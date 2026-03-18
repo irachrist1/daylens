@@ -8,46 +8,51 @@ final class AppState: ObservableObject {
     @Published var showCommandBar: Bool = false
     @Published var isTracking: Bool = false
     @Published var hasCompletedOnboarding: Bool = false
-
     @Published var trackingState: TrackingState = .disabled
 
-    private var captureEngine: CaptureEngine?
-    private var sessionNormalizer: SessionNormalizer?
+    private let container = ServiceContainer.shared
 
     init() {
         hasCompletedOnboarding = UserDefaults.standard.bool(
             forKey: AppConstants.UserDefaultsKeys.hasCompletedOnboarding
         )
-        showInspector = UserDefaults.standard.bool(
-            forKey: AppConstants.UserDefaultsKeys.showInspector
-        )
-    }
+        showInspector = UserDefaults.standard.object(forKey: AppConstants.UserDefaultsKeys.showInspector) != nil
+            ? UserDefaults.standard.bool(forKey: AppConstants.UserDefaultsKeys.showInspector)
+            : true
 
-    func setupServices(captureEngine: CaptureEngine, normalizer: SessionNormalizer) {
-        self.captureEngine = captureEngine
-        self.sessionNormalizer = normalizer
+        NotificationCenter.default.addObserver(
+            forName: AppConstants.NotificationNames.trackingStateChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.toggleTracking()
+        }
+
+        if hasCompletedOnboarding {
+            startTracking()
+        }
     }
 
     func toggleTracking() {
         if isTracking {
-            captureEngine?.pause()
+            container.captureEngine.pause()
             isTracking = false
             trackingState = .paused
         } else {
-            captureEngine?.resume()
+            container.captureEngine.resume()
             isTracking = true
             trackingState = .active
         }
     }
 
     func startTracking() {
-        captureEngine?.start()
+        container.captureEngine.start()
         isTracking = true
         trackingState = .active
     }
 
     func stopTracking() {
-        captureEngine?.stop()
+        container.captureEngine.stop()
         isTracking = false
         trackingState = .disabled
     }

@@ -9,6 +9,7 @@ final class AppMonitor {
     var onAppEvent: ((ActivityEvent) -> Void)?
 
     private var currentFrontmostBundleId: String?
+    private var currentFrontmostName: String?
     private var activationTimestamp: Date?
 
     #if canImport(AppKit)
@@ -130,12 +131,14 @@ final class AppMonitor {
     private func emitActivation(for app: NSRunningApplication) {
         guard let bundleId = app.bundleIdentifier else { return }
 
+        let appName = app.localizedName ?? bundleId
         currentFrontmostBundleId = bundleId
+        currentFrontmostName = appName
         activationTimestamp = Date()
 
         var metadata: [String: String] = [
             "bundleIdentifier": bundleId,
-            "name": app.localizedName ?? bundleId,
+            "name": appName,
         ]
 
         if BrowserRecord.isBrowser(bundleId) {
@@ -162,6 +165,7 @@ final class AppMonitor {
             source: .native,
             metadata: [
                 "bundleIdentifier": bundleId,
+                "name": currentFrontmostName ?? bundleId,
                 "activeDuration": activationTimestamp.map {
                     String(Date().timeIntervalSince($0))
                 } ?? "0",
@@ -170,6 +174,7 @@ final class AppMonitor {
         onAppEvent?(event)
 
         currentFrontmostBundleId = nil
+        currentFrontmostName = nil
         activationTimestamp = nil
     }
     #endif
