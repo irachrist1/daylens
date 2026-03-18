@@ -5,6 +5,7 @@ import SwiftUI
 struct OnboardingView: View {
     @EnvironmentObject var appState: AppState
     @State private var currentStep: OnboardingStep = .welcome
+    @StateObject private var permManager = ServiceContainer.shared.permissionManager
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome
@@ -60,7 +61,7 @@ struct OnboardingView: View {
                 .foregroundStyle(Theme.Colors.accent)
 
             VStack(spacing: Theme.spacing8) {
-                Text("Welcome to Activity Analyst")
+                Text("Welcome to Daylens")
                     .font(Theme.Typography.largeTitle)
                     .foregroundStyle(Theme.Colors.primaryText)
 
@@ -91,15 +92,32 @@ struct OnboardingView: View {
                     .frame(maxWidth: 400)
             }
 
-            Button("Open System Preferences") {
-                openAccessibilityPreferences()
+            if permManager.accessibilityStatus == .granted {
+                Label("Accessibility access granted", systemImage: "checkmark.circle.fill")
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(.green)
+            } else {
+                Button("Open System Preferences") {
+                    permManager.requestAccessibility()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Colors.accent)
+
+                Text("After enabling, return here. The app will detect the change automatically.")
+                    .font(Theme.Typography.footnote)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .multilineTextAlignment(.center)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.Colors.accent)
 
             Text("We never log keystrokes or record your screen.")
                 .font(Theme.Typography.footnote)
                 .foregroundStyle(Theme.Colors.tertiaryText)
+        }
+        .onAppear {
+            permManager.startPolling()
+        }
+        .onDisappear {
+            permManager.stopPolling()
         }
     }
 
@@ -122,8 +140,20 @@ struct OnboardingView: View {
             }
 
             VStack(spacing: Theme.spacing8) {
-                extensionRow(browser: "Chrome / Arc / Brave", icon: "globe", installed: false)
-                extensionRow(browser: "Safari", icon: "safari", installed: false)
+                extensionRow(
+                    browser: "Chrome / Arc / Brave",
+                    icon: "globe",
+                    action: {
+                        openChromeExtensionInstall()
+                    }
+                )
+                extensionRow(
+                    browser: "Safari",
+                    icon: "safari",
+                    action: {
+                        openSafariExtensionSettings()
+                    }
+                )
             }
 
             Text("You can set this up later in Settings.")
@@ -170,11 +200,17 @@ struct OnboardingView: View {
                     .font(Theme.Typography.largeTitle)
                     .foregroundStyle(Theme.Colors.primaryText)
 
-                Text("Activity Analyst is ready to start tracking. Your dashboard will fill up as you use your Mac throughout the day.")
+                Text("Daylens is ready to start tracking. Your dashboard will fill up as you use your Mac throughout the day.")
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 400)
+            }
+
+            if permManager.accessibilityStatus != .granted {
+                Label("Accessibility not granted — tracking will be limited", systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.Typography.footnote)
+                    .foregroundStyle(.orange)
             }
         }
     }
@@ -231,7 +267,7 @@ struct OnboardingView: View {
 
     // MARK: - Helpers
 
-    private func extensionRow(browser: String, icon: String, installed: Bool) -> some View {
+    private func extensionRow(browser: String, icon: String, action: @escaping () -> Void) -> some View {
         HStack {
             Image(systemName: icon)
                 .font(.system(size: 16))
@@ -243,15 +279,11 @@ struct OnboardingView: View {
 
             Spacer()
 
-            if installed {
-                Label("Installed", systemImage: "checkmark.circle.fill")
-                    .font(Theme.Typography.footnote)
-                    .foregroundStyle(.green)
-            } else {
-                Button("Install") {}
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+            Button("Install") {
+                action()
             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
         .padding(Theme.spacing8)
         .background(Theme.Colors.groupedBackground)
@@ -271,9 +303,26 @@ struct OnboardingView: View {
         }
     }
 
-    private func openAccessibilityPreferences() {
+    private func openChromeExtensionInstall() {
         #if canImport(AppKit)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        let extensionDir = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Extensions")
+            .appendingPathComponent("Chrome")
+
+        if FileManager.default.fileExists(atPath: extensionDir.path) {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: extensionDir.path)
+        } else {
+            if let url = URL(string: "chrome://extensions/") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        #endif
+    }
+
+    private func openSafariExtensionSettings() {
+        #if canImport(AppKit)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Safari.Extensions") {
             NSWorkspace.shared.open(url)
         }
         #endif

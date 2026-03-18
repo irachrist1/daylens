@@ -11,6 +11,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var todaySessions: [Session] = []
     @Published private(set) var isLoading = false
     @Published var selectedDate: Date
+    @Published private(set) var appNames: [UUID: String] = [:]
+    @Published private(set) var websiteDomains: [UUID: String] = [:]
 
     /// Hourly activity buckets for the density strip (0–23).
     /// Computed from todaySessions.
@@ -64,6 +66,11 @@ final class DashboardViewModel: ObservableObject {
 
                 todaySessions = sessions
                 dailySummary = summary
+
+                let apps = try await store.fetchAllApps()
+                appNames = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.name) })
+                let websites = try await store.fetchAllWebsites()
+                websiteDomains = Dictionary(uniqueKeysWithValues: websites.map { ($0.id, $0.domain) })
             } catch {
                 todaySessions = []
                 dailySummary = nil

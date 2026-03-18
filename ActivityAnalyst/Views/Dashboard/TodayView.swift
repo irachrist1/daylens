@@ -313,11 +313,11 @@ struct TodayView: View {
                 VStack(spacing: 0) {
                     ForEach(viewModel.todaySessions.suffix(10)) { session in
                         SessionRow(
-                            appName: "App",
+                            appName: viewModel.appNames[session.appId] ?? "Unknown App",
                             category: session.category,
                             startTime: session.startTime,
                             duration: session.duration,
-                            websiteDomain: nil,
+                            websiteDomain: session.websiteId.flatMap { viewModel.websiteDomains[$0] },
                             confidence: session.confidence,
                             isSignificant: session.isSignificant
                         )

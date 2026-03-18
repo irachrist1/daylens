@@ -1,15 +1,19 @@
 import Foundation
+import Combine
 #if canImport(AppKit)
 import AppKit
 import ApplicationServices
 #endif
 
 /// Manages macOS permission requests and monitors their status.
+/// Publishes real-time permission state for UI binding.
 @MainActor
 final class PermissionManager: ObservableObject {
     @Published var accessibilityStatus: PermissionStatus = .notDetermined
     @Published var screenRecordingStatus: PermissionStatus = .notDetermined
     @Published var automationStatus: PermissionStatus = .notDetermined
+
+    private var pollTimer: Timer?
 
     init() {
         refreshPermissions()
@@ -19,6 +23,21 @@ final class PermissionManager: ObservableObject {
         #if canImport(AppKit)
         accessibilityStatus = checkAccessibility()
         #endif
+    }
+
+    /// Start polling permission status (for onboarding flow when user is in System Settings).
+    func startPolling() {
+        stopPolling()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshPermissions()
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Accessibility
@@ -32,10 +51,7 @@ final class PermissionManager: ObservableObject {
     func requestAccessibility() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.refreshPermissions()
-        }
+        startPolling()
     }
 
     func openAccessibilitySettings() {

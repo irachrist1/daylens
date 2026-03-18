@@ -12,6 +12,7 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.Colors.primaryText)
 
                 permissionsSection
+                aiSection
                 trackingSection
                 privacySection
                 browserSection
@@ -51,6 +52,44 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.vertical, Theme.spacing4)
+            }
+        }
+    }
+
+    // MARK: - AI Configuration
+
+    private var aiSection: some View {
+        SettingsSection(title: "AI Configuration", icon: "brain.head.profile") {
+            VStack(alignment: .leading, spacing: Theme.spacing12) {
+                Text("Enter your Anthropic API key to enable AI-powered daily summaries and conversational insights.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                HStack {
+                    SecureField("sk-ant-...", text: $viewModel.apiKey)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button("Save") {
+                        viewModel.saveAPIKey()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.Colors.accent)
+                    .disabled(viewModel.apiKey.isEmpty)
+                }
+
+                if ServiceContainer.shared.hasAI {
+                    Label("AI is configured and available", systemImage: "checkmark.circle.fill")
+                        .font(Theme.Typography.footnote)
+                        .foregroundStyle(.green)
+                } else if !viewModel.apiKey.isEmpty {
+                    Label("Restart the app after saving to activate AI", systemImage: "arrow.clockwise")
+                        .font(Theme.Typography.footnote)
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("No API key configured — AI features are disabled", systemImage: "exclamationmark.triangle")
+                        .font(Theme.Typography.footnote)
+                        .foregroundStyle(.orange)
+                }
             }
         }
     }

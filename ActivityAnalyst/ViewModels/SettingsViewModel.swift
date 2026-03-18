@@ -4,69 +4,89 @@ import SwiftUI
 /// ViewModel for the Settings view: preferences, permissions, and data management.
 @MainActor
 final class SettingsViewModel: ObservableObject {
-    // MARK: - Published State
-
     @Published var preferences: TrackingPreferences
     @Published private(set) var permissions: [(name: String, status: PermissionStatus, description: String)] = []
     @Published private(set) var browserIntegrations: [BrowserRecord] = []
+    @Published var apiKey: String = ""
+    @Published var exportMessage: String?
 
-    // MARK: - Dependencies
-
-    private let store: ActivityStore
-
-    // MARK: - Init
+    private let store: ActivityStore?
+    private let permManager: PermissionManager
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store, permManager: ServiceContainer.shared.permissionManager)
     }
 
-    init(store: ActivityStore) {
+    init(store: ActivityStore?, permManager: PermissionManager) {
         self.store = store
+        self.permManager = permManager
         self.preferences = Self.loadPreferences()
+        self.apiKey = UserDefaults.standard.string(forKey: "anthropic_api_key") ?? ""
         loadPermissions()
         loadBrowserIntegrations()
     }
 
-    // MARK: - Public Methods
-
-    /// Save preferences to UserDefaults.
     func savePreferences() {
         if let data = try? JSONEncoder().encode(preferences) {
             UserDefaults.standard.set(data, forKey: AppConstants.UserDefaultsKeys.trackingPreferences)
         }
     }
 
-    /// Request a specific permission (placeholder for system permission APIs).
-    func requestPermission(_ name: String) {
-        // Placeholder: wire to Accessibility/Screen Recording permission APIs.
-        loadPermissions()
+    func saveAPIKey() {
+        UserDefaults.standard.set(apiKey, forKey: "anthropic_api_key")
     }
 
-    /// Export all data.
+    func requestPermission(_ name: String) {
+        switch name {
+        case "Accessibility":
+            #if canImport(AppKit)
+            permManager.requestAccessibility()
+            #endif
+        case "Screen Recording":
+            #if canImport(AppKit)
+            permManager.openScreenRecordingSettings()
+            #endif
+        default:
+            break
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.loadPermissions()
+        }
+    }
+
     func exportData() {
+        guard let store = store else { return }
         Task {
             do {
-                let data = try await store.exportAllData()
-                // Caller can handle file save; data is available for export.
-                _ = data
+                #if canImport(GRDB)
+                let fileURL = try await DataExporter.exportToJSON(store: store)
+                #if canImport(AppKit)
+                _ = await DataExporter.presentSavePanel(for: fileURL)
+                #endif
+                exportMessage = "Data exported successfully."
+                #endif
             } catch {
-                // Propagate error to UI
+                exportMessage = "Export failed: \(error.localizedDescription)"
             }
         }
     }
 
-    /// Delete all stored data.
     func deleteAllData() {
+        guard let store = store else { return }
         Task {
             do {
                 try await store.deleteAllData()
+                exportMessage = "All data deleted."
             } catch {
-                // Propagate error to UI
+                exportMessage = "Delete failed: \(error.localizedDescription)"
             }
         }
     }
 
-    // MARK: - Private Helpers
+    func loadPermissions() {
+        permManager.refreshPermissions()
+        permissions = permManager.allPermissions
+    }
 
     private static func loadPreferences() -> TrackingPreferences {
         guard let data = UserDefaults.standard.data(forKey: AppConstants.UserDefaultsKeys.trackingPreferences),
@@ -76,15 +96,8 @@ final class SettingsViewModel: ObservableObject {
         return prefs
     }
 
-    private func loadPermissions() {
-        // Placeholder: wire to actual permission checks (Accessibility, Screen Recording, etc.).
-        permissions = [
-            ("Accessibility", .notDetermined, "Required to detect active app and window focus"),
-            ("Screen Recording", .notDetermined, "Optional for enhanced window title capture"),
-        ]
-    }
-
     private func loadBrowserIntegrations() {
+        guard let store = store else { return }
         Task {
             do {
                 browserIntegrations = try await store.fetchAllBrowsers()

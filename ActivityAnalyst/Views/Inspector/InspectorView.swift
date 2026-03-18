@@ -43,21 +43,21 @@ struct InspectorView: View {
         .padding(Theme.spacing12)
     }
 
+    @EnvironmentObject var appState: AppState
+
     private var todayInspector: some View {
         VStack(alignment: .leading, spacing: Theme.spacing16) {
-            InspectorSection(title: "Quick Stats") {
-                InspectorRow(label: "Tracking since", value: "9:00 AM")
-                InspectorRow(label: "Last activity", value: "Just now")
-                InspectorRow(label: "Data quality", value: "High")
+            InspectorSection(title: "Status") {
+                InspectorRow(label: "Tracking", value: appState.isTracking ? "Active" : "Paused")
+                InspectorRow(label: "Accessibility", value: ServiceContainer.shared.permissionManager.accessibilityStatus == .granted ? "Granted" : "Not granted")
+                InspectorRow(label: "AI", value: ServiceContainer.shared.hasAI ? "Available" : "Not configured")
+                InspectorRow(label: "Database", value: ServiceContainer.shared.hasStore ? "Connected" : "Error")
             }
 
-            InspectorSection(title: "Focus Breakdown") {
-                VStack(spacing: Theme.spacing6) {
-                    FocusBar(label: "Deep work", fraction: 0.45, color: Theme.Colors.focus)
-                    FocusBar(label: "Communication", fraction: 0.25, color: Theme.Colors.accent)
-                    FocusBar(label: "Browsing", fraction: 0.20, color: Theme.Colors.distraction)
-                    FocusBar(label: "Other", fraction: 0.10, color: Theme.Colors.idle)
-                }
+            InspectorSection(title: "Capture Sources") {
+                InspectorRow(label: "App monitor", value: "NSWorkspace")
+                InspectorRow(label: "Window monitor", value: ServiceContainer.shared.permissionManager.accessibilityStatus == .granted ? "Accessibility API" : "Unavailable")
+                InspectorRow(label: "Browser ext.", value: "WebSocket :19847")
             }
         }
     }

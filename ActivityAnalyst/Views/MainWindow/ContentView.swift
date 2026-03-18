@@ -147,11 +147,115 @@ struct WebOverviewView: View {
 }
 
 struct HistoryView: View {
+    @State private var selectedDate = Date()
+    @State private var summaries: [DailySummary] = []
+    @State private var isLoading = false
+
     var body: some View {
-        EmptyStateView(
-            icon: "clock.arrow.circlepath",
-            title: "History",
-            message: "Browse your activity history across days and weeks."
-        )
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.spacing24) {
+                Text("History")
+                    .font(Theme.Typography.largeTitle)
+                    .foregroundStyle(Theme.Colors.primaryText)
+
+                DatePicker("Select date", selection: $selectedDate, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .frame(maxWidth: 320)
+                    .onChange(of: selectedDate) { _, _ in
+                        loadHistory()
+                    }
+
+                if isLoading {
+                    ProgressView()
+                } else if summaries.isEmpty {
+                    VStack(spacing: Theme.spacing12) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 32, weight: .light))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                        Text("No activity recorded for this period")
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, Theme.spacing32)
+                } else {
+                    ForEach(summaries) { summary in
+                        HistoryDayCard(summary: summary)
+                    }
+                }
+            }
+            .padding(Theme.spacing24)
+        }
+        .background(Theme.Colors.background)
+        .task {
+            loadHistory()
+        }
+    }
+
+    private func loadHistory() {
+        guard let store = ServiceContainer.shared.store else { return }
+        isLoading = true
+        Task {
+            do {
+                let start = Calendar.current.date(byAdding: .day, value: -30, to: selectedDate)!
+                let end = DateFormatters.endOfDay(selectedDate)
+                summaries = try await store.fetchDailySummaries(from: start, to: end)
+            } catch {
+                summaries = []
+            }
+            isLoading = false
+        }
+    }
+}
+
+struct HistoryDayCard: View {
+    let summary: DailySummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.spacing8) {
+            HStack {
+                Text(DateFormatters.relativeDay(summary.date))
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(Theme.Colors.primaryText)
+
+                Spacer()
+
+                Text(DurationFormatter.format(summary.totalActiveTime))
+                    .font(Theme.Typography.monoBody)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+            }
+
+            HStack(spacing: Theme.spacing16) {
+                Label("\(summary.sessionCount) sessions", systemImage: "rectangle.stack.fill")
+                    .font(Theme.Typography.footnote)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+
+                Label("Focus: \(DurationFormatter.formatPercentage(summary.focusScore))", systemImage: "target")
+                    .font(Theme.Typography.footnote)
+                    .foregroundStyle(
+                        summary.focusScore > 0.5 ? Theme.Colors.focus : Theme.Colors.distraction
+                    )
+
+                Label("\(summary.switchCount) switches", systemImage: "arrow.left.arrow.right")
+                    .font(Theme.Typography.footnote)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            if !summary.topApps.isEmpty {
+                HStack(spacing: Theme.spacing4) {
+                    ForEach(summary.topApps.prefix(5)) { app in
+                        Text(app.name)
+                            .font(Theme.Typography.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Theme.Colors.category(app.category).opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+            }
+        }
+        .padding(Theme.spacing12)
+        .background(Theme.Colors.groupedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusMedium))
     }
 }
