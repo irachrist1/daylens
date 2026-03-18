@@ -11,15 +11,15 @@ final class InsightsViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store)
     }
 
-    init(store: ActivityStore) {
+    init(store: ActivityStore?) {
         self.store = store
     }
 
@@ -27,6 +27,8 @@ final class InsightsViewModel: ObservableObject {
 
     /// Load insights from recent daily summaries.
     func loadInsights() {
+        guard let store = store else { return }
+
         Task {
             let end = Date()
             let start = Calendar.current.date(byAdding: .day, value: -14, to: end) ?? end
@@ -52,6 +54,8 @@ final class InsightsViewModel: ObservableObject {
 
     /// Load trends (recent summaries for trend visualization).
     func loadTrends() {
+        guard let store = store else { return }
+
         Task {
             let end = Date()
             let start = Calendar.current.date(byAdding: .day, value: -30, to: end) ?? end

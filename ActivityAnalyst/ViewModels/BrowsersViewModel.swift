@@ -11,15 +11,15 @@ final class BrowsersViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store)
     }
 
-    init(store: ActivityStore) {
+    init(store: ActivityStore?) {
         self.store = store
     }
 
@@ -27,6 +27,8 @@ final class BrowsersViewModel: ObservableObject {
 
     /// Load browser usage for the default date range (last 7 days).
     func loadBrowsers() {
+        guard let store = store else { return }
+
         Task {
             let end = Date()
             let start = Calendar.current.date(byAdding: .day, value: -7, to: end) ?? end

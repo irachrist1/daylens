@@ -13,15 +13,15 @@ final class AIConversationViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store)
     }
 
-    init(store: ActivityStore) {
+    init(store: ActivityStore?) {
         self.store = store
     }
 
@@ -29,6 +29,8 @@ final class AIConversationViewModel: ObservableObject {
 
     /// Send the current input as a user message and process the response.
     func sendMessage() {
+        guard let store = store else { return }
+
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
@@ -61,16 +63,26 @@ final class AIConversationViewModel: ObservableObject {
                 try await store.insertMessage(userMessage)
                 messages.append(userMessage)
 
-                // Placeholder: wire to AI service when available.
-                let assistantMessage = AIMessage(
-                    conversationId: conv.id,
-                    role: .assistant,
-                    content: "AI response generation will be wired to the AI service."
-                )
+                let assistantMessage: AIMessage
+                if let conversationManager = ServiceContainer.shared.conversationManager {
+                    let (response, evidence) = try await conversationManager.processMessage(text, conversationId: conv.id)
+                    assistantMessage = AIMessage(
+                        conversationId: conv.id,
+                        role: .assistant,
+                        content: response,
+                        evidence: evidence
+                    )
+                } else {
+                    assistantMessage = AIMessage(
+                        conversationId: conv.id,
+                        role: .assistant,
+                        content: "AI is not configured. Add your Anthropic API key in Settings to enable AI features."
+                    )
+                }
+
                 try await store.insertMessage(assistantMessage)
                 messages.append(assistantMessage)
             } catch {
-                // Restore input on error
                 inputText = text
             }
         }
@@ -85,6 +97,12 @@ final class AIConversationViewModel: ObservableObject {
 
     /// Load an existing conversation and its messages.
     func loadConversation(_ conversation: AIConversation?) {
+        guard let store = store else {
+            currentConversation = conversation
+            messages = []
+            return
+        }
+
         currentConversation = conversation
 
         guard let conv = conversation else {

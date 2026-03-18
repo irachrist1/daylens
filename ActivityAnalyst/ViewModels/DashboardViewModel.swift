@@ -20,23 +20,35 @@ final class DashboardViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!, selectedDate: Date())
+        self.init(store: ServiceContainer.shared.store, selectedDate: Date())
     }
 
-    init(store: ActivityStore, selectedDate: Date = Date()) {
+    init(store: ActivityStore?, selectedDate: Date = Date()) {
         self.store = store
         self.selectedDate = selectedDate
+
+        NotificationCenter.default.addObserver(
+            forName: AppConstants.NotificationNames.newSessionRecorded,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.loadToday()
+            }
+        }
     }
 
     // MARK: - Public Methods
 
     /// Load today's sessions and summary for the selected date.
     func loadToday() {
+        guard let store = store else { return }
+
         Task {
             isLoading = true
             defer { isLoading = false }
@@ -61,6 +73,8 @@ final class DashboardViewModel: ObservableObject {
 
     /// Refresh the daily summary for the selected date.
     func refreshSummary() {
+        guard let store = store else { return }
+
         Task {
             isLoading = true
             defer { isLoading = false }
@@ -76,8 +90,10 @@ final class DashboardViewModel: ObservableObject {
     }
 
     /// Trigger AI summary generation for the selected date.
-    /// Updates dailySummary.aiSummary when complete.
+    /// Uses ConversationManager for real AI generation when available.
     func generateAISummary() {
+        guard let store = store else { return }
+
         Task {
             isLoading = true
             defer { isLoading = false }
@@ -88,8 +104,13 @@ final class DashboardViewModel: ObservableObject {
                 var summary = try await store.fetchDailySummary(for: start)
                     ?? DailySummary(date: start)
 
-                // Placeholder: wire to AI service when available.
-                summary.aiSummary = "AI summary generation will be wired to the AI service."
+                if let conversationManager = ServiceContainer.shared.conversationManager {
+                    let aiText = try await conversationManager.generateDailySummary(for: selectedDate)
+                    summary.aiSummary = aiText
+                } else {
+                    summary.aiSummary = "AI is not configured. Add your Anthropic API key in Settings to enable AI summaries."
+                }
+
                 summary.generatedAt = Date()
                 try await store.upsertDailySummary(summary)
 

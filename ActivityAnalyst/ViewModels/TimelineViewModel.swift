@@ -22,16 +22,16 @@ final class TimelineViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
     private var selectedDay: Date = Date()
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store)
     }
 
-    init(store: ActivityStore) {
+    init(store: ActivityStore?) {
         self.store = store
     }
 
@@ -39,6 +39,8 @@ final class TimelineViewModel: ObservableObject {
 
     /// Load sessions for the given day.
     func loadSessions(for date: Date) {
+        guard let store = store else { return }
+
         selectedDay = date
         let start = DateFormatters.startOfDay(date)
         let end = DateFormatters.endOfDay(date)

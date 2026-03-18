@@ -13,15 +13,15 @@ final class AppsViewModel: ObservableObject {
 
     // MARK: - Dependencies
 
-    private let store: ActivityStore
+    private let store: ActivityStore?
 
     // MARK: - Init
 
     convenience init() {
-        self.init(store: ServiceContainer.shared.store!)
+        self.init(store: ServiceContainer.shared.store)
     }
 
-    init(store: ActivityStore, dateRange: (from: Date, to: Date)? = nil) {
+    init(store: ActivityStore?, dateRange: (from: Date, to: Date)? = nil) {
         self.store = store
         let range = dateRange ?? {
             let end = Date()
@@ -35,6 +35,8 @@ final class AppsViewModel: ObservableObject {
 
     /// Load app usage for the current date range.
     func loadApps() {
+        guard let store = store else { return }
+
         Task {
             let start = DateFormatters.startOfDay(dateRange.from)
             let end = DateFormatters.endOfDay(dateRange.to)
@@ -81,6 +83,8 @@ final class AppsViewModel: ObservableObject {
             appSessions = []
             return
         }
+
+        guard let store = store else { return }
 
         Task {
             let start = DateFormatters.startOfDay(dateRange.from)
