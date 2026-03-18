@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "DayLens",
+  "version": "1.0.0",
+  "description": "Sends active tab information to the DayLens macOS app for accurate website time tracking.",
+  "permissions": [
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:27182/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "DayLens"
+  }
+}
