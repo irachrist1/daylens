@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Activity Analyst",
+  "description": "Companion extension for Activity Analyst — enables accurate website tracking in Safari.",
+  "version": "1.0.0",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "48": "images/icon-48.png",
+      "128": "images/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon-16.png",
+    "48": "images/icon-48.png",
+    "128": "images/icon-128.png"
+  }
+}
