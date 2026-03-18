@@ -1,0 +1,215 @@
+{
+  "description": "A realistic workday timeline for testing session normalization and aggregation",
+  "date": "2026-03-18",
+  "events": [
+    {
+      "timestamp": "2026-03-18T09:00:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.mail",
+      "appName": "Mail"
+    },
+    {
+      "timestamp": "2026-03-18T09:05:30Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.mail",
+      "appName": "Mail"
+    },
+    {
+      "timestamp": "2026-03-18T09:05:30Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T09:45:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T09:45:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T09:47:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T09:47:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T10:30:00Z",
+      "eventType": "idleStart",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T10:35:00Z",
+      "eventType": "idleEnd",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T11:00:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T11:00:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.google.Chrome",
+      "appName": "Chrome",
+      "isBrowser": true
+    },
+    {
+      "timestamp": "2026-03-18T11:00:00Z",
+      "eventType": "tabChanged",
+      "appBundleId": "com.google.Chrome",
+      "appName": "Chrome",
+      "url": "https://github.com/user/repo",
+      "domain": "github.com",
+      "pageTitle": "user/repo - GitHub"
+    },
+    {
+      "timestamp": "2026-03-18T11:12:00Z",
+      "eventType": "tabChanged",
+      "appBundleId": "com.google.Chrome",
+      "appName": "Chrome",
+      "url": "https://youtube.com/watch",
+      "domain": "youtube.com",
+      "pageTitle": "Interesting Video - YouTube"
+    },
+    {
+      "timestamp": "2026-03-18T11:24:00Z",
+      "eventType": "tabChanged",
+      "appBundleId": "com.google.Chrome",
+      "appName": "Chrome",
+      "url": "https://stackoverflow.com/questions/123",
+      "domain": "stackoverflow.com",
+      "pageTitle": "How to fix this - Stack Overflow"
+    },
+    {
+      "timestamp": "2026-03-18T11:30:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.google.Chrome",
+      "appName": "Chrome"
+    },
+    {
+      "timestamp": "2026-03-18T11:30:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T12:00:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T12:00:00Z",
+      "eventType": "idleStart",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T13:00:00Z",
+      "eventType": "idleEnd",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T13:00:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T14:30:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T14:30:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.figma.Desktop",
+      "appName": "Figma"
+    },
+    {
+      "timestamp": "2026-03-18T15:15:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.figma.Desktop",
+      "appName": "Figma"
+    },
+    {
+      "timestamp": "2026-03-18T15:15:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:20:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:20:01Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:20:03Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:20:04Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:22:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack"
+    },
+    {
+      "timestamp": "2026-03-18T15:22:00Z",
+      "eventType": "appActivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    },
+    {
+      "timestamp": "2026-03-18T17:00:00Z",
+      "eventType": "appDeactivated",
+      "appBundleId": "com.apple.dt.Xcode",
+      "appName": "Xcode"
+    }
+  ],
+  "expected": {
+    "totalApps": 5,
+    "topApp": "Xcode",
+    "xcodeMinutes": 338,
+    "chromeMinutes": 30,
+    "slackMinutes": 12,
+    "figmaMinutes": 45,
+    "mailMinutes": 5,
+    "youtubeMinutes": 12,
+    "githubMinutes": 12,
+    "sessionCount_approx": 10,
+    "hasMergedSlackSessions": true
+  }
+}
