@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Core AI analysis engine using the Anthropic SDK.
 /// Provides daily summaries, trend analysis, and conversational Q&A.

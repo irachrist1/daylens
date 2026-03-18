@@ -14,8 +14,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0"),
-        .package(url: "https://github.com/anthropics/anthropic-sdk-swift.git", from: "0.1.0")
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0")
     ],
     targets: [
         .target(
@@ -24,8 +23,8 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
             path: "ActivityAnalyst",
-            exclude: ["Resources", "App/ActivityAnalystApp.swift"],
-            sources: ["Models", "Services", "ViewModels", "Utilities"]
+            exclude: ["Resources", "App/ActivityAnalystApp.swift", "Services/Capture", "Services/Privacy/PermissionManager.swift", "Services/Privacy/DataExporter.swift"],
+            sources: ["Models", "Services", "Utilities"]
         ),
         .testTarget(
             name: "ActivityAnalystTests",
