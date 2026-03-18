@@ -70,6 +70,25 @@ final class IdleDetector {
         }
     }
 
+    // MARK: - Test support
+
+#if DEBUG
+    /// Drives the idle state machine directly with a supplied idle duration.
+    /// Used by unit tests to exercise callbacks without a real timer or CGEventSource.
+    func simulateCheck(idleSeconds: Double) {
+        guard isRunning else { return }
+        guard !settings.isTrackingPaused else { return }
+
+        if !isCurrentlyIdle && idleSeconds >= settings.idleGraceSeconds {
+            isCurrentlyIdle = true
+            onIdle()
+        } else if isCurrentlyIdle && idleSeconds < settings.idleGraceSeconds {
+            isCurrentlyIdle = false
+            onResume()
+        }
+    }
+#endif
+
     // MARK: - CGEventSource query
 
     /// Returns seconds since the last keyboard or mouse event.
