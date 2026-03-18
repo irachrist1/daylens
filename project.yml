@@ -1,0 +1,63 @@
+name: Daylens
+options:
+  bundleIdPrefix: com.daylens
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: "6.24.0"
+
+targets:
+  Daylens:
+    type: application
+    platform: macOS
+    sources:
+      - path: Daylens
+    resources:
+      - path: Daylens/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.daylens.app
+        PRODUCT_NAME: Daylens
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: "5.9"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        INFOPLIST_FILE: Daylens/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Daylens/Resources/Daylens.entitlements
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: GRDB
+    entitlements:
+      path: Daylens/Resources/Daylens.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+
+  DaylensTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DaylensTests
+    dependencies:
+      - target: Daylens
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.daylens.tests
+        SWIFT_VERSION: "5.9"
+
+schemes:
+  Daylens:
+    build:
+      targets:
+        Daylens: all
+    run:
+      config: Debug
+    test:
+      targets:
+        - DaylensTests

@@ -1,0 +1,33 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+*.resolved
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Build artifacts
+*.o
+*.d
+
+# IDE
+.idea/
+.vscode/

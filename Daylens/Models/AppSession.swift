@@ -1,0 +1,59 @@
+import Foundation
+import GRDB
+
+/// A normalized session of app usage after merging and deduplication.
+struct AppSession: Codable, Identifiable, FetchableRecord, PersistableRecord {
+    var id: Int64?
+    var date: Date          // Calendar day (start of day)
+    var bundleID: String
+    var appName: String
+    var startTime: Date
+    var endTime: Date
+    var duration: TimeInterval
+    var category: AppCategory
+    var isBrowser: Bool
+
+    static let databaseTableName = "app_sessions"
+
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+
+    var formattedDuration: String {
+        let hours = Int(duration) / 3600
+        let minutes = (Int(duration) % 3600) / 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
+    }
+}
+
+/// Aggregated app usage for a given day.
+struct AppUsageSummary: Identifiable {
+    let bundleID: String
+    let appName: String
+    let totalDuration: TimeInterval
+    let sessionCount: Int
+    let category: AppCategory
+    let isBrowser: Bool
+
+    var id: String { bundleID }
+
+    var formattedDuration: String {
+        let hours = Int(totalDuration) / 3600
+        let minutes = (Int(totalDuration) % 3600) / 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        if minutes > 0 {
+            return "\(minutes)m"
+        }
+        let seconds = Int(totalDuration) % 60
+        return "\(seconds)s"
+    }
+
+    var durationHours: Double {
+        totalDuration / 3600.0
+    }
+}
