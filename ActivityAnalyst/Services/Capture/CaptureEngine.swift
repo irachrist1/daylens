@@ -81,6 +81,11 @@ final class CaptureEngine: ObservableObject {
 
     private func setupBindings() {
         appMonitor.onAppEvent = { [weak self] event in
+            if event.eventType == .appActivated,
+               let bundleId = event.metadata?["bundleIdentifier"],
+               let name = event.metadata?["name"] {
+                self?.currentApp = AppInfo(id: event.appId, bundleIdentifier: bundleId, name: name)
+            }
             self?.bufferEvent(event)
         }
 

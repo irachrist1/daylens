@@ -127,11 +127,11 @@ struct InsightsView: View {
                     .textFieldStyle(.plain)
                     .font(Theme.Typography.body)
                     .onSubmit {
-                        Task { await aiVM.sendMessage() }
+                        aiVM.sendMessage()
                     }
 
                 Button {
-                    Task { await aiVM.sendMessage() }
+                    aiVM.sendMessage()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 24))

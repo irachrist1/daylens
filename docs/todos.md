@@ -12,68 +12,60 @@
 - Browser extensions: Manifest V3 Chrome extension + Safari Web Extension with WebSocket bridge
 - Test suite: 50+ tests covering normalization, debouncing, privacy, AI prompts, performance
 
-## Broken
+## Broken (found in audit)
 
-### Critical — Pipeline completely disconnected
-1. `AppState.setupServices()` is never called — `captureEngine` stays nil, so all start/stop/pause calls are no-ops
-2. `CaptureEngine.onEventsReady` is never assigned — events captured by monitors are silently dropped
-3. No event processing pipeline exists: capture → debounce → normalize → persist → summarize
-4. UUID mismatch: `AppMonitor` emits deterministic UUIDs, but `ActivityStore.findOrCreateApp` creates random UUIDs — foreign key violations
-5. `DailySummaryBuilder` is never invoked — no daily rollups exist in the database
-6. Auto-start tracking for returning users is missing
+### Critical — Pipeline completely disconnected (NOW FIXED)
+1. ~~`AppState.setupServices()` was never called — `captureEngine` stayed nil~~ **FIXED**: AppState now wires directly to `ServiceContainer.shared.captureEngine`
+2. ~~`CaptureEngine.onEventsReady` was never assigned~~ **FIXED**: ServiceContainer.wirePipeline() now connects the full pipeline
+3. ~~No event processing pipeline existed~~ **FIXED**: Full pipeline: capture → filter → debounce → resolve IDs → persist events → normalize sessions → classify → persist sessions → rebuild daily summary
+4. ~~UUID mismatch between capture and storage~~ **FIXED**: Pipeline resolves deterministic UUIDs to stored record UUIDs via `findOrCreateApp` before inserting
+5. ~~`DailySummaryBuilder` was never invoked~~ **FIXED**: Pipeline calls `rebuildTodaySummary` after each event batch
+6. ~~Auto-start tracking for returning users was missing~~ **FIXED**: `AppState.init()` calls `startTracking()` if onboarding was completed
 
-### Critical — AI completely disconnected
-7. `AIAnalyst` and `ConversationManager` are never instantiated or injected
-8. `AIConversationViewModel.sendMessage()` returns hardcoded placeholder string
-9. `DashboardViewModel.generateAISummary()` writes a placeholder, never calls AI
-10. No API key management — user has no way to configure their Anthropic key
+### Critical — AI completely disconnected (NOW FIXED)
+7. ~~`AIAnalyst` and `ConversationManager` were never instantiated~~ **FIXED**: ServiceContainer creates them with API key from env or UserDefaults
+8. ~~`AIConversationViewModel.sendMessage()` returned hardcoded placeholder~~ **FIXED**: Wired to `ConversationManager.processMessage()` with real evidence
+9. ~~`DashboardViewModel.generateAISummary()` was a placeholder~~ **FIXED**: Wired to `ConversationManager.generateDailySummary()`
+10. ~~No API key management~~ **FIXED**: Settings now has API key configuration section
 
-### Critical — Permissions disconnected
-11. `PermissionManager` exists and works but is never used by UI
-12. Onboarding accessibility step doesn't check if permission is actually granted
-13. `SettingsViewModel.loadPermissions()` hardcodes `.notDetermined` for all permissions
-14. `SettingsViewModel.requestPermission()` does nothing useful
+### Critical — Permissions disconnected (NOW FIXED)
+11. ~~`PermissionManager` existed but was never used by UI~~ **FIXED**: Onboarding and Settings both wire to real `PermissionManager`
+12. ~~Onboarding accessibility step didn't check if permission was granted~~ **FIXED**: Polls permission status every 1.5s during accessibility step, shows green checkmark when granted
+13. ~~`SettingsViewModel.loadPermissions()` hardcoded `.notDetermined`~~ **FIXED**: Now reads from `PermissionManager.allPermissions`
+14. ~~`SettingsViewModel.requestPermission()` did nothing~~ **FIXED**: Now calls `PermissionManager.requestAccessibility()` / `openScreenRecordingSettings()`
 
-### Broken — UI displays fake data
-15. Today page shows `0s, 0%, 0, 0` despite "Tracking active"
-16. `SessionRow` hardcodes `appName: "App"` instead of resolving from store
-17. `TrendDayCell` receives no real data — purely decorative
-18. Inspector shows hardcoded placeholder stats
-19. Menu bar "Pause Tracking" posts notification nobody observes
-20. Export button discards exported data — no save dialog
+### Broken — UI displayed fake data (NOW FIXED)
+15. ~~Today page showed `0s, 0%, 0, 0` despite "Tracking active"~~ **FIXED**: Real data flows from pipeline → DailySummary → TodayView
+16. ~~`SessionRow` hardcoded `appName: "App"`~~ **FIXED**: Resolves app name from `DashboardViewModel.appNames[session.appId]`
+17. ~~Inspector showed hardcoded placeholder stats~~ **FIXED**: Shows real tracking status, permission status, AI availability, DB status
+18. ~~Menu bar "Pause Tracking" posted notification nobody observed~~ **FIXED**: `AppState.init()` observes `trackingStateChanged` notification
+19. ~~Export button discarded data~~ **FIXED**: Wired to `DataExporter.exportToJSON()` + `NSSavePanel`
 
-### Broken — Extension install flow
-21. Browser extension "Install" buttons are no-ops (empty closures)
-22. No detection of whether extensions are actually connected
+### Broken — Extension install flow (NOW FIXED)
+20. ~~Browser extension "Install" buttons were no-ops~~ **FIXED**: Chrome opens extension dir in Finder (or chrome://extensions); Safari opens extension settings
 
 ## Fixing Now
 
-- Wire `ServiceContainer` → `AppState` → `CaptureEngine` at app launch
-- Build full event pipeline: capture → debounce → normalize → persist → summarize
-- Fix UUID alignment between capture and storage layers
-- Wire `PermissionManager` into onboarding and settings
-- Add real permission detection and polling on onboarding
-- Wire `AIAnalyst` + `ConversationManager` into ViewModels
-- Add API key configuration in Settings
-- Fix extension install buttons to open real install targets
-- Fix all hardcoded/placeholder UI values
-- Auto-start tracking for returning users
+All items from the "Broken" list have been fixed in this pass.
 
 ## Remaining for MVP
 
-- Extension installed state detection (WebSocket handshake confirmation)
-- Safari Web Extension native messaging handler (Swift handler class)
-- App icon caching in database (currently loads live each time)
-- Full history view with date picker
-- Trend data in TrendDayCell (requires multi-day summaries)
-- Screen Recording permission detection
+- Extension installed state detection (WebSocket handshake confirmation updating BrowserRecord.extensionInstalled)
+- Safari Web Extension native messaging handler (Swift SafariWebExtensionHandler class)
+- App icon caching in database (currently loads live from NSWorkspace each time)
+- TrendDayCell data: needs to load prior-day summaries to show real daily active times
+- Screen Recording permission detection (currently always `.notDetermined`)
 - Automation (AppleScript) permission detection
 - Performance profiling on real workday data
+- Idle detection edge cases (sleep/wake, lid close/open)
+- Browser extension auto-reconnect resilience
 
 ## Notes / Risks
 
-- AnthropicSwiftSDK may not build in all environments — HTTP fallback is retained
+- AnthropicSwiftSDK may not compile in all environments — HTTP fallback is retained in AIAnalyst
 - The `#if canImport(GRDB)` guards mean core functionality compiles away if GRDB isn't linked
-- Force-unwrap `store!` in all ViewModels will crash if database init fails — adding guards
-- Accessibility permission requires the built app to be in /Applications or signed — dev builds may need manual TCC grant
+- ViewModels now safely handle `store == nil` (no more force unwraps)
+- Accessibility permission requires the built app to be signed or in /Applications — dev builds may need manual TCC grant
 - Browser extensions require manual loading in dev (Chrome: load unpacked, Safari: enable in extension settings)
+- `CaptureEngine` uses `Timer.scheduledTimer` for flush — may need `RunLoop.main.add` for reliable firing
+- AI features require a valid `ANTHROPIC_API_KEY` env var or configured in Settings; without it, AI degrades honestly

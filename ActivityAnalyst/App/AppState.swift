@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Global application state shared across the view hierarchy.
 @MainActor
@@ -9,8 +10,11 @@ final class AppState: ObservableObject {
     @Published var isTracking: Bool = false
     @Published var hasCompletedOnboarding: Bool = false
     @Published var trackingState: TrackingState = .disabled
+    @Published var currentAppName: String?
+    @Published var eventCount: Int = 0
 
     private let container = ServiceContainer.shared
+    private var cancellables = Set<AnyCancellable>()
 
     init() {
         hasCompletedOnboarding = UserDefaults.standard.bool(
@@ -27,6 +31,20 @@ final class AppState: ObservableObject {
         ) { [weak self] _ in
             self?.toggleTracking()
         }
+
+        container.captureEngine.$trackingState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.trackingState = state
+            }
+            .store(in: &cancellables)
+
+        container.captureEngine.$currentApp
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] info in
+                self?.currentAppName = info?.name
+            }
+            .store(in: &cancellables)
 
         if hasCompletedOnboarding {
             startTracking()

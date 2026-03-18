@@ -96,7 +96,7 @@ struct AIConversationView: View {
     private func suggestionButton(_ text: String) -> some View {
         Button {
             viewModel.inputText = text
-            Task { await viewModel.sendMessage() }
+            viewModel.sendMessage()
         } label: {
             Text(text)
                 .font(Theme.Typography.callout)
@@ -123,11 +123,11 @@ struct AIConversationView: View {
                 .font(Theme.Typography.body)
                 .lineLimit(1...4)
                 .onSubmit {
-                    Task { await viewModel.sendMessage() }
+                    viewModel.sendMessage()
                 }
 
             Button {
-                Task { await viewModel.sendMessage() }
+                viewModel.sendMessage()
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 28))

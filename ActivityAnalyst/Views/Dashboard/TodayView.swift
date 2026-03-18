@@ -266,7 +266,7 @@ struct TodayView: View {
                 if viewModel.dailySummary?.aiSummary == nil {
                     Button("Generate") {
                         Task {
-                            await viewModel.generateAISummary()
+                            viewModel.generateAISummary()
                         }
                     }
                     .buttonStyle(.borderless)
