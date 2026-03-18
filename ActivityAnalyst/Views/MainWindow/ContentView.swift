@@ -126,6 +126,9 @@ struct ContentView: View {
 
 /// Combined web overview showing both browsers and websites together.
 struct WebOverviewView: View {
+    @StateObject private var browsersVM = BrowsersViewModel()
+    @StateObject private var websitesVM = WebsitesViewModel()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.spacing24) {
@@ -137,12 +140,41 @@ struct WebOverviewView: View {
                     .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Colors.secondaryText)
 
-                BrowsersView()
-                WebsitesView()
+                if browsersVM.browserUsage.isEmpty && websitesVM.websiteUsage.isEmpty {
+                    EmptyStateView(
+                        icon: "network",
+                        title: "No Web Data",
+                        message: "Browser and website data will appear here as you browse. Install a browser extension for detailed website tracking."
+                    )
+                } else {
+                    if !browsersVM.browserUsage.isEmpty {
+                        VStack(alignment: .leading, spacing: Theme.spacing12) {
+                            Text("Top Browsers")
+                                .font(Theme.Typography.headline)
+                            ForEach(browsersVM.browserUsage, id: \.browser.id) { item in
+                                BrowserUsageRow(browser: item.browser, duration: item.duration, isSelected: false)
+                            }
+                        }
+                    }
+
+                    if !websitesVM.websiteUsage.isEmpty {
+                        VStack(alignment: .leading, spacing: Theme.spacing12) {
+                            Text("Top Websites")
+                                .font(Theme.Typography.headline)
+                            ForEach(websitesVM.websiteUsage, id: \.website.id) { item in
+                                WebsiteUsageRow(website: item.website, duration: item.duration, sessionCount: item.sessionCount, isSelected: false)
+                            }
+                        }
+                    }
+                }
             }
             .padding(Theme.spacing24)
         }
         .background(Theme.Colors.background)
+        .task {
+            browsersVM.loadBrowsers()
+            websitesVM.loadWebsites()
+        }
     }
 }
 

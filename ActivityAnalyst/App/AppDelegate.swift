@@ -32,14 +32,14 @@ extension AppDelegate: NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Activity Analyst")
+            button.image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Daylens")
             button.image?.size = NSSize(width: 16, height: 16)
             button.action = #selector(statusItemClicked)
             button.target = self
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Open Activity Analyst", action: #selector(openMainWindow), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Open Daylens", action: #selector(openMainWindow), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
 
         let trackingItem = NSMenuItem(title: "Pause Tracking", action: #selector(toggleTracking), keyEquivalent: "")
