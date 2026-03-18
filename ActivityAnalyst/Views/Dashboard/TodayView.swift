@@ -20,7 +20,7 @@ struct TodayView: View {
         }
         .background(Theme.Colors.background)
         .task {
-            await viewModel.loadToday()
+            viewModel.loadToday()
         }
     }
 
@@ -67,7 +67,7 @@ struct TodayView: View {
                 title: "Switches",
                 value: "\(viewModel.dailySummary?.switchCount ?? 0)",
                 icon: "arrow.left.arrow.right",
-                color: viewModel.isFragmented
+                color: (viewModel.dailySummary?.fragmentationScore ?? 0) > 0.5
                     ? Theme.Colors.distraction
                     : Theme.Colors.secondaryText
             )
@@ -82,7 +82,13 @@ struct TodayView: View {
                 .font(Theme.Typography.headline)
                 .foregroundStyle(Theme.Colors.primaryText)
 
-            LabeledDensityStrip(hourlyActivity: viewModel.hourlyActivity)
+            LabeledDensityStrip(hourlyActivity: viewModel.hourlyActivity.map {
+                DensityStrip.HourlyBucket(
+                    id: $0.id,
+                    activeMinutes: $0.activeMinutes,
+                    dominantCategory: $0.dominantCategory
+                )
+            })
         }
     }
 

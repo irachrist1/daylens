@@ -17,6 +17,10 @@ final class AIConversationViewModel: ObservableObject {
 
     // MARK: - Init
 
+    convenience init() {
+        self.init(store: ServiceContainer.shared.store!)
+    }
+
     init(store: ActivityStore) {
         self.store = store
     }

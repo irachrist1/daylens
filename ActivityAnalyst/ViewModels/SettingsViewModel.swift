@@ -16,6 +16,10 @@ final class SettingsViewModel: ObservableObject {
 
     // MARK: - Init
 
+    convenience init() {
+        self.init(store: ServiceContainer.shared.store!)
+    }
+
     init(store: ActivityStore) {
         self.store = store
         self.preferences = Self.loadPreferences()

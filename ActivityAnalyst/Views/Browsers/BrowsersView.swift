@@ -24,7 +24,7 @@ struct BrowsersView: View {
         }
         .background(Theme.Colors.background)
         .task {
-            await viewModel.loadBrowsers()
+            viewModel.loadBrowsers()
         }
     }
 

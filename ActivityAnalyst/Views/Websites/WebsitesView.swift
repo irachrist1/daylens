@@ -23,7 +23,7 @@ struct WebsitesView: View {
         }
         .background(Theme.Colors.background)
         .task {
-            await viewModel.loadWebsites()
+            viewModel.loadWebsites()
         }
     }
 

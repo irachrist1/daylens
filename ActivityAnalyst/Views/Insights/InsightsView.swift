@@ -16,7 +16,7 @@ struct InsightsView: View {
         }
         .background(Theme.Colors.background)
         .task {
-            await insightsVM.loadInsights()
+            insightsVM.loadInsights()
         }
     }
 

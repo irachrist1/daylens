@@ -10,9 +10,13 @@ final class TimelineViewModel: ObservableObject {
     @Published var selectedSession: Session?
 
     /// Sessions grouped by hour (0–23) for timeline display.
-    var sessionsByHour: [Int: [Session]] {
-        Dictionary(grouping: timelineSessions) { session in
+    var sessionsByHour: [(hour: Int, sessions: [Session])] {
+        let grouped = Dictionary(grouping: timelineSessions) { session in
             Calendar.current.component(.hour, from: session.startTime)
+        }
+        return (0..<24).compactMap { hour in
+            let sessions = grouped[hour] ?? []
+            return (hour: hour, sessions: sessions)
         }
     }
 
@@ -22,6 +26,10 @@ final class TimelineViewModel: ObservableObject {
     private var selectedDay: Date = Date()
 
     // MARK: - Init
+
+    convenience init() {
+        self.init(store: ServiceContainer.shared.store!)
+    }
 
     init(store: ActivityStore) {
         self.store = store

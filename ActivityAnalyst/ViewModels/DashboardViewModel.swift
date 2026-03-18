@@ -24,6 +24,10 @@ final class DashboardViewModel: ObservableObject {
 
     // MARK: - Init
 
+    convenience init() {
+        self.init(store: ServiceContainer.shared.store!, selectedDate: Date())
+    }
+
     init(store: ActivityStore, selectedDate: Date = Date()) {
         self.store = store
         self.selectedDate = selectedDate

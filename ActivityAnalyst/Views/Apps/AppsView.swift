@@ -23,7 +23,7 @@ struct AppsView: View {
         }
         .background(Theme.Colors.background)
         .task {
-            await viewModel.loadApps()
+            viewModel.loadApps()
         }
     }
 

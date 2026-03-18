@@ -17,6 +17,10 @@ final class AppsViewModel: ObservableObject {
 
     // MARK: - Init
 
+    convenience init() {
+        self.init(store: ServiceContainer.shared.store!)
+    }
+
     init(store: ActivityStore, dateRange: (from: Date, to: Date)? = nil) {
         self.store = store
         let range = dateRange ?? {
