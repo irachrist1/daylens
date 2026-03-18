@@ -1,26 +1,40 @@
 import Foundation
+#if canImport(AnthropicSwiftSDK)
+import AnthropicSwiftSDK
+#endif
 
-/// Core AI analysis engine using the Anthropic SDK.
+/// Core AI analysis engine using the Anthropic Swift SDK (AnthropicSwiftSDK).
 /// Provides daily summaries, trend analysis, and conversational Q&A.
 ///
 /// Uses Claude Sonnet 4.6 by default, with options for Opus 4.6 and Haiku 4.5.
 /// All prompts are grounded in real activity data with evidence citations.
+///
+/// SDK Reference: https://github.com/fumito-ito/AnthropicSwiftSDK
+/// Claude Code / Agent SDK is available for backend tooling in TypeScript/Python
+/// and can be used for CI/CD, batch analysis, or server-side agent workflows.
 actor AIAnalyst {
     private let apiKey: String
-    private let defaultModel: AIModel
+    private var currentModel: AIModel
     private var conversationHistories: [UUID: [(role: String, content: String)]] = [:]
+
+    #if canImport(AnthropicSwiftSDK)
+    private let anthropic: Anthropic
+    #endif
 
     init(
         apiKey: String,
         defaultModel: AIModel = .sonnet
     ) {
         self.apiKey = apiKey
-        self.defaultModel = defaultModel
+        self.currentModel = defaultModel
+
+        #if canImport(AnthropicSwiftSDK)
+        self.anthropic = Anthropic(apiKey: apiKey)
+        #endif
     }
 
     // MARK: - Daily Summary
 
-    /// Generates an AI summary for a day's activity.
     func generateDailySummary(
         date: Date,
         summary: DailySummary,
@@ -36,16 +50,11 @@ actor AIAnalyst {
             switchCount: summary.switchCount
         )
 
-        return try await callAnthropic(
-            messages: [("user", prompt)],
-            model: defaultModel,
-            maxTokens: 500
-        )
+        return try await sendMessage(prompt, maxTokens: 500)
     }
 
     // MARK: - Question Answering
 
-    /// Answers a user's natural-language question about their activity.
     func answerQuestion(
         _ question: String,
         context: ActivityContext,
@@ -62,11 +71,7 @@ actor AIAnalyst {
         }
         messages.append(("user", prompt))
 
-        let answer = try await callAnthropic(
-            messages: messages,
-            model: defaultModel,
-            maxTokens: 800
-        )
+        let answer = try await sendMessages(messages, maxTokens: 800)
 
         if let convId = conversationId {
             conversationHistories[convId, default: []].append(("user", prompt))
@@ -80,17 +85,12 @@ actor AIAnalyst {
 
     // MARK: - Trend Analysis
 
-    /// Analyzes patterns across multiple days.
     func analyzeTrends(summaries: [DailySummary]) async throws -> [Insight] {
         guard !summaries.isEmpty else { return [] }
 
         let prompt = PromptBuilder.trendPrompt(summaries: summaries)
 
-        let response = try await callAnthropic(
-            messages: [("user", prompt)],
-            model: defaultModel,
-            maxTokens: 600
-        )
+        let response = try await sendMessage(prompt, maxTokens: 600)
 
         let insight = Insight(
             dailySummaryId: summaries.first!.id,
@@ -104,20 +104,69 @@ actor AIAnalyst {
 
     // MARK: - Model Management
 
-    func setModel(_ model: AIModel) -> AIModel {
-        return model
+    func setModel(_ model: AIModel) {
+        currentModel = model
     }
 
     func clearConversation(_ conversationId: UUID) {
         conversationHistories.removeValue(forKey: conversationId)
     }
 
-    // MARK: - Anthropic API
+    // MARK: - Anthropic SDK Integration
 
-    /// Calls the Anthropic Messages API.
-    private func callAnthropic(
-        messages: [(role: String, content: String)],
-        model: AIModel,
+    /// Sends a single user message via the Anthropic SDK.
+    private func sendMessage(_ content: String, maxTokens: Int) async throws -> String {
+        return try await sendMessages([("user", content)], maxTokens: maxTokens)
+    }
+
+    /// Sends a conversation of messages via the Anthropic SDK.
+    private func sendMessages(
+        _ messages: [(role: String, content: String)],
+        maxTokens: Int
+    ) async throws -> String {
+        #if canImport(AnthropicSwiftSDK)
+        let sdkMessages = messages.map { role, content in
+            Message(
+                role: role == "user" ? .user : .assistant,
+                content: [.text(content)]
+            )
+        }
+
+        let response = try await anthropic.messages.createMessage(
+            sdkMessages,
+            maxTokens: maxTokens,
+            system: .text(PromptBuilder.systemPrompt),
+            model: anthropicModel(currentModel)
+        )
+
+        guard let textBlock = response.content.first else {
+            throw AIAnalystError.parseError
+        }
+
+        switch textBlock {
+        case .text(let text):
+            return text
+        default:
+            throw AIAnalystError.parseError
+        }
+        #else
+        return try await sendMessagesHTTP(messages, maxTokens: maxTokens)
+        #endif
+    }
+
+    #if canImport(AnthropicSwiftSDK)
+    private func anthropicModel(_ model: AIModel) -> AnthropicSwiftSDK.Model {
+        switch model {
+        case .sonnet: return .claude_4_sonnet
+        case .opus: return .claude_4_opus
+        case .haiku: return .claude_3_5_haiku
+        }
+    }
+    #endif
+
+    /// HTTP fallback for environments where AnthropicSwiftSDK is not available.
+    private func sendMessagesHTTP(
+        _ messages: [(role: String, content: String)],
         maxTokens: Int
     ) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
@@ -133,7 +182,7 @@ actor AIAnalyst {
         }
 
         let body: [String: Any] = [
-            "model": model.rawValue,
+            "model": currentModel.rawValue,
             "max_tokens": maxTokens,
             "system": PromptBuilder.systemPrompt,
             "messages": messagesPayload,
@@ -164,8 +213,6 @@ actor AIAnalyst {
 
     // MARK: - Evidence Extraction
 
-    /// Extracts relevant evidence references from the activity context
-    /// to support the AI's response with citations.
     private func extractEvidence(
         from context: ActivityContext,
         question: String

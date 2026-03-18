@@ -77,6 +77,8 @@ struct ContentView: View {
             TodayView()
         case .apps:
             AppsView()
+        case .web:
+            WebOverviewView()
         case .browsers:
             BrowsersView()
         case .websites:
@@ -119,6 +121,28 @@ struct ContentView: View {
         }
         .help("Command bar (⌘K)")
         .keyboardShortcut("k", modifiers: .command)
+    }
+}
+
+/// Combined web overview showing both browsers and websites together.
+struct WebOverviewView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.spacing24) {
+                Text("Web Activity")
+                    .font(Theme.Typography.largeTitle)
+                    .foregroundStyle(Theme.Colors.primaryText)
+
+                Text("Browser and website usage across all tracked browsers.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                BrowsersView()
+                WebsitesView()
+            }
+            .padding(Theme.spacing24)
+        }
+        .background(Theme.Colors.background)
     }
 }
 

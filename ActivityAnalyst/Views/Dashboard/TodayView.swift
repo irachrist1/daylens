@@ -11,8 +11,11 @@ struct TodayView: View {
                 headerSection
                 summaryCards
                 densitySection
+                categoryBreakdownSection
                 topAppsSection
+                topBrowsersSection
                 topWebsitesSection
+                trendSnapshotSection
                 aiSummarySection
                 timelinePreview
             }
@@ -92,6 +95,66 @@ struct TodayView: View {
         }
     }
 
+    // MARK: - Category Breakdown (PRD 11.7: time spent by category)
+
+    private var categoryBreakdownSection: some View {
+        VStack(alignment: .leading, spacing: Theme.spacing12) {
+            Text("Time by Category")
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.primaryText)
+
+            if let summary = viewModel.dailySummary, !summary.topApps.isEmpty {
+                let categories = aggregateByCategory(summary.topApps + summary.topWebsites)
+                VStack(spacing: Theme.spacing6) {
+                    ForEach(categories.prefix(6), id: \.category) { item in
+                        HStack(spacing: Theme.spacing8) {
+                            Image(systemName: item.category.sfSymbol)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.category(item.category))
+                                .frame(width: 16)
+
+                            Text(item.category.displayName)
+                                .font(Theme.Typography.body)
+                                .frame(width: 100, alignment: .leading)
+
+                            GeometryReader { geometry in
+                                RoundedRectangle(cornerRadius: Theme.barCornerRadius)
+                                    .fill(Theme.Colors.category(item.category))
+                                    .frame(width: geometry.size.width * CGFloat(item.fraction))
+                            }
+                            .frame(height: 20)
+
+                            Text(DurationFormatter.format(item.duration))
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .frame(width: 55, alignment: .trailing)
+
+                            Text(DurationFormatter.formatPercentage(item.fraction))
+                                .font(Theme.Typography.footnote)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .frame(width: 32, alignment: .trailing)
+                        }
+                    }
+                }
+            } else {
+                Text("No category data yet")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    private func aggregateByCategory(_ items: [RankedItem]) -> [(category: ActivityCategory, duration: TimeInterval, fraction: Double)] {
+        var totals: [ActivityCategory: TimeInterval] = [:]
+        for item in items {
+            totals[item.category, default: 0] += item.duration
+        }
+        let grandTotal = totals.values.reduce(0, +)
+        return totals
+            .sorted { $0.value > $1.value }
+            .map { (category: $0.key, duration: $0.value, fraction: grandTotal > 0 ? $0.value / grandTotal : 0) }
+    }
+
     // MARK: - Top Apps
 
     private var topAppsSection: some View {
@@ -119,6 +182,30 @@ struct TodayView: View {
         }
     }
 
+    // MARK: - Top Browsers (PRD 11.7)
+
+    private var topBrowsersSection: some View {
+        VStack(alignment: .leading, spacing: Theme.spacing12) {
+            HStack {
+                Text("Top Browsers")
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(Theme.Colors.primaryText)
+                Spacer()
+            }
+
+            if let summary = viewModel.dailySummary, !summary.topBrowsers.isEmpty {
+                HorizontalBarChart(
+                    items: summary.topBrowsers,
+                    maxItems: 5
+                )
+            } else {
+                Text("No browser activity recorded yet")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
     // MARK: - Top Websites
 
     private var topWebsitesSection: some View {
@@ -139,6 +226,27 @@ struct TodayView: View {
                 Text("No website activity recorded yet")
                     .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    // MARK: - Trend Snapshots (PRD 11.7: trend snapshots across recent days)
+
+    private var trendSnapshotSection: some View {
+        VStack(alignment: .leading, spacing: Theme.spacing12) {
+            Text("Recent Trends")
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.primaryText)
+
+            HStack(spacing: Theme.spacing12) {
+                ForEach(0..<5, id: \.self) { dayOffset in
+                    let date = Calendar.current.date(byAdding: .day, value: -dayOffset, to: viewModel.selectedDate)!
+                    TrendDayCell(
+                        date: date,
+                        isToday: dayOffset == 0
+                    )
+                }
+                Spacer()
             }
         }
     }
@@ -250,5 +358,41 @@ struct SummaryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.Colors.groupedBackground)
         .clipShape(RoundedRectangle(cornerRadius: Theme.radiusMedium))
+    }
+}
+
+// MARK: - Trend Day Cell
+
+struct TrendDayCell: View {
+    let date: Date
+    let isToday: Bool
+
+    var body: some View {
+        VStack(spacing: Theme.spacing4) {
+            Text(dayLabel)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(isToday ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+
+            RoundedRectangle(cornerRadius: 3)
+                .fill(isToday ? Theme.Colors.accent : Theme.Colors.separator.opacity(0.3))
+                .frame(width: 36, height: 36)
+                .overlay {
+                    Text(dayNumber)
+                        .font(Theme.Typography.headline)
+                        .foregroundStyle(isToday ? .white : Theme.Colors.secondaryText)
+                }
+        }
+    }
+
+    private var dayLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter.string(from: date)
+    }
+
+    private var dayNumber: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter.string(from: date)
     }
 }

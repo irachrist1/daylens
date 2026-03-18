@@ -15,7 +15,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.24.0"),
-        .package(url: "https://github.com/anthropics/anthropic-sdk-swift.git", from: "0.1.0")
+        .package(url: "https://github.com/fumito-ito/AnthropicSwiftSDK.git", from: "0.14.0")
     ],
     targets: [
         .target(

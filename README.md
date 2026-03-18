@@ -19,7 +19,7 @@ Activity Analyst is a personal activity intelligence product — not a simple ti
 
 **Stack:** Swift 5.9+ / SwiftUI + AppKit interop / GRDB.swift + SQLite / Anthropic SDK
 
-See [architecture/Architecture.md](architecture/Architecture.md) for the full architecture decision memo including stack comparison, system design, data model, and implementation phases.
+See [architecture/Architecture.md](architecture/Architecture.md) for the full architecture decision memo including stack comparison, system design, data model, and implementation phases. See [architecture/PerformanceAndPrivacyNotes.md](architecture/PerformanceAndPrivacyNotes.md) for detailed performance budgets and privacy design.
 
 ### Project Structure
 

@@ -59,10 +59,11 @@ struct ActivityAnalystApp: App {
         switch destination {
         case .today: return KeyboardShortcut("1", modifiers: .command)
         case .apps: return KeyboardShortcut("2", modifiers: .command)
-        case .browsers: return KeyboardShortcut("3", modifiers: .command)
-        case .websites: return KeyboardShortcut("4", modifiers: .command)
-        case .insights: return KeyboardShortcut("5", modifiers: .command)
-        case .history: return KeyboardShortcut("6", modifiers: .command)
+        case .web: return KeyboardShortcut("3", modifiers: .command)
+        case .browsers: return KeyboardShortcut("4", modifiers: .command)
+        case .websites: return KeyboardShortcut("5", modifiers: .command)
+        case .insights: return KeyboardShortcut("6", modifiers: .command)
+        case .history: return KeyboardShortcut("7", modifiers: .command)
         case .settings: return KeyboardShortcut(",", modifiers: .command)
         }
     }

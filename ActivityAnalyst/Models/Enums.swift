@@ -165,6 +165,7 @@ enum PermissionStatus: String, Codable, Sendable {
 enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
     case today
     case apps
+    case web
     case browsers
     case websites
     case insights
@@ -177,6 +178,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .today: return "Today"
         case .apps: return "Apps"
+        case .web: return "Web"
         case .browsers: return "Browsers"
         case .websites: return "Websites"
         case .insights: return "Insights"
@@ -189,11 +191,17 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .today: return "sun.max.fill"
         case .apps: return "square.grid.2x2.fill"
+        case .web: return "network"
         case .browsers: return "globe"
         case .websites: return "link"
         case .insights: return "brain.head.profile"
         case .history: return "clock.arrow.circlepath"
         case .settings: return "gearshape.fill"
         }
+    }
+
+    /// Whether this destination appears as a child under the "Web" expandable folder.
+    var isWebChild: Bool {
+        self == .browsers || self == .websites
     }
 }

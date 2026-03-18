@@ -56,6 +56,28 @@ final class Database: Sendable {
         #endif
 
         migrator.registerMigration("v1_initial") { db in
+            try db.create(table: "users") { t in
+                t.column("id", .text).primaryKey()
+                t.column("displayName", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.column("lastActiveAt", .datetime).notNull()
+                t.column("onboardingCompleted", .boolean).notNull().defaults(to: false)
+                t.column("selectedAIModel", .text).notNull().defaults(to: "claude-sonnet-4-20250514")
+                t.column("apiKeyConfigured", .boolean).notNull().defaults(to: false)
+            }
+
+            try db.create(table: "devices") { t in
+                t.column("id", .text).primaryKey()
+                t.column("userId", .text).notNull()
+                    .references("users", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("model", .text).notNull()
+                t.column("osVersion", .text).notNull()
+                t.column("appVersion", .text).notNull()
+                t.column("firstSeen", .datetime).notNull()
+                t.column("lastSeen", .datetime).notNull()
+            }
+
             try db.create(table: "apps") { t in
                 t.column("id", .text).primaryKey()
                 t.column("bundleIdentifier", .text).notNull().unique()

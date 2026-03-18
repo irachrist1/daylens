@@ -5,13 +5,29 @@ import SwiftUI
 struct SidebarView: View {
     @Binding var selection: SidebarDestination
 
+    @State private var webExpanded = true
+
     var body: some View {
         List(selection: $selection) {
             Section("Activity") {
-                ForEach([SidebarDestination.today, .apps, .browsers, .websites]) { dest in
-                    SidebarItem(destination: dest)
-                        .tag(dest)
-                }
+                SidebarItem(destination: .today)
+                    .tag(SidebarDestination.today)
+
+                SidebarItem(destination: .apps)
+                    .tag(SidebarDestination.apps)
+
+                DisclosureGroup(
+                    isExpanded: $webExpanded,
+                    content: {
+                        SidebarItem(destination: .browsers)
+                            .tag(SidebarDestination.browsers)
+                        SidebarItem(destination: .websites)
+                            .tag(SidebarDestination.websites)
+                    },
+                    label: {
+                        SidebarItem(destination: .web)
+                    }
+                )
             }
 
             Section("Intelligence") {
