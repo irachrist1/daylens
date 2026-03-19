@@ -24,9 +24,8 @@ final class AppsViewModel: ObservableObject {
     init(store: ActivityStore?, dateRange: (from: Date, to: Date)? = nil) {
         self.store = store
         let range = dateRange ?? {
-            let end = Date()
-            let start = Calendar.current.date(byAdding: .day, value: -7, to: end) ?? end
-            return (start, end)
+            let now = Date()
+            return (now, now)
         }()
         self.dateRange = range
     }
@@ -43,7 +42,7 @@ final class AppsViewModel: ObservableObject {
 
             do {
                 let durations = try await store.appDurations(from: start, to: end)
-                let sessions = try await store.fetchSessions(from: start, to: end, significantOnly: true)
+                let sessions = try await store.fetchSessions(from: start, to: end, significantOnly: false)
 
                 var sessionCountByApp: [UUID: Int] = [:]
                 for session in sessions {
@@ -51,9 +50,7 @@ final class AppsViewModel: ObservableObject {
                 }
 
                 var usage: [(app: AppRecord, duration: TimeInterval, sessionCount: Int)] = []
-                for (appId, name, duration, category) in durations {
-                    guard duration >= TrackingRules.minimumAppUseDuration else { continue }
-
+                for (appId, _, duration, _) in durations {
                     if let app = try await store.fetchApp(id: appId) {
                         let count = sessionCountByApp[appId] ?? 0
                         usage.append((app: app, duration: duration, sessionCount: count))

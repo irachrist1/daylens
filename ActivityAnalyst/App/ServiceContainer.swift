@@ -4,7 +4,7 @@ import Foundation
 /// Initialized once at app launch and accessible throughout the app.
 /// Wires the full pipeline: capture → debounce → normalize → persist → summarize.
 @MainActor
-final class ServiceContainer {
+final class ServiceContainer: ObservableObject {
     static let shared = ServiceContainer()
 
     #if canImport(GRDB)
@@ -17,10 +17,12 @@ final class ServiceContainer {
     let categoryClassifier: CategoryClassifier
     let privacyFilter: PrivacyFilter
     let permissionManager: PermissionManager
-    let aiAnalyst: AIAnalyst?
+    @Published private(set) var aiAnalyst: AIAnalyst?
     #if canImport(GRDB)
-    let conversationManager: ConversationManager?
+    private(set) var conversationManager: ConversationManager?
     #endif
+
+    private var pipelineTask: Task<Void, Never>?
 
     private init() {
         #if canImport(GRDB)
@@ -41,6 +43,22 @@ final class ServiceContainer {
         privacyFilter = PrivacyFilter()
         permissionManager = PermissionManager()
 
+        reloadAIServices()
+        wirePipeline()
+
+        NotificationCenter.default.addObserver(
+            forName: AppConstants.NotificationNames.apiKeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.reloadAIServices()
+            }
+        }
+    }
+
+    /// Recreates AI services with the current API key. Called on init and when key changes.
+    func reloadAIServices() {
         let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
             ?? UserDefaults.standard.string(forKey: "anthropic_api_key")
             ?? ""
@@ -58,8 +76,6 @@ final class ServiceContainer {
             conversationManager = nil
         }
         #endif
-
-        wirePipeline()
     }
 
     /// Wires the event pipeline: CaptureEngine → PrivacyFilter → EventDebouncer → SessionNormalizer → ActivityStore
@@ -78,7 +94,9 @@ final class ServiceContainer {
         captureEngine.onEventsReady = { [weak self] rawEvents in
             guard let self = self else { return }
 
-            Task {
+            let previousTask = self.pipelineTask
+            self.pipelineTask = Task {
+                await previousTask?.value
                 do {
                     let filtered = filter.filterBatch(rawEvents)
                     let debounced = debouncer.processBatch(filtered)

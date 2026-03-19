@@ -66,6 +66,8 @@ final class CaptureEngine: ObservableObject {
         guard trackingState == .active else { return }
         appMonitor.stopMonitoring()
         windowMonitor.stopMonitoring()
+        idleDetector.stopMonitoring()
+        extensionBridge.stop()
         flushBuffer()
         trackingState = .paused
     }
@@ -74,6 +76,8 @@ final class CaptureEngine: ObservableObject {
         guard trackingState == .paused else { return }
         appMonitor.startMonitoring()
         windowMonitor.startMonitoring()
+        idleDetector.startMonitoring()
+        extensionBridge.start()
         trackingState = .active
     }
 

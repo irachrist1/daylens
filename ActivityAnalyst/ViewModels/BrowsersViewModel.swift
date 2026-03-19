@@ -30,10 +30,9 @@ final class BrowsersViewModel: ObservableObject {
         guard let store = store else { return }
 
         Task {
-            let end = Date()
-            let start = Calendar.current.date(byAdding: .day, value: -7, to: end) ?? end
-            let rangeStart = DateFormatters.startOfDay(start)
-            let rangeEnd = DateFormatters.endOfDay(end)
+            let now = Date()
+            let rangeStart = DateFormatters.startOfDay(now)
+            let rangeEnd = DateFormatters.endOfDay(now)
 
             do {
                 let durations = try await store.browserDurations(from: rangeStart, to: rangeEnd)

@@ -176,7 +176,7 @@ actor ActivityStore {
     func insertSessions(_ sessions: [Session]) throws {
         try database.write { db in
             for var session in sessions {
-                try session.insert(db)
+                try session.save(db)
             }
         }
     }
@@ -230,8 +230,18 @@ actor ActivityStore {
 
     func upsertDailySummary(_ summary: DailySummary) throws {
         try database.write { db in
-            var mutableSummary = summary
-            try mutableSummary.save(db)
+            if let existing = try DailySummary
+                .filter(DailySummary.Columns.date == summary.date)
+                .fetchOne(db) {
+                var updated = summary
+                updated.id = existing.id
+                if updated.aiSummary == nil { updated.aiSummary = existing.aiSummary }
+                if updated.generatedAt == nil { updated.generatedAt = existing.generatedAt }
+                try updated.update(db)
+            } else {
+                var mutableSummary = summary
+                try mutableSummary.insert(db)
+            }
         }
     }
 
@@ -316,21 +326,22 @@ actor ActivityStore {
     func appDurations(from: Date, to: Date) throws -> [(appId: UUID, name: String, duration: TimeInterval, category: ActivityCategory)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT s.appId, a.name, SUM(s.duration) as totalDuration, a.category
+                SELECT CAST(s.appId AS TEXT) AS appIdText, a.name, SUM(s.duration) as totalDuration, a.category
                 FROM sessions s
                 JOIN apps a ON s.appId = a.id
-                WHERE s.startTime >= ? AND s.endTime <= ? AND s.isSignificant = 1
+                WHERE s.startTime >= ? AND s.startTime <= ? AND s.duration > 0
                 GROUP BY s.appId
                 ORDER BY totalDuration DESC
                 """, arguments: [from, to])
 
-            return rows.map { row in
-                (
-                    appId: UUID(uuidString: row["appId"] as String)!,
-                    name: row["name"] as String,
-                    duration: row["totalDuration"] as TimeInterval,
-                    category: ActivityCategory(rawValue: row["category"] as String) ?? .uncategorized
-                )
+            return rows.compactMap { row -> (appId: UUID, name: String, duration: TimeInterval, category: ActivityCategory)? in
+                guard let idStr: String = row["appIdText"],
+                      let id = UUID(uuidString: idStr),
+                      let name: String = row["name"],
+                      let duration: Double = row["totalDuration"] else { return nil }
+                let catStr: String? = row["category"]
+                let category = catStr.flatMap { ActivityCategory(rawValue: $0) } ?? .uncategorized
+                return (appId: id, name: name, duration: duration, category: category)
             }
         }
     }
@@ -338,22 +349,23 @@ actor ActivityStore {
     func websiteDurations(from: Date, to: Date) throws -> [(websiteId: UUID, domain: String, duration: TimeInterval, category: ActivityCategory)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT s.websiteId, w.domain, SUM(s.duration) as totalDuration, w.category
+                SELECT CAST(s.websiteId AS TEXT) AS websiteIdText, w.domain, SUM(s.duration) as totalDuration, w.category
                 FROM sessions s
                 JOIN websites w ON s.websiteId = w.id
-                WHERE s.startTime >= ? AND s.endTime <= ?
-                    AND s.websiteId IS NOT NULL AND s.isSignificant = 1
+                WHERE s.startTime >= ? AND s.startTime <= ?
+                    AND s.websiteId IS NOT NULL AND s.duration > 0
                 GROUP BY s.websiteId
                 ORDER BY totalDuration DESC
                 """, arguments: [from, to])
 
-            return rows.map { row in
-                (
-                    websiteId: UUID(uuidString: row["websiteId"] as String)!,
-                    domain: row["domain"] as String,
-                    duration: row["totalDuration"] as TimeInterval,
-                    category: ActivityCategory(rawValue: row["category"] as String) ?? .uncategorized
-                )
+            return rows.compactMap { row -> (websiteId: UUID, domain: String, duration: TimeInterval, category: ActivityCategory)? in
+                guard let idStr: String = row["websiteIdText"],
+                      let id = UUID(uuidString: idStr),
+                      let domain: String = row["domain"],
+                      let duration: Double = row["totalDuration"] else { return nil }
+                let catStr: String? = row["category"]
+                let category = catStr.flatMap { ActivityCategory(rawValue: $0) } ?? .uncategorized
+                return (websiteId: id, domain: domain, duration: duration, category: category)
             }
         }
     }
@@ -361,21 +373,21 @@ actor ActivityStore {
     func browserDurations(from: Date, to: Date) throws -> [(browserId: UUID, name: String, duration: TimeInterval)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT s.browserId, b.name, SUM(s.duration) as totalDuration
+                SELECT CAST(s.browserId AS TEXT) AS browserIdText, b.name, SUM(s.duration) as totalDuration
                 FROM sessions s
                 JOIN browsers b ON s.browserId = b.id
-                WHERE s.startTime >= ? AND s.endTime <= ?
-                    AND s.browserId IS NOT NULL AND s.isSignificant = 1
+                WHERE s.startTime >= ? AND s.startTime <= ?
+                    AND s.browserId IS NOT NULL AND s.duration > 0
                 GROUP BY s.browserId
                 ORDER BY totalDuration DESC
                 """, arguments: [from, to])
 
-            return rows.map { row in
-                (
-                    browserId: UUID(uuidString: row["browserId"] as String)!,
-                    name: row["name"] as String,
-                    duration: row["totalDuration"] as TimeInterval
-                )
+            return rows.compactMap { row -> (browserId: UUID, name: String, duration: TimeInterval)? in
+                guard let idStr: String = row["browserIdText"],
+                      let id = UUID(uuidString: idStr),
+                      let name: String = row["name"],
+                      let duration: Double = row["totalDuration"] else { return nil }
+                return (browserId: id, name: name, duration: duration)
             }
         }
     }

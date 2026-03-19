@@ -4,20 +4,15 @@ import SwiftUI
 /// Shows a narrative-first overview of the current day's activity.
 struct TodayView: View {
     @StateObject private var viewModel = DashboardViewModel()
+    @ObservedObject private var services = ServiceContainer.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.spacing24) {
                 headerSection
                 summaryCards
-                densitySection
                 categoryBreakdownSection
                 topAppsSection
-                topBrowsersSection
-                topWebsitesSection
-                trendSnapshotSection
-                aiSummarySection
-                timelinePreview
             }
             .padding(Theme.spacing24)
         }
@@ -115,24 +110,25 @@ struct TodayView: View {
 
                             Text(item.category.displayName)
                                 .font(Theme.Typography.body)
-                                .frame(width: 100, alignment: .leading)
+                                .frame(minWidth: 80, alignment: .leading)
+                                .lineLimit(1)
 
                             GeometryReader { geometry in
                                 RoundedRectangle(cornerRadius: Theme.barCornerRadius)
                                     .fill(Theme.Colors.category(item.category))
-                                    .frame(width: geometry.size.width * CGFloat(item.fraction))
+                                    .frame(width: max(4, geometry.size.width * CGFloat(item.fraction)))
                             }
                             .frame(height: 20)
 
                             Text(DurationFormatter.format(item.duration))
                                 .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(Theme.Colors.secondaryText)
-                                .frame(width: 55, alignment: .trailing)
+                                .frame(minWidth: 45, alignment: .trailing)
 
                             Text(DurationFormatter.formatPercentage(item.fraction))
                                 .font(Theme.Typography.footnote)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
-                                .frame(width: 32, alignment: .trailing)
+                                .frame(minWidth: 28, alignment: .trailing)
                         }
                     }
                 }
@@ -240,10 +236,14 @@ struct TodayView: View {
 
             HStack(spacing: Theme.spacing12) {
                 ForEach(0..<5, id: \.self) { dayOffset in
-                    let date = Calendar.current.date(byAdding: .day, value: -dayOffset, to: viewModel.selectedDate)!
+                    let date = Calendar.current.date(byAdding: .day, value: -(4 - dayOffset), to: viewModel.selectedDate)!
+                    let summary = viewModel.recentTrendSummaries.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
                     TrendDayCell(
                         date: date,
-                        isToday: dayOffset == 0
+                        isToday: Calendar.current.isDateInToday(date),
+                        activeTime: summary?.totalActiveTime,
+                        focusScore: summary?.focusScore,
+                        sessionCount: summary?.sessionCount
                     )
                 }
                 Spacer()
@@ -261,9 +261,16 @@ struct TodayView: View {
                 Text("Daily Analysis")
                     .font(Theme.Typography.headline)
                     .foregroundStyle(Theme.Colors.primaryText)
+
+                if services.hasAI {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                }
+
                 Spacer()
 
-                if viewModel.dailySummary?.aiSummary == nil {
+                if viewModel.dailySummary?.aiSummary == nil && services.hasAI {
                     Button("Generate") {
                         Task {
                             viewModel.generateAISummary()
@@ -282,6 +289,18 @@ struct TodayView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.Colors.accentSubtle)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.radiusMedium))
+            } else if !services.hasAI {
+                HStack(spacing: Theme.spacing8) {
+                    Image(systemName: "key.fill")
+                        .foregroundStyle(.orange)
+                    Text("Add your Anthropic API key in Settings to enable AI summaries.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+                .padding(Theme.spacing16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radiusMedium))
             } else {
                 Text("AI analysis will appear here once generated.")
                     .font(Theme.Typography.callout)
@@ -366,6 +385,16 @@ struct SummaryCard: View {
 struct TrendDayCell: View {
     let date: Date
     let isToday: Bool
+    let activeTime: TimeInterval?
+    let focusScore: Double?
+    let sessionCount: Int?
+
+    private var hasData: Bool { activeTime != nil }
+
+    private var activityLevel: Double {
+        guard let time = activeTime else { return 0 }
+        return min(time / (8 * 3600), 1.0)
+    }
 
     var body: some View {
         VStack(spacing: Theme.spacing4) {
@@ -373,15 +402,45 @@ struct TrendDayCell: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(isToday ? Theme.Colors.accent : Theme.Colors.tertiaryText)
 
-            RoundedRectangle(cornerRadius: 3)
-                .fill(isToday ? Theme.Colors.accent : Theme.Colors.separator.opacity(0.3))
-                .frame(width: 36, height: 36)
-                .overlay {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.radiusSmall)
+                    .fill(cellBackground)
+                    .frame(width: 56, height: 56)
+
+                VStack(spacing: 2) {
                     Text(dayNumber)
                         .font(Theme.Typography.headline)
                         .foregroundStyle(isToday ? .white : Theme.Colors.secondaryText)
+
+                    if hasData {
+                        Text(DurationFormatter.formatCompact(activeTime ?? 0))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(isToday ? .white.opacity(0.8) : Theme.Colors.tertiaryText)
+                    }
                 }
+            }
+
+            if let score = focusScore, hasData {
+                HStack(spacing: 2) {
+                    Circle()
+                        .fill(score > 0.5 ? Theme.Colors.focus : Theme.Colors.distraction)
+                        .frame(width: 5, height: 5)
+                    Text("\(Int(score * 100))%")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
         }
+    }
+
+    private var cellBackground: Color {
+        if isToday {
+            return Theme.Colors.accent
+        }
+        if hasData {
+            return Theme.Colors.accent.opacity(0.1 + activityLevel * 0.25)
+        }
+        return Theme.Colors.separator.opacity(0.15)
     }
 
     private var dayLabel: String {

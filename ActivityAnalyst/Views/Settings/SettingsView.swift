@@ -3,6 +3,7 @@ import SwiftUI
 /// App settings with sections for permissions, tracking, privacy, and browser integrations.
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
+    @ObservedObject private var services = ServiceContainer.shared
 
     var body: some View {
         ScrollView {
@@ -14,8 +15,6 @@ struct SettingsView: View {
                 permissionsSection
                 aiSection
                 trackingSection
-                privacySection
-                browserSection
                 dataSection
                 aboutSection
             }
@@ -77,12 +76,12 @@ struct SettingsView: View {
                     .disabled(viewModel.apiKey.isEmpty)
                 }
 
-                if ServiceContainer.shared.hasAI {
-                    Label("AI is configured and available", systemImage: "checkmark.circle.fill")
+                if services.hasAI {
+                    Label("AI is configured and ready", systemImage: "checkmark.circle.fill")
                         .font(Theme.Typography.footnote)
                         .foregroundStyle(.green)
                 } else if !viewModel.apiKey.isEmpty {
-                    Label("Restart the app after saving to activate AI", systemImage: "arrow.clockwise")
+                    Label("Press Save to activate AI features", systemImage: "arrow.clockwise")
                         .font(Theme.Typography.footnote)
                         .foregroundStyle(.orange)
                 } else {
@@ -135,7 +134,7 @@ struct SettingsView: View {
                         get: { viewModel.preferences.effectiveIdleGrace },
                         set: { viewModel.preferences.idleGracePeriod = $0 }
                     ),
-                    range: 30...600,
+                    range: 10...120,
                     unit: "seconds"
                 )
             }
@@ -145,71 +144,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.Colors.accent)
-        }
-    }
-
-    // MARK: - Privacy
-
-    private var privacySection: some View {
-        SettingsSection(title: "Privacy", icon: "eye.slash") {
-            VStack(alignment: .leading, spacing: Theme.spacing12) {
-                Picker("Private browsing", selection: $viewModel.preferences.trackPrivateBrowsing) {
-                    ForEach(PrivateBrowsingMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-
-                Divider()
-
-                HStack {
-                    Text("Data retention")
-                        .font(Theme.Typography.body)
-                    Spacer()
-                    Picker("", selection: Binding(
-                        get: { viewModel.preferences.effectiveRetentionDays },
-                        set: { viewModel.preferences.retentionDays = $0 }
-                    )) {
-                        Text("30 days").tag(30)
-                        Text("90 days").tag(90)
-                        Text("180 days").tag(180)
-                        Text("1 year").tag(365)
-                        Text("Forever").tag(0)
-                    }
-                    .frame(width: 150)
-                }
-            }
-        }
-    }
-
-    // MARK: - Browser Integrations
-
-    private var browserSection: some View {
-        SettingsSection(title: "Browser Integrations", icon: "globe") {
-            if viewModel.browserIntegrations.isEmpty {
-                Text("No browsers detected yet. Start using your browsers to see them here.")
-                    .font(Theme.Typography.callout)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-            } else {
-                ForEach(viewModel.browserIntegrations) { browser in
-                    HStack {
-                        Text(browser.name)
-                            .font(Theme.Typography.body)
-
-                        Spacer()
-
-                        if browser.extensionInstalled {
-                            Label("Connected", systemImage: "checkmark.circle.fill")
-                                .font(Theme.Typography.footnote)
-                                .foregroundStyle(.green)
-                        } else {
-                            Label("Extension needed", systemImage: "arrow.down.circle")
-                                .font(Theme.Typography.footnote)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-            }
         }
     }
 

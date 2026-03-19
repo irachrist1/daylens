@@ -13,6 +13,7 @@ final class DashboardViewModel: ObservableObject {
     @Published var selectedDate: Date
     @Published private(set) var appNames: [UUID: String] = [:]
     @Published private(set) var websiteDomains: [UUID: String] = [:]
+    @Published private(set) var recentTrendSummaries: [DailySummary] = []
 
     /// Hourly activity buckets for the density strip (0–23).
     /// Computed from todaySessions.
@@ -71,9 +72,15 @@ final class DashboardViewModel: ObservableObject {
                 appNames = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.name) })
                 let websites = try await store.fetchAllWebsites()
                 websiteDomains = Dictionary(uniqueKeysWithValues: websites.map { ($0.id, $0.domain) })
+
+                let trendStart = Calendar.current.date(byAdding: .day, value: -4, to: selectedDate)!
+                let trendRangeStart = DateFormatters.startOfDay(trendStart)
+                let trendRangeEnd = DateFormatters.endOfDay(selectedDate)
+                recentTrendSummaries = try await store.fetchDailySummaries(from: trendRangeStart, to: trendRangeEnd)
             } catch {
                 todaySessions = []
                 dailySummary = nil
+                recentTrendSummaries = []
             }
         }
     }

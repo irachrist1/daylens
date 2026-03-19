@@ -17,7 +17,7 @@ struct TrackingRules: Sendable {
     static let sessionMergeWindow: TimeInterval = 8.0
 
     /// Grace period (seconds) before idle detection stops counting active work
-    static let idleGracePeriod: TimeInterval = 120.0
+    static let idleGracePeriod: TimeInterval = 30.0
 
     /// Debounce window (seconds) for coalescing rapid app switches
     static let switchDebounceWindow: TimeInterval = 2.0

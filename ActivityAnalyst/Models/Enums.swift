@@ -9,6 +9,7 @@ enum EventType: String, Codable, CaseIterable, Sendable {
     case appTerminated
     case tabChanged
     case urlChanged
+    case windowChanged
     case idleStart
     case idleEnd
     case sessionStart

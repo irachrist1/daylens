@@ -8,14 +8,22 @@ import Foundation
 /// - Merges rapid back-and-forth switches within the merge window (8s)
 /// - Excludes idle time from active duration calculations
 /// - Produces clean, trustworthy session data for dashboard display
+///
+/// IMPORTANT: openSessions state persists across batches so that an activation
+/// in flush N and its deactivation in flush N+1 are correctly paired.
 final class SessionNormalizer {
     private let preferences: TrackingPreferences
+
+    /// Persistent state: tracks apps that have been activated but not yet deactivated.
+    /// Survives across flush batches so activation/deactivation pairing works correctly.
+    private var openSessions: [UUID: (event: ActivityEvent, start: Date)] = [:]
 
     init(preferences: TrackingPreferences = TrackingPreferences()) {
         self.preferences = preferences
     }
 
     /// Processes a batch of raw events into normalized sessions.
+    /// Open sessions carry over to the next batch for proper pairing.
     func normalize(events: [ActivityEvent]) -> [Session] {
         guard !events.isEmpty else { return [] }
 
@@ -24,6 +32,7 @@ final class SessionNormalizer {
         rawSessions = applyIdleSubtraction(sessions: rawSessions, events: sorted)
         rawSessions = markSignificance(sessions: rawSessions)
         rawSessions = mergeSessions(rawSessions)
+        rawSessions = rawSessions.filter { $0.duration >= 1.0 }
 
         return rawSessions
     }
@@ -31,13 +40,29 @@ final class SessionNormalizer {
     // MARK: - Phase 1: Build Raw Sessions
 
     /// Pairs app activation/deactivation events into raw session objects.
+    /// Uses persistent openSessions state so pairs can span batches.
     private func buildRawSessions(from events: [ActivityEvent]) -> [Session] {
         var sessions: [Session] = []
-        var openSessions: [UUID: (event: ActivityEvent, start: Date)] = [:]
 
         for event in events {
             switch event.eventType {
             case .appActivated:
+                if let existing = openSessions.removeValue(forKey: event.appId) {
+                    let duration = event.timestamp.timeIntervalSince(existing.start)
+                    if duration >= 1.0 {
+                        sessions.append(Session(
+                            appId: existing.event.appId,
+                            browserId: existing.event.browserId,
+                            websiteId: existing.event.websiteId,
+                            startTime: existing.start,
+                            endTime: event.timestamp,
+                            duration: duration,
+                            source: existing.event.source,
+                            confidence: existing.event.confidence,
+                            category: .uncategorized
+                        ))
+                    }
+                }
                 openSessions[event.appId] = (event: event, start: event.timestamp)
 
             case .appDeactivated:
@@ -59,7 +84,7 @@ final class SessionNormalizer {
                     sessions.append(session)
                 }
 
-            case .tabChanged, .urlChanged:
+            case .tabChanged, .urlChanged, .windowChanged:
                 if let existingOpen = openSessions[event.appId] {
                     let duration = event.timestamp.timeIntervalSince(existingOpen.start)
                     if duration > 0 {
@@ -82,24 +107,6 @@ final class SessionNormalizer {
 
             default:
                 break
-            }
-        }
-
-        for (_, open) in openSessions {
-            let now = Date()
-            let duration = now.timeIntervalSince(open.start)
-            if duration > 0 {
-                sessions.append(Session(
-                    appId: open.event.appId,
-                    browserId: open.event.browserId,
-                    websiteId: open.event.websiteId,
-                    startTime: open.start,
-                    endTime: now,
-                    duration: duration,
-                    source: open.event.source,
-                    confidence: open.event.confidence,
-                    category: .uncategorized
-                ))
             }
         }
 

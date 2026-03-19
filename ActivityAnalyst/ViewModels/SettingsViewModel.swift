@@ -34,6 +34,7 @@ final class SettingsViewModel: ObservableObject {
 
     func saveAPIKey() {
         UserDefaults.standard.set(apiKey, forKey: "anthropic_api_key")
+        NotificationCenter.default.post(name: AppConstants.NotificationNames.apiKeyChanged, object: nil)
     }
 
     func requestPermission(_ name: String) {
@@ -45,6 +46,10 @@ final class SettingsViewModel: ObservableObject {
         case "Screen Recording":
             #if canImport(AppKit)
             permManager.openScreenRecordingSettings()
+            #endif
+        case "Automation":
+            #if canImport(AppKit)
+            permManager.openAutomationSettings()
             #endif
         default:
             break

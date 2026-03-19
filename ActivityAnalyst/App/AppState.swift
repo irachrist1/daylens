@@ -5,8 +5,6 @@ import Combine
 @MainActor
 final class AppState: ObservableObject {
     @Published var selectedDestination: SidebarDestination = .today
-    @Published var showInspector: Bool = true
-    @Published var showCommandBar: Bool = false
     @Published var isTracking: Bool = false
     @Published var hasCompletedOnboarding: Bool = false
     @Published var trackingState: TrackingState = .disabled
@@ -20,9 +18,6 @@ final class AppState: ObservableObject {
         hasCompletedOnboarding = UserDefaults.standard.bool(
             forKey: AppConstants.UserDefaultsKeys.hasCompletedOnboarding
         )
-        showInspector = UserDefaults.standard.object(forKey: AppConstants.UserDefaultsKeys.showInspector) != nil
-            ? UserDefaults.standard.bool(forKey: AppConstants.UserDefaultsKeys.showInspector)
-            : true
 
         NotificationCenter.default.addObserver(
             forName: AppConstants.NotificationNames.trackingStateChanged,

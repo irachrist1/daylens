@@ -10,7 +10,7 @@ struct OnboardingView: View {
     enum OnboardingStep: Int, CaseIterable {
         case welcome
         case accessibility
-        case browserExtensions
+        case browserAccess
         case privacy
         case ready
     }
@@ -24,6 +24,11 @@ struct OnboardingView: View {
                 Spacer()
 
                 stepContent
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
+                    .id(currentStep)
 
                 Spacer()
 
@@ -43,8 +48,8 @@ struct OnboardingView: View {
             welcomeStep
         case .accessibility:
             accessibilityStep
-        case .browserExtensions:
-            browserExtensionStep
+        case .browserAccess:
+            browserAccessStep
         case .privacy:
             privacyStep
         case .ready:
@@ -92,22 +97,13 @@ struct OnboardingView: View {
                     .frame(maxWidth: 400)
             }
 
-            if permManager.accessibilityStatus == .granted {
-                Label("Accessibility access granted", systemImage: "checkmark.circle.fill")
-                    .font(Theme.Typography.headline)
-                    .foregroundStyle(.green)
-            } else {
-                Button("Open System Preferences") {
-                    permManager.requestAccessibility()
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.Colors.accent)
-
-                Text("After enabling, return here. The app will detect the change automatically.")
-                    .font(Theme.Typography.footnote)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .multilineTextAlignment(.center)
-            }
+            PermissionRow(
+                title: "Accessibility",
+                icon: "hand.raised.fill",
+                status: permManager.accessibilityStatus,
+                action: { permManager.requestAccessibility() }
+            )
+            .frame(maxWidth: 400)
 
             Text("We never log keystrokes or record your screen.")
                 .font(Theme.Typography.footnote)
@@ -121,44 +117,57 @@ struct OnboardingView: View {
         }
     }
 
-    private var browserExtensionStep: some View {
+    private var browserAccessStep: some View {
         VStack(spacing: Theme.spacing24) {
             Image(systemName: "globe")
                 .font(.system(size: 48, weight: .light))
                 .foregroundStyle(Theme.Colors.accent)
 
             VStack(spacing: Theme.spacing8) {
-                Text("Browser Extensions")
+                Text("Browser Access")
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.primaryText)
 
-                Text("Install our browser extension for high-accuracy website tracking. Without it, we'll use window titles as a fallback — the app works either way.")
+                Text("Grant access to your browsers so Daylens can track which websites you visit. macOS will ask you to confirm for each browser.")
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 400)
             }
 
-            VStack(spacing: Theme.spacing8) {
-                extensionRow(
-                    browser: "Chrome / Arc / Brave",
-                    icon: "globe",
-                    action: {
-                        openChromeExtensionInstall()
-                    }
-                )
-                extensionRow(
-                    browser: "Safari",
-                    icon: "safari",
-                    action: {
-                        openSafariExtensionSettings()
-                    }
-                )
-            }
+            #if canImport(AppKit)
+            let browsers = permManager.installedBrowsers()
 
-            Text("You can set this up later in Settings.")
+            if browsers.isEmpty {
+                Text("No supported browsers detected.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            } else {
+                VStack(spacing: Theme.spacing8) {
+                    ForEach(browsers, id: \.bundleId) { browser in
+                        BrowserAccessRow(
+                            name: browser.name,
+                            bundleId: browser.bundleId,
+                            status: permManager.automationStatuses[browser.bundleId] ?? .notDetermined,
+                            action: {
+                                permManager.requestAutomationAccess(for: browser.bundleId)
+                            }
+                        )
+                    }
+                }
+                .frame(maxWidth: 400)
+            }
+            #endif
+
+            Text("You can manage browser access later in Settings.")
                 .font(Theme.Typography.footnote)
                 .foregroundStyle(Theme.Colors.tertiaryText)
+        }
+        .onAppear {
+            permManager.startPolling()
+        }
+        .onDisappear {
+            permManager.stopPolling()
         }
     }
 
@@ -267,29 +276,6 @@ struct OnboardingView: View {
 
     // MARK: - Helpers
 
-    private func extensionRow(browser: String, icon: String, action: @escaping () -> Void) -> some View {
-        HStack {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.Colors.secondaryText)
-                .frame(width: 24)
-
-            Text(browser)
-                .font(Theme.Typography.body)
-
-            Spacer()
-
-            Button("Install") {
-                action()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(Theme.spacing8)
-        .background(Theme.Colors.groupedBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radiusSmall))
-    }
-
     private func privacyPoint(icon: String, text: String) -> some View {
         HStack(spacing: Theme.spacing12) {
             Image(systemName: icon)
@@ -302,29 +288,125 @@ struct OnboardingView: View {
                 .foregroundStyle(Theme.Colors.primaryText)
         }
     }
+}
 
-    private func openChromeExtensionInstall() {
-        #if canImport(AppKit)
-        let extensionDir = Bundle.main.bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Extensions")
-            .appendingPathComponent("Chrome")
+// MARK: - Reusable Permission Row
 
-        if FileManager.default.fileExists(atPath: extensionDir.path) {
-            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: extensionDir.path)
-        } else {
-            if let url = URL(string: "chrome://extensions/") {
-                NSWorkspace.shared.open(url)
+struct PermissionRow: View {
+    let title: String
+    let icon: String
+    let status: PermissionStatus
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.spacing12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(status == .granted ? .green : Theme.Colors.accent)
+                .frame(width: 28)
+
+            Text(title)
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.primaryText)
+
+            Spacer()
+
+            if status == .granted {
+                HStack(spacing: Theme.spacing4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Granted")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.green)
+                }
+                .transition(.scale.combined(with: .opacity))
+            } else {
+                Button("Grant Access") {
+                    action()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Colors.accent)
+                .controlSize(.small)
+                .transition(.scale.combined(with: .opacity))
             }
         }
-        #endif
+        .padding(Theme.spacing12)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.radiusMedium)
+                .fill(status == .granted
+                      ? Color.green.opacity(0.06)
+                      : Theme.Colors.groupedBackground)
+        )
+        .animation(.spring(duration: 0.35), value: status)
+    }
+}
+
+// MARK: - Browser Access Row
+
+struct BrowserAccessRow: View {
+    let name: String
+    let bundleId: String
+    let status: PermissionStatus
+    let action: () -> Void
+
+    private var browserIcon: String {
+        switch bundleId {
+        case "com.apple.Safari": return "safari"
+        case "org.mozilla.firefox": return "flame"
+        default: return "globe"
+        }
     }
 
-    private func openSafariExtensionSettings() {
-        #if canImport(AppKit)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Safari.Extensions") {
-            NSWorkspace.shared.open(url)
+    var body: some View {
+        HStack(spacing: Theme.spacing12) {
+            Image(systemName: browserIcon)
+                .font(.system(size: 18))
+                .foregroundStyle(status == .granted ? .green : Theme.Colors.secondaryText)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(Theme.Colors.primaryText)
+
+                if bundleId == "org.mozilla.firefox" {
+                    Text("Requires browser extension")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+
+            Spacer()
+
+            if status == .granted {
+                HStack(spacing: Theme.spacing4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Granted")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.green)
+                }
+                .transition(.scale.combined(with: .opacity))
+            } else if bundleId == "org.mozilla.firefox" {
+                Text("N/A")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            } else {
+                Button("Grant Access") {
+                    action()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .transition(.scale.combined(with: .opacity))
+            }
         }
-        #endif
+        .padding(Theme.spacing12)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.radiusMedium)
+                .fill(status == .granted
+                      ? Color.green.opacity(0.06)
+                      : Theme.Colors.groupedBackground)
+        )
+        .animation(.spring(duration: 0.35), value: status)
     }
 }

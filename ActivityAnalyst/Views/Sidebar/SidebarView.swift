@@ -5,8 +5,6 @@ import SwiftUI
 struct SidebarView: View {
     @Binding var selection: SidebarDestination
 
-    @State private var webExpanded = true
-
     var body: some View {
         List(selection: $selection) {
             Section("Activity") {
@@ -16,18 +14,8 @@ struct SidebarView: View {
                 SidebarItem(destination: .apps)
                     .tag(SidebarDestination.apps)
 
-                DisclosureGroup(
-                    isExpanded: $webExpanded,
-                    content: {
-                        SidebarItem(destination: .browsers)
-                            .tag(SidebarDestination.browsers)
-                        SidebarItem(destination: .websites)
-                            .tag(SidebarDestination.websites)
-                    },
-                    label: {
-                        SidebarItem(destination: .web)
-                    }
-                )
+                SidebarItem(destination: .web)
+                    .tag(SidebarDestination.web)
             }
 
             Section("Intelligence") {
@@ -44,9 +32,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            SidebarFooter()
-        }
     }
 }
 
@@ -64,44 +49,3 @@ struct SidebarItem: View {
     }
 }
 
-struct SidebarFooter: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        VStack(spacing: Theme.spacing8) {
-            Divider()
-
-            HStack(spacing: Theme.spacing8) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 6, height: 6)
-
-                Text(statusText)
-                    .font(Theme.Typography.footnote)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-
-                Spacer()
-            }
-            .padding(.horizontal, Theme.spacing16)
-            .padding(.bottom, Theme.spacing8)
-        }
-    }
-
-    private var statusColor: Color {
-        switch appState.trackingState {
-        case .active: return .green
-        case .paused: return .orange
-        case .idle: return .yellow
-        case .disabled: return .red
-        }
-    }
-
-    private var statusText: String {
-        switch appState.trackingState {
-        case .active: return "Tracking active"
-        case .paused: return "Tracking paused"
-        case .idle: return "User idle"
-        case .disabled: return "Tracking disabled"
-        }
-    }
-}

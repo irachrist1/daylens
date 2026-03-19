@@ -57,6 +57,17 @@ enum DurationFormatter {
         return String(format: "%.0fm", minutes)
     }
 
+    /// Ultra-compact format for small UI cells: "2.5h" or "45m"
+    static func formatCompact(_ interval: TimeInterval) -> String {
+        let hours = interval / 3600.0
+        if hours >= 1.0 {
+            return String(format: "%.1fh", hours)
+        }
+        let minutes = Int(interval / 60.0)
+        if minutes > 0 { return "\(minutes)m" }
+        return "0m"
+    }
+
     /// Formats a percentage: "45%"
     static func formatPercentage(_ value: Double) -> String {
         "\(Int(value * 100))%"

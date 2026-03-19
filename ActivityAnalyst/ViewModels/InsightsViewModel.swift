@@ -8,6 +8,8 @@ final class InsightsViewModel: ObservableObject {
 
     @Published private(set) var insights: [Insight] = []
     @Published private(set) var recentSummaries: [DailySummary] = []
+    @Published private(set) var isGeneratingInsights = false
+    @Published var aiConfigured: Bool = false
 
     // MARK: - Dependencies
 
@@ -21,6 +23,17 @@ final class InsightsViewModel: ObservableObject {
 
     init(store: ActivityStore?) {
         self.store = store
+        aiConfigured = ServiceContainer.shared.hasAI
+
+        NotificationCenter.default.addObserver(
+            forName: AppConstants.NotificationNames.apiKeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.aiConfigured = ServiceContainer.shared.hasAI
+            }
+        }
     }
 
     // MARK: - Public Methods
@@ -48,6 +61,29 @@ final class InsightsViewModel: ObservableObject {
             } catch {
                 insights = []
                 recentSummaries = []
+            }
+        }
+    }
+
+    /// Generate trend insights from recent summaries using AI.
+    func generateTrendInsights() {
+        guard let store = store,
+              let aiAnalyst = ServiceContainer.shared.aiAnalyst,
+              !recentSummaries.isEmpty else { return }
+
+        isGeneratingInsights = true
+
+        Task {
+            defer { isGeneratingInsights = false }
+
+            do {
+                let newInsights = try await aiAnalyst.analyzeTrends(summaries: recentSummaries)
+                for insight in newInsights {
+                    try await store.insertInsight(insight)
+                }
+                loadInsights()
+            } catch {
+                print("InsightsViewModel: Failed to generate trend insights: \(error)")
             }
         }
     }

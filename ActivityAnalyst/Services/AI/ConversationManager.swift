@@ -28,11 +28,20 @@ actor ConversationManager {
         let range = dateRange ?? defaultDateRange()
         let context = try await buildContext(from: range.from, to: range.to)
 
-        let (answer, evidence) = try await aiAnalyst.answerQuestion(
+        let (answer, _) = try await aiAnalyst.answerQuestion(
             text,
             context: context,
             conversationId: conversationId
         )
+
+        #if canImport(GRDB)
+        let evidence = try await EvidenceCollector.collectEvidence(
+            for: text, store: store,
+            from: range.from, to: range.to
+        )
+        #else
+        let evidence: [EvidenceReference] = []
+        #endif
 
         return (response: answer, evidence: evidence)
     }

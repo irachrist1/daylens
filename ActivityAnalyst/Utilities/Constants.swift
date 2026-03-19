@@ -12,7 +12,6 @@ enum AppConstants {
         static let trackingPreferences = "trackingPreferences"
         static let selectedAIModel = "selectedAIModel"
         static let lastDailySummaryDate = "lastDailySummaryDate"
-        static let showInspector = "showInspector"
         static let sidebarSelection = "sidebarSelection"
     }
 
@@ -21,5 +20,6 @@ enum AppConstants {
         static let newSessionRecorded = Notification.Name("newSessionRecorded")
         static let dailySummaryGenerated = Notification.Name("dailySummaryGenerated")
         static let extensionConnected = Notification.Name("extensionConnected")
+        static let apiKeyChanged = Notification.Name("apiKeyChanged")
     }
 }
