@@ -9,7 +9,7 @@ enum Constants {
 
     // MARK: - Tracking Thresholds
     /// Minimum seconds an app must be frontmost to count as "used"
-    static let minimumUsageDuration: TimeInterval = 1.0
+    static let minimumUsageDuration: TimeInterval = 3.0
     /// Maximum gap (seconds) between same-app sessions to merge them
     static let sessionMergeThreshold: TimeInterval = 8.0
     /// Seconds of inactivity before user is considered idle

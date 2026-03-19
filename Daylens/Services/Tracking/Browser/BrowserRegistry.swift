@@ -12,6 +12,8 @@ final class BrowserRegistry {
     static let shared = BrowserRegistry()
 
     private let logger = Logger(subsystem: "com.daylens.app", category: "BrowserRegistry")
+    private let stateLock = NSLock()
+    private var cachedState: RegistryState?
 
     /// All known browser-capable definitions, keyed by bundle ID.
     private let knownDefinitions: [String: BrowserDefinition] = {
@@ -33,17 +35,13 @@ final class BrowserRegistry {
     ]
 
     /// Cached detection results, populated on first access.
-    private(set) lazy var installedBrowsers: [InstalledBrowser] = detectAll()
+    var installedBrowsers: [InstalledBrowser] { registryState().installedBrowsers }
 
     /// Fast lookup: bundle IDs with any browser capability (primary OR hybrid).
-    private(set) lazy var browserCapableBundleIDs: Set<String> = {
-        Set(installedBrowsers.map(\.definition.bundleID))
-    }()
+    var browserCapableBundleIDs: Set<String> { registryState().browserCapableBundleIDs }
 
     /// Only primary browsers (not hybrids). Used for Constants.knownBrowserBundleIDs.
-    private(set) lazy var primaryBrowserBundleIDs: Set<String> = {
-        Set(installedBrowsers.filter { $0.definition.role == .primary }.map(\.definition.bundleID))
-    }()
+    var primaryBrowserBundleIDs: Set<String> { registryState().primaryBrowserBundleIDs }
 
     /// Check if a bundle ID has browser capability (primary or hybrid with evidence).
     func isBrowserCapable(_ bundleID: String) -> Bool {
@@ -67,9 +65,10 @@ final class BrowserRegistry {
 
     /// Refresh the installed browser list (e.g., after app install/uninstall).
     func refresh() {
-        installedBrowsers = detectAll()
-        browserCapableBundleIDs = Set(installedBrowsers.map(\.definition.bundleID))
-        primaryBrowserBundleIDs = Set(installedBrowsers.filter { $0.definition.role == .primary }.map(\.definition.bundleID))
+        let refreshedState = makeRegistryState()
+        stateLock.lock()
+        cachedState = refreshedState
+        stateLock.unlock()
     }
 
     // MARK: - Detection
@@ -105,6 +104,38 @@ final class BrowserRegistry {
         return results
     }
 
+    private func registryState() -> RegistryState {
+        stateLock.lock()
+        if let cachedState {
+            stateLock.unlock()
+            return cachedState
+        }
+        stateLock.unlock()
+
+        let detectedState = makeRegistryState()
+
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if let cachedState {
+            return cachedState
+        }
+        cachedState = detectedState
+        return detectedState
+    }
+
+    private func makeRegistryState() -> RegistryState {
+        let installedBrowsers = detectAll()
+        return RegistryState(
+            installedBrowsers: installedBrowsers,
+            browserCapableBundleIDs: Set(installedBrowsers.map(\.definition.bundleID)),
+            primaryBrowserBundleIDs: Set(
+                installedBrowsers
+                    .filter { $0.definition.role == .primary }
+                    .map(\.definition.bundleID)
+            )
+        )
+    }
+
     private func checkHistoryAvailability(definition: BrowserDefinition, homeDir: String) -> Bool {
         switch definition.engine {
         case .safari:
@@ -128,6 +159,12 @@ final class BrowserRegistry {
             return FileManager.default.fileExists(atPath: profilesDir)
         }
     }
+}
+
+private struct RegistryState {
+    let installedBrowsers: [InstalledBrowser]
+    let browserCapableBundleIDs: Set<String>
+    let primaryBrowserBundleIDs: Set<String>
 }
 
 // MARK: - Browser Definition

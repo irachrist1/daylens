@@ -22,13 +22,13 @@ final class TrackingPipelineTests: XCTestCase {
         tracker.simulateFrontmostAppChange(
             bundleID: "com.example.AppB",
             appName: "App B",
-            at: start.addingTimeInterval(2)
+            at: start.addingTimeInterval(4)
         )
 
         let sessions = try database.timelineEvents(for: start)
         XCTAssertEqual(sessions.count, 1)
         XCTAssertEqual(sessions[0].appName, "App A")
         XCTAssertEqual(sessions[0].bundleID, "com.example.AppA")
-        XCTAssertEqual(sessions[0].duration, 2, accuracy: 0.001)
+        XCTAssertEqual(sessions[0].duration, 4, accuracy: 0.001)
     }
 }

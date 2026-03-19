@@ -49,7 +49,6 @@ enum DomainIntelligence {
                     acc.topDomainDuration = site.totalDuration
                     acc.topPageTitle = site.topPageTitle
                 }
-                acc.category = classification.category
                 groups[groupKey] = acc
             } else {
                 groups[groupKey] = SiteGroupAccumulator(

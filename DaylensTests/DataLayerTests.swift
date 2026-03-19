@@ -10,8 +10,8 @@ final class DataLayerTests: XCTestCase {
 
     func testAppSessionsRoundTripThroughInMemoryDatabase() throws {
         let database = try AppDatabase.inMemory()
-        let now = Date()
-        let dayStart = Calendar.current.startOfDay(for: now)
+        let dayStart = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_710_000_000))
+        let now = dayStart.addingTimeInterval(12 * 3600)
 
         try database.insertAppSession(
             AppSession(
@@ -129,5 +129,66 @@ final class DataLayerTests: XCTestCase {
         XCTAssertEqual(summaries.count, 1)
         XCTAssertEqual(summaries.first?.domain, "github.com")
         XCTAssertEqual(summaries.first?.totalDuration ?? 0, 1200, accuracy: 0.001)
+    }
+
+    func testSaveAISummaryCreatesComputedDailySummaryWhenMissing() throws {
+        let database = try AppDatabase.inMemory()
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: Date(timeIntervalSince1970: 1_710_100_000))
+        let sessionStart = selectedDay.addingTimeInterval(300)
+        let sessionEnd = selectedDay.addingTimeInterval(900)
+
+        try database.insertAppSession(
+            AppSession(
+                date: selectedDay,
+                bundleID: "com.apple.dt.Xcode",
+                appName: "Xcode",
+                startTime: sessionStart,
+                endTime: sessionEnd,
+                duration: 600,
+                category: .development,
+                isBrowser: false
+            )
+        )
+
+        try database.insertBrowserSession(
+            BrowserSession(
+                date: selectedDay,
+                browserBundleID: "com.google.Chrome",
+                browserName: "Chrome",
+                startTime: sessionStart,
+                endTime: sessionEnd,
+                duration: 600
+            )
+        )
+
+        try database.insertWebsiteVisit(
+            WebsiteVisit(
+                date: selectedDay,
+                domain: "github.com",
+                fullURL: "https://github.com/openai/daylens",
+                pageTitle: "Daylens",
+                browserBundleID: "com.google.Chrome",
+                startTime: sessionStart,
+                endTime: sessionStart.addingTimeInterval(300),
+                duration: 300,
+                confidence: .high,
+                source: .browserHistory
+            )
+        )
+
+        try database.saveAISummary("Solid focus day", for: selectedDay)
+
+        let summary = try database.dailySummary(for: selectedDay)
+        XCTAssertNotNil(summary)
+        XCTAssertEqual(summary?.aiSummary, "Solid focus day")
+        XCTAssertEqual(summary?.totalActiveTime ?? 0, 600, accuracy: 0.001)
+        XCTAssertEqual(summary?.appCount, 1)
+        XCTAssertEqual(summary?.browserCount, 1)
+        XCTAssertEqual(summary?.domainCount, 1)
+        XCTAssertEqual(summary?.sessionCount, 1)
+        XCTAssertEqual(summary?.contextSwitches, 0)
+        XCTAssertEqual(summary?.topAppBundleID, "com.apple.dt.Xcode")
+        XCTAssertEqual(summary?.topDomain, "github.com")
     }
 }

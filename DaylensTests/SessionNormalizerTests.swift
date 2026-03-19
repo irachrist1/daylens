@@ -46,9 +46,7 @@ final class SessionNormalizerTests: XCTestCase {
     // MARK: - Session Merge Rules
 
     func testMinimumUsageDuration() {
-        // A sub-second session should not meet the 1s threshold
-        XCTAssertTrue(0.5 < Constants.minimumUsageDuration)
-        XCTAssertTrue(1.0 >= Constants.minimumUsageDuration)
+        XCTAssertEqual(Constants.minimumUsageDuration, 3.0)
     }
 
     func testSessionMergeThreshold() {

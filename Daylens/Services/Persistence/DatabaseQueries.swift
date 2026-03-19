@@ -154,34 +154,7 @@ extension AppDatabase {
 
     func timelineEvents(for date: Date) throws -> [AppSession] {
         try dbQueue.read { db in
-            let dayBounds = DayBounds(for: date)
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT id, date, bundleID, appName, startTime, endTime, duration, isBrowser
-                FROM app_sessions
-                WHERE startTime < ? AND endTime > ?
-                ORDER BY startTime ASC
-                """, arguments: [dayBounds.end, dayBounds.start])
-
-            return rows.compactMap { row in
-                let bundleID: String = row["bundleID"]
-                let appName: String = row["appName"]
-                let startTime: Date = row["startTime"]
-                let endTime: Date = row["endTime"]
-                guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else {
-                    return nil
-                }
-                return AppSession(
-                    id: row["id"],
-                    date: dayBounds.start,
-                    bundleID: bundleID,
-                    appName: appName,
-                    startTime: clipped.start,
-                    endTime: clipped.end,
-                    duration: clipped.duration,
-                    category: AppCategory.categorize(bundleID: bundleID, appName: appName),
-                    isBrowser: row["isBrowser"]
-                )
-            }
+            try self.timelineEvents(in: db, dayBounds: DayBounds(for: date))
         }
     }
 
@@ -192,24 +165,21 @@ extension AppDatabase {
     /// whether a DailySummary row already exists.
     func saveAISummary(_ text: String, for date: Date) throws {
         let dayStart = Calendar.current.startOfDay(for: date)
+        let generatedAt = Date()
         try dbQueue.write { db in
             // Try updating an existing row first
             try db.execute(
                 sql: "UPDATE daily_summaries SET aiSummary = ?, aiSummaryGeneratedAt = ? WHERE date = ?",
-                arguments: [text, Date(), dayStart]
+                arguments: [text, generatedAt, dayStart]
             )
             if db.changesCount == 0 {
-                // No row for this date — insert a minimal one
-                try db.execute(
-                    sql: """
-                        INSERT INTO daily_summaries
-                            (date, totalActiveTime, totalIdleTime, appCount, browserCount,
-                             domainCount, sessionCount, contextSwitches, focusScore,
-                             longestFocusStreak, aiSummary, aiSummaryGeneratedAt)
-                        VALUES (?, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?)
-                        """,
-                    arguments: [dayStart, text, Date()]
+                let summary = try computedDailySummary(
+                    in: db,
+                    dayBounds: DayBounds(for: date),
+                    aiSummary: text,
+                    aiSummaryGeneratedAt: generatedAt
                 )
+                try summary.save(db, onConflict: .replace)
             }
         }
     }
@@ -385,6 +355,109 @@ private func mergedIntervals(from intervals: [ClippedInterval]) -> [ClippedInter
 }
 
 private extension AppDatabase {
+    func computedDailySummary(
+        in db: Database,
+        dayBounds: DayBounds,
+        aiSummary: String?,
+        aiSummaryGeneratedAt: Date?
+    ) throws -> DailySummary {
+        let appSummaries = try appUsageSummaries(in: db, dayBounds: dayBounds)
+        let websiteSummaries = try websiteUsageSummaries(in: db, dayBounds: dayBounds)
+        let timeline = try timelineEvents(in: db, dayBounds: dayBounds)
+
+        let totalActiveTime = appSummaries.reduce(0) { $0 + $1.totalDuration }
+        let contextSwitches = max(0, timeline.count - 1)
+
+        return DailySummary(
+            date: dayBounds.start,
+            totalActiveTime: totalActiveTime,
+            totalIdleTime: 0,
+            appCount: appSummaries.count,
+            browserCount: try browserCount(in: db, dayBounds: dayBounds),
+            domainCount: websiteSummaries.count,
+            sessionCount: timeline.count,
+            contextSwitches: contextSwitches,
+            focusScore: computeFocusScore(for: timeline, totalTime: totalActiveTime),
+            longestFocusStreak: computeLongestFocusStreak(for: timeline),
+            topAppBundleID: appSummaries.first?.bundleID,
+            topDomain: websiteSummaries.first?.domain,
+            aiSummary: aiSummary,
+            aiSummaryGeneratedAt: aiSummaryGeneratedAt
+        )
+    }
+
+    func timelineEvents(in db: Database, dayBounds: DayBounds) throws -> [AppSession] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT id, date, bundleID, appName, startTime, endTime, duration, isBrowser
+            FROM app_sessions
+            WHERE startTime < ? AND endTime > ?
+            ORDER BY startTime ASC
+            """, arguments: [dayBounds.end, dayBounds.start])
+
+        return rows.compactMap { row in
+            let bundleID: String = row["bundleID"]
+            let appName: String = row["appName"]
+            let startTime: Date = row["startTime"]
+            let endTime: Date = row["endTime"]
+            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else {
+                return nil
+            }
+            return AppSession(
+                id: row["id"],
+                date: dayBounds.start,
+                bundleID: bundleID,
+                appName: appName,
+                startTime: clipped.start,
+                endTime: clipped.end,
+                duration: clipped.duration,
+                category: AppCategory.categorize(bundleID: bundleID, appName: appName),
+                isBrowser: row["isBrowser"]
+            )
+        }
+    }
+
+    func browserCount(in db: Database, dayBounds: DayBounds) throws -> Int {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT DISTINCT browserBundleID
+            FROM browser_sessions
+            WHERE startTime < ? AND endTime > ?
+            """, arguments: [dayBounds.end, dayBounds.start])
+        return rows.count
+    }
+
+    func computeFocusScore(for sessions: [AppSession], totalTime: TimeInterval) -> Double {
+        guard totalTime > 0 else { return 0 }
+
+        let focusedTime = sessions
+            .filter { $0.category.isFocused }
+            .reduce(0.0) { $0 + $1.duration }
+
+        let focusRatio = focusedTime / totalTime
+        let switchRate = Double(sessions.count) / max(totalTime / 3600.0, 0.1)
+        let switchPenalty = min(switchRate / 60.0, 0.3)
+
+        return max(0, min(1.0, focusRatio - switchPenalty))
+    }
+
+    func computeLongestFocusStreak(for sessions: [AppSession]) -> TimeInterval {
+        var longestStreak: TimeInterval = 0
+        var currentStreak: TimeInterval = 0
+        var lastEndTime: Date?
+
+        for session in sessions where session.category.isFocused {
+            if let lastEnd = lastEndTime,
+               session.startTime.timeIntervalSince(lastEnd) <= Constants.sessionMergeThreshold {
+                currentStreak += session.duration
+            } else {
+                currentStreak = session.duration
+            }
+            lastEndTime = session.endTime
+            longestStreak = max(longestStreak, currentStreak)
+        }
+
+        return longestStreak
+    }
+
     func appUsageSummaries(in db: Database, dayBounds: DayBounds) throws -> [AppUsageSummary] {
         let rows = try Row.fetchAll(db, sql: """
             SELECT bundleID, appName, isBrowser, startTime, endTime
