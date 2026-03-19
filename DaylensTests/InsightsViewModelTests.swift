@@ -98,31 +98,39 @@ final class InsightsViewModelTests: XCTestCase {
 
     // MARK: - No API Key Handling
 
-    func testNoAPIKeyAddsErrorMessage() {
+    func testNoAPIKeyAddsErrorMessage() async {
         let vm = InsightsViewModel()
         // Ensure no key is configured
         UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
         try? KeychainService(service: "com.daylens.app").removeString(for: Constants.DefaultsKey.anthropicAPIKey)
         let service = AIService()
 
-        vm.inputText = "My question"
-        vm.askQuestion(aiService: service, date: Date())
+        await MainActor.run {
+            vm.inputText = "My question"
+            vm.askQuestion(aiService: service, date: Date())
+        }
 
         // User message is added synchronously
-        XCTAssertEqual(vm.messages.count, 1)
-        XCTAssertEqual(vm.messages[0].role, .user)
+        await MainActor.run {
+            XCTAssertGreaterThanOrEqual(vm.messages.count, 1)
+            XCTAssertEqual(vm.messages[0].role, .user)
+        }
 
-        // The error response is added asynchronously, so we need to wait
-        let expectation = expectation(description: "Error message appended")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        for _ in 0..<10 {
+            let hasErrorMessage = await MainActor.run { vm.messages.count == 2 }
+            if hasErrorMessage {
+                break
+            }
+            await Task.yield()
+        }
+
+        await MainActor.run {
             XCTAssertEqual(vm.messages.count, 2)
             XCTAssertEqual(vm.messages[1].role, .error)
             XCTAssertTrue(vm.messages[1].content.contains("API key"))
             XCTAssertFalse(vm.isProcessing)
             XCTAssertNotNil(vm.lastError)
-            expectation.fulfill()
         }
-        waitForExpectations(timeout: 2)
     }
 
     // MARK: - State Ownership

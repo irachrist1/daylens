@@ -23,6 +23,7 @@ final class OnboardingTests: XCTestCase {
         defaultsSuiteName = nil
         UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
         try? KeychainService(service: "com.daylens.app").removeString(for: Constants.DefaultsKey.anthropicAPIKey)
+        try? KeychainService(service: "com.daylens.api-keys").removeString(for: "anthropic-api-key")
         super.tearDown()
     }
 
@@ -176,6 +177,22 @@ final class OnboardingTests: XCTestCase {
         service.removeAPIKey()
         XCTAssertFalse(service.isConfigured)
         XCTAssertNil(service.currentAPIKey())
+    }
+
+    func testLegacyKeychainAPIKeyMigratesToNewSlot() {
+        UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+        let newKeychain = KeychainService(service: "com.daylens.app")
+        let legacyKeychain = KeychainService(service: "com.daylens.api-keys")
+        try? newKeychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
+        try? legacyKeychain.removeString(for: "anthropic-api-key")
+        try? legacyKeychain.setString("sk-ant-legacy-key", for: "anthropic-api-key")
+
+        let service = AIService()
+
+        XCTAssertTrue(service.isConfigured)
+        XCTAssertEqual(service.currentAPIKey(), "sk-ant-legacy-key")
+        XCTAssertEqual(newKeychain.string(for: Constants.DefaultsKey.anthropicAPIKey), "sk-ant-legacy-key")
+        XCTAssertNil(legacyKeychain.string(for: "anthropic-api-key"))
     }
 
     func testDefaultsKeysAreCentralized() {

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 /// Lightweight snapshot for a day row in the History list.
 struct DaySummarySnapshot: Identifiable {
@@ -26,6 +27,7 @@ struct DaySummarySnapshot: Identifiable {
 
 @Observable
 final class HistoryViewModel {
+    private let logger = Logger(subsystem: "com.daylens.app", category: "HistoryViewModel")
     var days: [DaySummarySnapshot] = []
     var selectedDate: Date?
     var isLoadingList: Bool = false
@@ -178,7 +180,7 @@ final class HistoryViewModel {
             } catch {
                 // Save failed — summary will still show for this session
                 // but won't survive navigation. Log for debugging.
-                print("[Daylens] Failed to persist AI summary: \(error)")
+                logger.error("Failed to persist AI summary: \(error.localizedDescription, privacy: .private)")
             }
 
             // Update in-memory state

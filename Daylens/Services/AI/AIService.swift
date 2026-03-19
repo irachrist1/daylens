@@ -5,6 +5,8 @@ import Observation
 @Observable
 final class AIService {
     private static let keychain = KeychainService(service: "com.daylens.app")
+    private static let legacyKeychain = KeychainService(service: "com.daylens.api-keys")
+    private static let legacyKeychainAccount = "anthropic-api-key"
 
     private(set) var isConfigured: Bool
     private(set) var model: String
@@ -204,13 +206,24 @@ final class AIService {
     }
 
     private static func migrateLegacyAPIKeyIfNeeded() {
-        guard Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil,
-              let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
-              !legacyKey.isEmpty else {
+        guard Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil else {
             return
         }
 
         do {
+            if let legacyKey = Self.legacyKeychain.string(for: Self.legacyKeychainAccount),
+               !legacyKey.isEmpty {
+                try Self.keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
+                try? Self.legacyKeychain.removeString(for: Self.legacyKeychainAccount)
+                UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+                return
+            }
+
+            guard let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
+                  !legacyKey.isEmpty else {
+                return
+            }
+
             try Self.keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
             UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
         } catch {

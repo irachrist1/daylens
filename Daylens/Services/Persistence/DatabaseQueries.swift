@@ -489,6 +489,7 @@ private extension AppDatabase {
             let merged = mergedIntervals(from: visits.map(\.interval))
             let totalDuration = merged.reduce(0.0) { $0 + $1.duration }
             guard totalDuration >= Constants.minimumWebsiteVisitDuration else { return nil }
+            let rawVisitCount = visits.count
 
             let bundleIDs = Set(visits.map(\.bundleID))
             let browserName: String
@@ -506,7 +507,7 @@ private extension AppDatabase {
             return WebsiteUsageSummary(
                 domain: domain,
                 totalDuration: totalDuration,
-                visitCount: merged.count,
+                visitCount: rawVisitCount,
                 topPageTitle: topTitle,
                 confidence: bestConfidence,
                 browserName: browserName
