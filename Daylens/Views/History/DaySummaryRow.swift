@@ -62,7 +62,7 @@ struct DaySummaryRow: View {
                 if summary.aiSummary != nil {
                     Image(systemName: "sparkles")
                         .font(.caption)
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(.tint)
                 }
 
                 Image(systemName: "chevron.right")

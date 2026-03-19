@@ -5,7 +5,7 @@ import Security
 /// Anthropic Claude API client for AI-powered insights.
 @Observable
 final class AIService {
-    var isConfigured: Bool { apiKey != nil }
+    private(set) var isConfigured: Bool
     var isProcessing: Bool = false
 
     private var apiKey: String? {
@@ -13,6 +13,13 @@ final class AIService {
             service: Constants.keychainServiceName,
             account: Constants.anthropicAPIKeyAccount
         )
+    }
+
+    init() {
+        isConfigured = KeychainHelper.read(
+            service: Constants.keychainServiceName,
+            account: Constants.anthropicAPIKeyAccount
+        ) != nil
     }
 
     private let baseURL = Constants.anthropicAPIBaseURL
@@ -26,6 +33,7 @@ final class AIService {
             account: Constants.anthropicAPIKeyAccount,
             data: key
         )
+        isConfigured = true
     }
 
     func removeAPIKey() {
@@ -33,6 +41,7 @@ final class AIService {
             service: Constants.keychainServiceName,
             account: Constants.anthropicAPIKeyAccount
         )
+        isConfigured = false
     }
 
     func setModel(_ model: String) {

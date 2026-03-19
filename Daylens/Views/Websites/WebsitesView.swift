@@ -36,7 +36,7 @@ struct WebsiteRow: View {
         HStack(spacing: DS.space12) {
             Image(systemName: "globe")
                 .font(.title3)
-                .foregroundStyle(.accent)
+                .foregroundStyle(.tint)
                 .frame(width: 36, height: 36)
 
             VStack(alignment: .leading, spacing: DS.space4) {

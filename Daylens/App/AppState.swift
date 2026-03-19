@@ -6,12 +6,10 @@ final class AppState {
     // MARK: - Navigation
     var selectedSection: SidebarSection = .today
     var selectedDate: Date = Calendar.current.startOfDay(for: Date())
-    var isTrackingActive: Bool = true
 
     // MARK: - Onboarding
-    var hasCompletedOnboarding: Bool {
-        get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
-        set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
+    var hasCompletedOnboarding: Bool = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+        didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") }
     }
 
     // MARK: - Services
@@ -27,7 +25,7 @@ final class AppState {
         trackingCoordinator = TrackingCoordinator(database: database, permissionManager: permissionManager)
         aiService = AIService()
 
-        if hasCompletedOnboarding && isTrackingActive {
+        if hasCompletedOnboarding {
             trackingCoordinator.startTracking()
         }
     }
@@ -49,22 +47,12 @@ final class AppState {
         guard !isToday else { return }
         selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
     }
-
-    func toggleTracking() {
-        isTrackingActive.toggle()
-        if isTrackingActive {
-            trackingCoordinator.startTracking()
-        } else {
-            trackingCoordinator.stopTracking()
-        }
-    }
 }
 
 enum SidebarSection: String, CaseIterable, Identifiable {
     case today = "Today"
     case apps = "Apps"
-    case browsers = "Browsers"
-    case websites = "Websites"
+    case web = "Web"
     case history = "History"
     case insights = "Insights"
     case settings = "Settings"
@@ -75,11 +63,24 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         switch self {
         case .today: "sun.max"
         case .apps: "square.grid.2x2"
-        case .browsers: "globe"
-        case .websites: "link"
+        case .web: "globe"
         case .history: "clock.arrow.circlepath"
         case .insights: "sparkles"
         case .settings: "gearshape"
+        }
+    }
+
+    var showsDateNavigation: Bool {
+        switch self {
+        case .today, .apps, .web, .history: return true
+        case .insights, .settings: return false
+        }
+    }
+
+    var showsInspector: Bool {
+        switch self {
+        case .today, .apps: return true
+        case .web, .history, .insights, .settings: return false
         }
     }
 }

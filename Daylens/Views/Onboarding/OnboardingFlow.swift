@@ -39,8 +39,6 @@ struct OnboardingFlow: View {
 
     private func completeOnboarding() {
         appState.hasCompletedOnboarding = true
-        if appState.isTrackingActive {
-            appState.trackingCoordinator.startTracking()
-        }
+        appState.trackingCoordinator.startTracking()
     }
 }

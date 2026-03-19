@@ -25,21 +25,33 @@ enum AppCategory: String, Codable, CaseIterable, DatabaseValueConvertible {
         }
 
         // Heuristic: development tools
-        let devPatterns = ["xcode", "intellij", "vscode", "sublime", "terminal", "iterm", "warp"]
+        let devPatterns = [
+            "xcode", "intellij", "vscode", "sublime", "terminal", "iterm", "warp",
+            "cursor", "todesktop", "nova", "bbedit", "coderunner", "simulator",
+            "cmux", "tmux", "ssh", "sourcetree", "tower", "fork", "github",
+            "postman", "insomnia", "paw", "tableplus", "sequel", "datagrip",
+            "proxyman", "charles", "wireshark", "instruments"
+        ]
         if devPatterns.contains(where: { bundleID.lowercased().contains($0) }) {
             return .development
         }
 
         // Heuristic: design tools
-        let designPatterns = ["figma", "sketch", "pixelmator", "affinity", "adobe"]
+        let designPatterns = ["figma", "sketch", "pixelmator", "affinity", "adobe", "canva", "framer", "principle", "zeplin", "invision"]
         if designPatterns.contains(where: { bundleID.lowercased().contains($0) }) {
             return .design
         }
 
         // Heuristic: entertainment
-        let entertainmentPatterns = ["spotify", "music", "netflix", "youtube", "tv.app"]
+        let entertainmentPatterns = ["spotify", "music", "netflix", "youtube", "tv.app", "vlc", "mpv", "infuse", "plex", "steam", "epic", "gamepass"]
         if entertainmentPatterns.contains(where: { bundleID.lowercased().contains($0) }) {
             return .entertainment
+        }
+
+        // Heuristic: utilities
+        let utilityPatterns = ["finder", "system", "utility", "calculator", "calendar", "reminders", "notes", "preview", "quicktime", "keychain", "activity.monitor", "activityanalyst", "analyst"]
+        if utilityPatterns.contains(where: { bundleID.lowercased().contains($0) }) {
+            return .utility
         }
 
         return .other

@@ -62,22 +62,8 @@ struct DaylensCommands: Commands {
                 appState.goToToday()
             }
             .keyboardShortcut("t", modifiers: .command)
-
-            Divider()
-
-            Button(appState.isTrackingActive ? "Pause Tracking" : "Resume Tracking") {
-                appState.toggleTracking()
-            }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
         }
 
-        CommandGroup(replacing: .sidebar) {
-            Button("Toggle Sidebar") {
-                NSApp.keyWindow?.firstResponder?.tryToPerform(
-                    #selector(NSSplitViewController.toggleSidebar(_:)), with: nil
-                )
-            }
-            .keyboardShortcut("s", modifiers: [.command, .control])
-        }
+        CommandGroup(replacing: .sidebar) {}
     }
 }

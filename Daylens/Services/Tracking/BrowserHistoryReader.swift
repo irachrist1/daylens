@@ -32,15 +32,38 @@ final class BrowserHistoryReader {
 
         for (bundleID, relativePath) in Constants.browserHistoryPaths {
             guard !relativePath.isEmpty else {
-                // Firefox needs special handling
                 if bundleID == "org.mozilla.firefox" {
                     await readFirefoxHistory(homeDir: homeDir)
                 }
                 continue
             }
 
-            let historyPath = (homeDir as NSString).appendingPathComponent(relativePath)
-            await readBrowserHistory(at: historyPath, browserBundleID: bundleID)
+            // Try the primary path first
+            let primaryPath = (homeDir as NSString).appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: primaryPath) {
+                await readBrowserHistory(at: primaryPath, browserBundleID: bundleID)
+            } else {
+                // For Chromium-based browsers, scan all profiles in the User Data directory
+                await readChromiumProfiles(bundleID: bundleID, relativePath: relativePath, homeDir: homeDir)
+            }
+        }
+    }
+
+    /// Scans all profiles in a Chromium User Data directory for History files.
+    private func readChromiumProfiles(bundleID: String, relativePath: String, homeDir: String) async {
+        // Derive the User Data directory from the relative path (strip "/Default/History")
+        let components = relativePath.components(separatedBy: "/")
+        guard components.count >= 3 else { return }
+        let userDataRelative = components.dropLast(2).joined(separator: "/")
+        let userDataPath = (homeDir as NSString).appendingPathComponent(userDataRelative)
+
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: userDataPath) else { return }
+
+        for entry in entries where entry.hasPrefix("Profile") || entry == "Default" {
+            let historyPath = (userDataPath as NSString).appendingPathComponent("\(entry)/History")
+            if FileManager.default.fileExists(atPath: historyPath) {
+                await readBrowserHistory(at: historyPath, browserBundleID: bundleID)
+            }
         }
     }
 
@@ -84,7 +107,7 @@ final class BrowserHistoryReader {
         let chromiumEpochOffset: Int64 = 11_644_473_600_000_000 // microseconds from 1601 to 1970
         let lastReadChromium = Int64(lastRead.timeIntervalSince1970 * 1_000_000) + chromiumEpochOffset
 
-        let visits = try dbQueue.read { db -> [(url: String, title: String, visitTime: Date, visitDuration: TimeInterval)] in
+        let visits = try await dbQueue.read { db -> [(url: String, title: String, visitTime: Date, visitDuration: TimeInterval)] in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT u.url, u.title, v.visit_time, v.visit_duration
                 FROM visits v
@@ -140,7 +163,7 @@ final class BrowserHistoryReader {
         let macEpochOffset: TimeInterval = 978_307_200 // seconds from 1970 to 2001
         let lastReadMac = lastRead.timeIntervalSince1970 - macEpochOffset
 
-        let visits = try dbQueue.read { db -> [(url: String, title: String?, visitTime: Date)] in
+        let visits = try await dbQueue.read { db -> [(url: String, title: String?, visitTime: Date)] in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT hi.url, hi.domain_expansion, hv.visit_time
                 FROM history_visits hv
@@ -209,7 +232,7 @@ final class BrowserHistoryReader {
 
             do {
                 let dbQueue = try DatabaseQueue(path: tempPath)
-                let visits = try dbQueue.read { db -> [(url: String, title: String?, visitTime: Date)] in
+                let visits = try await dbQueue.read { db -> [(url: String, title: String?, visitTime: Date)] in
                     let rows = try Row.fetchAll(db, sql: """
                         SELECT p.url, p.title, v.visit_date
                         FROM moz_historyvisits v

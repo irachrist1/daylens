@@ -45,7 +45,7 @@ struct CompletionStep: View {
         HStack(spacing: DS.space8) {
             Image(systemName: "arrow.right")
                 .font(.caption)
-                .foregroundStyle(.accent)
+                .foregroundStyle(.tint)
             Text(text)
                 .font(.body)
                 .foregroundStyle(.secondary)

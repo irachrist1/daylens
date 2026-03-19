@@ -12,12 +12,8 @@ struct InspectorPanel: View {
                     todayInspector
                 case .apps:
                     appsInspector
-                case .browsers:
-                    browsersInspector
-                case .websites:
-                    websitesInspector
                 default:
-                    defaultInspector
+                    EmptyView()
                 }
             }
             .padding(DS.space20)
@@ -29,15 +25,6 @@ struct InspectorPanel: View {
 
     private var todayInspector: some View {
         VStack(alignment: .leading, spacing: DS.space16) {
-            Text("Quick Summary")
-                .sectionHeader()
-
-            Text("Select an item in the main view for details.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
             Text("Keyboard Shortcuts")
                 .sectionHeader()
 
@@ -45,7 +32,6 @@ struct InspectorPanel: View {
                 shortcutRow("Previous day", shortcut: "⌘ [")
                 shortcutRow("Next day", shortcut: "⌘ ]")
                 shortcutRow("Today", shortcut: "⌘ T")
-                shortcutRow("Toggle tracking", shortcut: "⌘ P")
             }
         }
     }
@@ -56,39 +42,6 @@ struct InspectorPanel: View {
                 .sectionHeader()
 
             Text("Select an app to see usage details, session history, and category.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var browsersInspector: some View {
-        VStack(alignment: .leading, spacing: DS.space16) {
-            Text("Browser Details")
-                .sectionHeader()
-
-            Text("Select a browser to see usage breakdown and top sites visited.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var websitesInspector: some View {
-        VStack(alignment: .leading, spacing: DS.space16) {
-            Text("Website Details")
-                .sectionHeader()
-
-            Text("Select a website to see visit history and time spent.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var defaultInspector: some View {
-        VStack(alignment: .leading, spacing: DS.space16) {
-            Text("Details")
-                .sectionHeader()
-
-            Text("Select an item for more information.")
                 .font(.body)
                 .foregroundStyle(.secondary)
         }

@@ -8,7 +8,7 @@ struct WebsiteDetailView: View {
             HStack(spacing: DS.space12) {
                 Image(systemName: "globe")
                     .font(.largeTitle)
-                    .foregroundStyle(.accent)
+                    .foregroundStyle(.tint)
 
                 VStack(alignment: .leading) {
                     Text(site.domain)

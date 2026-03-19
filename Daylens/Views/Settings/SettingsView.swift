@@ -8,25 +8,16 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space24) {
-                // AI Settings
                 aiSection
 
                 Divider()
 
-                // Tracking Settings
-                trackingSection
+                loginSection
 
                 Divider()
 
-                // Browser Integration Status
-                browserSection
-
-                Divider()
-
-                // Data Management
                 dataSection
 
-                // Status message
                 if let status = viewModel.statusMessage {
                     Text(status)
                         .font(.caption)
@@ -96,34 +87,18 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Tracking
+    // MARK: - Login Item
 
-    private var trackingSection: some View {
+    private var loginSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Tracking")
+            Text("General")
                 .sectionHeader()
-
-            HStack {
-                VStack(alignment: .leading, spacing: DS.space2) {
-                    Text("Activity Tracking")
-                        .font(.body.weight(.medium))
-                    Text(appState.isTrackingActive ? "Currently tracking" : "Paused")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { appState.isTrackingActive },
-                    set: { _ in appState.toggleTracking() }
-                ))
-                .labelsHidden()
-            }
 
             HStack {
                 VStack(alignment: .leading, spacing: DS.space2) {
                     Text("Open at Login")
                         .font(.body.weight(.medium))
-                    Text("Start tracking when you log in")
+                    Text("Start tracking automatically when you log in")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -139,32 +114,6 @@ struct SettingsView: View {
                     }
                 ))
                 .labelsHidden()
-            }
-        }
-    }
-
-    // MARK: - Browser Integration
-
-    private var browserSection: some View {
-        VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Browser Integration")
-                .sectionHeader()
-
-            Text("Daylens reads browser history databases locally. No extensions required.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-
-            VStack(spacing: DS.space8) {
-                browserStatusRow("Chrome / Arc / Brave / Edge", status: "Automatic", isAvailable: true)
-                browserStatusRow("Safari", status: appState.permissionManager?.isFullDiskAccessGranted == true ? "Available" : "Needs Full Disk Access", isAvailable: appState.permissionManager?.isFullDiskAccessGranted ?? false)
-                browserStatusRow("Firefox", status: "Automatic", isAvailable: true)
-            }
-
-            if appState.permissionManager?.isFullDiskAccessGranted != true {
-                Button("Grant Full Disk Access for Safari") {
-                    appState.permissionManager?.openFullDiskAccessPreferences()
-                }
-                .buttonStyle(.bordered)
             }
         }
     }
@@ -243,23 +192,5 @@ struct SettingsView: View {
                 Text("This will permanently remove all tracked activity data. This action cannot be undone.")
             }
         }
-    }
-
-    private func browserStatusRow(_ name: String, status: String, isAvailable: Bool) -> some View {
-        HStack {
-            Circle()
-                .fill(isAvailable ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
-
-            Text(name)
-                .font(.body)
-
-            Spacer()
-
-            Text(status)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, DS.space2)
     }
 }

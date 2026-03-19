@@ -69,7 +69,7 @@ struct BrowserAccessStep: View {
         HStack(spacing: DS.space12) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(.accent)
+                .foregroundStyle(.tint)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: DS.space2) {

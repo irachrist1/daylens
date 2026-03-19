@@ -11,6 +11,7 @@ final class ActivityTracker {
 
     var trackingState: TrackingState = .idle
     var lastTrackedApp: String?
+    var onSessionFinalized: (() -> Void)?
 
     init(database: AppDatabase) {
         self.database = database
@@ -132,6 +133,7 @@ final class ActivityTracker {
         )
 
         try? database.insertAppSession(session)
+        onSessionFinalized?()
 
         // Also record as browser session if applicable
         if isBrowser {

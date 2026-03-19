@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// NSApplicationDelegate providing menu bar status item and global keyboard shortcuts.
+/// NSApplicationDelegate providing menu bar status item.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private weak var appState: AppState?
@@ -24,30 +24,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image?.size = NSSize(width: 16, height: 16)
         }
 
-        updateMenu()
-    }
-
-    func updateMenu() {
         let menu = NSMenu()
 
-        let isTracking = appState?.isTrackingActive ?? false
-
-        // Status
-        let statusItem = NSMenuItem(title: isTracking ? "Tracking Active" : "Tracking Paused", action: nil, keyEquivalent: "")
-        statusItem.image = NSImage(systemSymbolName: isTracking ? "circle.fill" : "pause.circle.fill", accessibilityDescription: nil)
-        statusItem.image?.isTemplate = true
-        menu.addItem(statusItem)
+        let statusMenuItem = NSMenuItem(title: "Daylens is tracking", action: nil, keyEquivalent: "")
+        statusMenuItem.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+        statusMenuItem.image?.isTemplate = true
+        menu.addItem(statusMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Toggle tracking
-        let toggleTitle = isTracking ? "Pause Tracking" : "Resume Tracking"
-        let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleTracking), keyEquivalent: "p")
-        toggleItem.keyEquivalentModifierMask = [.command, .shift]
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-
-        // Show window
         let showItem = NSMenuItem(title: "Show Daylens", action: #selector(showMainWindow), keyEquivalent: "d")
         showItem.keyEquivalentModifierMask = [.command, .shift]
         showItem.target = self
@@ -55,16 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Quit
         let quitItem = NSMenuItem(title: "Quit Daylens", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
 
         self.statusItem?.menu = menu
-    }
-
-    @objc private func toggleTracking() {
-        appState?.toggleTracking()
-        updateMenu()
     }
 
     @objc private func showMainWindow() {

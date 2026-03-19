@@ -5,18 +5,13 @@ struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
 
+    private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space24) {
-                // Overview cards
                 overviewCards
-
-                // Activity timeline
-                if !viewModel.timeline.isEmpty {
-                    TimelineBand(sessions: viewModel.timeline)
-                }
-
-                // AI Summary
+                TimelineBand(sessions: viewModel.timeline)
                 AISummaryCard(
                     summary: viewModel.aiSummary,
                     isLoading: viewModel.isLoadingAI,
@@ -24,11 +19,7 @@ struct TodayView: View {
                         viewModel.generateAISummary(aiService: appState.aiService, for: appState.selectedDate)
                     }
                 )
-
-                // Top Apps
                 TopAppsCard(summaries: viewModel.appSummaries)
-
-                // Top Websites
                 if !viewModel.websiteSummaries.isEmpty {
                     topWebsitesSection
                 }
@@ -38,6 +29,11 @@ struct TodayView: View {
         .onAppear { viewModel.load(for: appState.selectedDate) }
         .onChange(of: appState.selectedDate) { _, newDate in
             viewModel.load(for: newDate)
+        }
+        .onReceive(refreshTimer) { _ in
+            if Calendar.current.isDateInToday(appState.selectedDate) {
+                viewModel.load(for: appState.selectedDate)
+            }
         }
     }
 
@@ -51,7 +47,6 @@ struct TodayView: View {
                 icon: "clock.fill",
                 color: .blue
             )
-
             StatCard(
                 title: "Focus Score",
                 value: viewModel.focusScoreText,
@@ -59,14 +54,12 @@ struct TodayView: View {
                 icon: "target",
                 color: .green
             )
-
             StatCard(
                 title: "Apps Used",
                 value: "\(viewModel.appSummaries.count)",
                 icon: "square.grid.2x2.fill",
                 color: .orange
             )
-
             StatCard(
                 title: "Sites Visited",
                 value: "\(viewModel.websiteSummaries.count)",

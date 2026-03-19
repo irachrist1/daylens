@@ -9,7 +9,7 @@ struct WelcomeStep: View {
 
             Image(systemName: "sun.max.fill")
                 .font(.system(size: 56))
-                .foregroundStyle(.accent)
+                .foregroundStyle(.tint)
 
             VStack(spacing: DS.space8) {
                 Text("Welcome to Daylens")
@@ -44,7 +44,7 @@ struct WelcomeStep: View {
         HStack(spacing: DS.space12) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(.accent)
+                .foregroundStyle(.tint)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: DS.space2) {

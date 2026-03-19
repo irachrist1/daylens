@@ -150,6 +150,39 @@ extension AppDatabase {
         }
     }
 
+    // MARK: - Website Visits by Browser
+
+    func websiteVisitsForBrowser(date: Date, browserBundleID: String, limit: Int = 20) throws -> [WebsiteUsageSummary] {
+        try dbQueue.read { db in
+            let dayStart = Calendar.current.startOfDay(for: date)
+            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
+
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT domain, browserBundleID, confidence,
+                       SUM(duration) as totalDuration,
+                       COUNT(*) as visitCount,
+                       pageTitle
+                FROM website_visits
+                WHERE startTime >= ? AND startTime < ? AND browserBundleID = ?
+                GROUP BY domain
+                ORDER BY totalDuration DESC
+                LIMIT ?
+                """, arguments: [dayStart, dayEnd, browserBundleID, limit])
+
+            return rows.map { row in
+                let bundleID: String = row["browserBundleID"]
+                return WebsiteUsageSummary(
+                    domain: row["domain"],
+                    totalDuration: row["totalDuration"],
+                    visitCount: row["visitCount"],
+                    topPageTitle: row["pageTitle"],
+                    confidence: ActivityEvent.ConfidenceLevel(rawValue: row["confidence"]) ?? .low,
+                    browserName: Constants.browserNames[bundleID] ?? "Browser"
+                )
+            }
+        }
+    }
+
     // MARK: - Daily Summary
 
     func dailySummary(for date: Date) throws -> DailySummary? {

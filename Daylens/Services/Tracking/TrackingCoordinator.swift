@@ -13,6 +13,7 @@ final class TrackingCoordinator {
 
     var trackingState: TrackingState = .idle
     private var summaryTimer: Timer?
+    private var debouncedSummaryWork: DispatchWorkItem?
     private let database: AppDatabase
 
     init(database: AppDatabase, permissionManager: PermissionManager) {
@@ -29,6 +30,11 @@ final class TrackingCoordinator {
         // Start core app tracking (always available via NSWorkspace)
         activityTracker.start()
         trackingState = .tracking
+
+        // Recompute summary 2 seconds after each app switch
+        activityTracker.onSessionFinalized = { [weak self] in
+            self?.scheduleDebouncedsummary()
+        }
 
         // Start idle detection
         idleDetector.start { [weak self] isIdle in
@@ -50,8 +56,11 @@ final class TrackingCoordinator {
             startAccessibilityPolling()
         }
 
-        // Periodic summary computation
-        summaryTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        // Compute summary immediately so Today view shows data right away
+        computeCurrentDaySummary()
+
+        // Periodic fallback every 15 seconds (session callbacks handle most updates)
+        summaryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.computeCurrentDaySummary()
         }
     }
@@ -69,6 +78,15 @@ final class TrackingCoordinator {
         Task {
             _ = try? sessionNormalizer.computeDailySummary(for: Date())
         }
+    }
+
+    private func scheduleDebouncedsummary() {
+        debouncedSummaryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.computeCurrentDaySummary()
+        }
+        debouncedSummaryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
     // MARK: - Accessibility-based enrichment

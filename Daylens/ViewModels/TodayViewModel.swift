@@ -25,8 +25,8 @@ final class TodayViewModel {
                 appSummaries = try db.appUsageSummaries(for: date)
                 websiteSummaries = try db.websiteUsageSummaries(for: date)
                 browserSummaries = try db.browserUsageSummaries(for: date)
-                dailySummary = try db.dailySummary(for: date)
                 timeline = try db.timelineEvents(for: date)
+                dailySummary = try db.dailySummary(for: date)
                 aiSummary = dailySummary?.aiSummary
             } catch {
                 self.error = error.localizedDescription
@@ -58,7 +58,6 @@ final class TodayViewModel {
                     )
                 }
 
-                // Cache the summary
                 if var summary = dailySummary {
                     summary.aiSummary = aiSummary
                     summary.aiSummaryGeneratedAt = Date()
@@ -76,16 +75,50 @@ final class TodayViewModel {
         }
     }
 
+    // Computed directly from sessions — never shows 0m while sessions exist
     var totalActiveTime: String {
-        dailySummary?.formattedActiveTime ?? "0m"
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        if total > 0 {
+            let hours = Int(total) / 3600
+            let minutes = (Int(total) % 3600) / 60
+            if hours > 0 { return "\(hours)h \(minutes)m" }
+            if minutes > 0 { return "\(minutes)m" }
+            let seconds = Int(total) % 60
+            return "\(seconds)s"
+        }
+        return dailySummary?.formattedActiveTime ?? "0m"
     }
 
     var focusScoreText: String {
-        guard let summary = dailySummary else { return "—" }
-        return "\(summary.focusScorePercent)%"
+        if let summary = dailySummary, summary.focusScore > 0 {
+            return "\(summary.focusScorePercent)%"
+        }
+        // Derive from live session data
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard total > 0 else { return "—" }
+        let focusedTime = appSummaries
+            .filter { $0.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let pct = Int((focusedTime / total) * 100)
+        return "\(pct)%"
     }
 
     var focusLabel: String {
-        dailySummary?.focusScoreLabel ?? "No data"
+        if let summary = dailySummary, summary.focusScore > 0 {
+            return summary.focusScoreLabel
+        }
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard total > 0 else { return "No data" }
+        let focusedTime = appSummaries
+            .filter { $0.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let ratio = focusedTime / total
+        switch ratio {
+        case 0.8...: return "Deep Focus"
+        case 0.6..<0.8: return "Focused"
+        case 0.4..<0.6: return "Mixed"
+        case 0.2..<0.4: return "Scattered"
+        default: return "Fragmented"
+        }
     }
 }
