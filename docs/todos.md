@@ -1,24 +1,26 @@
 # Daylens MVP — Progress Tracker
 
 ## Current State
-**Phase: Initial Implementation Complete (Code Written)**
-All source files created. Project needs `xcodegen generate` on macOS to produce the Xcode project, then build and test.
+**Phase: Feature-Complete Implementation**
+All source files created with real logic. Includes native browser tracking, AI integration, data export, menu bar status item, and keyboard shortcuts.
 
 ## What Works (Code Complete)
-- [x] Project structure with XcodeGen (`project.yml`)
+- [x] Project structure with XcodeGen (`project.yml`) + SPM (`Package.swift`)
 - [x] GRDB database layer with full schema and migrations
 - [x] All data models (ActivityEvent, AppSession, BrowserSession, WebsiteVisit, DailySummary)
 - [x] NSWorkspace-based app tracking (ActivityTracker)
 - [x] Idle detection via IOKit (IdleDetector)
 - [x] Native browser history reading — Chrome, Arc, Brave, Edge, Safari, Firefox (BrowserHistoryReader)
 - [x] Accessibility API for window title and URL extraction (AccessibilityService)
+- [x] AppleScript URL extraction fallback for all major browsers (AppleScriptURLProvider)
+- [x] Two-layer browser URL tracking: AX API primary → AppleScript fallback
 - [x] Session normalization and focus score computation (SessionNormalizer)
 - [x] Tracking coordinator orchestrating all services (TrackingCoordinator)
 - [x] Permission management — accessibility, full disk access, login item (PermissionManager)
 - [x] Anthropic Claude API client with streaming (AIService)
 - [x] Grounded prompt builder for AI (AIPromptBuilder)
 - [x] Local analysis fallback when AI unavailable (LocalAnalyzer)
-- [x] Keychain-based API key storage
+- [x] Keychain-based API key storage (with `import Security`)
 - [x] Multi-step onboarding flow (Welcome → Permissions → Browser Access → Completion)
 - [x] Three-column NavigationSplitView shell
 - [x] Sidebar with section navigation and tracking status
@@ -29,51 +31,39 @@ All source files created. Project needs `xcodegen generate` on macOS to produce 
 - [x] Websites view with domain tracking and confidence indicators
 - [x] History view with daily summaries
 - [x] Insights/AI chat with streaming and local fallback
-- [x] Settings with API key, tracking toggle, browser status, data retention, delete
+- [x] Settings with API key, tracking toggle, browser status, data retention, export, delete
+- [x] Data export to JSON via NSSavePanel
+- [x] Menu bar status item (AppDelegate with NSStatusItem)
+- [x] Keyboard shortcuts (⌘[/⌘] navigate days, ⌘T today, ⇧⌘P toggle tracking)
 - [x] Design system (spacing, colors, typography tokens)
 - [x] Unit tests for session normalization, browser history parsing, aggregation
 
-## Broken / Incomplete
-- [ ] Not yet compiled or runtime-tested (created on Linux)
-- [ ] No app icon asset (placeholder only)
-- [ ] XcodeGen needs to be run on macOS to generate .xcodeproj
-- [ ] Accessibility API may need runtime testing for browser URL extraction
-- [ ] Browser history reader needs testing with actual browser databases
-- [ ] Safari requires Full Disk Access — onboarding explains this but can't auto-grant
-
-## Fixing In This Pass
-- Created all ~50 Swift source files from scratch
-- Implemented native-first browser tracking (reading SQLite files directly, not extension-dependent)
-- Built complete AI integration with Anthropic API + local fallback
-- Every UI control is wired to real logic (no fake buttons)
-- Every screen has meaningful empty states
-
 ## Remaining for MVP
-- [ ] Build and fix compilation issues in Xcode
+- [ ] Build and fix compilation issues in Xcode (run `xcodegen generate` then `xcodebuild`)
 - [ ] Runtime test full tracking pipeline
 - [ ] Test onboarding flow end-to-end
 - [ ] Verify browser history reading works with real databases
-- [ ] Add app icon asset
+- [ ] Add app icon asset (replace placeholder)
 - [ ] Polish timeline rendering for edge cases
 - [ ] Test AI streaming response quality
 - [ ] Performance profile background tracking
 - [ ] Dark mode visual verification
 
-## Risks / Technical Debt
-1. **Chrome database locking**: Copying the file for reading should work but needs validation
-2. **Safari Full Disk Access**: Significant permission ask; well-explained in onboarding
-3. **Accessibility API depth**: URL bar extraction depends on browser AX tree structure
-4. **No runtime validation**: All code was written without compilation; expect some fixes needed
-5. **GRDB version**: Using 6.24.0; should be compatible with macOS 14
-
-## Decisions
-| Decision | Choice | Reasoning |
-|----------|--------|-----------|
+## Architecture Highlights
+| Component | Approach | Why |
+|-----------|----------|-----|
 | Min macOS version | 14.0 (Sonoma) | Enables @Observable, modern SwiftUI |
-| Database | GRDB.swift | Best Swift SQLite library, migration support |
-| Browser tracking | Native-first (SQLite + AX API) | No extensions required for MVP |
-| AI | Direct Anthropic API (URLSession) | No backend server needed |
-| Project generation | XcodeGen | Clean YAML config, generates .xcodeproj |
-| State management | @Observable macro | Modern SwiftUI, less boilerplate |
-| API key storage | macOS Keychain | Secure, native |
-| App sandbox | Disabled | Required for file system access (browser history, etc.) |
+| Database | GRDB.swift | Best Swift SQLite library, ValueObservation, migrations |
+| Browser tracking | Native-first (SQLite + AX API + AppleScript) | No extensions required |
+| AI | Direct Anthropic API (URLSession, streaming) | No backend server needed |
+| Project generation | XcodeGen + SPM | Clean YAML config, no .xcodeproj in git |
+| State management | @Observable macro | Modern SwiftUI, property-level updates |
+| API key storage | macOS Keychain (Security framework) | Secure, native |
+| App sandbox | Disabled | Required for file system access, AX API, AppleScript |
+| Menu bar | NSStatusItem via AppDelegate | Native macOS integration |
+
+## Browser URL Tracking Layers
+1. **Accessibility API** (real-time, medium confidence) — reads URL bar via AXUIElement
+2. **AppleScript/JXA** (real-time, high confidence) — browser-specific scripts for active tab
+3. **Browser History DB** (periodic, high confidence) — reads SQLite history files every 60s
+4. Falls back through layers automatically: AX API → AppleScript → History DB

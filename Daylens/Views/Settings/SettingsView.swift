@@ -205,6 +205,23 @@ struct SettingsView: View {
 
             HStack {
                 VStack(alignment: .leading, spacing: DS.space2) {
+                    Text("Export Data")
+                        .font(.body.weight(.medium))
+                    Text("Export all tracked data as JSON")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Export JSON") {
+                    viewModel.exportData()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Divider()
+
+            HStack {
+                VStack(alignment: .leading, spacing: DS.space2) {
                     Text("Delete All Data")
                         .font(.body.weight(.medium))
                     Text("Permanently remove all tracked data")

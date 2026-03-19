@@ -204,4 +204,63 @@ extension AppDatabase {
             try db.execute(sql: "DELETE FROM ai_conversations")
         }
     }
+
+    // MARK: - Export
+
+    /// Export all data for a date range as a JSON-compatible dictionary.
+    func exportData(from startDate: Date, to endDate: Date) throws -> [String: Any] {
+        try dbQueue.read { db in
+            let appSessions = try Row.fetchAll(db, sql: """
+                SELECT * FROM app_sessions WHERE startTime >= ? AND startTime < ?
+                ORDER BY startTime ASC
+                """, arguments: [startDate, endDate])
+
+            let websiteVisits = try Row.fetchAll(db, sql: """
+                SELECT * FROM website_visits WHERE startTime >= ? AND startTime < ?
+                ORDER BY startTime ASC
+                """, arguments: [startDate, endDate])
+
+            let dailySummaries = try Row.fetchAll(db, sql: """
+                SELECT * FROM daily_summaries WHERE date >= ? AND date < ?
+                ORDER BY date ASC
+                """, arguments: [startDate, endDate])
+
+            let browserSessions = try Row.fetchAll(db, sql: """
+                SELECT * FROM browser_sessions WHERE startTime >= ? AND startTime < ?
+                ORDER BY startTime ASC
+                """, arguments: [startDate, endDate])
+
+            let formatter = ISO8601DateFormatter()
+
+            func rowToDict(_ row: Row) -> [String: Any] {
+                var dict: [String: Any] = [:]
+                for column in row.columnNames {
+                    if let value = row[column] as? Date {
+                        dict[column] = formatter.string(from: value)
+                    } else if let value = row[column] as? String {
+                        dict[column] = value
+                    } else if let value = row[column] as? Int64 {
+                        dict[column] = value
+                    } else if let value = row[column] as? Double {
+                        dict[column] = value
+                    } else if let value = row[column] as? Bool {
+                        dict[column] = value
+                    }
+                }
+                return dict
+            }
+
+            return [
+                "exportedAt": formatter.string(from: Date()),
+                "dateRange": [
+                    "from": formatter.string(from: startDate),
+                    "to": formatter.string(from: endDate),
+                ],
+                "appSessions": appSessions.map(rowToDict),
+                "browserSessions": browserSessions.map(rowToDict),
+                "websiteVisits": websiteVisits.map(rowToDict),
+                "dailySummaries": dailySummaries.map(rowToDict),
+            ]
+        }
+    }
 }

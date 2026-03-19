@@ -83,10 +83,30 @@ final class TrackingCoordinator {
             let title = self.accessibilityService.frontmostWindowTitle(for: frontApp)
             self.activityTracker.updateWindowTitle(title)
 
-            // If it's a browser, try to get the URL
+            // If it's a browser, try to get the URL via AX API first, then AppleScript fallback
             let bundleID = frontApp.bundleIdentifier ?? ""
             if Constants.knownBrowserBundleIDs.contains(bundleID) {
-                if let urlString = self.accessibilityService.browserAddressBarURL(for: frontApp),
+                var extractedURL: String?
+                var extractedTitle: String? = title
+                var source: ActivityEvent.EventSource = .accessibility
+                var confidence: ActivityEvent.ConfidenceLevel = .medium
+
+                // Layer 1: Accessibility API
+                if let axURL = self.accessibilityService.browserAddressBarURL(for: frontApp) {
+                    extractedURL = axURL
+                    source = .accessibility
+                    confidence = .medium
+                }
+
+                // Layer 2: AppleScript fallback (higher confidence)
+                if extractedURL == nil, let tabInfo = AppleScriptURLProvider.activeTab(for: bundleID) {
+                    extractedURL = tabInfo.url
+                    extractedTitle = tabInfo.title ?? title
+                    source = .accessibility // categorized as local extraction
+                    confidence = .high
+                }
+
+                if let urlString = extractedURL,
                    let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)"),
                    let host = url.host {
                     let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -94,13 +114,13 @@ final class TrackingCoordinator {
                         date: Calendar.current.startOfDay(for: Date()),
                         domain: domain,
                         fullURL: urlString,
-                        pageTitle: title,
+                        pageTitle: extractedTitle,
                         browserBundleID: bundleID,
                         startTime: Date(),
-                        endTime: Date().addingTimeInterval(3), // Will be refined
+                        endTime: Date().addingTimeInterval(3),
                         duration: 3,
-                        confidence: .medium,
-                        source: .accessibility
+                        confidence: confidence,
+                        source: source
                     )
                     try? self.database.insertWebsiteVisit(visit)
                 }

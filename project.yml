@@ -34,10 +34,15 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
     dependencies:
       - package: GRDB
+      - sdk: Security.framework
+      - sdk: IOKit.framework
+      - sdk: ServiceManagement.framework
+      - sdk: ApplicationServices.framework
     entitlements:
       path: Daylens/Resources/Daylens.entitlements
       properties:
         com.apple.security.app-sandbox: false
+        com.apple.security.automation.apple-events: true
 
   DaylensTests:
     type: bundle.unit-test

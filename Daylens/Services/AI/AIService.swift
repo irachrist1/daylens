@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Security
 
 /// Anthropic Claude API client for AI-powered insights.
 @Observable
