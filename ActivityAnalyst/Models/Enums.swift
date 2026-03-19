@@ -125,9 +125,9 @@ enum MessageRole: String, Codable, Sendable {
 // MARK: - AI Model
 
 enum AIModel: String, Codable, CaseIterable, Sendable {
-    case sonnet = "claude-sonnet-4-20250514"
-    case opus = "claude-opus-4-20250514"
-    case haiku = "claude-haiku-4-20250414"
+    case sonnet = "claude-sonnet-4-6"
+    case opus = "claude-opus-4-6"
+    case haiku = "claude-haiku-4-5"
 
     var displayName: String {
         switch self {

@@ -134,9 +134,9 @@ actor AIAnalyst {
 
         let response = try await anthropic.messages.createMessage(
             sdkMessages,
-            maxTokens: maxTokens,
-            system: .text(PromptBuilder.systemPrompt),
-            model: anthropicModel(currentModel)
+            model: anthropicModel(currentModel),
+            system: [.text(PromptBuilder.systemPrompt, nil)],
+            maxTokens: maxTokens
         )
 
         guard let textBlock = response.content.first else {
@@ -144,7 +144,7 @@ actor AIAnalyst {
         }
 
         switch textBlock {
-        case .text(let text):
+        case .text(let text, _):
             return text
         default:
             throw AIAnalystError.parseError
@@ -156,11 +156,7 @@ actor AIAnalyst {
 
     #if canImport(AnthropicSwiftSDK)
     private func anthropicModel(_ model: AIModel) -> AnthropicSwiftSDK.Model {
-        switch model {
-        case .sonnet: return .claude_4_sonnet
-        case .opus: return .claude_4_opus
-        case .haiku: return .claude_3_5_haiku
-        }
+        return .custom(model.rawValue)
     }
     #endif
 
