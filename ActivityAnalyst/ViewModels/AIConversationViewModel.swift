@@ -2,8 +2,11 @@ import Foundation
 import SwiftUI
 
 /// ViewModel for the AI chat: conversations, messages, and input.
+/// Singleton so chat state persists across tab switches.
 @MainActor
 final class AIConversationViewModel: ObservableObject {
+    static let shared = AIConversationViewModel()
+
     // MARK: - Published State
 
     @Published private(set) var messages: [AIMessage] = []
@@ -17,8 +20,8 @@ final class AIConversationViewModel: ObservableObject {
 
     // MARK: - Init
 
-    convenience init() {
-        self.init(store: ServiceContainer.shared.store)
+    private init() {
+        self.store = ServiceContainer.shared.store
     }
 
     init(store: ActivityStore?) {

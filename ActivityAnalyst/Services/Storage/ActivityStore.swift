@@ -39,7 +39,7 @@ actor ActivityStore {
 
     func fetchApp(id: UUID) throws -> AppRecord? {
         try database.read { db in
-            try AppRecord.filter(AppRecord.Columns.id == id.uuidString).fetchOne(db)
+            try AppRecord.filter(AppRecord.Columns.id == id).fetchOne(db)
         }
     }
 
@@ -53,7 +53,7 @@ actor ActivityStore {
         try database.write { db in
             try db.execute(
                 sql: "UPDATE apps SET category = ? WHERE id = ?",
-                arguments: [category.rawValue, appId.uuidString]
+                arguments: [category.rawValue, appId]
             )
         }
     }
@@ -81,7 +81,7 @@ actor ActivityStore {
         try database.write { db in
             try db.execute(
                 sql: "UPDATE browsers SET extensionInstalled = ? WHERE id = ?",
-                arguments: [installed, browserId.uuidString]
+                arguments: [installed, browserId]
             )
         }
     }
@@ -148,7 +148,7 @@ actor ActivityStore {
     func fetchEvents(forApp appId: UUID, from: Date, to: Date) throws -> [ActivityEvent] {
         try database.read { db in
             try ActivityEvent
-                .filter(ActivityEvent.Columns.appId == appId.uuidString
+                .filter(ActivityEvent.Columns.appId == appId
                         && ActivityEvent.Columns.timestamp >= from
                         && ActivityEvent.Columns.timestamp <= to)
                 .order(ActivityEvent.Columns.timestamp)
@@ -199,9 +199,9 @@ actor ActivityStore {
     func fetchSessions(forApp appId: UUID, from: Date, to: Date) throws -> [Session] {
         try database.read { db in
             try Session
-                .filter(Session.Columns.appId == appId.uuidString
+                .filter(Session.Columns.appId == appId
                         && Session.Columns.startTime >= from
-                        && Session.Columns.endTime <= to)
+                        && Session.Columns.startTime <= to)
                 .order(Session.Columns.startTime)
                 .fetchAll(db)
         }
@@ -210,9 +210,9 @@ actor ActivityStore {
     func fetchSessions(forWebsite websiteId: UUID, from: Date, to: Date) throws -> [Session] {
         try database.read { db in
             try Session
-                .filter(Session.Columns.websiteId == websiteId.uuidString
+                .filter(Session.Columns.websiteId == websiteId
                         && Session.Columns.startTime >= from
-                        && Session.Columns.endTime <= to)
+                        && Session.Columns.startTime <= to)
                 .order(Session.Columns.startTime)
                 .fetchAll(db)
         }
@@ -275,7 +275,7 @@ actor ActivityStore {
     func fetchInsights(for summaryId: UUID) throws -> [Insight] {
         try database.read { db in
             try Insight
-                .filter(Insight.Columns.dailySummaryId == summaryId.uuidString)
+                .filter(Insight.Columns.dailySummaryId == summaryId)
                 .order(Insight.Columns.createdAt.desc)
                 .fetchAll(db)
         }
@@ -298,7 +298,7 @@ actor ActivityStore {
 
             try db.execute(
                 sql: "UPDATE ai_conversations SET lastMessageAt = ? WHERE id = ?",
-                arguments: [message.createdAt, message.conversationId.uuidString]
+                arguments: [message.createdAt, message.conversationId]
             )
         }
     }
@@ -306,7 +306,7 @@ actor ActivityStore {
     func fetchMessages(for conversationId: UUID) throws -> [AIMessage] {
         try database.read { db in
             try AIMessage
-                .filter(AIMessage.Columns.conversationId == conversationId.uuidString)
+                .filter(AIMessage.Columns.conversationId == conversationId)
                 .order(AIMessage.Columns.createdAt)
                 .fetchAll(db)
         }
@@ -326,7 +326,7 @@ actor ActivityStore {
     func appDurations(from: Date, to: Date) throws -> [(appId: UUID, name: String, duration: TimeInterval, category: ActivityCategory)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT CAST(s.appId AS TEXT) AS appIdText, a.name, SUM(s.duration) as totalDuration, a.category
+                SELECT s.appId, a.name, SUM(s.duration) as totalDuration, a.category
                 FROM sessions s
                 JOIN apps a ON s.appId = a.id
                 WHERE s.startTime >= ? AND s.startTime <= ? AND s.duration > 0
@@ -335,8 +335,7 @@ actor ActivityStore {
                 """, arguments: [from, to])
 
             return rows.compactMap { row -> (appId: UUID, name: String, duration: TimeInterval, category: ActivityCategory)? in
-                guard let idStr: String = row["appIdText"],
-                      let id = UUID(uuidString: idStr),
+                guard let id: UUID = row["appId"],
                       let name: String = row["name"],
                       let duration: Double = row["totalDuration"] else { return nil }
                 let catStr: String? = row["category"]
@@ -349,7 +348,7 @@ actor ActivityStore {
     func websiteDurations(from: Date, to: Date) throws -> [(websiteId: UUID, domain: String, duration: TimeInterval, category: ActivityCategory)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT CAST(s.websiteId AS TEXT) AS websiteIdText, w.domain, SUM(s.duration) as totalDuration, w.category
+                SELECT s.websiteId, w.domain, SUM(s.duration) as totalDuration, w.category
                 FROM sessions s
                 JOIN websites w ON s.websiteId = w.id
                 WHERE s.startTime >= ? AND s.startTime <= ?
@@ -359,8 +358,7 @@ actor ActivityStore {
                 """, arguments: [from, to])
 
             return rows.compactMap { row -> (websiteId: UUID, domain: String, duration: TimeInterval, category: ActivityCategory)? in
-                guard let idStr: String = row["websiteIdText"],
-                      let id = UUID(uuidString: idStr),
+                guard let id: UUID = row["websiteId"],
                       let domain: String = row["domain"],
                       let duration: Double = row["totalDuration"] else { return nil }
                 let catStr: String? = row["category"]
@@ -373,7 +371,7 @@ actor ActivityStore {
     func browserDurations(from: Date, to: Date) throws -> [(browserId: UUID, name: String, duration: TimeInterval)] {
         try database.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT CAST(s.browserId AS TEXT) AS browserIdText, b.name, SUM(s.duration) as totalDuration
+                SELECT s.browserId, b.name, SUM(s.duration) as totalDuration
                 FROM sessions s
                 JOIN browsers b ON s.browserId = b.id
                 WHERE s.startTime >= ? AND s.startTime <= ?
@@ -383,8 +381,7 @@ actor ActivityStore {
                 """, arguments: [from, to])
 
             return rows.compactMap { row -> (browserId: UUID, name: String, duration: TimeInterval)? in
-                guard let idStr: String = row["browserIdText"],
-                      let id = UUID(uuidString: idStr),
+                guard let id: UUID = row["browserId"],
                       let name: String = row["name"],
                       let duration: Double = row["totalDuration"] else { return nil }
                 return (browserId: id, name: name, duration: duration)

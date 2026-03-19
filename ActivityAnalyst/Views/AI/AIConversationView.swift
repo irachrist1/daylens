@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Standalone AI conversation view for deep Q&A sessions.
 struct AIConversationView: View {
-    @StateObject private var viewModel = AIConversationViewModel()
+    @ObservedObject private var viewModel = AIConversationViewModel.shared
 
     var body: some View {
         VStack(spacing: 0) {

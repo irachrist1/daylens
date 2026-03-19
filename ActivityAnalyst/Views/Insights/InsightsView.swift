@@ -3,7 +3,7 @@ import SwiftUI
 /// Insights page: full-screen conversational AI chatbot.
 /// Ask questions about your activity and get responses with inline data widgets.
 struct InsightsView: View {
-    @StateObject private var aiVM = AIConversationViewModel()
+    @ObservedObject private var aiVM = AIConversationViewModel.shared
     @ObservedObject private var services = ServiceContainer.shared
 
     var body: some View {
@@ -206,6 +206,10 @@ struct SuggestionChip: View {
 struct ChatBubble: View {
     let message: AIMessage
 
+    private var renderedContent: AttributedString {
+        (try? AttributedString(markdown: message.content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.content)
+    }
+
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: Theme.spacing4) {
             HStack {
@@ -223,7 +227,7 @@ struct ChatBubble: View {
                         }
                     }
 
-                    Text(message.content)
+                    Text(renderedContent)
                         .font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.primaryText)
                         .lineSpacing(3)
