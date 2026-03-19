@@ -1,22 +1,15 @@
 import SwiftUI
 
-/// Top toolbar bar with section title and date navigation.
+/// Top toolbar bar used only for date navigation surfaces.
 struct HeaderBar: View {
-    @Environment(AppState.self) private var appState
-
     var body: some View {
-        HStack(spacing: DS.space16) {
-            Text(appState.selectedSection.rawValue)
-                .font(.title2.weight(.semibold))
-
+        HStack {
             Spacer()
-
-            if appState.selectedSection.showsDateNavigation {
-                DateNavigator()
-            }
+            DateNavigator()
         }
         .padding(.horizontal, DS.space20)
         .padding(.vertical, DS.space12)
-        .background(.bar)
+        .background()
+        .overlay(alignment: .bottom) { Divider() }
     }
 }

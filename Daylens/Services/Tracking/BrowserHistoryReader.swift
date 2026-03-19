@@ -1,9 +1,11 @@
 import Foundation
 import GRDB
+import OSLog
 
 /// Reads browser history from local SQLite database files.
 /// This is the primary native browser tracking approach — no extensions needed.
 final class BrowserHistoryReader {
+    private let logger = Logger(subsystem: "com.daylens.app", category: "BrowserHistory")
     private let database: AppDatabase
     private var timer: Timer?
     private var lastReadTimestamps: [String: Date] = [:]
@@ -12,7 +14,13 @@ final class BrowserHistoryReader {
         self.database = database
     }
 
+    deinit {
+        stopPolling()
+    }
+
     func startPolling() {
+        guard timer == nil else { return }
+
         // Initial read
         Task { await readAllBrowserHistories() }
 
@@ -30,21 +38,29 @@ final class BrowserHistoryReader {
     private func readAllBrowserHistories() async {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
 
-        for (bundleID, relativePath) in Constants.browserHistoryPaths {
-            guard !relativePath.isEmpty else {
-                if bundleID == "org.mozilla.firefox" {
-                    await readFirefoxHistory(homeDir: homeDir)
+        for definition in BrowserDefinition.all {
+            switch definition.engine {
+            case .firefox:
+                await readFirefoxFamilyHistory(
+                    bundleID: definition.bundleID,
+                    profilesDir: (homeDir as NSString).appendingPathComponent(definition.historyRelativePath)
+                )
+            case .safari:
+                let path = (homeDir as NSString).appendingPathComponent(definition.historyRelativePath)
+                if FileManager.default.fileExists(atPath: path) {
+                    await readBrowserHistory(at: path, browserBundleID: definition.bundleID)
                 }
-                continue
-            }
-
-            // Try the primary path first
-            let primaryPath = (homeDir as NSString).appendingPathComponent(relativePath)
-            if FileManager.default.fileExists(atPath: primaryPath) {
-                await readBrowserHistory(at: primaryPath, browserBundleID: bundleID)
-            } else {
-                // For Chromium-based browsers, scan all profiles in the User Data directory
-                await readChromiumProfiles(bundleID: bundleID, relativePath: relativePath, homeDir: homeDir)
+            case .chromium:
+                let primaryPath = (homeDir as NSString).appendingPathComponent(definition.historyRelativePath)
+                if FileManager.default.fileExists(atPath: primaryPath) {
+                    await readBrowserHistory(at: primaryPath, browserBundleID: definition.bundleID)
+                } else {
+                    await readChromiumProfiles(
+                        bundleID: definition.bundleID,
+                        relativePath: definition.historyRelativePath,
+                        homeDir: homeDir
+                    )
+                }
             }
         }
     }
@@ -73,7 +89,9 @@ final class BrowserHistoryReader {
         guard FileManager.default.fileExists(atPath: path) else { return }
 
         // Chrome locks the database while running — copy to a temp file
-        let tempPath = NSTemporaryDirectory() + "daylens_\(browserBundleID.replacingOccurrences(of: ".", with: "_"))_history.sqlite"
+        let tempPath = (NSTemporaryDirectory() as NSString).appendingPathComponent(
+            "daylens_\(browserBundleID.replacingOccurrences(of: ".", with: "_"))_\(UUID().uuidString)_history.sqlite"
+        )
         do {
             if FileManager.default.fileExists(atPath: tempPath) {
                 try FileManager.default.removeItem(atPath: tempPath)
@@ -96,7 +114,7 @@ final class BrowserHistoryReader {
             }
         } catch {
             // Database might be corrupted or incompatible format
-            print("Failed to read browser history for \(browserBundleID): \(error)")
+            logger.error("Failed to read browser history for \(browserBundleID, privacy: .public): \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -207,18 +225,21 @@ final class BrowserHistoryReader {
         }
     }
 
-    // MARK: - Firefox
+    // MARK: - Firefox-family (Firefox, Zen)
 
-    private func readFirefoxHistory(homeDir: String) async {
-        let profilesDir = (homeDir as NSString).appendingPathComponent("Library/Application Support/Firefox/Profiles")
+    /// Reads history from any Firefox/Gecko-based browser by scanning its Profiles directory.
+    private func readFirefoxFamilyHistory(bundleID: String, profilesDir: String) async {
         guard let profiles = try? FileManager.default.contentsOfDirectory(atPath: profilesDir) else { return }
 
-        // Find the default profile (usually ends with .default-release)
-        for profile in profiles where profile.contains("default") {
+        // Find the default profile (usually contains "default" in its name)
+        for profile in profiles where profile.lowercased().contains("default") {
             let historyPath = (profilesDir as NSString).appendingPathComponent(profile + "/places.sqlite")
             guard FileManager.default.fileExists(atPath: historyPath) else { continue }
 
-            let tempPath = NSTemporaryDirectory() + "daylens_firefox_history.sqlite"
+            let safeBundleID = bundleID.replacingOccurrences(of: ".", with: "_")
+            let tempPath = (NSTemporaryDirectory() as NSString).appendingPathComponent(
+                "daylens_\(safeBundleID)_\(UUID().uuidString)_places.sqlite"
+            )
             do {
                 if FileManager.default.fileExists(atPath: tempPath) {
                     try FileManager.default.removeItem(atPath: tempPath)
@@ -227,7 +248,7 @@ final class BrowserHistoryReader {
             } catch { continue }
             defer { try? FileManager.default.removeItem(atPath: tempPath) }
 
-            let lastRead = lastReadTimestamps["org.mozilla.firefox"] ?? Calendar.current.startOfDay(for: Date())
+            let lastRead = lastReadTimestamps[bundleID] ?? Calendar.current.startOfDay(for: Date())
             let lastReadMicros = Int64(lastRead.timeIntervalSince1970 * 1_000_000)
 
             do {
@@ -260,7 +281,7 @@ final class BrowserHistoryReader {
                         domain: domain,
                         fullURL: visit.url,
                         pageTitle: visit.title,
-                        browserBundleID: "org.mozilla.firefox",
+                        browserBundleID: bundleID,
                         startTime: visit.visitTime,
                         endTime: visit.visitTime.addingTimeInterval(Constants.minimumWebsiteVisitDuration),
                         duration: Constants.minimumWebsiteVisitDuration,
@@ -271,10 +292,10 @@ final class BrowserHistoryReader {
                 }
 
                 if let lastVisit = visits.last {
-                    lastReadTimestamps["org.mozilla.firefox"] = lastVisit.visitTime
+                    lastReadTimestamps[bundleID] = lastVisit.visitTime
                 }
             } catch {
-                print("Failed to read Firefox history: \(error)")
+                logger.error("Failed to read \(bundleID, privacy: .public) history: \(error.localizedDescription, privacy: .private)")
             }
             break // Only read one profile
         }
@@ -282,10 +303,15 @@ final class BrowserHistoryReader {
 
     // MARK: - Helpers
 
-    private func extractDomain(from urlString: String) -> String? {
+    static func normalizedDomain(from urlString: String) -> String? {
         guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
               let host = url.host else { return nil }
-        // Strip "www." prefix for cleaner display
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    private func extractDomain(from urlString: String) -> String? {
+        Self.normalizedDomain(from: urlString)
     }
 }

@@ -1,143 +1,307 @@
 import SwiftUI
-import Charts
 
+/// Browse past days of tracked activity.
 struct HistoryView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = HistoryViewModel()
-    private let refreshTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
+
+    private var aiService: AIService? { appState.aiService }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DS.space24) {
-                activityChart
-                if !viewModel.dailySummaries.isEmpty {
-                    daysList
-                } else if !viewModel.isLoading {
-                    emptyState
-                }
-            }
-            .padding(DS.space24)
+        HStack(spacing: 0) {
+            dayList
+                .frame(width: 260)
+            Divider()
+            dayDetail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { viewModel.load() }
-        .onReceive(refreshTimer) { _ in viewModel.load() }
+        .onAppear { viewModel.loadDays() }
     }
 
-    // MARK: - Activity Chart
+    // MARK: - Day List
 
-    private var activityChart: some View {
+    private var dayList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("History")
+                .font(.headline)
+                .padding(.horizontal, DS.space16)
+                .padding(.vertical, DS.space12)
+
+            Divider()
+
+            if viewModel.days.isEmpty && !viewModel.isLoadingList {
+                dayListEmpty
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.days) { day in
+                            DayRow(
+                                snapshot: day,
+                                isSelected: viewModel.selectedDate == day.date
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { viewModel.selectDay(day.date) }
+
+                            if day.date != viewModel.days.last?.date {
+                                Divider().padding(.leading, DS.space16)
+                            }
+                        }
+                    }
+                    .padding(.vertical, DS.space4)
+                }
+            }
+        }
+        .background(Color(.windowBackgroundColor))
+    }
+
+    private var dayListEmpty: some View {
+        VStack(spacing: DS.space12) {
+            Image(systemName: "calendar")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+
+            Text("No history yet")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Text("Use your Mac for a day and your activity will appear here.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(DS.space24)
+    }
+
+    // MARK: - Day Detail
+
+    @ViewBuilder
+    private var dayDetail: some View {
+        if let selectedDate = viewModel.selectedDate {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DS.space24) {
+                    dayDetailHeader(for: selectedDate)
+
+                    if viewModel.appSummaries.isEmpty && !viewModel.isLoadingDetail {
+                        dayDetailEmpty
+                    } else {
+                        overviewStats
+                        daySummaryCard
+                        categoryBreakdown
+                        TimelineBand(
+                            sessions: viewModel.timeline,
+                            categorySummaries: viewModel.categorySummaries
+                        )
+                        TopAppsCard(summaries: viewModel.appSummaries, date: selectedDate)
+                        if !viewModel.websiteSummaries.isEmpty {
+                            topWebsitesSection
+                        }
+                    }
+                }
+                .frame(maxWidth: 780, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(DS.space24)
+            }
+        } else {
+            noSelectionPlaceholder
+        }
+    }
+
+    private func dayDetailHeader(for date: Date) -> some View {
+        VStack(alignment: .leading, spacing: DS.space4) {
+            Text(Self.fullDateFormatter.string(from: date))
+                .font(.title2.weight(.semibold))
+
+            if !viewModel.appSummaries.isEmpty {
+                Text("\(viewModel.totalActiveTime) active")
+                    .font(.title.weight(.bold).monospacedDigit())
+                    .padding(.top, DS.space4)
+            }
+        }
+    }
+
+    private var overviewStats: some View {
+        HStack(spacing: DS.space16) {
+            StatCard(
+                title: "Focus Score",
+                value: viewModel.focusScoreText,
+                subtitle: viewModel.focusLabel,
+                icon: "target",
+                color: .green
+            )
+            StatCard(
+                title: "Apps Used",
+                value: "\(viewModel.appSummaries.count)",
+                icon: "square.grid.2x2.fill",
+                color: .orange
+            )
+            StatCard(
+                title: "Sites Visited",
+                value: "\(viewModel.websiteSummaries.count)",
+                icon: "globe",
+                color: .purple
+            )
+        }
+    }
+
+    private var daySummaryCard: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Activity (Last 14 Days)")
-                .sectionHeader()
+            HStack {
+                Text("Day Summary")
+                    .sectionHeader()
 
-            Chart(viewModel.chartData, id: \.date) { entry in
-                BarMark(
-                    x: .value("Date", entry.date, unit: .day),
-                    y: .value("Hours", entry.hours)
-                )
-                .foregroundStyle(
-                    Calendar.current.isDateInToday(entry.date)
-                        ? Color.blue
-                        : Color.blue.opacity(0.4)
-                )
-                .cornerRadius(3)
-            }
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .day, count: 2)) { value in
-                    AxisGridLine()
-                    AxisValueLabel(format: .dateTime.weekday(.abbreviated))
+                Spacer()
+
+                if viewModel.isGeneratingSummary {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                } else if let aiService, aiService.isConfigured, !viewModel.hasPersistentSummary {
+                    Button {
+                        viewModel.generateAISummary(aiService: aiService)
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.tint)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .chartYAxis {
-                AxisMarks { value in
-                    AxisGridLine()
-                    AxisValueLabel("\(value.as(Double.self).map { Int($0) } ?? 0)h")
-                }
+
+            if let summary = viewModel.summaryText, !summary.isEmpty {
+                MarkdownContent(text: summary)
+                    .font(.body)
+                    .lineSpacing(5)
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .textSelection(.enabled)
+            } else {
+                Text("No summary available for this day.")
+                    .font(.body)
+                    .foregroundStyle(.tertiary)
             }
-            .frame(height: 160)
         }
         .cardStyle()
     }
 
-    // MARK: - Days List
+    private var categoryBreakdown: some View {
+        AnyView(
+            CategoryBreakdownCard(
+                categories: viewModel.categorySummaries,
+                appSummaries: viewModel.appSummaries
+            )
+        )
+    }
 
-    private var daysList: some View {
-        VStack(alignment: .leading, spacing: DS.space8) {
-            Text("Daily Breakdown")
+    private var topWebsitesSection: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            Text("Top Websites")
                 .sectionHeader()
 
-            ForEach(viewModel.dailySummaries) { summary in
-                HistoryDayRow(summary: summary) {
-                    appState.selectedDate = summary.date
-                    appState.selectedSection = .today
-                }
+            let maxDuration = viewModel.websiteSummaries.first?.totalDuration ?? 1
+
+            ForEach(viewModel.websiteSummaries.prefix(5)) { site in
+                UsageBar(
+                    label: site.domain,
+                    duration: site.totalDuration,
+                    maxDuration: maxDuration,
+                    color: .purple,
+                    subtitle: site.topPageTitle
+                )
             }
         }
+        .cardStyle()
     }
 
-    // MARK: - Empty State
-
-    private var emptyState: some View {
+    private var dayDetailEmpty: some View {
         VStack(spacing: DS.space12) {
-            Image(systemName: "chart.bar")
-                .font(.system(size: 40))
+            Image(systemName: "moon.zzz")
+                .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
-            Text("No history yet")
-                .font(.title3.weight(.medium))
-            Text("Activity history builds up over days of use.")
+
+            Text("No activity tracked this day.")
                 .font(.body)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, DS.space32)
+        .padding(.vertical, DS.space48)
     }
+
+    private var noSelectionPlaceholder: some View {
+        VStack(spacing: DS.space12) {
+            Image(systemName: "calendar")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+
+            Text("Select a day to see details")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Formatters
+
+    private static let fullDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        return f
+    }()
 }
 
-// MARK: - History Day Row
+// MARK: - Day Row
 
-struct HistoryDayRow: View {
-    let summary: DailySummary
-    let onTap: () -> Void
-
-    private var dateLabel: String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(summary.date) { return "Today" }
-        if calendar.isDateInYesterday(summary.date) { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMM d"
-        return formatter.string(from: summary.date)
-    }
+struct DayRow: View {
+    let snapshot: DaySummarySnapshot
+    let isSelected: Bool
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: DS.space16) {
-                VStack(alignment: .leading, spacing: DS.space4) {
-                    Text(dateLabel)
-                        .font(.body.weight(.medium))
-                    Text("\(summary.appCount) apps · \(summary.sessionCount) sessions")
+        HStack(spacing: DS.space12) {
+            // Date column
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.dayFormatter.string(from: snapshot.date))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(isSelected ? .primary : .primary)
+
+                Text(Self.dateFormatter.string(from: snapshot.date))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+
+            // Summary column
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(snapshot.formattedActiveTime)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+
+                if let topApp = snapshot.topAppName {
+                    Text(topApp)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: DS.space4) {
-                    Text(summary.formattedActiveTime)
-                        .font(.body.monospacedDigit().weight(.medium))
-                    if summary.focusScore > 0 {
-                        Text("\(summary.focusScorePercent)% focus")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
-            .padding(DS.space12)
-            .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: DS.radiusMedium))
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, DS.space16)
+        .padding(.vertical, DS.space12)
+        .background(
+            RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+                .padding(.horizontal, DS.space4)
+        )
+        .animation(.easeOut(duration: 0.15), value: isSelected)
     }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE"
+        return f
+    }()
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, yyyy"
+        return f
+    }()
 }

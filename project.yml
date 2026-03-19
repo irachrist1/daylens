@@ -17,6 +17,8 @@ targets:
     platform: macOS
     sources:
       - path: Daylens
+        excludes:
+          - Daylens.xcodeproj
     resources:
       - path: Daylens/Resources
     settings:
@@ -55,6 +57,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.daylens.tests
         SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   Daylens:

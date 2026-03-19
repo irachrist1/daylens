@@ -27,6 +27,10 @@ struct AppSession: Codable, Identifiable, FetchableRecord, PersistableRecord {
         }
         return "\(minutes)m"
     }
+
+    var classification: AppClassification {
+        AppCategory.classify(bundleID: bundleID, appName: appName)
+    }
 }
 
 /// Aggregated app usage for a given day.
@@ -55,5 +59,70 @@ struct AppUsageSummary: Identifiable {
 
     var durationHours: Double {
         totalDuration / 3600.0
+    }
+
+    var classification: AppClassification {
+        AppCategory.classify(bundleID: bundleID, appName: appName)
+    }
+
+    var semanticLabel: String? {
+        classification.semanticLabel
+    }
+
+    var classificationConfidence: AppClassificationConfidence {
+        classification.confidence
+    }
+}
+
+struct CategoryUsageSummary: Identifiable {
+    let category: AppCategory
+    let totalDuration: TimeInterval
+    let appCount: Int
+    let sessionCount: Int
+    let topApps: [String]
+    let containsLowConfidenceApps: Bool
+
+    var id: String { category.rawValue }
+
+    var formattedDuration: String {
+        let hours = Int(totalDuration) / 3600
+        let minutes = (Int(totalDuration) % 3600) / 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        if minutes > 0 {
+            return "\(minutes)m"
+        }
+        let seconds = Int(totalDuration) % 60
+        return "\(seconds)s"
+    }
+}
+
+enum SemanticUsageRollups {
+    static func categorySummaries(from appSummaries: [AppUsageSummary]) -> [CategoryUsageSummary] {
+        Dictionary(grouping: appSummaries, by: { $0.classification.category })
+            .map { category, items in
+                let sortedItems = items.sorted { lhs, rhs in
+                    if lhs.totalDuration == rhs.totalDuration {
+                        return lhs.appName.localizedCaseInsensitiveCompare(rhs.appName) == .orderedAscending
+                    }
+                    return lhs.totalDuration > rhs.totalDuration
+                }
+
+                return CategoryUsageSummary(
+                    category: category,
+                    totalDuration: sortedItems.reduce(0) { $0 + $1.totalDuration },
+                    appCount: sortedItems.count,
+                    sessionCount: sortedItems.reduce(0) { $0 + $1.sessionCount },
+                    topApps: Array(sortedItems.prefix(3).map(\.appName)),
+                    containsLowConfidenceApps: sortedItems.contains { $0.classificationConfidence == .low }
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.totalDuration == rhs.totalDuration {
+                    return lhs.category.rawValue < rhs.category.rawValue
+                }
+                return lhs.totalDuration > rhs.totalDuration
+            }
     }
 }

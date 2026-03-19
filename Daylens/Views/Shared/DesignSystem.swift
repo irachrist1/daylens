@@ -35,14 +35,17 @@ enum DS {
     // MARK: - Category Colors
     static func categoryColor(for category: AppCategory) -> Color {
         switch category {
-        case .productivity: return .blue
+        case .development: return .indigo
         case .communication: return .green
-        case .browser: return .orange
-        case .entertainment: return .pink
-        case .utility: return .gray
-        case .development: return .purple
-        case .design: return .indigo
-        case .other: return .secondary
+        case .research: return .mint
+        case .writing: return .blue
+        case .aiTools: return .purple
+        case .design: return .pink
+        case .browsing: return .orange
+        case .meetings: return .teal
+        case .entertainment: return .red
+        case .system: return .gray
+        case .uncategorized: return .secondary
         }
     }
 }
@@ -61,5 +64,13 @@ extension View {
             .font(.headline)
             .foregroundStyle(.primary)
             .padding(.bottom, DS.space4)
+    }
+
+    /// Glass chrome background for shell surfaces (toolbar, header bar).
+    /// Uses ultra-thin material with a subtle bottom shadow to float above content.
+    func chromeBackground() -> some View {
+        self
+            .background(.ultraThinMaterial)
+            .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
     }
 }

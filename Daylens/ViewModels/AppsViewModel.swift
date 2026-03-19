@@ -10,7 +10,10 @@ final class AppsViewModel {
     func load(for date: Date) {
         isLoading = true
         Task { @MainActor in
-            summaries = (try? AppDatabase.shared.appUsageSummaries(for: date)) ?? []
+            let summaries = (try? await Task.detached(priority: .userInitiated) {
+                try AppDatabase.shared.appUsageSummaries(for: date)
+            }.value) ?? []
+            self.summaries = summaries
             isLoading = false
         }
     }

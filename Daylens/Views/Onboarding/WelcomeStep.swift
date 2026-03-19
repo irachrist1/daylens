@@ -1,59 +1,54 @@
 import SwiftUI
 
 struct WelcomeStep: View {
-    let viewModel: OnboardingViewModel
+    @Bindable var viewModel: OnboardingViewModel
+    @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        VStack(spacing: DS.space24) {
+        VStack(spacing: 0) {
             Spacer()
 
-            Image(systemName: "sun.max.fill")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
-
-            VStack(spacing: DS.space8) {
+            VStack(spacing: DS.space24) {
                 Text("Welcome to Daylens")
-                    .font(.largeTitle.weight(.bold))
+                    .font(.largeTitle.weight(.semibold))
 
-                Text("Understand where your time goes.\nBeautiful, private, and intelligent.")
+                Text("A quiet companion that helps you\nunderstand where your time goes.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .lineSpacing(3)
             }
 
-            VStack(alignment: .leading, spacing: DS.space12) {
-                featureRow(icon: "clock.fill", title: "Automatic Tracking", description: "Passively tracks which apps and websites you use")
-                featureRow(icon: "lock.shield.fill", title: "Private by Default", description: "All data stays on your Mac — nothing leaves without your permission")
-                featureRow(icon: "sparkles", title: "AI-Powered Insights", description: "Ask questions about your day in plain language")
+            Spacer()
+                .frame(height: DS.space40)
+
+            VStack(alignment: .leading, spacing: DS.space8) {
+                Text("What should we call you?")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+
+                TextField("First name", text: $viewModel.firstName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+                    .focused($nameFieldFocused)
+                    .onSubmit {
+                        if viewModel.canContinueFromWelcome {
+                            viewModel.advance()
+                        }
+                    }
             }
-            .padding(.horizontal, DS.space32)
 
             Spacer()
 
-            Button("Get Started") {
-                viewModel.nextStep()
+            Button("Continue") {
+                viewModel.advance()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(!viewModel.canContinueFromWelcome)
             .padding(.bottom, DS.space32)
         }
-        .padding(DS.space24)
-    }
-
-    private func featureRow(icon: String, title: String, description: String) -> some View {
-        HStack(spacing: DS.space12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(.tint)
-                .frame(width: 28)
-
-            VStack(alignment: .leading, spacing: DS.space2) {
-                Text(title)
-                    .font(.body.weight(.medium))
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
+        .padding(.horizontal, DS.space40)
+        .onAppear { nameFieldFocused = true }
     }
 }

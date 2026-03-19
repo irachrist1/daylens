@@ -3,32 +3,49 @@ import GRDB
 
 /// Manages the GRDB database connection and migrations.
 final class AppDatabase {
-    static let shared = AppDatabase()
+    static let shared = try! AppDatabase()
 
     let dbQueue: DatabaseQueue
 
-    private init() {
+    init(dbQueue: DatabaseQueue) throws {
+        self.dbQueue = dbQueue
+        try Self.migrator.migrate(dbQueue)
+    }
+
+    convenience init() throws {
         let fileManager = FileManager.default
         let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let daylensDir = appSupportURL.appendingPathComponent("Daylens", isDirectory: true)
 
-        try! fileManager.createDirectory(at: daylensDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: daylensDir, withIntermediateDirectories: true)
 
         let dbURL = daylensDir.appendingPathComponent("daylens.sqlite")
+        let shouldLogSQL = ProcessInfo.processInfo.environment["DAYLENS_LOG_SQL"] == "1"
+        let dbQueue = try DatabaseQueue(path: dbURL.path, configuration: Self.makeConfiguration(logSQL: shouldLogSQL))
+        try self.init(dbQueue: dbQueue)
+    }
 
-        var config = Configuration()
-        config.foreignKeysEnabled = true
-        config.prepareDatabase { db in
-            db.trace { print("SQL: \($0)") }
-        }
-
-        dbQueue = try! DatabaseQueue(path: dbURL.path, configuration: config)
-        try! migrator.migrate(dbQueue)
+    static func inMemory() throws -> AppDatabase {
+        let dbQueue = try DatabaseQueue(path: ":memory:", configuration: makeConfiguration())
+        return try AppDatabase(dbQueue: dbQueue)
     }
 
     // MARK: - Migrations
 
-    private var migrator: DatabaseMigrator {
+    private static func makeConfiguration(logSQL: Bool = false) -> Configuration {
+        var config = Configuration()
+        config.foreignKeysEnabled = true
+
+        if logSQL {
+            config.prepareDatabase { db in
+                db.trace { print("SQL: \($0)") }
+            }
+        }
+
+        return config
+    }
+
+    private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         #if DEBUG

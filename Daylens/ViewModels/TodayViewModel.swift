@@ -21,12 +21,24 @@ final class TodayViewModel {
 
         Task { @MainActor in
             do {
-                guard let db = database else { return }
-                appSummaries = try db.appUsageSummaries(for: date)
-                websiteSummaries = try db.websiteUsageSummaries(for: date)
-                browserSummaries = try db.browserUsageSummaries(for: date)
-                timeline = try db.timelineEvents(for: date)
-                dailySummary = try db.dailySummary(for: date)
+                guard let db = database else {
+                    isLoading = false
+                    return
+                }
+                let payload = try await Task.detached(priority: .userInitiated) {
+                    (
+                        appSummaries: try db.appUsageSummaries(for: date),
+                        websiteSummaries: try db.websiteUsageSummaries(for: date),
+                        browserSummaries: try db.browserUsageSummaries(for: date),
+                        timeline: try db.timelineEvents(for: date),
+                        dailySummary: try db.dailySummary(for: date)
+                    )
+                }.value
+                appSummaries = payload.appSummaries
+                websiteSummaries = payload.websiteSummaries
+                browserSummaries = payload.browserSummaries
+                timeline = payload.timeline
+                dailySummary = payload.dailySummary
                 aiSummary = dailySummary?.aiSummary
             } catch {
                 self.error = error.localizedDescription
@@ -75,6 +87,22 @@ final class TodayViewModel {
         }
     }
 
+    // MARK: - Greeting
+
+    var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let timeOfDay: String
+        switch hour {
+        case 5..<12: timeOfDay = "Good morning"
+        case 12..<17: timeOfDay = "Good afternoon"
+        default: timeOfDay = "Good evening"
+        }
+        let name = UserDefaults.standard.string(forKey: Constants.DefaultsKey.userName)
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            ?? "there"
+        return "\(timeOfDay), \(name)"
+    }
+
     // Computed directly from sessions — never shows 0m while sessions exist
     var totalActiveTime: String {
         let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
@@ -97,7 +125,7 @@ final class TodayViewModel {
         let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
         guard total > 0 else { return "—" }
         let focusedTime = appSummaries
-            .filter { $0.category.isFocused }
+            .filter { $0.classification.category.isFocused }
             .reduce(0.0) { $0 + $1.totalDuration }
         let pct = Int((focusedTime / total) * 100)
         return "\(pct)%"
@@ -110,7 +138,7 @@ final class TodayViewModel {
         let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
         guard total > 0 else { return "No data" }
         let focusedTime = appSummaries
-            .filter { $0.category.isFocused }
+            .filter { $0.classification.category.isFocused }
             .reduce(0.0) { $0 + $1.totalDuration }
         let ratio = focusedTime / total
         switch ratio {
@@ -120,5 +148,9 @@ final class TodayViewModel {
         case 0.2..<0.4: return "Scattered"
         default: return "Fragmented"
         }
+    }
+
+    var categorySummaries: [CategoryUsageSummary] {
+        SemanticUsageRollups.categorySummaries(from: appSummaries)
     }
 }

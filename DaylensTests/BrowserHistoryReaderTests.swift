@@ -1,5 +1,10 @@
 import XCTest
+
+#if canImport(Daylens)
 @testable import Daylens
+#else
+@testable import DaylensCore
+#endif
 
 final class BrowserHistoryReaderTests: XCTestCase {
 
@@ -32,18 +37,236 @@ final class BrowserHistoryReaderTests: XCTestCase {
         XCTAssertEqual(convertedUnix, knownUnixTimestamp)
     }
 
-    func testKnownBrowserBundleIDs() {
+    // MARK: - Browser Registry & Classification
+
+    func testPrimaryBrowserBundleIDs() {
+        // Primary browsers
         XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("com.google.Chrome"))
         XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("com.apple.Safari"))
-        XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("company.thebrowser.Browser"))
+        XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("company.thebrowser.Browser")) // Arc
+        XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("app.zen-browser.zen"))
+        XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("ai.perplexity.comet"))
+
+        // Hybrid apps are NOT in knownBrowserBundleIDs (primary set)
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("company.thebrowser.dia"))
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("com.openai.atlas"))
+
+        // Non-browser apps
         XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("com.apple.dt.Xcode"))
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("com.blackboxai.desktopapp"))
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("ai.perplexity.mac"))
+    }
+
+    func testBrowserCapableBundleIDsIncludesHybrids() {
+        // Primary browsers are browser-capable
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("com.google.Chrome"))
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("com.apple.Safari"))
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("company.thebrowser.Browser"))
+
+        // Hybrid apps are browser-capable
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("company.thebrowser.dia"))
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("com.openai.atlas"))
+
+        // Excluded apps are NOT browser-capable
+        XCTAssertFalse(Constants.browserCapableBundleIDs.contains("com.blackboxai.desktopapp"))
+        XCTAssertFalse(Constants.browserCapableBundleIDs.contains("ai.perplexity.mac"))
+        XCTAssertFalse(Constants.browserCapableBundleIDs.contains("com.anthropic.claudefordesktop"))
+    }
+
+    func testBrowserDefinitionsComplete() {
+        // Every definition must have a non-empty bundle ID and display name
+        for def in BrowserDefinition.all {
+            XCTAssertFalse(def.bundleID.isEmpty, "Empty bundle ID in BrowserDefinition")
+            XCTAssertFalse(def.displayName.isEmpty, "Empty display name for \(def.bundleID)")
+            XCTAssertFalse(def.historyRelativePath.isEmpty, "Empty history path for \(def.bundleID)")
+        }
+    }
+
+    func testBrowserNamesMatchDefinitions() {
+        // Constants.browserNames should have an entry for every browser-capable app
+        for bundleID in Constants.browserCapableBundleIDs {
+            XCTAssertNotNil(Constants.browserNames[bundleID], "Missing browser name for \(bundleID)")
+        }
+    }
+
+    func testZenIsFirefoxBased() {
+        let zenDef = BrowserDefinition.all.first { $0.bundleID == "app.zen-browser.zen" }
+        XCTAssertNotNil(zenDef)
+        XCTAssertEqual(zenDef?.engine, .firefox)
+        XCTAssertFalse(zenDef?.supportsAppleScript ?? true)
+    }
+
+    func testCometIsChromiumBased() {
+        let cometDef = BrowserDefinition.all.first { $0.bundleID == "ai.perplexity.comet" }
+        XCTAssertNotNil(cometDef)
+        XCTAssertEqual(cometDef?.engine, .chromium)
+        XCTAssertTrue(cometDef?.supportsAppleScript ?? false)
+    }
+
+    // MARK: - Classification Discipline
+
+    func testDiaIsHybridAIPrimaryBrowserCapable() {
+        // Primary category is AI Tools
+        let classification = AppCategory.classify(bundleID: "company.thebrowser.dia", appName: "Dia")
+        XCTAssertEqual(classification.category, .aiTools, "Dia primary category should be AI Tools")
+        XCTAssertEqual(classification.confidence, .high)
+
+        // NOT a primary browser
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("company.thebrowser.dia"))
+
+        // IS browser-capable (history will be read)
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("company.thebrowser.dia"))
+
+        // Definition confirms hybrid role
+        let def = BrowserDefinition.allHybrid.first { $0.bundleID == "company.thebrowser.dia" }
+        XCTAssertNotNil(def)
+        XCTAssertEqual(def?.role, .hybrid)
+        XCTAssertEqual(def?.engine, .chromium)
+        XCTAssertTrue(def?.supportsAppleScript ?? false)
+        XCTAssertEqual(def?.primaryCategory, .aiTools)
+    }
+
+    func testAtlasIsHybridAIPrimaryBrowserCapable() {
+        // Primary category is AI Tools
+        let classification = AppCategory.classify(bundleID: "com.openai.atlas", appName: "ChatGPT Atlas")
+        XCTAssertEqual(classification.category, .aiTools, "Atlas primary category should be AI Tools")
+        XCTAssertEqual(classification.confidence, .high)
+
+        // NOT a primary browser
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("com.openai.atlas"))
+
+        // IS browser-capable (history will be read)
+        XCTAssertTrue(Constants.browserCapableBundleIDs.contains("com.openai.atlas"))
+
+        // Definition confirms hybrid role
+        let def = BrowserDefinition.allHybrid.first { $0.bundleID == "com.openai.atlas" }
+        XCTAssertNotNil(def)
+        XCTAssertEqual(def?.role, .hybrid)
+        XCTAssertEqual(def?.engine, .chromium)
+        XCTAssertFalse(def?.supportsAppleScript ?? true, "Atlas has no sdef — no AppleScript")
+        XCTAssertEqual(def?.primaryCategory, .aiTools)
+    }
+
+    func testBLACKBOXAIClassifiedAsAI() {
+        let classification = AppCategory.classify(bundleID: "com.blackboxai.desktopapp", appName: "BLACKBOXAI")
+        XCTAssertEqual(classification.category, .aiTools)
+    }
+
+    func testPerplexityDesktopIsAINotBrowser() {
+        let classification = AppCategory.classify(bundleID: "ai.perplexity.mac", appName: "Perplexity")
+        XCTAssertEqual(classification.category, .aiTools)
+        XCTAssertFalse(Constants.knownBrowserBundleIDs.contains("ai.perplexity.mac"))
+    }
+
+    func testCometIsBrowser() {
+        let classification = AppCategory.classify(bundleID: "ai.perplexity.comet", appName: "Comet")
+        XCTAssertEqual(classification.category, .browsing)
+        XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("ai.perplexity.comet"))
+    }
+
+    func testZenIsBrowser() {
+        let classification = AppCategory.classify(bundleID: "app.zen-browser.zen", appName: "Zen")
+        XCTAssertEqual(classification.category, .browsing)
+    }
+
+    func testExcludedBundleIDsNotBrowserCapable() {
+        for excludedID in BrowserRegistry.excludedBundleIDs {
+            XCTAssertFalse(
+                Constants.knownBrowserBundleIDs.contains(excludedID),
+                "\(excludedID) is excluded but appears in knownBrowserBundleIDs"
+            )
+            XCTAssertFalse(
+                Constants.browserCapableBundleIDs.contains(excludedID),
+                "\(excludedID) is excluded but appears in browserCapableBundleIDs"
+            )
+        }
+    }
+
+    func testHybridAppsNotInPrimaryBrowserList() {
+        for def in BrowserDefinition.allHybrid {
+            XCTAssertFalse(
+                Constants.knownBrowserBundleIDs.contains(def.bundleID),
+                "Hybrid app \(def.displayName) should not be in primary browser list"
+            )
+            XCTAssertTrue(
+                Constants.browserCapableBundleIDs.contains(def.bundleID),
+                "Hybrid app \(def.displayName) should be browser-capable"
+            )
+        }
+    }
+
+    func testPrimaryBrowsersHaveBrowsingCategory() {
+        for def in BrowserDefinition.allPrimary {
+            XCTAssertEqual(def.role, .primary)
+            XCTAssertEqual(def.primaryCategory, .browsing,
+                "Primary browser \(def.displayName) should have .browsing as primaryCategory")
+        }
+    }
+
+    func testHybridAppsHaveNonBrowsingPrimaryCategory() {
+        for def in BrowserDefinition.allHybrid {
+            XCTAssertEqual(def.role, .hybrid)
+            XCTAssertNotEqual(def.primaryCategory, .browsing,
+                "Hybrid app \(def.displayName) should NOT have .browsing as primaryCategory")
+        }
+    }
+
+    // MARK: - Domain Intelligence
+
+    func testDomainClassificationExactMatch() {
+        let github = DomainIntelligence.classify(domain: "github.com")
+        XCTAssertEqual(github.siteGroup, "GitHub")
+        XCTAssertEqual(github.category, .development)
+        XCTAssertEqual(github.confidence, .high)
+    }
+
+    func testDomainClassificationSubdomain() {
+        let ghPages = DomainIntelligence.classify(domain: "user.github.io")
+        XCTAssertEqual(ghPages.siteGroup, "GitHub Pages")
+
+        let docsGoogle = DomainIntelligence.classify(domain: "docs.google.com")
+        XCTAssertEqual(docsGoogle.siteGroup, "Google Docs")
+        XCTAssertEqual(docsGoogle.category, .writing)
+    }
+
+    func testDomainClassificationAISites() {
+        let claude = DomainIntelligence.classify(domain: "claude.ai")
+        XCTAssertEqual(claude.category, .aiTools)
+
+        let chatgpt = DomainIntelligence.classify(domain: "chatgpt.com")
+        XCTAssertEqual(chatgpt.category, .aiTools)
+    }
+
+    func testDomainClassificationUnknown() {
+        let unknown = DomainIntelligence.classify(domain: "totally-random-site.xyz")
+        XCTAssertNil(unknown.siteGroup)
+        XCTAssertEqual(unknown.category, .uncategorized)
+        XCTAssertEqual(unknown.confidence, .low)
+    }
+
+    func testDomainGrouping() {
+        let summaries = [
+            WebsiteUsageSummary(domain: "github.com", totalDuration: 600, visitCount: 5, topPageTitle: "Repo", confidence: .high, browserName: "Chrome"),
+            WebsiteUsageSummary(domain: "gist.github.com", totalDuration: 120, visitCount: 2, topPageTitle: "Gist", confidence: .high, browserName: "Chrome"),
+            WebsiteUsageSummary(domain: "youtube.com", totalDuration: 300, visitCount: 3, topPageTitle: "Video", confidence: .high, browserName: "Arc"),
+        ]
+
+        let grouped = DomainIntelligence.groupedSummaries(from: summaries)
+
+        // github.com and gist.github.com should merge under "GitHub"
+        let githubGroup = grouped.first { $0.siteGroup == "GitHub" }
+        XCTAssertNotNil(githubGroup)
+        XCTAssertEqual(githubGroup?.totalDuration, 720) // 600 + 120
+        XCTAssertEqual(githubGroup?.domainCount, 2)
+
+        let youtubeGroup = grouped.first { $0.siteGroup == "YouTube" }
+        XCTAssertNotNil(youtubeGroup)
+        XCTAssertEqual(youtubeGroup?.totalDuration, 300)
     }
 
     // MARK: - Helpers
 
     private func extractDomain(from urlString: String) -> String? {
-        guard let url = URL(string: urlString),
-              let host = url.host else { return nil }
-        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        BrowserHistoryReader.normalizedDomain(from: urlString)
     }
 }

@@ -19,7 +19,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Daylens",
-            exclude: ["Resources/Assets.xcassets", "Resources/Daylens.entitlements", "Info.plist"]
+            exclude: ["App/DaylensApp.swift", "Resources/Assets.xcassets", "Resources/Daylens.entitlements", "Info.plist"]
         ),
         .testTarget(
             name: "DaylensTests",

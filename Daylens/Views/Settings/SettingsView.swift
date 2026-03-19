@@ -12,7 +12,7 @@ struct SettingsView: View {
 
                 Divider()
 
-                loginSection
+                generalSection
 
                 Divider()
 
@@ -32,15 +32,15 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - AI Settings
+    // MARK: - AI
 
     private var aiSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("AI Settings")
+            Text("AI")
                 .sectionHeader()
 
             VStack(alignment: .leading, spacing: DS.space8) {
-                Text("Anthropic API Key")
+                Text("API Key")
                     .font(.body.weight(.medium))
 
                 HStack {
@@ -65,31 +65,16 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Your API key is stored securely in the macOS Keychain.")
+                Text("Used for AI-powered insights. Stored locally on your Mac.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-            }
-
-            VStack(alignment: .leading, spacing: DS.space4) {
-                Text("AI Model")
-                    .font(.body.weight(.medium))
-
-                Picker("Model", selection: $viewModel.selectedModel) {
-                    ForEach(viewModel.availableModels, id: \.0) { model in
-                        Text(model.1).tag(model.0)
-                    }
-                }
-                .labelsHidden()
-                .onChange(of: viewModel.selectedModel) { _, newModel in
-                    appState.aiService.setModel(newModel)
-                }
             }
         }
     }
 
-    // MARK: - Login Item
+    // MARK: - General
 
-    private var loginSection: some View {
+    private var generalSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
             Text("General")
                 .sectionHeader()
@@ -98,7 +83,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: DS.space2) {
                     Text("Open at Login")
                         .font(.body.weight(.medium))
-                    Text("Start tracking automatically when you log in")
+                    Text("Start tracking when you log in")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -118,18 +103,18 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Data Management
+    // MARK: - Data
 
     private var dataSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Data Management")
+            Text("Data")
                 .sectionHeader()
 
             HStack {
                 VStack(alignment: .leading, spacing: DS.space2) {
-                    Text("Data Retention")
+                    Text("Keep Data For")
                         .font(.body.weight(.medium))
-                    Text("Delete data older than this many days")
+                    Text("Older data is deleted automatically")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -139,7 +124,7 @@ struct SettingsView: View {
                     Text("60 days").tag(60)
                     Text("90 days").tag(90)
                     Text("180 days").tag(180)
-                    Text("365 days").tag(365)
+                    Text("1 year").tag(365)
                 }
                 .labelsHidden()
                 .frame(width: 120)
@@ -153,13 +138,8 @@ struct SettingsView: View {
             Divider()
 
             HStack {
-                VStack(alignment: .leading, spacing: DS.space2) {
-                    Text("Export Data")
-                        .font(.body.weight(.medium))
-                    Text("Export all tracked data as JSON")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Export Data")
+                    .font(.body.weight(.medium))
                 Spacer()
                 Button("Export JSON") {
                     viewModel.exportData()
@@ -170,15 +150,10 @@ struct SettingsView: View {
             Divider()
 
             HStack {
-                VStack(alignment: .leading, spacing: DS.space2) {
-                    Text("Delete All Data")
-                        .font(.body.weight(.medium))
-                    Text("Permanently remove all tracked data")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Delete All Data")
+                    .font(.body.weight(.medium))
                 Spacer()
-                Button("Delete All Data", role: .destructive) {
+                Button("Delete", role: .destructive) {
                     showDeleteConfirmation = true
                 }
                 .buttonStyle(.bordered)
@@ -189,7 +164,7 @@ struct SettingsView: View {
                     viewModel.clearAllData()
                 }
             } message: {
-                Text("This will permanently remove all tracked activity data. This action cannot be undone.")
+                Text("This permanently removes all tracked activity. This cannot be undone.")
             }
         }
     }

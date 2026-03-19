@@ -27,12 +27,17 @@ struct DateNavigator: View {
                     .font(.body.weight(.medium))
                     .padding(.horizontal, DS.space12)
                     .padding(.vertical, DS.space4)
-                    .background(
-                        appState.isToday
-                            ? Color.accentColor.opacity(0.1)
-                            : Color(.controlBackgroundColor),
-                        in: Capsule()
-                    )
+                    .background {
+                        if appState.isToday {
+                            Capsule()
+                                .fill(Color.accentColor.opacity(0.1))
+                        } else {
+                            Capsule()
+                                .fill(.ultraThinMaterial)
+                                .shadow(color: .black.opacity(0.04), radius: 0.5, y: 0.5)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: appState.isToday)
             }
             .buttonStyle(.plain)
             .help("Go to today")

@@ -8,35 +8,30 @@ extension AppDatabase {
 
     func insertEvent(_ event: ActivityEvent) throws {
         try dbQueue.write { db in
-            var event = event
             try event.insert(db)
         }
     }
 
     func insertAppSession(_ session: AppSession) throws {
         try dbQueue.write { db in
-            var session = session
             try session.insert(db)
         }
     }
 
     func insertBrowserSession(_ session: BrowserSession) throws {
         try dbQueue.write { db in
-            var session = session
             try session.insert(db)
         }
     }
 
     func insertWebsiteVisit(_ visit: WebsiteVisit) throws {
         try dbQueue.write { db in
-            var visit = visit
             try visit.insert(db)
         }
     }
 
     func saveDailySummary(_ summary: DailySummary) throws {
         try dbQueue.write { db in
-            var summary = summary
             try summary.save(db, onConflict: .replace)
         }
     }
@@ -45,29 +40,7 @@ extension AppDatabase {
 
     func appUsageSummaries(for date: Date) throws -> [AppUsageSummary] {
         try dbQueue.read { db in
-            let dayStart = Calendar.current.startOfDay(for: date)
-            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT bundleID, appName, category, isBrowser,
-                       SUM(duration) as totalDuration,
-                       COUNT(*) as sessionCount
-                FROM app_sessions
-                WHERE startTime >= ? AND startTime < ?
-                GROUP BY bundleID
-                ORDER BY totalDuration DESC
-                """, arguments: [dayStart, dayEnd])
-
-            return rows.map { row in
-                AppUsageSummary(
-                    bundleID: row["bundleID"],
-                    appName: row["appName"],
-                    totalDuration: row["totalDuration"],
-                    sessionCount: row["sessionCount"],
-                    category: AppCategory(rawValue: row["category"]) ?? .other,
-                    isBrowser: row["isBrowser"]
-                )
-            }
+            try self.appUsageSummaries(in: db, dayBounds: DayBounds(for: date))
         }
     }
 
@@ -75,78 +48,74 @@ extension AppDatabase {
 
     func browserUsageSummaries(for date: Date) throws -> [BrowserUsageSummary] {
         try dbQueue.read { db in
-            let dayStart = Calendar.current.startOfDay(for: date)
-            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-
+            let dayBounds = DayBounds(for: date)
             let rows = try Row.fetchAll(db, sql: """
-                SELECT browserBundleID, browserName,
-                       SUM(duration) as totalDuration,
-                       COUNT(*) as sessionCount
+                SELECT browserBundleID, browserName, startTime, endTime
                 FROM browser_sessions
-                WHERE startTime >= ? AND startTime < ?
-                GROUP BY browserBundleID
-                ORDER BY totalDuration DESC
-                """, arguments: [dayStart, dayEnd])
+                WHERE startTime < ? AND endTime > ?
+                ORDER BY startTime ASC
+                """, arguments: [dayBounds.end, dayBounds.start])
 
-            return rows.map { row in
-                let bundleID: String = row["browserBundleID"]
-                let topDomains = (try? self.topDomains(for: date, browserBundleID: bundleID, limit: 3, in: db)) ?? []
-                return BrowserUsageSummary(
-                    browserBundleID: bundleID,
-                    browserName: row["browserName"],
-                    totalDuration: row["totalDuration"],
-                    sessionCount: row["sessionCount"],
-                    topDomains: topDomains
-                )
+            struct BrowserAccumulator {
+                let browserBundleID: String
+                let browserName: String
+                var totalDuration: TimeInterval
+                var sessionCount: Int
             }
+
+            var grouped: [String: BrowserAccumulator] = [:]
+            for row in rows {
+                let startTime: Date = row["startTime"]
+                let endTime: Date = row["endTime"]
+                guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else { continue }
+
+                let bundleID: String = row["browserBundleID"]
+                let browserName: String = row["browserName"]
+                if grouped[bundleID] == nil {
+                    grouped[bundleID] = BrowserAccumulator(
+                        browserBundleID: bundleID,
+                        browserName: browserName,
+                        totalDuration: 0,
+                        sessionCount: 0
+                    )
+                }
+                grouped[bundleID]?.totalDuration += clipped.duration
+                grouped[bundleID]?.sessionCount += 1
+            }
+
+            return grouped.values
+                .sorted { lhs, rhs in
+                    if lhs.totalDuration == rhs.totalDuration {
+                        return lhs.browserName.localizedCaseInsensitiveCompare(rhs.browserName) == .orderedAscending
+                    }
+                    return lhs.totalDuration > rhs.totalDuration
+                }
+                .map { summary in
+                    BrowserUsageSummary(
+                        browserBundleID: summary.browserBundleID,
+                        browserName: summary.browserName,
+                        totalDuration: summary.totalDuration,
+                        sessionCount: summary.sessionCount,
+                        topDomains: (try? self.topDomains(in: db, dayBounds: dayBounds, browserBundleID: summary.browserBundleID, limit: 3)) ?? []
+                    )
+                }
         }
     }
 
-    private func topDomains(for date: Date, browserBundleID: String, limit: Int, in db: Database) throws -> [String] {
-        let dayStart = Calendar.current.startOfDay(for: date)
-        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT domain, SUM(duration) as totalDuration
-            FROM website_visits
-            WHERE startTime >= ? AND startTime < ? AND browserBundleID = ?
-            GROUP BY domain
-            ORDER BY totalDuration DESC
-            LIMIT ?
-            """, arguments: [dayStart, dayEnd, browserBundleID, limit])
-
-        return rows.map { $0["domain"] as String }
+    private func topDomains(in db: Database, dayBounds: DayBounds, browserBundleID: String, limit: Int) throws -> [String] {
+        try websiteUsageSummaries(
+            in: db,
+            dayBounds: dayBounds,
+            browserBundleID: browserBundleID,
+            limit: limit
+        ).map(\.domain)
     }
 
     // MARK: - Website Visits
 
     func websiteUsageSummaries(for date: Date) throws -> [WebsiteUsageSummary] {
         try dbQueue.read { db in
-            let dayStart = Calendar.current.startOfDay(for: date)
-            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT domain, browserBundleID, confidence,
-                       SUM(duration) as totalDuration,
-                       COUNT(*) as visitCount,
-                       pageTitle
-                FROM website_visits
-                WHERE startTime >= ? AND startTime < ?
-                GROUP BY domain
-                ORDER BY totalDuration DESC
-                """, arguments: [dayStart, dayEnd])
-
-            return rows.map { row in
-                let bundleID: String = row["browserBundleID"]
-                return WebsiteUsageSummary(
-                    domain: row["domain"],
-                    totalDuration: row["totalDuration"],
-                    visitCount: row["visitCount"],
-                    topPageTitle: row["pageTitle"],
-                    confidence: ActivityEvent.ConfidenceLevel(rawValue: row["confidence"]) ?? .low,
-                    browserName: Constants.browserNames[bundleID] ?? "Browser"
-                )
-            }
+            try self.websiteUsageSummaries(in: db, dayBounds: DayBounds(for: date))
         }
     }
 
@@ -154,32 +123,12 @@ extension AppDatabase {
 
     func websiteVisitsForBrowser(date: Date, browserBundleID: String, limit: Int = 20) throws -> [WebsiteUsageSummary] {
         try dbQueue.read { db in
-            let dayStart = Calendar.current.startOfDay(for: date)
-            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT domain, browserBundleID, confidence,
-                       SUM(duration) as totalDuration,
-                       COUNT(*) as visitCount,
-                       pageTitle
-                FROM website_visits
-                WHERE startTime >= ? AND startTime < ? AND browserBundleID = ?
-                GROUP BY domain
-                ORDER BY totalDuration DESC
-                LIMIT ?
-                """, arguments: [dayStart, dayEnd, browserBundleID, limit])
-
-            return rows.map { row in
-                let bundleID: String = row["browserBundleID"]
-                return WebsiteUsageSummary(
-                    domain: row["domain"],
-                    totalDuration: row["totalDuration"],
-                    visitCount: row["visitCount"],
-                    topPageTitle: row["pageTitle"],
-                    confidence: ActivityEvent.ConfidenceLevel(rawValue: row["confidence"]) ?? .low,
-                    browserName: Constants.browserNames[bundleID] ?? "Browser"
-                )
-            }
+            try self.websiteUsageSummaries(
+                in: db,
+                dayBounds: DayBounds(for: date),
+                browserBundleID: browserBundleID,
+                limit: limit
+            )
         }
     }
 
@@ -205,12 +154,96 @@ extension AppDatabase {
 
     func timelineEvents(for date: Date) throws -> [AppSession] {
         try dbQueue.read { db in
-            let dayStart = Calendar.current.startOfDay(for: date)
-            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
-            return try AppSession
-                .filter(Column("startTime") >= dayStart && Column("startTime") < dayEnd)
-                .order(Column("startTime").asc)
-                .fetchAll(db)
+            let dayBounds = DayBounds(for: date)
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, date, bundleID, appName, startTime, endTime, duration, isBrowser
+                FROM app_sessions
+                WHERE startTime < ? AND endTime > ?
+                ORDER BY startTime ASC
+                """, arguments: [dayBounds.end, dayBounds.start])
+
+            return rows.compactMap { row in
+                let bundleID: String = row["bundleID"]
+                let appName: String = row["appName"]
+                let startTime: Date = row["startTime"]
+                let endTime: Date = row["endTime"]
+                guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else {
+                    return nil
+                }
+                return AppSession(
+                    id: row["id"],
+                    date: dayBounds.start,
+                    bundleID: bundleID,
+                    appName: appName,
+                    startTime: clipped.start,
+                    endTime: clipped.end,
+                    duration: clipped.duration,
+                    category: AppCategory.categorize(bundleID: bundleID, appName: appName),
+                    isBrowser: row["isBrowser"]
+                )
+            }
+        }
+    }
+
+    // MARK: - AI Summary Persistence
+
+    /// Persist an AI-generated summary for a specific day.
+    /// Uses raw SQL upsert to guarantee the write succeeds regardless of
+    /// whether a DailySummary row already exists.
+    func saveAISummary(_ text: String, for date: Date) throws {
+        let dayStart = Calendar.current.startOfDay(for: date)
+        try dbQueue.write { db in
+            // Try updating an existing row first
+            try db.execute(
+                sql: "UPDATE daily_summaries SET aiSummary = ?, aiSummaryGeneratedAt = ? WHERE date = ?",
+                arguments: [text, Date(), dayStart]
+            )
+            if db.changesCount == 0 {
+                // No row for this date — insert a minimal one
+                try db.execute(
+                    sql: """
+                        INSERT INTO daily_summaries
+                            (date, totalActiveTime, totalIdleTime, appCount, browserCount,
+                             domainCount, sessionCount, contextSwitches, focusScore,
+                             longestFocusStreak, aiSummary, aiSummaryGeneratedAt)
+                        VALUES (?, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?)
+                        """,
+                    arguments: [dayStart, text, Date()]
+                )
+            }
+        }
+    }
+
+    // MARK: - Tracked Days
+
+    /// Returns dates that have at least one app session, most recent first.
+    func trackedDays(limit: Int = 60) throws -> [Date] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT date FROM app_sessions
+                ORDER BY date DESC
+                LIMIT ?
+                """, arguments: [limit])
+            return rows.compactMap { $0["date"] as Date? }
+        }
+    }
+
+    /// Lightweight summary for a single day, computed from app_sessions.
+    func daySummarySnapshot(for date: Date) throws -> DaySummarySnapshot {
+        try dbQueue.read { db in
+            let dayBounds = DayBounds(for: date)
+            let summaries = try self.appUsageSummaries(in: db, dayBounds: dayBounds)
+            let totalDuration = summaries.reduce(0) { $0 + $1.totalDuration }
+            let topAppName = summaries.first?.appName
+            let topAppBundleID = summaries.first?.bundleID
+
+            return DaySummarySnapshot(
+                date: dayBounds.start,
+                totalActiveTime: totalDuration,
+                appCount: summaries.count,
+                topAppName: topAppName,
+                topAppBundleID: topAppBundleID
+            )
         }
     }
 
@@ -295,5 +328,200 @@ extension AppDatabase {
                 "dailySummaries": dailySummaries.map(rowToDict),
             ]
         }
+    }
+}
+
+private struct DayBounds {
+    let start: Date
+    let end: Date
+
+    init(for date: Date) {
+        let dayStart = Calendar.current.startOfDay(for: date)
+        self.start = dayStart
+        self.end = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
+    }
+}
+
+private struct ClippedInterval {
+    let start: Date
+    let end: Date
+
+    var duration: TimeInterval {
+        end.timeIntervalSince(start)
+    }
+}
+
+private struct RawWebsiteVisitInterval {
+    let domain: String
+    let bundleID: String
+    let title: String?
+    let confidence: String
+    let interval: ClippedInterval
+}
+
+private func clippedInterval(start: Date, end: Date, to dayBounds: DayBounds) -> ClippedInterval? {
+    let clippedStart = max(start, dayBounds.start)
+    let clippedEnd = min(end, dayBounds.end)
+    guard clippedEnd > clippedStart else { return nil }
+    return ClippedInterval(start: clippedStart, end: clippedEnd)
+}
+
+private func mergedIntervals(from intervals: [ClippedInterval]) -> [ClippedInterval] {
+    let sorted = intervals.sorted { $0.start < $1.start }
+    var merged: [ClippedInterval] = []
+
+    for interval in sorted {
+        if let last = merged.last, interval.start <= last.end {
+            merged[merged.count - 1] = ClippedInterval(
+                start: last.start,
+                end: max(last.end, interval.end)
+            )
+        } else {
+            merged.append(interval)
+        }
+    }
+
+    return merged
+}
+
+private extension AppDatabase {
+    func appUsageSummaries(in db: Database, dayBounds: DayBounds) throws -> [AppUsageSummary] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT bundleID, appName, isBrowser, startTime, endTime
+            FROM app_sessions
+            WHERE startTime < ? AND endTime > ?
+            ORDER BY startTime ASC
+            """, arguments: [dayBounds.end, dayBounds.start])
+
+        struct AppAccumulator {
+            let bundleID: String
+            let appName: String
+            let isBrowser: Bool
+            var totalDuration: TimeInterval
+            var sessionCount: Int
+        }
+
+        var grouped: [String: AppAccumulator] = [:]
+        for row in rows {
+            let startTime: Date = row["startTime"]
+            let endTime: Date = row["endTime"]
+            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else { continue }
+
+            let bundleID: String = row["bundleID"]
+            let appName: String = row["appName"]
+            let isBrowser: Bool = row["isBrowser"]
+
+            if grouped[bundleID] == nil {
+                grouped[bundleID] = AppAccumulator(
+                    bundleID: bundleID,
+                    appName: appName,
+                    isBrowser: isBrowser,
+                    totalDuration: 0,
+                    sessionCount: 0
+                )
+            }
+
+            grouped[bundleID]?.totalDuration += clipped.duration
+            grouped[bundleID]?.sessionCount += 1
+        }
+
+        return grouped.values
+            .sorted { lhs, rhs in
+                if lhs.totalDuration == rhs.totalDuration {
+                    return lhs.appName.localizedCaseInsensitiveCompare(rhs.appName) == .orderedAscending
+                }
+                return lhs.totalDuration > rhs.totalDuration
+            }
+            .map { summary in
+                AppUsageSummary(
+                    bundleID: summary.bundleID,
+                    appName: summary.appName,
+                    totalDuration: summary.totalDuration,
+                    sessionCount: summary.sessionCount,
+                    category: AppCategory.categorize(bundleID: summary.bundleID, appName: summary.appName),
+                    isBrowser: summary.isBrowser
+                )
+            }
+    }
+
+    func websiteUsageSummaries(
+        in db: Database,
+        dayBounds: DayBounds,
+        browserBundleID: String? = nil,
+        limit: Int? = nil
+    ) throws -> [WebsiteUsageSummary] {
+        let rows: [Row]
+        if let browserBundleID {
+            rows = try Row.fetchAll(db, sql: """
+                SELECT domain, browserBundleID, confidence, pageTitle, startTime, endTime
+                FROM website_visits
+                WHERE startTime < ? AND endTime > ? AND browserBundleID = ?
+                ORDER BY domain ASC, startTime ASC
+                """, arguments: [dayBounds.end, dayBounds.start, browserBundleID])
+        } else {
+            rows = try Row.fetchAll(db, sql: """
+                SELECT domain, browserBundleID, confidence, pageTitle, startTime, endTime
+                FROM website_visits
+                WHERE startTime < ? AND endTime > ?
+                ORDER BY domain ASC, startTime ASC
+                """, arguments: [dayBounds.end, dayBounds.start])
+        }
+
+        var domainVisits: [String: [RawWebsiteVisitInterval]] = [:]
+        for row in rows {
+            let startTime: Date = row["startTime"]
+            let endTime: Date = row["endTime"]
+            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else { continue }
+
+            let domain: String = row["domain"]
+            domainVisits[domain, default: []].append(
+                RawWebsiteVisitInterval(
+                    domain: domain,
+                    bundleID: row["browserBundleID"],
+                    title: row["pageTitle"],
+                    confidence: row["confidence"],
+                    interval: clipped
+                )
+            )
+        }
+
+        let summaries = domainVisits.compactMap { domain, visits -> WebsiteUsageSummary? in
+            let merged = mergedIntervals(from: visits.map(\.interval))
+            let totalDuration = merged.reduce(0.0) { $0 + $1.duration }
+            guard totalDuration >= Constants.minimumWebsiteVisitDuration else { return nil }
+
+            let bundleIDs = Set(visits.map(\.bundleID))
+            let browserName: String
+            if bundleIDs.count == 1, let singleBundleID = bundleIDs.first {
+                browserName = Constants.browserNames[singleBundleID] ?? "Browser"
+            } else {
+                browserName = "Multiple Browsers"
+            }
+
+            let topTitle = visits.lazy.compactMap(\.title).first(where: { !$0.isEmpty })
+            let bestConfidence = visits.contains(where: { $0.confidence == ActivityEvent.ConfidenceLevel.high.rawValue })
+                ? ActivityEvent.ConfidenceLevel.high
+                : ActivityEvent.ConfidenceLevel(rawValue: visits.first?.confidence ?? ActivityEvent.ConfidenceLevel.low.rawValue) ?? .low
+
+            return WebsiteUsageSummary(
+                domain: domain,
+                totalDuration: totalDuration,
+                visitCount: merged.count,
+                topPageTitle: topTitle,
+                confidence: bestConfidence,
+                browserName: browserName
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.totalDuration == rhs.totalDuration {
+                return lhs.domain.localizedCaseInsensitiveCompare(rhs.domain) == .orderedAscending
+            }
+            return lhs.totalDuration > rhs.totalDuration
+        }
+
+        if let limit {
+            return Array(summaries.prefix(limit))
+        }
+        return summaries
     }
 }

@@ -10,6 +10,7 @@ final class IdleDetector {
     private var onIdleStateChanged: ((Bool) -> Void)?
 
     func start(onIdleStateChanged: @escaping (Bool) -> Void) {
+        guard timer == nil else { return }
         self.onIdleStateChanged = onIdleStateChanged
 
         // Poll every 5 seconds — lightweight check
@@ -22,6 +23,7 @@ final class IdleDetector {
         timer?.invalidate()
         timer = nil
         isIdle = false
+        onIdleStateChanged = nil
     }
 
     private func checkIdleState() {

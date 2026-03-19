@@ -11,29 +11,19 @@ final class SettingsViewModel {
     var isAPIKeyVisible: Bool = false
     var statusMessage: String?
 
-    let availableModels = [
-        ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Recommended)"),
-        ("claude-opus-4-6", "Claude Opus 4.6 (Most capable)"),
-        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 (Fastest)"),
-    ]
+    let availableModels = Constants.anthropicModels.map { ($0.id, $0.name) }
 
     func loadSettings(aiService: AIService) {
-        if let existingKey = KeychainHelper.read(
-            service: Constants.keychainServiceName,
-            account: Constants.anthropicAPIKeyAccount
-        ) {
-            apiKey = existingKey
-        }
+        apiKey = aiService.currentAPIKey() ?? ""
+        selectedModel = aiService.model
     }
 
     func saveAPIKey(aiService: AIService) {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            aiService.removeAPIKey()
-            statusMessage = "API key removed."
+            statusMessage = aiService.removeAPIKey() ? "API key removed." : "Couldn't remove the API key."
         } else {
-            aiService.setAPIKey(trimmed)
-            statusMessage = "API key saved securely."
+            statusMessage = aiService.setAPIKey(trimmed) ? "API key saved." : "Couldn't save the API key."
         }
     }
 
@@ -57,11 +47,13 @@ final class SettingsViewModel {
             guard response == .OK, let url = panel.url else { return }
             Task { @MainActor in
                 do {
-                    let startDate = Calendar.current.date(byAdding: .year, value: -1, to: Date())!
-                    let endDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-                    let data = try AppDatabase.shared.exportData(from: startDate, to: endDate)
-                    let jsonData = try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys])
-                    try jsonData.write(to: url)
+                    let export = try await Task.detached(priority: .userInitiated) { () -> Data in
+                        let startDate = Calendar.current.date(byAdding: .year, value: -1, to: Date())!
+                        let endDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+                        let data = try AppDatabase.shared.exportData(from: startDate, to: endDate)
+                        return try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys])
+                    }.value
+                    try export.write(to: url, options: .atomic)
                     self.statusMessage = "Data exported successfully."
                 } catch {
                     self.statusMessage = "Export failed: \(error.localizedDescription)"

@@ -10,22 +10,34 @@ struct TodayView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space24) {
-                overviewCards
-                TimelineBand(sessions: viewModel.timeline)
-                AISummaryCard(
-                    summary: viewModel.aiSummary,
-                    isLoading: viewModel.isLoadingAI,
-                    onGenerate: {
-                        viewModel.generateAISummary(aiService: appState.aiService, for: appState.selectedDate)
+                greetingSection
+
+                if viewModel.appSummaries.isEmpty && !viewModel.isLoading {
+                    emptyState
+                } else {
+                    activeTimeHeader
+                    overviewStats
+                    CategoryBreakdownCard(
+                        categories: viewModel.categorySummaries,
+                        appSummaries: viewModel.appSummaries
+                    )
+                    TimelineBand(
+                        sessions: viewModel.timeline,
+                        categorySummaries: viewModel.categorySummaries
+                    )
+                    TopAppsCard(summaries: viewModel.appSummaries, date: appState.selectedDate)
+                    if !viewModel.websiteSummaries.isEmpty {
+                        topWebsitesSection
                     }
-                )
-                TopAppsCard(summaries: viewModel.appSummaries)
-                if !viewModel.websiteSummaries.isEmpty {
-                    topWebsitesSection
                 }
             }
+            .frame(maxWidth: 980, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(DS.space24)
+            .id(appState.selectedDate)
+            .transition(.opacity)
         }
+        .animation(.easeOut(duration: 0.2), value: appState.selectedDate)
         .onAppear { viewModel.load(for: appState.selectedDate) }
         .onChange(of: appState.selectedDate) { _, newDate in
             viewModel.load(for: newDate)
@@ -37,16 +49,33 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Overview Cards
+    // MARK: - Greeting
 
-    private var overviewCards: some View {
+    private var greetingSection: some View {
+        Text(viewModel.greeting)
+            .font(.title.weight(.medium))
+            .foregroundStyle(.primary)
+    }
+
+    // MARK: - Active Time (large centered)
+
+    private var activeTimeHeader: some View {
+        VStack(spacing: DS.space4) {
+            Text(viewModel.totalActiveTime)
+                .font(.system(size: 48, weight: .bold).monospacedDigit())
+
+            Text("active today")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, DS.space8)
+    }
+
+    // MARK: - Overview Stats
+
+    private var overviewStats: some View {
         HStack(spacing: DS.space16) {
-            StatCard(
-                title: "Active Time",
-                value: viewModel.totalActiveTime,
-                icon: "clock.fill",
-                color: .blue
-            )
             StatCard(
                 title: "Focus Score",
                 value: viewModel.focusScoreText,
@@ -67,6 +96,23 @@ struct TodayView: View {
                 color: .purple
             )
         }
+    }
+
+    // MARK: - Empty State
+
+    private var emptyState: some View {
+        VStack(spacing: DS.space12) {
+            Image(systemName: "desktopcomputer")
+                .font(.system(size: 40))
+                .foregroundStyle(.tertiary)
+
+            Text("No activity tracked yet today. Use your Mac for a few minutes and check back.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, DS.space48)
     }
 
     // MARK: - Top Websites

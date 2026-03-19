@@ -3,39 +3,82 @@ import Foundation
 /// Provides basic local analysis when AI API is unavailable.
 enum LocalAnalyzer {
     /// Generate a simple text summary from aggregated data.
+    /// Works for any day — does not hardcode "today".
     static func generateLocalSummary(
         appSummaries: [AppUsageSummary],
         websiteSummaries: [WebsiteUsageSummary],
         dailySummary: DailySummary?
     ) -> String {
-        guard let summary = dailySummary else {
-            return "Not enough data yet. Keep using your Mac and check back later."
+        // Compute total from sessions directly so this works even without a DailySummary row
+        let totalDuration = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard totalDuration > 60 else {
+            return "Not enough activity recorded to summarize this day."
         }
 
         var lines: [String] = []
+        let categorySummaries = SemanticUsageRollups.categorySummaries(from: appSummaries)
 
-        lines.append("You were active for \(summary.formattedActiveTime) today.")
+        let formattedTime = Self.formatDuration(totalDuration)
+        lines.append("You were active for \(formattedTime).")
 
+        // Category-level patterns
+        if categorySummaries.count >= 2 {
+            let top = categorySummaries.prefix(2)
+            let parts = top.map { "\($0.category.rawValue) (\($0.formattedDuration))" }
+            lines.append("Most of your time went to \(parts.joined(separator: " and ")).")
+        } else if let first = categorySummaries.first {
+            lines.append("Your time was mainly in \(first.category.rawValue) (\(first.formattedDuration)).")
+        }
+
+        // Top app with semantic label
         if let topApp = appSummaries.first {
-            lines.append("Your most-used app was \(topApp.appName) at \(topApp.formattedDuration).")
+            let label = topApp.semanticLabel.map { " (\($0))" } ?? ""
+            lines.append("Your most-used app was \(topApp.appName)\(label) at \(topApp.formattedDuration).")
         }
 
+        // Top website
         if let topSite = websiteSummaries.first {
-            lines.append("You spent the most time on \(topSite.domain) (\(topSite.formattedDuration)).")
+            lines.append("Top website: \(topSite.domain) (\(topSite.formattedDuration)).")
         }
 
-        lines.append("Focus score: \(summary.focusScorePercent)% — \(summary.focusScoreLabel).")
+        // Focus assessment
+        if let summary = dailySummary, summary.focusScore > 0 {
+            lines.append("Focus score: \(summary.focusScorePercent)% — \(summary.focusScoreLabel).")
 
-        if summary.contextSwitches > 20 {
-            lines.append("You switched between apps \(summary.contextSwitches) times — consider batching similar tasks.")
-        }
+            if summary.contextSwitches > 20 {
+                lines.append("You switched between apps \(summary.contextSwitches) times.")
+            }
 
-        if summary.longestFocusStreak > 1800 {
-            let minutes = Int(summary.longestFocusStreak / 60)
-            lines.append("Nice! Your longest focus streak was \(minutes) minutes.")
+            if summary.longestFocusStreak > 1800 {
+                let minutes = Int(summary.longestFocusStreak / 60)
+                lines.append("Longest focus streak: \(minutes) minutes.")
+            }
+        } else {
+            // Derive focus from sessions
+            let focusedTime = appSummaries
+                .filter { $0.classification.category.isFocused }
+                .reduce(0.0) { $0 + $1.totalDuration }
+            let ratio = totalDuration > 0 ? focusedTime / totalDuration : 0
+            let label: String
+            switch ratio {
+            case 0.8...: label = "Deep Focus"
+            case 0.6..<0.8: label = "Focused"
+            case 0.4..<0.6: label = "Mixed"
+            case 0.2..<0.4: label = "Scattered"
+            default: label = "Fragmented"
+            }
+            lines.append("Focus: \(Int(ratio * 100))% — \(label).")
         }
 
         return lines.joined(separator: " ")
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "\(Int(seconds) % 60)s"
     }
 
     /// Answer basic questions locally.
