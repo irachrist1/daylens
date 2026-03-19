@@ -6,9 +6,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private weak var appState: AppState?
     private var refreshTimer: Timer?
+    private var todaySummaryTask: Task<Void, Never>?
+    private var cachedTodaySummary = MenuTodaySummary(activeTime: nil, topApps: [])
 
     func configure(with appState: AppState) {
         self.appState = appState
+        refreshTodaySummary()
         rebuildMenu()
     }
 
@@ -16,13 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         // Refresh menu content every 30 seconds
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.rebuildMenu()
+            self?.refreshTodaySummary()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
         refreshTimer = nil
+        todaySummaryTask?.cancel()
+        todaySummaryTask = nil
         appState?.permissionManager?.stopPolling()
         appState?.trackingCoordinator?.stopTracking()
     }
@@ -43,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         let trackingState = appState?.trackingCoordinator?.trackingState ?? .idle
-        let todaySummary = loadTodaySummary()
+        let todaySummary = cachedTodaySummary
 
         if let activeTime = todaySummary.activeTime {
             menu.addItem(makeInfoItem(
@@ -111,33 +116,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem?.menu = menu
     }
 
-    private func loadTodaySummary() -> MenuTodaySummary {
+    private func refreshTodaySummary() {
+        todaySummaryTask?.cancel()
+
         guard let db = appState?.database else {
-            return MenuTodaySummary(activeTime: nil, topApps: [])
+            cachedTodaySummary = MenuTodaySummary(activeTime: nil, topApps: [])
+            rebuildMenu()
+            return
         }
 
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let summaries = try? db.appUsageSummaries(for: today), !summaries.isEmpty else {
-            return MenuTodaySummary(activeTime: nil, topApps: [])
-        }
+        todaySummaryTask = Task { [weak self] in
+            let summary = await Task.detached(priority: .utility) {
+                let today = Calendar.current.startOfDay(for: Date())
+                guard let summaries = try? db.appUsageSummaries(for: today), !summaries.isEmpty else {
+                    return MenuTodaySummary(activeTime: nil, topApps: [])
+                }
 
-        let totalSeconds = summaries.reduce(0.0) { $0 + $1.totalDuration }
-        return MenuTodaySummary(
-            activeTime: formatActiveTime(totalSeconds),
-            topApps: Array(summaries.prefix(3))
-        )
-    }
+                let totalSeconds = summaries.reduce(0.0) { $0 + $1.totalDuration }
+                let activeTime: String
+                let hours = Int(totalSeconds) / 3600
+                let minutes = (Int(totalSeconds) % 3600) / 60
+                if hours > 0 {
+                    activeTime = "\(hours)h \(minutes)m"
+                } else if minutes > 0 {
+                    activeTime = "\(minutes)m"
+                } else {
+                    activeTime = "\(Int(totalSeconds) % 60)s"
+                }
 
-    private func formatActiveTime(_ totalSeconds: TimeInterval) -> String {
-        let hours = Int(totalSeconds) / 3600
-        let minutes = (Int(totalSeconds) % 3600) / 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
+                return MenuTodaySummary(
+                    activeTime: activeTime,
+                    topApps: Array(summaries.prefix(3))
+                )
+            }.value
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.cachedTodaySummary = summary
+                self.rebuildMenu()
+            }
         }
-        if minutes > 0 {
-            return "\(minutes)m"
-        }
-        return "\(Int(totalSeconds) % 60)s"
     }
 
     private func statusContent(for trackingState: TrackingState) -> MenuStatusContent? {

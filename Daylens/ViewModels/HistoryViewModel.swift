@@ -54,17 +54,10 @@ final class HistoryViewModel {
             guard let db = database else { return }
 
             do {
-                let trackedDates = try await Task.detached(priority: .userInitiated) {
-                    try db.trackedDays(limit: 60)
+                let snapshots = try await Task.detached(priority: .userInitiated) {
+                    let trackedDates = try db.trackedDays(limit: 60)
+                    return trackedDates.compactMap { try? db.daySummarySnapshot(for: $0) }
                 }.value
-
-                // Build snapshots for each date
-                var snapshots: [DaySummarySnapshot] = []
-                for date in trackedDates {
-                    if let snapshot = try? db.daySummarySnapshot(for: date) {
-                        snapshots.append(snapshot)
-                    }
-                }
                 days = snapshots
 
                 // Auto-select the most recent non-today day, or the first day

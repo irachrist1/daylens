@@ -50,19 +50,31 @@ final class InsightsViewModel {
                 return
             }
 
-            let contextPayload = try? await Task.detached(priority: .userInitiated) {
-                (
-                    appSummaries: try AppDatabase.shared.appUsageSummaries(for: date),
-                    websiteSummaries: try AppDatabase.shared.websiteUsageSummaries(for: date),
-                    browserSummaries: try AppDatabase.shared.browserUsageSummaries(for: date),
-                    dailySummary: try AppDatabase.shared.dailySummary(for: date)
-                )
-            }.value
+            let contextPayload: (
+                appSummaries: [AppUsageSummary],
+                websiteSummaries: [WebsiteUsageSummary],
+                browserSummaries: [BrowserUsageSummary],
+                dailySummary: DailySummary?
+            )
+            do {
+                contextPayload = try await Task.detached(priority: .userInitiated) {
+                    (
+                        appSummaries: try AppDatabase.shared.appUsageSummaries(for: date),
+                        websiteSummaries: try AppDatabase.shared.websiteUsageSummaries(for: date),
+                        browserSummaries: try AppDatabase.shared.browserUsageSummaries(for: date),
+                        dailySummary: try AppDatabase.shared.dailySummary(for: date)
+                    )
+                }.value
+            } catch {
+                appendError("Couldn't load your activity data. Please try again.")
+                isProcessing = false
+                return
+            }
 
-            let appSummaries = contextPayload?.appSummaries ?? []
-            let websiteSummaries = contextPayload?.websiteSummaries ?? []
-            let browserSummaries = contextPayload?.browserSummaries ?? []
-            let dailySummary = contextPayload?.dailySummary
+            let appSummaries = contextPayload.appSummaries
+            let websiteSummaries = contextPayload.websiteSummaries
+            let browserSummaries = contextPayload.browserSummaries
+            let dailySummary = contextPayload.dailySummary
 
             // No data check
             guard !appSummaries.isEmpty else {
