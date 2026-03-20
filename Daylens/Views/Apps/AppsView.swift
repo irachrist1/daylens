@@ -89,7 +89,7 @@ struct AppRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: DS.space12) {
-                AppIconView(bundleID: app.bundleID, size: 36)
+                AppInitialsIcon(name: app.appName, category: classification.category, size: 36)
 
                 VStack(alignment: .leading, spacing: DS.space4) {
                     HStack {
@@ -97,13 +97,7 @@ struct AppRow: View {
                             .font(.body.weight(.medium))
                             .foregroundStyle(DS.onSurface)
 
-                        // Focus chip
-                        Text(classification.category.rawValue)
-                            .font(.caption2)
-                            .foregroundStyle(color)
-                            .padding(.horizontal, DS.space6)
-                            .padding(.vertical, 2)
-                            .background(color.opacity(0.15), in: Capsule())
+                        CategoryBadge(category: classification.category)
 
                         Spacer()
 
