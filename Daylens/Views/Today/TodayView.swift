@@ -45,8 +45,17 @@ struct TodayView: View {
                         categorySummaries: viewModel.categorySummaries
                     )
 
-                    // Top apps (with browser website expansion)
-                    TopAppsCard(summaries: viewModel.appSummaries, date: appState.selectedDate)
+                    // Recent sessions + intelligence insight side by side
+                    HStack(alignment: .top, spacing: DS.space16) {
+                        RecentSessionsCard(summaries: viewModel.appSummaries)
+                            .frame(maxWidth: .infinity)
+                        IntelligenceInsightCard(
+                            focusScore: Int(viewModel.focusScoreRatio * 100),
+                            topCategory: viewModel.categorySummaries.first?.category,
+                            totalSeconds: viewModel.appSummaries.reduce(0) { $0 + $1.totalDuration }
+                        )
+                        .frame(width: 280)
+                    }
 
                     // Top websites
                     if !viewModel.websiteSummaries.isEmpty {

@@ -226,6 +226,194 @@ struct AllocationBarCard: View {
     }
 }
 
+// MARK: - App Initials Icon
+
+/// Colored rounded square with 2-letter initials — used in place of real app icons.
+struct AppInitialsIcon: View {
+    let name: String
+    let category: AppCategory
+    let size: CGFloat
+
+    private var initials: String {
+        let words = name.split(separator: " ")
+        if words.count >= 2 {
+            return String(words[0].prefix(1) + words[1].prefix(1)).uppercased()
+        }
+        return String(name.prefix(2)).uppercased()
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                .fill(DS.categoryColor(for: category).opacity(0.18))
+                .frame(width: size, height: size)
+            Text(initials)
+                .font(.system(size: size * 0.34, weight: .semibold))
+                .foregroundStyle(DS.categoryColor(for: category))
+        }
+    }
+}
+
+// MARK: - Category Badge
+
+/// Inline pill showing category name with category color background.
+struct CategoryBadge: View {
+    let category: AppCategory
+
+    var body: some View {
+        Text(category.rawValue.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.5)
+            .foregroundStyle(DS.categoryColor(for: category))
+            .padding(.horizontal, DS.space6)
+            .padding(.vertical, 2)
+            .background(
+                DS.categoryColor(for: category).opacity(0.12),
+                in: Capsule(style: .continuous)
+            )
+    }
+}
+
+// MARK: - Recent Sessions Card
+
+/// Replaces TopAppsCard with initials icons and efficiency dots.
+struct RecentSessionsCard: View {
+    let summaries: [AppUsageSummary]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            Text("Recent Sessions")
+                .sectionHeader()
+
+            if summaries.isEmpty {
+                Text("No sessions yet")
+                    .font(.body)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
+            } else {
+                ForEach(summaries.prefix(5)) { app in
+                    SessionRow(app: app)
+                }
+            }
+        }
+        .cardStyle()
+    }
+}
+
+private struct SessionRow: View {
+    let app: AppUsageSummary
+
+    var body: some View {
+        HStack(spacing: DS.space12) {
+            // App icon: colored square with initials
+            AppInitialsIcon(name: app.appName, category: app.category, size: 36)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: DS.space6) {
+                    Text(app.appName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(DS.onSurface)
+                    CategoryBadge(category: app.category)
+                }
+                Text(app.formattedDuration)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(DS.onSurfaceVariant)
+            }
+
+            Spacer()
+
+            // Efficiency dots
+            HStack(spacing: 3) {
+                ForEach(0..<3) { i in
+                    Circle()
+                        .fill(i < efficiencyDots(for: app) ? DS.categoryColor(for: app.category) : DS.surfaceHighest)
+                        .frame(width: 6, height: 6)
+                }
+            }
+        }
+    }
+
+    // Simple heuristic: 3 dots if >1h, 2 dots if >30m, 1 dot otherwise
+    private func efficiencyDots(for app: AppUsageSummary) -> Int {
+        app.totalDuration > 3600 ? 3 : app.totalDuration > 1800 ? 2 : 1
+    }
+}
+
+// MARK: - Intelligence Insight Card
+
+/// Heuristic-based insight card with optimization score.
+struct IntelligenceInsightCard: View {
+    let focusScore: Int
+    let topCategory: AppCategory?
+    let totalSeconds: TimeInterval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            HStack(spacing: DS.space8) {
+                Image(systemName: "lightbulb.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(DS.secondary)
+                Text("Intelligence Insight")
+                    .sectionHeader()
+            }
+
+            Text(insightTitle)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(DS.onSurface)
+
+            Text(insightBody)
+                .font(.system(size: 12))
+                .foregroundStyle(DS.onSurfaceVariant)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: DS.space6) {
+                HStack {
+                    Text("OPTIMIZATION SCORE")
+                        .font(.system(size: 9, weight: .semibold))
+                        .tracking(0.5)
+                        .foregroundStyle(DS.onSurfaceVariant)
+                    Spacer()
+                    Text("\(focusScore)/100")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(DS.primary)
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(DS.surfaceHighest)
+                        Capsule()
+                            .fill(DS.primaryGradient)
+                            .frame(width: geo.size.width * Double(focusScore) / 100)
+                    }
+                }
+                .frame(height: 5)
+            }
+        }
+        .cardStyle()
+    }
+
+    private var insightTitle: String {
+        if focusScore >= 75 { return "Focus Peak Detected" }
+        if focusScore >= 50 { return "Steady Progress" }
+        return "Focus Opportunity"
+    }
+
+    private var insightBody: String {
+        guard let cat = topCategory else {
+            return "Start using your Mac and insights will appear here."
+        }
+        let hours = Int(totalSeconds) / 3600
+        let mins = (Int(totalSeconds) % 3600) / 60
+        let timeStr = hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
+        if focusScore >= 75 {
+            return "Your cognitive load is optimized today with \(timeStr) in \(cat.rawValue). This is your peak performance window."
+        }
+        if focusScore >= 50 {
+            return "You've spent \(timeStr) in \(cat.rawValue). Consider blocking distractions to boost your score."
+        }
+        return "Only \(timeStr) of focused work detected. Scheduling a focus block could improve output by 20%+."
+    }
+}
+
 // MARK: - Hero Summary Card
 
 /// Hero-style banner: big active time + greeting subtext.
