@@ -75,7 +75,7 @@ struct InsightsView: View {
                                     .foregroundStyle(DS.onSurfaceVariant)
                                     .padding(.horizontal, DS.space12)
                                     .padding(.vertical, DS.space8)
-                                    .background(DS.surfaceHigh, in: Capsule())
+                                    .background(DS.surfaceCard, in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .disabled(viewModel.isProcessing)
@@ -259,13 +259,13 @@ struct ChatBubble: View {
     private var bubbleBackgroundView: some View {
         if isUser {
             RoundedRectangle(cornerRadius: isUser ? 18 : 16, style: .continuous)
-                .fill(DS.primaryGradient)
+                .fill(DS.primaryContainer)
         } else if isError {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(DS.secondary.opacity(0.10))
         } else {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(DS.surfaceHigh)
+                .fill(DS.surfaceCard)
         }
     }
 
@@ -314,7 +314,7 @@ struct TypingIndicator: View {
             }
             .padding(.horizontal, DS.space14)
             .padding(.vertical, DS.space12)
-            .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(DS.surfaceCard, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Spacer(minLength: 0)
         }
@@ -387,7 +387,7 @@ struct FloatingInputBar: View {
                 Button(action: onSubmit) {
                     ZStack {
                         Circle()
-                            .fill(canSend ? AnyShapeStyle(DS.primaryGradient) : AnyShapeStyle(DS.surfaceHighest))
+                            .fill(canSend ? AnyShapeStyle(DS.primary) : AnyShapeStyle(DS.surfaceHighest))
                             .frame(width: 36, height: 36)
                         if isProcessing {
                             ProgressView()
@@ -408,7 +408,7 @@ struct FloatingInputBar: View {
         }
         .background {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(DS.surfaceHigh)
+                .fill(DS.surfaceCard)
                 .overlay(
                     RoundedRectangle(cornerRadius: 28, style: .continuous)
                         .strokeBorder(
