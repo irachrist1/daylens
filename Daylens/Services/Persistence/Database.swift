@@ -20,9 +20,48 @@ final class AppDatabase {
         try fileManager.createDirectory(at: daylensDir, withIntermediateDirectories: true)
 
         let dbURL = daylensDir.appendingPathComponent("daylens.sqlite")
+
+        // Take a rolling backup before opening (keeps last 7 daily backups)
+        Self.takeBackup(of: dbURL, in: daylensDir)
+
         let shouldLogSQL = ProcessInfo.processInfo.environment["DAYLENS_LOG_SQL"] == "1"
         let dbQueue = try DatabaseQueue(path: dbURL.path, configuration: Self.makeConfiguration(logSQL: shouldLogSQL))
         try self.init(dbQueue: dbQueue)
+    }
+
+    // MARK: - Backup
+
+    /// Copies the database to a dated backup file, keeping only the last `maxBackups` files.
+    private static func takeBackup(of dbURL: URL, in daylensDir: URL, maxBackups: Int = 7) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: dbURL.path) else { return }
+
+        let backupDir = daylensDir.appendingPathComponent("Backups", isDirectory: true)
+        try? fileManager.createDirectory(at: backupDir, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dateString = formatter.string(from: Date())
+        let backupURL = backupDir.appendingPathComponent("daylens_\(dateString).sqlite")
+
+        // One backup per calendar day — skip if today's already exists
+        guard !fileManager.fileExists(atPath: backupURL.path) else { return }
+
+        try? fileManager.copyItem(at: dbURL, to: backupURL)
+
+        // Prune old backups beyond the limit
+        let backups = (try? fileManager.contentsOfDirectory(
+            at: backupDir,
+            includingPropertiesForKeys: [.creationDateKey],
+            options: .skipsHiddenFiles
+        ))?.filter { $0.pathExtension == "sqlite" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+
+        if backups.count > maxBackups {
+            for old in backups.prefix(backups.count - maxBackups) {
+                try? fileManager.removeItem(at: old)
+            }
+        }
     }
 
     static func inMemory() throws -> AppDatabase {
@@ -47,10 +86,6 @@ final class AppDatabase {
 
     private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
-
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = true
-        #endif
 
         migrator.registerMigration("v1_create_tables") { db in
             try db.create(table: "activity_events") { t in
@@ -128,6 +163,25 @@ final class AppDatabase {
                 t.column("question", .text).notNull()
                 t.column("answer", .text).notNull()
                 t.column("date", .date) // Optional: which day the question was about
+            }
+        }
+
+        migrator.registerMigration("v2_focus_sessions") { db in
+            try db.create(table: "focus_sessions") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("date", .date).notNull().indexed()
+                t.column("startTime", .datetime).notNull().indexed()
+                t.column("endTime", .datetime)
+                t.column("targetMinutes", .integer).notNull()
+                t.column("actualDuration", .double).notNull().defaults(to: 0)
+                t.column("status", .text).notNull()
+            }
+        }
+
+        migrator.registerMigration("v3_category_overrides") { db in
+            try db.create(table: "category_overrides") { t in
+                t.column("bundleID", .text).primaryKey()
+                t.column("category", .text).notNull()
             }
         }
 

@@ -3,71 +3,117 @@ import SwiftUI
 struct AppsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = AppsViewModel()
-    @State private var expandedBundleID: String?
-    @State private var expandedWebsites: [WebsiteUsageSummary] = []
-    @State private var isLoadingWebsites = false
+
+    private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ScrollView {
+        HStack(spacing: 0) {
+            appList
+                .frame(width: 360)
+                .background(DS.surfaceLow)
+
+            detailPane
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DS.surfaceContainer)
+        }
+        .onAppear {
+            viewModel.load(for: appState.selectedDate)
+            injectLiveSessionIfNeeded()
+        }
+        .onChange(of: appState.selectedDate) { _, date in
+            viewModel.load(for: date)
+        }
+        .onReceive(refreshTimer) { _ in
+            if Calendar.current.isDateInToday(appState.selectedDate) {
+                injectLiveSessionIfNeeded()
+            }
+        }
+    }
+
+    private func injectLiveSessionIfNeeded() {
+        if let info = appState.trackingCoordinator?.currentSessionInfo,
+           Calendar.current.isDateInToday(appState.selectedDate) {
+            viewModel.injectLiveSession(
+                bundleID: info.bundleID,
+                appName: info.appName,
+                startedAt: info.startedAt,
+                for: appState.selectedDate
+            )
+        }
+    }
+
+    private var appList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Apps")
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.0)
+                .foregroundStyle(DS.onSurfaceVariant)
+                .padding(.horizontal, DS.space16)
+                .padding(.vertical, DS.space16)
+
             if viewModel.summaries.isEmpty && !viewModel.isLoading {
                 EmptyStateView(
                     icon: "square.grid.2x2",
                     title: "No App Data Yet",
                     description: "Keep using your Mac. App usage will appear here within a few minutes of tracking."
                 )
+                .padding(DS.space16)
             } else {
-                VStack(alignment: .leading, spacing: DS.space8) {
-                    let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DS.space8) {
+                        let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
 
-                    ForEach(viewModel.summaries) { app in
-                        AppRow(
-                            app: app,
-                            maxDuration: maxDuration,
-                            isExpanded: expandedBundleID == app.bundleID,
-                            expandedWebsites: expandedBundleID == app.bundleID ? expandedWebsites : [],
-                            isLoadingWebsites: expandedBundleID == app.bundleID && isLoadingWebsites,
-                            onTap: { toggleExpansion(for: app.bundleID) }
-                        )
+                        ForEach(viewModel.summaries) { app in
+                            AppRow(
+                                app: app,
+                                maxDuration: maxDuration,
+                                isSelected: viewModel.selectedApp?.bundleID == app.bundleID,
+                                onTap: { viewModel.selectApp(app, for: appState.selectedDate) },
+                                setCategory: { cat in
+                                    if let cat {
+                                        viewModel.setOverride(bundleID: app.bundleID, category: cat, for: appState.selectedDate)
+                                    } else {
+                                        viewModel.removeOverride(bundleID: app.bundleID, for: appState.selectedDate)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    .padding(DS.space16)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let selectedApp = viewModel.selectedApp {
+            AppDetailView(
+                app: selectedApp,
+                date: appState.selectedDate,
+                sessions: viewModel.detailSessions,
+                websites: viewModel.detailWebsites,
+                isLoading: viewModel.isLoadingDetail,
+                setCategory: { cat in
+                    if let cat {
+                        viewModel.setOverride(bundleID: selectedApp.bundleID, category: cat, for: appState.selectedDate)
+                    } else {
+                        viewModel.removeOverride(bundleID: selectedApp.bundleID, for: appState.selectedDate)
                     }
                 }
-                .padding(DS.space24)
-            }
-        }
-        .background(DS.surfaceContainer)
-        .onAppear { viewModel.load(for: appState.selectedDate) }
-        .onChange(of: appState.selectedDate) { _, date in
-            expandedBundleID = nil
-            viewModel.load(for: date)
-        }
-    }
-
-    private func toggleExpansion(for bundleID: String) {
-        if expandedBundleID == bundleID {
-            expandedBundleID = nil
-            expandedWebsites = []
-            isLoadingWebsites = false
+            )
         } else {
-            expandedBundleID = bundleID
-            loadWebsites(for: bundleID)
-        }
-    }
+            VStack(spacing: DS.space12) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 32))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.35))
 
-    private func loadWebsites(for bundleID: String) {
-        isLoadingWebsites = true
-        expandedWebsites = []
-
-        Task { @MainActor in
-            let date = appState.selectedDate
-            let results = try? await Task.detached(priority: .userInitiated) {
-                try AppDatabase.shared.websiteVisitsForBrowser(
-                    date: date, browserBundleID: bundleID, limit: 8
-                )
-            }.value
-
-            if expandedBundleID == bundleID {
-                expandedWebsites = results ?? []
-                isLoadingWebsites = false
+                Text("Select an app to inspect its sessions")
+                    .font(.body)
+                    .foregroundStyle(DS.onSurfaceVariant)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -75,19 +121,17 @@ struct AppsView: View {
 struct AppRow: View {
     let app: AppUsageSummary
     let maxDuration: TimeInterval
-    var isExpanded: Bool = false
-    var expandedWebsites: [WebsiteUsageSummary] = []
-    var isLoadingWebsites: Bool = false
-    var onTap: (() -> Void)?
+    let isSelected: Bool
+    let onTap: () -> Void
+    var setCategory: ((AppCategory?) -> Void)? = nil
 
     @State private var isHovered = false
 
     private var classification: AppClassification { app.classification }
-    private var isBrowserCapable: Bool { Constants.browserCapableBundleIDs.contains(app.bundleID) }
     private var color: Color { DS.categoryColor(for: classification.category) }
 
     var body: some View {
-        VStack(spacing: 0) {
+        Button(action: onTap) {
             HStack(spacing: DS.space12) {
                 AppRealIcon(bundleID: app.bundleID, name: app.appName, category: classification.category, size: 36)
 
@@ -104,14 +148,6 @@ struct AppRow: View {
                         Text(app.formattedDuration)
                             .font(.body.monospacedDigit())
                             .foregroundStyle(DS.onSurfaceVariant)
-
-                        if isBrowserCapable {
-                            Image(systemName: "chevron.right")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
-                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                                .animation(.easeOut(duration: 0.15), value: isExpanded)
-                        }
                     }
 
                     GeometryReader { geometry in
@@ -126,29 +162,40 @@ struct AppRow: View {
                         .font(.caption)
                         .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard isBrowserCapable else { return }
-                onTap?()
-            }
 
-            if isExpanded {
-                BrowserWebsitesExpansion(
-                    websites: expandedWebsites,
-                    isLoading: isLoadingWebsites
-                )
-                .padding(.leading, 48)
-                .transition(.opacity.combined(with: .offset(y: -4)))
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.45))
             }
+            .padding(DS.space12)
+            .background(
+                RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous)
+                    .fill(rowBackground)
+            )
         }
-        .padding(DS.space12)
-        .background(
-            RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous)
-                .fill(isHovered ? DS.surfaceHighest : DS.surfaceHigh)
-        )
+        .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.2), value: isExpanded)
         .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .contextMenu {
+            Menu("Set Category") {
+                ForEach(AppCategory.allCases, id: \.self) { cat in
+                    Button {
+                        setCategory?(cat)
+                    } label: {
+                        Label(cat.rawValue, systemImage: cat.icon)
+                    }
+                }
+            }
+            Divider()
+            Button("Reset to Auto-detect") { setCategory?(nil) }
+        }
+    }
+
+    private var rowBackground: Color {
+        if isSelected {
+            return DS.primary.opacity(0.12)
+        }
+        return isHovered ? DS.surfaceHighest : DS.surfaceHigh
     }
 }

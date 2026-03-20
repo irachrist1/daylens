@@ -5,6 +5,7 @@ struct HistoryView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = HistoryViewModel()
     @State private var selectedFilter: AppCategory? = nil
+    @State private var showAllSites = false
 
     private var aiService: AIService? { appState.aiService }
 
@@ -16,6 +17,11 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear { viewModel.loadDays() }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryOverrideChanged)) { _ in
+            if let date = viewModel.selectedDate {
+                viewModel.loadDetail(for: date)
+            }
+        }
     }
 
     // MARK: - Day List
@@ -41,7 +47,10 @@ struct HistoryView: View {
                                 isSelected: viewModel.selectedDate == day.date
                             )
                             .contentShape(Rectangle())
-                            .onTapGesture { viewModel.selectDay(day.date) }
+                            .onTapGesture {
+                showAllSites = false
+                viewModel.selectDay(day.date)
+            }
                         }
                     }
                     .padding(.horizontal, DS.space8)
@@ -88,11 +97,11 @@ struct HistoryView: View {
                         daySummaryCard
                         categoryBreakdown
                         TimelineBand(
-                            sessions: viewModel.timeline,
-                            categorySummaries: viewModel.categorySummaries
+                            sessions: filteredTimeline,
+                            categorySummaries: filteredCategorySummaries
                         )
                         RecentSessionsCard(summaries: filteredSummaries)
-                        if !viewModel.websiteSummaries.isEmpty {
+                        if shouldShowTopWebsites {
                             topWebsitesSection
                         }
                     }
@@ -110,6 +119,24 @@ struct HistoryView: View {
     private var filteredSummaries: [AppUsageSummary] {
         guard let filter = selectedFilter else { return viewModel.appSummaries }
         return viewModel.appSummaries.filter { $0.category == filter }
+    }
+
+    private var filteredTimeline: [AppSession] {
+        guard let filter = selectedFilter else { return viewModel.timeline }
+        return viewModel.timeline.filter { $0.category == filter }
+    }
+
+    private var filteredCategorySummaries: [CategoryUsageSummary] {
+        guard let filter = selectedFilter else { return viewModel.categorySummaries }
+        return viewModel.categorySummaries.filter { $0.category == filter }
+    }
+
+    private var shouldShowTopWebsites: Bool {
+        !longSites.isEmpty && (selectedFilter == nil || selectedFilter == .browsing)
+    }
+
+    private var longSites: [WebsiteUsageSummary] {
+        viewModel.websiteSummaries.filter { $0.totalDuration >= 60 }
     }
 
     private var categoryFilterPills: some View {
@@ -206,25 +233,43 @@ struct HistoryView: View {
     private var categoryBreakdown: some View {
         AnyView(
             CategoryBreakdownCard(
-                categories: viewModel.categorySummaries,
-                appSummaries: viewModel.appSummaries
+                categories: filteredCategorySummaries,
+                appSummaries: filteredSummaries
             )
         )
     }
 
     private var topWebsitesSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Top Websites")
-                .sectionHeader()
+            HStack {
+                Text("Top Websites")
+                    .sectionHeader()
+                Spacer()
+                if longSites.count > 5 {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { showAllSites.toggle() }
+                    } label: {
+                        Text(showAllSites ? "Show less" : "Show all \(longSites.count)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
-            let maxDuration = viewModel.websiteSummaries.first?.totalDuration ?? 1
+            let displayed = showAllSites ? longSites : Array(longSites.prefix(5))
+            let maxDuration = longSites.first?.totalDuration ?? 1
 
-            ForEach(viewModel.websiteSummaries.prefix(5)) { site in
+            ForEach(displayed) { site in
+                let domainCat = DomainIntelligence.classify(domain: site.domain)
+                let color = domainCat.category != .uncategorized
+                    ? DS.categoryColor(for: domainCat.category)
+                    : DS.primary
                 UsageBar(
                     label: site.domain,
                     duration: site.totalDuration,
                     maxDuration: maxDuration,
-                    color: DS.primary,
+                    color: color,
                     subtitle: site.topPageTitle
                 )
             }

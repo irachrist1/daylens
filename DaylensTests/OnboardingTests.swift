@@ -144,18 +144,20 @@ final class OnboardingTests: XCTestCase {
 
     func testV1SidebarSections() {
         let allSections = SidebarSection.allCases
-        XCTAssertEqual(allSections, [.today, .history, .apps, .insights, .settings])
+        XCTAssertEqual(allSections, [.today, .focus, .history, .apps, .insights, .settings])
     }
 
     func testTodayShowsDateNavigation() {
         XCTAssertTrue(SidebarSection.today.showsDateNavigation)
         XCTAssertTrue(SidebarSection.apps.showsDateNavigation)
+        XCTAssertFalse(SidebarSection.focus.showsDateNavigation)
         XCTAssertFalse(SidebarSection.insights.showsDateNavigation)
         XCTAssertFalse(SidebarSection.settings.showsDateNavigation)
     }
 
     func testInspectorIsHiddenInV1Shell() {
         XCTAssertFalse(SidebarSection.today.showsInspector)
+        XCTAssertFalse(SidebarSection.focus.showsInspector)
         XCTAssertFalse(SidebarSection.apps.showsInspector)
         XCTAssertFalse(SidebarSection.insights.showsInspector)
         XCTAssertFalse(SidebarSection.settings.showsInspector)

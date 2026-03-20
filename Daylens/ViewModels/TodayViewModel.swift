@@ -18,6 +18,7 @@ final class TodayViewModel {
     func load(for date: Date) {
         isLoading = true
         error = nil
+        isViewingToday = Calendar.current.isDateInToday(date)
 
         Task { @MainActor in
             do {
@@ -25,21 +26,19 @@ final class TodayViewModel {
                     isLoading = false
                     return
                 }
+                // combinedDayPayload runs all day queries in one dbQueue.read and calls
+                // meaningfulAppSessions only once (shared between appSummaries and timeline).
                 let payload = try await Task.detached(priority: .userInitiated) {
                     (
-                        appSummaries: try db.appUsageSummaries(for: date),
-                        websiteSummaries: try db.websiteUsageSummaries(for: date),
-                        browserSummaries: try db.browserUsageSummaries(for: date),
-                        timeline: try db.timelineEvents(for: date),
-                        dailySummary: try db.dailySummary(for: date),
-                        weeklyScores: (try? db.recentDailySummaries(limit: 7)) ?? []
+                        day: try db.combinedDayPayload(for: date),
+                        weeklyScores: (try? db.trackedDaySnapshots(limit: 7)) ?? []
                     )
                 }.value
-                appSummaries = payload.appSummaries
-                websiteSummaries = payload.websiteSummaries
-                browserSummaries = payload.browserSummaries
-                timeline = payload.timeline
-                dailySummary = payload.dailySummary
+                appSummaries = payload.day.appSummaries
+                websiteSummaries = payload.day.websiteSummaries
+                browserSummaries = payload.day.browserSummaries
+                timeline = payload.day.timeline
+                dailySummary = payload.day.dailySummary
                 weeklyScores = payload.weeklyScores
                 aiSummary = dailySummary?.aiSummary
             } catch {
@@ -53,15 +52,20 @@ final class TodayViewModel {
         isLoadingAI = true
 
         Task { @MainActor in
-            let context = AIPromptBuilder.buildDayContext(
-                date: date,
-                appSummaries: appSummaries,
-                websiteSummaries: websiteSummaries,
-                browserSummaries: browserSummaries,
-                dailySummary: dailySummary
-            )
-
             do {
+                let primaryPayload = try database?.aiContextPayload(for: date) ?? AIDayContextPayload(
+                    date: date,
+                    appSummaries: appSummaries,
+                    websiteSummaries: websiteSummaries,
+                    browserSummaries: browserSummaries,
+                    dailySummary: dailySummary
+                )
+                let previousDays = (try? database?.recentAIPayloads(endingAt: date, limit: 4)) ?? []
+                let context = AIPromptBuilder.buildContext(
+                    primaryDay: primaryPayload,
+                    previousDays: previousDays
+                )
+
                 if aiService.isConfigured {
                     aiSummary = try await aiService.generateDailySummary(context: context)
                 } else {
@@ -86,6 +90,36 @@ final class TodayViewModel {
             }
 
             isLoadingAI = false
+        }
+    }
+
+    /// Merges the currently-active (unfinalised) app session into summaries so the
+    /// frontmost app always appears even before the user switches away from it.
+    func injectLiveSession(bundleID: String, appName: String, startedAt: Date) {
+        guard isViewingToday else { return }
+        let duration = Date().timeIntervalSince(startedAt)
+        guard duration >= 3 else { return }
+        let category = AppCategory.categorize(bundleID: bundleID, appName: appName)
+
+        if let idx = appSummaries.firstIndex(where: { $0.bundleID == bundleID }) {
+            let existing = appSummaries[idx]
+            appSummaries[idx] = AppUsageSummary(
+                bundleID: existing.bundleID,
+                appName: existing.appName,
+                totalDuration: existing.totalDuration + duration,
+                sessionCount: existing.sessionCount,
+                category: existing.category,
+                isBrowser: existing.isBrowser
+            )
+        } else {
+            appSummaries.append(AppUsageSummary(
+                bundleID: bundleID,
+                appName: appName,
+                totalDuration: duration,
+                sessionCount: 1,
+                category: category,
+                isBrowser: false
+            ))
         }
     }
 
@@ -120,29 +154,21 @@ final class TodayViewModel {
     }
 
     var focusScoreText: String {
-        if let summary = dailySummary, summary.focusScore > 0 {
+        if !isViewingToday, let summary = dailySummary, summary.focusScore >= 0.01 {
             return "\(summary.focusScorePercent)%"
         }
-        // Derive from live session data
-        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
-        guard total > 0 else { return "—" }
-        let focusedTime = appSummaries
-            .filter { $0.classification.category.isFocused }
-            .reduce(0.0) { $0 + $1.totalDuration }
-        let pct = Int((focusedTime / total) * 100)
+        let pct = Int(focusScoreRatio * 100)
+        guard pct > 0 else { return "—" }
         return "\(pct)%"
     }
 
     var focusLabel: String {
-        if let summary = dailySummary, summary.focusScore > 0 {
+        if !isViewingToday, let summary = dailySummary, summary.focusScore >= 0.01 {
             return summary.focusScoreLabel
         }
         let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
         guard total > 0 else { return "No data" }
-        let focusedTime = appSummaries
-            .filter { $0.classification.category.isFocused }
-            .reduce(0.0) { $0 + $1.totalDuration }
-        let ratio = focusedTime / total
+        let ratio = focusScoreRatio
         switch ratio {
         case 0.8...: return "Deep Focus"
         case 0.6..<0.8: return "Focused"
@@ -156,17 +182,27 @@ final class TodayViewModel {
         SemanticUsageRollups.categorySummaries(from: appSummaries)
     }
 
-    var weeklyScores: [DailySummary] = []
+    var weeklyScores: [DaySummarySnapshot] = []
+    private var isViewingToday: Bool = true
 
     var focusScoreRatio: Double {
-        if let summary = dailySummary, summary.focusScore > 0 {
+        if !isViewingToday, let summary = dailySummary, summary.focusScore >= 0.01 {
             return summary.focusScore
         }
         let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
         guard total > 0 else { return 0 }
-        let focusedTime = appSummaries
+        let appFocused = appSummaries
             .filter { $0.classification.category.isFocused }
             .reduce(0.0) { $0 + $1.totalDuration }
-        return focusedTime / total
+        // Credit browsing time spent on focused domains (research, dev, AI, writing, productivity)
+        let browserTotal = appSummaries
+            .filter { $0.category == .browsing }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let webFocused = websiteSummaries
+            .filter { DomainIntelligence.classify(domain: $0.domain).category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let focusedWebCredit = min(webFocused, browserTotal)
+        let ratio = (appFocused + focusedWebCredit) / total
+        return min(1.0, ratio)
     }
 }

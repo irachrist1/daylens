@@ -36,6 +36,7 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.24), value: hasConversation)
+        .onAppear { viewModel.loadPersistedConversation() }
     }
 
     private var emptyStateLayout: some View {
@@ -353,7 +354,6 @@ struct FloatingInputBar: View {
                     .foregroundStyle(DS.onSurface)
                     .lineLimit(1...6)
                     .focused($isFocused)
-                    .disabled(isProcessing)
                     .onSubmit {
                         if canSend { onSubmit() }
                     }
@@ -441,11 +441,12 @@ struct MarkdownContent: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
+        .textSelection(.enabled)
     }
 
     @ViewBuilder
@@ -454,32 +455,37 @@ struct MarkdownContent: View {
         case .heading(let level, let content):
             inlineText(content)
                 .font(headingFont(level))
-                .padding(.top, level == 1 ? 6 : 4)
+                .textSelection(.enabled)
+                .padding(.top, level == 1 ? 8 : 4)
 
         case .paragraph(let content):
             inlineText(content)
                 .font(.body)
+                .textSelection(.enabled)
 
         case .bullets(let items):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\u{2022}")
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•")
                             .foregroundStyle(DS.onSurfaceVariant)
                         inlineText(item)
+                            .textSelection(.enabled)
                     }
                 }
             }
             .font(.body)
 
         case .numberedList(let items):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("\(i + 1).")
                             .foregroundStyle(DS.onSurfaceVariant)
                             .monospacedDigit()
+                            .frame(minWidth: 18, alignment: .trailing)
                         inlineText(item)
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -490,15 +496,16 @@ struct MarkdownContent: View {
 
         case .codeBlock(let code):
             Text(code)
-                .font(.system(.callout, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(DS.onSurface)
-                .padding(10)
+                .textSelection(.enabled)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DS.surfaceHighest, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
         case .horizontalRule:
             Rectangle()
-                .fill(Color.white.opacity(0.06))
+                .fill(DS.outlineVariant.opacity(0.5))
                 .frame(height: 1)
                 .padding(.vertical, 2)
         }
@@ -516,9 +523,9 @@ struct MarkdownContent: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: .headline
-        case 2: .subheadline.weight(.semibold)
-        default: .subheadline.weight(.medium)
+        case 1: .system(size: 17, weight: .bold)
+        case 2: .system(size: 15, weight: .semibold)
+        default: .system(size: 13, weight: .semibold)
         }
     }
 
@@ -689,36 +696,51 @@ struct MarkdownTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header row
             HStack(spacing: 0) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                     Text(header)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(DS.onSurfaceVariant)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(DS.onSurface)
+                        .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 10)
                 }
             }
+            .background(DS.surfaceHighest.opacity(0.6))
 
+            // Divider
             Rectangle()
-                .fill(Color.white.opacity(0.06))
+                .fill(DS.outlineVariant)
                 .frame(height: 1)
 
+            // Data rows
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
                 HStack(spacing: 0) {
-                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                    ForEach(Array(row.enumerated()), id: \.offset) { colIdx, cell in
                         Text(cell)
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurface)
+                            .font(.callout)
+                            .foregroundStyle(colIdx == 0 ? DS.onSurface : DS.onSurfaceVariant)
+                            .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 5)
-                            .padding(.horizontal, 8)
+                            .padding(.vertical, 7)
+                            .padding(.horizontal, 10)
                     }
                 }
-                .background(rowIdx % 2 == 1 ? DS.surfaceHighest.opacity(0.4) : Color.clear)
+                .background(rowIdx % 2 == 0 ? Color.clear : DS.surfaceHighest.opacity(0.3))
+
+                if rowIdx < rows.count - 1 {
+                    Rectangle()
+                        .fill(DS.outlineVariant.opacity(0.4))
+                        .frame(height: 1)
+                }
             }
         }
-        .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(DS.outlineVariant, lineWidth: 1)
+        )
     }
 }

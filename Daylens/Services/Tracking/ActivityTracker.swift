@@ -16,6 +16,12 @@ final class ActivityTracker {
     var lastTrackedApp: String?
     var onSessionFinalized: (() -> Void)?
 
+    /// The app that is currently frontmost but whose session has not yet been finalized.
+    var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
+        guard let app = currentApp else { return nil }
+        return (app.bundleID, app.appName, app.activatedAt)
+    }
+
     init(database: AppDatabase) {
         self.database = database
     }
@@ -54,6 +60,16 @@ final class ActivityTracker {
             self?.handleAppDeactivation(app)
         }
         workspaceObservers.append(deactivateObserver)
+
+        let terminateObserver = workspace.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self?.handleAppTermination(app)
+        }
+        workspaceObservers.append(terminateObserver)
     }
 
     func stop() {
@@ -86,6 +102,12 @@ final class ActivityTracker {
 
     private func handleAppActivation(bundleID: String, appName: String, activatedAt: Date, source: ActivityEvent.EventSource) {
         logger.info("Frontmost app changed")
+
+        if let current = currentApp, current.bundleID == bundleID {
+            logger.debug("Ignoring duplicate activation for \(bundleID, privacy: .public)")
+            lastTrackedApp = appName
+            return
+        }
 
         // If we have a currently tracked app, finalize its session
         if let current = currentApp {
@@ -127,6 +149,18 @@ final class ActivityTracker {
         if let current = currentApp {
             finalizeSession(for: current, endedAt: Date())
         }
+        recordLifecycleEvent(type: .appDeactivated, app: app)
+        currentApp = nil
+    }
+
+    private func handleAppTermination(_ app: NSRunningApplication) {
+        let bundleID = app.bundleIdentifier ?? "unknown"
+        guard currentApp?.bundleID == bundleID else { return }
+
+        if let current = currentApp {
+            finalizeSession(for: current, endedAt: Date())
+        }
+        recordLifecycleEvent(type: .appDeactivated, app: app)
         currentApp = nil
     }
 
@@ -194,5 +228,25 @@ final class ActivityTracker {
             windowTitle: title,
             activatedAt: app.activatedAt
         )
+    }
+
+    private func recordLifecycleEvent(type: ActivityEvent.EventType, app: NSRunningApplication) {
+        let bundleID = app.bundleIdentifier ?? "unknown"
+        let appName = app.localizedName ?? currentApp?.appName ?? "Unknown"
+        let event = ActivityEvent(
+            timestamp: Date(),
+            eventType: type,
+            bundleID: bundleID,
+            appName: appName,
+            isIdle: false,
+            confidence: .high,
+            source: .nsworkspace
+        )
+
+        do {
+            try database.insertEvent(event)
+        } catch {
+            logger.error("Failed to write lifecycle event: \(error.localizedDescription, privacy: .private)")
+        }
     }
 }

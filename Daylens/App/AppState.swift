@@ -57,6 +57,7 @@ final class AppState {
 
         hasInitialized = true
         database = AppDatabase.shared
+        focusSession = FocusSessionManager(database: database)
         permissionManager = PermissionManager()
         trackingCoordinator = TrackingCoordinator(database: database, permissionManager: permissionManager)
         aiService = AIService()
@@ -110,6 +111,7 @@ final class AppState {
 
 enum SidebarSection: String, CaseIterable, Identifiable {
     case today = "Today"
+    case focus = "Focus"
     case history = "History"
     case apps = "Apps"
     case insights = "Insights"
@@ -120,6 +122,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .today: "sun.max"
+        case .focus: "timer"
         case .history: "calendar"
         case .apps: "square.grid.2x2"
         case .insights: "sparkles"
@@ -130,7 +133,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var showsDateNavigation: Bool {
         switch self {
         case .today, .apps: return true
-        case .history, .insights, .settings: return false
+        case .focus, .history, .insights, .settings: return false
         }
     }
 

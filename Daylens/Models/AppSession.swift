@@ -1,6 +1,10 @@
 import Foundation
 import GRDB
 
+extension Notification.Name {
+    static let categoryOverrideChanged = Notification.Name("DaylensCategoryOverrideChanged")
+}
+
 /// A normalized session of app usage after merging and deduplication.
 struct AppSession: Codable, Identifiable, FetchableRecord, PersistableRecord {
     var id: Int64?
@@ -22,14 +26,18 @@ struct AppSession: Codable, Identifiable, FetchableRecord, PersistableRecord {
     var formattedDuration: String {
         let hours = Int(duration) / 3600
         let minutes = (Int(duration) % 3600) / 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        }
-        return "\(minutes)m"
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        let seconds = Int(duration) % 60
+        return "\(seconds)s"
     }
 
     var classification: AppClassification {
-        AppCategory.classify(bundleID: bundleID, appName: appName)
+        let base = AppCategory.classify(bundleID: bundleID, appName: appName)
+        guard base.category == category else {
+            return AppClassification(category: category, semanticLabel: nil, confidence: .high, rule: "user-override")
+        }
+        return base
     }
 }
 
@@ -62,7 +70,12 @@ struct AppUsageSummary: Identifiable {
     }
 
     var classification: AppClassification {
-        AppCategory.classify(bundleID: bundleID, appName: appName)
+        let base = AppCategory.classify(bundleID: bundleID, appName: appName)
+        guard base.category == category else {
+            // category was overridden by user — wrap it so callers see the right value
+            return AppClassification(category: category, semanticLabel: nil, confidence: .high, rule: "user-override")
+        }
+        return base
     }
 
     var semanticLabel: String? {

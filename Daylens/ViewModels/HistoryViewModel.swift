@@ -55,15 +55,16 @@ final class HistoryViewModel {
 
             do {
                 let snapshots = try await Task.detached(priority: .userInitiated) {
-                    let trackedDates = try db.trackedDays(limit: 60)
-                    return trackedDates.compactMap { try? db.daySummarySnapshot(for: $0) }
+                    // trackedDaySnapshots replaces trackedDays + per-day daySummarySnapshot calls
+                    // (was 120 individual appUsageSummaries reads for 60 days → 2 SQL queries)
+                    try db.trackedDaySnapshots(limit: 60)
                 }.value
                 days = snapshots
 
-                // Auto-select the most recent non-today day, or the first day
-                if selectedDate == nil, let first = days.first(where: { !$0.isToday }) ?? days.first {
-                    selectedDate = first.date
-                    loadDetail(for: first.date)
+                // Prefer today when it has tracked data; otherwise fall back to the most recent day.
+                if selectedDate == nil, let initialSelection = Self.preferredInitialDate(from: days) {
+                    selectedDate = initialSelection
+                    loadDetail(for: initialSelection)
                 }
             } catch {
                 days = []
@@ -86,13 +87,7 @@ final class HistoryViewModel {
 
             do {
                 let payload = try await Task.detached(priority: .userInitiated) {
-                    (
-                        appSummaries: try db.appUsageSummaries(for: date),
-                        websiteSummaries: try db.websiteUsageSummaries(for: date),
-                        browserSummaries: try db.browserUsageSummaries(for: date),
-                        timeline: try db.timelineEvents(for: date),
-                        dailySummary: try db.dailySummary(for: date)
-                    )
+                    try db.combinedDayPayload(for: date)
                 }.value
 
                 appSummaries = payload.appSummaries
@@ -140,16 +135,21 @@ final class HistoryViewModel {
         Task { @MainActor in
             defer { isGeneratingSummary = false }
 
-            let context = AIPromptBuilder.buildDayContext(
-                date: date,
-                appSummaries: appSummaries,
-                websiteSummaries: websiteSummaries,
-                browserSummaries: browserSummaries,
-                dailySummary: dailySummary
-            )
-
             var generatedText: String
             do {
+                let primaryPayload = try database?.aiContextPayload(for: date) ?? AIDayContextPayload(
+                    date: date,
+                    appSummaries: appSummaries,
+                    websiteSummaries: websiteSummaries,
+                    browserSummaries: browserSummaries,
+                    dailySummary: dailySummary
+                )
+                let previousDays = (try? database?.recentAIPayloads(endingAt: date, limit: 4)) ?? []
+                let context = AIPromptBuilder.buildContext(
+                    primaryDay: primaryPayload,
+                    previousDays: previousDays
+                )
+
                 if aiService.isConfigured {
                     generatedText = try await aiService.generateDailySummary(context: context)
                 } else {
@@ -232,5 +232,12 @@ final class HistoryViewModel {
         case 0.2..<0.4: return "Scattered"
         default: return "Fragmented"
         }
+    }
+
+    static func preferredInitialDate(from days: [DaySummarySnapshot]) -> Date? {
+        if let today = days.first(where: \.isToday) {
+            return today.date
+        }
+        return days.first?.date
     }
 }

@@ -12,6 +12,9 @@ enum AppCategory: String, Codable, CaseIterable, DatabaseValueConvertible {
     case browsing = "Browsing"
     case meetings = "Meetings"
     case entertainment = "Entertainment"
+    case email = "Email"
+    case productivity = "Productivity"
+    case social = "Social"
     case system = "System"
     case uncategorized = "Uncategorized"
 
@@ -76,15 +79,34 @@ enum AppCategory: String, Codable, CaseIterable, DatabaseValueConvertible {
 
     var isFocused: Bool {
         switch self {
-        case .development, .research, .writing, .aiTools, .design:
+        case .development, .research, .writing, .aiTools, .design, .productivity:
             return true
-        case .communication, .browsing, .meetings, .entertainment, .system, .uncategorized:
+        case .communication, .email, .browsing, .meetings, .entertainment, .system, .social, .uncategorized:
             return false
         }
     }
 
     var legendLabel: String {
         rawValue
+    }
+
+    var icon: String {
+        switch self {
+        case .development:   return "chevron.left.forwardslash.chevron.right"
+        case .communication: return "message.fill"
+        case .research:      return "safari.fill"
+        case .writing:       return "pencil"
+        case .aiTools:       return "sparkles"
+        case .design:        return "paintbrush.fill"
+        case .browsing:      return "globe"
+        case .meetings:      return "video.fill"
+        case .entertainment: return "play.fill"
+        case .email:         return "envelope.fill"
+        case .productivity:  return "checkmark.circle.fill"
+        case .social:        return "person.2.fill"
+        case .system:        return "gear"
+        case .uncategorized: return "questionmark"
+        }
     }
 }
 
@@ -172,8 +194,50 @@ private extension AppCategory {
             rule: "Exact bundle match"
         ),
         "com.apple.mail": AppClassification(
-            category: .communication,
+            category: .email,
             semanticLabel: "Email",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.microsoft.outlook": AppClassification(
+            category: .email,
+            semanticLabel: "Email client",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.apple.iCal": AppClassification(
+            category: .productivity,
+            semanticLabel: "Calendar",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.apple.reminders": AppClassification(
+            category: .productivity,
+            semanticLabel: "Task manager",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.culturedcode.ThingsMac": AppClassification(
+            category: .productivity,
+            semanticLabel: "Task manager",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.omnigroup.OmniFocus3": AppClassification(
+            category: .productivity,
+            semanticLabel: "Task manager",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.todoist.mac.Todoist": AppClassification(
+            category: .productivity,
+            semanticLabel: "Task manager",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.linear.linear": AppClassification(
+            category: .productivity,
+            semanticLabel: "Project management",
             confidence: .high,
             rule: "Exact bundle match"
         ),
@@ -393,6 +457,30 @@ private extension AppCategory {
             appNamePatterns: []
         ),
         AppClassificationRule(
+            category: .email,
+            semanticLabel: "Email client",
+            confidence: .medium,
+            rule: "Bundle pattern match",
+            bundlePatterns: ["mail", "outlook", "mimestream", "airmail", "spark"],
+            appNamePatterns: []
+        ),
+        AppClassificationRule(
+            category: .productivity,
+            semanticLabel: "Task and project management",
+            confidence: .medium,
+            rule: "Bundle pattern match",
+            bundlePatterns: ["things", "omnifocus", "todoist", "ticktick", "asana", "linear", "notion", "reminders", "ical", "fantastical", "busycal"],
+            appNamePatterns: []
+        ),
+        AppClassificationRule(
+            category: .social,
+            semanticLabel: "Social media",
+            confidence: .medium,
+            rule: "Bundle pattern match",
+            bundlePatterns: ["twitter", "tweetbot", "twitterrific", "instagram", "facebook", "linkedin", "tiktok", "mastodon", "ivory", "tapbots"],
+            appNamePatterns: []
+        ),
+        AppClassificationRule(
             category: .system,
             semanticLabel: "System utility",
             confidence: .medium,
@@ -466,6 +554,30 @@ private extension AppCategory {
             rule: "App name pattern match",
             bundlePatterns: [],
             appNamePatterns: ["spotify", "music", "steam", "vlc", "netflix"]
+        ),
+        AppClassificationRule(
+            category: .email,
+            semanticLabel: "Email client",
+            confidence: .medium,
+            rule: "App name pattern match",
+            bundlePatterns: [],
+            appNamePatterns: ["mail", "outlook", "mimestream", "airmail", "spark"]
+        ),
+        AppClassificationRule(
+            category: .productivity,
+            semanticLabel: "Task manager",
+            confidence: .medium,
+            rule: "App name pattern match",
+            bundlePatterns: [],
+            appNamePatterns: ["things", "omnifocus", "todoist", "reminders", "calendar", "fantastical", "linear", "asana", "jira"]
+        ),
+        AppClassificationRule(
+            category: .social,
+            semanticLabel: "Social media",
+            confidence: .medium,
+            rule: "App name pattern match",
+            bundlePatterns: [],
+            appNamePatterns: ["twitter", "instagram", "facebook", "linkedin", "tiktok", "mastodon", "ivory"]
         ),
     ]
 }

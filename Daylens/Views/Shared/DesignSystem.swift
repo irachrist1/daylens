@@ -97,6 +97,9 @@ enum DS {
         case .browsing:      return Color(light: "ea580c", dark: "fb923c")
         case .meetings:      return secondary
         case .entertainment: return Color(light: "dc2626", dark: "f87171")
+        case .email:         return Color(light: "0891b2", dark: "67e8f9")
+        case .productivity:  return Color(light: "059669", dark: "6ee7b7")
+        case .social:        return Color(light: "7c3aed", dark: "a78bfa")
         case .system:        return Color(light: "475569", dark: "94a3b8")
         case .uncategorized: return Color(light: "64748b", dark: "64748b")
         }

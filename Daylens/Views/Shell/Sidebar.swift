@@ -98,7 +98,7 @@ private struct SidebarItem: View {
                     .frame(width: 18)
 
                 Text(section.rawValue)
-                    .font(.system(.subheadline, design: .default, weight: isSelected ? .medium : .regular))
+                    .font(.system(.body, design: .default, weight: isSelected ? .medium : .regular))
                     .foregroundStyle(isSelected ? DS.onSurface : DS.onSurfaceVariant)
                     .padding(.leading, DS.space10)
 
@@ -121,43 +121,30 @@ private struct FocusSidebarButton: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        if appState.focusSession.isRunning {
-            HStack(spacing: DS.space8) {
-                Circle()
-                    .fill(DS.primary)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: DS.primary.opacity(0.8), radius: 4)
-
-                Text("Focus: \(appState.focusSession.formattedRemaining)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(DS.primary)
-
-                Spacer()
-
-                Button {
-                    appState.focusSession.stop()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(DS.onSurfaceVariant)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, DS.space12)
-            .padding(.vertical, DS.space10)
-            .background(
-                DS.primary.opacity(0.1),
-                in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+        switch appState.focusSession.phase {
+        case .focusing:
+            activeRow(
+                dot: DS.primary,
+                label: "Focus: \(appState.focusSession.formattedRemaining)",
+                labelColor: DS.primary,
+                bg: DS.primary.opacity(0.1)
             )
-        } else {
+        case .onBreak:
+            activeRow(
+                dot: DS.secondary,
+                label: "Break: \(appState.focusSession.formattedBreakRemaining)",
+                labelColor: DS.secondary,
+                bg: DS.secondary.opacity(0.1)
+            )
+        case .idle:
             Button {
-                appState.focusSession.start(minutes: 25)
+                appState.focusSession.start()
             } label: {
                 HStack(spacing: DS.space8) {
                     Image(systemName: "timer")
                         .font(.system(size: 13, weight: .medium))
                     Text("Start Focus")
-                        .font(.system(.subheadline, design: .default, weight: .medium))
+                        .font(.system(.body, design: .default, weight: .medium))
                 }
                 .foregroundStyle(DS.onPrimaryFixed)
                 .frame(maxWidth: .infinity)
@@ -169,5 +156,32 @@ private struct FocusSidebarButton: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private func activeRow(dot: Color, label: String, labelColor: Color, bg: Color) -> some View {
+        HStack(spacing: DS.space8) {
+            Circle()
+                .fill(dot)
+                .frame(width: 6, height: 6)
+                .shadow(color: dot.opacity(0.8), radius: 4)
+
+            Text(label)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(labelColor)
+
+            Spacer()
+
+            Button {
+                appState.focusSession.stop()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(DS.onSurfaceVariant)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, DS.space12)
+        .padding(.vertical, DS.space10)
+        .background(bg, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
     }
 }

@@ -14,18 +14,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTodaySummary()
         rebuildMenu()
 
-        // Observe focus session ticks to update menu bar
+        // Observe focus session ticks to update menu bar title and controls
         appState.focusSession.onTick = { [weak self] in
-            Task { @MainActor [weak self] in self?.updateMenuBarFocusTitle() }
+            Task { @MainActor [weak self] in
+                self?.updateMenuBarFocusTitle()
+                self?.rebuildMenu()
+            }
         }
     }
 
     private func updateMenuBarFocusTitle() {
         guard let appState, let button = statusItem?.button else { return }
-        if appState.focusSession.isRunning {
+        switch appState.focusSession.phase {
+        case .focusing:
             button.title = " ⏱ \(appState.focusSession.formattedRemaining)"
             button.imagePosition = .imageLeft
-        } else {
+        case .onBreak:
+            button.title = " ☕ \(appState.focusSession.formattedBreakRemaining)"
+            button.imagePosition = .imageLeft
+        case .idle:
             button.title = ""
             button.imagePosition = .imageOnly
         }
@@ -44,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTimer = nil
         todaySummaryTask?.cancel()
         todaySummaryTask = nil
+        if appState?.focusSession.isRunning == true {
+            appState?.focusSession.stop()
+        }
         appState?.permissionManager?.stopPolling()
         appState?.trackingCoordinator?.stopTracking()
     }
@@ -101,6 +111,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(NSMenuItem.separator())
+
+        // Focus controls
+        if let session = appState?.focusSession {
+            switch session.phase {
+            case .focusing:
+                let timerItem = makeInfoItem(
+                    title: "⏱ Focus: \(session.formattedRemaining)",
+                    font: .systemFont(ofSize: 13, weight: .semibold)
+                )
+                menu.addItem(timerItem)
+                let endItem = NSMenuItem(title: "End Focus Session", action: #selector(endFocusSession), keyEquivalent: "")
+                endItem.target = self
+                endItem.image = menuSymbol(named: "stop.fill")
+                menu.addItem(endItem)
+            case .onBreak:
+                let breakItem = makeInfoItem(
+                    title: "☕ Break: \(session.formattedBreakRemaining)",
+                    font: .systemFont(ofSize: 13, weight: .semibold)
+                )
+                menu.addItem(breakItem)
+                let skipItem = NSMenuItem(title: "Skip Break", action: #selector(skipFocusBreak), keyEquivalent: "")
+                skipItem.target = self
+                skipItem.image = menuSymbol(named: "forward.fill")
+                menu.addItem(skipItem)
+            case .idle:
+                let startItem = NSMenuItem(title: "Start Focus (\(session.targetMinutes)m)", action: #selector(startFocusSession), keyEquivalent: "")
+                startItem.target = self
+                startItem.image = menuSymbol(named: "timer")
+                menu.addItem(startItem)
+            }
+            menu.addItem(NSMenuItem.separator())
+        }
 
         // Pause / Resume
         if let coordinator = appState?.trackingCoordinator {
@@ -223,6 +265,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Actions
+
+    @objc private func startFocusSession() {
+        appState?.focusSession.start()
+        rebuildMenu()
+    }
+
+    @objc private func endFocusSession() {
+        appState?.focusSession.stop()
+        rebuildMenu()
+    }
+
+    @objc private func skipFocusBreak() {
+        appState?.focusSession.skipBreak()
+        rebuildMenu()
+    }
 
     @objc private func showMainWindow() {
         NSApplication.shared.activate(ignoringOtherApps: true)

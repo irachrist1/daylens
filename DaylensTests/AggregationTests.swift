@@ -236,4 +236,61 @@ final class AggregationTests: XCTestCase {
         XCTAssertTrue(vm.greeting.contains("there"),
                        "Greeting '\(vm.greeting)' should contain 'there' for whitespace-only name")
     }
+
+    func testHistoryPreferredInitialDateChoosesTodayWhenAvailable() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        let days = [
+            DaySummarySnapshot(
+                date: yesterday,
+                totalActiveTime: 3600,
+                appCount: 4,
+                topAppName: "Xcode",
+                topAppBundleID: "com.apple.dt.Xcode"
+            ),
+            DaySummarySnapshot(
+                date: today,
+                totalActiveTime: 1800,
+                appCount: 2,
+                topAppName: "Safari",
+                topAppBundleID: "com.apple.Safari"
+            ),
+        ]
+
+        XCTAssertEqual(HistoryViewModel.preferredInitialDate(from: days), today)
+    }
+
+    func testPromptContextIncludesRecentDayComparisons() {
+        let today = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_710_000_000))
+        let previousDay = Calendar.current.date(byAdding: .day, value: -1, to: today)!
+
+        let context = AIPromptBuilder.buildDayContext(
+            date: today,
+            appSummaries: [
+                AppUsageSummary(bundleID: "com.apple.dt.Xcode", appName: "Xcode", totalDuration: 3600, sessionCount: 2, category: .development, isBrowser: false),
+            ],
+            websiteSummaries: [],
+            browserSummaries: [],
+            dailySummary: nil,
+            previousDays: [
+                AIDayContextPayload(
+                    date: previousDay,
+                    appSummaries: [
+                        AppUsageSummary(bundleID: "com.google.Chrome", appName: "Chrome", totalDuration: 1800, sessionCount: 1, category: .browsing, isBrowser: true),
+                    ],
+                    websiteSummaries: [
+                        WebsiteUsageSummary(domain: "github.com", totalDuration: 600, visitCount: 3, topPageTitle: "Repo", confidence: .medium, browserName: "Chrome"),
+                    ],
+                    browserSummaries: [],
+                    dailySummary: nil
+                )
+            ]
+        )
+
+        XCTAssertTrue(context.contains("### Recent Day Comparisons"))
+        XCTAssertTrue(context.contains("top site: github.com"))
+        XCTAssertTrue(context.contains("exclude known system/session noise"))
+    }
 }

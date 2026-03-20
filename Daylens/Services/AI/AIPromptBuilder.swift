@@ -1,5 +1,13 @@
 import Foundation
 
+struct AIDayContextPayload {
+    let date: Date
+    let appSummaries: [AppUsageSummary]
+    let websiteSummaries: [WebsiteUsageSummary]
+    let browserSummaries: [BrowserUsageSummary]
+    let dailySummary: DailySummary?
+}
+
 /// Builds grounded prompts for the Anthropic API using actual tracked data.
 enum AIPromptBuilder {
     static let systemPrompt = """
@@ -15,8 +23,14 @@ enum AIPromptBuilder {
     - When describing patterns, cite the evidence
     - Format durations as "Xh Ym" (e.g., "2h 15m")
     - Be honest about data confidence levels when mentioned
-    - Prefer supported category-level patterns (for example Development, AI Tools, Writing) over repeating raw app names alone
+    - Prefer supported category-level patterns (Development, AI Tools, Writing, Productivity) over repeating raw app names
     - Treat semantic labels as deterministic app-purpose hints, not proof of the exact task the user performed
+    - Never turn estimated browser timing into exact unsupported claims
+    - When website timing is estimated, use wording like "about", "roughly", or "estimated"
+    - You may compare across days only when those comparison days are explicitly present in the context
+    - Browser time on focused domains (AI tools, development sites, research, writing tools) counts as productive focused work — treat it accordingly
+    - Apps or sites marked "user override" have been explicitly categorized by the user and should be treated as authoritative
+    - When the user asks what information would help you, tell them: app category overrides for uncategorized apps, their goals for the day, and what specific apps like terminals or custom tools mean in their workflow
 
     """
 
@@ -26,16 +40,35 @@ enum AIPromptBuilder {
         appSummaries: [AppUsageSummary],
         websiteSummaries: [WebsiteUsageSummary],
         browserSummaries: [BrowserUsageSummary],
-        dailySummary: DailySummary?
+        dailySummary: DailySummary?,
+        previousDays: [AIDayContextPayload] = []
+    ) -> String {
+        let primaryDay = AIDayContextPayload(
+            date: date,
+            appSummaries: appSummaries,
+            websiteSummaries: websiteSummaries,
+            browserSummaries: browserSummaries,
+            dailySummary: dailySummary
+        )
+        return buildContext(primaryDay: primaryDay, previousDays: previousDays)
+    }
+
+    static func buildContext(
+        primaryDay: AIDayContextPayload,
+        previousDays: [AIDayContextPayload] = []
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .full
 
-        var context = "## Activity Data for \(dateFormatter.string(from: date))\n\n"
-        let categorySummaries = SemanticUsageRollups.categorySummaries(from: appSummaries)
+        var context = "## Activity Data for \(dateFormatter.string(from: primaryDay.date))\n\n"
+        let categorySummaries = SemanticUsageRollups.categorySummaries(from: primaryDay.appSummaries)
+
+        context += "### Data Notes\n"
+        context += "- Main summaries exclude known system/session noise such as loginwindow, lock/unlock artifacts, and near-zero session-management churn.\n"
+        context += "- Website durations marked [estimated] are grounded in browser evidence but may be approximate when active-tab timing is incomplete.\n\n"
 
         // Daily overview
-        if let summary = dailySummary {
+        if let summary = primaryDay.dailySummary {
             context += "### Overview\n"
             context += "- Total active time: \(summary.formattedActiveTime)\n"
             context += "- Apps used: \(summary.appCount)\n"
@@ -56,19 +89,31 @@ enum AIPromptBuilder {
         }
 
         // Top apps
-        if !appSummaries.isEmpty {
+        if !primaryDay.appSummaries.isEmpty {
             context += "### Top Apps\n"
-            for (i, app) in appSummaries.prefix(10).enumerated() {
+            for (i, app) in primaryDay.appSummaries.prefix(10).enumerated() {
                 let semantic = app.semanticLabel.map { " | type: \($0)" } ?? ""
                 let confidence = app.classificationConfidence == .high ? "" : " | category confidence: \(app.classificationConfidence.rawValue.lowercased())"
-                context += "\(i + 1). \(app.appName) — \(app.formattedDuration) | category: \(app.category.rawValue)\(semantic) | sessions: \(app.sessionCount)\(confidence)\n"
+                let overrideNote = (app.classificationConfidence == .high && app.classification.rule == "user-override") ? " [user override]" : ""
+                context += "\(i + 1). \(app.appName) — \(app.formattedDuration) | category: \(app.category.rawValue)\(overrideNote)\(semantic) | sessions: \(app.sessionCount)\(confidence)\n"
             }
             context += "\n"
         }
 
+        // Website focus attribution note
+        let focusedWebSites = primaryDay.websiteSummaries.filter {
+            DomainIntelligence.classify(domain: $0.domain).category.isFocused
+        }
+        if !focusedWebSites.isEmpty {
+            let focusedWebTime = focusedWebSites.reduce(0.0) { $0 + $1.totalDuration }
+            context += "### Focused Browser Time\n"
+            context += "- Productive websites (research, AI tools, development, writing): \(formatDuration(focusedWebTime))\n"
+            context += "- Top focused sites: \(focusedWebSites.prefix(5).map(\.domain).joined(separator: ", "))\n\n"
+        }
+
         // Top websites with domain intelligence grouping
-        if !websiteSummaries.isEmpty {
-            let grouped = DomainIntelligence.groupedSummaries(from: websiteSummaries)
+        if !primaryDay.websiteSummaries.isEmpty {
+            let grouped = DomainIntelligence.groupedSummaries(from: primaryDay.websiteSummaries)
             if !grouped.isEmpty {
                 context += "### Top Sites (grouped)\n"
                 for (i, group) in grouped.prefix(10).enumerated() {
@@ -80,7 +125,7 @@ enum AIPromptBuilder {
             }
 
             context += "### Top Websites (detail)\n"
-            for (i, site) in websiteSummaries.prefix(10).enumerated() {
+            for (i, site) in primaryDay.websiteSummaries.prefix(10).enumerated() {
                 let title = site.topPageTitle.map { " (\($0))" } ?? ""
                 let confidence = site.confidence == .high ? "" : " [estimated]"
                 let domainCategory = DomainIntelligence.classify(domain: site.domain)
@@ -91,11 +136,24 @@ enum AIPromptBuilder {
         }
 
         // Browsers
-        if !browserSummaries.isEmpty {
+        if !primaryDay.browserSummaries.isEmpty {
             context += "### Browsers Used\n"
-            for browser in browserSummaries {
+            for browser in primaryDay.browserSummaries {
                 let domains = browser.topDomains.isEmpty ? "" : " (top sites: \(browser.topDomains.joined(separator: ", ")))"
                 context += "- \(browser.browserName): \(browser.formattedDuration)\(domains)\n"
+            }
+            context += "\n"
+        }
+
+        if !previousDays.isEmpty {
+            context += "### Recent Day Comparisons\n"
+            for day in previousDays.prefix(5) {
+                let dateText = dateFormatter.string(from: day.date)
+                let activeTime = day.dailySummary?.formattedActiveTime ?? formatDuration(day.appSummaries.reduce(0) { $0 + $1.totalDuration })
+                let topCategory = SemanticUsageRollups.categorySummaries(from: day.appSummaries).first?.category.rawValue ?? "No clear category"
+                let topApp = day.appSummaries.first?.appName ?? "No dominant app"
+                let topSite = day.websiteSummaries.first?.domain ?? "No notable site"
+                context += "- \(dateText): \(activeTime) active | top category: \(topCategory) | top app: \(topApp) | top site: \(topSite)\n"
             }
             context += "\n"
         }

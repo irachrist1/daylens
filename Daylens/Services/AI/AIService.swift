@@ -4,24 +4,19 @@ import Observation
 /// Anthropic Claude API client for AI-powered insights.
 @Observable
 final class AIService {
-    private static let keychain = KeychainService(service: "com.daylens.app")
-    private static let legacyKeychain = KeychainService(service: "com.daylens.api-keys")
-    private static let legacyKeychainAccount = "anthropic-api-key"
-
     private(set) var isConfigured: Bool
     private(set) var model: String
     var isProcessing: Bool = false
     private let session: URLSession
 
     private var apiKey: String? {
-        let key = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
+        let key = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey)
         return (key?.isEmpty == false) ? key : nil
     }
 
     init(session: URLSession = AIService.makeSession()) {
         self.session = session
-        Self.migrateLegacyAPIKeyIfNeeded()
-        let storedKey = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
+        Self.migrateKeychainToUserDefaultsIfNeeded()
 
         let storedModel = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicModel)
         if let storedModel,
@@ -30,6 +25,7 @@ final class AIService {
         } else {
             model = Constants.defaultAIModel
         }
+        let storedKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey)
         isConfigured = storedKey?.isEmpty == false
     }
 
@@ -39,27 +35,16 @@ final class AIService {
 
     @discardableResult
     func setAPIKey(_ key: String) -> Bool {
-        do {
-            try Self.keychain.setString(key, for: Constants.DefaultsKey.anthropicAPIKey)
-            UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
-            isConfigured = true
-            return true
-        } catch {
-            isConfigured = apiKey != nil
-            return false
-        }
+        UserDefaults.standard.set(key, forKey: Constants.DefaultsKey.anthropicAPIKey)
+        isConfigured = true
+        return true
     }
 
     @discardableResult
     func removeAPIKey() -> Bool {
-        do {
-            try Self.keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
-        } catch {
-            // Best effort removal; fall through to legacy cleanup below.
-        }
         UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
         isConfigured = false
-        return apiKey == nil
+        return true
     }
 
     func setModel(_ model: String) {
@@ -205,29 +190,23 @@ final class AIService {
         }
     }
 
-    private static func migrateLegacyAPIKeyIfNeeded() {
-        guard Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil else {
-            return
+    /// One-time migration: pull any previously stored key out of the keychain into UserDefaults.
+    /// After this runs once the keychain is no longer touched, eliminating the macOS
+    /// re-authorization prompt that fires on every ad-hoc rebuild.
+    private static func migrateKeychainToUserDefaultsIfNeeded() {
+        guard UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey) == nil else {
+            return  // Already in UserDefaults, nothing to do.
         }
+        let keychain = KeychainService(service: "com.daylens.app")
+        let legacyKeychain = KeychainService(service: "com.daylens.api-keys")
 
-        do {
-            if let legacyKey = Self.legacyKeychain.string(for: Self.legacyKeychainAccount),
-               !legacyKey.isEmpty {
-                try Self.keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
-                try? Self.legacyKeychain.removeString(for: Self.legacyKeychainAccount)
-                UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
-                return
-            }
+        let key = keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
+            ?? legacyKeychain.string(for: "anthropic-api-key")
 
-            guard let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
-                  !legacyKey.isEmpty else {
-                return
-            }
-
-            try Self.keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
-            UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
-        } catch {
-            // Leave the legacy value in place if migration fails so the user is not locked out.
+        if let key, !key.isEmpty {
+            UserDefaults.standard.set(key, forKey: Constants.DefaultsKey.anthropicAPIKey)
+            try? keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
+            try? legacyKeychain.removeString(for: "anthropic-api-key")
         }
     }
 

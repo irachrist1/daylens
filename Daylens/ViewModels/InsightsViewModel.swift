@@ -23,11 +23,28 @@ final class InsightsViewModel {
     private(set) var isProcessing: Bool = false
     private(set) var lastError: String?
 
+    func loadPersistedConversation() {
+        guard messages.isEmpty else { return }
+        Task { @MainActor in
+            let turns = await Task.detached(priority: .userInitiated) {
+                (try? AppDatabase.shared.loadRecentConversation()) ?? []
+            }.value
+            guard !turns.isEmpty, self.messages.isEmpty else { return }
+            self.messages = turns.flatMap { turn in
+                [ChatMessage(role: .user, content: turn.question),
+                 ChatMessage(role: .assistant, content: turn.answer)]
+            }
+        }
+    }
+
     func clearConversation() {
         guard !isProcessing else { return }
         messages.removeAll()
         inputText = ""
         lastError = nil
+        Task.detached(priority: .utility) {
+            try? AppDatabase.shared.clearSavedConversation()
+        }
     }
 
     /// Ask a question grounded in today's real tracked data.
@@ -50,19 +67,13 @@ final class InsightsViewModel {
                 return
             }
 
-            let contextPayload: (
-                appSummaries: [AppUsageSummary],
-                websiteSummaries: [WebsiteUsageSummary],
-                browserSummaries: [BrowserUsageSummary],
-                dailySummary: DailySummary?
-            )
+            let contextPayload: AIDayContextPayload
+            let previousDays: [AIDayContextPayload]
             do {
-                contextPayload = try await Task.detached(priority: .userInitiated) {
+                (contextPayload, previousDays) = try await Task.detached(priority: .userInitiated) {
                     (
-                        appSummaries: try AppDatabase.shared.appUsageSummaries(for: date),
-                        websiteSummaries: try AppDatabase.shared.websiteUsageSummaries(for: date),
-                        browserSummaries: try AppDatabase.shared.browserUsageSummaries(for: date),
-                        dailySummary: try AppDatabase.shared.dailySummary(for: date)
+                        try AppDatabase.shared.aiContextPayload(for: date),
+                        try AppDatabase.shared.recentAIPayloads(endingAt: date, limit: 7)
                     )
                 }.value
             } catch {
@@ -71,29 +82,25 @@ final class InsightsViewModel {
                 return
             }
 
-            let appSummaries = contextPayload.appSummaries
-            let websiteSummaries = contextPayload.websiteSummaries
-            let browserSummaries = contextPayload.browserSummaries
-            let dailySummary = contextPayload.dailySummary
-
             // No data check
-            guard !appSummaries.isEmpty else {
-                appendError("No activity tracked yet today. Use your Mac for a few minutes and check back.")
+            guard !contextPayload.appSummaries.isEmpty else {
+                appendError("No activity tracked for that day yet. Use your Mac for a few minutes and check back.")
                 isProcessing = false
                 return
             }
 
-            let context = AIPromptBuilder.buildDayContext(
-                date: date,
-                appSummaries: appSummaries,
-                websiteSummaries: websiteSummaries,
-                browserSummaries: browserSummaries,
-                dailySummary: dailySummary
+            let context = AIPromptBuilder.buildContext(
+                primaryDay: contextPayload,
+                previousDays: previousDays
             )
 
             do {
                 let answer = try await aiService.askQuestion(question, context: context)
                 messages.append(ChatMessage(role: .assistant, content: answer))
+                let q = question, a = answer, d = date
+                Task.detached(priority: .utility) {
+                    try? AppDatabase.shared.saveConversationTurn(question: q, answer: a, for: d)
+                }
             } catch let error as AIError {
                 appendError(error.localizedDescription)
             } catch is URLError {

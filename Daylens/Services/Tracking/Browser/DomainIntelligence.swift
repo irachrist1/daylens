@@ -92,9 +92,9 @@ enum DomainIntelligence {
         "youtube.com": DomainClassification(siteGroup: "YouTube", category: .entertainment, confidence: .high),
         "netflix.com": DomainClassification(siteGroup: "Netflix", category: .entertainment, confidence: .high),
         "twitch.tv": DomainClassification(siteGroup: "Twitch", category: .entertainment, confidence: .high),
-        "reddit.com": DomainClassification(siteGroup: "Reddit", category: .entertainment, confidence: .medium),
-        "twitter.com": DomainClassification(siteGroup: "X/Twitter", category: .entertainment, confidence: .medium),
-        "x.com": DomainClassification(siteGroup: "X/Twitter", category: .entertainment, confidence: .medium),
+        "reddit.com": DomainClassification(siteGroup: "Reddit", category: .social, confidence: .medium),
+        "twitter.com": DomainClassification(siteGroup: "X/Twitter", category: .social, confidence: .medium),
+        "x.com": DomainClassification(siteGroup: "X/Twitter", category: .social, confidence: .medium),
 
         "notion.so": DomainClassification(siteGroup: "Notion", category: .writing, confidence: .high),
         "docs.google.com": DomainClassification(siteGroup: "Google Docs", category: .writing, confidence: .high),
@@ -105,9 +105,9 @@ enum DomainIntelligence {
 
         "slack.com": DomainClassification(siteGroup: "Slack", category: .communication, confidence: .high),
         "discord.com": DomainClassification(siteGroup: "Discord", category: .communication, confidence: .high),
-        "mail.google.com": DomainClassification(siteGroup: "Gmail", category: .communication, confidence: .high),
-        "outlook.live.com": DomainClassification(siteGroup: "Outlook", category: .communication, confidence: .high),
-        "outlook.office.com": DomainClassification(siteGroup: "Outlook", category: .communication, confidence: .high),
+        "mail.google.com": DomainClassification(siteGroup: "Gmail", category: .email, confidence: .high),
+        "outlook.live.com": DomainClassification(siteGroup: "Outlook", category: .email, confidence: .high),
+        "outlook.office.com": DomainClassification(siteGroup: "Outlook", category: .email, confidence: .high),
         "teams.microsoft.com": DomainClassification(siteGroup: "Teams", category: .communication, confidence: .high),
 
         "linear.app": DomainClassification(siteGroup: "Linear", category: .development, confidence: .high),
@@ -121,6 +121,28 @@ enum DomainIntelligence {
         "google.com": DomainClassification(siteGroup: "Google", category: .research, confidence: .medium),
         "wikipedia.org": DomainClassification(siteGroup: "Wikipedia", category: .research, confidence: .high),
         "medium.com": DomainClassification(siteGroup: "Medium", category: .research, confidence: .medium),
+
+        "linkedin.com": DomainClassification(siteGroup: "LinkedIn", category: .social, confidence: .high),
+        "instagram.com": DomainClassification(siteGroup: "Instagram", category: .social, confidence: .high),
+        "facebook.com": DomainClassification(siteGroup: "Facebook", category: .social, confidence: .high),
+        "tiktok.com": DomainClassification(siteGroup: "TikTok", category: .social, confidence: .high),
+
+        "asana.com": DomainClassification(siteGroup: "Asana", category: .productivity, confidence: .high),
+        "trello.com": DomainClassification(siteGroup: "Trello", category: .productivity, confidence: .high),
+        "todoist.com": DomainClassification(siteGroup: "Todoist", category: .productivity, confidence: .high),
+        "app.linear.app": DomainClassification(siteGroup: "Linear", category: .productivity, confidence: .high),
+        "clickup.com": DomainClassification(siteGroup: "ClickUp", category: .productivity, confidence: .high),
+        "monday.com": DomainClassification(siteGroup: "Monday", category: .productivity, confidence: .high),
+        "airtable.com": DomainClassification(siteGroup: "Airtable", category: .productivity, confidence: .high),
+        "calendar.google.com": DomainClassification(siteGroup: "Google Calendar", category: .productivity, confidence: .high),
+
+        "anthropic.com": DomainClassification(siteGroup: "Anthropic", category: .aiTools, confidence: .high),
+        "gemini.google.com": DomainClassification(siteGroup: "Gemini", category: .aiTools, confidence: .high),
+        "copilot.microsoft.com": DomainClassification(siteGroup: "Copilot", category: .aiTools, confidence: .high),
+        "cursor.sh": DomainClassification(siteGroup: "Cursor", category: .development, confidence: .high),
+        "vercel.app": DomainClassification(siteGroup: "Vercel", category: .development, confidence: .high),
+        "supabase.com": DomainClassification(siteGroup: "Supabase", category: .development, confidence: .high),
+        "railway.app": DomainClassification(siteGroup: "Railway", category: .development, confidence: .high),
     ]
 
     private struct SuffixRule {
@@ -139,8 +161,8 @@ enum DomainIntelligence {
         SuffixRule(suffix: ".googleapis.com", classification: DomainClassification(siteGroup: "Google", category: .research, confidence: .low)),
 
         SuffixRule(suffix: ".youtube.com", classification: DomainClassification(siteGroup: "YouTube", category: .entertainment, confidence: .high)),
-        SuffixRule(suffix: ".reddit.com", classification: DomainClassification(siteGroup: "Reddit", category: .entertainment, confidence: .medium)),
-        SuffixRule(suffix: ".twitter.com", classification: DomainClassification(siteGroup: "X/Twitter", category: .entertainment, confidence: .medium)),
+        SuffixRule(suffix: ".reddit.com", classification: DomainClassification(siteGroup: "Reddit", category: .social, confidence: .medium)),
+        SuffixRule(suffix: ".twitter.com", classification: DomainClassification(siteGroup: "X/Twitter", category: .social, confidence: .medium)),
 
         SuffixRule(suffix: ".notion.so", classification: DomainClassification(siteGroup: "Notion", category: .writing, confidence: .high)),
         SuffixRule(suffix: ".notion.site", classification: DomainClassification(siteGroup: "Notion", category: .writing, confidence: .medium)),

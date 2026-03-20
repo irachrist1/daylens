@@ -10,6 +10,24 @@ final class BrowserHistoryReader {
     private var timer: Timer?
     private var lastReadTimestamps: [String: Date] = [:]
 
+    // UserDefaults key prefix for persisted browser read timestamps.
+    private static let timestampKeyPrefix = "daylens_browser_last_read_"
+
+    private func loadPersistedTimestamp(for bundleID: String) -> Date? {
+        let key = Self.timestampKeyPrefix + bundleID
+        let ts = UserDefaults.standard.double(forKey: key)
+        guard ts > 0 else { return nil }
+        return Date(timeIntervalSince1970: ts)
+    }
+
+    private func persistTimestamp(_ date: Date, for bundleID: String) {
+        let key = Self.timestampKeyPrefix + bundleID
+        let existing = UserDefaults.standard.double(forKey: key)
+        if date.timeIntervalSince1970 > existing {
+            UserDefaults.standard.set(date.timeIntervalSince1970, forKey: key)
+        }
+    }
+
     init(database: AppDatabase) {
         self.database = database
     }
@@ -20,6 +38,14 @@ final class BrowserHistoryReader {
 
     func startPolling() {
         guard timer == nil else { return }
+
+        // Restore persisted timestamps so we don't re-read already-processed history on relaunch.
+        for definition in BrowserDefinition.all {
+            if lastReadTimestamps[definition.bundleID] == nil,
+               let persisted = loadPersistedTimestamp(for: definition.bundleID) {
+                lastReadTimestamps[definition.bundleID] = persisted
+            }
+        }
 
         // Initial read
         Task { await readAllBrowserHistories() }
@@ -171,6 +197,7 @@ final class BrowserHistoryReader {
 
         if let lastVisit = visits.last {
             lastReadTimestamps[browserBundleID] = lastVisit.visitTime
+            persistTimestamp(lastVisit.visitTime, for: browserBundleID)
         }
     }
 
@@ -222,6 +249,7 @@ final class BrowserHistoryReader {
 
         if let lastVisit = visits.last {
             lastReadTimestamps[browserBundleID] = lastVisit.visitTime
+            persistTimestamp(lastVisit.visitTime, for: browserBundleID)
         }
     }
 
@@ -293,6 +321,7 @@ final class BrowserHistoryReader {
 
                 if let lastVisit = visits.last {
                     lastReadTimestamps[bundleID] = lastVisit.visitTime
+                    persistTimestamp(lastVisit.visitTime, for: bundleID)
                 }
             } catch {
                 logger.error("Failed to read \(bundleID, privacy: .public) history: \(error.localizedDescription, privacy: .private)")

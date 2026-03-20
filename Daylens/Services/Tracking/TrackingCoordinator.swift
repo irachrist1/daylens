@@ -15,6 +15,11 @@ final class TrackingCoordinator {
     let permissionManager: PermissionManager
 
     var trackingState: TrackingState = .idle
+
+    /// Forwards the in-flight session from the underlying activity tracker.
+    var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
+        activityTracker.currentSessionInfo
+    }
     private var summaryTimer: Timer?
     private var accessibilityTimer: Timer?
     private var debouncedSummaryWork: DispatchWorkItem?

@@ -4,6 +4,7 @@ import SwiftUI
 struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
+    @State private var showAllSites = false
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -37,6 +38,29 @@ struct TodayView: View {
         }
     }
 
+    private var presentationTimeline: [AppSession] {
+        let osNoiseBundleIDs: Set<String> = [
+            "com.apple.loginwindow",
+            "com.apple.dock",
+            "com.apple.systemuiserver",
+            "com.apple.notificationcenterui",
+            "com.apple.controlcenter",
+            "com.apple.screensaver.engine",
+            "com.apple.backgroundtaskmanagementagent",
+            "com.apple.usernotificationcenter",
+            "com.apple.windowserver-target",
+            "com.apple.accessibility.universalaccessd",
+        ]
+        return viewModel.timeline.filter { session in
+            let id = session.bundleID.lowercased()
+            let name = session.appName.lowercased()
+            guard !osNoiseBundleIDs.contains(id) else { return false }
+            let noiseNames = ["loginwindow", "windowserver", "universalaccessd"]
+            guard !noiseNames.contains(name) else { return false }
+            return true
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space16) {
@@ -55,10 +79,9 @@ struct TodayView: View {
                     HStack(alignment: .top, spacing: DS.space16) {
                         FocusRingCard(
                             ratio: viewModel.focusScoreRatio,
-                            label: viewModel.focusLabel,
                             scoreText: viewModel.focusScoreText
                         )
-                        .frame(maxWidth: .infinity)
+                        .fixedSize(horizontal: true, vertical: false)
 
                         WeeklySparklineCard(days: viewModel.weeklyScores)
                             .frame(maxWidth: .infinity)
@@ -71,7 +94,7 @@ struct TodayView: View {
 
                     // Activity timeline
                     TimelineBand(
-                        sessions: viewModel.timeline,
+                        sessions: presentationTimeline,
                         categorySummaries: viewModel.categorySummaries
                     )
 
@@ -100,14 +123,21 @@ struct TodayView: View {
             .transition(.opacity)
         }
         .animation(.easeOut(duration: 0.2), value: appState.selectedDate)
-        .onAppear { viewModel.load(for: appState.selectedDate) }
+        .onAppear {
+            viewModel.load(for: appState.selectedDate)
+            injectLiveSessionIfNeeded()
+        }
         .onChange(of: appState.selectedDate) { _, newDate in
             viewModel.load(for: newDate)
         }
         .onReceive(refreshTimer) { _ in
             if Calendar.current.isDateInToday(appState.selectedDate) {
                 viewModel.load(for: appState.selectedDate)
+                injectLiveSessionIfNeeded()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryOverrideChanged)) { _ in
+            viewModel.load(for: appState.selectedDate)
         }
     }
 
@@ -140,23 +170,65 @@ struct TodayView: View {
         }
     }
 
+    // MARK: - Helpers
+
+    private func injectLiveSessionIfNeeded() {
+        if let info = appState.trackingCoordinator?.currentSessionInfo,
+           Calendar.current.isDateInToday(appState.selectedDate) {
+            viewModel.injectLiveSession(
+                bundleID: info.bundleID,
+                appName: info.appName,
+                startedAt: info.startedAt
+            )
+        }
+    }
+
     // MARK: - Top Websites
+
+    /// Sites with at least 1 minute of active time, sorted by duration desc.
+    private var longSites: [WebsiteUsageSummary] {
+        viewModel.websiteSummaries.filter { $0.totalDuration >= 60 }
+    }
 
     private var topWebsitesSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Top Websites")
-                .sectionHeader()
+            HStack {
+                Text("Top Websites")
+                    .sectionHeader()
+                Spacer()
+                if longSites.count > 5 {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { showAllSites.toggle() }
+                    } label: {
+                        Text(showAllSites ? "Show less" : "Show all \(longSites.count)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
-            let maxDuration = viewModel.websiteSummaries.first?.totalDuration ?? 1
+            if longSites.isEmpty {
+                Text("No sites with 1+ minutes of activity yet.")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
+            } else {
+                let displayed = showAllSites ? longSites : Array(longSites.prefix(5))
+                let maxDuration = longSites.first?.totalDuration ?? 1
 
-            ForEach(viewModel.websiteSummaries.prefix(5)) { site in
-                UsageBar(
-                    label: site.domain,
-                    duration: site.totalDuration,
-                    maxDuration: maxDuration,
-                    color: DS.primary,
-                    subtitle: site.topPageTitle
-                )
+                ForEach(displayed) { site in
+                    let domainCat = DomainIntelligence.classify(domain: site.domain)
+                    let color = domainCat.category != .uncategorized
+                        ? DS.categoryColor(for: domainCat.category)
+                        : DS.primary
+                    UsageBar(
+                        label: site.domain,
+                        duration: site.totalDuration,
+                        maxDuration: maxDuration,
+                        color: color,
+                        subtitle: site.topPageTitle
+                    )
+                }
             }
         }
         .cardStyle()
