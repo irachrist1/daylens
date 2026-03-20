@@ -270,10 +270,24 @@ extension AppDatabase {
 
     func recentAIPayloads(endingAt date: Date, limit: Int = 6) throws -> [AIDayContextPayload] {
         let dayStart = Calendar.current.startOfDay(for: date)
-        return try trackedDays(limit: max(limit * 3, limit))
+        let dates = try trackedDays(limit: max(limit * 3, limit))
             .filter { $0 < dayStart }
             .prefix(limit)
-            .compactMap { try? aiContextPayload(for: $0) }
+        guard !dates.isEmpty else { return [] }
+        // Batch all past-day reads into a single dbQueue.read, loading overrides once.
+        return try dbQueue.read { db in
+            let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
+            return dates.compactMap { pastDate -> AIDayContextPayload? in
+                let dayBounds = DayBounds(for: pastDate)
+                return try? AIDayContextPayload(
+                    date: dayBounds.start,
+                    appSummaries: self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides),
+                    websiteSummaries: self.websiteUsageSummaries(in: db, dayBounds: dayBounds),
+                    browserSummaries: self.browserUsageSummaries(in: db, dayBounds: dayBounds),
+                    dailySummary: DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
+                )
+            }
+        }
     }
 
     // MARK: - Conversation Persistence

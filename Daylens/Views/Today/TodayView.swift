@@ -8,55 +8,38 @@ struct TodayView: View {
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
+    /// Bundle IDs and display names that are OS infrastructure, never user-initiated apps.
+    /// Shared by both presentationSummaries and presentationTimeline so they can't diverge.
+    private static let osNoiseBundleIDs: Set<String> = [
+        "com.apple.loginwindow",
+        "com.apple.dock",
+        "com.apple.systemuiserver",
+        "com.apple.notificationcenterui",
+        "com.apple.controlcenter",
+        "com.apple.screensaver.engine",
+        "com.apple.backgroundtaskmanagementagent",
+        "com.apple.usernotificationcenter",
+        "com.apple.windowserver-target",
+        "com.apple.accessibility.universalaccessd",
+    ]
+    private static let osNoiseNames: Set<String> = ["loginwindow", "windowserver", "universalaccessd"]
+
     /// Presentation-layer filter: strips OS-session processes that are not user-initiated apps.
     /// Keeps the Today surface trustworthy without touching the tracking engine.
-    /// A deeper Codex pass will handle this at the source.
     private var presentationSummaries: [AppUsageSummary] {
-        // Bundle IDs that are OS infrastructure, never user-initiated apps
-        let osNoiseBundleIDs: Set<String> = [
-            "com.apple.loginwindow",
-            "com.apple.dock",
-            "com.apple.systemuiserver",
-            "com.apple.notificationcenterui",
-            "com.apple.controlcenter",
-            "com.apple.screensaver.engine",
-            "com.apple.backgroundtaskmanagementagent",
-            "com.apple.usernotificationcenter",
-            "com.apple.windowserver-target",
-            "com.apple.accessibility.universalaccessd",
-        ]
-        return viewModel.appSummaries.filter { app in
+        viewModel.appSummaries.filter { app in
             let id = app.bundleID.lowercased()
-            let name = app.appName.lowercased()
-            guard !osNoiseBundleIDs.contains(id) else { return false }
-            // Catch noise that slips through with a name-based check
-            let noiseNames = ["loginwindow", "windowserver", "universalaccessd"]
-            guard !noiseNames.contains(name) else { return false }
-            // Hide very-brief system-category entries (background churn, < 30 s)
+            guard !Self.osNoiseBundleIDs.contains(id) else { return false }
+            guard !Self.osNoiseNames.contains(app.appName.lowercased()) else { return false }
             if app.category == .system && app.totalDuration < 30 { return false }
             return true
         }
     }
 
     private var presentationTimeline: [AppSession] {
-        let osNoiseBundleIDs: Set<String> = [
-            "com.apple.loginwindow",
-            "com.apple.dock",
-            "com.apple.systemuiserver",
-            "com.apple.notificationcenterui",
-            "com.apple.controlcenter",
-            "com.apple.screensaver.engine",
-            "com.apple.backgroundtaskmanagementagent",
-            "com.apple.usernotificationcenter",
-            "com.apple.windowserver-target",
-            "com.apple.accessibility.universalaccessd",
-        ]
-        return viewModel.timeline.filter { session in
-            let id = session.bundleID.lowercased()
-            let name = session.appName.lowercased()
-            guard !osNoiseBundleIDs.contains(id) else { return false }
-            let noiseNames = ["loginwindow", "windowserver", "universalaccessd"]
-            guard !noiseNames.contains(name) else { return false }
+        viewModel.timeline.filter { session in
+            guard !Self.osNoiseBundleIDs.contains(session.bundleID.lowercased()) else { return false }
+            guard !Self.osNoiseNames.contains(session.appName.lowercased()) else { return false }
             return true
         }
     }

@@ -47,9 +47,13 @@ final class AIService {
 
     @discardableResult
     func removeAPIKey() -> Bool {
-        try? Self.keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
-        isConfigured = false
-        return true
+        do {
+            try Self.keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
+            isConfigured = false
+            return true
+        } catch {
+            return false
+        }
     }
 
     func setModel(_ model: String) {
@@ -62,18 +66,27 @@ final class AIService {
         apiKey
     }
 
-    /// One-time migration: move any key previously stored in UserDefaults into
-    /// the Keychain, then remove the UserDefaults entry. Runs only when the key
-    /// is absent from Keychain, so it's safe to call on every init.
+    /// One-time migration: consolidates any key stored in previous locations into
+    /// the current Keychain slot. Checks three legacy locations in priority order:
+    ///   1. UserDefaults (intermediate release that stored key in plaintext)
+    ///   2. Original Keychain service "com.daylens.api-keys" / account "anthropic-api-key"
+    /// Runs only when the key is absent from the current Keychain slot.
     private static func migrateUserDefaultsToKeychainIfNeeded() {
         guard keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil else {
-            return  // Already in Keychain, nothing to do.
+            return  // Already in current Keychain slot, nothing to do.
         }
-        // Pull from UserDefaults (previous storage location).
+        // Check UserDefaults (previous intermediate storage location).
         if let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
            !legacyKey.isEmpty {
             try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
             UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+            return
+        }
+        // Check original Keychain service/account used before the intermediate release.
+        let originalKeychain = KeychainService(service: "com.daylens.api-keys")
+        if let legacyKey = originalKeychain.string(for: "anthropic-api-key"), !legacyKey.isEmpty {
+            try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
+            try? originalKeychain.removeString(for: "anthropic-api-key")
         }
     }
 
