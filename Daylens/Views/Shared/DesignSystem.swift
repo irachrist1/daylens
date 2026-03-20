@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 
-/// Chromatic Sanctuary — deep navy, editorial, high-contrast.
-/// Depth through tonal layering; no 1px borders.
+/// Chromatic Sanctuary — deep navy dark / crisp blue-white light.
+/// Every surface token is fully adaptive: same tonal hierarchy, flipped luminance.
 enum DS {
     // MARK: - Spacing (8pt grid)
     static let space2: CGFloat = 2
@@ -31,103 +32,135 @@ enum DS {
     static let sidebarWidth: CGFloat = 220
     static let sidebarItemHeight: CGFloat = 36
 
-    // MARK: - Surface Hierarchy (deep navy — blue-tinted dark)
-    static let surfaceLowest    = Color(hex: "010f20")   // darkest backdrop
-    static let surface          = Color(hex: "051425")   // app background
-    static let surfaceLow       = Color(hex: "051425")   // sidebar, panels
-    static let surfaceContainer = Color(hex: "0d1c2e")   // sidebar bg / secondary
-    static let surfaceHigh      = Color(hex: "122032")   // content area bg
-    static let surfaceCard      = Color(hex: "1d2b3d")   // card surface
-    static let surfaceHighest   = Color(hex: "283648")   // interactive / hover
-    static let surfaceBright    = Color(hex: "2c3a4d")   // tooltips / elevated
+    // MARK: - Surface Hierarchy
+    //  Same tonal depth, flipped: dark = navy stack, light = blue-white stack
+    static let surfaceLowest    = Color(light: "eef2fb", dark: "010f20")
+    static let surface          = Color(light: "f3f6fd", dark: "051425")
+    static let surfaceLow       = Color(light: "f3f6fd", dark: "051425")
+    static let surfaceContainer = Color(light: "e8eef8", dark: "0d1c2e")
+    static let surfaceHigh      = Color(light: "dde5f5", dark: "122032")
+    static let surfaceCard      = Color(light: "ffffff", dark: "1d2b3d")
+    static let surfaceHighest   = Color(light: "cdd8ef", dark: "283648")
+    static let surfaceBright    = Color(light: "ffffff", dark: "2c3a4d")
 
     // MARK: - Text
-    static let onSurface        = Color(hex: "c8dcf4")   // primary — cool near-white
-    static let onSurfaceVariant = Color(hex: "5e7a92")   // secondary — muted, clearly subordinate
+    static let onSurface        = Color(light: "0d1f38", dark: "c8dcf4")
+    static let onSurfaceVariant = Color(light: "4a6180", dark: "5e7a92")
 
     // MARK: - Brand: Electric Blue
-    static let primary          = Color(hex: "b4c5ff")   // light periwinkle
-    static let primaryContainer = Color(hex: "2563eb")   // vivid blue (buttons)
-    static let onPrimaryFixed   = Color(hex: "040e1c")   // dark text on gradient/primary bg
-    static let primaryFixedDim  = Color(hex: "b4c5ff")
+    //  Dark  -> light periwinkle (readable on navy)
+    //  Light -> vivid blue (readable on white)
+    static let primary          = Color(light: "2563eb", dark: "b4c5ff")
+    static let primaryContainer = Color(light: "2563eb", dark: "2563eb")
+    static let onPrimaryFixed   = Color(light: "ffffff", dark: "040e1c")
+    static let primaryFixedDim  = Color(light: "2563eb", dark: "b4c5ff")
 
     // MARK: - Semantic Accents
-    static let secondary = Color(hex: "ffb95f")   // amber — Meetings
-    static let tertiary  = Color(hex: "4fdbc8")   // teal — Communication
+    static let secondary = Color(light: "d97706", dark: "ffb95f")   // amber
+    static let tertiary  = Color(light: "0d9488", dark: "4fdbc8")   // teal
 
     // MARK: - Error
-    static let error            = Color(hex: "ffb4ab")
-    static let errorContainer   = Color(hex: "93000a")
+    static let error          = Color(light: "b91c1c", dark: "ffb4ab")
+    static let errorContainer = Color(light: "fee2e2", dark: "93000a")
 
     // MARK: - Structural
-    static let outlineVariant = Color(hex: "434655")
-    static let ghostBorder = Color.white.opacity(0.06)
+    static let outlineVariant = Color(light: "c5d0e8", dark: "434655")
+    static let ghostBorder    = Color(light: "00000014", dark: "ffffff10")
 
     // MARK: - Gradients
-    /// Blue jewel gradient — primary buttons, hero cards
     static let primaryGradient = LinearGradient(
         colors: [Color(hex: "2563eb"), Color(hex: "93c5fd")],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
-    /// Wordmark gradient
     static let titleGradient = LinearGradient(
-        colors: [Color(hex: "2563eb"), Color(hex: "93c5fd")],
+        colors: [Color(hex: "2563eb"), Color(hex: "60a5fa")],
         startPoint: .leading, endPoint: .trailing
     )
-    /// Subtle hero card fill
+    // Hero card: deep jewel in dark, soft blue wash in light
     static let heroGradient = LinearGradient(
-        colors: [Color(hex: "0f2d5e"), Color(hex: "1a4480")],
+        colors: [Color(light: "dce8fb", dark: "0f2d5e"),
+                 Color(light: "c7d9f8", dark: "1a4480")],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
 
-    // MARK: - Category Colors (tuned for navy dark)
+    // MARK: - Category Colors
+    //  Dark  -> pastel variants (readable on navy)
+    //  Light -> saturated variants (readable on white)
     static func categoryColor(for category: AppCategory) -> Color {
         switch category {
         case .development:   return primary
         case .communication: return tertiary
-        case .research:      return Color(hex: "c084fc")
-        case .writing:       return Color(hex: "93c5fd")
-        case .aiTools:       return Color(hex: "e879f9")
-        case .design:        return Color(hex: "f472b6")
-        case .browsing:      return Color(hex: "fb923c")
+        case .research:      return Color(light: "7c3aed", dark: "c084fc")
+        case .writing:       return Color(light: "3b82f6", dark: "93c5fd")
+        case .aiTools:       return Color(light: "a21caf", dark: "e879f9")
+        case .design:        return Color(light: "be185d", dark: "f472b6")
+        case .browsing:      return Color(light: "ea580c", dark: "fb923c")
         case .meetings:      return secondary
-        case .entertainment: return Color(hex: "f87171")
-        case .system:        return Color(hex: "94a3b8")
-        case .uncategorized: return Color(hex: "64748b")
+        case .entertainment: return Color(light: "dc2626", dark: "f87171")
+        case .system:        return Color(light: "475569", dark: "94a3b8")
+        case .uncategorized: return Color(light: "64748b", dark: "64748b")
         }
     }
 }
 
-// MARK: - Color(hex:) initializer
+// MARK: - Adaptive Color initializer
 
 extension Color {
+    /// Appearance-adaptive color: resolves to lightHex in light mode, darkHex in dark.
+    init(light lightHex: String, dark darkHex: String) {
+        self.init(NSColor(name: nil) { $0.isDark ? NSColor(hex: darkHex) : NSColor(hex: lightHex) })
+    }
+
+    /// Fixed hex color (non-adaptive).
     init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3:  (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6:  (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default: (a, r, g, b) = (255, 0, 0, 0)
+        let (r, g, b, a) = Self.hexComponents(hex)
+        self.init(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    fileprivate static func hexComponents(_ raw: String) -> (Double, Double, Double, Double) {
+        let h = raw.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var n: UInt64 = 0
+        Scanner(string: h).scanHexInt64(&n)
+        switch h.count {
+        case 3:
+            return (Double((n >> 8) * 17) / 255, Double((n >> 4 & 0xF) * 17) / 255,
+                    Double((n & 0xF) * 17) / 255, 1)
+        case 6:
+            return (Double(n >> 16) / 255, Double(n >> 8 & 0xFF) / 255, Double(n & 0xFF) / 255, 1)
+        case 8:
+            return (Double(n >> 16 & 0xFF) / 255, Double(n >> 8 & 0xFF) / 255,
+                    Double(n & 0xFF) / 255, Double(n >> 24) / 255)
+        default:
+            return (0, 0, 0, 1)
         }
-        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
+    }
+}
+
+private extension NSColor {
+    convenience init(hex: String) {
+        let (r, g, b, a) = Color.hexComponents(hex)
+        self.init(srgbRed: r, green: g, blue: b, alpha: a)
+    }
+}
+
+private extension NSAppearance {
+    var isDark: Bool {
+        bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 }
 
 // MARK: - View Modifiers
 
 extension View {
-    /// Elevated card surface: surfaceCard bg, large radius, ambient primary glow.
+    /// Elevated card: adaptive surface, large radius, soft ambient shadow.
     func cardStyle() -> some View {
         self
             .padding(DS.space16)
             .background(DS.surfaceCard, in: RoundedRectangle(cornerRadius: DS.radiusXL, style: .continuous))
-            .shadow(color: DS.primary.opacity(0.05), radius: 18, x: 0, y: 3)
+            .shadow(color: Color.black.opacity(0.07), radius: 12, x: 0, y: 2)
     }
 
-    /// Label-style section header: uppercase, tracked, muted.
+    /// Section header: uppercase, tracked, muted.
     func sectionHeader() -> some View {
         self
             .font(.system(.caption, design: .default, weight: .semibold))

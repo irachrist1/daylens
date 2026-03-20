@@ -24,7 +24,6 @@ struct MainShell: View {
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
-        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder
