@@ -89,7 +89,7 @@ struct AppRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: DS.space12) {
-                AppInitialsIcon(name: app.appName, category: classification.category, size: 36)
+                AppRealIcon(bundleID: app.bundleID, name: app.appName, category: classification.category, size: 36)
 
                 VStack(alignment: .leading, spacing: DS.space4) {
                     HStack {

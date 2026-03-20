@@ -20,7 +20,7 @@ struct AppDetailView: View {
 
     private var appHeader: some View {
         HStack(spacing: DS.space16) {
-            AppInitialsIcon(name: app.appName, category: app.category, size: 52)
+            AppRealIcon(bundleID: app.bundleID, name: app.appName, category: app.category, size: 52)
             VStack(alignment: .leading, spacing: DS.space6) {
                 Text(app.appName)
                     .font(.system(.title2, weight: .bold))

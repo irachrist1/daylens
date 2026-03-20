@@ -125,7 +125,7 @@ struct TimelineBand: View {
         VStack(spacing: DS.space8) {
             ForEach(sessions.prefix(8)) { session in
                 HStack(spacing: DS.space12) {
-                    AppInitialsIcon(name: session.appName, category: session.classification.category, size: 32)
+                    AppRealIcon(bundleID: session.bundleID, name: session.appName, category: session.classification.category, size: 32)
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: DS.space6) {

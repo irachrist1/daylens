@@ -86,33 +86,44 @@ struct FocusRingCard: View {
 
 // MARK: - Weekly Sparkline Card
 
-/// 7-day sparkline of focus scores as a bar chart.
+/// 7-day bar chart of focus scores. Each bar shows the day, score %, and is
+/// highlighted for today. Header shows a 7-day average for immediate context.
 struct WeeklySparklineCard: View {
     let days: [DailySummary]
 
+    private var avgScore: Int {
+        let scored = days.filter { $0.focusScore > 0 }
+        guard !scored.isEmpty else { return 0 }
+        return Int(scored.reduce(0) { $0 + $1.focusScore } / Double(scored.count) * 100)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("This Week")
-                .sectionHeader()
+            HStack(alignment: .firstTextBaseline) {
+                Text("This Week")
+                    .sectionHeader()
+                Spacer()
+                if avgScore > 0 {
+                    Text("avg \(avgScore)% focus")
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.65))
+                }
+            }
 
             if days.isEmpty {
-                Text("Build up your history to see weekly trends.")
+                Text("Track a few days to see trends here.")
                     .font(.caption)
                     .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, DS.space20)
             } else {
-                HStack(alignment: .bottom, spacing: DS.space6) {
+                HStack(alignment: .bottom, spacing: DS.space4) {
                     ForEach(days.reversed()) { day in
-                        SparklineBar(
-                            score: day.focusScore,
-                            date: day.date,
-                            activeTime: day.formattedActiveTime
-                        )
+                        SparklineBar(score: day.focusScore, date: day.date)
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 64)
+                .frame(height: 88)
             }
         }
         .cardStyle()
@@ -120,42 +131,49 @@ struct WeeklySparklineCard: View {
 }
 
 private struct SparklineBar: View {
-    let score: Double
+    let score: Double   // 0–1
     let date: Date
-    let activeTime: String
 
     @State private var appeared = false
 
-    private var isToday: Bool {
-        Calendar.current.isDateInToday(date)
-    }
+    private var isToday: Bool { Calendar.current.isDateInToday(date) }
+    private var pct: Int { Int(score * 100) }
+    private var barHeight: CGFloat { score > 0 ? max(6, CGFloat(score) * 52) : 4 }
 
-    private var barHeight: CGFloat {
-        max(4, CGFloat(score) * 60)
+    /// Unambiguous 2-char weekday: Su Mo Tu We Th Fr Sa
+    private var dayLabel: String {
+        let labels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+        let weekday = Calendar.current.component(.weekday, from: date) // 1=Sun … 7=Sat
+        return labels[(weekday - 1) % 7]
     }
 
     var body: some View {
-        VStack(spacing: DS.space4) {
-            Text(dayLabel)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.4))
+        VStack(spacing: 3) {
+            // Score percentage — visible when data exists
+            Text(score > 0 ? "\(pct)%" : "–")
+                .font(.system(size: 8, weight: .semibold).monospacedDigit())
+                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.45))
+                .lineLimit(1)
 
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(isToday ? DS.primary : DS.primary.opacity(0.35))
-                .frame(height: appeared ? barHeight : 0)
-                .shadow(color: isToday ? DS.primary.opacity(0.5) : .clear, radius: 4, x: 0, y: 0)
-                .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.05), value: appeared)
+            // Bar grows from bottom
+            VStack {
+                Spacer(minLength: 0)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(isToday ? DS.primary : DS.primary.opacity(score > 0 ? 0.35 : 0.12))
+                    .frame(height: appeared ? barHeight : 2)
+                    .shadow(color: isToday ? DS.primary.opacity(0.45) : .clear, radius: 5)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.04), value: appeared)
+            }
+            .frame(maxWidth: .infinity)
+
+            // Day label — dot for today so it can't be confused with a letter
+            Text(isToday ? "●" : dayLabel)
+                .font(.system(size: isToday ? 7 : 9, weight: isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.5))
         }
-        .frame(maxWidth: .infinity, alignment: .bottom)
-        .help("\(dayLabel) — \(activeTime) active, \(Int(score * 100))% focus")
+        .frame(maxWidth: .infinity)
+        .help("\(dayLabel)\(isToday ? " (today)" : "") — \(pct)% focus")
         .onAppear { appeared = true }
-    }
-
-    private var dayLabel: String {
-        if isToday { return "T" }
-        let f = DateFormatter()
-        f.dateFormat = "E"
-        return String(f.string(from: date).prefix(1))
     }
 }
 
@@ -226,9 +244,43 @@ struct AllocationBarCard: View {
     }
 }
 
+// MARK: - App Real Icon
+
+/// Resolves the real macOS app icon via NSWorkspace using the bundle ID.
+/// Falls back to AppInitialsIcon if the bundle cannot be located.
+struct AppRealIcon: View {
+    let bundleID: String
+    let name: String
+    let category: AppCategory
+    let size: CGFloat
+
+    @State private var icon: NSImage? = nil
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            } else {
+                AppInitialsIcon(name: name, category: category, size: size)
+            }
+        }
+        .onAppear {
+            guard icon == nil, !bundleID.isEmpty else { return }
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                icon = NSWorkspace.shared.icon(forFile: url.path)
+            }
+        }
+    }
+}
+
 // MARK: - App Initials Icon
 
-/// Colored rounded square with 2-letter initials — used in place of real app icons.
+/// Colored rounded square with 2-letter initials — fallback when no real icon is available.
 struct AppInitialsIcon: View {
     let name: String
     let category: AppCategory
@@ -304,8 +356,7 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: DS.space12) {
-            // App icon: colored square with initials
-            AppInitialsIcon(name: app.appName, category: app.category, size: 36)
+            AppRealIcon(bundleID: app.bundleID, name: app.appName, category: app.category, size: 36)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: DS.space6) {
