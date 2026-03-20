@@ -138,7 +138,9 @@ final class FocusSessionManager {
         self.targetMinutes = d.integer(forKey: Keys.target).positive ?? 25
         self.breakMinutes  = d.integer(forKey: Keys.breakDur).positive ?? 5
         self.breaksEnabled = d.object(forKey: Keys.breaksOn) as? Bool ?? true
-        recoverOrphanedSessions()
+        Task.detached(priority: .utility) { [weak self] in
+            self?.recoverOrphanedSessions()
+        }
     }
 
     // MARK: - Public API

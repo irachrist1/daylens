@@ -218,8 +218,8 @@ extension AppDatabase {
                 GROUP BY date
                 HAVING totalDuration > 0
                 ORDER BY date DESC
-                LIMIT \(limit)
-                """)
+                LIMIT ?
+                """, arguments: [limit])
 
             guard !aggRows.isEmpty else { return [] }
 
@@ -734,7 +734,7 @@ private extension AppDatabase {
 
     func meaningfulAppSessions(in db: Database, dayBounds: DayBounds, overrides: [String: AppCategory] = [:]) throws -> [AppSession] {
         let rows = try Row.fetchAll(db, sql: """
-            SELECT id, date, bundleID, appName, startTime, endTime, duration, isBrowser
+            SELECT id, date, bundleID, appName, startTime, endTime, duration, category, isBrowser
             FROM app_sessions
             WHERE startTime < ? AND endTime > ?
             ORDER BY startTime ASC
@@ -749,7 +749,15 @@ private extension AppDatabase {
                 return nil
             }
 
-            let category = overrides[bundleID] ?? AppCategory.categorize(bundleID: bundleID, appName: appName)
+            let storedCategory = AppCategory(rawValue: row["category"] as String) ?? .uncategorized
+            let category: AppCategory
+            if let override = overrides[bundleID] {
+                category = override
+            } else if storedCategory == .uncategorized {
+                category = AppCategory.categorize(bundleID: bundleID, appName: appName)
+            } else {
+                category = storedCategory
+            }
             guard MeaningfulActivityRules.shouldSurfaceAppSession(
                 bundleID: bundleID,
                 appName: appName,

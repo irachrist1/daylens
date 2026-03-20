@@ -21,12 +21,16 @@ final class AppDatabase {
 
         let dbURL = daylensDir.appendingPathComponent("daylens.sqlite")
 
-        // Take a rolling backup before opening (keeps last 7 daily backups)
-        Self.takeBackup(of: dbURL, in: daylensDir)
-
         let shouldLogSQL = ProcessInfo.processInfo.environment["DAYLENS_LOG_SQL"] == "1"
         let dbQueue = try DatabaseQueue(path: dbURL.path, configuration: Self.makeConfiguration(logSQL: shouldLogSQL))
         try self.init(dbQueue: dbQueue)
+
+        // Take a rolling backup after the connection is open, off the main thread.
+        let capturedDirURL = daylensDir
+        let capturedDBURL = dbURL
+        Task.detached(priority: .utility) {
+            Self.takeBackup(of: capturedDBURL, in: capturedDirURL)
+        }
     }
 
     // MARK: - Backup
