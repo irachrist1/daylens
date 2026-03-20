@@ -304,13 +304,18 @@ extension AppDatabase {
             let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
             return dates.compactMap { pastDate -> AIDayContextPayload? in
                 let dayBounds = DayBounds(for: pastDate)
-                return try? AIDayContextPayload(
-                    date: dayBounds.start,
-                    appSummaries: self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides),
-                    websiteSummaries: self.websiteUsageSummaries(in: db, dayBounds: dayBounds),
-                    browserSummaries: self.browserUsageSummaries(in: db, dayBounds: dayBounds),
-                    dailySummary: DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
-                )
+                do {
+                    return try AIDayContextPayload(
+                        date: dayBounds.start,
+                        appSummaries: self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides),
+                        websiteSummaries: self.websiteUsageSummaries(in: db, dayBounds: dayBounds),
+                        browserSummaries: self.browserUsageSummaries(in: db, dayBounds: dayBounds),
+                        dailySummary: DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
+                    )
+                } catch {
+                    print("[Daylens] recentAIPayloads: skipping \(pastDate) — \(error)")
+                    return nil
+                }
             }
         }
     }

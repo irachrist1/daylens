@@ -3,7 +3,13 @@ import GRDB
 
 /// Manages the GRDB database connection and migrations.
 final class AppDatabase {
-    static let shared = try! AppDatabase()
+    static let shared: AppDatabase = {
+        do {
+            return try AppDatabase()
+        } catch {
+            fatalError("AppDatabase failed to initialize: \(error)")
+        }
+    }()
 
     let dbQueue: DatabaseQueue
 
