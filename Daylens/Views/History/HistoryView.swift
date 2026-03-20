@@ -22,9 +22,10 @@ struct HistoryView: View {
     private var dayList: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("History")
-                .font(.system(.subheadline, design: .default, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.0)
                 .foregroundStyle(DS.onSurfaceVariant)
-                .tracking(0.5)
                 .padding(.horizontal, DS.space16)
                 .padding(.vertical, DS.space16)
 
@@ -105,9 +106,10 @@ struct HistoryView: View {
     }
 
     private func dayDetailHeader(for date: Date) -> some View {
-        VStack(alignment: .leading, spacing: DS.space4) {
-            Text(Self.fullDateFormatter.string(from: date))
-                .font(.system(.subheadline, design: .default, weight: .medium))
+        VStack(alignment: .leading, spacing: DS.space6) {
+            Text(Self.fullDateFormatter.string(from: date).uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.0)
                 .foregroundStyle(DS.onSurfaceVariant)
 
             if !viewModel.appSummaries.isEmpty {
@@ -115,7 +117,6 @@ struct HistoryView: View {
                     .font(.system(size: 40, weight: .bold, design: .default).monospacedDigit())
                     .foregroundStyle(DS.onSurface)
                     .tracking(-0.8)
-                    .padding(.top, DS.space4)
             }
         }
     }
