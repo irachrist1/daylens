@@ -17,6 +17,10 @@ struct MainShell: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(DS.surfaceContainer)
             }
+            .overlay(alignment: .bottom) {
+                FloatingHUD()
+                    .animation(Animation.spring(response: 0.4, dampingFraction: 0.8), value: appState.focusSession.isRunning)
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)

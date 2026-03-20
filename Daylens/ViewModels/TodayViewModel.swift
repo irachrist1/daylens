@@ -31,7 +31,8 @@ final class TodayViewModel {
                         websiteSummaries: try db.websiteUsageSummaries(for: date),
                         browserSummaries: try db.browserUsageSummaries(for: date),
                         timeline: try db.timelineEvents(for: date),
-                        dailySummary: try db.dailySummary(for: date)
+                        dailySummary: try db.dailySummary(for: date),
+                        weeklyScores: (try? db.recentDailySummaries(limit: 7)) ?? []
                     )
                 }.value
                 appSummaries = payload.appSummaries
@@ -39,6 +40,7 @@ final class TodayViewModel {
                 browserSummaries = payload.browserSummaries
                 timeline = payload.timeline
                 dailySummary = payload.dailySummary
+                weeklyScores = payload.weeklyScores
                 aiSummary = dailySummary?.aiSummary
             } catch {
                 self.error = error.localizedDescription
@@ -152,5 +154,19 @@ final class TodayViewModel {
 
     var categorySummaries: [CategoryUsageSummary] {
         SemanticUsageRollups.categorySummaries(from: appSummaries)
+    }
+
+    var weeklyScores: [DailySummary] = []
+
+    var focusScoreRatio: Double {
+        if let summary = dailySummary, summary.focusScore > 0 {
+            return summary.focusScore
+        }
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard total > 0 else { return 0 }
+        let focusedTime = appSummaries
+            .filter { $0.classification.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        return focusedTime / total
     }
 }

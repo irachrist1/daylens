@@ -16,6 +16,7 @@ final class AppState {
 
     // MARK: - ViewModels (session-scoped)
     var insightsViewModel = InsightsViewModel()
+    var focusSession = FocusSessionManager()
 
     // MARK: - Services
     var database: AppDatabase!

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Design system tokens: "The Intelligent Monolith"
-/// Super-black foundation with tonal layering — no 1px borders.
+/// Chromatic Sanctuary — deep navy, editorial, high-contrast.
+/// Depth through tonal layering; no 1px borders.
 enum DS {
     // MARK: - Spacing (8pt grid)
     static let space2: CGFloat = 2
@@ -24,54 +24,63 @@ enum DS {
     static let radiusSmall: CGFloat = 4
     static let radiusMedium: CGFloat = 8
     static let radiusLarge: CGFloat = 12
+    static let radiusXL: CGFloat = 16
     static let radiusFull: CGFloat = 999
 
     // MARK: - Sidebar
-    static let sidebarWidth: CGFloat = 240
-    static let sidebarItemHeight: CGFloat = 34
+    static let sidebarWidth: CGFloat = 220
+    static let sidebarItemHeight: CGFloat = 36
 
-    // MARK: - Surface Hierarchy
-    // Workspaces are defined by background color shifts — not borders.
-    /// Global app backdrop
-    static let surfaceLowest    = Color(hex: "0b0e14")
-    /// Base surface
-    static let surface          = Color(hex: "10131a")
-    /// Sidebar / secondary panels
-    static let surfaceLow       = Color(hex: "191c22")
-    /// Active content area
-    static let surfaceContainer = Color(hex: "1d2026")
-    /// Elevated cards (one tier above content area)
-    static let surfaceHigh      = Color(hex: "272a30")
-    /// Interactive elements, highest elevation
-    static let surfaceHighest   = Color(hex: "32353c")
+    // MARK: - Surface Hierarchy (deep navy — blue-tinted dark)
+    static let surfaceLowest    = Color(hex: "010f20")   // darkest backdrop
+    static let surface          = Color(hex: "051425")   // app background
+    static let surfaceLow       = Color(hex: "051425")   // sidebar, panels
+    static let surfaceContainer = Color(hex: "0d1c2e")   // sidebar bg / secondary
+    static let surfaceHigh      = Color(hex: "122032")   // content area bg
+    static let surfaceCard      = Color(hex: "1d2b3d")   // card surface
+    static let surfaceHighest   = Color(hex: "283648")   // interactive / hover
+    static let surfaceBright    = Color(hex: "2c3a4d")   // tooltips / elevated
 
-    // MARK: - Text Hierarchy
-    /// Primary text — never pure #fff
-    static let onSurface        = Color(hex: "e1e2eb")
-    /// Secondary / body text
-    static let onSurfaceVariant = Color(hex: "c2c6d6")
+    // MARK: - Text
+    static let onSurface        = Color(hex: "c8dcf4")   // primary — cool near-white
+    static let onSurfaceVariant = Color(hex: "5e7a92")   // secondary — muted, clearly subordinate
 
     // MARK: - Brand: Electric Blue
-    static let primary          = Color(hex: "adc6ff")
-    static let primaryContainer = Color(hex: "4d8eff")
-    static let onPrimaryFixed   = Color(hex: "ffffff")
-    static let primaryFixedDim  = Color(hex: "adc6ff")
+    static let primary          = Color(hex: "b4c5ff")   // light periwinkle
+    static let primaryContainer = Color(hex: "2563eb")   // vivid blue (buttons)
+    static let onPrimaryFixed   = Color(hex: "040e1c")   // dark text on gradient/primary bg
+    static let primaryFixedDim  = Color(hex: "b4c5ff")
 
     // MARK: - Semantic Accents
-    /// Amber — Meetings / Calendar
-    static let secondary = Color(hex: "ffb95f")
-    /// Teal — Communication / Messaging
-    static let tertiary  = Color(hex: "4fdbc8")
+    static let secondary = Color(hex: "ffb95f")   // amber — Meetings
+    static let tertiary  = Color(hex: "4fdbc8")   // teal — Communication
+
+    // MARK: - Error
+    static let error            = Color(hex: "ffb4ab")
+    static let errorContainer   = Color(hex: "93000a")
+
+    // MARK: - Structural
+    static let outlineVariant = Color(hex: "434655")
+    static let ghostBorder = Color.white.opacity(0.06)
 
     // MARK: - Gradients
-    /// Jewel-like blue gradient for primary actions
+    /// Blue jewel gradient — primary buttons, hero cards
     static let primaryGradient = LinearGradient(
-        colors: [Color(hex: "adc6ff"), Color(hex: "4d8eff")],
-        startPoint: UnitPoint(x: 0.1, y: 0.0),
-        endPoint: UnitPoint(x: 0.9, y: 1.0)
+        colors: [Color(hex: "2563eb"), Color(hex: "93c5fd")],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+    /// Wordmark gradient
+    static let titleGradient = LinearGradient(
+        colors: [Color(hex: "2563eb"), Color(hex: "93c5fd")],
+        startPoint: .leading, endPoint: .trailing
+    )
+    /// Subtle hero card fill
+    static let heroGradient = LinearGradient(
+        colors: [Color(hex: "0f2d5e"), Color(hex: "1a4480")],
+        startPoint: .topLeading, endPoint: .bottomTrailing
     )
 
-    // MARK: - Category Colors (tuned for dark mode)
+    // MARK: - Category Colors (tuned for navy dark)
     static func categoryColor(for category: AppCategory) -> Color {
         switch category {
         case .development:   return primary
@@ -103,38 +112,33 @@ extension Color {
         case 8:  (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default: (a, r, g, b) = (255, 0, 0, 0)
         }
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
+        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
     }
 }
 
 // MARK: - View Modifiers
 
 extension View {
-    /// Card with elevated tonal background. No border — depth via color shift.
+    /// Elevated card surface: surfaceCard bg, large radius, ambient primary glow.
     func cardStyle() -> some View {
         self
             .padding(DS.space16)
-            .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous))
+            .background(DS.surfaceCard, in: RoundedRectangle(cornerRadius: DS.radiusXL, style: .continuous))
+            .shadow(color: DS.primary.opacity(0.05), radius: 18, x: 0, y: 3)
     }
 
-    /// Section header: small-caps, tracked, muted.
+    /// Label-style section header: uppercase, tracked, muted.
     func sectionHeader() -> some View {
         self
             .font(.system(.caption, design: .default, weight: .semibold))
             .textCase(.uppercase)
-            .tracking(0.8)
+            .tracking(1.0)
             .foregroundStyle(DS.onSurfaceVariant)
             .padding(.bottom, DS.space4)
     }
 
-    /// Header chrome: solid tonal surface instead of a divider line.
+    /// Tonal chrome background (header bar).
     func chromeBackground() -> some View {
-        self.background(DS.surfaceLow)
+        self.background(DS.surfaceContainer)
     }
 }

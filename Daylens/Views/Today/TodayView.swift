@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The main Today dashboard — default landing screen.
+/// The main Today dashboard — bento-grid layout.
 struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
@@ -9,23 +9,46 @@ struct TodayView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DS.space24) {
-                greetingSection
-
+            VStack(alignment: .leading, spacing: DS.space16) {
                 if viewModel.appSummaries.isEmpty && !viewModel.isLoading {
                     emptyState
                 } else {
-                    activeTimeHeader
-                    overviewStats
-                    CategoryBreakdownCard(
-                        categories: viewModel.categorySummaries,
-                        appSummaries: viewModel.appSummaries
+                    // Hero banner
+                    HeroSummaryCard(
+                        greeting: viewModel.greeting,
+                        totalActiveTime: viewModel.totalActiveTime,
+                        appCount: viewModel.appSummaries.count,
+                        siteCount: viewModel.websiteSummaries.count
                     )
+
+                    // Focus ring + weekly sparkline side-by-side
+                    HStack(alignment: .top, spacing: DS.space16) {
+                        FocusRingCard(
+                            ratio: viewModel.focusScoreRatio,
+                            label: viewModel.focusLabel,
+                            scoreText: viewModel.focusScoreText
+                        )
+                        .frame(maxWidth: .infinity)
+
+                        WeeklySparklineCard(days: viewModel.weeklyScores)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    // Time allocation stacked bar
+                    if !viewModel.categorySummaries.isEmpty {
+                        AllocationBarCard(categories: viewModel.categorySummaries)
+                    }
+
+                    // Activity timeline
                     TimelineBand(
                         sessions: viewModel.timeline,
                         categorySummaries: viewModel.categorySummaries
                     )
+
+                    // Top apps (with browser website expansion)
                     TopAppsCard(summaries: viewModel.appSummaries, date: appState.selectedDate)
+
+                    // Top websites
                     if !viewModel.websiteSummaries.isEmpty {
                         topWebsitesSection
                     }
@@ -49,73 +72,33 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Greeting
-
-    private var greetingSection: some View {
-        Text(viewModel.greeting)
-            .font(.system(.title2, design: .default, weight: .semibold))
-            .foregroundStyle(DS.onSurface)
-            .tracking(-0.3)
-    }
-
-    // MARK: - Active Time (display figure)
-
-    private var activeTimeHeader: some View {
-        VStack(spacing: DS.space4) {
-            Text(viewModel.totalActiveTime)
-                .font(.system(size: 52, weight: .bold, design: .default).monospacedDigit())
-                .foregroundStyle(DS.onSurface)
-                .tracking(-1.0)
-
-            Text("active today")
-                .font(.subheadline)
-                .foregroundStyle(DS.onSurfaceVariant)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, DS.space12)
-    }
-
-    // MARK: - Overview Stats
-
-    private var overviewStats: some View {
-        HStack(spacing: DS.space12) {
-            StatCard(
-                title: "Focus Score",
-                value: viewModel.focusScoreText,
-                subtitle: viewModel.focusLabel,
-                icon: "target",
-                color: DS.tertiary
-            )
-            StatCard(
-                title: "Apps Used",
-                value: "\(viewModel.appSummaries.count)",
-                icon: "square.grid.2x2.fill",
-                color: DS.secondary
-            )
-            StatCard(
-                title: "Sites Visited",
-                value: "\(viewModel.websiteSummaries.count)",
-                icon: "globe",
-                color: DS.primary
-            )
-        }
-    }
-
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: DS.space12) {
-            Image(systemName: "desktopcomputer")
-                .font(.system(size: 40))
-                .foregroundStyle(DS.onSurfaceVariant.opacity(0.4))
+        VStack(spacing: DS.space16) {
+            Text(viewModel.greeting)
+                .font(.system(.title2, design: .default, weight: .semibold))
+                .foregroundStyle(DS.onSurface)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("No activity tracked yet today. Use your Mac for a few minutes and check back.")
-                .font(.body)
-                .foregroundStyle(DS.onSurfaceVariant)
-                .multilineTextAlignment(.center)
+            VStack(spacing: DS.space12) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 44))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.35))
+
+                Text("No activity tracked yet today.")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(DS.onSurface)
+
+                Text("Use your Mac for a few minutes and check back.")
+                    .font(.body)
+                    .foregroundStyle(DS.onSurfaceVariant)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DS.space48)
+            .cardStyle()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, DS.space48)
     }
 
     // MARK: - Top Websites
@@ -141,7 +124,7 @@ struct TodayView: View {
     }
 }
 
-// MARK: - Stat Card
+// MARK: - Stat Card (used in HistoryView)
 
 struct StatCard: View {
     let title: String
@@ -152,7 +135,6 @@ struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space8) {
-            // Icon with neon-on-dark chip
             ZStack {
                 RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
                     .fill(color.opacity(0.15))
