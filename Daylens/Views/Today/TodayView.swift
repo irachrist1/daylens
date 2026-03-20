@@ -53,47 +53,50 @@ struct TodayView: View {
 
     private var greetingSection: some View {
         Text(viewModel.greeting)
-            .font(.title.weight(.medium))
-            .foregroundStyle(.primary)
+            .font(.system(.title2, design: .default, weight: .semibold))
+            .foregroundStyle(DS.onSurface)
+            .tracking(-0.3)
     }
 
-    // MARK: - Active Time (large centered)
+    // MARK: - Active Time (display figure)
 
     private var activeTimeHeader: some View {
         VStack(spacing: DS.space4) {
             Text(viewModel.totalActiveTime)
-                .font(.system(size: 48, weight: .bold).monospacedDigit())
+                .font(.system(size: 52, weight: .bold, design: .default).monospacedDigit())
+                .foregroundStyle(DS.onSurface)
+                .tracking(-1.0)
 
             Text("active today")
-                .font(.body)
-                .foregroundStyle(.secondary)
+                .font(.subheadline)
+                .foregroundStyle(DS.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, DS.space8)
+        .padding(.vertical, DS.space12)
     }
 
     // MARK: - Overview Stats
 
     private var overviewStats: some View {
-        HStack(spacing: DS.space16) {
+        HStack(spacing: DS.space12) {
             StatCard(
                 title: "Focus Score",
                 value: viewModel.focusScoreText,
                 subtitle: viewModel.focusLabel,
                 icon: "target",
-                color: .green
+                color: DS.tertiary
             )
             StatCard(
                 title: "Apps Used",
                 value: "\(viewModel.appSummaries.count)",
                 icon: "square.grid.2x2.fill",
-                color: .orange
+                color: DS.secondary
             )
             StatCard(
                 title: "Sites Visited",
                 value: "\(viewModel.websiteSummaries.count)",
                 icon: "globe",
-                color: .purple
+                color: DS.primary
             )
         }
     }
@@ -104,11 +107,11 @@ struct TodayView: View {
         VStack(spacing: DS.space12) {
             Image(systemName: "desktopcomputer")
                 .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.4))
 
             Text("No activity tracked yet today. Use your Mac for a few minutes and check back.")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -129,7 +132,7 @@ struct TodayView: View {
                     label: site.domain,
                     duration: site.totalDuration,
                     maxDuration: maxDuration,
-                    color: .purple,
+                    color: DS.primary,
                     subtitle: site.topPageTitle
                 )
             }
@@ -149,24 +152,30 @@ struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space8) {
-            HStack {
+            // Icon with neon-on-dark chip
+            ZStack {
+                RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                    .fill(color.opacity(0.15))
+                    .frame(width: 30, height: 30)
                 Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(color)
-                Spacer()
             }
 
             Text(value)
-                .font(.title.weight(.semibold).monospacedDigit())
+                .font(.system(.title2, design: .default, weight: .bold).monospacedDigit())
+                .foregroundStyle(DS.onSurface)
+                .tracking(-0.5)
 
             VStack(alignment: .leading, spacing: DS.space2) {
                 Text(title)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
 
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
             }
         }

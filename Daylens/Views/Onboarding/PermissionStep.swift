@@ -93,7 +93,7 @@ struct PermissionStep: View {
             statusView
         }
         .padding(DS.space16)
-        .background(DS.cardBackground, in: RoundedRectangle(cornerRadius: DS.radiusMedium))
+        .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: DS.radiusMedium))
     }
 
     @ViewBuilder

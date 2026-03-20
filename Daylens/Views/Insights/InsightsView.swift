@@ -24,6 +24,8 @@ struct InsightsView: View {
 
     var body: some View {
         ZStack {
+            DS.surfaceContainer.ignoresSafeArea()
+
             if hasConversation {
                 conversationLayout
                     .transition(.opacity)
@@ -70,17 +72,10 @@ struct InsightsView: View {
                             } label: {
                                 Label("New chat", systemImage: "plus")
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(DS.onSurfaceVariant)
                                     .padding(.horizontal, DS.space12)
                                     .padding(.vertical, DS.space8)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(Color(.controlBackgroundColor))
-                                            .overlay(
-                                                Capsule(style: .continuous)
-                                                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                                            )
-                                    )
+                                    .background(DS.surfaceHigh, in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .disabled(viewModel.isProcessing)
@@ -119,14 +114,13 @@ struct InsightsView: View {
                 }
             }
 
-            Divider()
-
+            // Tonal separator — no Divider line
             composerView
                 .matchedGeometryEffect(id: "insights-composer", in: composerTransition)
                 .padding(.horizontal, DS.space24)
                 .padding(.top, DS.space12)
                 .padding(.bottom, DS.space16)
-                .background(.bar)
+                .background(DS.surfaceLow)
         }
     }
 
@@ -134,16 +128,17 @@ struct InsightsView: View {
         VStack(spacing: DS.space24) {
             ZStack {
                 Circle()
-                    .fill(Color.accentColor.opacity(0.10))
+                    .fill(DS.primary.opacity(0.10))
                     .frame(width: 58, height: 58)
 
                 Image(systemName: "sparkles")
                     .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(DS.primary)
             }
 
             Text("Ask about your day")
-                .font(.title2.weight(.semibold))
+                .font(.system(.title2, design: .default, weight: .semibold))
+                .foregroundStyle(DS.onSurface)
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: DS.space10) {
@@ -187,33 +182,33 @@ struct SuggestionChip: View {
     let text: String
     let action: () -> Void
 
+    @State private var isHovered = false
+
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center, spacing: DS.space10) {
                 Text(text)
                     .font(.subheadline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.onSurface)
                     .multilineTextAlignment(.leading)
 
                 Spacer(minLength: 0)
 
                 Image(systemName: "arrow.up.left")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.space14)
             .padding(.vertical, DS.space10)
             .background(
                 RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                    .fill(Color(.windowBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                    )
+                    .fill(isHovered ? DS.surfaceHighest : DS.surfaceHigh)
             )
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 }
 
@@ -236,9 +231,9 @@ struct ChatBubble: View {
 
             VStack(alignment: .leading, spacing: DS.space6) {
                 if !isUser {
-                    Text(isError ? "Couldn’t answer" : "Daylens")
+                    Text(isError ? "Couldn't answer" : "Daylens")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(isError ? Color.orange : .secondary)
+                        .foregroundStyle(isError ? DS.secondary : DS.onSurfaceVariant)
                         .padding(.leading, DS.space4)
                 }
 
@@ -248,15 +243,8 @@ struct ChatBubble: View {
                     .textSelection(.enabled)
                     .padding(.horizontal, DS.space16)
                     .padding(.vertical, DS.space14)
-                    .background(
-                        RoundedRectangle(cornerRadius: isUser ? 18 : 16, style: .continuous)
-                            .fill(bubbleColor)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: isUser ? 18 : 16, style: .continuous)
-                                    .strokeBorder(bubbleBorderColor, lineWidth: isUser ? 0 : 1)
-                            )
-                    )
-                    .foregroundStyle(isUser ? Color.white : Color.primary)
+                    .background { bubbleBackgroundView }
+                    .foregroundStyle(isUser ? DS.onPrimaryFixed : DS.onSurface)
             }
             .frame(maxWidth: 620, alignment: isUser ? .trailing : .leading)
 
@@ -267,15 +255,18 @@ struct ChatBubble: View {
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 
-    private var bubbleColor: Color {
-        if isUser { return Color.accentColor }
-        if isError { return Color.orange.opacity(0.08) }
-        return Color(.controlBackgroundColor)
-    }
-
-    private var bubbleBorderColor: Color {
-        if isError { return Color.orange.opacity(0.18) }
-        return Color.primary.opacity(0.06)
+    @ViewBuilder
+    private var bubbleBackgroundView: some View {
+        if isUser {
+            RoundedRectangle(cornerRadius: isUser ? 18 : 16, style: .continuous)
+                .fill(DS.primaryGradient)
+        } else if isError {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(DS.secondary.opacity(0.10))
+        } else {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(DS.surfaceHigh)
+        }
     }
 
     @ViewBuilder
@@ -294,11 +285,11 @@ struct InsightAvatar: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(isError ? Color.orange.opacity(0.12) : Color.accentColor.opacity(0.12))
+                .fill(isError ? DS.secondary.opacity(0.12) : DS.primary.opacity(0.12))
                 .frame(width: 30, height: 30)
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "sparkles")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isError ? Color.orange : Color.accentColor)
+                .foregroundStyle(isError ? DS.secondary : DS.primary)
         }
         .padding(.top, 2)
     }
@@ -316,21 +307,14 @@ struct TypingIndicator: View {
             HStack(spacing: 4) {
                 ForEach(0..<3) { i in
                     Circle()
-                        .fill(Color.secondary.opacity(phase == i ? 1.0 : 0.3))
+                        .fill(DS.onSurfaceVariant.opacity(phase == i ? 0.8 : 0.25))
                         .frame(width: 6, height: 6)
                         .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: phase)
                 }
             }
             .padding(.horizontal, DS.space14)
             .padding(.vertical, DS.space12)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(.controlBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
-                    )
-            )
+            .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Spacer(minLength: 0)
         }
@@ -358,7 +342,7 @@ struct FloatingInputBar: View {
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(placeholderText)
                         .font(.body)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.4))
                         .padding(.horizontal, DS.space18)
                         .padding(.top, DS.space16)
                 }
@@ -366,13 +350,12 @@ struct FloatingInputBar: View {
                 TextField("", text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
+                    .foregroundStyle(DS.onSurface)
                     .lineLimit(1...6)
                     .focused($isFocused)
                     .disabled(isProcessing)
                     .onSubmit {
-                        if canSend {
-                            onSubmit()
-                        }
+                        if canSend { onSubmit() }
                     }
                     .padding(.horizontal, DS.space18)
                     .padding(.top, DS.space16)
@@ -382,9 +365,7 @@ struct FloatingInputBar: View {
             HStack(spacing: DS.space12) {
                 Menu {
                     ForEach(availableModels) { model in
-                        Button(model.name) {
-                            selectedModel = model.id
-                        }
+                        Button(model.name) { selectedModel = model.id }
                     }
                 } label: {
                     HStack(spacing: DS.space6) {
@@ -393,26 +374,20 @@ struct FloatingInputBar: View {
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
                     .padding(.horizontal, DS.space12)
                     .padding(.vertical, DS.space8)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color(.windowBackgroundColor))
-                            .overlay(
-                                Capsule(style: .continuous)
-                                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                            )
-                    )
+                    .background(DS.surfaceHighest, in: Capsule())
                 }
                 .buttonStyle(.plain)
 
                 Spacer()
 
+                // Primary send button with gradient fill
                 Button(action: onSubmit) {
                     ZStack {
                         Circle()
-                            .fill(canSend ? Color.accentColor : Color.secondary.opacity(0.18))
+                            .fill(canSend ? AnyShapeStyle(DS.primaryGradient) : AnyShapeStyle(DS.surfaceHighest))
                             .frame(width: 36, height: 36)
                         if isProcessing {
                             ProgressView()
@@ -421,7 +396,7 @@ struct FloatingInputBar: View {
                         } else {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(canSend ? .white : .secondary)
+                                .foregroundStyle(canSend ? DS.onPrimaryFixed : DS.onSurfaceVariant.opacity(0.4))
                         }
                     }
                 }
@@ -433,15 +408,16 @@ struct FloatingInputBar: View {
         }
         .background {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(.controlBackgroundColor))
+                .fill(DS.surfaceHigh)
                 .overlay(
                     RoundedRectangle(cornerRadius: 28, style: .continuous)
                         .strokeBorder(
-                            Color.primary.opacity(isFocused ? 0.14 : 0.08),
-                            lineWidth: 1
+                            isFocused ? DS.primary.opacity(0.25) : Color.white.opacity(0.05),
+                            lineWidth: isFocused ? 1.5 : 1
                         )
                 )
-                .shadow(color: .black.opacity(0.04), radius: 12, y: 3)
+                // Active: 2px primary glow on bottom edge only (spec)
+                .shadow(color: isFocused ? DS.primary.opacity(0.12) : .clear, radius: 12, y: 4)
         }
     }
 
@@ -489,7 +465,7 @@ struct MarkdownContent: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("\u{2022}")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceVariant)
                         inlineText(item)
                     }
                 }
@@ -501,7 +477,7 @@ struct MarkdownContent: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("\(i + 1).")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceVariant)
                             .monospacedDigit()
                         inlineText(item)
                     }
@@ -515,15 +491,15 @@ struct MarkdownContent: View {
         case .codeBlock(let code):
             Text(code)
                 .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(DS.onSurface)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                )
+                .background(DS.surfaceHighest, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
         case .horizontalRule:
-            Divider()
+            Rectangle()
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 1)
                 .padding(.vertical, 2)
         }
     }
@@ -562,6 +538,26 @@ struct MarkdownContent: View {
         case horizontalRule
     }
 
+    /// Returns true if `s` starts with "N. " (numbered list prefix).
+    private static func isNumberedListLine(_ s: String) -> Bool {
+        guard !s.isEmpty, s.first!.isNumber else { return false }
+        var idx = s.startIndex
+        while idx < s.endIndex, s[idx].isNumber { s.formIndex(after: &idx) }
+        guard idx < s.endIndex, s[idx] == "." else { return false }
+        s.formIndex(after: &idx)
+        return idx < s.endIndex && s[idx] == " "
+    }
+
+    /// Extracts the content after "N. " prefix. Nil if not a numbered list line.
+    private static func numberedListContent(_ s: String) -> String? {
+        guard isNumberedListLine(s) else { return nil }
+        var idx = s.startIndex
+        while idx < s.endIndex, s[idx].isNumber { s.formIndex(after: &idx) }
+        s.formIndex(after: &idx) // skip "."
+        s.formIndex(after: &idx) // skip " "
+        return String(s[idx...])
+    }
+
     static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.components(separatedBy: "\n")
         var blocks: [MarkdownBlock] = []
@@ -571,21 +567,13 @@ struct MarkdownContent: View {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-            // Blank line — skip
-            if trimmed.isEmpty {
-                i += 1
-                continue
-            }
+            if trimmed.isEmpty { i += 1; continue }
 
-            // Code block (``` fenced)
             if trimmed.hasPrefix("```") {
                 var codeLines: [String] = []
                 i += 1
                 while i < lines.count {
-                    if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                        i += 1
-                        break
-                    }
+                    if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") { i += 1; break }
                     codeLines.append(lines[i])
                     i += 1
                 }
@@ -593,7 +581,6 @@ struct MarkdownContent: View {
                 continue
             }
 
-            // Heading
             if trimmed.hasPrefix("#") {
                 let level = trimmed.prefix(while: { $0 == "#" }).count
                 let content = String(trimmed.dropFirst(level)).trimmingCharacters(in: .whitespaces)
@@ -604,7 +591,6 @@ struct MarkdownContent: View {
                 }
             }
 
-            // Horizontal rule
             if trimmed.count >= 3,
                Set(trimmed.filter { !$0.isWhitespace }).count == 1,
                ["-", "*", "_"].contains(trimmed.first) {
@@ -613,71 +599,48 @@ struct MarkdownContent: View {
                 continue
             }
 
-            // Table (starts with |)
             if trimmed.hasPrefix("|") {
                 var tableLines: [String] = []
                 while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
                     tableLines.append(lines[i])
                     i += 1
                 }
-                if let table = parseTable(tableLines) {
-                    blocks.append(table)
-                }
+                if let table = parseTable(tableLines) { blocks.append(table) }
                 continue
             }
 
-            // Bullet list (- or * or +)
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") {
                 var items: [String] = []
                 while i < lines.count {
                     let t = lines[i].trimmingCharacters(in: .whitespaces)
                     if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("+ ") {
-                        items.append(String(t.dropFirst(2)))
-                        i += 1
-                    } else if t.isEmpty {
-                        i += 1
-                        break
-                    } else {
-                        break
-                    }
+                        items.append(String(t.dropFirst(2))); i += 1
+                    } else if t.isEmpty { i += 1; break } else { break }
                 }
                 blocks.append(.bullets(items))
                 continue
             }
 
-            // Numbered list
-            if let _ = trimmed.firstMatch(of: /^\d+\.\s/) {
+            if isNumberedListLine(trimmed) {
                 var items: [String] = []
                 while i < lines.count {
                     let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    if let match = t.firstMatch(of: /^\d+\.\s(.*)/) {
-                        items.append(String(match.1))
-                        i += 1
-                    } else if t.isEmpty {
-                        i += 1
-                        break
-                    } else {
-                        break
-                    }
+                    if isNumberedListLine(t), let content = numberedListContent(t) {
+                        items.append(content); i += 1
+                    } else if t.isEmpty { i += 1; break } else { break }
                 }
                 blocks.append(.numberedList(items))
                 continue
             }
 
-            // Paragraph — collect consecutive non-empty, non-special lines
             var paraLines: [String] = []
             while i < lines.count {
                 let t = lines[i].trimmingCharacters(in: .whitespaces)
                 if t.isEmpty || t.hasPrefix("#") || t.hasPrefix("```")
                     || t.hasPrefix("|") || t.hasPrefix("- ") || t.hasPrefix("* ")
-                    || t.hasPrefix("+ ") || t.firstMatch(of: /^\d+\.\s/) != nil {
-                    break
-                }
-                // Check for horizontal rule
+                    || t.hasPrefix("+ ") || isNumberedListLine(t) { break }
                 if t.count >= 3, Set(t.filter { !$0.isWhitespace }).count == 1,
-                   ["-", "*", "_"].contains(t.first) {
-                    break
-                }
+                   ["-", "*", "_"].contains(t.first) { break }
                 paraLines.append(t)
                 i += 1
             }
@@ -700,16 +663,10 @@ struct MarkdownContent: View {
         }
 
         let headers = parseCells(lines[0])
-
-        // Skip separator row (|---|---|)
         let startRow: Int
         if lines.count > 1 {
             let sep = lines[1].trimmingCharacters(in: .whitespaces)
-            if sep.allSatisfy({ $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }) {
-                startRow = 2
-            } else {
-                startRow = 1
-            }
+            startRow = sep.allSatisfy({ $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }) ? 2 : 1
         } else {
             startRow = 1
         }
@@ -717,9 +674,7 @@ struct MarkdownContent: View {
         var rows: [[String]] = []
         for r in startRow..<lines.count {
             let cells = parseCells(lines[r])
-            if !cells.isEmpty {
-                rows.append(cells)
-            }
+            if !cells.isEmpty { rows.append(cells) }
         }
 
         return .table(headers: headers, rows: rows)
@@ -734,45 +689,36 @@ struct MarkdownTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header row
             HStack(spacing: 0) {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                     Text(header)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceVariant)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
                 }
             }
 
-            Divider()
+            Rectangle()
+                .fill(Color.white.opacity(0.06))
+                .frame(height: 1)
 
-            // Data rows
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
                 HStack(spacing: 0) {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                         Text(cell)
                             .font(.caption)
+                            .foregroundStyle(DS.onSurface)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 5)
                             .padding(.horizontal, 8)
                     }
                 }
-                .background(rowIdx % 2 == 1 ? Color.primary.opacity(0.02) : Color.clear)
+                .background(rowIdx % 2 == 1 ? DS.surfaceHighest.opacity(0.4) : Color.clear)
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
-        )
+        .background(DS.surfaceHigh, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
-}
-
-private extension DS {
-    static let space18: CGFloat = 18
-    static let space10: CGFloat = 10
-    static let space14: CGFloat = 14
-    static let space28: CGFloat = 28
 }

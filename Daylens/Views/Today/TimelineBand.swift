@@ -5,8 +5,8 @@ struct TimelineBand: View {
     let sessions: [AppSession]
     let categorySummaries: [CategoryUsageSummary]
 
-    private let dayStartHour = 6  // Start at 6 AM
-    private let dayEndHour = 24   // End at midnight
+    private let dayStartHour = 6
+    private let dayEndHour = 24
     private let bandHeight: CGFloat = 40
 
     init(sessions: [AppSession], categorySummaries: [CategoryUsageSummary] = []) {
@@ -24,20 +24,20 @@ struct TimelineBand: View {
                 let totalHours = CGFloat(dayEndHour - dayStartHour)
 
                 ZStack(alignment: .leading) {
-                    // Background
+                    // Track background
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(Color(.controlBackgroundColor))
+                        .fill(DS.surfaceHighest)
 
-                    // Hour markers
+                    // Hour markers — ghost lines at low opacity
                     ForEach(dayStartHour..<dayEndHour, id: \.self) { hour in
                         let x = CGFloat(hour - dayStartHour) / totalHours * totalWidth
                         Rectangle()
-                            .fill(Color(.separatorColor))
+                            .fill(Color.white.opacity(0.05))
                             .frame(width: 0.5)
                             .offset(x: x)
                     }
 
-                    // Session segments
+                    // Session segments with subtle glow
                     ForEach(sessions) { session in
                         sessionSegment(session, totalWidth: totalWidth, totalHours: totalHours)
                     }
@@ -50,7 +50,7 @@ struct TimelineBand: View {
                     ForEach([6, 9, 12, 15, 18, 21], id: \.self) { hour in
                         Text(hourLabel(hour))
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -88,9 +88,11 @@ struct TimelineBand: View {
             helpLines.append("Category confidence: \(classification.confidence.rawValue)")
         }
 
+        let color = DS.categoryColor(for: classification.category)
         return RoundedRectangle(cornerRadius: 2)
-            .fill(DS.categoryColor(for: classification.category).opacity(0.8))
+            .fill(color.opacity(0.85))
             .frame(width: width, height: bandHeight - 8)
+            .shadow(color: color.opacity(0.5), radius: 2, x: 0, y: 0)
             .offset(x: x, y: 4)
             .help(helpLines.joined(separator: "\n"))
     }
@@ -105,7 +107,7 @@ struct TimelineBand: View {
         VStack(alignment: .leading, spacing: DS.space6) {
             Text("Colors reflect activity type")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
 
             FlowLegend(categories: categorySummaries)
         }
@@ -118,20 +120,22 @@ private struct FlowLegend: View {
     var body: some View {
         HStack(spacing: DS.space8) {
             ForEach(Array(categories.prefix(5))) { summary in
+                let color = DS.categoryColor(for: summary.category)
                 HStack(spacing: DS.space4) {
                     Circle()
-                        .fill(DS.categoryColor(for: summary.category))
-                        .frame(width: 8, height: 8)
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                        .shadow(color: color.opacity(0.6), radius: 2)
 
                     Text(summary.category.legendLabel)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceVariant)
                 }
                 .padding(.horizontal, DS.space8)
                 .padding(.vertical, DS.space4)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(DS.categoryColor(for: summary.category).opacity(0.12))
+                        .fill(color.opacity(0.12))
                 )
                 .help(legendHelp(for: summary))
             }

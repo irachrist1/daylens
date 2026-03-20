@@ -70,41 +70,45 @@ private struct CategoryUsageRow: View {
         return min(summary.totalDuration / maxDuration, 1.0)
     }
 
+    private var color: Color { DS.categoryColor(for: summary.category) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space4) {
             HStack(spacing: DS.space8) {
                 Text(summary.category.rawValue)
                     .font(.body)
+                    .foregroundStyle(DS.onSurface)
                     .lineLimit(1)
 
                 Spacer()
 
                 Text(summary.formattedDuration)
                     .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
 
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(DS.categoryColor(for: summary.category).opacity(0.12))
-                        .frame(height: 6)
+                        .fill(color.opacity(0.10))
+                        .frame(height: 5)
 
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(DS.categoryColor(for: summary.category))
-                        .frame(width: geometry.size.width * fraction, height: 6)
+                        .fill(color)
+                        .frame(width: geometry.size.width * fraction, height: 5)
+                        .shadow(color: color.opacity(0.4), radius: 3, x: 0, y: 0)
                 }
             }
-            .frame(height: 6)
+            .frame(height: 5)
 
             Text(summary.topApps.joined(separator: ", "))
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 .lineLimit(1)
         }
         .padding(.vertical, DS.space4)
@@ -120,14 +124,14 @@ private struct CategoryAppRow: View {
 
             Text(app.appName)
                 .font(.caption)
-                .foregroundStyle(.primary)
+                .foregroundStyle(DS.onSurface)
                 .lineLimit(1)
 
             Spacer()
 
             Text(app.formattedDuration)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
         }
     }
 }

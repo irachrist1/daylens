@@ -11,7 +11,6 @@ struct HistoryView: View {
         HStack(spacing: 0) {
             dayList
                 .frame(width: 260)
-            Divider()
             dayDetail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -23,17 +22,17 @@ struct HistoryView: View {
     private var dayList: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("History")
-                .font(.headline)
+                .font(.system(.subheadline, design: .default, weight: .semibold))
+                .foregroundStyle(DS.onSurfaceVariant)
+                .tracking(0.5)
                 .padding(.horizontal, DS.space16)
-                .padding(.vertical, DS.space12)
-
-            Divider()
+                .padding(.vertical, DS.space16)
 
             if viewModel.days.isEmpty && !viewModel.isLoadingList {
                 dayListEmpty
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: DS.space2) {
                         ForEach(viewModel.days) { day in
                             DayRow(
                                 snapshot: day,
@@ -41,32 +40,29 @@ struct HistoryView: View {
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { viewModel.selectDay(day.date) }
-
-                            if day.date != viewModel.days.last?.date {
-                                Divider().padding(.leading, DS.space16)
-                            }
                         }
                     }
+                    .padding(.horizontal, DS.space8)
                     .padding(.vertical, DS.space4)
                 }
             }
         }
-        .background(Color(.windowBackgroundColor))
+        .background(DS.surfaceLow)
     }
 
     private var dayListEmpty: some View {
         VStack(spacing: DS.space12) {
             Image(systemName: "calendar")
                 .font(.system(size: 28))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.4))
 
             Text("No history yet")
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
 
             Text("Use your Mac for a day and your activity will appear here.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -102,6 +98,7 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(DS.space24)
             }
+            .background(DS.surfaceContainer)
         } else {
             noSelectionPlaceholder
         }
@@ -110,36 +107,39 @@ struct HistoryView: View {
     private func dayDetailHeader(for date: Date) -> some View {
         VStack(alignment: .leading, spacing: DS.space4) {
             Text(Self.fullDateFormatter.string(from: date))
-                .font(.title2.weight(.semibold))
+                .font(.system(.subheadline, design: .default, weight: .medium))
+                .foregroundStyle(DS.onSurfaceVariant)
 
             if !viewModel.appSummaries.isEmpty {
                 Text("\(viewModel.totalActiveTime) active")
-                    .font(.title.weight(.bold).monospacedDigit())
+                    .font(.system(size: 40, weight: .bold, design: .default).monospacedDigit())
+                    .foregroundStyle(DS.onSurface)
+                    .tracking(-0.8)
                     .padding(.top, DS.space4)
             }
         }
     }
 
     private var overviewStats: some View {
-        HStack(spacing: DS.space16) {
+        HStack(spacing: DS.space12) {
             StatCard(
                 title: "Focus Score",
                 value: viewModel.focusScoreText,
                 subtitle: viewModel.focusLabel,
                 icon: "target",
-                color: .green
+                color: DS.tertiary
             )
             StatCard(
                 title: "Apps Used",
                 value: "\(viewModel.appSummaries.count)",
                 icon: "square.grid.2x2.fill",
-                color: .orange
+                color: DS.secondary
             )
             StatCard(
                 title: "Sites Visited",
                 value: "\(viewModel.websiteSummaries.count)",
                 icon: "globe",
-                color: .purple
+                color: DS.primary
             )
         }
     }
@@ -162,7 +162,7 @@ struct HistoryView: View {
                     } label: {
                         Label("Enhance with AI", systemImage: "sparkles")
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(DS.primary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -172,12 +172,12 @@ struct HistoryView: View {
                 MarkdownContent(text: summary)
                     .font(.body)
                     .lineSpacing(5)
-                    .foregroundStyle(.primary.opacity(0.85))
+                    .foregroundStyle(DS.onSurface.opacity(0.85))
                     .textSelection(.enabled)
             } else {
                 Text("No summary available for this day.")
                     .font(.body)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
             }
         }
         .cardStyle()
@@ -204,7 +204,7 @@ struct HistoryView: View {
                     label: site.domain,
                     duration: site.totalDuration,
                     maxDuration: maxDuration,
-                    color: .purple,
+                    color: DS.primary,
                     subtitle: site.topPageTitle
                 )
             }
@@ -216,11 +216,11 @@ struct HistoryView: View {
         VStack(spacing: DS.space12) {
             Image(systemName: "moon.zzz")
                 .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.4))
 
             Text("No activity tracked this day.")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, DS.space48)
@@ -230,13 +230,14 @@ struct HistoryView: View {
         VStack(spacing: DS.space12) {
             Image(systemName: "calendar")
                 .font(.system(size: 36))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.3))
 
             Text("Select a day to see details")
                 .font(.body)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DS.surfaceContainer)
     }
 
     // MARK: - Formatters
@@ -256,39 +257,36 @@ struct DayRow: View {
 
     var body: some View {
         HStack(spacing: DS.space12) {
-            // Date column
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.dayFormatter.string(from: snapshot.date))
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(isSelected ? .primary : .primary)
+                    .foregroundStyle(DS.onSurface)
 
                 Text(Self.dateFormatter.string(from: snapshot.date))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
             }
 
             Spacer(minLength: 0)
 
-            // Summary column
             VStack(alignment: .trailing, spacing: 2) {
                 Text(snapshot.formattedActiveTime)
                     .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .foregroundStyle(isSelected ? DS.primary : DS.onSurface)
 
                 if let topApp = snapshot.topAppName {
                     Text(topApp)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                         .lineLimit(1)
                 }
             }
         }
-        .padding(.horizontal, DS.space16)
-        .padding(.vertical, DS.space12)
+        .padding(.horizontal, DS.space12)
+        .padding(.vertical, DS.space10)
         .background(
             RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
-                .padding(.horizontal, DS.space4)
+                .fill(isSelected ? DS.primary.opacity(0.12) : Color.clear)
         )
         .animation(.easeOut(duration: 0.15), value: isSelected)
     }

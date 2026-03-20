@@ -16,7 +16,7 @@ struct AppsView: View {
                     description: "Keep using your Mac. App usage will appear here within a few minutes of tracking."
                 )
             } else {
-                VStack(alignment: .leading, spacing: DS.space16) {
+                VStack(alignment: .leading, spacing: DS.space8) {
                     let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
 
                     ForEach(viewModel.summaries) { app in
@@ -33,6 +33,7 @@ struct AppsView: View {
                 .padding(DS.space24)
             }
         }
+        .background(DS.surfaceContainer)
         .onAppear { viewModel.load(for: appState.selectedDate) }
         .onChange(of: appState.selectedDate) { _, date in
             expandedBundleID = nil
@@ -79,13 +80,11 @@ struct AppRow: View {
     var isLoadingWebsites: Bool = false
     var onTap: (() -> Void)?
 
-    private var classification: AppClassification {
-        app.classification
-    }
+    @State private var isHovered = false
 
-    private var isBrowserCapable: Bool {
-        Constants.browserCapableBundleIDs.contains(app.bundleID)
-    }
+    private var classification: AppClassification { app.classification }
+    private var isBrowserCapable: Bool { Constants.browserCapableBundleIDs.contains(app.bundleID) }
+    private var color: Color { DS.categoryColor(for: classification.category) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -96,24 +95,26 @@ struct AppRow: View {
                     HStack {
                         Text(app.appName)
                             .font(.body.weight(.medium))
+                            .foregroundStyle(DS.onSurface)
 
+                        // Focus chip
                         Text(classification.category.rawValue)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, DS.space4)
-                            .padding(.vertical, 1)
-                            .background(DS.categoryColor(for: classification.category).opacity(0.15), in: Capsule())
+                            .foregroundStyle(color)
+                            .padding(.horizontal, DS.space6)
+                            .padding(.vertical, 2)
+                            .background(color.opacity(0.15), in: Capsule())
 
                         Spacer()
 
                         Text(app.formattedDuration)
                             .font(.body.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceVariant)
 
                         if isBrowserCapable {
                             Image(systemName: "chevron.right")
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                                 .animation(.easeOut(duration: 0.15), value: isExpanded)
                         }
@@ -121,14 +122,15 @@ struct AppRow: View {
 
                     GeometryReader { geometry in
                         RoundedRectangle(cornerRadius: DS.radiusSmall)
-                            .fill(DS.categoryColor(for: classification.category))
-                            .frame(width: geometry.size.width * min(app.totalDuration / maxDuration, 1.0), height: 4)
+                            .fill(color)
+                            .frame(width: geometry.size.width * min(app.totalDuration / maxDuration, 1.0), height: 3)
+                            .shadow(color: color.opacity(0.5), radius: 3, x: 0, y: 0)
                     }
-                    .frame(height: 4)
+                    .frame(height: 3)
 
                     Text("\(app.sessionCount) session\(app.sessionCount == 1 ? "" : "s")")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
             }
             .contentShape(Rectangle())
@@ -142,12 +144,17 @@ struct AppRow: View {
                     websites: expandedWebsites,
                     isLoading: isLoadingWebsites
                 )
-                .padding(.leading, 48) // Align with text (icon + spacing)
+                .padding(.leading, 48)
                 .transition(.opacity.combined(with: .offset(y: -4)))
             }
         }
         .padding(DS.space12)
-        .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: DS.radiusMedium))
+        .background(
+            RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous)
+                .fill(isHovered ? DS.surfaceHighest : DS.surfaceHigh)
+        )
+        .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.2), value: isExpanded)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 }

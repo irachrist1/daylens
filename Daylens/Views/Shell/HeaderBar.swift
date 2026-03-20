@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Top toolbar bar used only for date navigation surfaces.
+/// Top toolbar for date navigation surfaces.
+/// Uses a tonal background shift — no divider line.
 struct HeaderBar: View {
     var body: some View {
         HStack {
@@ -9,7 +10,6 @@ struct HeaderBar: View {
         }
         .padding(.horizontal, DS.space20)
         .padding(.vertical, DS.space12)
-        .background()
-        .overlay(alignment: .bottom) { Divider() }
+        .background(DS.surfaceLow)
     }
 }

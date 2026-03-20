@@ -17,7 +17,7 @@ struct TopAppsCard: View {
             if summaries.isEmpty {
                 Text("No app data yet. Keep using your Mac and check back soon.")
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
                     .padding(.vertical, DS.space8)
             } else {
                 let maxDuration = summaries.first?.totalDuration ?? 1
@@ -40,7 +40,7 @@ struct TopAppsCard: View {
                             if isBrowserCapable {
                                 Image(systemName: "chevron.right")
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                                     .animation(.easeOut(duration: 0.15), value: isExpanded)
                             }
@@ -88,7 +88,6 @@ struct TopAppsCard: View {
                 )
             }.value
 
-            // Only update if this browser is still expanded
             if expandedBundleID == bundleID {
                 expandedWebsites = results ?? []
                 isLoadingWebsites = false
@@ -112,31 +111,31 @@ struct BrowserWebsitesExpansion: View {
             } else if websites.isEmpty {
                 Text("No website data for this browser.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                     .padding(.vertical, DS.space8)
             } else {
                 ForEach(websites.prefix(5)) { site in
                     HStack(spacing: DS.space8) {
                         Image(systemName: "globe")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                             .frame(width: 14)
 
                         Text(site.domain)
                             .font(.caption)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(DS.onSurface)
                             .lineLimit(1)
 
                         Spacer()
 
                         Text(site.formattedDuration)
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceVariant)
                     }
                 }
             }
         }
-        .padding(.leading, 36) // Align with the app name (icon width + spacing)
+        .padding(.leading, 36)
         .padding(.top, DS.space6)
         .padding(.bottom, DS.space4)
     }

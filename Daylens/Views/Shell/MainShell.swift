@@ -7,7 +7,7 @@ struct MainShell: View {
     var body: some View {
         NavigationSplitView {
             Sidebar()
-                .navigationSplitViewColumnWidth(min: 180, ideal: DS.sidebarWidth, max: 280)
+                .navigationSplitViewColumnWidth(min: 200, ideal: DS.sidebarWidth, max: 300)
         } detail: {
             VStack(spacing: 0) {
                 if appState.selectedSection.showsDateNavigation {
@@ -15,10 +15,12 @@ struct MainShell: View {
                 }
                 contentView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(DS.surfaceContainer)
             }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
+        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder

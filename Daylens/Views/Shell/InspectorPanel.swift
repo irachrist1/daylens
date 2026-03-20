@@ -16,21 +16,21 @@ struct InspectorPanel: View {
             }
             .padding(DS.space20)
         }
-        .background(Color(.windowBackgroundColor))
+        .background(DS.surfaceLow)
     }
 
     private func shortcutRow(_ label: String, shortcut: String) -> some View {
         HStack {
             Text(label)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceVariant)
             Spacer()
             Text(shortcut)
                 .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 .padding(.horizontal, DS.space4)
                 .padding(.vertical, DS.space2)
-                .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: DS.radiusSmall))
+                .background(DS.surfaceHighest, in: RoundedRectangle(cornerRadius: DS.radiusSmall))
         }
     }
 }
