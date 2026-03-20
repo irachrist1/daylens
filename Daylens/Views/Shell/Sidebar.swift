@@ -5,10 +5,8 @@ struct Sidebar: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        @Bindable var state = appState
-
         VStack(alignment: .leading, spacing: 0) {
-            // Gradient wordmark
+            // Wordmark
             Text("Daylens")
                 .font(.system(.title3, design: .default, weight: .bold))
                 .foregroundStyle(DS.titleGradient)
@@ -16,13 +14,10 @@ struct Sidebar: View {
                 .padding(.top, DS.space28)
                 .padding(.bottom, DS.space24)
 
-            // Nav items
+            // Nav
             VStack(spacing: DS.space2) {
                 ForEach(SidebarSection.allCases) { section in
-                    SidebarItem(
-                        section: section,
-                        isSelected: appState.selectedSection == section
-                    ) {
+                    SidebarItem(section: section, isSelected: appState.selectedSection == section) {
                         appState.selectedSection = section
                     }
                 }
@@ -31,13 +26,51 @@ struct Sidebar: View {
 
             Spacer()
 
-            // Focus Session CTA
-            FocusSidebarButton()
-                .padding(.horizontal, DS.space12)
-                .padding(.bottom, DS.space20)
+            // User profile + focus button
+            VStack(spacing: DS.space12) {
+                FocusSidebarButton()
+                UserProfileCard()
+            }
+            .padding(.horizontal, DS.space12)
+            .padding(.bottom, DS.space20)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(DS.surfaceLow)
+    }
+}
+
+// MARK: - User Profile Card
+
+private struct UserProfileCard: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: DS.space10) {
+            // Avatar circle
+            ZStack {
+                Circle()
+                    .fill(DS.primaryContainer)
+                    .frame(width: 32, height: 32)
+                Text(String(appState.userName.prefix(1)).uppercased())
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(appState.userName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(DS.onSurface)
+                    .lineLimit(1)
+                Text("Pro")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DS.primary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, DS.space10)
+        .padding(.vertical, DS.space8)
+        .background(DS.surfaceContainer, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
     }
 }
 
@@ -74,7 +107,7 @@ private struct SidebarItem: View {
             .frame(height: DS.sidebarItemHeight)
             .background(
                 RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                    .fill(isSelected ? DS.surfaceHighest : (isHovered ? DS.surfaceHighest.opacity(0.5) : Color.clear))
+                    .fill(isSelected ? DS.primary.opacity(0.12) : (isHovered ? DS.surfaceHighest.opacity(0.5) : Color.clear))
             )
         }
         .buttonStyle(.plain)
