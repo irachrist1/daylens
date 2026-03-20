@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Observe focus session ticks to update menu bar
         appState.focusSession.onTick = { [weak self] in
-            DispatchQueue.main.async { self?.updateMenuBarFocusTitle() }
+            Task { @MainActor [weak self] in self?.updateMenuBarFocusTitle() }
         }
     }
 
