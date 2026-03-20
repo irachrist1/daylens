@@ -4,6 +4,7 @@ import SwiftUI
 struct HistoryView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = HistoryViewModel()
+    @State private var selectedFilter: AppCategory? = nil
 
     private var aiService: AIService? { appState.aiService }
 
@@ -82,6 +83,7 @@ struct HistoryView: View {
                     if viewModel.appSummaries.isEmpty && !viewModel.isLoadingDetail {
                         dayDetailEmpty
                     } else {
+                        categoryFilterPills
                         overviewStats
                         daySummaryCard
                         categoryBreakdown
@@ -89,7 +91,7 @@ struct HistoryView: View {
                             sessions: viewModel.timeline,
                             categorySummaries: viewModel.categorySummaries
                         )
-                        TopAppsCard(summaries: viewModel.appSummaries, date: selectedDate)
+                        RecentSessionsCard(summaries: filteredSummaries)
                         if !viewModel.websiteSummaries.isEmpty {
                             topWebsitesSection
                         }
@@ -102,6 +104,23 @@ struct HistoryView: View {
             .background(DS.surfaceContainer)
         } else {
             noSelectionPlaceholder
+        }
+    }
+
+    private var filteredSummaries: [AppUsageSummary] {
+        guard let filter = selectedFilter else { return viewModel.appSummaries }
+        return viewModel.appSummaries.filter { $0.category == filter }
+    }
+
+    private var categoryFilterPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: DS.space8) {
+                FilterPill(label: "All", isSelected: selectedFilter == nil) { selectedFilter = nil }
+                FilterPill(label: "Focus Work", isSelected: selectedFilter == .development) { selectedFilter = .development }
+                FilterPill(label: "Meetings", isSelected: selectedFilter == .meetings) { selectedFilter = .meetings }
+                FilterPill(label: "Communication", isSelected: selectedFilter == .communication) { selectedFilter = .communication }
+                FilterPill(label: "Browsing", isSelected: selectedFilter == .browsing) { selectedFilter = .browsing }
+            }
         }
     }
 
@@ -248,6 +267,27 @@ struct HistoryView: View {
         f.dateStyle = .full
         return f
     }()
+}
+
+// MARK: - Filter Pill
+
+private struct FilterPill: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? .white : DS.onSurfaceVariant)
+                .padding(.horizontal, DS.space12)
+                .padding(.vertical, DS.space6)
+                .background(isSelected ? DS.primaryContainer : DS.surfaceHighest.opacity(0.6),
+                            in: Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 // MARK: - Day Row

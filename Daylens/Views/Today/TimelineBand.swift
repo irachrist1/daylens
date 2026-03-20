@@ -61,6 +61,14 @@ struct TimelineBand: View {
             if !categorySummaries.isEmpty {
                 legendRow
             }
+
+            if !sessions.isEmpty {
+                Divider()
+                    .background(DS.surfaceHighest.opacity(0.5))
+                    .padding(.vertical, DS.space4)
+
+                sessionList
+            }
         }
         .cardStyle()
     }
@@ -110,6 +118,45 @@ struct TimelineBand: View {
                 .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
 
             FlowLegend(categories: categorySummaries)
+        }
+    }
+
+    private var sessionList: some View {
+        VStack(spacing: DS.space8) {
+            ForEach(sessions.prefix(8)) { session in
+                HStack(spacing: DS.space12) {
+                    AppInitialsIcon(name: session.appName, category: session.classification.category, size: 32)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: DS.space6) {
+                            Text(session.appName)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(DS.onSurface)
+                                .lineLimit(1)
+                            CategoryBadge(category: session.classification.category)
+                        }
+                        Text(sessionTypeLabel(for: session.classification.category))
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(0.5)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.7))
+                    }
+
+                    Spacer()
+
+                    Text(session.formattedDuration)
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(DS.onSurfaceVariant)
+                }
+            }
+        }
+    }
+
+    private func sessionTypeLabel(for category: AppCategory) -> String {
+        switch category {
+        case .development: return "DEEP FOCUS"
+        case .meetings: return "HIGH ENERGY"
+        case .communication: return "CONTEXT SWITCHING"
+        default: return "ACTIVE SESSION"
         }
     }
 }
