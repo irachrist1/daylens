@@ -10,10 +10,14 @@ final class AppsViewModel {
     var isLoading = false
     var isLoadingDetail = false
     var error: String?
+    /// Stable DB base duration per bundleID, latched on first injectLiveSession call
+    /// and reset on every load(). Prevents timer-tick accumulation.
+    private var liveSessionBase: [String: TimeInterval] = [:]
 
     func load(for date: Date) {
         isLoading = true
         error = nil
+        liveSessionBase = [:]
 
         Task { @MainActor in
             defer { isLoading = false }
@@ -23,6 +27,7 @@ final class AppsViewModel {
                     try AppDatabase.shared.appUsageSummaries(for: date)
                 }.value
 
+                liveSessionBase = [:]
                 self.summaries = summaries
 
                 if let existingSelection = selectedApp,
@@ -71,18 +76,21 @@ final class AppsViewModel {
 
     /// Merges the currently-active (unfinalised) session so the frontmost app
     /// always appears even before the user switches away from it.
+    /// Uses a stable DB base so repeated timer-tick calls don't compound.
     func injectLiveSession(bundleID: String, appName: String, startedAt: Date, for date: Date) {
         guard Calendar.current.isDateInToday(date) else { return }
-        let duration = Date().timeIntervalSince(startedAt)
-        guard duration >= 3 else { return }
+        let liveDuration = Date().timeIntervalSince(startedAt)
+        guard liveDuration >= 3 else { return }
         let category = AppCategory.categorize(bundleID: bundleID, appName: appName)
 
         if let idx = summaries.firstIndex(where: { $0.bundleID == bundleID }) {
             let existing = summaries[idx]
+            let base = liveSessionBase[bundleID, default: existing.totalDuration]
+            liveSessionBase[bundleID] = base
             summaries[idx] = AppUsageSummary(
                 bundleID: existing.bundleID,
                 appName: existing.appName,
-                totalDuration: existing.totalDuration + duration,
+                totalDuration: base + liveDuration,
                 sessionCount: existing.sessionCount,
                 category: existing.category,
                 isBrowser: existing.isBrowser

@@ -14,11 +14,17 @@ final class TodayViewModel {
     var error: String?
 
     private var database: AppDatabase? { AppDatabase.shared }
+    /// Stores the DB-loaded base duration for the currently-active live session,
+    /// keyed by bundleID. Reset on every fresh load() so the base reflects the
+    /// latest DB snapshot. This prevents injectLiveSession from accumulating
+    /// duration on top of a previously-injected value each timer tick.
+    private var liveSessionBase: [String: TimeInterval] = [:]
 
     func load(for date: Date) {
         isLoading = true
         error = nil
         isViewingToday = Calendar.current.isDateInToday(date)
+        liveSessionBase = [:]  // Reset so next inject uses fresh DB totals as base.
 
         Task { @MainActor in
             do {
@@ -34,6 +40,7 @@ final class TodayViewModel {
                         weeklyScores: (try? db.trackedDaySnapshots(limit: 7)) ?? []
                     )
                 }.value
+                liveSessionBase = [:]  // Also reset after the async load completes.
                 appSummaries = payload.day.appSummaries
                 websiteSummaries = payload.day.websiteSummaries
                 browserSummaries = payload.day.browserSummaries
@@ -95,18 +102,23 @@ final class TodayViewModel {
 
     /// Merges the currently-active (unfinalised) app session into summaries so the
     /// frontmost app always appears even before the user switches away from it.
+    /// Uses a stable DB base duration so repeated timer-tick calls don't compound.
     func injectLiveSession(bundleID: String, appName: String, startedAt: Date) {
         guard isViewingToday else { return }
-        let duration = Date().timeIntervalSince(startedAt)
-        guard duration >= 3 else { return }
+        let liveDuration = Date().timeIntervalSince(startedAt)
+        guard liveDuration >= 3 else { return }
         let category = AppCategory.categorize(bundleID: bundleID, appName: appName)
 
         if let idx = appSummaries.firstIndex(where: { $0.bundleID == bundleID }) {
             let existing = appSummaries[idx]
+            // Latch the DB total on first inject; reuse it on every subsequent call
+            // so we always display (dbBase + liveDuration) — not an accumulation.
+            let base = liveSessionBase[bundleID, default: existing.totalDuration]
+            liveSessionBase[bundleID] = base
             appSummaries[idx] = AppUsageSummary(
                 bundleID: existing.bundleID,
                 appName: existing.appName,
-                totalDuration: existing.totalDuration + duration,
+                totalDuration: base + liveDuration,
                 sessionCount: existing.sessionCount,
                 category: existing.category,
                 isBrowser: existing.isBrowser
@@ -115,7 +127,7 @@ final class TodayViewModel {
             appSummaries.append(AppUsageSummary(
                 bundleID: bundleID,
                 appName: appName,
-                totalDuration: duration,
+                totalDuration: liveDuration,
                 sessionCount: 1,
                 category: category,
                 isBrowser: false
