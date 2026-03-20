@@ -270,12 +270,26 @@ extension AppDatabase {
 
     func recentAIPayloads(endingAt date: Date, limit: Int = 6) throws -> [AIDayContextPayload] {
         let dayStart = Calendar.current.startOfDay(for: date)
-        let dates = try trackedDays(limit: max(limit * 3, limit))
-            .filter { $0 < dayStart }
-            .prefix(limit)
-        guard !dates.isEmpty else { return [] }
-        // Batch all past-day reads into a single dbQueue.read, loading overrides once.
+        let exclusion = MeaningfulActivityRules.sqlBundleIDExclusion
+        let fetchLimit = max(limit * 3, limit)
+
+        // Single atomic snapshot: discover tracked dates AND fetch payloads in one dbQueue.read.
         return try dbQueue.read { db in
+            let dateRows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT date
+                FROM app_sessions
+                WHERE bundleID NOT IN (\(exclusion))
+                ORDER BY date DESC
+                LIMIT \(fetchLimit)
+                """)
+
+            let dates = dateRows
+                .compactMap { $0["date"] as Date? }
+                .filter { $0 < dayStart }
+                .prefix(limit)
+
+            guard !dates.isEmpty else { return [] }
+
             let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
             return dates.compactMap { pastDate -> AIDayContextPayload? in
                 let dayBounds = DayBounds(for: pastDate)
@@ -660,7 +674,8 @@ private extension AppDatabase {
 
     func daySummarySnapshot(in db: Database, for date: Date) throws -> DaySummarySnapshot {
         let dayBounds = DayBounds(for: date)
-        let summaries = try self.appUsageSummaries(in: db, dayBounds: dayBounds)
+        let overrides = (try? categoryOverrides(in: db)) ?? [:]
+        let summaries = try self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides)
         let totalDuration = summaries.reduce(0) { $0 + $1.totalDuration }
         let topAppName = summaries.first?.appName
         let topAppBundleID = summaries.first?.bundleID

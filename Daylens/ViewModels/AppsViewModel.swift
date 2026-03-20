@@ -96,13 +96,14 @@ final class AppsViewModel {
                 isBrowser: existing.isBrowser
             )
         } else {
+            let isBrowser = Constants.knownBrowserBundleIDs.contains(bundleID)
             summaries.append(AppUsageSummary(
                 bundleID: bundleID,
                 appName: appName,
                 totalDuration: liveDuration,
                 sessionCount: 1,
                 category: category,
-                isBrowser: false
+                isBrowser: isBrowser
             ))
             summaries.sort { $0.totalDuration > $1.totalDuration }
             if selectedApp == nil { selectedApp = summaries.first }
