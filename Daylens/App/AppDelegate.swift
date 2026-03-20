@@ -13,6 +13,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appState = appState
         refreshTodaySummary()
         rebuildMenu()
+
+        // Observe focus session ticks to update menu bar
+        appState.focusSession.onTick = { [weak self] in
+            DispatchQueue.main.async { self?.updateMenuBarFocusTitle() }
+        }
+    }
+
+    private func updateMenuBarFocusTitle() {
+        guard let appState, let button = statusItem?.button else { return }
+        if appState.focusSession.isRunning {
+            button.title = " ⏱ \(appState.focusSession.formattedRemaining)"
+            button.imagePosition = .imageLeft
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

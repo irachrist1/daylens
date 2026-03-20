@@ -70,6 +70,25 @@ final class AppState {
         }
     }
 
+    // MARK: - Color Scheme Preference
+
+    // Color scheme preference (nil = follow system)
+    var colorScheme: ColorScheme? {
+        get {
+            guard let raw = userDefaults.string(forKey: "colorScheme") else { return nil }
+            return raw == "dark" ? .dark : .light
+        }
+        set {
+            if let v = newValue {
+                userDefaults.set(v == .dark ? "dark" : "light", forKey: "colorScheme")
+            } else {
+                userDefaults.removeObject(forKey: "colorScheme")
+            }
+        }
+    }
+
+    var userName: String { userDefaults.string(forKey: Constants.DefaultsKey.userName) ?? "User" }
+
     // MARK: - Date Navigation
     var isToday: Bool {
         Calendar.current.isDateInToday(selectedDate)

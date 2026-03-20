@@ -9,6 +9,8 @@ final class FocusSessionManager {
     var elapsed: TimeInterval = 0
     var targetMinutes: Int = 25
 
+    var onTick: (() -> Void)?
+
     private var timer: Timer?
     private var startedAt: Date?
 
@@ -42,6 +44,8 @@ final class FocusSessionManager {
             self.elapsed = Date().timeIntervalSince(startedAt)
             if self.elapsed >= self.target {
                 self.finish()
+            } else {
+                self.onTick?()
             }
         }
     }
@@ -52,11 +56,13 @@ final class FocusSessionManager {
         isRunning = false
         elapsed = 0
         startedAt = nil
+        onTick?()
     }
 
     private func finish() {
         timer?.invalidate()
         timer = nil
         isRunning = false
+        onTick?()
     }
 }
