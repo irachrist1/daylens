@@ -8,6 +8,8 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space20) {
+                profileCard
+                appearanceSection
                 aiSection
                 generalSection
                 dataSection
@@ -24,6 +26,68 @@ struct SettingsView: View {
         .background(DS.surfaceContainer)
         .onAppear {
             viewModel.loadSettings(aiService: appState.aiService)
+        }
+    }
+
+    // MARK: - Profile Card
+
+    private var profileCard: some View {
+        HStack(spacing: DS.space16) {
+            ZStack {
+                Circle()
+                    .fill(DS.primaryContainer)
+                    .frame(width: 52, height: 52)
+                Text(String(appState.userName.prefix(1)).uppercased())
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: DS.space4) {
+                Text(appState.userName)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(DS.onSurface)
+                HStack(spacing: DS.space8) {
+                    Label("Pro Plan", systemImage: "checkmark.seal.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(DS.primary)
+                }
+            }
+            Spacer()
+        }
+        .cardStyle()
+    }
+
+    // MARK: - Appearance
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            Text("Appearance")
+                .sectionHeader()
+
+            HStack {
+                Text("Color Scheme")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(DS.onSurface)
+                Spacer()
+                Picker("", selection: Binding(
+                    get: {
+                        switch appState.colorScheme {
+                        case .dark: return "dark"
+                        case .light: return "light"
+                        default: return "system"
+                        }
+                    },
+                    set: { val in
+                        appState.colorScheme = val == "dark" ? .dark : val == "light" ? .light : nil
+                    }
+                )) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+            }
+            .cardStyle()
         }
     }
 
