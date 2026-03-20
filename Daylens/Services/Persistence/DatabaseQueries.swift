@@ -223,14 +223,25 @@ extension AppDatabase {
 
             guard !aggRows.isEmpty else { return [] }
 
+            // Scope top-app query to the same date window returned by the first query
+            // so it doesn't perform a full-table scan on long-running installs.
+            let minDate = aggRows.compactMap { $0["date"] as Date? }.min()
+            let maxDate = aggRows.compactMap { $0["date"] as Date? }.max()
+
             // Top app per day (single pass — ORDER BY ensures highest first)
-            let topRows = try Row.fetchAll(db, sql: """
-                SELECT date, bundleID, appName, SUM(duration) AS total
-                FROM app_sessions
-                WHERE bundleID NOT IN (\(exclusion))
-                GROUP BY date, bundleID
-                ORDER BY date DESC, total DESC
-                """)
+            let topRows: [Row]
+            if let minDate, let maxDate {
+                topRows = try Row.fetchAll(db, sql: """
+                    SELECT date, bundleID, appName, SUM(duration) AS total
+                    FROM app_sessions
+                    WHERE bundleID NOT IN (\(exclusion))
+                      AND date >= ? AND date <= ?
+                    GROUP BY date, bundleID
+                    ORDER BY date DESC, total DESC
+                    """, arguments: [minDate, maxDate])
+            } else {
+                topRows = []
+            }
 
             var topApps: [Date: (bundleID: String, appName: String)] = [:]
             for row in topRows {

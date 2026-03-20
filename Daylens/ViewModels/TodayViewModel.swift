@@ -124,13 +124,17 @@ final class TodayViewModel {
                 isBrowser: existing.isBrowser
             )
         } else {
+            // Latch the initial live duration as the base so subsequent timer-tick calls
+            // always display (base + freshLiveDuration) rather than accumulating.
+            liveSessionBase[bundleID] = liveDuration
+            let isBrowser = Constants.knownBrowserBundleIDs.contains(bundleID)
             appSummaries.append(AppUsageSummary(
                 bundleID: bundleID,
                 appName: appName,
                 totalDuration: liveDuration,
                 sessionCount: 1,
                 category: category,
-                isBrowser: false
+                isBrowser: isBrowser
             ))
         }
     }

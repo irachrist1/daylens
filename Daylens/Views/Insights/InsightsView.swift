@@ -439,6 +439,13 @@ struct FloatingInputBar: View {
 
 struct MarkdownContent: View {
     let text: String
+    /// Pre-parsed blocks — computed once at init time, not on every render pass.
+    private let blocks: [MarkdownBlock]
+
+    init(text: String) {
+        self.text = text
+        self.blocks = Self.parse(text)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -530,10 +537,6 @@ struct MarkdownContent: View {
     }
 
     // MARK: - Parser
-
-    private var blocks: [MarkdownBlock] {
-        Self.parse(text)
-    }
 
     enum MarkdownBlock {
         case heading(level: Int, text: String)
