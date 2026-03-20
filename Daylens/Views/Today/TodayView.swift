@@ -7,17 +7,47 @@ struct TodayView: View {
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
+    /// Presentation-layer filter: strips OS-session processes that are not user-initiated apps.
+    /// Keeps the Today surface trustworthy without touching the tracking engine.
+    /// A deeper Codex pass will handle this at the source.
+    private var presentationSummaries: [AppUsageSummary] {
+        // Bundle IDs that are OS infrastructure, never user-initiated apps
+        let osNoiseBundleIDs: Set<String> = [
+            "com.apple.loginwindow",
+            "com.apple.dock",
+            "com.apple.systemuiserver",
+            "com.apple.notificationcenterui",
+            "com.apple.controlcenter",
+            "com.apple.screensaver.engine",
+            "com.apple.backgroundtaskmanagementagent",
+            "com.apple.usernotificationcenter",
+            "com.apple.windowserver-target",
+            "com.apple.accessibility.universalaccessd",
+        ]
+        return viewModel.appSummaries.filter { app in
+            let id = app.bundleID.lowercased()
+            let name = app.appName.lowercased()
+            guard !osNoiseBundleIDs.contains(id) else { return false }
+            // Catch noise that slips through with a name-based check
+            let noiseNames = ["loginwindow", "windowserver", "universalaccessd"]
+            guard !noiseNames.contains(name) else { return false }
+            // Hide very-brief system-category entries (background churn, < 30 s)
+            if app.category == .system && app.totalDuration < 30 { return false }
+            return true
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space16) {
-                if viewModel.appSummaries.isEmpty && !viewModel.isLoading {
+                if presentationSummaries.isEmpty && !viewModel.isLoading {
                     emptyState
                 } else {
                     // Hero banner
                     HeroSummaryCard(
                         greeting: viewModel.greeting,
                         totalActiveTime: viewModel.totalActiveTime,
-                        appCount: viewModel.appSummaries.count,
+                        appCount: presentationSummaries.count,
                         siteCount: viewModel.websiteSummaries.count
                     )
 
@@ -47,12 +77,12 @@ struct TodayView: View {
 
                     // Recent sessions + intelligence insight side by side
                     HStack(alignment: .top, spacing: DS.space16) {
-                        RecentSessionsCard(summaries: viewModel.appSummaries)
+                        RecentSessionsCard(summaries: presentationSummaries)
                             .frame(maxWidth: .infinity)
                         IntelligenceInsightCard(
                             focusScore: Int(viewModel.focusScoreRatio * 100),
                             topCategory: viewModel.categorySummaries.first?.category,
-                            totalSeconds: viewModel.appSummaries.reduce(0) { $0 + $1.totalDuration }
+                            totalSeconds: presentationSummaries.reduce(0) { $0 + $1.totalDuration }
                         )
                         .frame(width: 280)
                     }

@@ -86,8 +86,12 @@ struct FocusRingCard: View {
 
 // MARK: - Weekly Sparkline Card
 
-/// 7-day bar chart of focus scores. Each bar shows the day, score %, and is
-/// highlighted for today. Header shows a 7-day average for immediate context.
+/// 7-day focus score bar chart.
+/// Answers one question at a glance: how does today compare to the rest of the week?
+/// - Today's bar is highlighted with its % label; other bars are unlabelled.
+/// - The header shows the weekly average as a quiet reference number.
+/// - A single takeaway line ("Best day this week", "Above avg", "Below avg") gives
+///   the conclusion so the user never has to calculate it.
 struct WeeklySparklineCard: View {
     let days: [DailySummary]
 
@@ -97,16 +101,37 @@ struct WeeklySparklineCard: View {
         return Int(scored.reduce(0) { $0 + $1.focusScore } / Double(scored.count) * 100)
     }
 
+    private var todayScore: Int? {
+        guard let today = days.first(where: { Calendar.current.isDateInToday($0.date) }),
+              today.focusScore > 0 else { return nil }
+        return Int(today.focusScore * 100)
+    }
+
+    /// One restrained conclusion about today vs the week — nil when there is not enough data.
+    private var takeaway: (text: String, positive: Bool)? {
+        guard let pct = todayScore, avgScore > 0 else { return nil }
+        let maxPct = days.map { Int($0.focusScore * 100) }.max() ?? 0
+        if pct >= maxPct && pct > avgScore {
+            return ("Best day this week", true)
+        } else if pct > avgScore {
+            return ("Above weekly average", true)
+        } else if pct < avgScore {
+            return ("Below weekly average", false)
+        }
+        return nil
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.space12) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: DS.space10) {
+            // Header: title + quiet average reference
+            HStack(alignment: .firstTextBaseline, spacing: DS.space6) {
                 Text("This Week")
                     .sectionHeader()
                 Spacer()
                 if avgScore > 0 {
-                    Text("avg \(avgScore)% focus")
+                    Text("avg · \(avgScore)%")
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.65))
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                 }
             }
 
@@ -123,7 +148,19 @@ struct WeeklySparklineCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 88)
+                .frame(height: 72)
+
+                // Single takeaway — only shown when there is enough context
+                if let t = takeaway {
+                    HStack(spacing: DS.space4) {
+                        Image(systemName: t.positive ? "arrow.up.right" : "arrow.down.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(t.positive ? DS.tertiary : DS.onSurfaceVariant.opacity(0.45))
+                        Text(t.text)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.65))
+                    }
+                }
             }
         }
         .cardStyle()
@@ -138,38 +175,38 @@ private struct SparklineBar: View {
 
     private var isToday: Bool { Calendar.current.isDateInToday(date) }
     private var pct: Int { Int(score * 100) }
-    private var barHeight: CGFloat { score > 0 ? max(6, CGFloat(score) * 52) : 4 }
+    private var barHeight: CGFloat { score > 0 ? max(6, CGFloat(score) * 48) : 3 }
 
-    /// Unambiguous 2-char weekday: Su Mo Tu We Th Fr Sa
+    // Unambiguous 2-char weekday codes: Su Mo Tu We Th Fr Sa
     private var dayLabel: String {
         let labels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
-        let weekday = Calendar.current.component(.weekday, from: date) // 1=Sun … 7=Sat
+        let weekday = Calendar.current.component(.weekday, from: date)
         return labels[(weekday - 1) % 7]
     }
 
     var body: some View {
-        VStack(spacing: 3) {
-            // Score percentage — visible when data exists
-            Text(score > 0 ? "\(pct)%" : "–")
-                .font(.system(size: 8, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.45))
+        VStack(spacing: 2) {
+            // Today's % above the bar — reserved space on other days keeps bars aligned
+            Text(isToday && score > 0 ? "\(pct)%" : " ")
+                .font(.system(size: 8, weight: .bold).monospacedDigit())
+                .foregroundStyle(DS.primary)
                 .lineLimit(1)
 
-            // Bar grows from bottom
+            // Bar — grows from bottom via Spacer push
             VStack {
                 Spacer(minLength: 0)
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(isToday ? DS.primary : DS.primary.opacity(score > 0 ? 0.35 : 0.12))
+                RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    .fill(isToday ? DS.primary : DS.primary.opacity(score > 0 ? 0.28 : 0.08))
                     .frame(height: appeared ? barHeight : 2)
-                    .shadow(color: isToday ? DS.primary.opacity(0.45) : .clear, radius: 5)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.72).delay(0.04), value: appeared)
+                    .shadow(color: isToday ? DS.primary.opacity(0.4) : .clear, radius: 4)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.75).delay(0.04), value: appeared)
             }
             .frame(maxWidth: .infinity)
 
-            // Day label — dot for today so it can't be confused with a letter
+            // Day label — bullet for today (can't be confused with a letter)
             Text(isToday ? "●" : dayLabel)
-                .font(.system(size: isToday ? 7 : 9, weight: isToday ? .bold : .regular))
-                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.5))
+                .font(.system(size: isToday ? 6 : 9, weight: isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? DS.primary : DS.onSurfaceVariant.opacity(0.45))
         }
         .frame(maxWidth: .infinity)
         .help("\(dayLabel)\(isToday ? " (today)" : "") — \(pct)% focus")
