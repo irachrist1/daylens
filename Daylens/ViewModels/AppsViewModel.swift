@@ -99,7 +99,7 @@ final class AppsViewModel {
             summaries.append(AppUsageSummary(
                 bundleID: bundleID,
                 appName: appName,
-                totalDuration: duration,
+                totalDuration: liveDuration,
                 sessionCount: 1,
                 category: category,
                 isBrowser: false
