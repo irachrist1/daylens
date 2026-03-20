@@ -94,7 +94,7 @@ enum AIPromptBuilder {
             for (i, app) in primaryDay.appSummaries.prefix(10).enumerated() {
                 let semantic = app.semanticLabel.map { " | type: \($0)" } ?? ""
                 let confidence = app.classificationConfidence == .high ? "" : " | category confidence: \(app.classificationConfidence.rawValue.lowercased())"
-                let overrideNote = (app.classificationConfidence == .high && app.classification.rule == "user-override") ? " [user override]" : ""
+                let overrideNote = app.classification.rule == "user-override" ? " [user override]" : ""
                 context += "\(i + 1). \(app.appName) — \(app.formattedDuration) | category: \(app.category.rawValue)\(overrideNote)\(semantic) | sessions: \(app.sessionCount)\(confidence)\n"
             }
             context += "\n"
