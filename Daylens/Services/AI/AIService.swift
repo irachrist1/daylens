@@ -9,14 +9,16 @@ final class AIService {
     var isProcessing: Bool = false
     private let session: URLSession
 
+    private static let keychain = KeychainService(service: "com.daylens.app")
+
     private var apiKey: String? {
-        let key = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey)
+        let key = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
         return (key?.isEmpty == false) ? key : nil
     }
 
     init(session: URLSession = AIService.makeSession()) {
         self.session = session
-        Self.migrateKeychainToUserDefaultsIfNeeded()
+        Self.migrateUserDefaultsToKeychainIfNeeded()
 
         let storedModel = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicModel)
         if let storedModel,
@@ -25,8 +27,7 @@ final class AIService {
         } else {
             model = Constants.defaultAIModel
         }
-        let storedKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey)
-        isConfigured = storedKey?.isEmpty == false
+        isConfigured = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)?.isEmpty == false
     }
 
     private let baseURL = Constants.anthropicAPIBaseURL
@@ -35,14 +36,18 @@ final class AIService {
 
     @discardableResult
     func setAPIKey(_ key: String) -> Bool {
-        UserDefaults.standard.set(key, forKey: Constants.DefaultsKey.anthropicAPIKey)
-        isConfigured = true
-        return true
+        do {
+            try Self.keychain.setString(key, for: Constants.DefaultsKey.anthropicAPIKey)
+            isConfigured = true
+            return true
+        } catch {
+            return false
+        }
     }
 
     @discardableResult
     func removeAPIKey() -> Bool {
-        UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+        try? Self.keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
         isConfigured = false
         return true
     }
@@ -55,6 +60,21 @@ final class AIService {
 
     func currentAPIKey() -> String? {
         apiKey
+    }
+
+    /// One-time migration: move any key previously stored in UserDefaults into
+    /// the Keychain, then remove the UserDefaults entry. Runs only when the key
+    /// is absent from Keychain, so it's safe to call on every init.
+    private static func migrateUserDefaultsToKeychainIfNeeded() {
+        guard keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil else {
+            return  // Already in Keychain, nothing to do.
+        }
+        // Pull from UserDefaults (previous storage location).
+        if let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
+           !legacyKey.isEmpty {
+            try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
+            UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+        }
     }
 
     // MARK: - Generate Summary
@@ -190,25 +210,6 @@ final class AIService {
         }
     }
 
-    /// One-time migration: pull any previously stored key out of the keychain into UserDefaults.
-    /// After this runs once the keychain is no longer touched, eliminating the macOS
-    /// re-authorization prompt that fires on every ad-hoc rebuild.
-    private static func migrateKeychainToUserDefaultsIfNeeded() {
-        guard UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey) == nil else {
-            return  // Already in UserDefaults, nothing to do.
-        }
-        let keychain = KeychainService(service: "com.daylens.app")
-        let legacyKeychain = KeychainService(service: "com.daylens.api-keys")
-
-        let key = keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
-            ?? legacyKeychain.string(for: "anthropic-api-key")
-
-        if let key, !key.isEmpty {
-            UserDefaults.standard.set(key, forKey: Constants.DefaultsKey.anthropicAPIKey)
-            try? keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
-            try? legacyKeychain.removeString(for: "anthropic-api-key")
-        }
-    }
 
     private func sanitizedErrorMessage(from data: Data) -> String {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
