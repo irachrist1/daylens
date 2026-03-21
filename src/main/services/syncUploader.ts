@@ -3,10 +3,10 @@
  * Mirrors the macOS SyncUploader.swift for parity.
  */
 import { exportSnapshot } from './snapshotExporter'
-import { getDeviceId, getWorkspaceId } from './credentials'
+import { getDeviceId, getWorkspaceToken } from './credentials'
+import { getConvexSiteUrl, getSessionToken } from './workspaceLinker'
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
-const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL || ''
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -66,16 +66,16 @@ export function finalizePreviousDay(): void {
 async function syncNow(): Promise<void> {
   if (dirtyDays.size === 0) return
 
-  const siteUrl = CONVEX_SITE_URL
+  const siteUrl = getConvexSiteUrl()
   if (!siteUrl) {
     console.warn('[sync] CONVEX_SITE_URL not set — skipping')
     return
   }
 
-  const workspaceId = await getWorkspaceId()
+  const sessionToken = await getSessionToken()
   const deviceId = await getDeviceId()
 
-  if (!workspaceId || !deviceId) {
+  if (!sessionToken || !deviceId) {
     console.log('[sync] not linked — skipping')
     return
   }
@@ -88,10 +88,11 @@ async function syncNow(): Promise<void> {
 
       const res = await fetch(`${siteUrl}/uploadSnapshot`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({
-          workspaceId,
-          deviceId,
           localDate: dateStr,
           snapshot,
         }),

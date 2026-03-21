@@ -130,4 +130,11 @@ export const IPC = {
   TRACKING: {
     GET_LIVE: 'tracking:get-live',
   },
+  SYNC: {
+    GET_STATUS: 'sync:get-status',
+    LINK: 'sync:link',
+    CREATE_BROWSER_LINK: 'sync:create-browser-link',
+    DISCONNECT: 'sync:disconnect',
+    GET_MNEMONIC: 'sync:get-mnemonic',
+  },
 } as const

@@ -5,6 +5,7 @@ import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
+import { registerSyncHandlers } from './ipc/sync.handlers'
 import { initDb, closeDb } from './services/database'
 import { initSettings } from './services/settings'
 import { startTracking, stopTracking } from './services/tracking'
@@ -117,6 +118,7 @@ app.whenReady().then(async () => {
   registerFocusHandlers()
   registerAIHandlers()
   registerSettingsHandlers()
+  registerSyncHandlers()
 
   mainWindow = createWindow()
   createTray(mainWindow)

@@ -42,6 +42,13 @@ const api = {
   debug: {
     getInfo: () => ipcRenderer.invoke(IPC.DEBUG.GET_INFO),
   },
+  sync: {
+    getStatus: () => ipcRenderer.invoke(IPC.SYNC.GET_STATUS),
+    link: () => ipcRenderer.invoke(IPC.SYNC.LINK),
+    createBrowserLink: () => ipcRenderer.invoke(IPC.SYNC.CREATE_BROWSER_LINK),
+    disconnect: () => ipcRenderer.invoke(IPC.SYNC.DISCONNECT),
+    getMnemonic: () => ipcRenderer.invoke(IPC.SYNC.GET_MNEMONIC),
+  },
 }
 
 contextBridge.exposeInMainWorld('daylens', api)
