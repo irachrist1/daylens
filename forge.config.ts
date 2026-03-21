@@ -8,7 +8,7 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     // App name shown in taskbar and window title on Windows
-    name: 'Daylens',
+    name: 'DaylensWindows',
     executableName: 'daylens',
     icon: './build/icon',
     appCopyright: `Copyright © ${new Date().getFullYear()} Daylens`,
@@ -18,7 +18,7 @@ const config: ForgeConfig = {
   makers: [
     // Windows installer — only runs on Windows
     new MakerSquirrel({
-      name: 'Daylens',
+      name: 'DaylensWindows',
       setupExe: 'DaylensSetup.exe',
     }),
     // macOS zip for dev testing
