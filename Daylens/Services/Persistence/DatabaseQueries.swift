@@ -8,6 +8,7 @@ struct CombinedDayPayload {
     let websiteSummaries: [WebsiteUsageSummary]
     let browserSummaries: [BrowserUsageSummary]
     let dailySummary: DailySummary?
+    let categoryOverrides: [String: AppCategory]
 }
 
 /// Reusable database query methods.
@@ -184,9 +185,14 @@ extension AppDatabase {
                 timeline: sessions,
                 websiteSummaries: websiteSummaries,
                 browserSummaries: browserSummaries,
-                dailySummary: dailySummary
+                dailySummary: dailySummary,
+                categoryOverrides: overrides
             )
         }
+    }
+
+    func categoryOverrides() throws -> [String: AppCategory] {
+        try dbQueue.read { db in try categoryOverrides(in: db) }
     }
 
     private func categoryOverrides(in db: Database) throws -> [String: AppCategory] {
@@ -489,7 +495,7 @@ private struct DayBounds {
     init(for date: Date) {
         let dayStart = Calendar.current.startOfDay(for: date)
         self.start = dayStart
-        self.end = Calendar.current.date(byAdding: .day, value: 1, to: dayStart)!
+        self.end = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(86400)
     }
 }
 

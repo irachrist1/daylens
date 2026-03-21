@@ -78,8 +78,9 @@ final class AIService {
         // Check UserDefaults (previous intermediate storage location).
         if let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
            !legacyKey.isEmpty {
-            try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
-            UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+            if (try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)) != nil {
+                UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+            }
             return
         }
         // Check original Keychain service/account used before the intermediate release.

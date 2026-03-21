@@ -19,6 +19,7 @@ final class TodayViewModel {
     /// latest DB snapshot. This prevents injectLiveSession from accumulating
     /// duration on top of a previously-injected value each timer tick.
     private var liveSessionBase: [String: TimeInterval] = [:]
+    private var cachedOverrides: [String: AppCategory] = [:]
 
     func load(for date: Date) {
         isLoading = true
@@ -41,6 +42,7 @@ final class TodayViewModel {
                     )
                 }.value
                 liveSessionBase = [:]  // Also reset after the async load completes.
+                cachedOverrides = payload.day.categoryOverrides
                 appSummaries = payload.day.appSummaries
                 websiteSummaries = payload.day.websiteSummaries
                 browserSummaries = payload.day.browserSummaries
@@ -107,7 +109,7 @@ final class TodayViewModel {
         guard isViewingToday else { return }
         let liveDuration = Date().timeIntervalSince(startedAt)
         guard liveDuration >= 3 else { return }
-        let category = AppCategory.categorize(bundleID: bundleID, appName: appName)
+        let category = cachedOverrides[bundleID] ?? AppCategory.categorize(bundleID: bundleID, appName: appName)
 
         if let idx = appSummaries.firstIndex(where: { $0.bundleID == bundleID }) {
             let existing = appSummaries[idx]

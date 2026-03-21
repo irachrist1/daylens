@@ -13,6 +13,7 @@ final class AppsViewModel {
     /// Stable DB base duration per bundleID, latched on first injectLiveSession call
     /// and reset on every load(). Prevents timer-tick accumulation.
     private var liveSessionBase: [String: TimeInterval] = [:]
+    private var cachedOverrides: [String: AppCategory] = [:]
 
     func load(for date: Date) {
         isLoading = true
@@ -23,11 +24,13 @@ final class AppsViewModel {
             defer { isLoading = false }
 
             do {
-                let summaries = try await Task.detached(priority: .userInitiated) {
-                    try AppDatabase.shared.appUsageSummaries(for: date)
+                let (summaries, overrides) = try await Task.detached(priority: .userInitiated) {
+                    (try AppDatabase.shared.appUsageSummaries(for: date),
+                     (try? AppDatabase.shared.categoryOverrides()) ?? [:])
                 }.value
 
                 liveSessionBase = [:]
+                cachedOverrides = overrides
                 self.summaries = summaries
 
                 if let existingSelection = selectedApp,
@@ -81,7 +84,7 @@ final class AppsViewModel {
         guard Calendar.current.isDateInToday(date) else { return }
         let liveDuration = Date().timeIntervalSince(startedAt)
         guard liveDuration >= 3 else { return }
-        let category = AppCategory.categorize(bundleID: bundleID, appName: appName)
+        let category = cachedOverrides[bundleID] ?? AppCategory.categorize(bundleID: bundleID, appName: appName)
 
         if let idx = summaries.firstIndex(where: { $0.bundleID == bundleID }) {
             let existing = summaries[idx]

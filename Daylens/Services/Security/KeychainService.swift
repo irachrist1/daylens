@@ -51,9 +51,16 @@ struct KeychainService {
             insert[kSecValueData as String] = data
             insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let addStatus = SecItemAdd(insert as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.unexpectedStatus(addStatus)
+            if addStatus == errSecSuccess { return }
+            // Concurrent insert won the race — retry update
+            if addStatus == errSecDuplicateItem {
+                let retryStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+                guard retryStatus == errSecSuccess else {
+                    throw KeychainError.unexpectedStatus(retryStatus)
+                }
+                return
             }
+            throw KeychainError.unexpectedStatus(addStatus)
         default:
             throw KeychainError.unexpectedStatus(updateStatus)
         }
