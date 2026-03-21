@@ -13,13 +13,8 @@ struct WebCompanionSection: View {
     private let linker = WorkspaceLinker()
     private let uploader = SyncUploader.shared
 
-    /// The Convex site URL for the Daylens backend.
-    /// In production, replace with your deployed URL.
-    private static let convexSiteUrl = "https://decisive-aardvark-847.convex.site"
-
-    /// The web dashboard URL where users go to paste the link code.
-    /// Update this when you deploy to a custom domain.
-    private static let webDashboardUrl = "https://daylens-web.vercel.app"
+    private static let convexSiteUrl = SyncConfiguration.convexSiteUrl
+    private static let webDashboardUrl = SyncConfiguration.webDashboardUrl
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
