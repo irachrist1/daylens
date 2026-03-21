@@ -4,70 +4,198 @@ struct AppsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = AppsViewModel()
 
+    private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        ScrollView {
+        HStack(spacing: 0) {
+            appList
+                .frame(width: 360)
+                .background(DS.surfaceLow)
+
+            detailPane
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DS.surfaceContainer)
+        }
+        .onAppear {
+            viewModel.load(for: appState.selectedDate)
+            injectLiveSessionIfNeeded()
+        }
+        .onChange(of: appState.selectedDate) { _, date in
+            viewModel.load(for: date)
+        }
+        .onReceive(refreshTimer) { _ in
+            if Calendar.current.isDateInToday(appState.selectedDate) {
+                injectLiveSessionIfNeeded()
+            }
+        }
+    }
+
+    private func injectLiveSessionIfNeeded() {
+        if let info = appState.trackingCoordinator?.currentSessionInfo,
+           Calendar.current.isDateInToday(appState.selectedDate) {
+            viewModel.injectLiveSession(
+                bundleID: info.bundleID,
+                appName: info.appName,
+                startedAt: info.startedAt,
+                for: appState.selectedDate
+            )
+        }
+    }
+
+    private var appList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Apps")
+                .font(.system(size: 10, weight: .semibold))
+                .textCase(.uppercase)
+                .tracking(1.0)
+                .foregroundStyle(DS.onSurfaceVariant)
+                .padding(.horizontal, DS.space16)
+                .padding(.vertical, DS.space16)
+
             if viewModel.summaries.isEmpty && !viewModel.isLoading {
                 EmptyStateView(
                     icon: "square.grid.2x2",
                     title: "No App Data Yet",
                     description: "Keep using your Mac. App usage will appear here within a few minutes of tracking."
                 )
+                .padding(DS.space16)
             } else {
-                VStack(alignment: .leading, spacing: DS.space16) {
-                    let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DS.space8) {
+                        let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
 
-                    ForEach(viewModel.summaries) { app in
-                        AppRow(app: app, maxDuration: maxDuration)
+                        ForEach(viewModel.summaries) { app in
+                            AppRow(
+                                app: app,
+                                maxDuration: maxDuration,
+                                isSelected: viewModel.selectedApp?.bundleID == app.bundleID,
+                                onTap: { viewModel.selectApp(app, for: appState.selectedDate) },
+                                setCategory: { cat in
+                                    if let cat {
+                                        viewModel.setOverride(bundleID: app.bundleID, category: cat, for: appState.selectedDate)
+                                    } else {
+                                        viewModel.removeOverride(bundleID: app.bundleID, for: appState.selectedDate)
+                                    }
+                                }
+                            )
+                        }
                     }
+                    .padding(DS.space16)
                 }
-                .padding(DS.space24)
             }
         }
-        .onAppear { viewModel.load(for: appState.selectedDate) }
-        .onChange(of: appState.selectedDate) { _, date in viewModel.load(for: date) }
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let selectedApp = viewModel.selectedApp {
+            AppDetailView(
+                app: selectedApp,
+                date: appState.selectedDate,
+                sessions: viewModel.detailSessions,
+                websites: viewModel.detailWebsites,
+                isLoading: viewModel.isLoadingDetail,
+                setCategory: { cat in
+                    if let cat {
+                        viewModel.setOverride(bundleID: selectedApp.bundleID, category: cat, for: appState.selectedDate)
+                    } else {
+                        viewModel.removeOverride(bundleID: selectedApp.bundleID, for: appState.selectedDate)
+                    }
+                }
+            )
+        } else {
+            VStack(spacing: DS.space12) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 32))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.35))
+
+                Text("Select an app to inspect its sessions")
+                    .font(.body)
+                    .foregroundStyle(DS.onSurfaceVariant)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
 struct AppRow: View {
     let app: AppUsageSummary
     let maxDuration: TimeInterval
+    let isSelected: Bool
+    let onTap: () -> Void
+    var setCategory: ((AppCategory?) -> Void)? = nil
+
+    @State private var isHovered = false
+
+    private var classification: AppClassification { app.classification }
+    private var color: Color { DS.categoryColor(for: classification.category) }
 
     var body: some View {
-        HStack(spacing: DS.space12) {
-            AppIconView(bundleID: app.bundleID, size: 36)
+        Button(action: onTap) {
+            HStack(spacing: DS.space12) {
+                AppRealIcon(bundleID: app.bundleID, name: app.appName, category: classification.category, size: 36)
 
-            VStack(alignment: .leading, spacing: DS.space4) {
-                HStack {
-                    Text(app.appName)
-                        .font(.body.weight(.medium))
+                VStack(alignment: .leading, spacing: DS.space4) {
+                    HStack {
+                        Text(app.appName)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(DS.onSurface)
 
-                    Text(app.category.rawValue)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, DS.space4)
-                        .padding(.vertical, 1)
-                        .background(DS.categoryColor(for: app.category).opacity(0.15), in: Capsule())
+                        CategoryBadge(category: classification.category)
 
-                    Spacer()
+                        Spacer()
 
-                    Text(app.formattedDuration)
-                        .font(.body.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        Text(app.formattedDuration)
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(DS.onSurfaceVariant)
+                    }
+
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: DS.radiusSmall)
+                            .fill(color)
+                            .frame(width: geometry.size.width * min(app.totalDuration / maxDuration, 1.0), height: 3)
+                            .shadow(color: color.opacity(0.5), radius: 3, x: 0, y: 0)
+                    }
+                    .frame(height: 3)
+
+                    Text("\(app.sessionCount) session\(app.sessionCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
 
-                GeometryReader { geometry in
-                    RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(DS.categoryColor(for: app.category))
-                        .frame(width: geometry.size.width * min(app.totalDuration / maxDuration, 1.0), height: 4)
-                }
-                .frame(height: 4)
-
-                Text("\(app.sessionCount) session\(app.sessionCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.45))
             }
+            .padding(DS.space12)
+            .background(
+                RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous)
+                    .fill(rowBackground)
+            )
         }
-        .padding(DS.space12)
-        .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: DS.radiusMedium))
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .contextMenu {
+            Menu("Set Category") {
+                ForEach(AppCategory.allCases, id: \.self) { cat in
+                    Button {
+                        setCategory?(cat)
+                    } label: {
+                        Label(cat.rawValue, systemImage: cat.icon)
+                    }
+                }
+            }
+            Divider()
+            Button("Reset to Auto-detect") { setCategory?(nil) }
+        }
+    }
+
+    private var rowBackground: Color {
+        if isSelected {
+            return DS.primary.opacity(0.12)
+        }
+        return isHovered ? DS.surfaceHighest : DS.surfaceHigh
     }
 }

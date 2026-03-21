@@ -1,16 +1,25 @@
 import AppKit
 import Observation
+import OSLog
 import ServiceManagement
 
 /// Manages app permissions and login item registration.
 @Observable
 final class PermissionManager {
+    private let logger = Logger(subsystem: "com.daylens.app", category: "Permissions")
+
     var isAccessibilityGranted: Bool = false
     var isFullDiskAccessGranted: Bool = false
     var isLoginItemEnabled: Bool = false
 
+    private var pollTimer: Timer?
+
     init() {
         refreshPermissions()
+    }
+
+    deinit {
+        stopPolling()
     }
 
     func refreshPermissions() {
@@ -24,10 +33,26 @@ final class PermissionManager {
     func requestAccessibility() {
         let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
-        // Poll for change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.refreshPermissions()
+        startPolling()
+    }
+
+    /// Begin periodic polling for accessibility permission changes.
+    /// Used while the permission step is visible so the UI always converges.
+    func startPolling() {
+        guard pollTimer == nil else { return }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.refreshPermissions()
+            if self.isAccessibilityGranted {
+                self.stopPolling()
+            }
         }
+    }
+
+    /// Stop periodic polling. Call when leaving the permission screen or after granted.
+    func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Full Disk Access (for Safari history)
@@ -53,7 +78,7 @@ final class PermissionManager {
             try SMAppService.mainApp.register()
             isLoginItemEnabled = true
         } catch {
-            print("Failed to register login item: \(error)")
+            logger.error("Failed to register login item: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -62,7 +87,7 @@ final class PermissionManager {
             try SMAppService.mainApp.unregister()
             isLoginItemEnabled = false
         } catch {
-            print("Failed to unregister login item: \(error)")
+            logger.error("Failed to unregister login item: \(error.localizedDescription, privacy: .private)")
         }
     }
 

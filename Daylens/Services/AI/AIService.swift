@@ -1,51 +1,94 @@
 import Foundation
 import Observation
-import Security
 
 /// Anthropic Claude API client for AI-powered insights.
 @Observable
 final class AIService {
     private(set) var isConfigured: Bool
+    private(set) var model: String
     var isProcessing: Bool = false
+    private let session: URLSession
+
+    private static let keychain = KeychainService(service: "com.daylens.app")
 
     private var apiKey: String? {
-        KeychainHelper.read(
-            service: Constants.keychainServiceName,
-            account: Constants.anthropicAPIKeyAccount
-        )
+        let key = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)
+        return (key?.isEmpty == false) ? key : nil
     }
 
-    init() {
-        isConfigured = KeychainHelper.read(
-            service: Constants.keychainServiceName,
-            account: Constants.anthropicAPIKeyAccount
-        ) != nil
+    init(session: URLSession = AIService.makeSession()) {
+        self.session = session
+        Self.migrateUserDefaultsToKeychainIfNeeded()
+
+        let storedModel = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicModel)
+        if let storedModel,
+           Constants.anthropicModels.contains(where: { $0.id == storedModel }) {
+            model = storedModel
+        } else {
+            model = Constants.defaultAIModel
+        }
+        isConfigured = Self.keychain.string(for: Constants.DefaultsKey.anthropicAPIKey)?.isEmpty == false
     }
 
     private let baseURL = Constants.anthropicAPIBaseURL
-    private var model = Constants.defaultAIModel
 
     // MARK: - API Key Management
 
-    func setAPIKey(_ key: String) {
-        KeychainHelper.save(
-            service: Constants.keychainServiceName,
-            account: Constants.anthropicAPIKeyAccount,
-            data: key
-        )
-        isConfigured = true
+    @discardableResult
+    func setAPIKey(_ key: String) -> Bool {
+        do {
+            try Self.keychain.setString(key, for: Constants.DefaultsKey.anthropicAPIKey)
+            isConfigured = true
+            return true
+        } catch {
+            return false
+        }
     }
 
-    func removeAPIKey() {
-        KeychainHelper.delete(
-            service: Constants.keychainServiceName,
-            account: Constants.anthropicAPIKeyAccount
-        )
-        isConfigured = false
+    @discardableResult
+    func removeAPIKey() -> Bool {
+        do {
+            try Self.keychain.removeString(for: Constants.DefaultsKey.anthropicAPIKey)
+            isConfigured = false
+            return true
+        } catch {
+            return false
+        }
     }
 
     func setModel(_ model: String) {
+        guard Constants.anthropicModels.contains(where: { $0.id == model }) else { return }
+        UserDefaults.standard.set(model, forKey: Constants.DefaultsKey.anthropicModel)
         self.model = model
+    }
+
+    func currentAPIKey() -> String? {
+        apiKey
+    }
+
+    /// One-time migration: consolidates any key stored in previous locations into
+    /// the current Keychain slot. Checks three legacy locations in priority order:
+    ///   1. UserDefaults (intermediate release that stored key in plaintext)
+    ///   2. Original Keychain service "com.daylens.api-keys" / account "anthropic-api-key"
+    /// Runs only when the key is absent from the current Keychain slot.
+    private static func migrateUserDefaultsToKeychainIfNeeded() {
+        guard keychain.string(for: Constants.DefaultsKey.anthropicAPIKey) == nil else {
+            return  // Already in current Keychain slot, nothing to do.
+        }
+        // Check UserDefaults (previous intermediate storage location).
+        if let legacyKey = UserDefaults.standard.string(forKey: Constants.DefaultsKey.anthropicAPIKey),
+           !legacyKey.isEmpty {
+            if (try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)) != nil {
+                UserDefaults.standard.removeObject(forKey: Constants.DefaultsKey.anthropicAPIKey)
+            }
+            return
+        }
+        // Check original Keychain service/account used before the intermediate release.
+        let originalKeychain = KeychainService(service: "com.daylens.api-keys")
+        if let legacyKey = originalKeychain.string(for: "anthropic-api-key"), !legacyKey.isEmpty {
+            try? keychain.setString(legacyKey, for: Constants.DefaultsKey.anthropicAPIKey)
+            try? originalKeychain.removeString(for: "anthropic-api-key")
+        }
     }
 
     // MARK: - Generate Summary
@@ -97,15 +140,17 @@ final class AIService {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIError.networkError("Invalid response")
         }
 
         guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw AIError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
+            throw AIError.apiError(
+                statusCode: httpResponse.statusCode,
+                message: sanitizedErrorMessage(from: data)
+            )
         }
 
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -148,7 +193,7 @@ final class AIService {
                 request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
                 do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await self.session.bytes(for: request)
 
                     guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                         continuation.finish(throwing: AIError.networkError("Bad response"))
@@ -178,6 +223,39 @@ final class AIService {
             }
         }
     }
+
+
+    private func sanitizedErrorMessage(from data: Data) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let error = json["error"] as? [String: Any],
+               let message = error["message"] as? String {
+                return Self.truncatedErrorMessage(message)
+            }
+
+            if let message = json["message"] as? String {
+                return Self.truncatedErrorMessage(message)
+            }
+        }
+
+        return "Request failed."
+    }
+
+    private static func truncatedErrorMessage(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Request failed." }
+        return String(trimmed.prefix(160))
+    }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 60
+        configuration.waitsForConnectivity = true
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        return URLSession(configuration: configuration)
+    }
 }
 
 // MARK: - Errors
@@ -199,49 +277,5 @@ enum AIError: LocalizedError {
         case .parseError:
             return "Failed to parse AI response."
         }
-    }
-}
-
-// MARK: - Keychain Helper
-
-enum KeychainHelper {
-    static func save(service: String, account: String, data: String) {
-        let data = data.data(using: .utf8)!
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-
-        SecItemDelete(query as CFDictionary)
-
-        var newItem = query
-        newItem[kSecValueData as String] = data
-        SecItemAdd(newItem as CFDictionary, nil)
-    }
-
-    static func read(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func delete(service: String, account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
     }
 }

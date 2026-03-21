@@ -1,5 +1,10 @@
 import XCTest
+
+#if canImport(Daylens)
 @testable import Daylens
+#else
+@testable import DaylensCore
+#endif
 
 final class SessionNormalizerTests: XCTestCase {
 
@@ -41,9 +46,7 @@ final class SessionNormalizerTests: XCTestCase {
     // MARK: - Session Merge Rules
 
     func testMinimumUsageDuration() {
-        // A 3-second session should not meet the 5s threshold
-        XCTAssertTrue(3.0 < Constants.minimumUsageDuration)
-        XCTAssertTrue(5.0 >= Constants.minimumUsageDuration)
+        XCTAssertEqual(Constants.minimumUsageDuration, 3.0)
     }
 
     func testSessionMergeThreshold() {

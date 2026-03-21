@@ -1,27 +1,243 @@
 import Foundation
 import Observation
+import OSLog
+
+/// Lightweight snapshot for a day row in the History list.
+struct DaySummarySnapshot: Identifiable {
+    let date: Date
+    let totalActiveTime: TimeInterval
+    let appCount: Int
+    let topAppName: String?
+    let topAppBundleID: String?
+
+    var id: Date { date }
+
+    var formattedActiveTime: String {
+        let hours = Int(totalActiveTime) / 3600
+        let minutes = (Int(totalActiveTime) % 3600) / 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "<1m"
+    }
+
+    var isToday: Bool {
+        Calendar.current.isDateInToday(date)
+    }
+}
 
 @Observable
 final class HistoryViewModel {
-    var dailySummaries: [DailySummary] = []
-    var isLoading = false
+    private let logger = Logger(subsystem: "com.daylens.app", category: "HistoryViewModel")
+    var days: [DaySummarySnapshot] = []
+    var selectedDate: Date?
+    var isLoadingList: Bool = false
 
-    /// Last 14 days with placeholder zeros for days with no data
-    var chartData: [(date: Date, hours: Double)] {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        return (0..<14).reversed().map { offset in
-            let date = calendar.date(byAdding: .day, value: -offset, to: today)!
-            let summary = dailySummaries.first { calendar.isDate($0.date, inSameDayAs: date) }
-            return (date: date, hours: (summary?.totalActiveTime ?? 0) / 3600.0)
+    // Detail state for the selected day
+    var appSummaries: [AppUsageSummary] = []
+    var websiteSummaries: [WebsiteUsageSummary] = []
+    var browserSummaries: [BrowserUsageSummary] = []
+    var timeline: [AppSession] = []
+    var dailySummary: DailySummary?
+    var isLoadingDetail: Bool = false
+
+    // Summary state
+    var summaryText: String?
+    var isGeneratingSummary: Bool = false
+
+    private var database: AppDatabase? { AppDatabase.shared }
+
+    func loadDays() {
+        isLoadingList = true
+
+        Task { @MainActor in
+            defer { isLoadingList = false }
+            guard let db = database else { return }
+
+            do {
+                let snapshots = try await Task.detached(priority: .userInitiated) {
+                    // trackedDaySnapshots replaces trackedDays + per-day daySummarySnapshot calls
+                    // (was 120 individual appUsageSummaries reads for 60 days → 2 SQL queries)
+                    try db.trackedDaySnapshots(limit: 60)
+                }.value
+                days = snapshots
+
+                // Prefer today when it has tracked data; otherwise fall back to the most recent day.
+                if selectedDate == nil, let initialSelection = Self.preferredInitialDate(from: days) {
+                    selectedDate = initialSelection
+                    loadDetail(for: initialSelection)
+                }
+            } catch {
+                days = []
+            }
         }
     }
 
-    func load() {
-        isLoading = true
+    func selectDay(_ date: Date) {
+        guard selectedDate != date else { return }
+        selectedDate = date
+        loadDetail(for: date)
+    }
+
+    func loadDetail(for date: Date) {
+        isLoadingDetail = true
+
         Task { @MainActor in
-            dailySummaries = (try? AppDatabase.shared.recentDailySummaries(limit: 30)) ?? []
-            isLoading = false
+            defer { isLoadingDetail = false }
+            guard let db = database else { return }
+
+            do {
+                let payload = try await Task.detached(priority: .userInitiated) {
+                    try db.combinedDayPayload(for: date)
+                }.value
+
+                appSummaries = payload.appSummaries
+                websiteSummaries = payload.websiteSummaries
+                browserSummaries = payload.browserSummaries
+                timeline = payload.timeline
+                dailySummary = payload.dailySummary
+
+                // Load persisted summary or generate a local one
+                if let existing = payload.dailySummary?.aiSummary, !existing.isEmpty {
+                    summaryText = existing
+                } else if !payload.appSummaries.isEmpty {
+                    summaryText = LocalAnalyzer.generateLocalSummary(
+                        appSummaries: payload.appSummaries,
+                        websiteSummaries: payload.websiteSummaries,
+                        dailySummary: payload.dailySummary
+                    )
+                } else {
+                    summaryText = nil
+                }
+            } catch {
+                appSummaries = []
+                websiteSummaries = []
+                browserSummaries = []
+                timeline = []
+                dailySummary = nil
+                summaryText = nil
+            }
         }
+    }
+
+    // MARK: - Summary Generation
+
+    /// Whether this day's summary came from the AI (persisted) vs local generation.
+    var hasPersistentSummary: Bool {
+        dailySummary?.aiSummary?.isEmpty == false
+    }
+
+    /// Generate an AI-enhanced summary for the selected day, with local fallback.
+    func generateAISummary(aiService: AIService) {
+        guard let date = selectedDate, !appSummaries.isEmpty else { return }
+        guard !isGeneratingSummary else { return }
+        isGeneratingSummary = true
+
+        Task { @MainActor in
+            defer { isGeneratingSummary = false }
+
+            var generatedText: String
+            do {
+                let primaryPayload = try database?.aiContextPayload(for: date) ?? AIDayContextPayload(
+                    date: date,
+                    appSummaries: appSummaries,
+                    websiteSummaries: websiteSummaries,
+                    browserSummaries: browserSummaries,
+                    dailySummary: dailySummary
+                )
+                let previousDays = (try? database?.recentAIPayloads(endingAt: date, limit: 4)) ?? []
+                let context = AIPromptBuilder.buildContext(
+                    primaryDay: primaryPayload,
+                    previousDays: previousDays
+                )
+
+                if aiService.isConfigured {
+                    generatedText = try await aiService.generateDailySummary(context: context)
+                } else {
+                    generatedText = LocalAnalyzer.generateLocalSummary(
+                        appSummaries: appSummaries,
+                        websiteSummaries: websiteSummaries,
+                        dailySummary: dailySummary
+                    )
+                }
+            } catch {
+                generatedText = LocalAnalyzer.generateLocalSummary(
+                    appSummaries: appSummaries,
+                    websiteSummaries: websiteSummaries,
+                    dailySummary: dailySummary
+                )
+            }
+
+            // Persist via dedicated raw-SQL upsert — guaranteed to write
+            do {
+                try database?.saveAISummary(generatedText, for: date)
+            } catch {
+                // Save failed — summary will still show for this session
+                // but won't survive navigation. Log for debugging.
+                logger.error("Failed to persist AI summary: \(error.localizedDescription, privacy: .private)")
+            }
+
+            // Update in-memory state
+            summaryText = generatedText
+
+            // Reload the DailySummary row so hasPersistentSummary reflects the DB
+            if let db = database {
+                dailySummary = try? db.dailySummary(for: date)
+            }
+        }
+    }
+
+    // MARK: - Computed
+
+    var totalActiveTime: String {
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        if total > 0 {
+            let hours = Int(total) / 3600
+            let minutes = (Int(total) % 3600) / 60
+            if hours > 0 { return "\(hours)h \(minutes)m" }
+            if minutes > 0 { return "\(minutes)m" }
+            return "\(Int(total) % 60)s"
+        }
+        return dailySummary?.formattedActiveTime ?? "0m"
+    }
+
+    var categorySummaries: [CategoryUsageSummary] {
+        SemanticUsageRollups.categorySummaries(from: appSummaries)
+    }
+
+    var focusScoreText: String {
+        if let summary = dailySummary, summary.focusScore > 0 {
+            return "\(summary.focusScorePercent)%"
+        }
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard total > 0 else { return "—" }
+        let focusedTime = appSummaries
+            .filter { $0.classification.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        return "\(Int((focusedTime / total) * 100))%"
+    }
+
+    var focusLabel: String {
+        if let summary = dailySummary, summary.focusScore > 0 {
+            return summary.focusScoreLabel
+        }
+        let total = appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        guard total > 0 else { return "No data" }
+        let ratio = appSummaries
+            .filter { $0.classification.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration } / total
+        switch ratio {
+        case 0.8...: return "Deep Focus"
+        case 0.6..<0.8: return "Focused"
+        case 0.4..<0.6: return "Mixed"
+        case 0.2..<0.4: return "Scattered"
+        default: return "Fragmented"
+        }
+    }
+
+    static func preferredInitialDate(from days: [DaySummarySnapshot]) -> Date? {
+        if let today = days.first(where: \.isToday) {
+            return today.date
+        }
+        return days.first?.date
     }
 }

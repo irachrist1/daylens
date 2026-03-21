@@ -1,9 +1,12 @@
 import AppKit
 import Observation
+import OSLog
 
 /// Orchestrates all tracking services.
 @Observable
 final class TrackingCoordinator {
+    private let logger = Logger(subsystem: "com.daylens.app", category: "TrackingCoordinator")
+
     let activityTracker: ActivityTracker
     let idleDetector: IdleDetector
     let browserHistoryReader: BrowserHistoryReader
@@ -12,9 +15,23 @@ final class TrackingCoordinator {
     let permissionManager: PermissionManager
 
     var trackingState: TrackingState = .idle
+
+    /// Forwards the in-flight session from the underlying activity tracker.
+    var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
+        activityTracker.currentSessionInfo
+    }
     private var summaryTimer: Timer?
+    private var accessibilityTimer: Timer?
     private var debouncedSummaryWork: DispatchWorkItem?
     private let database: AppDatabase
+
+    // Current website visit state — we track one open "session" and finalize on domain change
+    private var currentWebDomain: String?
+    private var currentWebVisitStart: Date?
+    private var currentWebURL: String?
+    private var currentWebTitle: String?
+    private var currentWebBundleID: String?
+    private var currentWebConfidence: ActivityEvent.ConfidenceLevel = .medium
 
     init(database: AppDatabase, permissionManager: PermissionManager) {
         self.database = database
@@ -26,7 +43,18 @@ final class TrackingCoordinator {
         self.sessionNormalizer = SessionNormalizer(database: database)
     }
 
+    deinit {
+        stopTracking()
+    }
+
     func startTracking() {
+        guard trackingState != .tracking else {
+            logger.debug("startTracking ignored because tracking is already active")
+            return
+        }
+
+        logger.info("TrackingCoordinator starting tracking pipeline")
+
         // Start core app tracking (always available via NSWorkspace)
         activityTracker.start()
         trackingState = .tracking
@@ -40,9 +68,11 @@ final class TrackingCoordinator {
         idleDetector.start { [weak self] isIdle in
             guard let self else { return }
             if isIdle {
+                self.logger.info("Idle detected; pausing activity tracker")
                 // Pause active session tracking
                 self.activityTracker.stop()
             } else {
+                self.logger.info("Idle cleared; resuming activity tracker")
                 // Resume tracking
                 self.activityTracker.start()
             }
@@ -66,11 +96,18 @@ final class TrackingCoordinator {
     }
 
     func stopTracking() {
+        logger.info("TrackingCoordinator stopping tracking pipeline")
+        finalizeCurrentWebVisit()
         activityTracker.stop()
+        activityTracker.onSessionFinalized = nil
         idleDetector.stop()
         browserHistoryReader.stopPolling()
         summaryTimer?.invalidate()
         summaryTimer = nil
+        accessibilityTimer?.invalidate()
+        accessibilityTimer = nil
+        debouncedSummaryWork?.cancel()
+        debouncedSummaryWork = nil
         trackingState = .paused
     }
 
@@ -92,57 +129,111 @@ final class TrackingCoordinator {
     // MARK: - Accessibility-based enrichment
 
     private func startAccessibilityPolling() {
-        // When the frontmost app changes, read its window title
-        // This is already handled by NSWorkspace observer + AX enrichment
-        Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        accessibilityTimer?.invalidate()
+        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
 
             let title = self.accessibilityService.frontmostWindowTitle(for: frontApp)
             self.activityTracker.updateWindowTitle(title)
 
-            // If it's a browser, try to get the URL via AX API first, then AppleScript fallback
+            // If it's browser-capable (primary or hybrid), try URL extraction
             let bundleID = frontApp.bundleIdentifier ?? ""
-            if Constants.knownBrowserBundleIDs.contains(bundleID) {
-                var extractedURL: String?
-                var extractedTitle: String? = title
-                var source: ActivityEvent.EventSource = .accessibility
-                var confidence: ActivityEvent.ConfidenceLevel = .medium
+            guard BrowserRegistry.shared.isBrowserCapable(bundleID) else {
+                // Non-browser became frontmost — finalize any open website visit
+                self.finalizeCurrentWebVisit()
+                return
+            }
 
-                // Layer 1: Accessibility API
-                if let axURL = self.accessibilityService.browserAddressBarURL(for: frontApp) {
-                    extractedURL = axURL
-                    source = .accessibility
-                    confidence = .medium
-                }
+            var extractedURL: String?
+            var extractedTitle: String? = title
+            var confidence: ActivityEvent.ConfidenceLevel = .medium
 
-                // Layer 2: AppleScript fallback (higher confidence)
-                if extractedURL == nil, let tabInfo = AppleScriptURLProvider.activeTab(for: bundleID) {
-                    extractedURL = tabInfo.url
-                    extractedTitle = tabInfo.title ?? title
-                    source = .accessibility // categorized as local extraction
-                    confidence = .high
-                }
+            // Layer 1: Accessibility API
+            if let axURL = self.accessibilityService.browserAddressBarURL(for: frontApp) {
+                extractedURL = axURL
+                confidence = .medium
+            }
 
-                if let urlString = extractedURL,
-                   let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)"),
-                   let host = url.host {
-                    let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-                    let visit = WebsiteVisit(
-                        date: Calendar.current.startOfDay(for: Date()),
-                        domain: domain,
-                        fullURL: urlString,
-                        pageTitle: extractedTitle,
-                        browserBundleID: bundleID,
-                        startTime: Date(),
-                        endTime: Date().addingTimeInterval(3),
-                        duration: 3,
-                        confidence: confidence,
-                        source: source
-                    )
-                    try? self.database.insertWebsiteVisit(visit)
+            // Layer 2: AppleScript fallback (higher confidence)
+            if extractedURL == nil, let tabInfo = AppleScriptURLProvider.activeTab(for: bundleID) {
+                extractedURL = tabInfo.url
+                extractedTitle = tabInfo.title ?? title
+                confidence = .high
+            }
+
+            guard let urlString = extractedURL,
+                  let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)"),
+                  let host = url.host else {
+                // Couldn't extract a URL — finalize any open visit
+                self.finalizeCurrentWebVisit()
+                return
+            }
+
+            let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+
+            if domain == self.currentWebDomain, bundleID == self.currentWebBundleID {
+                // Same site in the same browser — update title if we got a better one
+                if let newTitle = extractedTitle, self.currentWebTitle == nil {
+                    self.currentWebTitle = newTitle
                 }
+                // Promote confidence if we got a higher-quality extraction
+                if confidence == .high {
+                    self.currentWebConfidence = .high
+                }
+            } else {
+                // Domain or browser changed — finalize previous, start new session
+                self.finalizeCurrentWebVisit()
+                self.currentWebDomain = domain
+                self.currentWebVisitStart = Date()
+                self.currentWebURL = urlString
+                self.currentWebTitle = extractedTitle
+                self.currentWebBundleID = bundleID
+                self.currentWebConfidence = confidence
             }
         }
+    }
+
+    /// Finalize the current website visit session and persist it.
+    private func finalizeCurrentWebVisit() {
+        guard let domain = currentWebDomain,
+              let startTime = currentWebVisitStart,
+              let bundleID = currentWebBundleID else {
+            clearWebVisitState()
+            return
+        }
+
+        let endTime = Date()
+        let duration = endTime.timeIntervalSince(startTime)
+
+        // Only persist if the visit lasted long enough
+        guard duration >= Constants.minimumWebsiteVisitDuration else {
+            clearWebVisitState()
+            return
+        }
+
+        let visit = WebsiteVisit(
+            date: Calendar.current.startOfDay(for: startTime),
+            domain: domain,
+            fullURL: currentWebURL,
+            pageTitle: currentWebTitle,
+            browserBundleID: bundleID,
+            startTime: startTime,
+            endTime: endTime,
+            duration: duration,
+            confidence: currentWebConfidence,
+            source: .accessibility
+        )
+        try? database.insertWebsiteVisit(visit)
+        clearWebVisitState()
+    }
+
+    private func clearWebVisitState() {
+        currentWebDomain = nil
+        currentWebVisitStart = nil
+        currentWebURL = nil
+        currentWebTitle = nil
+        currentWebBundleID = nil
+        currentWebConfidence = .medium
     }
 }

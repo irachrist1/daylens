@@ -1,98 +1,224 @@
 import SwiftUI
 
-/// The main Today dashboard — default landing screen.
+/// The main Today dashboard — bento-grid layout.
 struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
+    @State private var showAllSites = false
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
+    /// Bundle IDs and display names that are OS infrastructure, never user-initiated apps.
+    /// Shared by both presentationSummaries and presentationTimeline so they can't diverge.
+    private static let osNoiseBundleIDs: Set<String> = [
+        "com.apple.loginwindow",
+        "com.apple.dock",
+        "com.apple.systemuiserver",
+        "com.apple.notificationcenterui",
+        "com.apple.controlcenter",
+        "com.apple.screensaver.engine",
+        "com.apple.backgroundtaskmanagementagent",
+        "com.apple.usernotificationcenter",
+        "com.apple.windowserver-target",
+        "com.apple.accessibility.universalaccessd",
+    ]
+    private static let osNoiseNames: Set<String> = ["loginwindow", "windowserver", "universalaccessd"]
+
+    /// Presentation-layer filter: strips OS-session processes that are not user-initiated apps.
+    /// Keeps the Today surface trustworthy without touching the tracking engine.
+    private var presentationSummaries: [AppUsageSummary] {
+        viewModel.appSummaries.filter { app in
+            let id = app.bundleID.lowercased()
+            guard !Self.osNoiseBundleIDs.contains(id) else { return false }
+            guard !Self.osNoiseNames.contains(app.appName.lowercased()) else { return false }
+            if app.category == .system && app.totalDuration < 30 { return false }
+            return true
+        }
+    }
+
+    private var presentationTimeline: [AppSession] {
+        viewModel.timeline.filter { session in
+            guard !Self.osNoiseBundleIDs.contains(session.bundleID.lowercased()) else { return false }
+            guard !Self.osNoiseNames.contains(session.appName.lowercased()) else { return false }
+            return true
+        }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DS.space24) {
-                overviewCards
-                TimelineBand(sessions: viewModel.timeline)
-                AISummaryCard(
-                    summary: viewModel.aiSummary,
-                    isLoading: viewModel.isLoadingAI,
-                    onGenerate: {
-                        viewModel.generateAISummary(aiService: appState.aiService, for: appState.selectedDate)
+            VStack(alignment: .leading, spacing: DS.space16) {
+                if presentationSummaries.isEmpty && !viewModel.isLoading {
+                    emptyState
+                } else {
+                    // Hero banner
+                    HeroSummaryCard(
+                        greeting: viewModel.greeting,
+                        totalActiveTime: viewModel.totalActiveTime,
+                        appCount: presentationSummaries.count,
+                        siteCount: viewModel.websiteSummaries.count
+                    )
+
+                    // Focus ring + weekly sparkline side-by-side
+                    HStack(alignment: .top, spacing: DS.space16) {
+                        FocusRingCard(
+                            ratio: viewModel.focusScoreRatio,
+                            scoreText: viewModel.focusScoreText
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+
+                        WeeklySparklineCard(days: viewModel.weeklyScores)
+                            .frame(maxWidth: .infinity)
                     }
-                )
-                TopAppsCard(summaries: viewModel.appSummaries)
-                if !viewModel.websiteSummaries.isEmpty {
-                    topWebsitesSection
+
+                    // Time allocation stacked bar
+                    if !viewModel.categorySummaries.isEmpty {
+                        AllocationBarCard(categories: viewModel.categorySummaries)
+                    }
+
+                    // Activity timeline
+                    TimelineBand(
+                        sessions: presentationTimeline,
+                        categorySummaries: viewModel.categorySummaries
+                    )
+
+                    // Recent sessions + intelligence insight side by side
+                    HStack(alignment: .top, spacing: DS.space16) {
+                        RecentSessionsCard(summaries: presentationSummaries)
+                            .frame(maxWidth: .infinity)
+                        IntelligenceInsightCard(
+                            focusScore: Int(viewModel.focusScoreRatio * 100),
+                            topCategory: viewModel.categorySummaries.first?.category,
+                            totalSeconds: presentationSummaries.reduce(0) { $0 + $1.totalDuration }
+                        )
+                        .frame(width: 280)
+                    }
+
+                    // Top websites
+                    if !viewModel.websiteSummaries.isEmpty {
+                        topWebsitesSection
+                    }
                 }
             }
+            .frame(maxWidth: 980, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(DS.space24)
+            .id(appState.selectedDate)
+            .transition(.opacity)
         }
-        .onAppear { viewModel.load(for: appState.selectedDate) }
+        .animation(.easeOut(duration: 0.2), value: appState.selectedDate)
+        .onAppear {
+            viewModel.load(for: appState.selectedDate)
+            injectLiveSessionIfNeeded()
+        }
         .onChange(of: appState.selectedDate) { _, newDate in
             viewModel.load(for: newDate)
         }
         .onReceive(refreshTimer) { _ in
             if Calendar.current.isDateInToday(appState.selectedDate) {
                 viewModel.load(for: appState.selectedDate)
+                injectLiveSessionIfNeeded()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryOverrideChanged)) { _ in
+            viewModel.load(for: appState.selectedDate)
         }
     }
 
-    // MARK: - Overview Cards
+    // MARK: - Empty State
 
-    private var overviewCards: some View {
-        HStack(spacing: DS.space16) {
-            StatCard(
-                title: "Active Time",
-                value: viewModel.totalActiveTime,
-                icon: "clock.fill",
-                color: .blue
-            )
-            StatCard(
-                title: "Focus Score",
-                value: viewModel.focusScoreText,
-                subtitle: viewModel.focusLabel,
-                icon: "target",
-                color: .green
-            )
-            StatCard(
-                title: "Apps Used",
-                value: "\(viewModel.appSummaries.count)",
-                icon: "square.grid.2x2.fill",
-                color: .orange
-            )
-            StatCard(
-                title: "Sites Visited",
-                value: "\(viewModel.websiteSummaries.count)",
-                icon: "globe",
-                color: .purple
+    private var emptyState: some View {
+        VStack(spacing: DS.space16) {
+            Text(viewModel.greeting)
+                .font(.system(.title2, design: .default, weight: .semibold))
+                .foregroundStyle(DS.onSurface)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: DS.space12) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 44))
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.35))
+
+                Text("No activity tracked yet today.")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(DS.onSurface)
+
+                Text("Use your Mac for a few minutes and check back.")
+                    .font(.body)
+                    .foregroundStyle(DS.onSurfaceVariant)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, DS.space48)
+            .cardStyle()
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func injectLiveSessionIfNeeded() {
+        if let info = appState.trackingCoordinator?.currentSessionInfo,
+           Calendar.current.isDateInToday(appState.selectedDate) {
+            viewModel.injectLiveSession(
+                bundleID: info.bundleID,
+                appName: info.appName,
+                startedAt: info.startedAt
             )
         }
     }
 
     // MARK: - Top Websites
 
+    /// Sites with at least 1 minute of active time, sorted by duration desc.
+    private var longSites: [WebsiteUsageSummary] {
+        viewModel.websiteSummaries.filter { $0.totalDuration >= 60 }
+    }
+
     private var topWebsitesSection: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Top Websites")
-                .sectionHeader()
+            HStack {
+                Text("Top Websites")
+                    .sectionHeader()
+                Spacer()
+                if longSites.count > 5 {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { showAllSites.toggle() }
+                    } label: {
+                        Text(showAllSites ? "Show less" : "Show all \(longSites.count)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
-            let maxDuration = viewModel.websiteSummaries.first?.totalDuration ?? 1
+            if longSites.isEmpty {
+                Text("No sites with 1+ minutes of activity yet.")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
+            } else {
+                let displayed = showAllSites ? longSites : Array(longSites.prefix(5))
+                let maxDuration = longSites.first?.totalDuration ?? 1
 
-            ForEach(viewModel.websiteSummaries.prefix(5)) { site in
-                UsageBar(
-                    label: site.domain,
-                    duration: site.totalDuration,
-                    maxDuration: maxDuration,
-                    color: .purple,
-                    subtitle: site.topPageTitle
-                )
+                ForEach(displayed) { site in
+                    let domainCat = DomainIntelligence.classify(domain: site.domain)
+                    let color = domainCat.category != .uncategorized
+                        ? DS.categoryColor(for: domainCat.category)
+                        : DS.primary
+                    UsageBar(
+                        label: site.domain,
+                        duration: site.totalDuration,
+                        maxDuration: maxDuration,
+                        color: color,
+                        subtitle: site.topPageTitle
+                    )
+                }
             }
         }
         .cardStyle()
     }
 }
 
-// MARK: - Stat Card
+// MARK: - Stat Card (used in HistoryView)
 
 struct StatCard: View {
     let title: String
@@ -103,24 +229,29 @@ struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space8) {
-            HStack {
+            ZStack {
+                RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                    .fill(color.opacity(0.15))
+                    .frame(width: 30, height: 30)
                 Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(color)
-                Spacer()
             }
 
             Text(value)
-                .font(.title.weight(.semibold).monospacedDigit())
+                .font(.system(.title2, design: .default, weight: .bold).monospacedDigit())
+                .foregroundStyle(DS.onSurface)
+                .tracking(-0.5)
 
             VStack(alignment: .leading, spacing: DS.space2) {
                 Text(title)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
 
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
             }
         }

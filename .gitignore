@@ -31,3 +31,6 @@ Packages/
 # IDE
 .idea/
 .vscode/
+# AI agent instruction files — never commit, contain sensitive incident history
+CLAUDE.md
+AGENTS.md

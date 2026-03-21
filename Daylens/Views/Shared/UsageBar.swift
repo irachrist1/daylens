@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Horizontal usage bar showing relative time for an item.
+/// Progress line has a subtle outer glow — "self-illuminated" on dark.
 struct UsageBar: View {
     let label: String
     let duration: TimeInterval
@@ -26,32 +27,36 @@ struct UsageBar: View {
             HStack {
                 Text(label)
                     .font(.body)
+                    .foregroundStyle(DS.onSurface)
                     .lineLimit(1)
 
                 Spacer()
 
                 Text(formattedDuration)
                     .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
             }
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
+                    // Track
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(color.opacity(0.12))
-                        .frame(height: 6)
+                        .fill(color.opacity(0.10))
+                        .frame(height: 5)
 
+                    // Fill with subtle glow
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
                         .fill(color)
-                        .frame(width: geometry.size.width * fraction, height: 6)
+                        .frame(width: geometry.size.width * fraction, height: 5)
+                        .shadow(color: color.opacity(0.45), radius: 3, x: 0, y: 0)
                 }
             }
-            .frame(height: 6)
+            .frame(height: 5)
 
             if let subtitle {
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
             }
         }
         .padding(.vertical, DS.space4)

@@ -12,16 +12,16 @@ struct EmptyStateView: View {
         VStack(spacing: DS.space16) {
             Image(systemName: icon)
                 .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.35))
 
             VStack(spacing: DS.space4) {
                 Text(title)
                     .font(.title3.weight(.medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.onSurface)
 
                 Text(description)
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.onSurfaceVariant)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 300)
             }

@@ -1,22 +1,15 @@
 import SwiftUI
 
-/// Top toolbar bar with section title and date navigation.
+/// Top toolbar: date navigation only.
+/// Focus controls live exclusively in the sidebar (FocusSidebarButton).
 struct HeaderBar: View {
-    @Environment(AppState.self) private var appState
-
     var body: some View {
-        HStack(spacing: DS.space16) {
-            Text(appState.selectedSection.rawValue)
-                .font(.title2.weight(.semibold))
-
+        HStack {
+            DateNavigator()
             Spacer()
-
-            if appState.selectedSection.showsDateNavigation {
-                DateNavigator()
-            }
         }
         .padding(.horizontal, DS.space20)
         .padding(.vertical, DS.space12)
-        .background(.bar)
+        .background(DS.surfaceLow)
     }
 }

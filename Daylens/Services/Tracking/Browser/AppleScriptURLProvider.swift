@@ -29,9 +29,16 @@ enum AppleScriptURLProvider {
         case "company.thebrowser.Browser": // Arc
             return arcScript()
 
+        case "company.thebrowser.dia": // Dia (Chromium-based hybrid, has sdef)
+            return diaScript()
+
+        case "ai.perplexity.comet": // Comet (Chromium-based)
+            return cometScript()
+
         case "com.apple.Safari":
             return safariScript()
 
+        // Atlas (com.openai.atlas) — no sdef, AppleScript not supported
         default:
             return nil
         }
@@ -52,6 +59,30 @@ enum AppleScriptURLProvider {
     private static func arcScript() -> String {
         """
         tell application "Arc"
+            if (count of windows) > 0 then
+                set theURL to URL of active tab of front window
+                set theTitle to title of active tab of front window
+                return theURL & "|||" & theTitle
+            end if
+        end tell
+        """
+    }
+
+    private static func diaScript() -> String {
+        """
+        tell application "Dia"
+            if (count of windows) > 0 then
+                set theURL to URL of active tab of front window
+                set theTitle to title of active tab of front window
+                return theURL & "|||" & theTitle
+            end if
+        end tell
+        """
+    }
+
+    private static func cometScript() -> String {
+        """
+        tell application "Comet"
             if (count of windows) > 0 then
                 set theURL to URL of active tab of front window
                 set theTitle to title of active tab of front window
@@ -109,6 +140,7 @@ enum AppleScriptURLProvider {
         case "com.vivaldi.Vivaldi": return "Vivaldi"
         case "com.operasoftware.Opera": return "Opera"
         case "org.chromium.Chromium": return "Chromium"
+        case "ai.perplexity.comet": return "Comet"
         default: return "Google Chrome"
         }
     }

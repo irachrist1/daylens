@@ -3,10 +3,16 @@ import SwiftUI
 /// Horizontal activity timeline showing the day's sessions as colored segments.
 struct TimelineBand: View {
     let sessions: [AppSession]
+    let categorySummaries: [CategoryUsageSummary]
 
-    private let dayStartHour = 6  // Start at 6 AM
-    private let dayEndHour = 24   // End at midnight
+    private let dayStartHour = 6
+    private let dayEndHour = 24
     private let bandHeight: CGFloat = 40
+
+    init(sessions: [AppSession], categorySummaries: [CategoryUsageSummary] = []) {
+        self.sessions = sessions
+        self.categorySummaries = categorySummaries
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space8) {
@@ -18,20 +24,20 @@ struct TimelineBand: View {
                 let totalHours = CGFloat(dayEndHour - dayStartHour)
 
                 ZStack(alignment: .leading) {
-                    // Background
+                    // Track background
                     RoundedRectangle(cornerRadius: DS.radiusSmall)
-                        .fill(Color(.controlBackgroundColor))
+                        .fill(DS.surfaceHighest)
 
-                    // Hour markers
+                    // Hour markers — ghost lines at low opacity
                     ForEach(dayStartHour..<dayEndHour, id: \.self) { hour in
                         let x = CGFloat(hour - dayStartHour) / totalHours * totalWidth
                         Rectangle()
-                            .fill(Color(.separatorColor))
+                            .fill(Color.white.opacity(0.05))
                             .frame(width: 0.5)
                             .offset(x: x)
                     }
 
-                    // Session segments
+                    // Session segments with subtle glow
                     ForEach(sessions) { session in
                         sessionSegment(session, totalWidth: totalWidth, totalHours: totalHours)
                     }
@@ -44,13 +50,25 @@ struct TimelineBand: View {
                     ForEach([6, 9, 12, 15, 18, 21], id: \.self) { hour in
                         Text(hourLabel(hour))
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .offset(y: bandHeight + 4)
             }
             .frame(height: bandHeight + 20)
+
+            if !categorySummaries.isEmpty {
+                legendRow
+            }
+
+            if !sessions.isEmpty {
+                Divider()
+                    .background(DS.surfaceHighest.opacity(0.5))
+                    .padding(.vertical, DS.space4)
+
+                sessionList
+            }
         }
         .cardStyle()
     }
@@ -68,16 +86,117 @@ struct TimelineBand: View {
         let x = (clampedStart - CGFloat(dayStartHour)) / totalHours * totalWidth
         let width = max(2, (clampedEnd - clampedStart) / totalHours * totalWidth)
 
+        let classification = session.classification
+        var helpLines = ["\(session.appName) — \(session.formattedDuration)"]
+        helpLines.append("Category: \(classification.category.rawValue)")
+        if let semanticLabel = classification.semanticLabel {
+            helpLines.append("Type: \(semanticLabel)")
+        }
+        if !classification.confidence.isHighConfidence {
+            helpLines.append("Category confidence: \(classification.confidence.rawValue)")
+        }
+
+        let color = DS.categoryColor(for: classification.category)
         return RoundedRectangle(cornerRadius: 2)
-            .fill(DS.categoryColor(for: session.category).opacity(0.8))
+            .fill(color.opacity(0.85))
             .frame(width: width, height: bandHeight - 8)
+            .shadow(color: color.opacity(0.5), radius: 2, x: 0, y: 0)
             .offset(x: x, y: 4)
-            .help("\(session.appName) — \(session.formattedDuration)")
+            .help(helpLines.joined(separator: "\n"))
     }
 
     private func hourLabel(_ hour: Int) -> String {
         if hour == 12 { return "12p" }
         if hour > 12 { return "\(hour - 12)p" }
         return "\(hour)a"
+    }
+
+    private var legendRow: some View {
+        VStack(alignment: .leading, spacing: DS.space6) {
+            Text("Colors reflect activity type")
+                .font(.caption)
+                .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
+
+            FlowLegend(categories: categorySummaries)
+        }
+    }
+
+    private var sessionList: some View {
+        VStack(spacing: DS.space8) {
+            ForEach(sessions.prefix(8)) { session in
+                HStack(spacing: DS.space12) {
+                    AppRealIcon(bundleID: session.bundleID, name: session.appName, category: session.classification.category, size: 32)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: DS.space6) {
+                            Text(session.appName)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(DS.onSurface)
+                                .lineLimit(1)
+                            CategoryBadge(category: session.classification.category)
+                        }
+                        Text(sessionTypeLabel(for: session.classification.category))
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(0.5)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.7))
+                    }
+
+                    Spacer()
+
+                    Text(session.formattedDuration)
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(DS.onSurfaceVariant)
+                }
+            }
+        }
+    }
+
+    private func sessionTypeLabel(for category: AppCategory) -> String {
+        switch category {
+        case .development: return "DEEP FOCUS"
+        case .meetings: return "HIGH ENERGY"
+        case .communication: return "CONTEXT SWITCHING"
+        default: return "ACTIVE SESSION"
+        }
+    }
+}
+
+private struct FlowLegend: View {
+    let categories: [CategoryUsageSummary]
+
+    var body: some View {
+        HStack(spacing: DS.space8) {
+            ForEach(Array(categories.prefix(5))) { summary in
+                let color = DS.categoryColor(for: summary.category)
+                HStack(spacing: DS.space4) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                        .shadow(color: color.opacity(0.6), radius: 2)
+
+                    Text(summary.category.legendLabel)
+                        .font(.caption2)
+                        .foregroundStyle(DS.onSurfaceVariant)
+                }
+                .padding(.horizontal, DS.space8)
+                .padding(.vertical, DS.space4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(color.opacity(0.12))
+                )
+                .help(legendHelp(for: summary))
+            }
+        }
+    }
+
+    private func legendHelp(for summary: CategoryUsageSummary) -> String {
+        var lines = [
+            "\(summary.category.rawValue) — \(summary.formattedDuration)",
+            "Top apps: \(summary.topApps.joined(separator: ", "))"
+        ]
+        if summary.containsLowConfidenceApps {
+            lines.append("Includes some low-confidence categorizations")
+        }
+        return lines.joined(separator: "\n")
     }
 }

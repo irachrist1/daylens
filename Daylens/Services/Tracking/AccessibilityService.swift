@@ -11,10 +11,13 @@ final class AccessibilityService {
 
         var focusedWindow: AnyObject?
         let result = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        guard result == .success else { return nil }
+        guard result == .success,
+              let focusedWindow,
+              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else { return nil }
+        let windowElement = unsafeBitCast(focusedWindow, to: AXUIElement.self)
 
         var titleValue: AnyObject?
-        let titleResult = AXUIElementCopyAttributeValue(focusedWindow as! AXUIElement, kAXTitleAttribute as CFString, &titleValue)
+        let titleResult = AXUIElementCopyAttributeValue(windowElement, kAXTitleAttribute as CFString, &titleValue)
         guard titleResult == .success, let title = titleValue as? String else { return nil }
 
         return title
@@ -27,12 +30,14 @@ final class AccessibilityService {
         let appElement = AXUIElementCreateApplication(pid)
 
         var focusedWindow: AnyObject?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success else {
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+              let focusedWindow,
+              CFGetTypeID(focusedWindow) == AXUIElementGetTypeID() else {
             return nil
         }
 
         // Try to find a text field with the URL role
-        let windowElement = focusedWindow as! AXUIElement
+        let windowElement = unsafeBitCast(focusedWindow, to: AXUIElement.self)
         return findURLInElement(windowElement, depth: 0, maxDepth: 5)
     }
 
@@ -40,7 +45,7 @@ final class AccessibilityService {
     /// Most browsers format titles as "Page Title - Browser Name" or "Page Title — Domain".
     func extractDomainFromWindowTitle(_ title: String, browserBundleID: String) -> (domain: String?, pageTitle: String?) {
         // Remove browser suffix
-        let browserSuffixes = ["- Google Chrome", "- Arc", "- Brave", "- Microsoft Edge", "- Safari", "— Mozilla Firefox", "- Opera", "- Vivaldi"]
+        let browserSuffixes = ["- Google Chrome", "- Arc", "- Brave", "- Microsoft Edge", "- Safari", "— Mozilla Firefox", "- Opera", "- Vivaldi", "- Zen Browser", "— Zen Browser", "- Comet", "- Dia"]
         var cleanTitle = title
         for suffix in browserSuffixes {
             if cleanTitle.hasSuffix(suffix) {
