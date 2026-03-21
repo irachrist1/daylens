@@ -2,6 +2,12 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.4] - 2026-03-21
+
+### Fixed
+- Stage Manager icon now displays correctly — rebuilt icon set with correct DPI metadata and pre-built .icns resource
+- Menu bar icon now matches the Dock icon instead of showing a generic sun symbol
+
 ## [1.0.3] - 2026-03-21
 
 ### Fixed

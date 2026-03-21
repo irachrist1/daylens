@@ -64,8 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "sun.max.fill", accessibilityDescription: "Daylens")
-            button.image?.size = NSSize(width: 16, height: 16)
+            let icon = NSImage(named: NSImage.applicationIconName)
+            icon?.size = NSSize(width: 18, height: 18)
+            button.image = icon
+            button.imageScaling = .scaleProportionallyDown
         }
 
         rebuildMenu()

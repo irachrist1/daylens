@@ -34,7 +34,7 @@ Then open Daylens from your Applications folder or Launchpad.
 
 ### macOS — Direct download
 
-1. Download [Daylens-1.0.3.dmg](https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.3.dmg) from GitHub Releases.
+1. Download [Daylens-1.0.4.dmg](https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.4.dmg) from GitHub Releases.
 2. Drag `Daylens.app` into `Applications`.
 3. On first launch, go to **System Settings → Privacy & Security → Open Anyway**.
 
