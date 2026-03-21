@@ -34,6 +34,8 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
+        DAYLENS_CONVEX_SITE_URL: "https://decisive-aardvark-847.convex.site"
+        DAYLENS_WEB_DASHBOARD_URL: "https://daylens-web.vercel.app"
     dependencies:
       - package: GRDB
       - sdk: Security.framework
