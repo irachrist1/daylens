@@ -48,6 +48,24 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 3,
+    description: 'Deduplicate app_sessions and add unique index for idempotent inserts',
+    up: () => {
+      const db = getDb()
+      // Remove any exact duplicates (same bundle_id + start_time) keeping the lowest rowid
+      db.exec(`
+        DELETE FROM app_sessions
+        WHERE rowid NOT IN (
+          SELECT MIN(rowid) FROM app_sessions GROUP BY bundle_id, start_time
+        )
+      `)
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_dedup
+        ON app_sessions (bundle_id, start_time)
+      `)
+    },
+  },
 ]
 
 export function runMigrations(): void {

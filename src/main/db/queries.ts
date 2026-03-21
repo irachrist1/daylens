@@ -72,7 +72,7 @@ export function insertAppSession(
   session: Omit<AppSession, 'id'>,
 ): number {
   const stmt = db.prepare(`
-    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec, category, is_focused)
+    INSERT OR IGNORE INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec, category, is_focused)
     VALUES (@bundleId, @appName, @startTime, @endTime, @durationSeconds, @category, @isFocused)
   `)
   const result = stmt.run({
