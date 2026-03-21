@@ -2,25 +2,28 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-111111.svg?style=flat-square)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-111111.svg?style=flat-square)](https://support.apple.com/macos)
+[![Windows 10+](https://img.shields.io/badge/Windows-10%2B-111111.svg?style=flat-square)](https://github.com/irachrist1/daylens-windows/releases)
 [![Download](https://img.shields.io/badge/Download-GitHub%20Releases-111111?style=for-the-badge)](https://github.com/irachrist1/daylens/releases)
 
-Your personal activity analyst for macOS.
+Your personal activity analyst for macOS and Windows.
 
 <!-- TODO: Add a real screenshot here. Recommended: take a screenshot of the Today view at 1440×900, save as website/assets/screenshot-today.png and replace this line with: ![Daylens Today dashboard](website/assets/screenshot-today.png) -->
 
-Daylens is a native macOS app that watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. It is local-first, privacy-forward, and designed to feel like a calm product companion rather than a dashboard full of noise.
+Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. It is local-first, privacy-forward, and designed to feel like a calm product companion rather than a dashboard full of noise.
+
+- **macOS**: Native SwiftUI app (macOS 14 Sonoma+)
+- **Windows**: Electron + React app (Windows 10+)
 
 ## Why Daylens
 
 - Local-first tracking for apps, windows, and website activity
 - AI-powered daily summaries and chat grounded in your actual usage history
-- Native SwiftUI interface built for macOS 14 Sonoma and later
 - Multi-browser support for Chrome, Arc, Safari, Brave, Edge, and Firefox
 - Focus scoring, history review, category overrides, and JSON export
 
 ## Install
 
-### Homebrew (recommended)
+### macOS — Homebrew (recommended)
 
 ```sh
 brew tap irachrist1/daylens
@@ -29,7 +32,7 @@ brew install --cask daylens
 
 Then open Daylens from your Applications folder or Launchpad.
 
-### Direct download
+### macOS — Direct download
 
 1. Download [Daylens-1.0.3.dmg](https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.3.dmg) from GitHub Releases.
 2. Drag `Daylens.app` into `Applications`.
@@ -37,12 +40,24 @@ Then open Daylens from your Applications folder or Launchpad.
 
 > **Note:** The direct download requires a one-time approval step because the app is distributed without a paid Apple Developer certificate. Homebrew handles this automatically.
 
+### Windows — Installer
+
+1. Download the latest `Daylens-*-Setup.exe` from [Windows Releases](https://github.com/irachrist1/daylens-windows/releases/latest).
+2. Run the installer and follow the prompts.
+3. Launch Daylens from the Start menu.
+
+A portable `.exe` (no install required) is also available on the releases page.
+
 ## System Requirements
 
+### macOS
 - macOS 14 Sonoma or later
 - Accessibility permission for active app and window tracking
 - Full Disk Access for browser history import from local browser databases
-- Internet connection only when you want cloud AI summaries or chat
+
+### Windows
+- Windows 10 or later (64-bit)
+- Internet connection only when you want AI summaries or chat (Claude API key)
 
 ## Permissions
 

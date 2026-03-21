@@ -189,8 +189,8 @@
           </div>
           <div class="step reveal">
             <span class="step-num">3</span>
-            <h3>Use your Mac normally</h3>
-            <p>Daylens runs quietly in the menu bar. No manual tracking, no timers to start or stop.</p>
+            <h3>Use your computer normally</h3>
+            <p>Daylens runs quietly in the background. No manual tracking, no timers to start or stop.</p>
           </div>
           <div class="step reveal">
             <span class="step-num">4</span>
@@ -255,16 +255,42 @@
       </div>
       <div class="download-cta-content reveal">
         <h2>Start understanding your day.</h2>
-        <div class="terminal-block">
-          <div class="terminal-line"><span class="prompt">$ </span>brew tap irachrist1/daylens</div>
-          <div class="terminal-line"><span class="prompt">$ </span>brew install --cask daylens</div>
-          <button class="copy-btn" data-copy="brew tap irachrist1/daylens && brew install --cask daylens">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
-            Copy
-          </button>
+        <div class="download-platforms">
+          <div class="download-platform">
+            <h3 class="download-platform-label">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83"/><path d="M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11"/></svg>
+              macOS
+            </h3>
+            <div class="terminal-block">
+              <div class="terminal-line"><span class="prompt">$ </span>brew tap irachrist1/daylens</div>
+              <div class="terminal-line"><span class="prompt">$ </span>brew install --cask daylens</div>
+              <button class="copy-btn" data-copy="brew tap irachrist1/daylens && brew install --cask daylens">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
+                Copy
+              </button>
+            </div>
+            <p class="download-alt">Or install with curl:</p>
+            <div class="terminal-block">
+              <div class="terminal-line"><span class="prompt">$ </span>curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh</div>
+              <button class="copy-btn" data-copy="curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
+                Copy
+              </button>
+            </div>
+          </div>
+          <div class="download-platform">
+            <h3 class="download-platform-label">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M3 5.548l7.206-0.994v6.953H3V5.548zm0 12.904l7.206 0.994v-6.953H3v5.959zm8.009 1.107L22 21v-8.507h-10.991v8.066zm0-14.118v8.066H22V3L11.009 5.441z"/></svg>
+              Windows
+            </h3>
+            <a class="btn-windows btn-windows-lg" href="https://github.com/irachrist1/daylens-windows/releases/latest">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M3 5.548l7.206-0.994v6.953H3V5.548zm0 12.904l7.206 0.994v-6.953H3v5.959zm8.009 1.107L22 21v-8.507h-10.991v8.066zm0-14.118v8.066H22V3L11.009 5.441z"/></svg>
+              Download installer
+            </a>
+            <p class="download-alt"><a href="https://github.com/irachrist1/daylens-windows/releases/latest">Portable version also available</a></p>
+          </div>
         </div>
-        <p class="download-alt">Or: <a href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.3.dmg">Direct DMG download →</a></p>
-        <p class="download-fine">macOS 14+ · No account required · Free forever</p>
+        <p class="download-fine">macOS 14+ · Windows 10+ · No account required · Free forever</p>
       </div>
     </section>
 
@@ -273,7 +299,7 @@
       <div class="footer-inner">
         <div class="footer-left">
           <span class="footer-brand">Daylens</span>
-          <span class="footer-tagline">Local-first activity analyst for macOS</span>
+          <span class="footer-tagline">Local-first activity analyst for macOS and Windows</span>
         </div>
         <div class="footer-links">
           <a href="https://github.com/irachrist1/daylens">GitHub</a>

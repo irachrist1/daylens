@@ -239,6 +239,73 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   transform: translateY(-1px);
 }
 
+/* Platform icons in buttons */
+.platform-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.btn-primary .platform-icon { opacity: 0.6; }
+
+/* Windows download button */
+.btn-windows {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-btn);
+  background: transparent;
+  transition: border-color 200ms ease, background 200ms ease, transform 200ms ease;
+}
+.btn-windows:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-accent-dim);
+  transform: translateY(-1px);
+}
+.btn-windows .platform-icon { opacity: 0.9; }
+
+.btn-windows-lg {
+  padding: 16px 28px;
+  font-size: 0.9375rem;
+  justify-content: center;
+  width: 100%;
+}
+
+/* Download platforms (bottom CTA) */
+.download-platforms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  max-width: 700px;
+  margin: 0 auto 24px;
+  text-align: left;
+}
+.download-platform-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 16px;
+}
+.download-platform-label svg {
+  width: 18px;
+  height: 18px;
+  color: var(--color-accent);
+}
+.download-platform .terminal-block {
+  margin-bottom: 12px;
+}
+.download-platform .download-alt {
+  font-size: 0.8125rem;
+}
+
 .hero-meta {
   font-size: 0.8125rem;
   color: var(--color-text-muted);
@@ -767,6 +834,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   }
   .window-mockup { transform: none; animation: none; }
   .hero { padding: 100px 20px 60px; }
+  .download-platforms { grid-template-columns: 1fr; gap: 24px; }
 }
 
 @media (max-width: 480px) {
