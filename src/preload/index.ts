@@ -24,6 +24,8 @@ const api = {
       ipcRenderer.invoke('db:clear-category-override', bundleId),
     getCategoryOverrides: (): Promise<Record<string, AppCategory>> =>
       ipcRenderer.invoke('db:get-category-overrides'),
+    getAppIcon: (exePath: string): Promise<string | null> =>
+      ipcRenderer.invoke('app:get-icon', exePath),
   },
   focus: {
     start: (label?: string) => ipcRenderer.invoke(IPC.FOCUS.START, label ?? null),

@@ -4,7 +4,7 @@ import { formatDuration, formatTime, formatFullDate, percentOf, todayString } fr
 import { catColor, formatCategory } from '../lib/category'
 import type { AppSession, AppCategory } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 function isPresentationNoise(session: AppSession): boolean {
   return (session.category === 'system' || session.category === 'uncategorized') &&
@@ -201,8 +201,11 @@ function WeekView({ onSelectDay }: { onSelectDay: (date: string) => void }) {
             radius={[4, 4, 0, 0]}
             onClick={(entry: { dateStr: string }) => onSelectDay(entry.dateStr)}
             style={{ cursor: 'pointer' }}
-            fill="var(--color-accent)"
-          />
+          >
+            {chartData.map((entry) => (
+              <Cell key={entry.dateStr} fill={entry.fill} />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
       <p className="text-[12px] text-[var(--color-text-secondary)] mt-3">

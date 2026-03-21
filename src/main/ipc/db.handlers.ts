@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, app } from 'electron'
 import {
   getAppSummariesForRange,
   getSessionsForRange,
@@ -93,4 +93,35 @@ export function registerDbHandlers(): void {
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
+
+  // Returns a base64 PNG data URL for a given bundleId/exe path, or null if unavailable.
+  // On Windows the bundleId is the full exe path — passed directly to getFileIcon.
+  // On macOS the bundleId is a bundle identifier (e.g. 'com.anthropic.claude') — resolved
+  // to the .app path via mdfind before calling getFileIcon.
+  ipcMain.handle('app:get-icon', async (_e, bundleId: string): Promise<string | null> => {
+    try {
+      let filePath = bundleId
+
+      if (process.platform === 'darwin' && !bundleId.startsWith('/')) {
+        const { execFile } = await import('node:child_process')
+        const { promisify } = await import('node:util')
+        const execAsync = promisify(execFile)
+        try {
+          const { stdout } = await execAsync('mdfind', [
+            `kMDItemCFBundleIdentifier == '${bundleId}'`,
+          ])
+          const resolved = stdout.trim().split('\n').find((p) => p.endsWith('.app'))
+          if (!resolved) return null
+          filePath = resolved
+        } catch {
+          return null
+        }
+      }
+
+      const icon = await app.getFileIcon(filePath, { size: 'normal' })
+      return icon.toDataURL()
+    } catch {
+      return null
+    }
+  })
 }

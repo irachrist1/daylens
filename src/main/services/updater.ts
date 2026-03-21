@@ -2,6 +2,9 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { capture } from './analytics'
 
+let _updateAvailable: string | null = null
+export function getUpdateAvailable(): string | null { return _updateAvailable }
+
 export function initUpdater(win: BrowserWindow): void {
   // Only run on Windows — macOS auto-updates require code signing
   if (process.platform !== 'win32') return
@@ -12,6 +15,7 @@ export function initUpdater(win: BrowserWindow): void {
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('update-available', (info) => {
+    _updateAvailable = info.version
     capture('update_available', { version: info.version })
     win.webContents.send('update:status', { status: 'available', version: info.version })
   })

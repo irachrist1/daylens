@@ -11,7 +11,10 @@ export default function FeedbackModal({ onClose }: Props) {
 
   function handleSubmit() {
     if (score === null) return
-    track('feedback_submitted', { score, has_comment: comment.length > 0 })
+    track('feedback_submitted', {
+      score,
+      ...(comment.trim() ? { comment: comment.trim() } : {}),
+    })
     onClose()
   }
 
