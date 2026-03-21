@@ -277,7 +277,9 @@ export default function Insights() {
           </h1>
         </div>
         <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-          <div className="text-3xl mb-4 opacity-20">✦</div>
+          <div className="mb-4 opacity-20" style={{ color: 'var(--color-text-primary)' }}>
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3 L18.8 11.5 L28 11.5 L20.8 16.8 L23.4 25.5 L16 20.4 L8.6 25.5 L11.2 16.8 L4 11.5 L13.2 11.5 Z" /></svg>
+          </div>
           <p className="text-[15px] font-semibold text-[var(--color-text-primary)] mb-2">
             API key required
           </p>
@@ -324,7 +326,9 @@ export default function Insights() {
       <div className="flex-1 overflow-y-auto px-7 py-5 flex flex-col gap-4">
         {messages.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <div className="text-3xl mb-3 opacity-20">✦</div>
+            <div className="mb-3 opacity-20" style={{ color: 'var(--color-text-primary)' }}>
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3 L18.8 11.5 L28 11.5 L20.8 16.8 L23.4 25.5 L16 20.4 L8.6 25.5 L11.2 16.8 L4 11.5 L13.2 11.5 Z" /></svg>
+          </div>
             <p className="text-[15px] font-medium text-[var(--color-text-primary)] mb-2">
               Ask about your day
             </p>

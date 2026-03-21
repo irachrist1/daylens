@@ -178,7 +178,7 @@ export default function History() {
           <div className="flex flex-wrap gap-2 mb-4">
             {focusSec > 0 && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] bg-[var(--color-surface-high)]">
-                <span style={{ color: 'var(--color-accent)' }}>⚡</span>
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="var(--color-accent)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6.5,1 3,5.5 5.5,5.5 4.5,10 8,5.5 5.5,5.5 6.5,1" /></svg>
                 <span className="text-[var(--color-text-secondary)]">
                   {formatDuration(focusSec)} focus · {focusPct}%
                 </span>
@@ -197,7 +197,7 @@ export default function History() {
               </div>
             )}
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] bg-[var(--color-surface-high)]">
-              <span className="text-[var(--color-text-tertiary)]">⊞</span>
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="1" width="3.5" height="3.5" rx="0.7" /><rect x="6.5" y="1" width="3.5" height="3.5" rx="0.7" /><rect x="1" y="6.5" width="3.5" height="3.5" rx="0.7" /><rect x="6.5" y="6.5" width="3.5" height="3.5" rx="0.7" /></svg>
               <span className="text-[var(--color-text-secondary)]">
                 {[...catMap.keys()].length} categories · {uniqueApps} apps
               </span>

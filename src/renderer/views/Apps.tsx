@@ -286,10 +286,10 @@ export default function Apps() {
                         </span>
                         {isFocused && (
                           <span
-                            className="text-[9px] font-semibold px-1 py-0.5 rounded shrink-0"
+                            className="text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
                             style={{ background: 'rgba(180,197,255,0.12)', color: 'var(--color-accent)' }}
                           >
-                            ⚡
+                            Focus
                           </span>
                         )}
                       </div>
