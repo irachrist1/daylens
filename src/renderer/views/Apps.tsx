@@ -5,10 +5,78 @@ import { catColor, formatCategory } from '../lib/category'
 import type { AppUsageSummary, AppSession, AppCategory, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 
+// ─── App icon component ───────────────────────────────────────────────────────
+// Fetches the real exe icon via Electron's getFileIcon API and caches it in
+// memory so the same icon is never fetched twice per session.
+
+const iconCache = new Map<string, string | null>()
+
+function AppIcon({
+  bundleId,
+  appName,
+  color,
+  size = 32,
+  fontSize = 11,
+}: {
+  bundleId: string
+  appName: string
+  color: string
+  size?: number
+  fontSize?: number
+}) {
+  const [iconUrl, setIconUrl] = useState<string | null | undefined>(
+    iconCache.has(bundleId) ? iconCache.get(bundleId) : undefined,
+  )
+
+  useEffect(() => {
+    if (iconCache.has(bundleId)) return
+    void ipc.db.getAppIcon(bundleId).then((url) => {
+      iconCache.set(bundleId, url)
+      setIconUrl(url)
+    })
+  }, [bundleId])
+
+  const rounded = Math.round(size * 0.3)
+  const initials = appName.slice(0, 2).toUpperCase()
+
+  if (iconUrl) {
+    return (
+      <img
+        src={iconUrl}
+        alt={appName}
+        width={size}
+        height={size}
+        style={{ borderRadius: rounded, display: 'block', objectFit: 'contain' }}
+        onError={() => setIconUrl(null)}
+      />
+    )
+  }
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: rounded,
+        background: color + '22',
+        color,
+        fontSize,
+        fontWeight: 700,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}
+    >
+      {initials}
+    </div>
+  )
+}
+
 const ALL_CATEGORIES: AppCategory[] = [
   'development', 'communication', 'browsing', 'writing', 'design',
   'aiTools', 'email', 'research', 'productivity', 'meetings',
-  'entertainment', 'system', 'uncategorized',
+  'entertainment', 'social', 'system', 'uncategorized',
 ]
 
 const DAYS_OPTIONS = [1, 7, 30] as const
@@ -352,12 +420,7 @@ export default function Apps() {
                       <span className="text-[11px] text-[var(--color-text-tertiary)] w-4 text-right tabular-nums">
                         {i + 1}
                       </span>
-                      <div
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-[11px] font-bold"
-                        style={{ background: color + '22', color }}
-                      >
-                        {app.appName.slice(0, 2).toUpperCase()}
-                      </div>
+                      <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={32} fontSize={11} />
                     </div>
 
                     {/* Name, category, session count, bar */}
@@ -372,13 +435,18 @@ export default function Apps() {
                               e.stopPropagation()
                               setOpenDropdown(openDropdown === app.bundleId ? null : app.bundleId)
                             }}
-                            className="flex items-center gap-1 text-[9px] font-semibold tracking-[0.4px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
-                            style={{ background: color + '1a', color }}
+                            title="Change category"
+                            className="flex items-center gap-1 text-[10px] font-semibold tracking-[0.3px] px-2 py-0.5 rounded hover:opacity-90 transition-opacity border"
+                            style={{ background: color + '18', color, borderColor: color + '40' }}
                           >
                             {overrides[app.bundleId] && (
                               <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
                             )}
                             {formatCategory(app.category)}
+                            {/* pencil icon */}
+                            <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ opacity: 0.7 }}>
+                              <path d="M8.5 1.5a1.415 1.415 0 0 1 2 2L4 10 1 11l1-3 6.5-6.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
                           </button>
                           {openDropdown === app.bundleId && renderCategoryDropdown(app.bundleId, app.category)}
                         </div>
@@ -503,12 +571,7 @@ function AppDetailPanel({
       </button>
 
       <div className="flex items-center gap-3 mb-5">
-        <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center text-[13px] font-bold shrink-0"
-          style={{ background: color + '22', color }}
-        >
-          {app.appName.slice(0, 2).toUpperCase()}
-        </div>
+        <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={44} fontSize={13} />
         <div>
           <h1 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight leading-none mb-0.5">
             {app.appName}

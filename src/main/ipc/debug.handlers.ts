@@ -5,7 +5,7 @@ import { getCurrentSession, lastClassifyMatch, trackingStatus } from '../service
 import { getBrowserStatus } from '../services/browser'
 import { getRecentAppSessions } from '../db/queries'
 import { getDb } from '../services/database'
-import { updateAvailable } from '../index'
+import { getUpdateAvailable } from '../services/updater'
 
 export function registerDebugHandlers(): void {
   ipcMain.handle(IPC.DEBUG.GET_INFO, () => ({
@@ -17,6 +17,6 @@ export function registerDebugHandlers(): void {
     trackingStatus:  { ...trackingStatus },
     recentSessions:  getRecentAppSessions(getDb(), 5),
     browserStatus:   getBrowserStatus(),
-    updateAvailable: updateAvailable,
+    updateAvailable: getUpdateAvailable(),
   }))
 }
