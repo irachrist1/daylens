@@ -21,12 +21,16 @@ win:
   artifactName: "Daylens-${version}-Setup.${ext}"
 
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Daylens
-  runAfterFinish: true
+  runAfterFinish: false
 
 asar: true
 

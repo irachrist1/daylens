@@ -74,17 +74,21 @@ jobs:
             ### Fixes in this build
             - Fixes the packaged-app startup crash from `v0.1.6-win`
             - Publishes a single Windows x64 NSIS installer (`Setup.exe`)
+            - Uses a standard guided installer flow instead of a silent one-click install
 
             ### Install
 
             1. Download `Daylens-${{ steps.meta.outputs.version }}-Setup.exe` below
             2. Run it — Windows may show a security warning, click **"More info" → "Run anyway"**
-            3. Let the installer replace any previous Daylens Windows install
-            4. Daylens launches automatically when done
+            3. Follow the installer steps and click **Finish**
+            4. Launch Daylens from the Desktop shortcut or Start menu
 
             ### System requirements
             - Windows 10 or later (64-bit)
             - Internet connection only for AI features (Claude API key)
+
+            ### Security note
+            - This installer is not code-signed yet, so Windows SmartScreen may still warn before install. That warning is expected for now.
 
             ### Also available
             - **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)
