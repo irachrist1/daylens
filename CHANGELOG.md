@@ -2,6 +2,13 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.2] - 2026-03-21
+
+### Changed
+
+- New app icon: liquid glass blue gradient window mark
+- Website accent color updated to match icon blue (#68AEFF)
+
 ## [1.0.0] - 2026-03-21
 
 ### Added
