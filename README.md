@@ -6,7 +6,7 @@
 
 Your personal activity analyst for macOS.
 
-![Daylens hero preview](website/assets/daylens-hero.svg)
+<!-- TODO: Add a real screenshot here. Recommended: take a screenshot of the Today view at 1440×900, save as website/assets/screenshot-today.png and replace this line with: ![Daylens Today dashboard](website/assets/screenshot-today.png) -->
 
 Daylens is a native macOS app that watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. It is local-first, privacy-forward, and designed to feel like a calm product companion rather than a dashboard full of noise.
 
