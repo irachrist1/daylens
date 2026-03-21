@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daylens — Know exactly where your time goes</title>
-    <meta name="description" content="Daylens is a local-first AI-powered activity analyst for macOS. Track apps, browsers, and websites — then turn that data into grounded insight. Free, open source, no telemetry." />
+    <meta name="description" content="Daylens is a local-first AI-powered activity analyst for macOS and Windows. Track apps, browsers, and websites — then turn that data into grounded insight. Free, open source, no telemetry." />
     <meta property="og:title" content="Daylens — Know exactly where your time goes" />
-    <meta property="og:description" content="Local-first AI-powered activity analyst for macOS. Free and open source." />
+    <meta property="og:description" content="Local-first AI-powered activity analyst for macOS and Windows. Free and open source." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://irachrist1.github.io/daylens/" />
     <link rel="canonical" href="https://irachrist1.github.io/daylens/" />
@@ -41,17 +41,23 @@
       <div class="hero-content">
         <span class="eyebrow-pill">Free · Open Source · Local-first</span>
         <h1>Know exactly where<br>your time goes.</h1>
-        <p class="hero-sub">Daylens watches the apps, browsers, and websites you use — then turns that activity into grounded AI insight. Everything stays on your Mac. No subscription, no cloud, no games.</p>
+        <p class="hero-sub">Daylens watches the apps, browsers, and websites you use — then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud, no games.</p>
 
         <div class="cta-row">
-          <button class="btn-primary" id="brew-copy" data-copy="brew install --cask daylens" title="Copy to clipboard">
-            <span>brew install --cask daylens</span>
-            <svg class="copy-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
-            <svg class="check-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 7-7"/></svg>
-          </button>
-          <a class="btn-secondary" href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.2.dmg">Direct download ↓</a>
+          <div class="platform-cta" id="cta-macos">
+            <button class="btn-primary" id="brew-copy" data-copy="brew install --cask daylens" title="Copy to clipboard">
+              <svg class="platform-icon" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83"/><path d="M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11"/></svg>
+              <span>brew install --cask daylens</span>
+              <svg class="copy-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
+              <svg class="check-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 7-7"/></svg>
+            </button>
+          </div>
+          <a class="btn-windows" href="https://github.com/irachrist1/daylens-windows/releases/latest">
+            <svg class="platform-icon" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M3 5.548l7.206-0.994v6.953H3V5.548zm0 12.904l7.206 0.994v-6.953H3v5.959zm8.009 1.107L22 21v-8.507h-10.991v8.066zm0-14.118v8.066H22V3L11.009 5.441z"/></svg>
+            Download for Windows
+          </a>
         </div>
-        <p class="hero-meta">macOS Sonoma 14+ · MIT License · Free forever</p>
+        <p class="hero-meta">macOS Sonoma 14+ · Windows 10+ · MIT License · Free forever</p>
       </div>
 
       <div class="hero-visual">
@@ -90,8 +96,9 @@
       <div class="trust-bar-inner">
         <span>Swift</span><span class="dot"></span>
         <span>SwiftUI</span><span class="dot"></span>
+        <span>Electron</span><span class="dot"></span>
+        <span>React</span><span class="dot"></span>
         <span>Claude API</span><span class="dot"></span>
-        <span>97 tests</span><span class="dot"></span>
         <span>MIT License</span><span class="dot"></span>
         <span>No telemetry</span>
       </div>
@@ -112,7 +119,7 @@
         <div class="feature-card reveal">
           <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
           <h3>Local-first privacy</h3>
-          <p>No telemetry, no analytics, no cloud sync. All data lives in ~/Library on your Mac.</p>
+          <p>No telemetry, no analytics, no cloud sync. All data stays local on your machine.</p>
         </div>
         <div class="feature-card reveal">
           <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5h4.5l-3.5 2.7 1.3 4.3L12 12l-3.8 2.5 1.3-4.3L6 7.5h4.5z"/><circle cx="12" cy="12" r="10"/></svg>
@@ -146,12 +153,13 @@
     <section class="open-source" id="open-source">
       <div class="open-source-inner reveal">
         <div>
-          <h2>The first truly open-source macOS activity analyst.</h2>
+          <h2>The first truly open-source cross-platform activity analyst.</h2>
           <p>Every tool in this category is closed source and subscription-priced. Rize is $10/month. Timing is $29. Daylens is $0, MIT licensed, and every line of code is readable on GitHub. Audit it, fork it, or contribute to it.</p>
           <div class="badge-row">
             <img src="https://img.shields.io/github/stars/irachrist1/daylens?style=flat-square&color=111111&labelColor=111111" alt="GitHub stars" loading="lazy" />
             <img src="https://img.shields.io/badge/License-MIT-111111.svg?style=flat-square" alt="MIT License" loading="lazy" />
             <img src="https://img.shields.io/badge/macOS-14%2B-111111.svg?style=flat-square" alt="macOS 14+" loading="lazy" />
+            <img src="https://img.shields.io/badge/Windows-10%2B-111111.svg?style=flat-square" alt="Windows 10+" loading="lazy" />
           </div>
         </div>
         <div class="os-cta-col">
@@ -172,7 +180,7 @@
           <div class="step reveal">
             <span class="step-num">1</span>
             <h3>Install</h3>
-            <p>Run <code>brew tap irachrist1/daylens && brew install --cask daylens</code>. Or download the DMG from GitHub Releases.</p>
+            <p><strong>macOS:</strong> Run <code>brew tap irachrist1/daylens && brew install --cask daylens</code> or download the DMG. <strong>Windows:</strong> Download the installer from <a href="https://github.com/irachrist1/daylens-windows/releases/latest" style="color:var(--color-accent)">GitHub Releases</a>.</p>
           </div>
           <div class="step reveal">
             <span class="step-num">2</span>
@@ -255,7 +263,7 @@
             Copy
           </button>
         </div>
-        <p class="download-alt">Or: <a href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.2.dmg">Direct DMG download →</a></p>
+        <p class="download-alt">Or: <a href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.3.dmg">Direct DMG download →</a></p>
         <p class="download-fine">macOS 14+ · No account required · Free forever</p>
       </div>
     </section>
