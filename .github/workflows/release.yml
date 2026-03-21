@@ -29,6 +29,11 @@ jobs:
           git branch --contains "$GITHUB_SHA" origin/main
           git checkout -B main "$GITHUB_SHA"
 
+      - name: Select Xcode 16.2
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
+
       - name: Install release dependencies
         run: |
           brew install xcodegen create-dmg
