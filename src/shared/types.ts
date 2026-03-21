@@ -62,8 +62,10 @@ export type AppTheme = 'system' | 'light' | 'dark'
 export interface AppSettings {
   anthropicApiKey: string
   launchOnLogin: boolean
-  trackingEnabled: boolean
   theme: AppTheme
+  onboardingComplete: boolean
+  userName: string
+  userGoals: string[]
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -136,5 +138,8 @@ export const IPC = {
     CREATE_BROWSER_LINK: 'sync:create-browser-link',
     DISCONNECT: 'sync:disconnect',
     GET_MNEMONIC: 'sync:get-mnemonic',
+  },
+  SHELL: {
+    OPEN_EXTERNAL: 'shell:open-external',
   },
 } as const

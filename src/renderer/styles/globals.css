@@ -18,13 +18,17 @@
   --color-surface-raised:    #122032;
   --color-surface-overlay:   #1d2b3d;
   --color-focus-green:       #4fdbc8;
-  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: -apple-system, "SF Pro Display", "SF Pro Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --color-hero-gradient:     linear-gradient(135deg, #0f2d5e 0%, #173a73 52%, #1b4a8a 100%);
   --color-hero-border:       rgba(180, 197, 255, 0.18);
   --color-pill-bg:           rgba(255, 255, 255, 0.08);
   --color-icon-tint:         rgba(180, 197, 255, 0.14);
   --color-icon-bg:           rgba(255, 255, 255, 0.06);
   --color-bar-gradient:      linear-gradient(90deg, #6c8cff, #b4c5ff);
+  /* Brand palette */
+  --color-brand-light:       #68AEFF;
+  --color-brand-deep:        #003EB7;
+  --color-brand-gradient:    linear-gradient(180deg, #68AEFF 0%, #003EB7 100%);
 }
 
 :root[data-theme="light"] {
@@ -98,6 +102,7 @@ body,
   background: var(--color-surface);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }

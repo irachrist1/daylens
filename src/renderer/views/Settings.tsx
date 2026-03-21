@@ -46,8 +46,10 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings>({
     anthropicApiKey: '',
     launchOnLogin: false,
-    trackingEnabled: true,
     theme: 'system',
+    onboardingComplete: true,
+    userName: '',
+    userGoals: [],
   })
   const [saved, setSaved]         = useState<string | null>(null)
   const [debugOpen, setDebugOpen] = useState(false)
@@ -78,13 +80,6 @@ export default function Settings() {
   async function handleApiKeySave() {
     await ipc.settings.set({ anthropicApiKey: settings.anthropicApiKey })
     flashSaved(settings.anthropicApiKey.trim() ? 'API key saved' : 'API key cleared')
-  }
-
-  async function handleTrackingToggle() {
-    const next = !settings.trackingEnabled
-    setSettings((s) => ({ ...s, trackingEnabled: next }))
-    await ipc.settings.set({ trackingEnabled: next })
-    flashSaved(next ? 'Tracking enabled' : 'Tracking paused')
   }
 
   async function handleThemeChange(theme: AppTheme) {
@@ -174,40 +169,6 @@ export default function Settings() {
               Stored locally. Only used for Anthropic requests you send from Insights.
             </p>
           </div>
-        </div>
-
-        {/* General section */}
-        <div className="card">
-          <p className="section-label mb-4">Tracking</p>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[13px] text-[var(--color-text-primary)] font-medium">Enable tracking</p>
-              <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5">
-                Record active app usage in the background
-              </p>
-            </div>
-            <button
-              onClick={() => void handleTrackingToggle()}
-              className={[
-                'w-10 h-6 rounded-full transition-colors relative shrink-0',
-                settings.trackingEnabled
-                  ? 'bg-[var(--color-accent)]'
-                  : 'bg-[var(--color-surface-high)]',
-              ].join(' ')}
-            >
-              <span
-                className={[
-                  'absolute top-1 w-4 h-4 rounded-full transition-transform',
-                  settings.trackingEnabled
-                    ? 'translate-x-5 bg-[var(--color-surface)]'
-                    : 'translate-x-1 bg-[var(--color-text-secondary)]',
-                ].join(' ')}
-              />
-            </button>
-          </div>
-          <p className="text-[11px] text-[var(--color-text-tertiary)] mt-3">
-            This applies immediately. Turning tracking off ends the current in-flight session and stops new writes until you turn it back on.
-          </p>
         </div>
 
         <div className="card">
@@ -437,6 +398,9 @@ export default function Settings() {
           </p>
         )}
 
+        {/* App version */}
+        <AppVersionLine />
+
         {/* ── Developer Info ──────────────────────────────────────────── */}
         <div
           className="rounded-xl overflow-hidden"
@@ -471,11 +435,19 @@ export default function Settings() {
                 <p className="text-[12px] text-[var(--color-text-tertiary)]">Loading…</p>
               ) : (
                 <>
+                  {/* Tracker module first — most important for debugging */}
+                  <DebugRow
+                    label="Tracker module"
+                    value={debug.trackingStatus.moduleSource ?? 'not loaded — tracking unavailable'}
+                    error={!debug.trackingStatus.moduleSource}
+                  />
+                  {debug.trackingStatus.loadError && (
+                    <DebugRow label="Tracker load error" value={debug.trackingStatus.loadError} error />
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <DebugRow label="Version"  value={debug.appVersion ?? '—'} />
                     <DebugRow label="Platform" value={debug.platform} />
                     <DebugRow label="Theme" value={settings.theme} />
-                    <DebugRow label="Tracking" value={settings.trackingEnabled ? 'enabled' : 'paused'} />
                   </div>
                   <DebugRow label="DB path" value={debug.dbPath} mono />
                   <DebugRow
@@ -489,13 +461,6 @@ export default function Settings() {
                     value={`"${debug.lastClassify.target}" → ${debug.lastClassify.category}`}
                     mono
                   />
-                  <DebugRow
-                    label="Tracker module"
-                    value={debug.trackingStatus.moduleSource ?? 'not loaded'}
-                  />
-                  {debug.trackingStatus.loadError && (
-                    <DebugRow label="Tracker load error" value={debug.trackingStatus.loadError} error />
-                  )}
                   {debug.trackingStatus.pollError && (
                     <DebugRow label="Tracker poll error" value={debug.trackingStatus.pollError} error />
                   )}
@@ -570,6 +535,22 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  )
+}
+
+function AppVersionLine() {
+  const [version, setVersion] = useState<string | null>(null)
+  useEffect(() => {
+    ipc.debug.getInfo().then((info: unknown) => {
+      const d = info as { appVersion?: string }
+      setVersion(d.appVersion ?? null)
+    })
+  }, [])
+  if (!version) return null
+  return (
+    <p className="text-[11px] text-[var(--color-text-tertiary)] text-center">
+      v{version}
+    </p>
   )
 }
 

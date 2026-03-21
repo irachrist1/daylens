@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
@@ -9,6 +9,7 @@ import History from './views/History'
 import Apps from './views/Apps'
 import Insights from './views/Insights'
 import Settings from './views/Settings'
+import Onboarding from './views/Onboarding'
 import type { AppTheme } from '@shared/types'
 
 function applyTheme(theme: AppTheme | undefined) {
@@ -21,12 +22,15 @@ function applyTheme(theme: AppTheme | undefined) {
 }
 
 export default function App() {
+  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
+
   useEffect(() => {
     let active = true
 
     void ipc.settings.get().then((settings) => {
       if (!active) return
       applyTheme(settings.theme)
+      setOnboardingComplete(settings.onboardingComplete)
     })
 
     const onThemeChange = (event: Event) => {
@@ -40,6 +44,13 @@ export default function App() {
       window.removeEventListener('daylens:theme-changed', onThemeChange as EventListener)
     }
   }, [])
+
+  // Loading — wait for settings before rendering anything
+  if (onboardingComplete === null) return null
+
+  if (!onboardingComplete) {
+    return <Onboarding onComplete={() => setOnboardingComplete(true)} />
+  }
 
   return (
     <HashRouter>

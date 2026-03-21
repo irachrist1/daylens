@@ -16,8 +16,10 @@ async function getStore() {
 const DEFAULTS: AppSettings = {
   anthropicApiKey: '',
   launchOnLogin: false,
-  trackingEnabled: true,
   theme: 'system',
+  onboardingComplete: false,
+  userName: '',
+  userGoals: [],
 }
 
 export function getSettings(): AppSettings {
@@ -28,8 +30,10 @@ export function getSettings(): AppSettings {
   return {
     anthropicApiKey: (_store.get('anthropicApiKey', '') as string),
     launchOnLogin: (_store.get('launchOnLogin', false) as boolean),
-    trackingEnabled: (_store.get('trackingEnabled', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
+    onboardingComplete: (_store.get('onboardingComplete', false) as boolean),
+    userName: (_store.get('userName', '') as string),
+    userGoals: (_store.get('userGoals', []) as string[]),
   }
 }
 

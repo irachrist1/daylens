@@ -1,4 +1,17 @@
-import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron'
+// ─── Global error handlers — must be first, before any imports' side effects ──
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err)
+  try {
+    const { dialog: d } = require('electron') as typeof import('electron')
+    d.showErrorBox('Daylens crashed', `${err.name}: ${err.message}\n\nPlease restart Daylens.`)
+  } catch { /* dialog may not be ready */ }
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection:', reason)
+})
+
+import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron'
 import path from 'node:path'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
@@ -91,6 +104,19 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
 
+  win.webContents.on('render-process-gone', (_, details) => {
+    console.error('[renderer] process gone:', details.reason, details.exitCode)
+    dialog.showErrorBox(
+      'Daylens renderer crashed',
+      `The app display process exited unexpectedly (${details.reason}). Restarting...`,
+    )
+    win.reload()
+  })
+
+  win.webContents.on('did-fail-load', (_, errorCode, errorDescription) => {
+    console.error('[renderer] failed to load:', errorCode, errorDescription)
+  })
+
   // Hide to tray on close — real quit only via tray menu
   win.on('close', (e) => {
     if (!isQuitting) {
@@ -101,6 +127,18 @@ function createWindow(): BrowserWindow {
 
   return win
 }
+
+// Shell — open external URLs safely (renderer cannot call shell.openExternal directly)
+ipcMain.on('shell:open-external', (_e, url: string) => {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'https:') {
+      void shell.openExternal(url)
+    }
+  } catch {
+    // Ignore malformed URLs
+  }
+})
 
 // Window controls IPC — used by the custom TitleBar component in the renderer
 ipcMain.on('window:minimize', () => mainWindow?.minimize())
@@ -141,14 +179,16 @@ app.whenReady()
     startBrowserTracking()
     startSync()
 
-    // Backfill the last 24 h of Windows app history from ActivityCache.db (Windows only)
-    try { backfillWindowsHistory() } catch (err) { console.warn('[init] windows history backfill:', err) }
+    // Deferred 3s — after window is visible
+    setTimeout(() => {
+      try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
+    }, 3_000)
 
-    // Compute any missing daily summaries in the background
-    try { computeAllMissingSummaries() } catch (err) { console.warn('[init] daily summaries:', err) }
-
-    // Finalize previous day's snapshot shortly after startup
-    setTimeout(() => finalizePreviousDay(), 30_000)
+    // Deferred 10s — background maintenance
+    setTimeout(() => {
+      try { computeAllMissingSummaries() } catch (err) { console.warn('[init] summaries:', err) }
+      setTimeout(() => finalizePreviousDay(), 0)
+    }, 10_000)
   })
   .catch((err) => {
     showFatalStartupError('Daylens failed to start', err)

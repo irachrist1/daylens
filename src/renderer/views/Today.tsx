@@ -5,6 +5,56 @@ import { catColor, formatCategory } from '../lib/category'
 import type { AppSession, AppUsageSummary, AppCategory, LiveSession, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 
+// ─── Inline SVG icons ─────────────────────────────────────────────────────────
+
+function IconTimer() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="7" cy="8" r="5" />
+      <line x1="7" y1="5.5" x2="7" y2="8" />
+      <line x1="5.5" y1="2" x2="8.5" y2="2" />
+      <line x1="7" y1="2" x2="7" y2="3.5" />
+    </svg>
+  )
+}
+
+function IconZap() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="8,1 4,7 7,7 6,13 10,7 7,7 8,1" />
+    </svg>
+  )
+}
+
+function IconTarget() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="7" cy="7" r="5.5" />
+      <circle cx="7" cy="7" r="2.5" />
+      <circle cx="7" cy="7" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function IconGrid() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.5" y="1.5" width="4" height="4" rx="0.8" />
+      <rect x="8.5" y="1.5" width="4" height="4" rx="0.8" />
+      <rect x="1.5" y="8.5" width="4" height="4" rx="0.8" />
+      <rect x="8.5" y="8.5" width="4" height="4" rx="0.8" />
+    </svg>
+  )
+}
+
+function IconSpark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 1.5 L8.1 5.2 L12 5.2 L9 7.4 L10 11 L7 8.9 L4 11 L5 7.4 L2 5.2 L5.9 5.2 Z" />
+    </svg>
+  )
+}
+
 // ─── Derived types ────────────────────────────────────────────────────────────
 
 interface CategorySummary {
@@ -29,11 +79,10 @@ function buildCategorySummaries(summaries: AppUsageSummary[]): CategorySummary[]
 
 // ─── Greeting ─────────────────────────────────────────────────────────────────
 
-function greeting(): string {
+function greeting(name?: string): string {
   const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  return 'Good evening'
+  const base = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+  return name ? `${base}, ${name}.` : `${base}.`
 }
 
 function focusLabel(pct: number, hasData: boolean): string {
@@ -125,10 +174,29 @@ function hourLabel(h: number): string {
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 export default function Today() {
-  const [dbSummaries, setDbSummaries] = useState<AppUsageSummary[]>([])
-  const [dbSessions,  setDbSessions]  = useState<AppSession[]>([])
-  const [live,        setLive]        = useState<LiveSession | null>(null)
-  const [loading,     setLoading]     = useState(true)
+  const [dbSummaries,    setDbSummaries]    = useState<AppUsageSummary[]>([])
+  const [dbSessions,     setDbSessions]     = useState<AppSession[]>([])
+  const [live,           setLive]           = useState<LiveSession | null>(null)
+  const [loading,        setLoading]        = useState(true)
+  const [userName,       setUserName]       = useState('')
+  const [trackingActive, setTrackingActive] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    void ipc.settings.get().then((s) => setUserName(s.userName ?? ''))
+  }, [])
+
+  // Poll tracking status every 30s
+  useEffect(() => {
+    function checkTracking() {
+      ipc.debug.getInfo().then((info: unknown) => {
+        const d = info as { trackingStatus?: { moduleSource: string | null } }
+        setTrackingActive(d.trackingStatus?.moduleSource != null)
+      }).catch(() => setTrackingActive(false))
+    }
+    checkTracking()
+    const t = setInterval(checkTracking, 30_000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -178,26 +246,42 @@ export default function Today() {
   return (
     <div className="p-6 max-w-[920px] mx-auto">
 
+      {/* ── Tracking indicator ─────────────────────────────────────────── */}
+      {trackingActive !== null && (
+        <div className="flex items-center gap-1.5 mb-4">
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: trackingActive ? '#4fdbc8' : 'var(--color-text-tertiary)',
+              boxShadow: trackingActive ? '0 0 4px #4fdbc8' : 'none',
+            }}
+          />
+          <span className="text-[11px] text-[var(--color-text-tertiary)]">
+            {trackingActive ? 'Tracking active' : 'App tracking unavailable — check Settings > Developer Info'}
+          </span>
+        </div>
+      )}
+
       {/* ── 1. Hero ────────────────────────────────────────────────────── */}
-      <HeroCard totalSec={totalSec} focusSec={focusSec} appCount={appCount} />
+      <HeroCard totalSec={totalSec} focusSec={focusSec} appCount={appCount} userName={userName} />
 
       {/* ── 2. Stat cards ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-3 mt-4">
         <StatCard
-          icon="⏱"
+          icon={<IconTimer />}
           label="Screen time"
           value={totalSec > 0 ? formatDuration(totalSec) : '—'}
           sub={`${appCount} apps`}
         />
         <StatCard
-          icon="⚡"
+          icon={<IconZap />}
           label="Focus time"
           value={focusSec > 0 ? formatDuration(focusSec) : '—'}
           sub={totalSec > 0 ? `${focusPct}% of tracked time` : 'No tracked focus yet'}
           accent
         />
         <StatCard
-          icon="◎"
+          icon={<IconTarget />}
           label="Focus share"
           value={totalSec > 0 ? `${focusPct}%` : '—'}
           sub={`${focusLabel(focusPct, totalSec > 0)} · app-category based`}
@@ -244,10 +328,12 @@ function HeroCard({
   totalSec,
   focusSec,
   appCount,
+  userName,
 }: {
   totalSec: number
   focusSec: number
   appCount: number
+  userName: string
 }) {
   return (
     <div
@@ -257,7 +343,7 @@ function HeroCard({
         border:     '1px solid var(--color-hero-border)',
       }}
     >
-      <p className="text-[13px] text-[var(--color-text-secondary)]">{greeting()}</p>
+      <p className="text-[13px] text-[var(--color-text-secondary)]">{greeting(userName || undefined)}</p>
 
       <div className="flex items-baseline gap-2 mt-0.5">
         <span
@@ -271,19 +357,20 @@ function HeroCard({
       <p className="text-[13px] opacity-60 text-[var(--color-text-secondary)]">active today</p>
 
       <div className="flex gap-2 mt-1">
-        <HeroPill>⊞ {appCount} apps</HeroPill>
-        {focusSec > 0 && <HeroPill>⚡ {formatDuration(focusSec)} focus</HeroPill>}
+        <HeroPill icon={<IconGrid />}>{appCount} apps</HeroPill>
+        {focusSec > 0 && <HeroPill icon={<IconZap />}>{formatDuration(focusSec)} focus</HeroPill>}
       </div>
     </div>
   )
 }
 
-function HeroPill({ children }: { children: React.ReactNode }) {
+function HeroPill({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <span
-      className="text-[12px] font-medium text-[var(--color-text-primary)] px-3 py-1 rounded-full"
+      className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--color-text-primary)] px-3 py-1 rounded-full"
       style={{ background: 'var(--color-pill-bg)' }}
     >
+      {icon && <span className="opacity-70">{icon}</span>}
       {children}
     </span>
   )
@@ -294,7 +381,7 @@ function HeroPill({ children }: { children: React.ReactNode }) {
 function StatCard({
   icon, label, value, sub, accent,
 }: {
-  icon: string
+  icon: React.ReactNode
   label: string
   value: string
   sub: string
@@ -303,8 +390,11 @@ function StatCard({
   return (
     <div className="card flex flex-col gap-2">
       <div
-        className="w-7 h-7 rounded-lg flex items-center justify-center text-sm"
-        style={{ background: accent ? 'var(--color-icon-tint)' : 'var(--color-icon-bg)' }}
+        className="w-7 h-7 rounded-lg flex items-center justify-center"
+        style={{
+          background: accent ? 'var(--color-icon-tint)' : 'var(--color-icon-bg)',
+          color: accent ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+        }}
       >
         {icon}
       </div>
@@ -629,10 +719,10 @@ function InsightCard({
       {/* Header */}
       <div className="flex items-center gap-2">
         <div
-          className="w-[22px] h-[22px] rounded-md flex items-center justify-center text-[12px]"
-          style={{ background: 'var(--color-icon-tint)' }}
+          className="w-[22px] h-[22px] rounded-md flex items-center justify-center"
+          style={{ background: 'var(--color-icon-tint)', color: 'var(--color-accent)' }}
         >
-          ✦
+          <IconSpark />
         </div>
         <p className="section-label">Intelligence</p>
       </div>

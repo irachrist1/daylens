@@ -49,6 +49,9 @@ const api = {
     disconnect: () => ipcRenderer.invoke(IPC.SYNC.DISCONNECT),
     getMnemonic: () => ipcRenderer.invoke(IPC.SYNC.GET_MNEMONIC),
   },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
+  },
 }
 
 contextBridge.exposeInMainWorld('daylens', api)

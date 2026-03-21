@@ -4,6 +4,55 @@ import { dateStringFromMs, formatDuration, formatRelativeDate, formatTime, perce
 import type { AppUsageSummary, FocusSession, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 
+// ─── Inline SVG icons ─────────────────────────────────────────────────────────
+
+function IconZap() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="7,1 3.5,6 6,6 5,11 8.5,6 6,6 7,1" />
+    </svg>
+  )
+}
+
+function IconTarget() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="6" cy="6" r="4.5" />
+      <circle cx="6" cy="6" r="2" />
+    </svg>
+  )
+}
+
+function IconGrid() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="1" width="3.5" height="3.5" rx="0.7" />
+      <rect x="7.5" y="1" width="3.5" height="3.5" rx="0.7" />
+      <rect x="1" y="7.5" width="3.5" height="3.5" rx="0.7" />
+      <rect x="7.5" y="7.5" width="3.5" height="3.5" rx="0.7" />
+    </svg>
+  )
+}
+
+function IconTimerLarge() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <circle cx="16" cy="18" r="11" />
+      <line x1="16" y1="12" x2="16" y2="18" />
+      <line x1="11" y1="4" x2="21" y2="4" />
+      <line x1="16" y1="4" x2="16" y2="8" />
+    </svg>
+  )
+}
+
+function IconCheck() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2,7 5.5,10.5 12,4" />
+    </svg>
+  )
+}
+
 function mergeLiveSummary(
   summaries: AppUsageSummary[],
   live: LiveSession | null,
@@ -153,7 +202,7 @@ export default function Focus() {
             className="flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium"
             style={{ background: 'rgba(110,231,183,0.12)', color: '#6ee7b7' }}
           >
-            ✓ Session complete · {formatDuration(justFinished)}
+            <IconCheck /> Session complete · {formatDuration(justFinished)}
           </div>
         )}
 
@@ -184,17 +233,36 @@ export default function Focus() {
           />
         )}
 
-        <button
-          onClick={active ? () => void handleStop() : () => void handleStart()}
-          className={[
-            'px-8 py-2.5 rounded-lg text-[13px] font-medium transition-colors',
-            active
-              ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20'
-              : 'bg-[var(--color-accent)] text-[var(--color-surface)] hover:opacity-90',
-          ].join(' ')}
-        >
-          {active ? 'End session' : 'Start focus session'}
-        </button>
+        <div className="relative flex items-center justify-center">
+          {active && (
+            <span
+              className="absolute rounded-lg"
+              style={{
+                inset: -4,
+                border: '2px solid var(--color-brand-light)',
+                animation: 'focus-pulse 2s ease-in-out infinite',
+              }}
+            />
+          )}
+          <button
+            onClick={active ? () => void handleStop() : () => void handleStart()}
+            className={[
+              'relative px-8 py-2.5 rounded-lg text-[13px] font-medium transition-colors',
+              active
+                ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20'
+                : 'text-[var(--color-surface)] hover:opacity-90',
+            ].join(' ')}
+            style={active ? undefined : { background: 'var(--color-brand-gradient)' }}
+          >
+            {active ? 'End session' : 'Start focus session'}
+          </button>
+        </div>
+        <style>{`
+          @keyframes focus-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.04); }
+          }
+        `}</style>
 
         {!active && justFinished === null && (
           <p className="text-[12px] text-[var(--color-text-tertiary)] text-center max-w-sm">
@@ -208,18 +276,18 @@ export default function Focus() {
         <p className="section-label mb-3">Today</p>
         <div className="grid grid-cols-3 gap-3">
           <TodayStat
-            icon="⚡"
+            icon={<IconZap />}
             label="Focus time"
             value={focusTracked > 0 ? formatDuration(focusTracked) : '—'}
             accent
           />
           <TodayStat
-            icon="◎"
+            icon={<IconTarget />}
             label="Focus share"
             value={totalTracked > 0 ? `${focusPct}%` : '—'}
           />
           <TodayStat
-            icon="⊞"
+            icon={<IconGrid />}
             label="Apps tracked"
             value={appsTracked > 0 ? String(appsTracked) : '—'}
           />
@@ -252,9 +320,13 @@ export default function Focus() {
       <div className="card">
         <p className="section-label mb-3">Recent Sessions</p>
         {recentSessions.length === 0 ? (
-          <p className="text-[12px] text-[var(--color-text-tertiary)]">
-            No completed focus sessions yet. Start one above to begin tracking.
-          </p>
+          <div className="flex flex-col items-center gap-2 py-6">
+            <span style={{ color: 'var(--color-text-tertiary)' }}><IconTimerLarge /></span>
+            <p className="text-[13px] font-medium text-[var(--color-text-secondary)]">No focus sessions yet</p>
+            <p className="text-[12px] text-[var(--color-text-tertiary)] text-center max-w-xs">
+              Start a session above to begin tracking your deep work time.
+            </p>
+          </div>
         ) : (
           <div className="flex flex-col divide-y divide-[var(--color-border)]">
             {recentSessions.map((s) => {
@@ -296,11 +368,11 @@ export default function Focus() {
 
 function TodayStat({
   icon, label, value, accent,
-}: { icon: string; label: string; value: string; accent?: boolean }) {
+}: { icon: React.ReactNode; label: string; value: string; accent?: boolean }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1">
-        <span className="text-[11px]">{icon}</span>
+      <div className="flex items-center gap-1" style={{ color: 'var(--color-text-tertiary)' }}>
+        <span>{icon}</span>
         <span className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-[0.5px] font-semibold">
           {label}
         </span>

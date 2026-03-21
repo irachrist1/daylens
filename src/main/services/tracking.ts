@@ -152,21 +152,26 @@ const OS_NOISE_APP_NAMES = new Set([
   'svchost.exe',
 ])
 
-// Self-exclusion: Electron shell + this app + dev infrastructure.
-// These appear as "frontmost app" but represent the tracker itself or tools
-// with no meaningful user intent.  Matched as lowercase substrings.
-const SELF_NOISE_SUBSTRINGS = [
-  'electron',   // Electron shell (dev mode) and its helper processes
-  'daylens',    // This app in production
-  'cmux',       // tmux manager shim
-  'node.js',    // Node.js runtime windows
-]
+// Self-exclusion: only this app's own exe names, not all Electron-based apps.
+// Previously matched 'electron' as a substring which filtered VS Code, Discord,
+// Slack, Figma, and every other Electron app. Now uses exact exe name matching.
+const SELF_NOISE_EXE_NAMES = new Set([
+  'daylens windows.exe',
+  'daylenswindows.exe',
+  'electron.exe',      // dev mode — raw electron runner, not a user app
+])
 
-function isOsNoise(bundleId: string, appName: string): boolean {
+function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean {
   if (OS_NOISE_BUNDLE_IDS.has(bundleId)) return true
-  const lower = appName.toLowerCase()
-  if (OS_NOISE_APP_NAMES.has(lower)) return true
-  return SELF_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
+  const lowerName = appName.toLowerCase()
+  if (OS_NOISE_APP_NAMES.has(lowerName)) return true
+  // Exact exe name match — allows VS Code, Discord, Slack etc. through
+  const exeName = (winPath ? path.basename(winPath) : appName).toLowerCase()
+  if (SELF_NOISE_EXE_NAMES.has(exeName)) return true
+  // App name substring match for 'daylens' only
+  if (lowerName.includes('daylens')) return true
+  if (lowerName.includes('cmux') || lowerName.includes('node.js')) return true
+  return false
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -243,7 +248,7 @@ async function poll(): Promise<void> {
     const { bundleId, appName } = deriveWindowIdentity(win)
 
     // Skip OS infrastructure processes
-    if (isOsNoise(bundleId, appName)) return
+    if (isOsNoise(bundleId, appName, win.path)) return
 
     // App switched → flush the previous session
     if (currentSession && currentSession.bundleId !== bundleId) {
