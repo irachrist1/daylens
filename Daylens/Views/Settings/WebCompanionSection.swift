@@ -1,4 +1,6 @@
 import SwiftUI
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 /// "Web Companion" section for Settings — link/unlink, last sync, recovery phrase.
 struct WebCompanionSection: View {
@@ -62,6 +64,20 @@ struct WebCompanionSection: View {
             }
 
             Button {
+                createBrowserLink()
+            } label: {
+                if isLinking {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("Connect Browser", systemImage: "qrcode")
+                        .font(.body.weight(.medium))
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isLinking)
+
+            Button {
                 showRecoveryPhrase = true
             } label: {
                 Label("Show Recovery Phrase", systemImage: "key")
@@ -118,12 +134,17 @@ struct WebCompanionSection: View {
 
             if let result = linkResult {
                 VStack(alignment: .leading, spacing: DS.space8) {
-                    Text("Link Code: \(result.linkCode)")
+                    Text("Browser Link")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(DS.onSurfaceVariant)
+
+                    QRCodeCard(token: result.linkToken)
+
+                    Text("Reference code: \(result.linkCode)")
                         .font(.system(.body, design: .monospaced).weight(.bold))
                         .foregroundStyle(DS.primary)
-                        .textSelection(.enabled)
 
-                    Text("Enter this code on the web app to connect.")
+                    Text("Scan the QR code in the browser. The visible code is only the first 8 characters.")
                         .font(.caption)
                         .foregroundStyle(DS.onSurfaceVariant)
 
@@ -206,6 +227,42 @@ struct WebCompanionSection: View {
         }
     }
 
+    private func createBrowserLink() {
+        isLinking = true
+        errorMessage = nil
+
+        Task {
+            do {
+                let result = try await linker.createBrowserLink()
+                await MainActor.run {
+                    if let current = linkResult {
+                        linkResult = WorkspaceLinker.WorkspaceResult(
+                            workspaceId: current.workspaceId,
+                            mnemonic: current.mnemonic,
+                            linkCode: result.displayCode,
+                            linkToken: result.fullToken
+                        )
+                    } else {
+                        let keychain = KeychainService(service: "com.daylens.sync")
+                        let mnemonic = keychain.string(for: "recovery-mnemonic") ?? ""
+                        linkResult = WorkspaceLinker.WorkspaceResult(
+                            workspaceId: uploader.workspaceId ?? "",
+                            mnemonic: mnemonic,
+                            linkCode: result.displayCode,
+                            linkToken: result.fullToken
+                        )
+                    }
+                    isLinking = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLinking = false
+                }
+            }
+        }
+    }
+
     private func disconnect() {
         do {
             try SyncUploader.shared.clearWorkspaceCredentials()
@@ -214,5 +271,41 @@ struct WebCompanionSection: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct QRCodeCard: View {
+    let token: String
+
+    private let context = CIContext()
+    private let filter = CIFilter.qrCodeGenerator()
+
+    var body: some View {
+        Group {
+            if let image = qrImage(from: token) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 180, height: 180)
+                    .padding(DS.space8)
+                    .background(DS.surfaceLowest)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(DS.surfaceLowest)
+                    .frame(width: 180, height: 180)
+            }
+        }
+    }
+
+    private func qrImage(from string: String) -> NSImage? {
+        filter.setValue(Data(string.utf8), forKey: "inputMessage")
+        filter.correctionLevel = "M"
+
+        guard let outputImage = filter.outputImage else { return nil }
+        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: 180, height: 180))
     }
 }

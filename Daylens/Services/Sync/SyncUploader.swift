@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Responsibilities:
 /// - Device ID management (UUID stored in Keychain)
-/// - Workspace token management (stored in Keychain after device link)
+/// - Session token management (stored in Keychain after device link)
 /// - Upload scheduler: 5-minute timer + focus-session hooks + app quit
 /// - Dirty-day tracking: marks dates that need re-upload
 /// - HTTP POST to Convex uploadSnapshot action
@@ -16,9 +16,11 @@ final class SyncUploader {
 
     private let keychain = KeychainService(service: "com.daylens.sync")
     private static let deviceIdKey = "sync-device-id"
-    private static let workspaceTokenKey = "sync-workspace-token"
-    private static let workspaceIdKey = "sync-workspace-id"
+    private static let sessionTokenKey = "sync-session-token"
+    private static let publicWorkspaceIdKey = "sync-public-workspace-id"
     private static let convexUrlKey = "sync-convex-url"
+    private static let legacyWorkspaceTokenKey = "sync-workspace-token"
+    private static let legacyWorkspaceIdKey = "sync-workspace-id"
 
     // MARK: - State
 
@@ -32,7 +34,7 @@ final class SyncUploader {
     }()
 
     /// Whether a workspace is linked and sync is active.
-    var isLinked: Bool { workspaceToken != nil && workspaceId != nil }
+    var isLinked: Bool { sessionToken != nil && convexUrl != nil }
 
     /// Timestamp of last successful sync.
     private(set) var lastSyncAt: Date? {
@@ -53,28 +55,32 @@ final class SyncUploader {
 
     // MARK: - Workspace credentials
 
-    var workspaceToken: String? {
-        keychain.string(for: Self.workspaceTokenKey)
+    var sessionToken: String? {
+        keychain.string(for: Self.sessionTokenKey)
     }
 
     var workspaceId: String? {
-        keychain.string(for: Self.workspaceIdKey)
+        keychain.string(for: Self.publicWorkspaceIdKey)
     }
 
     var convexUrl: String? {
         keychain.string(for: Self.convexUrlKey)
     }
 
-    func storeWorkspaceCredentials(token: String, workspaceId: String, convexUrl: String) throws {
-        try keychain.setString(token, for: Self.workspaceTokenKey)
-        try keychain.setString(workspaceId, for: Self.workspaceIdKey)
+    func storeWorkspaceCredentials(sessionToken: String, workspaceId: String, convexUrl: String) throws {
+        try keychain.setString(sessionToken, for: Self.sessionTokenKey)
+        try keychain.setString(workspaceId, for: Self.publicWorkspaceIdKey)
         try keychain.setString(convexUrl, for: Self.convexUrlKey)
+        try? keychain.removeString(for: Self.legacyWorkspaceTokenKey)
+        try? keychain.removeString(for: Self.legacyWorkspaceIdKey)
     }
 
     func clearWorkspaceCredentials() throws {
-        try keychain.removeString(for: Self.workspaceTokenKey)
-        try keychain.removeString(for: Self.workspaceIdKey)
+        try keychain.removeString(for: Self.sessionTokenKey)
+        try keychain.removeString(for: Self.publicWorkspaceIdKey)
         try keychain.removeString(for: Self.convexUrlKey)
+        try? keychain.removeString(for: Self.legacyWorkspaceTokenKey)
+        try? keychain.removeString(for: Self.legacyWorkspaceIdKey)
         stopSync()
     }
 
@@ -146,7 +152,7 @@ final class SyncUploader {
                 do {
                     let jsonData = try self.exporter.exportSnapshot(for: date, deviceId: self.deviceId)
                     try await self.postSnapshot(jsonData: jsonData, localDate: dateString)
-                    await MainActor.run {
+                    _ = await MainActor.run {
                         self.dirtyDates.remove(dateString)
                     }
                 } catch {
@@ -162,8 +168,7 @@ final class SyncUploader {
 
     private func postSnapshot(jsonData: Data, localDate: String) async throws {
         guard let baseUrl = convexUrl,
-              let workspaceId = workspaceId,
-              let token = workspaceToken else {
+              let token = sessionToken else {
             throw SyncError.notLinked
         }
 
@@ -179,11 +184,8 @@ final class SyncUploader {
         }
 
         let body: [String: Any] = [
-            "workspaceId": workspaceId,
-            "deviceId": deviceId,
             "localDate": localDate,
-            "snapshot": snapshot,
-            "token": token
+            "snapshot": snapshot
         ]
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
@@ -191,6 +193,7 @@ final class SyncUploader {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = bodyData
 
         let (_, response) = try await URLSession.shared.data(for: request)

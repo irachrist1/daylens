@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security
 
 /// Handles workspace creation, BIP39 mnemonic recovery, and device linking via QR/short code.
 final class WorkspaceLinker {
@@ -10,6 +11,12 @@ final class WorkspaceLinker {
         let workspaceId: String
         let mnemonic: String
         let linkCode: String
+        let linkToken: String
+    }
+
+    struct BrowserLinkResult {
+        let displayCode: String
+        let fullToken: String
     }
 
     /// Creates a new anonymous workspace on the Convex backend.
@@ -21,7 +28,9 @@ final class WorkspaceLinker {
 
         // Call Convex createWorkspace mutation
         let body: [String: Any] = [
-            "recoveryKeyHash": recoveryKeyHash
+            "recoveryKeyHash": recoveryKeyHash,
+            "deviceId": SyncUploader.shared.deviceId,
+            "displayName": desktopDisplayName()
         ]
         let result = try await callConvexAction(
             baseUrl: convexSiteUrl,
@@ -29,14 +38,12 @@ final class WorkspaceLinker {
             body: body
         )
 
-        guard let convexWorkspaceId = result["workspaceId"] as? String,
-              let linkCode = result["linkCode"] as? String else {
+        guard let sessionToken = result["sessionToken"] as? String else {
             throw WorkspaceLinkError.invalidResponse
         }
 
-        // Store credentials
         try SyncUploader.shared.storeWorkspaceCredentials(
-            token: convexWorkspaceId, // Using Convex _id as token
+            sessionToken: sessionToken,
             workspaceId: workspaceId,
             convexUrl: convexSiteUrl
         )
@@ -45,10 +52,16 @@ final class WorkspaceLinker {
         let keychain = KeychainService(service: "com.daylens.sync")
         try keychain.setString(mnemonic, for: "recovery-mnemonic")
 
+        let browserLink = try await createBrowserLink(
+            convexSiteUrl: convexSiteUrl,
+            sessionToken: sessionToken
+        )
+
         return WorkspaceResult(
             workspaceId: workspaceId,
             mnemonic: mnemonic,
-            linkCode: linkCode
+            linkCode: browserLink.displayCode,
+            linkToken: browserLink.fullToken
         )
     }
 
@@ -59,7 +72,9 @@ final class WorkspaceLinker {
         let recoveryKeyHash = sha256Hex(workspaceId)
 
         let body: [String: Any] = [
-            "recoveryKeyHash": recoveryKeyHash
+            "recoveryKeyHash": recoveryKeyHash,
+            "deviceId": SyncUploader.shared.deviceId,
+            "displayName": desktopDisplayName()
         ]
         let result = try await callConvexAction(
             baseUrl: convexSiteUrl,
@@ -67,12 +82,12 @@ final class WorkspaceLinker {
             body: body
         )
 
-        guard let convexWorkspaceId = result["workspaceId"] as? String else {
+        guard let sessionToken = result["sessionToken"] as? String else {
             throw WorkspaceLinkError.workspaceNotFound
         }
 
         try SyncUploader.shared.storeWorkspaceCredentials(
-            token: convexWorkspaceId,
+            sessionToken: sessionToken,
             workspaceId: workspaceId,
             convexUrl: convexSiteUrl
         )
@@ -85,18 +100,30 @@ final class WorkspaceLinker {
 
     /// Upload Anthropic API key (envelope-encrypted on server).
     func uploadApiKey(apiKey: String, convexSiteUrl: String) async throws {
-        guard let convexWorkspaceId = SyncUploader.shared.workspaceToken else {
+        guard let sessionToken = SyncUploader.shared.sessionToken else {
             throw WorkspaceLinkError.notLinked
         }
 
         let body: [String: Any] = [
-            "workspaceId": convexWorkspaceId,
             "anthropicKey": apiKey
         ]
         _ = try await callConvexAction(
             baseUrl: convexSiteUrl,
             path: "storeApiKey",
-            body: body
+            body: body,
+            bearerToken: sessionToken
+        )
+    }
+
+    func createBrowserLink() async throws -> BrowserLinkResult {
+        guard let convexSiteUrl = SyncUploader.shared.convexUrl,
+              let sessionToken = SyncUploader.shared.sessionToken else {
+            throw WorkspaceLinkError.notLinked
+        }
+
+        return try await createBrowserLink(
+            convexSiteUrl: convexSiteUrl,
+            sessionToken: sessionToken
         )
     }
 
@@ -110,7 +137,7 @@ final class WorkspaceLinker {
 
         // SHA256 checksum — first 4 bits
         let hash = SHA256.hash(data: Data(entropy))
-        let checksumByte = hash.first ?? 0
+        let checksumByte = Array(hash).first ?? 0
 
         // Combine: 128 bits entropy + 4 bits checksum = 132 bits
         var bits = entropy.flatMap { byte in
@@ -148,6 +175,42 @@ final class WorkspaceLinker {
             .split(separator: " ")
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private func createBrowserLink(
+        convexSiteUrl: String,
+        sessionToken: String
+    ) async throws -> BrowserLinkResult {
+        let fullToken = generateLinkToken()
+        let displayCode = String(fullToken.prefix(8)).uppercased()
+        let tokenHash = sha256Hex(fullToken)
+
+        let body: [String: Any] = [
+            "tokenHash": tokenHash,
+            "displayCode": displayCode
+        ]
+
+        _ = try await callConvexAction(
+            baseUrl: convexSiteUrl,
+            path: "createLinkCode",
+            body: body,
+            bearerToken: sessionToken
+        )
+
+        return BrowserLinkResult(
+            displayCode: displayCode,
+            fullToken: fullToken
+        )
+    }
+
+    private func generateLinkToken() -> String {
+        var entropy = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
+        return entropy.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func desktopDisplayName() -> String {
+        Host.current().localizedName ?? "This Mac"
     }
 
     // MARK: - Helpers
@@ -188,7 +251,8 @@ final class WorkspaceLinker {
     private func callConvexAction(
         baseUrl: String,
         path: String,
-        body: [String: Any]
+        body: [String: Any],
+        bearerToken: String? = nil
     ) async throws -> [String: Any] {
         let endpoint = baseUrl.hasSuffix("/") ? baseUrl + path : baseUrl + "/" + path
         guard let url = URL(string: endpoint) else {
@@ -200,6 +264,9 @@ final class WorkspaceLinker {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let bearerToken {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
         request.httpBody = bodyData
 
         let (data, response) = try await URLSession.shared.data(for: request)
