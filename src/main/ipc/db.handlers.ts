@@ -5,6 +5,8 @@ import {
   getSessionsForApp,
   getWebsiteSummariesForRange,
   setCategoryOverride,
+  clearCategoryOverride,
+  getCategoryOverrides,
 } from '../db/queries'
 import { getDb } from '../services/database'
 import { getCurrentSession } from '../services/tracking'
@@ -62,6 +64,14 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:set-category-override', (_e, bundleId: string, category: string) => {
     setCategoryOverride(getDb(), bundleId, category as import('@shared/types').AppCategory)
+  })
+
+  ipcMain.handle('db:clear-category-override', (_e, bundleId: string) => {
+    clearCategoryOverride(getDb(), bundleId)
+  })
+
+  ipcMain.handle('db:get-category-overrides', () => {
+    return getCategoryOverrides(getDb())
   })
 
   // Per-app session drill-down — used by Apps detail panel

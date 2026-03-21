@@ -3,6 +3,8 @@ import { ipc } from '../lib/ipc'
 import { formatDuration, formatTime, formatFullDate, percentOf, todayString } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
 import type { AppSession, AppCategory } from '@shared/types'
+import { FOCUSED_CATEGORIES } from '@shared/types'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 function isPresentationNoise(session: AppSession): boolean {
   return (session.category === 'system' || session.category === 'uncategorized') &&
@@ -72,18 +74,158 @@ function groupSessions(sessions: AppSession[]): SessionGroup[] {
   return groups.filter((g) => g.totalSeconds >= 15)
 }
 
+// Returns YYYY-MM-DD string for the Monday of the week containing the given date
+function getWeekStart(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  const day = dt.getDay() // 0=Sun, 1=Mon ... 6=Sat
+  const diff = day === 0 ? -6 : 1 - day // shift to Monday
+  dt.setDate(dt.getDate() + diff)
+  return [
+    dt.getFullYear(),
+    String(dt.getMonth() + 1).padStart(2, '0'),
+    String(dt.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
+// ─── Week view ────────────────────────────────────────────────────────────────
+
+interface WeekDayData {
+  label: string   // "Mon", "Tue", etc.
+  dateStr: string
+  totalSeconds: number
+  focusSeconds: number
+  topCategory: AppCategory | null
+  appCount: number
+  color: string
+}
+
+function WeekView({ onSelectDay }: { onSelectDay: (date: string) => void }) {
+  const [weekData, setWeekData] = useState<WeekDayData[]>([])
+  const [loading, setLoading] = useState(true)
+  const weekStartStr = getWeekStart(todayString())
+
+  useEffect(() => {
+    setLoading(true)
+    const days: string[] = []
+    const [y, m, d] = weekStartStr.split('-').map(Number)
+    for (let i = 0; i < 7; i++) {
+      const dt = new Date(y, m - 1, d + i)
+      days.push([
+        dt.getFullYear(),
+        String(dt.getMonth() + 1).padStart(2, '0'),
+        String(dt.getDate()).padStart(2, '0'),
+      ].join('-'))
+    }
+
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+    void Promise.all(days.map((ds) => ipc.db.getHistory(ds))).then((sessionResults) => {
+        const data: WeekDayData[] = days.map((ds, i) => {
+          const sessions = sessionResults[i] as AppSession[]
+          const catTotals = new Map<AppCategory, number>()
+          let totalSec = 0
+          let focusSec = 0
+          const bundleIds = new Set<string>()
+          for (const s of sessions) {
+            totalSec += s.durationSeconds
+            if (FOCUSED_CATEGORIES.includes(s.category)) focusSec += s.durationSeconds
+            catTotals.set(s.category, (catTotals.get(s.category) ?? 0) + s.durationSeconds)
+            bundleIds.add(s.bundleId)
+          }
+          const topCategory = sessions.length > 0
+            ? ([...catTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null)
+            : null
+          return {
+            label: dayLabels[i],
+            dateStr: ds,
+            totalSeconds: totalSec,
+            focusSeconds: focusSec,
+            topCategory,
+            appCount: bundleIds.size,
+            color: topCategory ? catColor(topCategory) : 'var(--color-surface-high)',
+          }
+        })
+        setWeekData(data)
+        setLoading(false)
+      })
+  }, [weekStartStr])
+
+  if (loading) {
+    return (
+      <div className="card animate-pulse h-48" />
+    )
+  }
+
+  const totalTracked = weekData.reduce((s, d) => s + d.totalSeconds, 0)
+  const totalFocus = weekData.reduce((s, d) => s + d.focusSeconds, 0)
+  const focusPct = totalTracked > 0 ? Math.round((totalFocus / totalTracked) * 100) : 0
+  const allApps = weekData.reduce((s, d) => s + d.appCount, 0)
+
+  const chartData = weekData.map((d) => ({
+    name: d.label,
+    dateStr: d.dateStr,
+    hours: parseFloat((d.totalSeconds / 3600).toFixed(2)),
+    fill: d.color,
+  }))
+
+  return (
+    <div className="card">
+      <p className="section-label mb-4">This week</p>
+      <ResponsiveContainer width="100%" height={180}>
+        <BarChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+          <XAxis
+            dataKey="name"
+            tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }}
+            axisLine={false}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v: number) => `${v}h`}
+          />
+          <Tooltip
+            formatter={(value: number) => [`${value}h`, 'Tracked']}
+            contentStyle={{
+              background: 'var(--color-surface-card)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 8,
+              fontSize: 12,
+            }}
+            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+          />
+          <Bar
+            dataKey="hours"
+            radius={[4, 4, 0, 0]}
+            onClick={(entry: { dateStr: string }) => onSelectDay(entry.dateStr)}
+            style={{ cursor: 'pointer' }}
+            fill="var(--color-accent)"
+          />
+        </BarChart>
+      </ResponsiveContainer>
+      <p className="text-[12px] text-[var(--color-text-secondary)] mt-3">
+        This week: {formatDuration(totalTracked)} tracked · {focusPct}% focus · {allApps} app opens
+      </p>
+    </div>
+  )
+}
+
 export default function History() {
+  const [viewMode, setViewMode] = useState<'day' | 'week'>('day')
   const [date, setDate] = useState(todayString())
   const [sessions, setSessions] = useState<AppSession[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (viewMode !== 'day') return
     setLoading(true)
     ipc.db.getHistory(date).then((data) => {
       setSessions(data as AppSession[])
       setLoading(false)
     })
-  }, [date])
+  }, [date, viewMode])
 
   const groups    = groupSessions(sessions)
   const totalSec  = groups.reduce((n, g) => n + g.totalSeconds, 0)
@@ -119,7 +261,11 @@ export default function History() {
       <div className="flex items-end justify-between mb-5">
         <div>
           <p className="section-label mb-1">History</p>
-          {groups.length > 0 ? (
+          {viewMode === 'week' ? (
+            <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
+              Weekly overview
+            </h1>
+          ) : groups.length > 0 ? (
             <>
               <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
                 {formatFullDate(date)}
@@ -138,8 +284,28 @@ export default function History() {
           )}
         </div>
 
-        {/* Date navigation: ‹ [date input] › [Today] */}
-        <div className="flex items-center gap-1">
+        {/* Right side: Day/Week toggle + date navigation */}
+        <div className="flex items-center gap-2">
+          {/* Day / Week toggle */}
+          <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-surface-card)] border border-[var(--color-border)]">
+            {(['day', 'week'] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                className={[
+                  'px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors',
+                  viewMode === mode
+                    ? 'bg-[var(--color-surface-high)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+                ].join(' ')}
+              >
+                {mode === 'day' ? 'Day' : 'Week'}
+              </button>
+            ))}
+          </div>
+
+          {/* Date navigation: ‹ [date input] › [Today] — only in day mode */}
+          {viewMode === 'day' && <div className="flex items-center gap-1">
           <button
             onClick={() => setDate(shiftDate(date, -1))}
             className="w-7 h-7 rounded-md flex items-center justify-center text-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-high)] transition-colors"
@@ -168,8 +334,23 @@ export default function History() {
               Today
             </button>
           )}
+          </div>}
         </div>
       </div>
+
+      {/* ── Week view ───────────────────────────────────────────────────── */}
+      {viewMode === 'week' && (
+        <WeekView
+          onSelectDay={(d) => {
+            setDate(d)
+            setViewMode('day')
+          }}
+        />
+      )}
+      {viewMode === 'week' && <div />}
+
+      {/* ── Day view content ────────────────────────────────────────────── */}
+      {viewMode === 'day' && <>
 
       {/* Day summary section — shown when groups exist */}
       {!loading && groups.length > 0 && (
@@ -312,6 +493,8 @@ export default function History() {
           })}
         </div>
       )}
+
+      </>}
     </div>
   )
 }

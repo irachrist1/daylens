@@ -1,7 +1,28 @@
 // Raw better-sqlite3 queries — will be typed Drizzle functions in Phase 2a
+import fs from 'node:fs'
+import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AppSession, AppUsageSummary, AppCategory, FocusSession, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
+
+// ─── App name normalization ────────────────────────────────────────────────────
+
+function loadNormMap(): { aliases: Record<string, string>; catalog: Record<string, { displayName: string }> } {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'shared', 'app-normalization.v1.json'),
+    path.join(process.cwd(), 'shared', 'app-normalization.v1.json'),
+  ]
+  for (const p of candidates) {
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { /* try next */ }
+  }
+  return { aliases: {}, catalog: {} }
+}
+const normMap = loadNormMap()
+
+function resolveDisplayName(rawName: string): string {
+  const key = normMap.aliases[rawName.toLowerCase()]
+  return (key && normMap.catalog[key]?.displayName) || rawName
+}
 
 // ─── UX noise filter ──────────────────────────────────────────────────────────
 // Applied at read time so junk data never surfaces in the UI.
@@ -46,6 +67,7 @@ function clipRowToRange(
   fromMs: number,
   toMs: number,
   category: AppCategory,
+  resolvedName?: string,
 ): AppSession | null {
   const clippedStart = Math.max(row.start_time, fromMs)
   const clippedEnd = Math.min(sessionEndTime(row), toMs)
@@ -54,7 +76,7 @@ function clipRowToRange(
   return {
     id: row.id,
     bundleId: row.bundle_id,
-    appName: row.app_name,
+    appName: resolvedName ?? row.app_name,
     startTime: clippedStart,
     endTime: clippedEnd,
     durationSeconds: Math.max(1, Math.round((clippedEnd - clippedStart) / 1_000)),
@@ -114,7 +136,7 @@ export function getAppSummariesForRange(
     } else {
       summaryMap.set(row.bundle_id, {
         bundleId: row.bundle_id,
-        appName: row.app_name,
+        appName: resolveDisplayName(row.app_name),
         category,
         totalSeconds: clipped.durationSeconds,
         isFocused: FOCUSED_CATEGORIES.includes(category),
@@ -149,7 +171,7 @@ export function getSessionsForRange(
       row: r,
       session: (() => {
       const category: AppCategory = overrides[r.bundle_id] ?? r.category
-      return clipRowToRange(r, fromMs, toMs, category)
+      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.app_name))
       })(),
     }))
     .filter((entry): entry is { row: AppSessionRow; session: AppSession } => {
@@ -209,11 +231,15 @@ export function getActiveFocusSession(db: Database.Database): FocusSession | nul
 // Category overrides
 // ---------------------------------------------------------------------------
 
-function getCategoryOverrides(db: Database.Database): Record<string, AppCategory> {
+export function getCategoryOverrides(db: Database.Database): Record<string, AppCategory> {
   const rows = db
     .prepare(`SELECT bundle_id, category FROM category_overrides`)
     .all() as { bundle_id: string; category: AppCategory }[]
   return Object.fromEntries(rows.map((r) => [r.bundle_id, r.category]))
+}
+
+export function clearCategoryOverride(db: Database.Database, bundleId: string): void {
+  db.prepare(`DELETE FROM category_overrides WHERE bundle_id = ?`).run(bundleId)
 }
 
 export function setCategoryOverride(
@@ -304,7 +330,7 @@ export function getSessionsForApp(
     .filter((r) => !isUxNoise(r.app_name))
     .map((r) => {
       const category: AppCategory = overrides[r.bundle_id] ?? r.category
-      return clipRowToRange(r, fromMs, toMs, category)
+      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.app_name))
     })
     .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
 }
@@ -315,7 +341,7 @@ export function getRecentAppSessions(
   db: Database.Database,
   limit = 5,
 ): { appName: string; category: string; durationSec: number; startTime: number }[] {
-  return db
+  const rows = db
     .prepare<number>(`
       SELECT app_name   AS appName,
              category,
@@ -326,6 +352,7 @@ export function getRecentAppSessions(
       LIMIT ?
     `)
     .all(limit) as { appName: string; category: string; durationSec: number; startTime: number }[]
+  return rows.map((r) => ({ ...r, appName: resolveDisplayName(r.appName) }))
 }
 
 // ---------------------------------------------------------------------------

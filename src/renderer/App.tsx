@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { ipc } from './lib/ipc'
 import Today from './views/Today'
 import Focus from './views/Focus'
@@ -62,12 +63,12 @@ export default function App() {
           <main className="flex-1 overflow-y-auto bg-[var(--color-surface)]">
             <Routes>
               <Route path="/" element={<Navigate to="/today" replace />} />
-              <Route path="/today" element={<Today />} />
-              <Route path="/focus" element={<Focus />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/apps" element={<Apps />} />
-              <Route path="/insights" element={<Insights />} />
-              <Route path="/settings" element={<Settings />} />
+              <Route path="/today" element={<ErrorBoundary name="Today"><Today /></ErrorBoundary>} />
+              <Route path="/focus" element={<ErrorBoundary name="Focus"><Focus /></ErrorBoundary>} />
+              <Route path="/history" element={<ErrorBoundary name="History"><History /></ErrorBoundary>} />
+              <Route path="/apps" element={<ErrorBoundary name="Apps"><Apps /></ErrorBoundary>} />
+              <Route path="/insights" element={<ErrorBoundary name="Insights"><Insights /></ErrorBoundary>} />
+              <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings /></ErrorBoundary>} />
             </Routes>
           </main>
         </div>
