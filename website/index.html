@@ -3,153 +3,336 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Daylens for macOS</title>
-    <meta
-      name="description"
-      content="Daylens is your personal activity analyst for macOS: local-first tracking, AI-powered insights, and a calm native interface."
-    />
+    <title>Daylens — Know exactly where your time goes</title>
+    <meta name="description" content="Daylens is a local-first AI-powered activity analyst for macOS. Track apps, browsers, and websites — then turn that data into grounded insight. Free, open source, no telemetry." />
+    <meta property="og:title" content="Daylens — Know exactly where your time goes" />
+    <meta property="og:description" content="Local-first AI-powered activity analyst for macOS. Free and open source." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://irachrist1.github.io/daylens/" />
     <link rel="canonical" href="https://irachrist1.github.io/daylens/" />
-    <!-- TODO: Replace the canonical URL if a custom domain is configured for GitHub Pages. -->
     <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="site-shell">
-      <header class="topbar">
-        <a class="brand" href="./index.html">Daylens</a>
-        <nav class="topnav">
+
+    <!-- ── Navbar ── -->
+    <nav class="navbar" id="navbar">
+      <div class="navbar-inner">
+        <a class="navbar-brand" href="./">Daylens</a>
+        <div class="navbar-links">
           <a href="#features">Features</a>
-          <a href="#walkthrough">Walkthrough</a>
-          <a href="./privacy.html">Privacy</a>
-          <a href="https://github.com/irachrist1/daylens">GitHub</a>
-        </nav>
-      </header>
+          <a href="#open-source" class="hide-mobile">Open Source</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/irachrist1/daylens" class="btn-nav">Download</a>
+        </div>
+      </div>
+    </nav>
 
-      <main>
-        <section class="hero">
-          <div class="hero-copy">
-            <span class="eyebrow">Native macOS activity intelligence</span>
-            <h1>Your personal activity analyst for macOS.</h1>
-            <p class="lede">
-              Track the apps, browsers, and websites that shaped your day, then
-              turn that activity into calm, grounded insight. Daylens is
-              local-first, privacy-forward, and fully open source.
-            </p>
-            <div class="cta-row">
-              <a
-                class="button primary"
-                href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.0.dmg"
-              >
-                Download for macOS
-              </a>
-              <a class="button secondary" href="https://github.com/irachrist1/daylens">
-                View on GitHub
-              </a>
+    <!-- ── Hero ── -->
+    <section class="hero">
+      <div class="hero-bg">
+        <div class="hero-orb hero-orb-1"></div>
+        <div class="hero-orb hero-orb-2"></div>
+      </div>
+
+      <div class="hero-content">
+        <span class="eyebrow-pill">Free · Open Source · Local-first</span>
+        <h1>Know exactly where<br>your time goes.</h1>
+        <p class="hero-sub">Daylens watches the apps, browsers, and websites you use — then turns that activity into grounded AI insight. Everything stays on your Mac. No subscription, no cloud, no games.</p>
+
+        <div class="cta-row">
+          <button class="btn-primary" id="brew-copy" data-copy="brew install --cask daylens" title="Copy to clipboard">
+            <span>brew install --cask daylens</span>
+            <svg class="copy-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
+            <svg class="check-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.5 3.5 7-7"/></svg>
+          </button>
+          <a class="btn-secondary" href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.0.dmg">Direct download ↓</a>
+        </div>
+        <p class="hero-meta">macOS Sonoma 14+ · MIT License · Free forever</p>
+      </div>
+
+      <div class="hero-visual">
+        <div class="window-mockup">
+          <div class="window-chrome">
+            <div class="traffic-light tl-red"></div>
+            <div class="traffic-light tl-yellow"></div>
+            <div class="traffic-light tl-green"></div>
+            <div class="window-tabs">
+              <div class="window-tab active"></div>
+              <div class="window-tab"></div>
+              <div class="window-tab"></div>
             </div>
-            <div class="meta-row">
-              <span class="badge">Requires macOS 14 Sonoma or later</span>
-              <span class="gatekeeper">First launch: right-click -> Open</span>
+          </div>
+          <div class="window-content">
+            <div class="window-sidebar">
+              <div class="sidebar-item active" style="width:70%"></div>
+              <div class="sidebar-item" style="width:55%"></div>
+              <div class="sidebar-item" style="width:80%"></div>
+              <div class="sidebar-item" style="width:45%"></div>
+              <div class="sidebar-item" style="width:60%"></div>
+            </div>
+            <div class="window-main">
+              <!-- TODO: Replace these placeholder blocks with a real screenshot of the Today view -->
+              <div class="mock-block tall"></div>
+              <div class="mock-block"></div>
+              <div class="mock-block"></div>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
 
-          <div class="hero-visual">
-            <img
-              src="./assets/daylens-hero.svg"
-              alt="Illustrated Daylens application preview"
-            />
-          </div>
-        </section>
-
-        <section class="value-strip" id="features">
-          <article>
-            <h2>Local-first</h2>
-            <p>Your tracking data stays on your Mac. No telemetry, no analytics, no cloud sync.</p>
-          </article>
-          <article>
-            <h2>AI-powered insight</h2>
-            <p>Generate summaries and ask grounded questions about your actual activity history.</p>
-          </article>
-          <article>
-            <h2>Multi-browser coverage</h2>
-            <p>Chrome, Arc, Safari, Brave, Edge, and Firefox all feed into the same daily story.</p>
-          </article>
-          <article>
-            <h2>Native macOS UI</h2>
-            <p>Built in SwiftUI with a calm, information-dense layout that feels at home on Sonoma.</p>
-          </article>
-        </section>
-
-        <section class="feature-grid">
-          <div class="feature-card">
-            <span class="feature-label">Why people install it</span>
-            <h2>See where your time really went.</h2>
-            <p>
-              Daylens separates active use from background noise, blends app and
-              browser context together, and surfaces focus patterns you can act on.
-            </p>
-          </div>
-          <div class="feature-card">
-            <span class="feature-label">Open source</span>
-            <h2>100% open source under MIT.</h2>
-            <p>
-              Audit the code, run it locally, and contribute improvements. Daylens
-              ships as an open project from day one.
-            </p>
-            <a class="inline-link" href="https://github.com/irachrist1/daylens">
-              Explore the repository
-            </a>
-          </div>
-        </section>
-
-        <section class="walkthrough" id="walkthrough">
-          <div class="section-heading">
-            <span class="eyebrow">Feature walkthrough</span>
-            <h2>Built for daily review, not just raw logging.</h2>
-            <p>
-              The experience moves from capture to interpretation: what happened,
-              what mattered, and what might deserve your attention tomorrow.
-            </p>
-          </div>
-
-          <div class="shot-grid">
-            <!-- TODO: Replace these placeholders with real app screenshots before the public launch page freeze. -->
-            <article class="shot-card">
-              <div class="shot-placeholder">Today dashboard screenshot placeholder</div>
-              <h3>Today overview</h3>
-              <p>Focus score, live app activity, timeline context, and top apps in one calm surface.</p>
-            </article>
-            <article class="shot-card">
-              <div class="shot-placeholder">Apps and websites screenshot placeholder</div>
-              <h3>Apps and websites</h3>
-              <p>Review meaningful sessions, browser imports, and category overrides across the day.</p>
-            </article>
-            <article class="shot-card">
-              <div class="shot-placeholder">AI insights screenshot placeholder</div>
-              <h3>AI insights</h3>
-              <p>Ask questions about your usage history and generate grounded summaries when you want them.</p>
-            </article>
-          </div>
-        </section>
-
-        <section class="privacy-callout">
-          <div>
-            <span class="eyebrow">Privacy-first</span>
-            <h2>No telemetry. No analytics. No cloud sync.</h2>
-          </div>
-          <p>
-            Tracking data stays on your Mac, your API key lives in macOS Keychain,
-            and you can delete all collected data at any time from Settings.
-          </p>
-          <a class="inline-link" href="./privacy.html">Read the privacy policy</a>
-        </section>
-      </main>
-
-      <footer class="footer">
-        <span>MIT License</span>
-        <a href="https://github.com/irachrist1/daylens">GitHub</a>
-        <a href="./privacy.html">Privacy</a>
-        <span>Christian Tonny 2026</span>
-      </footer>
+    <!-- ── Trust bar ── -->
+    <div class="trust-bar">
+      <div class="trust-bar-inner">
+        <span>Swift</span><span class="dot"></span>
+        <span>SwiftUI</span><span class="dot"></span>
+        <span>Claude API</span><span class="dot"></span>
+        <span>97 tests</span><span class="dot"></span>
+        <span>MIT License</span><span class="dot"></span>
+        <span>No telemetry</span>
+      </div>
     </div>
+
+    <!-- ── The problem ── -->
+    <section class="problem">
+      <div class="problem-inner reveal">
+        <h2>You're losing hours you can't account for.</h2>
+        <p>Most people have no idea where their day actually went. The apps they think they use and the apps they actually use never match. Manual time-trackers don't get used. Analytics tools that send your data somewhere ask you to trust a company with your entire behavior pattern.</p>
+        <p>Daylens solves this differently. It runs in the background, watches what you do locally and automatically, and explains it back to you in plain language — powered by AI that's grounded in your real data, not generic productivity advice.</p>
+      </div>
+    </section>
+
+    <!-- ── Features ── -->
+    <section class="features" id="features">
+      <div class="features-grid">
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          <h3>Local-first privacy</h3>
+          <p>No telemetry, no analytics, no cloud sync. All data lives in ~/Library on your Mac.</p>
+        </div>
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5h4.5l-3.5 2.7 1.3 4.3L12 12l-3.8 2.5 1.3-4.3L6 7.5h4.5z"/><circle cx="12" cy="12" r="10"/></svg>
+          <h3>AI-powered insight</h3>
+          <p>Daily summaries and Q&A grounded in your actual activity data. Works with Claude or OpenAI-compatible APIs.</p>
+        </div>
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><ellipse cx="12" cy="12" rx="5" ry="10"/></svg>
+          <h3>Multi-browser</h3>
+          <p>Chrome, Arc, Safari, Brave, Edge, and Firefox all feed into the same timeline automatically.</p>
+        </div>
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          <h3>Focus scoring</h3>
+          <p>See whether your day was focused or fragmented, with scores tied to real session data.</p>
+        </div>
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/></svg>
+          <h3>Category overrides</h3>
+          <p>Fix miscategorized apps. Your corrections persist and flow through summaries, scores, and AI context.</p>
+        </div>
+        <div class="feature-card reveal">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
+          <h3>Full history</h3>
+          <p>Browse any past day, review weekly trends, and export everything to JSON.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Open source ── -->
+    <section class="open-source" id="open-source">
+      <div class="open-source-inner reveal">
+        <div>
+          <h2>The first truly open-source macOS activity analyst.</h2>
+          <p>Every tool in this category is closed source and subscription-priced. Rize is $10/month. Timing is $29. Daylens is $0, MIT licensed, and every line of code is readable on GitHub. Audit it, fork it, or contribute to it.</p>
+          <div class="badge-row">
+            <img src="https://img.shields.io/github/stars/irachrist1/daylens?style=flat-square&color=111111&labelColor=111111" alt="GitHub stars" loading="lazy" />
+            <img src="https://img.shields.io/badge/License-MIT-111111.svg?style=flat-square" alt="MIT License" loading="lazy" />
+            <img src="https://img.shields.io/badge/macOS-14%2B-111111.svg?style=flat-square" alt="macOS 14+" loading="lazy" />
+          </div>
+        </div>
+        <div class="os-cta-col">
+          <a class="btn-secondary" href="https://github.com/irachrist1/daylens">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="margin-right:8px"><path d="M8 .2A8 8 0 0 0 5.47 15.79c.4.07.55-.17.55-.38v-1.33C3.73 14.5 3.26 13 3.26 13a2.13 2.13 0 0 0-.89-1.17c-.73-.5.05-.49.05-.49a1.69 1.69 0 0 1 1.23.83 1.71 1.71 0 0 0 2.34.67 1.72 1.72 0 0 1 .51-1.07c-1.78-.2-3.64-.89-3.64-3.95a3.1 3.1 0 0 1 .82-2.15 2.87 2.87 0 0 1 .08-2.12s.67-.21 2.2.82a7.55 7.55 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82a2.87 2.87 0 0 1 .08 2.12 3.1 3.1 0 0 1 .82 2.15c0 3.07-1.87 3.75-3.65 3.95a1.92 1.92 0 0 1 .55 1.49v2.21c0 .21.15.46.55.38A8 8 0 0 0 8 .2"/></svg>
+            Star on GitHub
+          </a>
+          <a class="btn-secondary" href="https://github.com/irachrist1/daylens/tree/main">Browse the code</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── How it works ── -->
+    <section class="how-it-works" id="install">
+      <div class="how-it-works-inner">
+        <h2 class="reveal">How it works</h2>
+        <div class="steps">
+          <div class="step reveal">
+            <span class="step-num">1</span>
+            <h3>Install</h3>
+            <p>Run <code>brew tap irachrist1/daylens && brew install --cask daylens</code>. Or download the DMG from GitHub Releases.</p>
+          </div>
+          <div class="step reveal">
+            <span class="step-num">2</span>
+            <h3>Grant permissions</h3>
+            <p>Daylens will ask for Accessibility and Full Disk Access on first launch. Both are required — Accessibility to know which app is active, Full Disk Access to read your browser history databases.</p>
+          </div>
+          <div class="step reveal">
+            <span class="step-num">3</span>
+            <h3>Use your Mac normally</h3>
+            <p>Daylens runs quietly in the menu bar. No manual tracking, no timers to start or stop.</p>
+          </div>
+          <div class="step reveal">
+            <span class="step-num">4</span>
+            <h3>Open Daylens</h3>
+            <p>See your focus score, today's timeline, top apps, and website activity. Ask the AI anything about your day.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Screenshots ── -->
+    <section class="screenshots">
+      <div class="screenshots-inner">
+        <h2 class="reveal">See it in action</h2>
+        <div class="tab-bar reveal">
+          <button class="tab-btn active" data-tab="today">Today</button>
+          <button class="tab-btn" data-tab="ai">AI Insights</button>
+          <button class="tab-btn" data-tab="history">History</button>
+        </div>
+        <div class="tab-panels">
+          <div class="tab-panel active" id="tab-today">
+            <div class="screenshot-mockup">
+              <div class="screenshot-chrome">
+                <div class="traffic-light tl-red"></div>
+                <div class="traffic-light tl-yellow"></div>
+                <div class="traffic-light tl-green"></div>
+              </div>
+              <!-- TODO: Replace with real screenshot of the Today view -->
+              <div class="screenshot-body">Today dashboard screenshot — coming soon</div>
+            </div>
+          </div>
+          <div class="tab-panel" id="tab-ai">
+            <div class="screenshot-mockup">
+              <div class="screenshot-chrome">
+                <div class="traffic-light tl-red"></div>
+                <div class="traffic-light tl-yellow"></div>
+                <div class="traffic-light tl-green"></div>
+              </div>
+              <!-- TODO: Replace with real screenshot of AI Insights -->
+              <div class="screenshot-body">AI Insights screenshot — coming soon</div>
+            </div>
+          </div>
+          <div class="tab-panel" id="tab-history">
+            <div class="screenshot-mockup">
+              <div class="screenshot-chrome">
+                <div class="traffic-light tl-red"></div>
+                <div class="traffic-light tl-yellow"></div>
+                <div class="traffic-light tl-green"></div>
+              </div>
+              <!-- TODO: Replace with real screenshot of the History view -->
+              <div class="screenshot-body">History view screenshot — coming soon</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Download CTA ── -->
+    <section class="download-cta">
+      <div class="download-cta-bg">
+        <div class="hero-orb"></div>
+      </div>
+      <div class="download-cta-content reveal">
+        <h2>Start understanding your day.</h2>
+        <div class="terminal-block">
+          <div class="terminal-line"><span class="prompt">$ </span>brew tap irachrist1/daylens</div>
+          <div class="terminal-line"><span class="prompt">$ </span>brew install --cask daylens</div>
+          <button class="copy-btn" data-copy="brew tap irachrist1/daylens && brew install --cask daylens">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5"/></svg>
+            Copy
+          </button>
+        </div>
+        <p class="download-alt">Or: <a href="https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.0.dmg">Direct DMG download →</a></p>
+        <p class="download-fine">macOS 14+ · No account required · Free forever</p>
+      </div>
+    </section>
+
+    <!-- ── Footer ── -->
+    <footer class="footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="footer-brand">Daylens</span>
+          <span class="footer-tagline">Local-first activity analyst for macOS</span>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/irachrist1/daylens">GitHub</a>
+          <a href="./privacy.html">Privacy</a>
+          <a href="https://github.com/irachrist1/daylens/blob/main/CHANGELOG.md">Changelog</a>
+          <a href="https://github.com/irachrist1/daylens/blob/main/LICENSE">License</a>
+        </div>
+        <span class="footer-copy">Built by Christian Tonny · 2026</span>
+      </div>
+    </footer>
+
+    <script>
+      // Navbar scroll effect
+      const navbar = document.getElementById('navbar');
+      const onScroll = () => navbar.classList.toggle('scrolled', window.scrollY > 40);
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+
+      // Scroll reveal
+      const reveals = document.querySelectorAll('.reveal');
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((e, i) => {
+          if (e.isIntersecting) {
+            // Stagger siblings
+            const siblings = Array.from(e.target.parentElement.querySelectorAll('.reveal'));
+            const idx = siblings.indexOf(e.target);
+            e.target.style.transitionDelay = `${idx * 60}ms`;
+            e.target.classList.add('visible');
+            observer.unobserve(e.target);
+          }
+        });
+      }, { threshold: 0.15 });
+      reveals.forEach(el => observer.observe(el));
+
+      // Copy to clipboard
+      document.querySelectorAll('[data-copy]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          navigator.clipboard.writeText(btn.dataset.copy).then(() => {
+            btn.classList.add('copied');
+            const orig = btn.querySelector('.copy-btn') ? btn.textContent : null;
+            if (btn.classList.contains('copy-btn')) {
+              const svgEl = btn.querySelector('svg');
+              btn.textContent = ' Copied!';
+              if (svgEl) btn.prepend(svgEl);
+            }
+            setTimeout(() => {
+              btn.classList.remove('copied');
+              if (btn.classList.contains('copy-btn')) {
+                const svgEl = btn.querySelector('svg');
+                btn.textContent = ' Copy';
+                if (svgEl) btn.prepend(svgEl);
+              }
+            }, 2000);
+          });
+        });
+      });
+
+      // Screenshot tabs
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        });
+      });
+    </script>
   </body>
 </html>

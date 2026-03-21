@@ -18,16 +18,24 @@ Daylens is a native macOS app that watches the apps, browsers, and websites you 
 - Multi-browser support for Chrome, Arc, Safari, Brave, Edge, and Firefox
 - Focus scoring, history review, category overrides, and JSON export
 
-## Download
+## Install
 
-Download the latest DMG from [GitHub Releases](https://github.com/irachrist1/daylens/releases), then:
+### Homebrew (recommended)
 
-1. Open `Daylens-1.0.0.dmg`
-2. Drag `Daylens.app` into `Applications`
-3. Open Daylens from `Applications`
-4. On first launch, use `right-click -> Open` to bypass Gatekeeper for the ad-hoc signed build
+```sh
+brew tap irachrist1/daylens
+brew install --cask daylens
+```
 
-Daylens is currently distributed without a paid Apple Developer certificate, so macOS will block the first double-click launch. After the first `Open`, future launches work normally.
+Then open Daylens from your Applications folder or Launchpad.
+
+### Direct download
+
+1. Download [Daylens-1.0.0.dmg](https://github.com/irachrist1/daylens/releases/latest/download/Daylens-1.0.0.dmg) from GitHub Releases.
+2. Drag `Daylens.app` into `Applications`.
+3. On first launch, go to **System Settings → Privacy & Security → Open Anyway**.
+
+> **Note:** The direct download requires a one-time approval step because the app is distributed without a paid Apple Developer certificate. Homebrew handles this automatically.
 
 ## System Requirements
 
@@ -74,6 +82,10 @@ The release is ad-hoc signed so anyone can install it without a paid Apple Devel
 ### Can I delete my data?
 
 Yes. Daylens includes a delete-all-data flow in Settings and also writes rolling backups on launch.
+
+## Website
+
+The marketing site is live at [irachrist1.github.io/daylens](https://irachrist1.github.io/daylens). It deploys automatically from the `website/` directory on push to `main` via GitHub Pages (Actions source). To enable it for the first time, go to **repo Settings → Pages → Source: GitHub Actions → Save**.
 
 ## Contributing
 
