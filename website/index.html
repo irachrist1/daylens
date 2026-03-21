@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daylens — Know exactly where your time goes</title>
-    <meta name="description" content="Daylens is a local-first AI-powered activity analyst for macOS and Windows. Track apps, browsers, and websites — then turn that data into grounded insight. Free, open source, no telemetry." />
+    <meta name="description" content="Daylens is a local-first AI-powered activity analyst for macOS, Windows, and the web. Track apps, browsers, and websites — then turn that data into grounded insight. Free, open source, no telemetry." />
     <meta property="og:title" content="Daylens — Know exactly where your time goes" />
-    <meta property="og:description" content="Local-first AI-powered activity analyst for macOS and Windows. Free and open source." />
+    <meta property="og:description" content="Local-first AI-powered activity analyst for macOS, Windows, and the web. Free and open source." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://irachrist1.github.io/daylens/" />
     <link rel="canonical" href="https://irachrist1.github.io/daylens/" />
@@ -24,6 +24,7 @@
         <a class="navbar-brand" href="./">Daylens</a>
         <div class="navbar-links">
           <a href="#features">Features</a>
+          <a href="#web-companion">Web</a>
           <a href="#open-source" class="hide-mobile">Open Source</a>
           <a href="#install">Install</a>
           <a href="https://github.com/irachrist1/daylens" class="btn-nav">Download</a>
@@ -41,7 +42,7 @@
       <div class="hero-content">
         <span class="eyebrow-pill">Free · Open Source · Local-first</span>
         <h1>Know exactly where<br>your time goes.</h1>
-        <p class="hero-sub">Daylens watches the apps, browsers, and websites you use — then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud, no games.</p>
+        <p class="hero-sub">Daylens watches the apps, browsers, and websites you use — then turns that activity into grounded AI insight. Everything stays on your machine, with an optional web companion to view your data anywhere. No subscription, no games.</p>
 
         <div class="cta-row">
           <div class="platform-cta" id="cta-macos">
@@ -99,6 +100,8 @@
         <span>Electron</span><span class="dot"></span>
         <span>React</span><span class="dot"></span>
         <span>Claude API</span><span class="dot"></span>
+        <span>Next.js</span><span class="dot"></span>
+        <span>Convex</span><span class="dot"></span>
         <span>MIT License</span><span class="dot"></span>
         <span>No telemetry</span>
       </div>
@@ -119,7 +122,7 @@
         <div class="feature-card reveal">
           <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
           <h3>Local-first privacy</h3>
-          <p>No telemetry, no analytics, no cloud sync. All data stays local on your machine.</p>
+          <p>No telemetry, no analytics. All data stays local by default — optional Web Companion sync is encrypted and on your terms.</p>
         </div>
         <div class="feature-card reveal">
           <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5h4.5l-3.5 2.7 1.3 4.3L12 12l-3.8 2.5 1.3-4.3L6 7.5h4.5z"/><circle cx="12" cy="12" r="10"/></svg>
@@ -197,6 +200,106 @@
             <h3>Open Daylens</h3>
             <p>See your focus score, today's timeline, top apps, and website activity. Ask the AI anything about your day.</p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Web Companion ── -->
+    <section class="web-companion" id="web-companion">
+      <div class="web-companion-inner">
+        <div class="web-companion-header reveal">
+          <span class="eyebrow-pill">New</span>
+          <h2>Your data, anywhere.<br>Meet Daylens Web.</h2>
+          <p class="web-companion-sub">Access your activity data from any browser — your phone, a tablet, or another computer. Daylens Web syncs with the desktop app so you can review your day from anywhere.</p>
+        </div>
+
+        <div class="web-companion-grid">
+          <!-- How it works -->
+          <div class="wc-card wc-card-how reveal">
+            <div class="wc-card-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <h3>How it works</h3>
+            <ol class="wc-steps">
+              <li><strong>Install the desktop app</strong> — Daylens runs on your Mac or Windows PC and tracks your activity locally.</li>
+              <li><strong>Connect to Web</strong> — Open Settings, find "Web Companion," and click Connect. A QR code and link token appear.</li>
+              <li><strong>Scan or paste</strong> — Open Daylens Web on any device, scan the QR code with your phone camera, or paste the link token.</li>
+              <li><strong>View anywhere</strong> — Your activity data syncs securely. Browse your timeline, focus scores, and AI insights from any browser.</li>
+            </ol>
+          </div>
+
+          <!-- Desktop vs Web comparison -->
+          <div class="wc-card wc-card-compare reveal">
+            <h3>Desktop app vs. Web</h3>
+            <div class="wc-compare-table">
+              <div class="wc-compare-row wc-compare-header">
+                <div class="wc-compare-feature"></div>
+                <div class="wc-compare-val">
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="1.5"/><line x1="12" y1="17" x2="12" y2="21" stroke="currentColor" stroke-width="1.5"/></svg>
+                  Desktop
+                </div>
+                <div class="wc-compare-val">
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 12h20" stroke="currentColor" stroke-width="1.5" fill="none"/><ellipse cx="12" cy="12" rx="5" ry="10" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                  Web
+                </div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">Tracks your activity</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+                <div class="wc-compare-val wc-no">&mdash;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">Runs in the background</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+                <div class="wc-compare-val wc-no">&mdash;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">AI insights &amp; Q&amp;A</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">View timeline &amp; focus scores</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">Browse history</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">Access from any device</div>
+                <div class="wc-compare-val wc-no">&mdash;</div>
+                <div class="wc-compare-val wc-yes">&#10003;</div>
+              </div>
+              <div class="wc-compare-row">
+                <div class="wc-compare-feature">Requires desktop app</div>
+                <div class="wc-compare-val wc-no">&mdash;</div>
+                <div class="wc-compare-val wc-yes">Required</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Important callout -->
+        <div class="wc-callout reveal">
+          <div class="wc-callout-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          </div>
+          <div>
+            <strong>Daylens Web requires the desktop app.</strong>
+            <p>The web dashboard is a read-only companion — it displays the data your desktop app collects. Install Daylens on your Mac or Windows PC first, then connect to the web from Settings.</p>
+          </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="wc-cta reveal">
+          <a class="btn-primary" href="https://daylens-web.vercel.app" style="background: var(--color-accent); color: var(--color-bg);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><ellipse cx="12" cy="12" rx="5" ry="10"/></svg>
+            Open Daylens Web
+          </a>
+          <p class="wc-cta-note">Already have the desktop app installed? Connect in Settings &rarr; Web Companion.</p>
         </div>
       </div>
     </section>
@@ -290,7 +393,7 @@
             <p class="download-alt"><a href="https://github.com/irachrist1/daylens-windows/releases/latest">Portable version also available</a></p>
           </div>
         </div>
-        <p class="download-fine">macOS 14+ · Windows 10+ · No account required · Free forever</p>
+        <p class="download-fine">macOS 14+ · Windows 10+ · Web companion included · No account required · Free forever</p>
       </div>
     </section>
 
@@ -299,10 +402,11 @@
       <div class="footer-inner">
         <div class="footer-left">
           <span class="footer-brand">Daylens</span>
-          <span class="footer-tagline">Local-first activity analyst for macOS and Windows</span>
+          <span class="footer-tagline">Local-first activity analyst for macOS, Windows, and the web</span>
         </div>
         <div class="footer-links">
           <a href="https://github.com/irachrist1/daylens">GitHub</a>
+          <a href="https://daylens-web.vercel.app">Daylens Web</a>
           <a href="./privacy.html">Privacy</a>
           <a href="https://github.com/irachrist1/daylens/blob/main/CHANGELOG.md">Changelog</a>
           <a href="https://github.com/irachrist1/daylens/blob/main/LICENSE">License</a>

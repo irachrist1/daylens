@@ -8,11 +8,18 @@ struct WebCompanionSection: View {
     @State private var linkResult: WorkspaceLinker.WorkspaceResult?
     @State private var showRecoveryPhrase = false
     @State private var showUnlinkConfirmation = false
-    @State private var convexSiteUrl = ""
     @State private var errorMessage: String?
 
     private let linker = WorkspaceLinker()
     private let uploader = SyncUploader.shared
+
+    /// The Convex site URL for the Daylens backend.
+    /// In production, replace with your deployed URL.
+    private static let convexSiteUrl = "https://decisive-aardvark-847.convex.site"
+
+    /// The web dashboard URL where users go to paste the link code.
+    /// Update this when you deploy to a custom domain.
+    private static let webDashboardUrl = "https://daylens-web.vercel.app"
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
@@ -20,7 +27,11 @@ struct WebCompanionSection: View {
                 .sectionHeader()
 
             VStack(alignment: .leading, spacing: DS.space12) {
-                if uploader.isLinked {
+                // If we just generated a link code, ALWAYS show it — even if already connected.
+                // This is the critical moment where the user needs to see the QR code.
+                if let result = linkResult {
+                    activeLinkContent(result: result)
+                } else if uploader.isLinked {
                     linkedContent
                 } else {
                     unlinkedContent
@@ -36,7 +47,108 @@ struct WebCompanionSection: View {
         }
     }
 
-    // MARK: - Linked state
+    // MARK: - Active link code display (shown immediately after connecting or clicking "Connect Browser")
+
+    private func activeLinkContent(result: WorkspaceLinker.WorkspaceResult) -> some View {
+        VStack(alignment: .leading, spacing: DS.space16) {
+            // Status bar
+            HStack {
+                HStack(spacing: DS.space8) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                    Text("Connected")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(DS.onSurface)
+                }
+                Spacer()
+                Button("Done") {
+                    linkResult = nil
+                }
+                .buttonStyle(.bordered)
+            }
+
+            // Clear instruction
+            VStack(alignment: .leading, spacing: DS.space4) {
+                Text("Now open Daylens Web in your browser")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(DS.onSurface)
+                Text("Scan the QR code below, or copy and paste the link code.")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceVariant)
+            }
+
+            // QR code — encodes a URL, not just the raw token
+            QRCodeCard(token: "\(Self.webDashboardUrl)?token=\(result.linkToken)")
+
+            // Link code — clearly labeled and copyable
+            VStack(alignment: .leading, spacing: DS.space8) {
+                Text("LINK CODE")
+                    .font(.system(size: 10, weight: .bold, design: .default))
+                    .foregroundStyle(DS.onSurfaceVariant)
+                    .tracking(1)
+
+                HStack(spacing: DS.space8) {
+                    Text(result.linkToken)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(DS.onSurface)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(result.linkToken, forType: .string)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text("Paste this at \(Self.webDashboardUrl)")
+                    .font(.caption)
+                    .foregroundStyle(DS.primary)
+
+                Text("This code expires in 5 minutes.")
+                    .font(.caption2)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
+            }
+            .padding(DS.space12)
+            .background(DS.surfaceLowest.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // Recovery phrase — separate section, clearly different from link code
+            VStack(alignment: .leading, spacing: DS.space8) {
+                Text("RECOVERY PHRASE")
+                    .font(.system(size: 10, weight: .bold, design: .default))
+                    .foregroundStyle(.orange)
+                    .tracking(1)
+
+                Text("Save this separately. Use it to restore your workspace if you reinstall.")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceVariant)
+
+                Text(result.mnemonic)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(DS.onSurface)
+                    .textSelection(.enabled)
+                    .padding(DS.space8)
+                    .background(DS.surfaceLowest.opacity(0.3))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(result.mnemonic, forType: .string)
+                } label: {
+                    Label("Copy Recovery Phrase", systemImage: "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    // MARK: - Linked state (no active link code — just status and actions)
 
     private var linkedContent: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
@@ -70,7 +182,7 @@ struct WebCompanionSection: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Label("Connect Browser", systemImage: "qrcode")
+                    Label("Connect a Browser", systemImage: "qrcode")
                         .font(.body.weight(.medium))
                 }
             }
@@ -107,79 +219,33 @@ struct WebCompanionSection: View {
                     Text("Not Connected")
                         .font(.body.weight(.medium))
                         .foregroundStyle(DS.onSurface)
-                    Text("Link to view your activity on the web")
+                    Text("View your activity data from any browser")
                         .font(.caption)
                         .foregroundStyle(DS.onSurfaceVariant)
                 }
                 Spacer()
             }
 
-            HStack(spacing: DS.space8) {
-                TextField("Convex site URL", text: $convexSiteUrl)
-                    .textFieldStyle(.roundedBorder)
-
-                Button {
-                    link()
-                } label: {
-                    if isLinking {
+            Button {
+                link()
+            } label: {
+                if isLinking {
+                    HStack(spacing: DS.space8) {
                         ProgressView()
                             .controlSize(.small)
-                    } else {
-                        Text("Link")
+                        Text("Setting up...")
                     }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isLinking || convexSiteUrl.isEmpty)
-            }
-
-            if let result = linkResult {
-                VStack(alignment: .leading, spacing: DS.space8) {
-                    Text("Browser Link")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(DS.onSurfaceVariant)
-
-                    QRCodeCard(token: result.linkToken)
-
-                    Text("Reference code: \(result.linkCode)")
-                        .font(.system(.body, design: .monospaced).weight(.bold))
-                        .foregroundStyle(DS.primary)
-
-                    Text("Scan the QR code in the browser. The visible code is only the first 8 characters.")
-                        .font(.caption)
-                        .foregroundStyle(DS.onSurfaceVariant)
-
-                    recoveryPhraseDisplay(mnemonic: result.mnemonic)
+                } else {
+                    Label("Connect to Web", systemImage: "link")
+                        .font(.body.weight(.medium))
                 }
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(isLinking)
         }
     }
 
-    // MARK: - Recovery phrase
-
-    private func recoveryPhraseDisplay(mnemonic: String) -> some View {
-        VStack(alignment: .leading, spacing: DS.space8) {
-            Text("Recovery Phrase — save this now!")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.orange)
-
-            Text(mnemonic)
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(DS.onSurface)
-                .textSelection(.enabled)
-                .padding(DS.space8)
-                .background(DS.surfaceLowest.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(mnemonic, forType: .string)
-            } label: {
-                Label("Copy to Clipboard", systemImage: "doc.on.doc")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-        }
-    }
+    // MARK: - Recovery phrase sheet
 
     private var recoveryPhraseSheet: some View {
         VStack(spacing: DS.space16) {
@@ -189,7 +255,28 @@ struct WebCompanionSection: View {
 
             let keychain = KeychainService(service: "com.daylens.sync")
             if let mnemonic = keychain.string(for: "recovery-mnemonic") {
-                recoveryPhraseDisplay(mnemonic: mnemonic)
+                VStack(alignment: .leading, spacing: DS.space8) {
+                    Text("Use this to restore your workspace if you reinstall Daylens.")
+                        .font(.caption)
+                        .foregroundStyle(DS.onSurfaceVariant)
+
+                    Text(mnemonic)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(DS.onSurface)
+                        .textSelection(.enabled)
+                        .padding(DS.space8)
+                        .background(DS.surfaceLowest.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(mnemonic, forType: .string)
+                    } label: {
+                        Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                }
             } else {
                 Text("Recovery phrase not available.")
                     .foregroundStyle(DS.onSurfaceVariant)
@@ -212,7 +299,7 @@ struct WebCompanionSection: View {
 
         Task {
             do {
-                let result = try await linker.createWorkspace(convexSiteUrl: convexSiteUrl)
+                let result = try await linker.createWorkspace(convexSiteUrl: Self.convexSiteUrl)
                 await MainActor.run {
                     linkResult = result
                     isLinking = false
@@ -235,23 +322,14 @@ struct WebCompanionSection: View {
             do {
                 let result = try await linker.createBrowserLink()
                 await MainActor.run {
-                    if let current = linkResult {
-                        linkResult = WorkspaceLinker.WorkspaceResult(
-                            workspaceId: current.workspaceId,
-                            mnemonic: current.mnemonic,
-                            linkCode: result.displayCode,
-                            linkToken: result.fullToken
-                        )
-                    } else {
-                        let keychain = KeychainService(service: "com.daylens.sync")
-                        let mnemonic = keychain.string(for: "recovery-mnemonic") ?? ""
-                        linkResult = WorkspaceLinker.WorkspaceResult(
-                            workspaceId: uploader.workspaceId ?? "",
-                            mnemonic: mnemonic,
-                            linkCode: result.displayCode,
-                            linkToken: result.fullToken
-                        )
-                    }
+                    let keychain = KeychainService(service: "com.daylens.sync")
+                    let mnemonic = keychain.string(for: "recovery-mnemonic") ?? ""
+                    linkResult = WorkspaceLinker.WorkspaceResult(
+                        workspaceId: uploader.workspaceId ?? "",
+                        mnemonic: mnemonic,
+                        linkCode: result.displayCode,
+                        linkToken: result.fullToken
+                    )
                     isLinking = false
                 }
             } catch {
@@ -289,7 +367,7 @@ private struct QRCodeCard: View {
                     .scaledToFit()
                     .frame(width: 180, height: 180)
                     .padding(DS.space8)
-                    .background(DS.surfaceLowest)
+                    .background(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 RoundedRectangle(cornerRadius: 12)
