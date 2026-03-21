@@ -388,6 +388,16 @@ extension AppDatabase {
         try trackedDaySnapshots(limit: limit).map(\.date)
     }
 
+    func focusSessions(for date: Date) throws -> [FocusSessionRecord] {
+        try dbQueue.read { db in
+            let dayBounds = DayBounds(for: date)
+            return try FocusSessionRecord
+                .filter(Column("startTime") >= dayBounds.start && Column("startTime") < dayBounds.end)
+                .order(Column("startTime").asc)
+                .fetchAll(db)
+        }
+    }
+
     func recentFocusSessions(limit: Int = 30) throws -> [FocusSessionRecord] {
         try dbQueue.read { db in
             try FocusSessionRecord

@@ -13,6 +13,7 @@ struct SettingsView: View {
                 aiSection
                 generalSection
                 dataSection
+                WebCompanionSection()
 
                 if let status = viewModel.statusMessage {
                     Text(status)
