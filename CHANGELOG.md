@@ -2,6 +2,13 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.3] - 2026-03-21
+
+### Fixed
+
+- App icon now includes all required sizes (16px through 1024px) — fixes missing icon in Stage Manager and Dock
+- Website: replaced all amber/yellow accent hues with blue to match app icon
+
 ## [1.0.2] - 2026-03-21
 
 ### Changed

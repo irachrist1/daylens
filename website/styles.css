@@ -4,12 +4,12 @@
   --color-surface: #111111;
   --color-surface-2: #1a1a1a;
   --color-border: rgba(255, 255, 255, 0.07);
-  --color-border-hover: rgba(245, 166, 35, 0.3);
+  --color-border-hover: rgba(104, 174, 255, 0.35);
   --color-text: #f0efe8;
   --color-text-muted: #6b6b6b;
   --color-accent: #68AEFF;
-  --color-accent-dim: rgba(245, 166, 35, 0.12);
-  --color-accent-glow: rgba(245, 166, 35, 0.08);
+  --color-accent-dim: rgba(104, 174, 255, 0.10);
+  --color-accent-glow: rgba(104, 174, 255, 0.06);
   --radius-card: 14px;
   --radius-btn: 8px;
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -214,7 +214,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 24px rgba(245, 166, 35, 0.25);
+  box-shadow: 0 4px 24px rgba(59, 130, 246, 0.30);
 }
 .btn-primary .copy-icon { width: 16px; height: 16px; opacity: 0.6; }
 .btn-primary .check-icon { display: none; width: 16px; height: 16px; }
@@ -295,7 +295,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   border-radius: 4px;
   background: rgba(255,255,255,0.06);
 }
-.window-tab.active { background: rgba(245,166,35,0.2); }
+.window-tab.active { background: rgba(104,174,255,0.18); }
 
 .window-content {
   display: grid;
@@ -314,7 +314,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   border-radius: 5px;
   background: rgba(255,255,255,0.05);
 }
-.sidebar-item.active { background: rgba(245,166,35,0.15); }
+.sidebar-item.active { background: rgba(104,174,255,0.14); }
 .window-main {
   padding: 20px;
   display: grid;
