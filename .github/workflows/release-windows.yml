@@ -34,7 +34,7 @@ jobs:
         run: npm ci
 
       - name: Rebuild native modules for Electron
-        run: npx electron-rebuild -f -w better-sqlite3 -w @paymoapp/active-window
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window
 
       - name: Build Vite bundles
         shell: bash
