@@ -27,6 +27,7 @@ Packages/
 # Build artifacts
 *.o
 *.d
+dist/
 
 # IDE
 .idea/
