@@ -12,7 +12,8 @@
     "cursor": "cursor", "cursor.exe": "cursor",
     "com.microsoft.VSCode": "vscode", "code.exe": "vscode",
     "com.apple.dt.Xcode": "xcode",
-    "com.apple.Terminal": "terminal", "windowsterminal.exe": "terminal",
+    "com.apple.Terminal": "terminal",
+    "windowsterminal.exe": "windowsterminal",
     "com.googlecode.iterm2": "iterm",
     "dev.warp.Warp-Stable": "warp",
     "com.getpostman.postman": "postman", "postman.exe": "postman",
@@ -28,7 +29,11 @@
     "linear": "linear", "linear.exe": "linear",
     "com.microsoft.Outlook": "outlook", "outlook.exe": "outlook",
     "com.anthropic.claudefordesktop": "claude", "claude.exe": "claude",
-    "com.openai.chat": "chatgpt", "chatgpt.exe": "chatgpt"
+    "com.openai.chat": "chatgpt", "chatgpt.exe": "chatgpt",
+    "powershell.exe": "powershell", "pwsh.exe": "powershell",
+    "notepad.exe": "notepad",
+    "explorer.exe": "explorer",
+    "spotify.exe": "spotify"
   },
   "catalog": {
     "chrome": { "displayName": "Google Chrome", "defaultCategory": "browsing" },
@@ -40,14 +45,18 @@
     "opera": { "displayName": "Opera", "defaultCategory": "browsing" },
     "vivaldi": { "displayName": "Vivaldi", "defaultCategory": "browsing" },
     "cursor": { "displayName": "Cursor", "defaultCategory": "development" },
-    "vscode": { "displayName": "VS Code", "defaultCategory": "development" },
+    "vscode": { "displayName": "Visual Studio Code", "defaultCategory": "development" },
     "xcode": { "displayName": "Xcode", "defaultCategory": "development" },
     "terminal": { "displayName": "Terminal", "defaultCategory": "development" },
+    "windowsterminal": { "displayName": "Windows Terminal", "defaultCategory": "development" },
     "iterm": { "displayName": "iTerm2", "defaultCategory": "development" },
     "warp": { "displayName": "Warp", "defaultCategory": "development" },
     "postman": { "displayName": "Postman", "defaultCategory": "development" },
     "tableplus": { "displayName": "TablePlus", "defaultCategory": "development" },
     "github-desktop": { "displayName": "GitHub Desktop", "defaultCategory": "development" },
+    "powershell": { "displayName": "PowerShell", "defaultCategory": "development" },
+    "notepad": { "displayName": "Notepad", "defaultCategory": "writing" },
+    "explorer": { "displayName": "File Explorer", "defaultCategory": "system" },
     "slack": { "displayName": "Slack", "defaultCategory": "communication" },
     "teams": { "displayName": "Microsoft Teams", "defaultCategory": "communication" },
     "discord": { "displayName": "Discord", "defaultCategory": "communication" },
@@ -58,6 +67,7 @@
     "linear": { "displayName": "Linear", "defaultCategory": "productivity" },
     "outlook": { "displayName": "Outlook", "defaultCategory": "email" },
     "claude": { "displayName": "Claude", "defaultCategory": "aiTools" },
-    "chatgpt": { "displayName": "ChatGPT", "defaultCategory": "aiTools" }
+    "chatgpt": { "displayName": "ChatGPT", "defaultCategory": "aiTools" },
+    "spotify": { "displayName": "Spotify", "defaultCategory": "entertainment" }
   }
 }

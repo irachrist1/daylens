@@ -179,10 +179,14 @@ export default function Today() {
   const [live,           setLive]           = useState<LiveSession | null>(null)
   const [loading,        setLoading]        = useState(true)
   const [userName,       setUserName]       = useState('')
+  const [goalHours,      setGoalHours]      = useState(4)
   const [trackingActive, setTrackingActive] = useState<boolean | null>(null)
 
   useEffect(() => {
-    void ipc.settings.get().then((s) => setUserName(s.userName ?? ''))
+    void ipc.settings.get().then((s) => {
+      setUserName(s.userName ?? '')
+      setGoalHours(s.dailyFocusGoalHours ?? 4)
+    })
   }, [])
 
   // Poll tracking status every 30s
@@ -287,6 +291,9 @@ export default function Today() {
           sub={`${focusLabel(focusPct, totalSec > 0)} · app-category based`}
         />
       </div>
+
+      {/* ── 2b. Daily focus goal ───────────────────────────────────────── */}
+      <GoalProgressRow focusSec={focusSec} goalHours={goalHours} />
 
       {/* ── 3. Category allocation ─────────────────────────────────────── */}
       <div className="mt-4">
@@ -411,6 +418,36 @@ function StatCard({
         {sub && (
           <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">{sub}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── 2b. Daily focus goal row ─────────────────────────────────────────────────
+
+function GoalProgressRow({ focusSec, goalHours }: { focusSec: number; goalHours: number }) {
+  const goalSec = goalHours * 3600
+  const pct = Math.min(100, goalSec > 0 ? (focusSec / goalSec) * 100 : 0)
+  const reached = focusSec >= goalSec && goalSec > 0
+
+  return (
+    <div className="card mt-4 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="section-label">Today's goal</span>
+        <span className="text-[11px] text-[var(--color-text-secondary)] tabular-nums">
+          {reached
+            ? 'Goal reached'
+            : `${formatDuration(focusSec)} of ${goalHours}h`}
+        </span>
+      </div>
+      <div className="h-[4px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{
+            width: `${pct}%`,
+            background: reached ? 'var(--color-accent)' : 'var(--color-brand-light, var(--color-accent))',
+          }}
+        />
       </div>
     </div>
   )

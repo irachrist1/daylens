@@ -20,6 +20,7 @@ const DEFAULTS: AppSettings = {
   onboardingComplete: false,
   userName: '',
   userGoals: [],
+  dailyFocusGoalHours: 4,
 }
 
 export function getSettings(): AppSettings {
@@ -34,6 +35,7 @@ export function getSettings(): AppSettings {
     onboardingComplete: (_store.get('onboardingComplete', false) as boolean),
     userName: (_store.get('userName', '') as string),
     userGoals: (_store.get('userGoals', []) as string[]),
+    dailyFocusGoalHours: (_store.get('dailyFocusGoalHours', 4) as number),
   }
 }
 

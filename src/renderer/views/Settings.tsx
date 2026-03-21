@@ -27,6 +27,7 @@ interface DebugInfo {
     error: string | null
     browsersPollable: number
   }
+  updateAvailable: string | null
 }
 
 interface SyncStatus {
@@ -50,6 +51,7 @@ export default function Settings() {
     onboardingComplete: true,
     userName: '',
     userGoals: [],
+    dailyFocusGoalHours: 4,
   })
   const [saved, setSaved]         = useState<string | null>(null)
   const [debugOpen, setDebugOpen] = useState(false)
@@ -65,6 +67,8 @@ export default function Settings() {
   useEffect(() => {
     ipc.settings.get().then((s) => setSettings(s))
     ipc.sync.getStatus().then((s: SyncStatus) => setSyncStatus(s))
+    // Load debug info eagerly for the update banner
+    ipc.debug.getInfo().then((info) => setDebug(info as DebugInfo))
   }, [])
 
   useEffect(() => {
@@ -150,6 +154,25 @@ export default function Settings() {
       <p className="section-label mb-1">Settings</p>
       <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-8">Preferences</h1>
 
+      {/* Update banner */}
+      {debug?.updateAvailable && (
+        <div
+          className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3"
+          style={{ background: 'var(--color-icon-tint)', border: '1px solid var(--color-accent)22' }}
+        >
+          <span className="text-[13px] text-[var(--color-text-primary)]">
+            Daylens {debug.updateAvailable} is available
+          </span>
+          <button
+            onClick={() => ipc.shell.openExternal('https://daylens.app')}
+            className="text-[12px] font-medium underline"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Download
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4">
         {/* AI section */}
         <div className="card">
@@ -196,6 +219,34 @@ export default function Settings() {
           <p className="text-[11px] text-[var(--color-text-tertiary)] mt-3">
             System follows the Windows appearance automatically. Light and dark override it immediately.
           </p>
+        </div>
+
+        {/* Daily focus goal */}
+        <div className="card">
+          <p className="section-label mb-4">Focus</p>
+          <div>
+            <label className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5">
+              Daily focus goal (hours)
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={12}
+              step={0.5}
+              value={settings.dailyFocusGoalHours ?? 4}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                if (!isNaN(v) && v >= 1 && v <= 12) {
+                  setSettings((s) => ({ ...s, dailyFocusGoalHours: v }))
+                  void ipc.settings.set({ dailyFocusGoalHours: v }).then(() => flashSaved('Goal updated'))
+                }
+              }}
+              className="w-32 px-3 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-high)] text-[13px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] transition-colors"
+            />
+            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1.5">
+              Shown as a progress bar on the Today view.
+            </p>
+          </div>
         </div>
 
         {/* Web Companion */}

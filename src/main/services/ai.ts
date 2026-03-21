@@ -8,6 +8,8 @@ import {
   getOrCreateConversation,
   getAppSummariesForRange,
   getWebsiteSummariesForRange,
+  getRecentFocusSessions,
+  getCategoryOverrides,
 } from '../db/queries'
 import { getDb } from './database'
 import { getSettings } from './settings'
@@ -34,17 +36,52 @@ function dayBounds(date: Date): [number, number] {
 function buildDayContext(): string {
   try {
     const db = getDb()
+    const settings = getSettings()
     const now = new Date()
     const [todayFrom, todayTo] = dayBounds(now)
     const summaries = getAppSummariesForRange(db, todayFrom, todayTo)
     const websites = getWebsiteSummariesForRange(db, todayFrom, todayTo)
-    if (summaries.length === 0 && websites.length === 0) {
-      return 'No activity recorded yet today.'
-    }
 
     const totalSec = summaries.reduce((s, a) => s + a.totalSeconds, 0)
     const focusSec = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
     const focusPct = totalSec > 0 ? Math.round((focusSec / totalSec) * 100) : 0
+    const goalHours = settings.dailyFocusGoalHours ?? 4
+    const goalSec = goalHours * 3600
+
+    // User identity & goals
+    const userName = settings.userName || 'the user'
+    const goalsStr = settings.userGoals?.length
+      ? settings.userGoals.join(', ')
+      : 'not specified'
+    const goalPct = goalSec > 0 ? Math.round((focusSec / goalSec) * 100) : 0
+
+    // Focus sessions
+    const focusSessions = getRecentFocusSessions(db, 10).filter((s) => {
+      return s.startTime >= todayFrom && s.startTime < todayTo
+    })
+    const todayFocusSessionCount = focusSessions.length
+    const longestFocusSession = focusSessions.reduce((m, s) => Math.max(m, s.durationSeconds), 0)
+    const totalFocusSessionSec = focusSessions.reduce((s, x) => s + x.durationSeconds, 0)
+
+    // Category overrides
+    const overrides = getCategoryOverrides(db)
+    const overrideEntries = Object.entries(overrides)
+
+    // Time context
+    const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+    const dayStr = now.toLocaleDateString('en-US', { weekday: 'long' })
+
+    if (summaries.length === 0 && websites.length === 0) {
+      return [
+        `User: ${userName}`,
+        `Goals: ${goalsStr}`,
+        `Daily focus goal: ${goalHours}h target, currently at 0m (0%)`,
+        `Current time: ${timeStr}, ${dayStr}`,
+        '',
+        'No activity recorded yet today.',
+      ].join('\n')
+    }
+
     const topCategories = new Map<string, number>()
     for (const summary of summaries) {
       topCategories.set(summary.category, (topCategories.get(summary.category) ?? 0) + summary.totalSeconds)
@@ -80,6 +117,18 @@ function buildDayContext(): string {
     }
 
     return [
+      `User: ${userName}`,
+      `Goals: ${goalsStr}`,
+      `Daily focus goal: ${goalHours}h target, currently at ${formatDuration(focusSec)} (${goalPct}%)`,
+      `Current time: ${timeStr}, ${dayStr}`,
+      '',
+      todayFocusSessionCount > 0
+        ? `Focus sessions today: ${todayFocusSessionCount} session${todayFocusSessionCount > 1 ? 's' : ''}, longest ${formatDuration(longestFocusSession)}, total ${formatDuration(totalFocusSessionSec)}`
+        : 'Focus sessions today: none',
+      overrideEntries.length > 0
+        ? `User has recategorized: ${overrideEntries.map(([id, cat]) => `${id} → ${cat}`).join(', ')}`
+        : '',
+      '',
       'Data notes:',
       '- App totals are grounded in tracked foreground-window sessions.',
       '- Focus share is derived from focused app categories and may not fully capture productive browser work.',
@@ -95,7 +144,7 @@ function buildDayContext(): string {
       recentDays.length > 0 ? 'Recent days:' : '',
       ...recentDays.map((line) => `- ${line}`),
     ]
-      .filter(Boolean)
+      .filter((l) => l !== '')
       .join('\n')
   } catch {
     return ''
@@ -114,9 +163,12 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const prior = history.slice(0, -1)
 
   const dayContext = buildDayContext()
+  const { userName } = getSettings()
+  const persona = userName
+    ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
+    : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
   const systemPrompt =
-    'You are Daylens, a personal productivity coach embedded in a local screen-time tracker. ' +
-    'You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
+    persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
     'When answering:\n' +
     '- Lead with specific tracked facts when available\n' +
     '- Separate tracked facts from interpretation or advice\n' +

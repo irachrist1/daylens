@@ -20,7 +20,7 @@ import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { initDb, closeDb } from './services/database'
-import { initSettings } from './services/settings'
+import { initSettings, getSettings } from './services/settings'
 import { startTracking, stopTracking } from './services/tracking'
 import { startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay } from './services/syncUploader'
@@ -53,6 +53,8 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+// Set to latest version string when a newer release is detected
+export let updateAvailable: string | null = null
 
 function showFatalStartupError(title: string, err: unknown): void {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -163,6 +165,7 @@ app.on('before-quit', () => {
 app.whenReady()
   .then(async () => {
     await initSettings()
+    app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
     initDb()
 
     registerDbHandlers()
@@ -183,6 +186,20 @@ app.whenReady()
     setTimeout(() => {
       try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
     }, 3_000)
+
+    // Deferred 30s — check for newer release
+    setTimeout(async () => {
+      try {
+        const res = await fetch(
+          'https://api.github.com/repos/irachrist1/daylens-windows/releases/latest',
+          { headers: { 'User-Agent': 'daylens-windows' } }
+        )
+        if (!res.ok) return
+        const data = await res.json() as { tag_name: string }
+        const latest = data.tag_name.replace(/^v/, '').replace(/-win$/, '')
+        if (latest !== app.getVersion()) updateAvailable = latest
+      } catch { /* silent */ }
+    }, 30_000)
 
     // Deferred 10s — background maintenance
     setTimeout(() => {

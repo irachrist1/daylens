@@ -20,6 +20,10 @@ const api = {
       ipcRenderer.invoke(IPC.DB.GET_WEBSITE_SUMMARIES, days),
     setCategoryOverride: (bundleId: string, category: AppCategory) =>
       ipcRenderer.invoke('db:set-category-override', bundleId, category),
+    clearCategoryOverride: (bundleId: string) =>
+      ipcRenderer.invoke('db:clear-category-override', bundleId),
+    getCategoryOverrides: (): Promise<Record<string, AppCategory>> =>
+      ipcRenderer.invoke('db:get-category-overrides'),
   },
   focus: {
     start: (label?: string) => ipcRenderer.invoke(IPC.FOCUS.START, label ?? null),

@@ -66,6 +66,7 @@ export interface AppSettings {
   onboardingComplete: boolean
   userName: string
   userGoals: string[]
+  dailyFocusGoalHours: number
 }
 
 // In-flight session that has not yet been flushed to the DB.

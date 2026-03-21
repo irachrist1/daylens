@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { formatDuration, formatTime, formatDateShort, percentOf, rollingDayBounds } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
 import type { AppUsageSummary, AppSession, AppCategory, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
+
+const ALL_CATEGORIES: AppCategory[] = [
+  'development', 'communication', 'browsing', 'writing', 'design',
+  'aiTools', 'email', 'research', 'productivity', 'meetings',
+  'entertainment', 'system', 'uncategorized',
+]
 
 const DAYS_OPTIONS = [1, 7, 30] as const
 
@@ -71,6 +77,21 @@ export default function Apps() {
   const [loading, setLoading]         = useState(true)
   const [selectedCat, setSelectedCat] = useState<AppCategory | null>(null)
   const [selectedApp, setSelectedApp] = useState<AppUsageSummary | null>(null)
+  const [overrides, setOverrides]     = useState<Record<string, AppCategory>>({})
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+  const dropdownRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    function handleOutsideClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpenDropdown(null)
+      }
+    }
+    if (openDropdown) {
+      document.addEventListener('mousedown', handleOutsideClick)
+    }
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [openDropdown])
 
   useEffect(() => {
     setLoading(true)
@@ -80,13 +101,15 @@ export default function Apps() {
     let cancelled = false
 
     async function refresh() {
-      const [summaryData, liveData] = await Promise.all([
+      const [summaryData, liveData, overrideData] = await Promise.all([
         ipc.db.getAppSummaries(days),
         ipc.tracking.getLiveSession(),
+        ipc.db.getCategoryOverrides(),
       ])
       if (cancelled) return
       setSummaries(summaryData as AppUsageSummary[])
       setLive(liveData as LiveSession | null)
+      setOverrides(overrideData as Record<string, AppCategory>)
       setLoading(false)
     }
 
@@ -98,6 +121,28 @@ export default function Apps() {
       clearInterval(timer)
     }
   }, [days])
+
+  async function handleSetOverride(bundleId: string, category: AppCategory) {
+    setOpenDropdown(null)
+    await ipc.db.setCategoryOverride(bundleId, category)
+    const [summaryData, overrideData] = await Promise.all([
+      ipc.db.getAppSummaries(days),
+      ipc.db.getCategoryOverrides(),
+    ])
+    setSummaries(summaryData as AppUsageSummary[])
+    setOverrides(overrideData as Record<string, AppCategory>)
+  }
+
+  async function handleClearOverride(bundleId: string) {
+    setOpenDropdown(null)
+    await ipc.db.clearCategoryOverride(bundleId)
+    const [summaryData, overrideData] = await Promise.all([
+      ipc.db.getAppSummaries(days),
+      ipc.db.getCategoryOverrides(),
+    ])
+    setSummaries(summaryData as AppUsageSummary[])
+    setOverrides(overrideData as Record<string, AppCategory>)
+  }
 
   if (selectedApp) {
     const selectedSummary =
@@ -112,6 +157,49 @@ export default function Apps() {
         days={days}
         onBack={() => setSelectedApp(null)}
       />
+    )
+  }
+
+  function renderCategoryDropdown(bundleId: string, currentCategory: AppCategory) {
+    return (
+      <div
+        ref={dropdownRef}
+        className="absolute top-full left-0 mt-1 z-50 rounded-lg py-1 min-w-[160px]"
+        style={{
+          background: 'var(--color-surface-elevated, var(--color-surface-card))',
+          border: '1px solid var(--color-border)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {ALL_CATEGORIES.map((cat) => {
+          const col = catColor(cat)
+          const isActive = cat === currentCategory
+          return (
+            <button
+              key={cat}
+              onClick={() => void handleSetOverride(bundleId, cat)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-high)] transition-colors"
+            >
+              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
+              <span
+                className="text-[12px]"
+                style={{ color: isActive ? col : 'var(--color-text-primary)', fontWeight: isActive ? 600 : 400 }}
+              >
+                {formatCategory(cat)}
+              </span>
+            </button>
+          )
+        })}
+        <div className="border-t border-[var(--color-border)] mt-1 pt-1">
+          <button
+            onClick={() => void handleClearOverride(bundleId)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-high)] transition-colors"
+          >
+            <span className="text-[12px] text-[var(--color-text-tertiary)]">Reset to auto</span>
+          </button>
+        </div>
+      </div>
     )
   }
 
@@ -278,12 +366,22 @@ export default function Apps() {
                         <p className="text-[13px] text-[var(--color-text-primary)] truncate leading-none">
                           {app.appName}
                         </p>
-                        <span
-                          className="text-[9px] font-semibold tracking-[0.4px] px-1.5 py-0.5 rounded shrink-0"
-                          style={{ background: color + '1a', color }}
-                        >
-                          {formatCategory(app.category)}
-                        </span>
+                        <div className="relative shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setOpenDropdown(openDropdown === app.bundleId ? null : app.bundleId)
+                            }}
+                            className="flex items-center gap-1 text-[9px] font-semibold tracking-[0.4px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
+                            style={{ background: color + '1a', color }}
+                          >
+                            {overrides[app.bundleId] && (
+                              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+                            )}
+                            {formatCategory(app.category)}
+                          </button>
+                          {openDropdown === app.bundleId && renderCategoryDropdown(app.bundleId, app.category)}
+                        </div>
                         {isFocused && (
                           <span
                             className="text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
