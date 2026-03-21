@@ -131,9 +131,12 @@ final class WorkspaceLinker {
 
     /// Generate a 12-word BIP39 English mnemonic (128 bits entropy).
     private func generateMnemonic() -> String {
-        // 128 bits of entropy
+        // 128 bits of entropy — must succeed or the mnemonic would be deterministic
         var entropy = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 16, &entropy)
+        let status = SecRandomCopyBytes(kSecRandomDefault, 16, &entropy)
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with status \(status) — cannot generate secure mnemonic")
+        }
 
         // SHA256 checksum — first 4 bits
         let hash = SHA256.hash(data: Data(entropy))
@@ -205,7 +208,10 @@ final class WorkspaceLinker {
 
     private func generateLinkToken() -> String {
         var entropy = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
+        let status = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with status \(status) — cannot generate secure link token")
+        }
         return entropy.map { String(format: "%02x", $0) }.joined()
     }
 
