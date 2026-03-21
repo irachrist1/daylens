@@ -13,6 +13,7 @@ export default defineConfig({
     ...(isStandalone && {
       outDir: path.resolve(__dirname, 'dist/main'),
       emptyOutDir: false,
+      ssr: true,
     }),
     rollupOptions: {
       input: path.resolve(__dirname, 'src/preload/index.ts'),

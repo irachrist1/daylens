@@ -16,9 +16,11 @@ export default defineConfig({
       }
     : {},
   build: {
+    // Build as Node (not browser) so node: builtins are not externalized
     ...(isStandalone && {
       outDir: path.resolve(__dirname, 'dist/main'),
       emptyOutDir: true,
+      ssr: true,
     }),
     rollupOptions: {
       input: path.resolve(__dirname, 'src/main/index.ts'),
