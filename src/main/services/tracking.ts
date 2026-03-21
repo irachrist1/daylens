@@ -399,7 +399,7 @@ function classifyApp(bundleId: string, appName: string): AppCategory {
   return 'uncategorized'
 }
 
-function classifyResult(
+export function classifyResult(
   bundleId: string,
   appName: string,
 ): { category: AppCategory; isFocused: boolean } {
