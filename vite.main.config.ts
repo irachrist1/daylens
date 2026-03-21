@@ -21,6 +21,7 @@ export default defineConfig({
       emptyOutDir: true,
     }),
     rollupOptions: {
+      input: path.resolve(__dirname, 'src/main/index.ts'),
       // Native addons and electron itself must not be bundled.
       external: ['electron', 'better-sqlite3', '@paymoapp/active-window'],
       output: {

@@ -40,8 +40,8 @@ jobs:
         shell: bash
         run: |
           export STANDALONE_BUILD=1
-          npx vite build --config vite.main.config.ts src/main/index.ts
-          npx vite build --config vite.preload.config.ts src/preload/index.ts
+          npx vite build --config vite.main.config.ts
+          npx vite build --config vite.preload.config.ts
           npx vite build --config vite.renderer.config.ts
 
       - name: Package with electron-builder

@@ -15,6 +15,7 @@ export default defineConfig({
       emptyOutDir: false,
     }),
     rollupOptions: {
+      input: path.resolve(__dirname, 'src/preload/index.ts'),
       external: ['electron'],
       output: {
         format: 'cjs',
