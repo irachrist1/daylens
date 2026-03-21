@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain, nativeImage } from 'electron'
+import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron'
 import path from 'node:path'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
@@ -40,6 +40,16 @@ let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
 
+function showFatalStartupError(title: string, err: unknown): void {
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  console.error(`[fatal] ${title}:`, err)
+  try {
+    dialog.showErrorBox(title, message)
+  } catch {
+    // Best-effort only — if the dialog cannot be shown we still keep the error in stderr.
+  }
+}
+
 function createWindow(): BrowserWindow {
   const iconExt = process.platform === 'darwin' ? 'icns' : 'ico'
   const iconPath = path.join(__dirname, '..', '..', 'build', `icon.${iconExt}`)
@@ -71,9 +81,11 @@ function createWindow(): BrowserWindow {
     // DevTools on demand — Ctrl+Shift+I / Cmd+Option+I.
     // Auto-open was spawning a stray window on every reload.
   } else {
-    win.loadFile(
-      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
-    )
+    const rendererPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
+    void win.loadFile(rendererPath).catch((err) => {
+      showFatalStartupError('Daylens failed to load', err)
+      app.quit()
+    })
   }
 
   win.once('ready-to-show', () => win.show())
@@ -109,30 +121,35 @@ app.on('before-quit', () => {
   destroyTray()
 })
 
-app.whenReady().then(async () => {
-  await initSettings()
-  initDb()
+app.whenReady()
+  .then(async () => {
+    await initSettings()
+    initDb()
 
-  registerDbHandlers()
-  registerDebugHandlers()
-  registerFocusHandlers()
-  registerAIHandlers()
-  registerSettingsHandlers()
-  registerSyncHandlers()
+    registerDbHandlers()
+    registerDebugHandlers()
+    registerFocusHandlers()
+    registerAIHandlers()
+    registerSettingsHandlers()
+    registerSyncHandlers()
 
-  mainWindow = createWindow()
-  createTray(mainWindow)
+    mainWindow = createWindow()
+    createTray(mainWindow)
 
-  startTracking()
-  startBrowserTracking()
-  startSync()
+    startTracking()
+    startBrowserTracking()
+    startSync()
 
-  // Compute any missing daily summaries in the background
-  try { computeAllMissingSummaries() } catch (err) { console.warn('[init] daily summaries:', err) }
+    // Compute any missing daily summaries in the background
+    try { computeAllMissingSummaries() } catch (err) { console.warn('[init] daily summaries:', err) }
 
-  // Finalize previous day's snapshot shortly after startup
-  setTimeout(() => finalizePreviousDay(), 30_000)
-})
+    // Finalize previous day's snapshot shortly after startup
+    setTimeout(() => finalizePreviousDay(), 30_000)
+  })
+  .catch((err) => {
+    showFatalStartupError('Daylens failed to start', err)
+    app.quit()
+  })
 
 app.on('window-all-closed', () => {
   // On macOS keep running in tray; on Windows quit when all windows closed

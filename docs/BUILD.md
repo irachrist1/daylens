@@ -48,6 +48,7 @@ The Vite configs are shared between electron-forge (dev) and electron-builder (p
 - ARM64 is **not** built — `@paymoapp/active-window` has no prebuilt Windows ARM64 binaries and node-gyp fails on Python 3.12+ (missing `distutils`)
 - Native modules unpacked from asar: `better-sqlite3`, `@paymoapp/active-window`, `keytar`
 - `extraMetadata.main: dist/main/main.js` overrides `package.json "main"` inside the package
+- NSIS runs as a guided installer (`oneClick: false`) so users see a normal install + finish flow
 
 ## Artifacts
 
@@ -88,3 +89,4 @@ git push origin v0.1.5-win
 | v0.1.2-win | `"promisify" is not exported by "__vite-browser-external"` | Added `ssr: true` to standalone build options |
 | v0.1.3-win | `ModuleNotFoundError: No module named 'distutils'` | Dropped ARM64 target — no prebuilt binaries, node-gyp fails on Python 3.12+ |
 | v0.1.6-win | `require is not defined in ES module scope` on first launch | Emit the packaged main bundle as CommonJS and remove the leftover Squirrel startup hook |
+| v0.1.7-win | One-click installer appears to hang, then vanishes after install | Switch NSIS back to a guided installer and stop auto-launching immediately after install |
