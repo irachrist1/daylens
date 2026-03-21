@@ -74,7 +74,6 @@ jobs:
             | File | Description |
             |------|-------------|
             | `Daylens-${{ steps.meta.outputs.version }}-x64-Setup.exe` | Windows installer (x64) |
-            | `Daylens-${{ steps.meta.outputs.version }}-arm64-Setup.exe` | Windows installer (ARM64) |
             | `Daylens-${{ steps.meta.outputs.version }}-Portable.exe` | Portable — no install needed (x64) |
 
             ### System requirements
