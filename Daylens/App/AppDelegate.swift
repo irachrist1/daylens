@@ -27,12 +27,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let appState, let button = statusItem?.button else { return }
         switch appState.focusSession.phase {
         case .focusing:
-            button.title = " ⏱ \(appState.focusSession.formattedRemaining)"
+            let text = " \(appState.focusSession.formattedRemaining)"
+            button.attributedTitle = NSAttributedString(string: text, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+            ])
             button.imagePosition = .imageLeft
         case .onBreak:
-            button.title = " ☕ \(appState.focusSession.formattedBreakRemaining)"
+            let text = " \(appState.focusSession.formattedBreakRemaining)"
+            button.attributedTitle = NSAttributedString(string: text, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                .foregroundColor: NSColor(red: 0x68/255.0, green: 0xAE/255.0, blue: 0xFF/255.0, alpha: 1.0)
+            ])
             button.imagePosition = .imageLeft
         case .idle:
+            button.attributedTitle = nil
             button.title = ""
             button.imagePosition = .imageOnly
         }
