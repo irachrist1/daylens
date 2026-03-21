@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ])
             button.imagePosition = .imageLeft
         case .idle:
-            button.attributedTitle = nil
+            button.attributedTitle = NSAttributedString(string: "")
             button.title = ""
             button.imagePosition = .imageOnly
         }
