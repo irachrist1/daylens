@@ -133,7 +133,7 @@ final class WorkspaceLinker {
     private func generateMnemonic() -> String {
         // 128 bits of entropy — must succeed or the mnemonic would be deterministic
         var entropy = [UInt8](repeating: 0, count: 16)
-        let status = SecRandomCopyBytes(kSecRandomDefault, 16, &entropy)
+        let status = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
         guard status == errSecSuccess else {
             fatalError("SecRandomCopyBytes failed with status \(status) — cannot generate secure mnemonic")
         }
