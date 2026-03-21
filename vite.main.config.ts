@@ -3,7 +3,7 @@ import path from 'node:path'
 
 const isStandalone = process.env.STANDALONE_BUILD === '1'
 const convexSiteUrl = JSON.stringify(
-  process.env.DAYLENS_CONVEX_SITE_URL ?? 'https://decisive-aardvark-847.convex.site',
+  process.env.DAYLENS_CONVEX_SITE_URL || 'https://decisive-aardvark-847.convex.site',
 )
 
 export default defineConfig({
