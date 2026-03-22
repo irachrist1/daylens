@@ -3,6 +3,7 @@ import SwiftUI
 /// The main two-column app shell.
 struct MainShell: View {
     @Environment(AppState.self) private var appState
+    @Environment(UpdateChecker.self) private var updateChecker
 
     var body: some View {
         NavigationSplitView {
@@ -13,9 +14,21 @@ struct MainShell: View {
                 if appState.selectedSection.showsDateNavigation {
                     HeaderBar()
                 }
-                contentView
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(DS.surfaceContainer)
+
+                VStack(spacing: 0) {
+                    if updateChecker.updateAvailable {
+                        UpdateBanner()
+                            .padding(.horizontal, DS.space24)
+                            .padding(.top, DS.space16)
+                            .padding(.bottom, DS.space8)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
+                    contentView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .background(DS.surfaceContainer)
+                .animation(.easeInOut(duration: 0.22), value: updateChecker.updateAvailable)
             }
         }
         .navigationSplitViewStyle(.balanced)

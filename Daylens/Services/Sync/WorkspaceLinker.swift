@@ -30,7 +30,8 @@ final class WorkspaceLinker {
         let body: [String: Any] = [
             "recoveryKeyHash": recoveryKeyHash,
             "deviceId": SyncUploader.shared.deviceId,
-            "displayName": desktopDisplayName()
+            "displayName": desktopDisplayName(),
+            "platform": "macos"
         ]
         let result = try await callConvexAction(
             baseUrl: convexSiteUrl,
@@ -74,7 +75,8 @@ final class WorkspaceLinker {
         let body: [String: Any] = [
             "recoveryKeyHash": recoveryKeyHash,
             "deviceId": SyncUploader.shared.deviceId,
-            "displayName": desktopDisplayName()
+            "displayName": desktopDisplayName(),
+            "platform": "macos"
         ]
         let result = try await callConvexAction(
             baseUrl: convexSiteUrl,

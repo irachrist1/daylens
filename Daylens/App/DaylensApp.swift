@@ -4,15 +4,20 @@ import SwiftUI
 struct DaylensApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
+    @State private var updateChecker = UpdateChecker()
+    @State private var updateInstaller = UpdateInstaller()
 
     var body: some Scene {
         WindowGroup {
             ContentRouter()
                 .environment(appState)
+                .environment(updateChecker)
+                .environment(updateInstaller)
                 .frame(minWidth: 900, minHeight: 600)
                 .onAppear {
                     appState.initialize()
                     appDelegate.configure(with: appState)
+                    updateChecker.startPolling()
                 }
         }
         .windowStyle(.titleBar)
@@ -25,6 +30,8 @@ struct DaylensApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                .environment(updateChecker)
+                .environment(updateInstaller)
         }
     }
 }
