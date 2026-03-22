@@ -12,38 +12,88 @@ struct DateNavigator: View {
     }
 
     var body: some View {
-        HStack(spacing: DS.space4) {
-            Button(action: appState.goToPreviousDay) {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(DS.onSurfaceVariant)
-            }
-            .buttonStyle(.borderless)
-            .help("Previous day")
+        HStack(spacing: 0) {
+            navigationButton(symbol: "chevron.left", help: "Previous day", action: appState.goToPreviousDay)
+            separator
 
             Button(action: appState.goToToday) {
                 Text(dateLabel)
-                    .font(.body.weight(.medium))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(appState.isToday ? DS.primary : DS.onSurface)
+                    .lineLimit(1)
                     .padding(.horizontal, DS.space12)
-                    .padding(.vertical, DS.space4)
-                    .background(
-                        Capsule()
-                            .fill(appState.isToday ? DS.primary.opacity(0.12) : DS.surfaceHighest)
-                    )
+                    .frame(minWidth: 96)
+                    .frame(height: 28)
+                    .contentShape(Capsule())
                     .animation(.easeInOut(duration: 0.2), value: appState.isToday)
             }
             .buttonStyle(.plain)
             .help("Go to today")
 
-            Button(action: appState.goToNextDay) {
-                Image(systemName: "chevron.right")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(DS.onSurfaceVariant)
-            }
-            .buttonStyle(.borderless)
-            .disabled(appState.isToday)
-            .help("Next day")
+            separator
+            navigationButton(symbol: "chevron.right", help: "Next day", disabled: appState.isToday, action: appState.goToNextDay)
         }
+        .padding(.horizontal, DS.space8)
+        .padding(.vertical, DS.space6)
+        .background {
+            // macOS 14-compatible approximation of Apple's newer Liquid Glass:
+            // translucent material, a crisp specular edge, and a floating shadow.
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.18),
+                                    DS.primary.opacity(0.08),
+                                    Color.clear
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                }
+                .overlay(alignment: .top) {
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+                        .blur(radius: 0.6)
+                        .mask {
+                            Rectangle()
+                                .frame(height: 14)
+                        }
+                }
+        }
+        .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 10)
+        .shadow(color: Color.white.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.12))
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, DS.space4)
+    }
+
+    private func navigationButton(
+        symbol: String,
+        help: String,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(disabled ? DS.onSurfaceVariant.opacity(0.35) : DS.onSurface)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(help)
     }
 }

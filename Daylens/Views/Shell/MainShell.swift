@@ -5,31 +5,48 @@ struct MainShell: View {
     @Environment(AppState.self) private var appState
     @Environment(UpdateChecker.self) private var updateChecker
 
+    private var showsDateNavigation: Bool {
+        appState.selectedSection.showsDateNavigation
+    }
+
+    private var headerReservedTopInset: CGFloat {
+        updateChecker.updateAvailable ? DS.space40 : HeaderBar.compactReservedTopInset
+    }
+
+    private var headerFloatingOffset: CGFloat {
+        updateChecker.updateAvailable ? -8 : HeaderBar.compactFloatingOffset
+    }
+
     var body: some View {
         NavigationSplitView {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 200, ideal: DS.sidebarWidth, max: 300)
         } detail: {
             VStack(spacing: 0) {
-                if appState.selectedSection.showsDateNavigation {
-                    HeaderBar()
+                if updateChecker.updateAvailable {
+                    UpdateBanner()
+                        .padding(.horizontal, DS.space24)
+                        .padding(.top, DS.space10)
+                        .padding(.bottom, DS.space14)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                VStack(spacing: 0) {
-                    if updateChecker.updateAvailable {
-                        UpdateBanner()
-                            .padding(.horizontal, DS.space24)
-                            .padding(.top, DS.space16)
-                            .padding(.bottom, DS.space8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                contentView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        if showsDateNavigation {
+                            Color.clear.frame(height: headerReservedTopInset)
+                        }
                     }
-
-                    contentView
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .background(DS.surfaceContainer)
-                .animation(.easeInOut(duration: 0.22), value: updateChecker.updateAvailable)
+                    .overlay(alignment: .topLeading) {
+                        if showsDateNavigation {
+                            HeaderBar()
+                                .offset(y: headerFloatingOffset)
+                        }
+                    }
             }
+            .background(DS.surfaceContainer)
+            .animation(.easeInOut(duration: 0.22), value: updateChecker.updateAvailable)
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
