@@ -29,6 +29,7 @@ final class SnapshotExporter {
 
     struct AppSummaryDTO: Codable {
         let appKey: String
+        let bundleID: String
         let displayName: String
         let category: String
         let totalSeconds: Int
@@ -127,6 +128,7 @@ final class SnapshotExporter {
             )
             return AppSummaryDTO(
                 appKey: appKey,
+                bundleID: app.bundleID,
                 displayName: displayName,
                 category: category,
                 totalSeconds: Int(app.totalDuration),
