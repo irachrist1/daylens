@@ -74,7 +74,7 @@ struct WebCompanionSection: View {
             }
 
             // QR code — encodes a URL, not just the raw token
-            QRCodeCard(token: "\(Self.webDashboardUrl)?token=\(result.linkToken)")
+            QRCodeCard(token: "\(Self.webDashboardUrl)/link?token=\(result.linkToken)")
 
             // Link code — clearly labeled and copyable
             VStack(alignment: .leading, spacing: DS.space8) {
@@ -100,7 +100,7 @@ struct WebCompanionSection: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Paste this at \(Self.webDashboardUrl)")
+                Text("Paste this at \(Self.webDashboardUrl)/link")
                     .font(.caption)
                     .foregroundStyle(DS.primary)
 
