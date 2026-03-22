@@ -23,7 +23,19 @@ final class SettingsViewModel {
         if trimmed.isEmpty {
             statusMessage = aiService.removeAPIKey() ? "API key removed." : "Couldn't remove the API key."
         } else {
-            statusMessage = aiService.setAPIKey(trimmed) ? "API key saved." : "Couldn't save the API key."
+            let saved = aiService.setAPIKey(trimmed)
+            statusMessage = saved ? "API key saved." : "Couldn't save the API key."
+
+            // Upload to Convex so the web companion can use it for AI chat
+            if saved, SyncUploader.shared.isLinked, let convexUrl = SyncUploader.shared.convexUrl {
+                Task {
+                    do {
+                        try await WorkspaceLinker().uploadApiKey(apiKey: trimmed, convexSiteUrl: convexUrl)
+                    } catch {
+                        // Non-critical — local key still works
+                    }
+                }
+            }
         }
     }
 
