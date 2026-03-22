@@ -2,6 +2,15 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.6] - 2026-03-22
+
+### Added
+- In-app auto-update: checks GitHub Releases every 30 minutes, shows a banner when a new version is available, downloads and installs the DMG automatically
+- API key now syncs to Convex when saved in Settings, enabling AI chat on the web companion
+
+### Fixed
+- QR code in Web Companion settings now encodes the correct `/link?token=` path instead of the root URL
+
 ## [1.0.5] - 2026-03-22
 
 ### Fixed
