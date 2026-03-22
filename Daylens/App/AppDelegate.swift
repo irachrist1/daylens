@@ -64,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appState?.permissionManager?.stopPolling()
         appState?.trackingCoordinator?.stopTracking()
+        SyncUploader.shared.syncOnQuit()
+        appState?.tearDownLifecycleHooks()
     }
 
     // MARK: - Menu Bar Status Item

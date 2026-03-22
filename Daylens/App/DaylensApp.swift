@@ -20,7 +20,7 @@ struct DaylensApp: App {
                     updateChecker.startPolling()
                 }
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
         .defaultSize(width: 1200, height: 800)
         .commands {

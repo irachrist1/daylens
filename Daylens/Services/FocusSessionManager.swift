@@ -19,6 +19,7 @@ struct FocusSessionRecord: Codable, Identifiable, FetchableRecord, PersistableRe
     var date: Date
     var startTime: Date
     var endTime: Date?
+    var label: String?
     var targetMinutes: Int
     var actualDuration: TimeInterval
     var status: FocusSessionStatus
@@ -114,6 +115,7 @@ final class FocusSessionManager {
     private var startedAt: Date?
     private let database: AppDatabase?
     private var persistedSession: FocusSessionRecord?
+    private var currentLabel: String?
 
     // MARK: - Computed
 
@@ -145,19 +147,20 @@ final class FocusSessionManager {
 
     // MARK: - Public API
 
-    func start() {
+    func start(label: String? = nil) {
         guard phase == .idle else { return }
         elapsed = 0
         startedAt = Date()
+        currentLabel = normalizedLabel(label)
         phase = .focusing
         persistStartedSession()
         scheduleFocusTimer()
     }
 
     /// Backward-compat entry point used by sidebar quick-start.
-    func start(minutes: Int) {
+    func start(minutes: Int, label: String? = nil) {
         targetMinutes = minutes
-        start()
+        start(label: label)
     }
 
     func stop() {
@@ -231,9 +234,11 @@ final class FocusSessionManager {
             record.actualDuration = finishedAt.timeIntervalSince(s)
             record.status = status
             try? database?.saveFocusSession(record)
+            SyncUploader.shared.syncNow()
         }
 
         persistedSession = nil
+        currentLabel = nil
         startedAt = nil
         if status == .stopped { phase = .idle }
         onTick?()
@@ -245,12 +250,14 @@ final class FocusSessionManager {
             date: Calendar.current.startOfDay(for: startedAt),
             startTime: startedAt,
             endTime: nil,
+            label: currentLabel,
             targetMinutes: targetMinutes,
             actualDuration: 0,
             status: .running
         )
         try? database.insertFocusSession(&session)
         persistedSession = session
+        SyncUploader.shared.syncNow()
     }
 
     /// On launch, mark any left-over "running" sessions as stopped with actual wall-clock duration.
@@ -276,6 +283,14 @@ final class FocusSessionManager {
     private func countdown(_ t: TimeInterval) -> String {
         let m = Int(t) / 60, s = Int(t) % 60
         return String(format: "%d:%02d", m, s)
+    }
+
+    private func normalizedLabel(_ label: String?) -> String? {
+        guard let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private enum Keys {

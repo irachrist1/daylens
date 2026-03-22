@@ -137,6 +137,21 @@ extension AppDatabase {
         }
     }
 
+    func topPagesByDomain(
+        for date: Date,
+        domains: [String],
+        limitPerDomain: Int = 5
+    ) throws -> [String: [WebsitePageSummary]] {
+        try dbQueue.read { db in
+            try self.topPagesByDomain(
+                in: db,
+                dayBounds: DayBounds(for: date),
+                domains: domains,
+                limitPerDomain: limitPerDomain
+            )
+        }
+    }
+
     // MARK: - Daily Summary
 
     func dailySummary(for date: Date) throws -> DailySummary? {
@@ -165,7 +180,13 @@ extension AppDatabase {
 
     func appSessions(for date: Date, bundleID: String) throws -> [AppSession] {
         try dbQueue.read { db in
-            try self.appSessions(in: db, dayBounds: DayBounds(for: date), bundleID: bundleID)
+            let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
+            return try self.appSessions(
+                in: db,
+                dayBounds: DayBounds(for: date),
+                bundleID: bundleID,
+                overrides: overrides
+            )
         }
     }
 
@@ -521,6 +542,7 @@ private struct ClippedInterval {
 private struct RawWebsiteVisitInterval {
     let domain: String
     let bundleID: String
+    let url: String?
     let title: String?
     let confidence: ActivityEvent.ConfidenceLevel
     let source: ActivityEvent.EventSource
@@ -530,6 +552,7 @@ private struct RawWebsiteVisitInterval {
 private struct EffectiveWebsiteInterval {
     let domain: String
     let bundleID: String
+    let url: String?
     let title: String?
     let confidence: ActivityEvent.ConfidenceLevel
     let source: ActivityEvent.EventSource
@@ -816,8 +839,13 @@ private extension AppDatabase {
         try meaningfulAppSessions(in: db, dayBounds: dayBounds)
     }
 
-    func appSessions(in db: Database, dayBounds: DayBounds, bundleID: String) throws -> [AppSession] {
-        try meaningfulAppSessions(in: db, dayBounds: dayBounds)
+    func appSessions(
+        in db: Database,
+        dayBounds: DayBounds,
+        bundleID: String,
+        overrides: [String: AppCategory] = [:]
+    ) throws -> [AppSession] {
+        try meaningfulAppSessions(in: db, dayBounds: dayBounds, overrides: overrides)
             .filter { $0.bundleID == bundleID }
     }
 
@@ -937,14 +965,14 @@ private extension AppDatabase {
         let rows: [Row]
         if let browserBundleID {
             rows = try Row.fetchAll(db, sql: """
-                SELECT domain, browserBundleID, confidence, source, pageTitle, startTime, endTime
+                SELECT domain, fullURL, browserBundleID, confidence, source, pageTitle, startTime, endTime
                 FROM website_visits
                 WHERE startTime < ? AND endTime > ? AND browserBundleID = ?
                 ORDER BY domain ASC, startTime ASC
                 """, arguments: [dayBounds.end, dayBounds.start, browserBundleID])
         } else {
             rows = try Row.fetchAll(db, sql: """
-                SELECT domain, browserBundleID, confidence, source, pageTitle, startTime, endTime
+                SELECT domain, fullURL, browserBundleID, confidence, source, pageTitle, startTime, endTime
                 FROM website_visits
                 WHERE startTime < ? AND endTime > ?
                 ORDER BY domain ASC, startTime ASC
@@ -964,6 +992,7 @@ private extension AppDatabase {
             guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else { continue }
 
             let domain: String = row["domain"]
+            let fullURL: String? = row["fullURL"]
             let bundleID: String = row["browserBundleID"]
             let confidence = ActivityEvent.ConfidenceLevel(rawValue: row["confidence"]) ?? .low
             let source = ActivityEvent.EventSource(rawValue: row["source"]) ?? .browserHistory
@@ -978,6 +1007,7 @@ private extension AppDatabase {
                     RawWebsiteVisitInterval(
                         domain: domain,
                         bundleID: bundleID,
+                        url: fullURL,
                         title: row["pageTitle"],
                         confidence: confidence,
                         source: source,
@@ -1038,6 +1068,98 @@ private extension AppDatabase {
             return Array(summaries.prefix(limit))
         }
         return summaries
+    }
+
+    func topPagesByDomain(
+        in db: Database,
+        dayBounds: DayBounds,
+        domains: [String],
+        limitPerDomain: Int
+    ) throws -> [String: [WebsitePageSummary]] {
+        guard !domains.isEmpty else { return [:] }
+
+        let quotedDomains = domains
+            .map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }
+            .joined(separator: ", ")
+
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT domain, fullURL, browserBundleID, confidence, source, pageTitle, startTime, endTime
+            FROM website_visits
+            WHERE startTime < ? AND endTime > ?
+              AND domain IN (\(quotedDomains))
+            ORDER BY domain ASC, startTime ASC
+            """, arguments: [dayBounds.end, dayBounds.start])
+
+        let browserForegrounds = try foregroundBrowserIntervals(
+            in: db,
+            dayBounds: dayBounds,
+            browserBundleID: nil
+        )
+
+        var visitsByBundle: [String: [RawWebsiteVisitInterval]] = [:]
+        for row in rows {
+            let startTime: Date = row["startTime"]
+            let endTime: Date = row["endTime"]
+            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else { continue }
+
+            let bundleID: String = row["browserBundleID"]
+            let confidence = ActivityEvent.ConfidenceLevel(rawValue: row["confidence"]) ?? .low
+            let source = ActivityEvent.EventSource(rawValue: row["source"]) ?? .browserHistory
+            let clippedToForeground = clippedWebsiteVisit(
+                interval: clipped,
+                browserBundleID: bundleID,
+                browserForegrounds: browserForegrounds
+            )
+
+            for effectiveInterval in clippedToForeground {
+                visitsByBundle[bundleID, default: []].append(
+                    RawWebsiteVisitInterval(
+                        domain: row["domain"],
+                        bundleID: bundleID,
+                        url: row["fullURL"],
+                        title: row["pageTitle"],
+                        confidence: confidence,
+                        source: source,
+                        interval: effectiveInterval
+                    )
+                )
+            }
+        }
+
+        let resolvedIntervals = visitsByBundle.values.flatMap(resolveEffectiveWebsiteIntervals)
+
+        return Dictionary(grouping: resolvedIntervals, by: \.domain).reduce(into: [:]) { result, entry in
+            let (domain, visits) = entry
+            let summaries = Dictionary(grouping: visits) { visit in
+                visit.url ?? "https://\(visit.domain)"
+            }
+            .compactMap { url, pageVisits -> WebsitePageSummary? in
+                let merged = mergedIntervals(from: pageVisits.map(\.interval))
+                let totalDuration = merged.reduce(0.0) { $0 + $1.duration }
+                guard totalDuration >= Constants.minimumWebsiteVisitDuration else { return nil }
+
+                let title = pageVisits
+                    .sorted { $0.interval.duration > $1.interval.duration }
+                    .lazy
+                    .compactMap(\.title)
+                    .first(where: { !$0.isEmpty })
+
+                return WebsitePageSummary(
+                    domain: domain,
+                    url: url,
+                    title: title,
+                    totalDuration: totalDuration
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.totalDuration == rhs.totalDuration {
+                    return lhs.url.localizedCaseInsensitiveCompare(rhs.url) == .orderedAscending
+                }
+                return lhs.totalDuration > rhs.totalDuration
+            }
+
+            result[domain] = Array(summaries.prefix(limitPerDomain))
+        }
     }
 
     func foregroundBrowserIntervals(
@@ -1110,6 +1232,7 @@ private extension AppDatabase {
             let effective = EffectiveWebsiteInterval(
                 domain: bestVisit.domain,
                 bundleID: bestVisit.bundleID,
+                url: bestVisit.url,
                 title: bestVisit.title,
                 confidence: bestVisit.confidence,
                 source: bestVisit.source,
@@ -1119,12 +1242,15 @@ private extension AppDatabase {
             if let last = resolved.last,
                last.domain == effective.domain,
                last.bundleID == effective.bundleID,
+               last.url == effective.url,
+               last.title == effective.title,
                last.source == effective.source,
                last.confidence == effective.confidence,
                last.interval.end == effective.interval.start {
                 resolved[resolved.count - 1] = EffectiveWebsiteInterval(
                     domain: last.domain,
                     bundleID: last.bundleID,
+                    url: last.url,
                     title: last.title ?? effective.title,
                     confidence: last.confidence,
                     source: last.source,

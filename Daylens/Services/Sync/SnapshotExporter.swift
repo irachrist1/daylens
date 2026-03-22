@@ -1,5 +1,6 @@
-import Foundation
+import AppKit
 import CryptoKit
+import Foundation
 
 /// Reads combinedDayPayload() and serializes a DaySnapshot JSON document
 /// matching the locked v1 contract.
@@ -34,6 +35,7 @@ final class SnapshotExporter {
         let category: String
         let totalSeconds: Int
         let sessionCount: Int
+        let iconBase64: String?
     }
 
     struct CategoryTotalDTO: Codable {
@@ -51,6 +53,13 @@ final class SnapshotExporter {
         let domain: String
         let seconds: Int
         let category: String
+        let topPages: [TopPageDTO]
+    }
+
+    struct TopPageDTO: Codable {
+        let url: String
+        let title: String?
+        let seconds: Int
     }
 
     struct FocusSessionDTO: Codable {
@@ -95,9 +104,15 @@ final class SnapshotExporter {
     func exportSnapshot(for date: Date, deviceId: String) throws -> Data {
         let payload = try AppDatabase.shared.combinedDayPayload(for: date)
         let focusSessions = try AppDatabase.shared.focusSessions(for: date)
+        let topPagesByDomain = try AppDatabase.shared.topPagesByDomain(
+            for: date,
+            domains: payload.websiteSummaries.prefix(20).map(\.domain),
+            limitPerDomain: 5
+        )
         let snapshot = buildSnapshot(
             payload: payload,
             focusSessions: focusSessions,
+            topPagesByDomain: topPagesByDomain,
             date: date,
             deviceId: deviceId
         )
@@ -111,6 +126,7 @@ final class SnapshotExporter {
     private func buildSnapshot(
         payload: CombinedDayPayload,
         focusSessions: [FocusSessionRecord],
+        topPagesByDomain: [String: [WebsitePageSummary]],
         date: Date,
         deviceId: String
     ) -> DaySnapshot {
@@ -132,7 +148,8 @@ final class SnapshotExporter {
                 displayName: displayName,
                 category: category,
                 totalSeconds: Int(app.totalDuration),
-                sessionCount: app.sessionCount
+                sessionCount: app.sessionCount,
+                iconBase64: iconPNGBase64(bundleID: app.bundleID)
             )
         }
 
@@ -160,7 +177,14 @@ final class SnapshotExporter {
             return TopDomainDTO(
                 domain: site.domain,
                 seconds: Int(site.totalDuration),
-                category: categoryRawValue(domainCategory)
+                category: categoryRawValue(domainCategory),
+                topPages: (topPagesByDomain[site.domain] ?? []).map { page in
+                    TopPageDTO(
+                        url: page.url,
+                        title: page.title,
+                        seconds: Int(page.totalDuration)
+                    )
+                }
             )
         }
 
@@ -274,6 +298,39 @@ final class SnapshotExporter {
         case .system: return "system"
         case .uncategorized: return "uncategorized"
         }
+    }
+
+    private func iconPNGBase64(bundleID: String, size: CGFloat = 32) -> String? {
+        guard !bundleID.isEmpty, let icon = appIcon(for: bundleID) else { return nil }
+
+        let targetSize = NSSize(width: size, height: size)
+        let resized = NSImage(size: targetSize)
+        resized.lockFocus()
+        defer { resized.unlockFocus() }
+
+        NSGraphicsContext.current?.imageInterpolation = .high
+        icon.draw(
+            in: NSRect(origin: .zero, size: targetSize),
+            from: .zero,
+            operation: .copy,
+            fraction: 1
+        )
+
+        guard let tiff = resized.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+
+        return png.base64EncodedString()
+    }
+
+    private func appIcon(for bundleID: String) -> NSImage? {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: appURL.path)
+        }
+
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon
     }
 
     // MARK: - Focus score formula

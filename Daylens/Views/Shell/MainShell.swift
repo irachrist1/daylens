@@ -52,6 +52,7 @@ struct MainShell: View {
 struct FocusView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = FocusViewModel()
+    @State private var focusLabel = ""
 
     private let refreshTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
@@ -170,6 +171,22 @@ struct FocusView: View {
 
     private var idleView: some View {
         VStack(alignment: .leading, spacing: DS.space16) {
+            VStack(alignment: .leading, spacing: DS.space8) {
+                Text("FOCUS LABEL")
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(0.5)
+                    .foregroundStyle(DS.onSurfaceVariant)
+
+                TextField("What are you focusing on?", text: $focusLabel)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, DS.space12)
+                    .padding(.vertical, DS.space10)
+                    .background(
+                        RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                            .fill(DS.surfaceHighest)
+                    )
+            }
+
             // Duration presets
             VStack(alignment: .leading, spacing: DS.space8) {
                 Text("DURATION")
@@ -217,7 +234,8 @@ struct FocusView: View {
             }
 
             Button {
-                appState.focusSession.start()
+                appState.focusSession.start(label: focusLabel)
+                focusLabel = ""
                 viewModel.load()
             } label: {
                 HStack(spacing: DS.space8) {
@@ -260,6 +278,13 @@ struct FocusView: View {
                             Text("\(Self.dayFormatter.string(from: session.startTime)) • \(Self.timeFormatter.string(from: session.startTime))")
                                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                                 .foregroundStyle(DS.onSurface)
+
+                            if let label = session.label, !label.isEmpty {
+                                Text(label)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(DS.onSurface)
+                                    .lineLimit(1)
+                            }
 
                             Text(statusLabel(for: session))
                                 .font(.caption)

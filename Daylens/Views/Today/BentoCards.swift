@@ -310,18 +310,32 @@ struct CategoryBadge: View {
 /// Replaces TopAppsCard with initials icons and efficiency dots.
 struct RecentSessionsCard: View {
     let summaries: [AppUsageSummary]
+    @State private var showAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.space12) {
-            Text("Recent Sessions")
-                .sectionHeader()
+            HStack {
+                Text("Recent Sessions")
+                    .sectionHeader()
+                Spacer()
+                if summaries.count > 5 {
+                    Button(showAll ? "Show less" : "See all") {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showAll.toggle()
+                        }
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(DS.primary)
+                    .buttonStyle(.plain)
+                }
+            }
 
             if summaries.isEmpty {
                 Text("No sessions yet")
                     .font(.body)
                     .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
             } else {
-                ForEach(summaries.prefix(5)) { app in
+                ForEach(showAll ? summaries : Array(summaries.prefix(5))) { app in
                     SessionRow(app: app)
                 }
             }
@@ -418,6 +432,7 @@ struct IntelligenceInsightCard: View {
                 .frame(height: 5)
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .cardStyle()
     }
 

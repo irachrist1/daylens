@@ -226,7 +226,7 @@ stateDiagram-v2
 | **Credentials** | Keychain (`com.daylens.app` + `com.daylens.sync`) | Windows Credential Manager (keytar, service: `DaylensWindows`) | `CONVEX_ENCRYPTION_SECRET` env var | JWT in HttpOnly cookie |
 | **API Key** | Keychain (plaintext, local only) | Credential Manager (plaintext, local only) | AES-256-GCM encrypted in `encrypted_keys` table | Never seen by browser |
 | **Backup** | Rolling daily (7 files in `Backups/`) | None | Convex auto-backup | — |
-| **Sync** | 5-min upload + on-quit + on focus-session change | 5-min upload + first sync at 10s + on-quit | Receive only | 30s polling via `Poller` component |
+| **Sync** | Starts on launch when linked, then 5-min upload + day-change finalization + on-quit + on focus-session change | 5-min upload + first sync at 10s + on-quit | Receive only | 30s polling via `Poller` component |
 
 ### macOS database schema
 
@@ -318,6 +318,7 @@ erDiagram
 | `v1_create_tables` | All base tables | Baseline schema |
 | `v2_focus_sessions` | `focus_sessions` | Focus timer feature |
 | `v3_category_overrides` | `category_overrides` | User category corrections |
+| `v4_focus_session_label` | `focus_sessions.label` | Optional label captured when a focus session starts |
 
 ### Convex database schema
 
@@ -436,8 +437,8 @@ sequenceDiagram
     Web->>Phone: Set-Cookie: daylens_session (HttpOnly, Secure, SameSite=Strict)
     Phone->>Web: Redirect to /dashboard
 
-    Note over Desktop: Ongoing sync (every 5 minutes)
-    loop Every 5 minutes (and on quit)
+    Note over Desktop: Ongoing sync starts automatically once linked
+    loop Every 5 minutes (plus on day change and quit)
         Desktop->>Desktop: SnapshotExporter.exportSnapshot(for: today)
         Desktop->>Convex: POST /uploadSnapshot {localDate, snapshot} (Bearer JWT)
         Convex->>Convex: Validate device, upsert day_snapshots
@@ -466,10 +467,10 @@ Every sync upload sends this JSON structure:
 | `isPartialDay` | boolean | True if day is still in progress |
 | `focusScore` | `0–100` | Integer percentage |
 | `focusSeconds` | int | Total focused time in seconds |
-| `appSummaries` | array | Per-app: `{appKey, bundleID, displayName, category, totalSeconds, sessionCount}` |
+| `appSummaries` | array | Per-app: `{appKey, bundleID, displayName, category, totalSeconds, sessionCount, iconBase64?}` |
 | `categoryTotals` | array | Per-category: `{category, totalSeconds}` |
 | `timeline` | array | Ordered: `{appKey, startAt, endAt}` |
-| `topDomains` | array | Per-domain: `{domain, seconds, category}` |
+| `topDomains` | array | Per-domain: `{domain, seconds, category, topPages?}` where `topPages` is up to 5 `{url, title, seconds}` rows |
 | `categoryOverrides` | map | User-corrected: `{bundleID: category}` |
 | `aiSummary` | string? | AI-generated day narrative |
 | `focusSessions` | array | `{sourceId, startAt, endAt, actualDurationSec, targetMinutes, status}` |
@@ -480,9 +481,10 @@ When the web dashboard queries a date with data from multiple devices (e.g., mac
 
 1. Load all `day_snapshots` for (workspaceId, localDate)
 2. For each device's snapshot:
-   - Sum `appSummaries` by `appKey` (accumulate totalSeconds, sessionCount)
+   - Sum `appSummaries` by `appKey` (accumulate totalSeconds, sessionCount, preserve embedded icon data)
    - Sum `categoryTotals` by category
    - Concatenate + sort timelines by `startAt`
+   - Merge `topDomains` by domain/category and combine `topPages` by URL
    - Combine focus sessions (prefix sourceId with deviceId)
    - Merge `categoryOverrides` (latest wins)
    - Keep latest `aiSummary`
@@ -552,8 +554,8 @@ graph TD
     end
 
     subgraph Protected["Protected Routes (JWT cookie required)"]
-        DASH["/dashboard — Today's data<br/>Focus score, top apps, timeline"]
-        HIST["/history — Past days<br/>List of synced days with scores"]
+        DASH["/dashboard — Date-driven dashboard<br/>Focus score, top apps, top sites"]
+        HIST["/history — Synced day browser<br/>Date navigation + day detail"]
         APPS["/apps/[date] — Day detail<br/>All apps, categories, domains"]
         FOCUS["/focus/[date] — Focus sessions<br/>Timer history for a day"]
         CHAT["/chat — AI Chat<br/>Claude-powered Q&A about activity"]

@@ -96,10 +96,6 @@ struct HistoryView: View {
                         overviewStats
                         daySummaryCard
                         categoryBreakdown
-                        TimelineBand(
-                            sessions: filteredTimeline,
-                            categorySummaries: filteredCategorySummaries
-                        )
                         RecentSessionsCard(summaries: filteredSummaries)
                         if shouldShowTopWebsites {
                             topWebsitesSection
@@ -121,22 +117,17 @@ struct HistoryView: View {
         return viewModel.appSummaries.filter { $0.category == filter }
     }
 
-    private var filteredTimeline: [AppSession] {
-        guard let filter = selectedFilter else { return viewModel.timeline }
-        return viewModel.timeline.filter { $0.category == filter }
-    }
-
     private var filteredCategorySummaries: [CategoryUsageSummary] {
         guard let filter = selectedFilter else { return viewModel.categorySummaries }
         return viewModel.categorySummaries.filter { $0.category == filter }
     }
 
     private var shouldShowTopWebsites: Bool {
-        !longSites.isEmpty && (selectedFilter == nil || selectedFilter == .browsing)
+        !visibleSites.isEmpty && (selectedFilter == nil || selectedFilter == .browsing)
     }
 
-    private var longSites: [WebsiteUsageSummary] {
-        viewModel.websiteSummaries.filter { $0.totalDuration >= 60 }
+    private var visibleSites: [WebsiteUsageSummary] {
+        viewModel.websiteSummaries
     }
 
     private var categoryFilterPills: some View {
@@ -245,11 +236,11 @@ struct HistoryView: View {
                 Text("Top Websites")
                     .sectionHeader()
                 Spacer()
-                if longSites.count > 5 {
+                if visibleSites.count > 3 {
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { showAllSites.toggle() }
                     } label: {
-                        Text(showAllSites ? "Show less" : "Show all \(longSites.count)")
+                        Text(showAllSites ? "Show less" : "See all")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(DS.primary)
                     }
@@ -257,8 +248,8 @@ struct HistoryView: View {
                 }
             }
 
-            let displayed = showAllSites ? longSites : Array(longSites.prefix(5))
-            let maxDuration = longSites.first?.totalDuration ?? 1
+            let displayed = showAllSites ? visibleSites : Array(visibleSites.prefix(3))
+            let maxDuration = visibleSites.first?.totalDuration ?? 1
 
             ForEach(displayed) { site in
                 let domainCat = DomainIntelligence.classify(domain: site.domain)

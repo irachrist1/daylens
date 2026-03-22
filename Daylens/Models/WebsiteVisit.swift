@@ -58,3 +58,13 @@ struct WebsiteUsageSummary: Identifiable {
         return "<1m"
     }
 }
+
+/// Aggregated page-level website usage for a specific domain.
+struct WebsitePageSummary: Identifiable {
+    let domain: String
+    let url: String
+    let title: String?
+    let totalDuration: TimeInterval
+
+    var id: String { url }
+}

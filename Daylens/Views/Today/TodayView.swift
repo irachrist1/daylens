@@ -5,6 +5,7 @@ struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
     @State private var showAllSites = false
+    @State private var insightRowHeight: CGFloat = 0
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -32,14 +33,6 @@ struct TodayView: View {
             guard !Self.osNoiseBundleIDs.contains(id) else { return false }
             guard !Self.osNoiseNames.contains(app.appName.lowercased()) else { return false }
             if app.category == .system && app.totalDuration < 30 { return false }
-            return true
-        }
-    }
-
-    private var presentationTimeline: [AppSession] {
-        viewModel.timeline.filter { session in
-            guard !Self.osNoiseBundleIDs.contains(session.bundleID.lowercased()) else { return false }
-            guard !Self.osNoiseNames.contains(session.appName.lowercased()) else { return false }
             return true
         }
     }
@@ -75,23 +68,21 @@ struct TodayView: View {
                         AllocationBarCard(categories: viewModel.categorySummaries)
                     }
 
-                    // Activity timeline
-                    TimelineBand(
-                        sessions: presentationTimeline,
-                        categorySummaries: viewModel.categorySummaries
-                    )
-
                     // Recent sessions + intelligence insight side by side
                     HStack(alignment: .top, spacing: DS.space16) {
                         RecentSessionsCard(summaries: presentationSummaries)
-                            .frame(maxWidth: .infinity)
+                            .measureCardHeight()
+                            .frame(maxWidth: .infinity, minHeight: insightRowHeight, alignment: .top)
                         IntelligenceInsightCard(
                             focusScore: Int(viewModel.focusScoreRatio * 100),
                             topCategory: viewModel.categorySummaries.first?.category,
                             totalSeconds: presentationSummaries.reduce(0) { $0 + $1.totalDuration }
                         )
-                        .frame(width: 280)
+                        .measureCardHeight()
+                        .frame(width: 280, alignment: .top)
+                        .frame(minHeight: insightRowHeight, alignment: .top)
                     }
+                    .onPreferenceChange(CardHeightPreferenceKey.self) { insightRowHeight = $0 }
 
                     // Top websites
                     if !viewModel.websiteSummaries.isEmpty {
@@ -179,9 +170,8 @@ struct TodayView: View {
 
     // MARK: - Top Websites
 
-    /// Sites with at least 1 minute of active time, sorted by duration desc.
-    private var longSites: [WebsiteUsageSummary] {
-        viewModel.websiteSummaries.filter { $0.totalDuration >= 60 }
+    private var visibleSites: [WebsiteUsageSummary] {
+        viewModel.websiteSummaries
     }
 
     private var topWebsitesSection: some View {
@@ -190,11 +180,11 @@ struct TodayView: View {
                 Text("Top Websites")
                     .sectionHeader()
                 Spacer()
-                if longSites.count > 5 {
+                if visibleSites.count > 3 {
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { showAllSites.toggle() }
                     } label: {
-                        Text(showAllSites ? "Show less" : "Show all \(longSites.count)")
+                        Text(showAllSites ? "Show less" : "See all")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(DS.primary)
                     }
@@ -202,30 +192,42 @@ struct TodayView: View {
                 }
             }
 
-            if longSites.isEmpty {
-                Text("No sites with 1+ minutes of activity yet.")
-                    .font(.caption)
-                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
-            } else {
-                let displayed = showAllSites ? longSites : Array(longSites.prefix(5))
-                let maxDuration = longSites.first?.totalDuration ?? 1
+            let displayed = showAllSites ? visibleSites : Array(visibleSites.prefix(3))
+            let maxDuration = visibleSites.first?.totalDuration ?? 1
 
-                ForEach(displayed) { site in
-                    let domainCat = DomainIntelligence.classify(domain: site.domain)
-                    let color = domainCat.category != .uncategorized
-                        ? DS.categoryColor(for: domainCat.category)
-                        : DS.primary
-                    UsageBar(
-                        label: site.domain,
-                        duration: site.totalDuration,
-                        maxDuration: maxDuration,
-                        color: color,
-                        subtitle: site.topPageTitle
-                    )
-                }
+            ForEach(displayed) { site in
+                let domainCat = DomainIntelligence.classify(domain: site.domain)
+                let color = domainCat.category != .uncategorized
+                    ? DS.categoryColor(for: domainCat.category)
+                    : DS.primary
+                UsageBar(
+                    label: site.domain,
+                    duration: site.totalDuration,
+                    maxDuration: maxDuration,
+                    color: color,
+                    subtitle: site.topPageTitle
+                )
             }
         }
         .cardStyle()
+    }
+}
+
+private struct CardHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private extension View {
+    func measureCardHeight() -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: CardHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        )
     }
 }
 

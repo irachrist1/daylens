@@ -14,8 +14,8 @@ The Web Companion lets users view their Daylens activity data from any browser. 
        │                                        ▲                              │
        │  Tracks apps, browsers, websites       │                              │
        │  Stores locally in SQLite              │  Stores snapshots            │
-       │  Generates workspace + link codes      │  Validates JWTs              │  Displays timeline,
-       │                                        │  Issues sessions             │  focus scores, AI
+       │  Generates workspace + link codes      │  Validates JWTs              │  Displays date-driven
+       │                                        │  Issues sessions             │  dashboards, top sites, AI
        └────────────────────────────────────────┘                              │
                                                                                │  Read-only — never
                                                                                │  writes activity data
@@ -51,9 +51,10 @@ The Web Companion lets users view their Daylens activity data from any browser. 
 
 ### Ongoing Sync
 
-- Desktop app syncs every 5 minutes via `POST /uploadSnapshot` with Bearer JWT auth
-- The snapshot contains: app sessions, browser history, focus scores, categories, daily summary
-- Web dashboard reads snapshots from Convex in real-time
+- Linked desktop apps start sync automatically on launch, then continue syncing every 5 minutes via `POST /uploadSnapshot` with Bearer JWT auth
+- macOS also finalizes the previous day on calendar rollover and flushes a sync on quit
+- The snapshot contains app sessions, browser history, focus scores, categories, embedded app icons, and per-domain top pages
+- The web dashboard polls its API routes for refreshed snapshot data and lets the user navigate across synced dates
 
 ### Connecting Another Browser
 
@@ -129,7 +130,7 @@ JWTs carry the workspace ID and device ID as claims, so the backend can verify i
 
 ### Why Convex?
 
-Convex provides real-time subscriptions out of the box. The web dashboard gets live updates when the desktop app syncs — no polling needed.
+Convex gives the desktop apps a simple authenticated sync target, stores per-device snapshots, validates the contract, and lets the web companion merge desktop data into a date-driven dashboard.
 
 ### Why can't the web app run on GitHub Pages?
 
@@ -152,7 +153,7 @@ These URLs appear in the codebase and need updating if you change deployments:
 1. Update the schema in `daylens-web/convex/schema.ts`
 2. Update HTTP endpoints in `daylens-web/convex/http.ts`
 3. Run `npx convex dev` to apply changes
-4. If you change the snapshot format, update `snapshotExporter` in both desktop apps
+4. If you change the snapshot format, update `packages/snapshot-schema/snapshot.ts`, `daylens-web/convex/snapshotValidator.ts`, and the snapshot exporters in both desktop apps
 
 ### If you change the auth system:
 1. Generate a new ES256 key pair

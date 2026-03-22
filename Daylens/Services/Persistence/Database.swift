@@ -195,6 +195,12 @@ final class AppDatabase {
             }
         }
 
+        migrator.registerMigration("v4_focus_session_label") { db in
+            try db.alter(table: "focus_sessions") { t in
+                t.add(column: "label", .text)
+            }
+        }
+
         return migrator
     }
 }

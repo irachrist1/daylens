@@ -6,6 +6,8 @@ import OSLog
 final class AppState {
     private let logger = Logger(subsystem: "com.daylens.app", category: "AppState")
     private let userDefaults: UserDefaults
+    private let syncUploader = SyncUploader.shared
+    private var dayChangeObserver: NSObjectProtocol?
 
     // MARK: - Navigation
     var selectedSection: SidebarSection = .today
@@ -66,6 +68,11 @@ final class AppState {
         if hasCompletedOnboarding, !isRunningTests {
             logger.info("Tracking starts on launch because onboarding is already complete")
             trackingCoordinator.startTracking()
+            if syncUploader.isLinked {
+                logger.info("Sync starts on launch because a workspace is already linked")
+                syncUploader.startSync()
+            }
+            installDayChangeObserverIfNeeded()
         } else if hasCompletedOnboarding {
             logger.debug("Skipping launch-time tracking because tests are running")
         }
@@ -106,6 +113,37 @@ final class AppState {
     func goToNextDay() {
         guard !isToday else { return }
         selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
+    }
+
+    func handleDayChange() {
+        let today = Calendar.current.startOfDay(for: Date())
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today)
+
+        if let yesterday, Calendar.current.isDate(selectedDate, inSameDayAs: yesterday) {
+            selectedDate = today
+        }
+
+        logger.info("Detected a local day rollover; finalizing the previous day for sync")
+        syncUploader.finalizePreviousDay()
+    }
+
+    func tearDownLifecycleHooks() {
+        if let dayChangeObserver {
+            NotificationCenter.default.removeObserver(dayChangeObserver)
+            self.dayChangeObserver = nil
+        }
+    }
+
+    private func installDayChangeObserverIfNeeded() {
+        guard dayChangeObserver == nil else { return }
+
+        dayChangeObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleDayChange()
+        }
     }
 }
 

@@ -2,6 +2,21 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.7] - 2026-03-22
+
+### Added
+- Focus sessions can now be labeled from the Focus tab, backed by the additive `v4_focus_session_label` migration
+
+### Fixed
+- Web companion snapshots now include embedded app icons and per-domain top pages for richer dashboard drilldowns
+- Linked desktops now start sync automatically on launch, finalize the previous day at day change, and flush sync on quit
+- Removed the misleading activity timeline from Today and History
+- Intelligence Insight and Recent Sessions cards now stretch to a consistent height
+- Top Websites now always expose a subtle See all control when more than three sites are present
+- The native title bar is hidden so the custom shell header no longer sits under a dark chrome band
+- App detail session rows now respect category overrides, matching the override-aware summaries
+- Focus view now captures a label before starting a session and shows it in Previous Focus Sessions
+
 ## [1.0.6] - 2026-03-22
 
 ### Added
