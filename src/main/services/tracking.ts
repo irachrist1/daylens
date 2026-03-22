@@ -5,6 +5,7 @@ import path from 'node:path'
 import { insertAppSession } from '../db/queries'
 import { getDb } from './database'
 import type { AppCategory, LiveSession } from '@shared/types'
+import { isCategoryFocused } from '../lib/focusScore'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,8 @@ interface InFlightSession {
 
 const POLL_INTERVAL_MS  = 5_000
 const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
-const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → flush current session and park
+const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
+const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
 
 // ─── active-window singleton ─────────────────────────────────────────────────
 // @paymoapp/active-window is a native CJS module — synchronous getActiveWindow().
@@ -178,11 +180,38 @@ function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let currentSession: InFlightSession | null = null
+type IdleState = 'active' | 'provisional_idle' | 'away'
+let idleState: IdleState = 'active'
+let provisionalIdleStart: number | null = null
+let powerMonitorListenersRegistered = false
+
+function handleLockScreen(): void {
+  if (currentSession) {
+    flushCurrent()
+    console.log('[tracking] screen locked — session flushed')
+  }
+  idleState = 'away'
+  provisionalIdleStart = null
+}
+
+function handleSuspend(): void {
+  if (currentSession) {
+    flushCurrent()
+    console.log('[tracking] system suspended — session flushed')
+  }
+  idleState = 'away'
+  provisionalIdleStart = null
+}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function startTracking(): void {
   if (pollTimer) return
+  if (!powerMonitorListenersRegistered) {
+    powerMonitor.on('lock-screen', handleLockScreen)
+    powerMonitor.on('suspend', handleSuspend)
+    powerMonitorListenersRegistered = true
+  }
   // Fire immediately — don't wait 5 s for the first data point
   void poll()
   pollTimer = setInterval(poll, POLL_INTERVAL_MS)
@@ -194,7 +223,14 @@ export function stopTracking(): void {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  if (powerMonitorListenersRegistered) {
+    powerMonitor.removeListener('lock-screen', handleLockScreen)
+    powerMonitor.removeListener('suspend', handleSuspend)
+    powerMonitorListenersRegistered = false
+  }
   flushCurrent()
+  idleState = 'active'
+  provisionalIdleStart = null
   console.log('[tracking] stopped')
 }
 
@@ -207,17 +243,32 @@ export function getCurrentSession(): LiveSession | null {
 async function poll(): Promise<void> {
   try {
     // ── Idle detection ───────────────────────────────────────────────────────
-    // If the user hasn't touched keyboard/mouse for IDLE_THRESHOLD_SEC, end the
-    // in-progress session at the moment they went idle (not "now"), then park
-    // until they return. This prevents idle time inflating focus totals.
     const idleSec = powerMonitor.getSystemIdleTime()
-    if (idleSec >= IDLE_THRESHOLD_SEC) {
-      if (currentSession) {
-        const idleStartMs = Date.now() - Math.round(idleSec) * 1_000
+    if (idleSec >= AWAY_THRESHOLD_SEC) {
+      if (idleState !== 'away' && currentSession) {
+        const idleStartMs = provisionalIdleStart ?? (Date.now() - Math.round(idleSec) * 1_000)
         flushCurrent(idleStartMs)
-        console.log(`[tracking] user idle ${Math.round(idleSec)}s — session flushed`)
+        console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
       }
+      idleState = 'away'
+      provisionalIdleStart = null
       return
+    } else if (idleSec >= IDLE_THRESHOLD_SEC) {
+      if (idleState === 'active') {
+        provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
+        idleState = 'provisional_idle'
+        console.log(`[tracking] provisional idle at ${Math.round(idleSec)}s — session held open`)
+      }
+    } else {
+      if (idleState === 'away' || idleState === 'provisional_idle') {
+        // Returning from provisional_idle: the session was intentionally held open
+        // through the 2–5 min idle window to avoid fragmenting media playback.
+        // The idle time is attributed to the session — this is the desired behaviour.
+        // Returning from away: session was already flushed, a new one will start below.
+        console.log(`[tracking] user returned from ${idleState}`)
+      }
+      idleState = 'active'
+      provisionalIdleStart = null
     }
 
     // ── Active window ────────────────────────────────────────────────────────
@@ -409,6 +460,5 @@ export function classifyResult(
   appName: string,
 ): { category: AppCategory; isFocused: boolean } {
   const category = classifyApp(bundleId, appName)
-  const focused: AppCategory[] = ['development', 'research', 'writing', 'aiTools', 'design', 'productivity']
-  return { category, isFocused: focused.includes(category) }
+  return { category, isFocused: isCategoryFocused(category) }
 }

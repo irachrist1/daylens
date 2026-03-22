@@ -42,6 +42,21 @@ interface BrowserEntry {
   historyPath: string
 }
 
+interface HistoryRow {
+  url: string
+  title: string | null
+  visit_time: bigint
+  visit_duration: bigint
+}
+
+interface ProcessedHistoryRow {
+  domain: string
+  pageTitle: string | null
+  url: string
+  visitTime: number
+  durationSec: number
+}
+
 function macBrowsers(): BrowserEntry[] {
   const home = os.homedir()
   return [
@@ -113,6 +128,43 @@ function extractDomain(url: string): string | null {
   }
 }
 
+function processHistoryRows(rows: HistoryRow[]): ProcessedHistoryRow[] {
+  return rows
+    .map((row, i) => {
+      const visitMs = chromeUsToMs(row.visit_time)
+      const chromeDurationSec = Math.max(0, Number(row.visit_duration / 1_000_000n))
+
+      if (chromeDurationSec > 0 && chromeDurationSec < 2) return null
+
+      const domain = extractDomain(row.url)
+      if (!domain) return null
+
+      let estimatedDurationSec: number
+      if (i < rows.length - 1) {
+        const nextVisitMs = chromeUsToMs(rows[i + 1].visit_time)
+        estimatedDurationSec = Math.round((nextVisitMs - visitMs) / 1000)
+        estimatedDurationSec = Math.min(Math.max(estimatedDurationSec, 0), 1800)
+      } else {
+        // Terminal row — no successor to measure gap against.
+      // Use Chrome's duration if reliable, otherwise a 30s default (median dwell time).
+      estimatedDurationSec = chromeDurationSec > 0 ? chromeDurationSec : 30
+      }
+
+      const finalDuration = chromeDurationSec > 2
+        ? Math.max(Math.min(chromeDurationSec, estimatedDurationSec), 1)
+        : Math.max(estimatedDurationSec, 5)
+
+      return {
+        domain,
+        pageTitle: row.title ?? null,
+        url: row.url,
+        visitTime: visitMs,
+        durationSec: finalDuration,
+      }
+    })
+    .filter((row): row is ProcessedHistoryRow => row !== null)
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -180,47 +232,70 @@ async function pollAll(): Promise<void> {
       histDb.defaultSafeIntegers(true)   // return BigInt for large integers
 
       const fromChrome = msToChromeUs(pollFrom)
+      const query = histDb.prepare(`
+        SELECT u.url, u.title, v.visit_time, v.visit_duration
+        FROM visits v
+        JOIN urls u ON v.url = u.id
+        WHERE v.visit_time > ?
+        ORDER BY v.visit_time ASC
+        LIMIT 500
+      `)
 
-      const rows = histDb
-        .prepare(`
-          SELECT u.url, u.title, v.visit_time, v.visit_duration
-          FROM visits v
-          JOIN urls u ON v.url = u.id
-          WHERE v.visit_time > ?
-          ORDER BY v.visit_time ASC
-          LIMIT 500
-        `)
-        .all(fromChrome) as {
-          url:            string
-          title:          string | null
-          visit_time:     bigint
-          visit_duration: bigint
-        }[]
+      let cursor = fromChrome
+      let batchCount = 0
+      let hitBatchLimit = false
+      let pendingRow: HistoryRow | null = null
+      const MAX_BATCHES = 10
+
+      while (batchCount < MAX_BATCHES) {
+        const rows = query.all(cursor) as HistoryRow[]
+        if (rows.length === 0) break
+
+        const batchRows: HistoryRow[] = pendingRow ? [pendingRow, ...rows] : rows
+        const isFinalBatch = rows.length < 500
+        const rowsToProcess = isFinalBatch ? batchRows : batchRows.slice(0, -1)
+        pendingRow = isFinalBatch ? null : batchRows[batchRows.length - 1]
+
+        for (const processed of processHistoryRows(rowsToProcess)) {
+          insertWebsiteVisit(db, {
+            domain: processed.domain,
+            pageTitle: processed.pageTitle,
+            url: processed.url,
+            visitTime: processed.visitTime,
+            durationSec: processed.durationSec,
+            browserBundleId: browser.bundleId,
+            source: 'chrome_history',
+          })
+          totalInserted++
+        }
+
+        cursor = rows[rows.length - 1].visit_time
+        batchCount++
+
+        if (isFinalBatch) break
+        if (batchCount === MAX_BATCHES) hitBatchLimit = true
+      }
+
+      if (pendingRow) {
+        for (const processed of processHistoryRows([pendingRow])) {
+          insertWebsiteVisit(db, {
+            domain: processed.domain,
+            pageTitle: processed.pageTitle,
+            url: processed.url,
+            visitTime: processed.visitTime,
+            durationSec: processed.durationSec,
+            browserBundleId: browser.bundleId,
+            source: 'chrome_history',
+          })
+          totalInserted++
+        }
+      }
+
+      if (hitBatchLimit) {
+        console.warn(`[browser] hit batch limit while polling ${browser.name}`)
+      }
 
       histDb.close()
-
-      for (const row of rows) {
-        const domain = extractDomain(row.url)
-        if (!domain) continue
-
-        const visitMs    = chromeUsToMs(row.visit_time)
-        const durationSec = Number(row.visit_duration / 1_000_000n)
-
-        // Skip noise: Chrome records pre-fetches and redirects with 0 or tiny duration.
-        // Only skip if duration is explicitly very small and non-zero (0 = not yet set).
-        if (durationSec > 0 && durationSec < 2) continue
-
-        insertWebsiteVisit(db, {
-          domain,
-          pageTitle:       row.title ?? null,
-          url:             row.url,
-          visitTime:       visitMs,
-          durationSec:     Math.max(0, durationSec),
-          browserBundleId: browser.bundleId,
-          source:          'chrome_history',
-        })
-        totalInserted++
-      }
     } catch (err) {
       lastError = String(err)
       console.warn(`[browser] failed to poll ${browser.name}:`, err)

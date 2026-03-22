@@ -1,4 +1,5 @@
 import { getDb } from '../services/database'
+import { computeFocusScore } from '../lib/focusScore'
 
 /**
  * Daily summary computation and persistence.
@@ -104,12 +105,11 @@ export function computeDailySummary(dateStr: string): void {
   const focusSec = appAgg.focus_sec
   const hours = totalSec / 3600
   const switchesPerHour = hours > 0 ? switches / hours : 0
-  let focusScore = 0
-  if (totalSec > 0) {
-    const focusedRatio = focusSec / totalSec
-    const penalty = Math.min(switchesPerHour / 300, 0.15)
-    focusScore = Math.round(100 * focusedRatio * (1 - penalty))
-  }
+  const focusScore = computeFocusScore({
+    focusedSeconds: focusSec,
+    totalSeconds: totalSec,
+    switchesPerHour,
+  })
 
   // Upsert
   db.prepare(

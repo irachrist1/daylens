@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import type { AppSession, AppUsageSummary, AppCategory, FocusSession, WebsiteSummary } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
+import { isCategoryFocused } from '../lib/focusScore'
 
 // ─── App name normalization ────────────────────────────────────────────────────
 
@@ -41,6 +41,7 @@ const UX_NOISE_SUBSTRINGS = [
 // Minimum session duration exposed to the UI (seconds).
 // Sessions shorter than this are noise from rapid app switches.
 const MIN_DISPLAY_SEC = 15
+const SAME_APP_MERGE_GAP_MS = 15_000
 
 function isUxNoise(appName: string): boolean {
   const lower = appName.toLowerCase()
@@ -62,6 +63,10 @@ function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'du
   return row.end_time ?? (row.start_time + row.duration_sec * 1_000)
 }
 
+function appSessionEndTime(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
+  return session.endTime ?? (session.startTime + session.durationSeconds * 1_000)
+}
+
 function clipRowToRange(
   row: AppSessionRow,
   fromMs: number,
@@ -81,8 +86,31 @@ function clipRowToRange(
     endTime: clippedEnd,
     durationSeconds: Math.max(1, Math.round((clippedEnd - clippedStart) / 1_000)),
     category,
-    isFocused: FOCUSED_CATEGORIES.includes(category),
+    isFocused: isCategoryFocused(category),
   }
+}
+
+function mergeSessions(sessions: AppSession[]): AppSession[] {
+  if (sessions.length <= 1) return sessions
+
+  const merged: AppSession[] = [{ ...sessions[0] }]
+
+  for (let i = 1; i < sessions.length; i++) {
+    const curr = sessions[i]
+    const last = merged[merged.length - 1]
+    const gap = curr.startTime - appSessionEndTime(last)
+
+    if (curr.bundleId === last.bundleId && gap <= SAME_APP_MERGE_GAP_MS) {
+      const newEnd = Math.max(appSessionEndTime(last), appSessionEndTime(curr))
+      last.endTime = newEnd
+      last.durationSeconds = Math.max(1, Math.round((newEnd - last.startTime) / 1000))
+      continue
+    }
+
+    merged.push({ ...curr })
+  }
+
+  return merged
 }
 
 // ---------------------------------------------------------------------------
@@ -120,26 +148,30 @@ export function getAppSummariesForRange(
     `)
     .all(fromMs, toMs) as AppSessionRow[]
 
+  const clippedSessions = mergeSessions(
+    rows
+      .filter((row) => !isUxNoise(row.app_name))
+      .map((row) => {
+        const category: AppCategory = overrides[row.bundle_id] ?? row.category ?? 'uncategorized'
+        return clipRowToRange(row, fromMs, toMs, category)
+      })
+      .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
+  )
+
   const summaryMap = new Map<string, AppUsageSummary>()
 
-  for (const row of rows) {
-    if (isUxNoise(row.app_name)) continue
-
-    const category: AppCategory = overrides[row.bundle_id] ?? row.category ?? 'uncategorized'
-    const clipped = clipRowToRange(row, fromMs, toMs, category)
-    if (!clipped) continue
-
-    const existing = summaryMap.get(row.bundle_id)
+  for (const session of clippedSessions) {
+    const existing = summaryMap.get(session.bundleId)
     if (existing) {
-      existing.totalSeconds += clipped.durationSeconds
+      existing.totalSeconds += session.durationSeconds
       existing.sessionCount = (existing.sessionCount ?? 0) + 1
     } else {
-      summaryMap.set(row.bundle_id, {
-        bundleId: row.bundle_id,
-        appName: resolveDisplayName(row.app_name),
-        category,
-        totalSeconds: clipped.durationSeconds,
-        isFocused: FOCUSED_CATEGORIES.includes(category),
+      summaryMap.set(session.bundleId, {
+        bundleId: session.bundleId,
+        appName: resolveDisplayName(session.appName),
+        category: session.category,
+        totalSeconds: session.durationSeconds,
+        isFocused: isCategoryFocused(session.category),
         sessionCount: 1,
       })
     }
@@ -165,21 +197,15 @@ export function getSessionsForRange(
     `)
     .all(fromMs, toMs) as AppSessionRow[]
 
-  return rows
-    .filter((r) => !isUxNoise(r.app_name))
-    .map((r) => ({
-      row: r,
-      session: (() => {
-      const category: AppCategory = overrides[r.bundle_id] ?? r.category
-      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.app_name))
-      })(),
-    }))
-    .filter((entry): entry is { row: AppSessionRow; session: AppSession } => {
-      if (!entry.session) return false
-      return entry.session.durationSeconds > 0 &&
-        (entry.session.durationSeconds >= MIN_DISPLAY_SEC || entry.row.duration_sec >= MIN_DISPLAY_SEC)
-    })
-    .map((entry) => entry.session)
+  return mergeSessions(
+    rows
+      .filter((row) => !isUxNoise(row.app_name))
+      .map((row) => {
+        const category: AppCategory = overrides[row.bundle_id] ?? row.category
+        return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.app_name))
+      })
+      .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
+  ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
 }
 
 // ---------------------------------------------------------------------------
@@ -322,17 +348,19 @@ export function getSessionsForApp(
     .prepare<[string, number, number]>(`
       SELECT * FROM app_sessions
       WHERE bundle_id = ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ? AND start_time < ?
-      ORDER BY start_time DESC
+      ORDER BY start_time ASC
     `)
     .all(bundleId, fromMs, toMs) as AppSessionRow[]
 
-  return rows
+  const clipped = rows
     .filter((r) => !isUxNoise(r.app_name))
     .map((r) => {
       const category: AppCategory = overrides[r.bundle_id] ?? r.category
       return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.app_name))
     })
     .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
+
+  return mergeSessions(clipped).reverse()
 }
 
 // Last N app sessions across all apps — for the debug panel.
