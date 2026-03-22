@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.appState = appState
         refreshTodaySummary()
         rebuildMenu()
+        configureMainWindowAppearance()
 
         // Observe focus session ticks to update menu bar title and controls
         appState.focusSession.onTick = { [weak self] in
@@ -48,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        configureMainWindowAppearance()
         // Refresh menu content every 30 seconds
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.refreshTodaySummary()
@@ -81,6 +83,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         rebuildMenu()
+    }
+
+    private func configureMainWindowAppearance() {
+        DispatchQueue.main.async {
+            guard let window = NSApplication.shared.windows.first else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.backgroundColor = NSColor(named: "SurfaceContainer") ?? .windowBackgroundColor
+        }
     }
 
     private func rebuildMenu() {
