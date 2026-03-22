@@ -5,7 +5,8 @@ import Foundation
 /// Reads combinedDayPayload() and serializes a DaySnapshot JSON document
 /// matching the locked v1 contract.
 ///
-/// All database access runs inside Task.detached (never on main actor).
+/// Database access should stay off the main actor; AppKit icon resolution is
+/// marshaled onto the main actor before encoding.
 final class SnapshotExporter {
 
     // MARK: - Types matching the locked DaySnapshot contract
@@ -100,8 +101,7 @@ final class SnapshotExporter {
     // MARK: - Public
 
     /// Build a DaySnapshot JSON blob for the given date.
-    /// Must be called from Task.detached — never on main actor.
-    func exportSnapshot(for date: Date, deviceId: String) throws -> Data {
+    func exportSnapshot(for date: Date, deviceId: String) async throws -> Data {
         let payload = try AppDatabase.shared.combinedDayPayload(for: date)
         let focusSessions = try AppDatabase.shared.focusSessions(for: date)
         let topPagesByDomain = try AppDatabase.shared.topPagesByDomain(
@@ -109,10 +109,21 @@ final class SnapshotExporter {
             domains: payload.websiteSummaries.prefix(20).map(\.domain),
             limitPerDomain: 5
         )
+        let bundleIDs = payload.appSummaries.map(\.bundleID)
+        let iconMap = await MainActor.run {
+            var map: [String: String] = [:]
+            for bundleID in bundleIDs {
+                if let iconBase64 = iconPNGBase64(bundleID: bundleID) {
+                    map[bundleID] = iconBase64
+                }
+            }
+            return map
+        }
         let snapshot = buildSnapshot(
             payload: payload,
             focusSessions: focusSessions,
             topPagesByDomain: topPagesByDomain,
+            iconMap: iconMap,
             date: date,
             deviceId: deviceId
         )
@@ -127,6 +138,7 @@ final class SnapshotExporter {
         payload: CombinedDayPayload,
         focusSessions: [FocusSessionRecord],
         topPagesByDomain: [String: [WebsitePageSummary]],
+        iconMap: [String: String],
         date: Date,
         deviceId: String
     ) -> DaySnapshot {
@@ -149,7 +161,7 @@ final class SnapshotExporter {
                 category: category,
                 totalSeconds: Int(app.totalDuration),
                 sessionCount: app.sessionCount,
-                iconBase64: iconPNGBase64(bundleID: app.bundleID)
+                iconBase64: iconMap[app.bundleID]
             )
         }
 

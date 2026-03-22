@@ -150,7 +150,7 @@ final class SyncUploader {
             for dateString in datesToUpload {
                 guard let date = self.dateFormatter.date(from: dateString) else { continue }
                 do {
-                    let jsonData = try self.exporter.exportSnapshot(for: date, deviceId: self.deviceId)
+                    let jsonData = try await self.exporter.exportSnapshot(for: date, deviceId: self.deviceId)
                     try await self.postSnapshot(jsonData: jsonData, localDate: dateString)
                     _ = await MainActor.run {
                         self.dirtyDates.remove(dateString)
