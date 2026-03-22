@@ -66,6 +66,14 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 4,
+    description: 'Recompute daily summaries after tracking fixes',
+    up: () => {
+      const db = getDb()
+      db.exec('DELETE FROM daily_summaries')
+    },
+  },
 ]
 
 export function runMigrations(): void {

@@ -13,6 +13,7 @@ import {
 } from '../db/queries'
 import { getDb } from './database'
 import { getSettings } from './settings'
+import { computeFocusScore } from '../lib/focusScore'
 
 function buildClient(): Anthropic {
   const { anthropicApiKey } = getSettings()
@@ -44,7 +45,11 @@ function buildDayContext(): string {
 
     const totalSec = summaries.reduce((s, a) => s + a.totalSeconds, 0)
     const focusSec = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-    const focusPct = totalSec > 0 ? Math.round((focusSec / totalSec) * 100) : 0
+    const focusScore = computeFocusScore({
+      focusedSeconds: focusSec,
+      totalSeconds: totalSec,
+      switchesPerHour: 0,
+    })
     const goalHours = settings.dailyFocusGoalHours ?? 4
     const goalSec = goalHours * 3600
 
@@ -108,11 +113,15 @@ function buildDayContext(): string {
       if (daySummaries.length === 0) continue
       const dayTotal = daySummaries.reduce((sum, item) => sum + item.totalSeconds, 0)
       const dayFocus = daySummaries.filter((item) => item.isFocused).reduce((sum, item) => sum + item.totalSeconds, 0)
-      const dayFocusPct = dayTotal > 0 ? Math.round((dayFocus / dayTotal) * 100) : 0
+      const dayFocusScore = computeFocusScore({
+        focusedSeconds: dayFocus,
+        totalSeconds: dayTotal,
+        switchesPerHour: 0,
+      })
       const topApp = daySummaries[0]
       recentDays.push(
         `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}: ` +
-        `${formatDuration(dayTotal)} total, ${dayFocusPct}% focus share, top app ${topApp?.appName ?? 'n/a'}`,
+        `${formatDuration(dayTotal)} total, focus score ${dayFocusScore}, top app ${topApp?.appName ?? 'n/a'}`,
       )
     }
 
@@ -131,12 +140,12 @@ function buildDayContext(): string {
       '',
       'Data notes:',
       '- App totals are grounded in tracked foreground-window sessions.',
-      '- Focus share is derived from focused app categories and may not fully capture productive browser work.',
+      '- Focus score is derived from focused app categories and may not fully capture productive browser work.',
       '- Website timing comes from local browser evidence and may be approximate.',
       '',
       'Today:',
       `- Total tracked time: ${formatDuration(totalSec)}`,
-      `- Focus share: ${focusPct}% (${formatDuration(focusSec)})`,
+      `- Focus score: ${focusScore} (${formatDuration(focusSec)} in focused apps)`,
       `- Top categories: ${topCategoryList || 'none yet'}`,
       `- Top apps: ${topApps || 'none yet'}`,
       `- Top websites: ${topSites || 'none yet'}`,

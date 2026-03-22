@@ -9,11 +9,10 @@ import {
   getWebsiteSummariesForRange,
   getRecentFocusSessions,
 } from '../db/queries'
-import type { AppCategory } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
 import fs from 'node:fs'
 import path from 'node:path'
 import { localDateString, localDayBounds } from '../lib/localDate'
+import { computeFocusScore, isCategoryFocused } from '../lib/focusScore'
 
 // ─── Types matching DaySnapshot v1 contract ──────────────────────────────────
 
@@ -128,15 +127,6 @@ function normalize(bundleId: string, appName: string): { appKey: string; display
   }
 }
 
-// ─── Focus score ─────────────────────────────────────────────────────────────
-
-function computeFocusScore(focusedSeconds: number, totalTrackedSeconds: number, switchesPerHour: number): number {
-  if (totalTrackedSeconds === 0) return 0
-  const focusedRatio = focusedSeconds / totalTrackedSeconds
-  const penalty = Math.min(switchesPerHour / 300, 0.15)
-  return Math.round(100 * focusedRatio * (1 - penalty))
-}
-
 // ─── Day bounds ──────────────────────────────────────────────────────────────
 
 function dayBounds(dateStr: string): [number, number] {
@@ -202,9 +192,8 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
 
   // Focus seconds
-  const focusedCats = new Set(FOCUSED_CATEGORIES)
   const focusSeconds = appSummaries
-    .filter((a) => focusedCats.has(a.category as AppCategory))
+    .filter((a) => isCategoryFocused(a.category))
     .reduce((s, a) => s + a.totalSeconds, 0)
 
   const totalTrackedSeconds = appSummaries.reduce((s, a) => s + a.totalSeconds, 0)
@@ -221,7 +210,11 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   const switchesPerHour = hours > 0 ? switches / hours : 0
 
   // Focus score
-  const focusScore = computeFocusScore(focusSeconds, totalTrackedSeconds, switchesPerHour)
+  const focusScore = computeFocusScore({
+    focusedSeconds: focusSeconds,
+    totalSeconds: totalTrackedSeconds,
+    switchesPerHour,
+  })
 
   // Timeline — raw sessions mapped to normalized appKeys
   const timeline: TimelineEntry[] = rawSessions.map((s) => {

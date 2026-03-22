@@ -1,17 +1,19 @@
-# Current Status — 2026-03-21
+# Current Status — 2026-03-22
 
 ## What's shipped
 
 Windows releases are published at https://github.com/irachrist1/daylens-windows/releases/latest
 
 Core features currently shipped:
-- Active window tracking (5 s poll, idle detection, session flush)
-- Browser history ingestion (Chrome, Edge, Brave on Windows)
+- Active window tracking (5 s poll, three-state idle detection, session flush)
+- Browser history ingestion (Chrome, Edge, Brave on Windows) with navigation-gap duration estimation
 - Focus session timer
 - AI insights chat (Anthropic API, streaming)
 - System tray (hide-to-tray, single-instance lock)
 - Settings (API key, theme, launch-on-login)
 - NSIS installer via electron-builder
+- Unified focus score calculator shared across daily summaries, exports, and AI context
+- Same-app session merge (15s gap tolerance) to reduce polling noise
 
 ### Release health
 - `v0.1.6-win` is a bad Windows installer build: it emits the Electron main process as ESM while the packaged runtime still expects CommonJS semantics on first launch.
