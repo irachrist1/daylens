@@ -301,7 +301,7 @@ export default function Settings() {
                   </button>
                 </div>
                 <p className="text-[10px] text-[var(--color-text-tertiary)]">
-                  Paste this at <a href="https://daylens-web.vercel.app" className="text-[var(--color-accent)] hover:underline">daylens-web.vercel.app</a> · Expires in 5 minutes
+                  Paste this at <a href="https://daylens-web.vercel.app/link" className="text-[var(--color-accent)] hover:underline">daylens-web.vercel.app/link</a> · Expires in 5 minutes
                 </p>
               </div>
 
