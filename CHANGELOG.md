@@ -2,6 +2,15 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.8] - 2026-03-23
+
+### Fixed
+- Restored the protected `DaylensApp.swift` scene configuration and moved title bar styling back into `AppDelegate`
+- Resolved synced app icons on the main actor so snapshot exports no longer rely on AppKit calls from a background task
+
+### Removed
+- Deleted the unused `TimelineBand` view after the timeline removal shipped in 1.0.7
+
 ## [1.0.7] - 2026-03-22
 
 ### Added
