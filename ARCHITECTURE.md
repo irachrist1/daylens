@@ -50,7 +50,7 @@ graph TB
 
 | Platform | Repo | Deploy | Branch Model |
 |----------|------|--------|-------------|
-| macOS | [irachrist1/daylens](https://github.com/irachrist1/daylens) | GitHub Releases (`.dmg`) via CI | `main` + `codex/functional-pass-chromatic-sanctuary` (dev) |
+| macOS | [irachrist1/daylens](https://github.com/irachrist1/daylens) | GitHub Releases (`.dmg`) via CI | `main` only |
 | Windows | [irachrist1/daylens-windows](https://github.com/irachrist1/daylens-windows) | GitHub Releases (`.exe`) via CI | `main` only |
 | Web | [irachrist1/daylens-web](https://github.com/irachrist1/daylens-web) | Vercel auto-deploy on push | `main` only |
 
