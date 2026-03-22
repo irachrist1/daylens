@@ -168,21 +168,22 @@ final class SnapshotExporter {
         }
 
         // Focus score
-        let totalTracked = appDTOs.reduce(0) { $0 + $1.totalSeconds }
-        let focusedSeconds = appDTOs
-            .filter { Self.focusedCategories.contains($0.category) }
-            .reduce(0) { $0 + $1.totalSeconds }
-        let switchesPerHour: Double
-        if let summary = payload.dailySummary, summary.totalActiveTime > 0 {
-            let hours = summary.totalActiveTime / 3600.0
-            switchesPerHour = hours > 0 ? Double(summary.contextSwitches) / hours : 0
-        } else {
-            switchesPerHour = 0
-        }
+        let totalTracked = payload.appSummaries.reduce(0.0) { $0 + $1.totalDuration }
+        let focusedSeconds = payload.appSummaries
+            .filter { $0.category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let browserTotal = payload.appSummaries
+            .filter { $0.category == .browsing }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let webFocused = payload.websiteSummaries
+            .filter { DomainIntelligence.classify(domain: $0.domain).category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let focusedWebCredit = min(webFocused, browserTotal)
         let focusScore = Self.computeFocusScore(
             focusedSeconds: focusedSeconds,
             totalTracked: totalTracked,
-            switchesPerHour: switchesPerHour
+            sessionCount: payload.timeline.count,
+            websiteFocusCredit: focusedWebCredit
         )
 
         // Focus sessions
@@ -205,7 +206,7 @@ final class SnapshotExporter {
             generatedAt: Self.iso8601Formatter.string(from: Date()),
             isPartialDay: isPartialDay,
             focusScore: focusScore,
-            focusSeconds: focusedSeconds,
+            focusSeconds: Int(focusedSeconds + focusedWebCredit),
             appSummaries: appDTOs,
             categoryTotals: categoryTotals,
             timeline: timelineDTOs,
@@ -275,16 +276,19 @@ final class SnapshotExporter {
 
     // MARK: - Focus score formula
 
-    private static let focusedCategories: Set<String> = [
-        "development", "writing", "design", "research", "aiTools"
-    ]
-
-    /// focusScore = round(100 * focusedRatio * (1 - min(switchesPerHour / 300, 0.15)))
-    private static func computeFocusScore(focusedSeconds: Int, totalTracked: Int, switchesPerHour: Double) -> Int {
-        guard totalTracked > 0 else { return 0 }
-        let focusedRatio = Double(focusedSeconds) / Double(totalTracked)
-        let penalty = min(switchesPerHour / 300.0, 0.15)
-        return min(100, max(0, Int(round(100.0 * focusedRatio * (1.0 - penalty)))))
+    private static func computeFocusScore(
+        focusedSeconds: TimeInterval,
+        totalTracked: TimeInterval,
+        sessionCount: Int,
+        websiteFocusCredit: TimeInterval
+    ) -> Int {
+        let score = FocusScoreCalculator.compute(
+            focusedTime: focusedSeconds,
+            totalTime: totalTracked,
+            sessionCount: sessionCount,
+            websiteFocusCredit: websiteFocusCredit
+        )
+        return min(100, max(0, Int(round(score * 100.0))))
     }
 
     // MARK: - Formatters

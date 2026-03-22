@@ -40,6 +40,18 @@ struct AppsView: View {
                 for: appState.selectedDate
             )
         }
+
+        if let webInfo = appState.trackingCoordinator?.currentWebVisitInfo,
+           Calendar.current.isDateInToday(appState.selectedDate) {
+            viewModel.injectLiveWebsiteVisit(
+                domain: webInfo.domain,
+                url: webInfo.url,
+                title: webInfo.title,
+                startedAt: webInfo.startedAt,
+                browserBundleID: webInfo.browserBundleID,
+                for: appState.selectedDate
+            )
+        }
     }
 
     private var appList: some View {

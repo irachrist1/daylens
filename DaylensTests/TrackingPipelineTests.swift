@@ -60,4 +60,81 @@ final class TrackingPipelineTests: XCTestCase {
         XCTAssertEqual(sessions[0].bundleID, "com.microsoft.teams2")
         XCTAssertEqual(sessions[0].duration, 120, accuracy: 0.001)
     }
+
+    func testIdlePauseResumesWithLatestFrontmostApp() throws {
+        let database = try AppDatabase.inMemory()
+        let tracker = ActivityTracker(database: database)
+        tracker.simulateTrackingStarted()
+
+        let firstStart = Date().addingTimeInterval(-10)
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.example.Video",
+            appName: "Video",
+            at: firstStart
+        )
+
+        tracker.pauseForIdle()
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.example.Chat",
+            appName: "Chat",
+            at: Date()
+        )
+        tracker.resumeFromIdle()
+
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.example.Other",
+            appName: "Other",
+            at: Date().addingTimeInterval(4)
+        )
+
+        let sessions = try database.timelineEvents(for: Date())
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions.map(\.bundleID), ["com.example.Video", "com.example.Chat"])
+        XCTAssertGreaterThanOrEqual(sessions[0].duration, 9)
+        XCTAssertEqual(sessions[1].duration, 4, accuracy: 0.25)
+    }
+
+    func testSameAppReactivationDuringSpaceTransitionKeepsSessionContinuous() throws {
+        let database = try AppDatabase.inMemory()
+        let tracker = ActivityTracker(
+            database: database,
+            deactivationGracePeriod: 0.05,
+            spaceTransitionWindow: 0.1
+        )
+        tracker.simulateTrackingStarted()
+
+        let start = Date().addingTimeInterval(-20)
+        let deactivatedAt = Date().addingTimeInterval(-10)
+        let switchedAwayAt = Date().addingTimeInterval(-1)
+
+        tracker.simulateFrontmostAppChange(
+            bundleID: "company.thebrowser.Browser",
+            appName: "Arc",
+            at: start
+        )
+        tracker.simulateActiveSpaceChange()
+        tracker.simulateAppDeactivation(
+            bundleID: "company.thebrowser.Browser",
+            appName: "Arc",
+            at: deactivatedAt
+        )
+        tracker.simulateFrontmostAppChange(
+            bundleID: "company.thebrowser.Browser",
+            appName: "Arc",
+            at: deactivatedAt.addingTimeInterval(1)
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.daylens.app",
+            appName: "Daylens",
+            at: switchedAwayAt
+        )
+
+        let sessions = try database.timelineEvents(for: Date())
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions[0].bundleID, "company.thebrowser.Browser")
+        XCTAssertEqual(sessions[0].duration, switchedAwayAt.timeIntervalSince(start), accuracy: 0.001)
+    }
 }

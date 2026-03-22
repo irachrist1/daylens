@@ -123,10 +123,23 @@ final class BrowserHistoryReader {
                 try FileManager.default.removeItem(atPath: tempPath)
             }
             try FileManager.default.copyItem(atPath: path, toPath: tempPath)
+
+            // Copy WAL and SHM sidecars if they exist (newest rows live here)
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = path + suffix
+                let tempSidecar = tempPath + suffix
+                if FileManager.default.fileExists(atPath: sidecar) {
+                    try? FileManager.default.copyItem(atPath: sidecar, toPath: tempSidecar)
+                }
+            }
         } catch {
             return // Can't copy, browser might have exclusive lock
         }
-        defer { try? FileManager.default.removeItem(atPath: tempPath) }
+        defer {
+            try? FileManager.default.removeItem(atPath: tempPath)
+            try? FileManager.default.removeItem(atPath: tempPath + "-wal")
+            try? FileManager.default.removeItem(atPath: tempPath + "-shm")
+        }
 
         let isSafari = browserBundleID == "com.apple.Safari"
 
@@ -151,31 +164,56 @@ final class BrowserHistoryReader {
         let chromiumEpochOffset: Int64 = 11_644_473_600_000_000 // microseconds from 1601 to 1970
         let lastReadChromium = Int64(lastRead.timeIntervalSince1970 * 1_000_000) + chromiumEpochOffset
 
-        let visits = try await dbQueue.read { db -> [(url: String, title: String, visitTime: Date, visitDuration: TimeInterval)] in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT u.url, u.title, v.visit_time, v.visit_duration
-                FROM visits v
-                JOIN urls u ON v.url = u.id
-                WHERE v.visit_time > ?
-                ORDER BY v.visit_time ASC
-                LIMIT 500
-                """, arguments: [lastReadChromium])
+        var cursorTimeMicros = lastReadChromium
+        var cursorVisitID: Int64 = 0
+        var allVisits: [ChromiumHistoryVisit] = []
 
-            return rows.compactMap { row in
-                let visitTimeMicros: Int64 = row["visit_time"]
-                let epochMicros = visitTimeMicros - chromiumEpochOffset
-                let visitDate = Date(timeIntervalSince1970: TimeInterval(epochMicros) / 1_000_000.0)
-                let durationMicros: Int64 = row["visit_duration"] ?? 0
-                let duration = TimeInterval(durationMicros) / 1_000_000.0
+        while true {
+            let batchCursorTimeMicros = cursorTimeMicros
+            let batchCursorVisitID = cursorVisitID
+            let batch = try await dbQueue.read { db -> [ChromiumHistoryVisit] in
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT v.id, u.url, u.title, v.visit_time, v.visit_duration
+                    FROM visits v
+                    JOIN urls u ON v.url = u.id
+                    WHERE v.visit_time > ?
+                       OR (v.visit_time = ? AND v.id > ?)
+                    ORDER BY v.visit_time ASC, v.id ASC
+                    LIMIT 500
+                    """, arguments: [batchCursorTimeMicros, batchCursorTimeMicros, batchCursorVisitID])
 
-                return (
-                    url: row["url"] as String,
-                    title: (row["title"] as String?) ?? "",
-                    visitTime: visitDate,
-                    visitDuration: max(duration, Constants.minimumWebsiteVisitDuration)
-                )
+                return rows.compactMap { row in
+                    let visitTimeMicros: Int64 = row["visit_time"]
+                    let epochMicros = visitTimeMicros - chromiumEpochOffset
+                    let visitDate = Date(timeIntervalSince1970: TimeInterval(epochMicros) / 1_000_000.0)
+                    let durationMicros: Int64 = row["visit_duration"] ?? 0
+
+                    return ChromiumHistoryVisit(
+                        visitID: row["id"],
+                        url: row["url"],
+                        title: (row["title"] as String?) ?? "",
+                        visitTime: visitDate,
+                        visitTimeMicros: visitTimeMicros,
+                        recordedDuration: TimeInterval(durationMicros) / 1_000_000.0
+                    )
+                }
             }
+
+            allVisits.append(contentsOf: batch)
+
+            guard batch.count == 500, let lastVisit = batch.last else { break }
+            cursorTimeMicros = lastVisit.visitTimeMicros
+            cursorVisitID = lastVisit.visitID
         }
+
+        guard !allVisits.isEmpty else { return }
+
+        let foregroundIntervals = try browserForegroundIntervals(
+            for: browserBundleID,
+            from: allVisits.first?.visitTime ?? lastRead,
+            to: (allVisits.last?.visitTime ?? lastRead).addingTimeInterval(30 * 60)
+        )
+        let visits = Self.estimateChromiumVisits(allVisits, foregroundIntervals: foregroundIntervals)
 
         for visit in visits {
             guard let domain = extractDomain(from: visit.url) else { continue }
@@ -195,7 +233,7 @@ final class BrowserHistoryReader {
             try? database.insertWebsiteVisit(websiteVisit)
         }
 
-        if let lastVisit = visits.last {
+        if let lastVisit = allVisits.last {
             lastReadTimestamps[browserBundleID] = lastVisit.visitTime
             persistTimestamp(lastVisit.visitTime, for: browserBundleID)
         }
@@ -342,5 +380,118 @@ final class BrowserHistoryReader {
 
     private func extractDomain(from urlString: String) -> String? {
         Self.normalizedDomain(from: urlString)
+    }
+
+    private func browserForegroundIntervals(for browserBundleID: String, from start: Date, to end: Date) throws -> [BrowserForegroundInterval] {
+        guard end > start else { return [] }
+
+        let intervals = try database.dbQueue.read { db -> [BrowserForegroundInterval] in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT startTime, endTime
+                FROM browser_sessions
+                WHERE browserBundleID = ?
+                  AND startTime < ?
+                  AND endTime > ?
+                ORDER BY startTime ASC
+                """, arguments: [browserBundleID, end, start])
+
+            return rows.compactMap { row in
+                let startTime: Date = row["startTime"]
+                let endTime: Date = row["endTime"]
+                guard endTime > startTime else { return nil }
+                return BrowserForegroundInterval(start: startTime, end: endTime)
+            }
+        }
+
+        return Self.mergeForegroundIntervals(intervals)
+    }
+
+    static func estimateChromiumVisits(
+        _ visits: [ChromiumHistoryVisit],
+        foregroundIntervals: [BrowserForegroundInterval]
+    ) -> [EstimatedChromiumVisit] {
+        guard !visits.isEmpty else { return [] }
+
+        return visits.enumerated().map { index, visit in
+            let estimatedDuration: TimeInterval
+            if let nextVisit = visits[safe: index + 1] {
+                var gapDuration = nextVisit.visitTime.timeIntervalSince(visit.visitTime)
+                gapDuration = min(gapDuration, 30 * 60)
+
+                if let foreground = foregroundIntervals.first(where: { $0.contains(visit.visitTime) }) {
+                    gapDuration = min(gapDuration, foreground.end.timeIntervalSince(visit.visitTime))
+                }
+
+                if visit.recordedDuration > 0, visit.recordedDuration < gapDuration {
+                    gapDuration = visit.recordedDuration
+                }
+
+                estimatedDuration = gapDuration
+            } else {
+                var lastDuration = visit.recordedDuration > 0 ? visit.recordedDuration : Constants.minimumWebsiteVisitDuration
+                if let foreground = foregroundIntervals.first(where: { $0.contains(visit.visitTime) }) {
+                    lastDuration = min(lastDuration, foreground.end.timeIntervalSince(visit.visitTime))
+                }
+                estimatedDuration = lastDuration
+            }
+
+            return EstimatedChromiumVisit(
+                url: visit.url,
+                title: visit.title,
+                visitTime: visit.visitTime,
+                visitDuration: max(estimatedDuration, Constants.minimumWebsiteVisitDuration)
+            )
+        }
+    }
+
+    private static func mergeForegroundIntervals(_ intervals: [BrowserForegroundInterval]) -> [BrowserForegroundInterval] {
+        guard var current = intervals.first else { return [] }
+        var merged: [BrowserForegroundInterval] = []
+
+        for interval in intervals.dropFirst() {
+            if interval.start <= current.end {
+                current = BrowserForegroundInterval(
+                    start: current.start,
+                    end: max(current.end, interval.end)
+                )
+            } else {
+                merged.append(current)
+                current = interval
+            }
+        }
+
+        merged.append(current)
+        return merged
+    }
+}
+
+struct ChromiumHistoryVisit {
+    let visitID: Int64
+    let url: String
+    let title: String
+    let visitTime: Date
+    let visitTimeMicros: Int64
+    let recordedDuration: TimeInterval
+}
+
+struct EstimatedChromiumVisit {
+    let url: String
+    let title: String
+    let visitTime: Date
+    let visitDuration: TimeInterval
+}
+
+struct BrowserForegroundInterval {
+    let start: Date
+    let end: Date
+
+    func contains(_ date: Date) -> Bool {
+        start <= date && end > date
+    }
+}
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

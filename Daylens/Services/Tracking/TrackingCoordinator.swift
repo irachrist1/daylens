@@ -6,6 +6,7 @@ import OSLog
 @Observable
 final class TrackingCoordinator {
     private let logger = Logger(subsystem: "com.daylens.app", category: "TrackingCoordinator")
+    private static let summaryRepairFlag = "daylens_v2_summaries_recomputed"
 
     let activityTracker: ActivityTracker
     let idleDetector: IdleDetector
@@ -20,6 +21,12 @@ final class TrackingCoordinator {
     var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
         activityTracker.currentSessionInfo
     }
+    var currentWebVisitInfo: (domain: String, url: String?, title: String?, startedAt: Date, browserBundleID: String)? {
+        guard let domain = currentWebDomain,
+              let start = currentWebVisitStart,
+              let bundleID = currentWebBundleID else { return nil }
+        return (domain, currentWebURL, currentWebTitle, start, bundleID)
+    }
     private var summaryTimer: Timer?
     private var accessibilityTimer: Timer?
     private var debouncedSummaryWork: DispatchWorkItem?
@@ -32,6 +39,7 @@ final class TrackingCoordinator {
     private var currentWebTitle: String?
     private var currentWebBundleID: String?
     private var currentWebConfidence: ActivityEvent.ConfidenceLevel = .medium
+    private var webExtractionFailures = 0
 
     init(database: AppDatabase, permissionManager: PermissionManager) {
         self.database = database
@@ -69,25 +77,23 @@ final class TrackingCoordinator {
             guard let self else { return }
             if isIdle {
                 self.logger.info("Idle detected; pausing activity tracker")
-                // Pause active session tracking
-                self.activityTracker.stop()
+                self.finalizeCurrentWebVisit()
+                self.activityTracker.pauseForIdle()
             } else {
                 self.logger.info("Idle cleared; resuming activity tracker")
-                // Resume tracking
-                self.activityTracker.start()
+                self.activityTracker.resumeFromIdle()
             }
         }
 
         // Start browser history polling
         browserHistoryReader.startPolling()
 
-        // Start periodic window title reading if accessibility is available
-        if AccessibilityService.isAccessibilityEnabled {
-            startAccessibilityPolling()
-        }
+        // AppleScript fallback works without Accessibility permission, so always poll.
+        startAccessibilityPolling()
 
         // Compute summary immediately so Today view shows data right away
         computeCurrentDaySummary()
+        recomputeHistoricalDailySummariesIfNeeded()
 
         // Periodic fallback every 15 seconds (session callbacks handle most updates)
         summaryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -112,7 +118,7 @@ final class TrackingCoordinator {
     }
 
     func computeCurrentDaySummary() {
-        Task {
+        Task.detached(priority: .utility) { [sessionNormalizer] in
             _ = try? sessionNormalizer.computeDailySummary(for: Date())
         }
     }
@@ -124,6 +130,22 @@ final class TrackingCoordinator {
         }
         debouncedSummaryWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    private func recomputeHistoricalDailySummariesIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.summaryRepairFlag) else { return }
+
+        let sessionNormalizer = sessionNormalizer
+        let logger = logger
+        Task.detached(priority: .utility) {
+            do {
+                try sessionNormalizer.recomputeAllDailySummaries()
+                UserDefaults.standard.set(true, forKey: Self.summaryRepairFlag)
+                logger.info("Historical daily summaries recomputed after tracking engine update")
+            } catch {
+                logger.error("Failed to recompute historical daily summaries: \(error.localizedDescription, privacy: .private)")
+            }
+        }
     }
 
     // MARK: - Accessibility-based enrichment
@@ -141,6 +163,7 @@ final class TrackingCoordinator {
             let bundleID = frontApp.bundleIdentifier ?? ""
             guard BrowserRegistry.shared.isBrowserCapable(bundleID) else {
                 // Non-browser became frontmost — finalize any open website visit
+                self.webExtractionFailures = 0
                 self.finalizeCurrentWebVisit()
                 return
             }
@@ -165,11 +188,14 @@ final class TrackingCoordinator {
             guard let urlString = extractedURL,
                   let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)"),
                   let host = url.host else {
-                // Couldn't extract a URL — finalize any open visit
-                self.finalizeCurrentWebVisit()
+                self.webExtractionFailures += 1
+                if self.webExtractionFailures >= 3 {
+                    self.finalizeCurrentWebVisit()
+                }
                 return
             }
 
+            self.webExtractionFailures = 0
             let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
 
             if domain == self.currentWebDomain, bundleID == self.currentWebBundleID {
@@ -235,5 +261,6 @@ final class TrackingCoordinator {
         currentWebTitle = nil
         currentWebBundleID = nil
         currentWebConfidence = .medium
+        webExtractionFailures = 0
     }
 }

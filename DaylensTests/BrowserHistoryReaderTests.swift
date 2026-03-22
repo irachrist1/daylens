@@ -37,6 +37,48 @@ final class BrowserHistoryReaderTests: XCTestCase {
         XCTAssertEqual(convertedUnix, knownUnixTimestamp)
     }
 
+    func testChromiumVisitEstimationUsesNavigationGapForegroundCapAndFallback() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let visits = [
+            ChromiumHistoryVisit(
+                visitID: 1,
+                url: "https://www.youtube.com/watch?v=abc",
+                title: "Video",
+                visitTime: start,
+                visitTimeMicros: 0,
+                recordedDuration: 0
+            ),
+            ChromiumHistoryVisit(
+                visitID: 2,
+                url: "https://github.com/openai/gpt-5",
+                title: "Repo",
+                visitTime: start.addingTimeInterval(600),
+                visitTimeMicros: 1,
+                recordedDuration: 12
+            ),
+            ChromiumHistoryVisit(
+                visitID: 3,
+                url: "https://chatgpt.com",
+                title: "ChatGPT",
+                visitTime: start.addingTimeInterval(1_800),
+                visitTimeMicros: 2,
+                recordedDuration: 0
+            ),
+        ]
+        let foregrounds = [
+            BrowserForegroundInterval(start: start, end: start.addingTimeInterval(300)),
+            BrowserForegroundInterval(start: start.addingTimeInterval(600), end: start.addingTimeInterval(900)),
+            BrowserForegroundInterval(start: start.addingTimeInterval(1_800), end: start.addingTimeInterval(1_900)),
+        ]
+
+        let estimated = BrowserHistoryReader.estimateChromiumVisits(visits, foregroundIntervals: foregrounds)
+
+        XCTAssertEqual(estimated.count, 3)
+        XCTAssertEqual(estimated[0].visitDuration, 300, accuracy: 0.001)
+        XCTAssertEqual(estimated[1].visitDuration, 12, accuracy: 0.001)
+        XCTAssertEqual(estimated[2].visitDuration, Constants.minimumWebsiteVisitDuration, accuracy: 0.001)
+    }
+
     // MARK: - Browser Registry & Classification
 
     func testPrimaryBrowserBundleIDs() {
@@ -162,6 +204,16 @@ final class BrowserHistoryReaderTests: XCTestCase {
         let classification = AppCategory.classify(bundleID: "ai.perplexity.comet", appName: "Comet")
         XCTAssertEqual(classification.category, .browsing)
         XCTAssertTrue(Constants.knownBrowserBundleIDs.contains("ai.perplexity.comet"))
+    }
+
+    func testProductivityOfficeAppsUseExactBundleRules() {
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.microsoft.excel", appName: "Excel").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.microsoft.word", appName: "Word").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.microsoft.powerpoint", appName: "PowerPoint").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.apple.iWork.Numbers", appName: "Numbers").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.apple.iWork.Pages", appName: "Pages").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.apple.iWork.Keynote", appName: "Keynote").category, .productivity)
+        XCTAssertEqual(AppCategory.classify(bundleID: "com.notion.id", appName: "Notion").category, .productivity)
     }
 
     func testZenIsBrowser() {

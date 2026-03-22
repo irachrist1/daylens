@@ -196,6 +196,77 @@ final class AggregationTests: XCTestCase {
         XCTAssertEqual(vm.focusScoreText, "100%")
     }
 
+    func testTodayViewModelInjectLiveWebsiteVisitUsesStableBaseDuration() {
+        let vm = TodayViewModel()
+        vm.websiteSummaries = [
+            WebsiteUsageSummary(
+                domain: "github.com",
+                totalDuration: 120,
+                visitCount: 2,
+                topPageTitle: "Repo",
+                confidence: .high,
+                browserName: "Chrome"
+            )
+        ]
+
+        vm.injectLiveWebsiteVisit(
+            domain: "github.com",
+            url: "https://github.com/openai/gpt-5",
+            title: "Repo",
+            startedAt: Date().addingTimeInterval(-30),
+            browserBundleID: "com.google.Chrome"
+        )
+        let firstInjectedDuration = vm.websiteSummaries[0].totalDuration
+
+        vm.injectLiveWebsiteVisit(
+            domain: "github.com",
+            url: "https://github.com/openai/gpt-5",
+            title: "Repo",
+            startedAt: Date().addingTimeInterval(-45),
+            browserBundleID: "com.google.Chrome"
+        )
+
+        XCTAssertEqual(vm.websiteSummaries.count, 1)
+        XCTAssertGreaterThan(firstInjectedDuration, 140)
+        XCTAssertLessThan(vm.websiteSummaries[0].totalDuration, 180, "Repeated injections should reuse the DB base, not compound indefinitely")
+    }
+
+    func testAppsViewModelInjectLiveWebsiteVisitTargetsSelectedBrowserOnly() {
+        let vm = AppsViewModel()
+        vm.selectedApp = AppUsageSummary(
+            bundleID: "com.google.Chrome",
+            appName: "Chrome",
+            totalDuration: 600,
+            sessionCount: 1,
+            category: .browsing,
+            isBrowser: true
+        )
+
+        vm.injectLiveWebsiteVisit(
+            domain: "chatgpt.com",
+            url: "https://chatgpt.com",
+            title: "ChatGPT",
+            startedAt: Date().addingTimeInterval(-20),
+            browserBundleID: "com.google.Chrome",
+            for: Date()
+        )
+
+        XCTAssertEqual(vm.detailWebsites.count, 1)
+        XCTAssertEqual(vm.detailWebsites[0].domain, "chatgpt.com")
+        XCTAssertGreaterThan(vm.detailWebsites[0].totalDuration, 15)
+
+        vm.injectLiveWebsiteVisit(
+            domain: "github.com",
+            url: "https://github.com",
+            title: "GitHub",
+            startedAt: Date().addingTimeInterval(-20),
+            browserBundleID: "company.thebrowser.Browser",
+            for: Date()
+        )
+
+        XCTAssertEqual(vm.detailWebsites.count, 1, "Non-selected browsers should not inject into the current detail pane")
+    }
+
     func testFocusLabelBuckets() {
         let vm = TodayViewModel()
 

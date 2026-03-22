@@ -2,6 +2,22 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.5] - 2026-03-22
+
+### Fixed
+- Idle detection no longer fragments sessions during media playback — sessions are held open during provisional idle (2-5 min) and only end on true away (5 min) or screen lock/sleep
+- Fullscreen app Space transitions no longer create session gaps — same-app deactivation/reactivation within 1.5 seconds is seamlessly bridged
+- Website duration tracking no longer relies on broken Chromium visit_duration — uses navigation-gap estimation with 30-minute cap
+- Browser history reader now copies WAL/SHM sidecars to capture newest rows
+- Browser history pagination replaces fixed LIMIT 500 — processes up to 5,000 rows per poll
+- Active tab polling now runs even without Accessibility permission (AppleScript fallback)
+- URL extraction failures require 3 consecutive misses before closing a website visit
+- Live in-flight website visits now appear in Today and Apps views before finalization
+- Focus score unified across Today view, daily summary, snapshot export, and AI context — all use the same multiplicative formula with 15% max switch penalty and web domain credit
+- Excel, Word, PowerPoint, OneNote, Pages, Numbers, Keynote, and Notion now correctly classified as Productivity (were Uncategorized)
+- Removed dead productivityBundleIDs constant that was never consulted
+- Historical daily summaries recomputed on first launch after update to reflect corrected tracking data
+
 ## [1.0.4] - 2026-03-21
 
 ### Fixed

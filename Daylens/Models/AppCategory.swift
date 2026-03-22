@@ -241,6 +241,60 @@ private extension AppCategory {
             confidence: .high,
             rule: "Exact bundle match"
         ),
+        "com.microsoft.excel": AppClassification(
+            category: .productivity,
+            semanticLabel: "Spreadsheet editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.microsoft.word": AppClassification(
+            category: .productivity,
+            semanticLabel: "Document editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.microsoft.powerpoint": AppClassification(
+            category: .productivity,
+            semanticLabel: "Presentation editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.microsoft.onenote": AppClassification(
+            category: .productivity,
+            semanticLabel: "Notes workspace",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.apple.iwork.numbers": AppClassification(
+            category: .productivity,
+            semanticLabel: "Spreadsheet editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.apple.iwork.pages": AppClassification(
+            category: .productivity,
+            semanticLabel: "Document editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.apple.iwork.keynote": AppClassification(
+            category: .productivity,
+            semanticLabel: "Presentation editor",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "com.notion.id": AppClassification(
+            category: .productivity,
+            semanticLabel: "Docs and notes workspace",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
+        "notion.id": AppClassification(
+            category: .productivity,
+            semanticLabel: "Docs and notes workspace",
+            confidence: .high,
+            rule: "Exact bundle match"
+        ),
         "com.apple.mobilesms": AppClassification(
             category: .communication,
             semanticLabel: "Messages",
@@ -319,12 +373,6 @@ private extension AppCategory {
             confidence: .high,
             rule: "Exact bundle match — hybrid: browser-capable but AI-primary"
         ),
-        "notion.id": AppClassification(
-            category: .writing,
-            semanticLabel: "Docs and notes workspace",
-            confidence: .medium,
-            rule: "Exact bundle match"
-        ),
         "md.obsidian": AppClassification(
             category: .research,
             semanticLabel: "Knowledge base",
@@ -334,18 +382,6 @@ private extension AppCategory {
         "org.zotero.zotero": AppClassification(
             category: .research,
             semanticLabel: "Research library",
-            confidence: .high,
-            rule: "Exact bundle match"
-        ),
-        "com.apple.iwork.pages": AppClassification(
-            category: .writing,
-            semanticLabel: "Document editor",
-            confidence: .high,
-            rule: "Exact bundle match"
-        ),
-        "com.microsoft.word": AppClassification(
-            category: .writing,
-            semanticLabel: "Document editor",
             confidence: .high,
             rule: "Exact bundle match"
         ),

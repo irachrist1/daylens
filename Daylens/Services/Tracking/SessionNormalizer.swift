@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 /// Normalizes raw sessions by merging short gaps and computing daily summaries.
 final class SessionNormalizer {
@@ -44,22 +45,31 @@ final class SessionNormalizer {
         return summary
     }
 
+    func recomputeAllDailySummaries() throws {
+        let dates = try database.dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT DISTINCT date
+                FROM app_sessions
+                ORDER BY date ASC
+                """).compactMap { $0["date"] as Date? }
+        }
+
+        for date in dates {
+            _ = try computeDailySummary(for: date)
+        }
+    }
+
     /// Focus score: ratio of time in focus categories vs total time,
     /// penalized by context switching frequency.
     private func computeFocusScore(sessions: [AppSession], totalTime: TimeInterval) -> Double {
-        guard totalTime > 0 else { return 0 }
-
         let focusedTime = sessions
             .filter { $0.category.isFocused }
             .reduce(0.0) { $0 + $1.duration }
-
-        let focusRatio = focusedTime / totalTime
-
-        // Penalize high context switching
-        let switchRate = Double(sessions.count) / max(totalTime / 3600.0, 0.1) // switches per hour
-        let switchPenalty = min(switchRate / 60.0, 0.3) // Max 30% penalty at 60 switches/hour
-
-        return max(0, min(1.0, focusRatio - switchPenalty))
+        return FocusScoreCalculator.compute(
+            focusedTime: focusedTime,
+            totalTime: totalTime,
+            sessionCount: sessions.count
+        )
     }
 
     /// Longest continuous streak of focused app usage.

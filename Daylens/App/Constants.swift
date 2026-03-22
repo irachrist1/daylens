@@ -76,24 +76,6 @@ enum Constants {
         })
     }()
 
-    // MARK: - App Categories (basic defaults)
-    static let productivityBundleIDs: Set<String> = [
-        "com.apple.dt.Xcode",
-        "com.microsoft.VSCode",
-        "com.sublimetext.4",
-        "com.jetbrains.intellij",
-        "com.apple.iWork.Keynote",
-        "com.apple.iWork.Pages",
-        "com.apple.iWork.Numbers",
-        "com.microsoft.Word",
-        "com.microsoft.Excel",
-        "com.microsoft.Powerpoint",
-        "com.tinyspeck.slackmacgap",
-        "com.linear",
-        "com.figma.Desktop",
-        "com.notion.id",
-    ]
-
     static let communicationBundleIDs: Set<String> = [
         "com.apple.MobileSMS",
         "com.apple.mail",

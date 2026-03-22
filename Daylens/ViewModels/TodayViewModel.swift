@@ -19,6 +19,7 @@ final class TodayViewModel {
     /// latest DB snapshot. This prevents injectLiveSession from accumulating
     /// duration on top of a previously-injected value each timer tick.
     private var liveSessionBase: [String: TimeInterval] = [:]
+    private var liveWebsiteBase: [String: TimeInterval] = [:]
     private var cachedOverrides: [String: AppCategory] = [:]
 
     func load(for date: Date) {
@@ -26,6 +27,7 @@ final class TodayViewModel {
         error = nil
         isViewingToday = Calendar.current.isDateInToday(date)
         liveSessionBase = [:]  // Reset so next inject uses fresh DB totals as base.
+        liveWebsiteBase = [:]
 
         Task { @MainActor in
             do {
@@ -42,6 +44,7 @@ final class TodayViewModel {
                     )
                 }.value
                 liveSessionBase = [:]  // Also reset after the async load completes.
+                liveWebsiteBase = [:]
                 cachedOverrides = payload.day.categoryOverrides
                 appSummaries = payload.day.appSummaries
                 websiteSummaries = payload.day.websiteSummaries
@@ -142,6 +145,52 @@ final class TodayViewModel {
         }
     }
 
+    func injectLiveWebsiteVisit(
+        domain: String,
+        url: String?,
+        title: String?,
+        startedAt: Date,
+        browserBundleID: String
+    ) {
+        guard isViewingToday else { return }
+
+        let liveDuration = max(0, Date().timeIntervalSince(startedAt))
+        guard liveDuration > 0 else { return }
+
+        if let idx = websiteSummaries.firstIndex(where: { $0.domain == domain }) {
+            let existing = websiteSummaries[idx]
+            let base = liveWebsiteBase[domain, default: existing.totalDuration]
+            liveWebsiteBase[domain] = base
+            websiteSummaries[idx] = WebsiteUsageSummary(
+                domain: existing.domain,
+                totalDuration: base + liveDuration,
+                visitCount: existing.visitCount,
+                topPageTitle: existing.topPageTitle ?? title ?? url,
+                confidence: existing.confidence,
+                browserName: existing.browserName
+            )
+        } else {
+            liveWebsiteBase[domain] = 0
+            websiteSummaries.append(
+                WebsiteUsageSummary(
+                    domain: domain,
+                    totalDuration: liveDuration,
+                    visitCount: 1,
+                    topPageTitle: title ?? url,
+                    confidence: .medium,
+                    browserName: Constants.browserNames[browserBundleID] ?? "Browser"
+                )
+            )
+        }
+
+        websiteSummaries.sort { lhs, rhs in
+            if lhs.totalDuration == rhs.totalDuration {
+                return lhs.domain.localizedCaseInsensitiveCompare(rhs.domain) == .orderedAscending
+            }
+            return lhs.totalDuration > rhs.totalDuration
+        }
+    }
+
     // MARK: - Greeting
 
     var greeting: String {
@@ -221,7 +270,11 @@ final class TodayViewModel {
             .filter { DomainIntelligence.classify(domain: $0.domain).category.isFocused }
             .reduce(0.0) { $0 + $1.totalDuration }
         let focusedWebCredit = min(webFocused, browserTotal)
-        let ratio = (appFocused + focusedWebCredit) / total
-        return min(1.0, ratio)
+        return FocusScoreCalculator.compute(
+            focusedTime: appFocused,
+            totalTime: total,
+            sessionCount: timeline.count,
+            websiteFocusCredit: focusedWebCredit
+        )
     }
 }

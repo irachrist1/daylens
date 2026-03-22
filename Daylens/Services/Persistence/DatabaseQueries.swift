@@ -734,6 +734,10 @@ private extension AppDatabase {
 
         let totalActiveTime = appSummaries.reduce(0) { $0 + $1.totalDuration }
         let contextSwitches = max(0, timeline.count - 1)
+        let websiteFocusCredit = focusedWebsiteCredit(
+            appSummaries: appSummaries,
+            websiteSummaries: websiteSummaries
+        )
 
         return DailySummary(
             date: dayBounds.start,
@@ -744,7 +748,11 @@ private extension AppDatabase {
             domainCount: websiteSummaries.count,
             sessionCount: timeline.count,
             contextSwitches: contextSwitches,
-            focusScore: computeFocusScore(for: timeline, totalTime: totalActiveTime),
+            focusScore: computeFocusScore(
+                for: timeline,
+                totalTime: totalActiveTime,
+                websiteFocusCredit: websiteFocusCredit
+            ),
             longestFocusStreak: computeLongestFocusStreak(for: timeline),
             topAppBundleID: appSummaries.first?.bundleID,
             topDomain: websiteSummaries.first?.domain,
@@ -822,21 +830,34 @@ private extension AppDatabase {
         return rows.count
     }
 
-    func computeFocusScore(for sessions: [AppSession], totalTime: TimeInterval) -> Double {
-        guard totalTime > 0 else { return 0 }
-
+    func computeFocusScore(
+        for sessions: [AppSession],
+        totalTime: TimeInterval,
+        websiteFocusCredit: TimeInterval = 0
+    ) -> Double {
         let focusedTime = sessions
             .filter { $0.category.isFocused }
             .reduce(0.0) { $0 + $1.duration }
 
-        let focusRatio = focusedTime / totalTime
-        // Light penalty for rapid context switching — but AI-assisted dev patterns
-        // (many short terminal/browser/AI switches) should not heavily penalise genuinely
-        // focused work. Cap at 15% so a coding-heavy day still scores 60–80%+.
-        let switchRate = Double(sessions.count) / max(totalTime / 3600.0, 0.1)
-        let switchPenalty = min(switchRate / 300.0, 0.15)
+        return FocusScoreCalculator.compute(
+            focusedTime: focusedTime,
+            totalTime: totalTime,
+            sessionCount: sessions.count,
+            websiteFocusCredit: websiteFocusCredit
+        )
+    }
 
-        return min(1.0, focusRatio * (1.0 - switchPenalty))
+    func focusedWebsiteCredit(
+        appSummaries: [AppUsageSummary],
+        websiteSummaries: [WebsiteUsageSummary]
+    ) -> TimeInterval {
+        let browserTotal = appSummaries
+            .filter { $0.category == .browsing }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        let webFocused = websiteSummaries
+            .filter { DomainIntelligence.classify(domain: $0.domain).category.isFocused }
+            .reduce(0.0) { $0 + $1.totalDuration }
+        return min(webFocused, browserTotal)
     }
 
     func computeLongestFocusStreak(for sessions: [AppSession]) -> TimeInterval {

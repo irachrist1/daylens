@@ -13,12 +13,14 @@ final class AppsViewModel {
     /// Stable DB base duration per bundleID, latched on first injectLiveSession call
     /// and reset on every load(). Prevents timer-tick accumulation.
     private var liveSessionBase: [String: TimeInterval] = [:]
+    private var liveWebsiteBase: [String: TimeInterval] = [:]
     private var cachedOverrides: [String: AppCategory] = [:]
 
     func load(for date: Date) {
         isLoading = true
         error = nil
         liveSessionBase = [:]
+        liveWebsiteBase = [:]
 
         Task { @MainActor in
             defer { isLoading = false }
@@ -30,6 +32,7 @@ final class AppsViewModel {
                 }.value
 
                 liveSessionBase = [:]
+                liveWebsiteBase = [:]
                 cachedOverrides = overrides
                 self.summaries = summaries
 
@@ -117,11 +120,60 @@ final class AppsViewModel {
         }
     }
 
+    func injectLiveWebsiteVisit(
+        domain: String,
+        url: String?,
+        title: String?,
+        startedAt: Date,
+        browserBundleID: String,
+        for date: Date
+    ) {
+        guard Calendar.current.isDateInToday(date) else { return }
+        guard selectedApp?.bundleID == browserBundleID else { return }
+
+        let liveDuration = max(0, Date().timeIntervalSince(startedAt))
+        guard liveDuration > 0 else { return }
+
+        if let idx = detailWebsites.firstIndex(where: { $0.domain == domain }) {
+            let existing = detailWebsites[idx]
+            let base = liveWebsiteBase[domain, default: existing.totalDuration]
+            liveWebsiteBase[domain] = base
+            detailWebsites[idx] = WebsiteUsageSummary(
+                domain: existing.domain,
+                totalDuration: base + liveDuration,
+                visitCount: existing.visitCount,
+                topPageTitle: existing.topPageTitle ?? title ?? url,
+                confidence: existing.confidence,
+                browserName: existing.browserName
+            )
+        } else {
+            liveWebsiteBase[domain] = 0
+            detailWebsites.append(
+                WebsiteUsageSummary(
+                    domain: domain,
+                    totalDuration: liveDuration,
+                    visitCount: 1,
+                    topPageTitle: title ?? url,
+                    confidence: .medium,
+                    browserName: Constants.browserNames[browserBundleID] ?? "Browser"
+                )
+            )
+        }
+
+        detailWebsites.sort { lhs, rhs in
+            if lhs.totalDuration == rhs.totalDuration {
+                return lhs.domain.localizedCaseInsensitiveCompare(rhs.domain) == .orderedAscending
+            }
+            return lhs.totalDuration > rhs.totalDuration
+        }
+    }
+
     private func loadDetail(for app: AppUsageSummary, date: Date) async {
         isLoadingDetail = true
         defer { isLoadingDetail = false }
 
         do {
+            liveWebsiteBase = [:]
             let payload = try await Task.detached(priority: .userInitiated) {
                 (
                     sessions: try AppDatabase.shared.appSessions(for: date, bundleID: app.bundleID),
