@@ -12,6 +12,7 @@ final class UpdateChecker {
     @ObservationIgnored private var dismissedVersion: String?
 
     private static let latestReleaseURL = URL(string: "https://api.github.com/repos/irachrist1/daylens/releases/latest")!
+    private static let allReleasesURL = URL(string: "https://api.github.com/repos/irachrist1/daylens/releases")!
     private static let skippedVersionKey = "daylens_skipped_version"
 
     var updateAvailable = false
@@ -112,6 +113,66 @@ final class UpdateChecker {
         } else {
             updateAvailable = true
             logger.info("Update available: \(remoteVersion, privacy: .public)")
+
+            // Fetch aggregated release notes from all skipped versions
+            Task { [weak self] in
+                await self?.fetchAggregatedReleaseNotes(currentVersion: localVersion)
+            }
+        }
+    }
+
+    private func fetchAggregatedReleaseNotes(currentVersion: String) async {
+        do {
+            var request = URLRequest(url: Self.allReleasesURL)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 30
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+            let client = ReleaseDownloadClient(logger: logger)
+            let (data, response) = try await client.fetch(request)
+
+            guard (200...299).contains(response.statusCode) else {
+                logger.error("All releases check returned HTTP \(response.statusCode, privacy: .public)")
+                return
+            }
+
+            let allReleases = try JSONDecoder().decode([GitHubRelease].self, from: data)
+
+            // Filter to only releases newer than the current version
+            let newerReleases = allReleases.filter { release in
+                let version = normalizedVersionString(release.tagName)
+                return isNewerVersion(version, than: currentVersion)
+            }
+
+            // Sort oldest-first so notes read chronologically
+            let sorted = newerReleases.sorted { a, b in
+                let vA = normalizedVersionString(a.tagName)
+                let vB = normalizedVersionString(b.tagName)
+                return isNewerVersion(vB, than: vA)
+            }
+
+            guard sorted.count > 1 else {
+                // Only one (or zero) newer release — keep the single latest notes already set
+                return
+            }
+
+            // Build aggregated notes with version headers
+            let aggregated = sorted.compactMap { release -> String? in
+                let version = normalizedVersionString(release.tagName)
+                let body = release.body?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let body, !body.isEmpty else { return nil }
+                return "### v\(version)\n\(body)"
+            }.joined(separator: "\n\n")
+
+            if !aggregated.isEmpty {
+                releaseNotes = aggregated
+                logger.info("Aggregated release notes from \(sorted.count, privacy: .public) versions")
+            }
+        } catch {
+            // Fall back to single latest release notes (already set) — don't break the update flow
+            logger.error("Aggregated release notes fetch failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 

@@ -149,7 +149,8 @@ struct UpdateBanner: View {
             }
             .padding(DS.space16)
         }
-        .frame(width: 360, height: 240)
+        .frame(minHeight: 200, maxHeight: 420)
+        .frame(width: 360)
     }
 
     private func startInstall() {
