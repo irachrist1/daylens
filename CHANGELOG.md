@@ -2,6 +2,12 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.9] - 2026-03-23
+
+### Changed
+- Replaced the fixed top date row with a floating liquid-glass date navigator that reclaims unused shell chrome
+- Tightened the update banner spacing so it sits higher and leaves clearer separation above the floating date control
+
 ## [1.0.8] - 2026-03-23
 
 ### Fixed
