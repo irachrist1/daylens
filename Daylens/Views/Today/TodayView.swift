@@ -25,16 +25,24 @@ struct TodayView: View {
     ]
     private static let osNoiseNames: Set<String> = ["loginwindow", "windowserver", "universalaccessd"]
 
-    /// Presentation-layer filter: strips OS-session processes that are not user-initiated apps.
-    /// Keeps the Today surface trustworthy without touching the tracking engine.
+    /// Presentation-layer filter: strips OS noise and user-hidden apps.
     private var presentationSummaries: [AppUsageSummary] {
-        viewModel.appSummaries.filter { app in
+        let prefs = appState.preferencesService
+        return viewModel.appSummaries.filter { app in
             let id = app.bundleID.lowercased()
             guard !Self.osNoiseBundleIDs.contains(id) else { return false }
             guard !Self.osNoiseNames.contains(app.appName.lowercased()) else { return false }
             if app.category == .system && app.totalDuration < 30 { return false }
+            if prefs?.isAppHidden(app.bundleID) == true { return false }
             return true
         }
+    }
+
+    /// Visible website summaries with hidden domains filtered out.
+    private var presentationWebsites: [WebsiteUsageSummary] {
+        let prefs = appState.preferencesService
+        guard let prefs else { return viewModel.websiteSummaries }
+        return viewModel.websiteSummaries.filter { !prefs.isDomainHidden($0.domain) }
     }
 
     var body: some View {
@@ -48,7 +56,7 @@ struct TodayView: View {
                         greeting: viewModel.greeting,
                         totalActiveTime: viewModel.totalActiveTime,
                         appCount: presentationSummaries.count,
-                        siteCount: viewModel.websiteSummaries.count
+                        siteCount: presentationWebsites.count
                     )
 
                     // Focus ring + weekly sparkline side-by-side
@@ -70,8 +78,13 @@ struct TodayView: View {
 
                     // Recent sessions + intelligence insight side by side
                     HStack(alignment: .top, spacing: DS.space16) {
-                        RecentSessionsCard(summaries: presentationSummaries)
-                            .measureCardHeight()
+                        RecentSessionsCard(
+                            summaries: presentationSummaries,
+                            onHideApp: appState.preferencesService.map { prefs in
+                                { bundleID in prefs.hideApp(bundleID: bundleID) }
+                            }
+                        )
+                        .measureCardHeight()
                             .frame(maxWidth: .infinity, minHeight: insightRowHeight, alignment: .top)
                         IntelligenceInsightCard(
                             focusScore: Int(viewModel.focusScoreRatio * 100),
@@ -171,7 +184,7 @@ struct TodayView: View {
     // MARK: - Top Websites
 
     private var visibleSites: [WebsiteUsageSummary] {
-        viewModel.websiteSummaries
+        presentationWebsites
     }
 
     private var topWebsitesSection: some View {
@@ -205,7 +218,10 @@ struct TodayView: View {
                     duration: site.totalDuration,
                     maxDuration: maxDuration,
                     color: color,
-                    subtitle: site.topPageTitle
+                    subtitle: site.topPageTitle,
+                    onHide: appState.preferencesService.map { prefs in
+                        { prefs.hideDomain(site.domain) }
+                    }
                 )
             }
         }

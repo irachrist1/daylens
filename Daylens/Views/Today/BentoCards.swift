@@ -310,6 +310,7 @@ struct CategoryBadge: View {
 /// Replaces TopAppsCard with initials icons and efficiency dots.
 struct RecentSessionsCard: View {
     let summaries: [AppUsageSummary]
+    var onHideApp: ((String) -> Void)? = nil
     @State private var showAll = false
 
     var body: some View {
@@ -336,7 +337,7 @@ struct RecentSessionsCard: View {
                     .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
             } else {
                 ForEach(showAll ? summaries : Array(summaries.prefix(5))) { app in
-                    SessionRow(app: app)
+                    SessionRow(app: app, onHide: onHideApp.map { cb in { cb(app.bundleID) } })
                 }
             }
         }
@@ -346,6 +347,9 @@ struct RecentSessionsCard: View {
 
 private struct SessionRow: View {
     let app: AppUsageSummary
+    var onHide: (() -> Void)? = nil
+
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: DS.space12) {
@@ -365,15 +369,30 @@ private struct SessionRow: View {
 
             Spacer()
 
-            // Efficiency dots
-            HStack(spacing: 3) {
-                ForEach(0..<3) { i in
-                    Circle()
-                        .fill(i < efficiencyDots(for: app) ? DS.categoryColor(for: app.category) : DS.surfaceHighest)
-                        .frame(width: 6, height: 6)
+            if isHovered, let onHide {
+                Button {
+                    onHide()
+                } label: {
+                    Image(systemName: "eye.slash")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(DS.onSurfaceVariant)
+                }
+                .buttonStyle(.plain)
+                .help("Hide this app")
+                .transition(.opacity)
+            } else {
+                // Efficiency dots
+                HStack(spacing: 3) {
+                    ForEach(0..<3) { i in
+                        Circle()
+                            .fill(i < efficiencyDots(for: app) ? DS.categoryColor(for: app.category) : DS.surfaceHighest)
+                            .frame(width: 6, height: 6)
+                    }
                 }
             }
         }
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 
     // Simple heuristic: 3 dots if >1h, 2 dots if >30m, 1 dot otherwise

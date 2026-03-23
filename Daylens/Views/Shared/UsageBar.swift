@@ -8,6 +8,9 @@ struct UsageBar: View {
     let maxDuration: TimeInterval
     let color: Color
     var subtitle: String?
+    var onHide: (() -> Void)? = nil
+
+    @State private var isHovered = false
 
     private var fraction: Double {
         guard maxDuration > 0 else { return 0 }
@@ -32,10 +35,24 @@ struct UsageBar: View {
 
                 Spacer()
 
+                if isHovered, let onHide {
+                    Button {
+                        onHide()
+                    } label: {
+                        Image(systemName: "eye.slash")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.onSurfaceVariant)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide this site")
+                    .transition(.opacity)
+                }
+
                 Text(formattedDuration)
                     .font(.body.monospacedDigit())
                     .foregroundStyle(DS.onSurfaceVariant)
             }
+            .animation(.easeOut(duration: 0.12), value: isHovered)
 
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -60,5 +77,6 @@ struct UsageBar: View {
             }
         }
         .padding(.vertical, DS.space4)
+        .onHover { isHovered = $0 }
     }
 }

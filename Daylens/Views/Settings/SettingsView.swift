@@ -13,6 +13,7 @@ struct SettingsView: View {
                 aiSection
                 generalSection
                 dataSection
+                PrivacySection()
                 WebCompanionSection()
 
                 if let status = viewModel.statusMessage {

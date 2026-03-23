@@ -4,6 +4,12 @@ struct AppsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = AppsViewModel()
 
+    private var visibleSummaries: [AppUsageSummary] {
+        let prefs = appState.preferencesService
+        guard let prefs else { return viewModel.summaries }
+        return viewModel.summaries.filter { !prefs.isAppHidden($0.bundleID) }
+    }
+
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -64,7 +70,7 @@ struct AppsView: View {
                 .padding(.horizontal, DS.space16)
                 .padding(.vertical, DS.space16)
 
-            if viewModel.summaries.isEmpty && !viewModel.isLoading {
+            if visibleSummaries.isEmpty && !viewModel.isLoading {
                 EmptyStateView(
                     icon: "square.grid.2x2",
                     title: "No App Data Yet",
@@ -74,9 +80,9 @@ struct AppsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.space8) {
-                        let maxDuration = viewModel.summaries.first?.totalDuration ?? 1
+                        let maxDuration = visibleSummaries.first?.totalDuration ?? 1
 
-                        ForEach(viewModel.summaries) { app in
+                        ForEach(visibleSummaries) { app in
                             AppRow(
                                 app: app,
                                 maxDuration: maxDuration,
@@ -88,6 +94,9 @@ struct AppsView: View {
                                     } else {
                                         viewModel.removeOverride(bundleID: app.bundleID, for: appState.selectedDate)
                                     }
+                                },
+                                onHide: appState.preferencesService.map { prefs in
+                                    { prefs.hideApp(bundleID: app.bundleID) }
                                 }
                             )
                         }
@@ -136,6 +145,7 @@ struct AppRow: View {
     let isSelected: Bool
     let onTap: () -> Void
     var setCategory: ((AppCategory?) -> Void)? = nil
+    var onHide: (() -> Void)? = nil
 
     @State private var isHovered = false
 
@@ -175,9 +185,22 @@ struct AppRow: View {
                         .foregroundStyle(DS.onSurfaceVariant.opacity(0.6))
                 }
 
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.45))
+                if isHovered, let onHide {
+                    Button {
+                        onHide()
+                    } label: {
+                        Image(systemName: "eye.slash")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.onSurfaceVariant)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide this app")
+                    .transition(.opacity)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(DS.onSurfaceVariant.opacity(0.45))
+                }
             }
             .padding(DS.space12)
             .background(

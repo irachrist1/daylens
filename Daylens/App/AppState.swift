@@ -25,6 +25,7 @@ final class AppState {
     var trackingCoordinator: TrackingCoordinator!
     var aiService: AIService!
     var permissionManager: PermissionManager!
+    var preferencesService: PreferencesService?
     private var hasInitialized = false
     private var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -91,6 +92,9 @@ final class AppState {
             if syncUploader.isLinked {
                 logger.info("Sync starts on launch because a workspace is already linked")
                 syncUploader.startSync()
+                let prefs = PreferencesService()
+                preferencesService = prefs
+                prefs.load()
             }
             installDayChangeObserverIfNeeded()
         } else if hasCompletedOnboarding {
@@ -130,6 +134,15 @@ final class AppState {
 
         logger.info("Detected a local day rollover; finalizing the previous day for sync")
         syncUploader.finalizePreviousDay()
+    }
+
+    /// Called after a workspace is successfully linked so preferences sync starts immediately.
+    func workspaceDidLink() {
+        if preferencesService == nil {
+            let prefs = PreferencesService()
+            preferencesService = prefs
+            prefs.load()
+        }
     }
 
     func tearDownLifecycleHooks() {

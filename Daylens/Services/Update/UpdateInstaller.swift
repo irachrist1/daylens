@@ -370,20 +370,42 @@ private enum UpdateInstallCoordinator {
     }
 
     static func relaunchApp(at appURL: URL, logger: Logger) async throws {
+        // Write a small shell script that waits for the current process to fully exit,
+        // then opens the new app. This avoids the race where `open` sees the old process
+        // still running, re-activates it instead of launching a fresh copy, and then
+        // terminate(nil) kills that instance — leaving nothing running.
         try await Task.detached(priority: .utility) {
+            let scriptContent = """
+            #!/bin/bash
+            # Wait up to 5 seconds for the current Daylens process to die
+            for i in $(seq 1 50); do
+                sleep 0.1
+                pgrep -xq "Daylens" || break
+            done
+            sleep 0.3
+            open "$1"
+            """
+
+            let scriptURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("daylens-relaunch-\(UUID().uuidString).sh")
+
+            try Data(scriptContent.utf8).write(to: scriptURL)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: 0o755)],
+                ofItemAtPath: scriptURL.path
+            )
+
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = [appURL.path]
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [scriptURL.path, appURL.path]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
 
             try process.run()
-            process.waitUntilExit()
-
-            guard process.terminationStatus == 0 else {
-                throw UpdateInstallerError.commandFailed("open exited with status \(process.terminationStatus)")
-            }
+            // Deliberately do NOT wait — the script must outlive the current process
         }.value
 
-        logger.info("Relaunching app from \(appURL.path, privacy: .private)")
+        logger.info("Relaunch script started, terminating current instance")
         await MainActor.run {
             NSApplication.shared.terminate(nil)
         }

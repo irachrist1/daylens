@@ -4,6 +4,7 @@ import CoreImage.CIFilterBuiltins
 
 /// "Web Companion" section for Settings — link/unlink, last sync, recovery phrase.
 struct WebCompanionSection: View {
+    @Environment(AppState.self) private var appState
     @State private var isLinking = false
     @State private var linkResult: WorkspaceLinker.WorkspaceResult?
     @State private var showRecoveryPhrase = false
@@ -299,6 +300,7 @@ struct WebCompanionSection: View {
                     linkResult = result
                     isLinking = false
                     SyncUploader.shared.startSync()
+                    appState.workspaceDidLink()
                 }
             } catch {
                 await MainActor.run {

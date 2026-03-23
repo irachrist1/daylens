@@ -2,6 +2,16 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.17] - 2026-03-23
+
+### Fixed
+- In-app update now correctly relaunches the app after installing — the previous version called `open` while the old process was still alive, causing macOS to re-activate the existing instance instead of launching the new one; a relaunch script now waits for the old process to fully exit before opening the updated app
+- Update banner no longer appears in dev (Xcode) builds — polling is suppressed in DEBUG so you won't see update noise while developing
+
+### Added
+- Hide apps and sites: hover any app row or website bar to reveal an eye-slash button that removes it from all views; synced to your Web Companion workspace
+- Privacy settings panel (Settings → Privacy): PIN-gated list of all hidden items with restore buttons; Set/Change/Remove PIN flows with client-side SHA-256 hashing
+
 ## [1.0.16] - 2026-03-23
 
 ### Fixed

@@ -112,9 +112,15 @@ struct HistoryView: View {
         }
     }
 
+    private var visibleAppSummaries: [AppUsageSummary] {
+        let prefs = appState.preferencesService
+        guard let prefs else { return viewModel.appSummaries }
+        return viewModel.appSummaries.filter { !prefs.isAppHidden($0.bundleID) }
+    }
+
     private var filteredSummaries: [AppUsageSummary] {
-        guard let filter = selectedFilter else { return viewModel.appSummaries }
-        return viewModel.appSummaries.filter { $0.category == filter }
+        guard let filter = selectedFilter else { return visibleAppSummaries }
+        return visibleAppSummaries.filter { $0.category == filter }
     }
 
     private var filteredCategorySummaries: [CategoryUsageSummary] {
@@ -127,7 +133,9 @@ struct HistoryView: View {
     }
 
     private var visibleSites: [WebsiteUsageSummary] {
-        viewModel.websiteSummaries
+        let prefs = appState.preferencesService
+        guard let prefs else { return viewModel.websiteSummaries }
+        return viewModel.websiteSummaries.filter { !prefs.isDomainHidden($0.domain) }
     }
 
     private var categoryFilterPills: some View {
