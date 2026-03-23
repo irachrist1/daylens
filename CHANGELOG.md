@@ -2,6 +2,12 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.15] - 2026-03-23
+
+### Fixed
+- In-app update no longer shows "can't be opened" after install — the quarantine xattr from the DMG is now stripped before replacing the app bundle
+- Old `.old` backup app bundles are cleaned up after successful update instead of accumulating in /Applications
+
 ## [1.0.14] - 2026-03-23
 
 ### Fixed

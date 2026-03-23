@@ -312,6 +312,13 @@ private enum UpdateInstallCoordinator {
                     throw error
                 }
 
+                // Remove quarantine xattr — copied files from a DMG inherit it,
+                // and Gatekeeper blocks ad-hoc signed apps that are quarantined.
+                _ = try? runCommand(
+                    executable: "/usr/bin/xattr",
+                    arguments: ["-dr", "com.apple.quarantine", stagingURL.path]
+                )
+
                 do {
                     try fileManager.moveItem(at: currentAppURL, to: backupURL)
                 } catch {
@@ -326,6 +333,9 @@ private enum UpdateInstallCoordinator {
                     throw error
                 }
 
+                // Clean up backup — the old version is no longer needed
+                try? fileManager.removeItem(at: backupURL)
+
                 do {
                     try detachDMG(at: mountPoint, force: false, logger: logger)
                 } catch {
@@ -334,7 +344,7 @@ private enum UpdateInstallCoordinator {
                 shouldDetach = false
                 try? fileManager.removeItem(at: mountPoint)
 
-                return InstallResult(installedAppURL: currentAppURL, backupURL: backupURL)
+                return InstallResult(installedAppURL: currentAppURL, backupURL: nil)
             } catch let error as UpdateInstallerError {
                 if shouldDetach {
                     try? detachDMG(at: mountPoint, force: true, logger: logger)
