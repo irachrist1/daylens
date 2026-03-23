@@ -30,14 +30,34 @@ final class AppState {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
+    // MARK: - Appearance
+    var colorScheme: ColorScheme? {
+        didSet { persistColorScheme() }
+    }
+
     init() {
         self.userDefaults = .standard
         self.hasCompletedOnboarding = userDefaults.bool(forKey: Constants.DefaultsKey.hasCompletedOnboarding)
+        self.colorScheme = Self.loadColorScheme(from: .standard)
     }
 
     init(userDefaults: UserDefaults) {
         self.userDefaults = userDefaults
         self.hasCompletedOnboarding = userDefaults.bool(forKey: Constants.DefaultsKey.hasCompletedOnboarding)
+        self.colorScheme = Self.loadColorScheme(from: userDefaults)
+    }
+
+    private static func loadColorScheme(from defaults: UserDefaults) -> ColorScheme? {
+        guard let raw = defaults.string(forKey: "colorScheme") else { return nil }
+        return raw == "dark" ? .dark : .light
+    }
+
+    private func persistColorScheme() {
+        if let v = colorScheme {
+            userDefaults.set(v == .dark ? "dark" : "light", forKey: "colorScheme")
+        } else {
+            userDefaults.removeObject(forKey: "colorScheme")
+        }
     }
 
     /// Mark onboarding complete and persist immediately.
@@ -79,21 +99,6 @@ final class AppState {
     }
 
     // MARK: - Color Scheme Preference
-
-    // Color scheme preference (nil = follow system)
-    var colorScheme: ColorScheme? {
-        get {
-            guard let raw = userDefaults.string(forKey: "colorScheme") else { return nil }
-            return raw == "dark" ? .dark : .light
-        }
-        set {
-            if let v = newValue {
-                userDefaults.set(v == .dark ? "dark" : "light", forKey: "colorScheme")
-            } else {
-                userDefaults.removeObject(forKey: "colorScheme")
-            }
-        }
-    }
 
     var userName: String { userDefaults.string(forKey: Constants.DefaultsKey.userName) ?? "User" }
 

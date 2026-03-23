@@ -91,7 +91,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
-            window.backgroundColor = NSColor(named: "SurfaceContainer") ?? .windowBackgroundColor
+            // DS.surfaceContainer values — no asset catalog entry exists for this color,
+            // so NSColor(named:) always returned nil, falling back to .windowBackgroundColor
+            // and losing the transparent titlebar / rounded sidebar appearance in release builds.
+            window.backgroundColor = NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                return isDark
+                    ? NSColor(srgbRed: 0x0d / 255.0, green: 0x1c / 255.0, blue: 0x2e / 255.0, alpha: 1.0)
+                    : NSColor(srgbRed: 0xe8 / 255.0, green: 0xee / 255.0, blue: 0xf8 / 255.0, alpha: 1.0)
+            }
         }
     }
 

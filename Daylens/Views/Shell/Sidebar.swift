@@ -70,7 +70,7 @@ private struct UserProfileCard: View {
         }
         .padding(.horizontal, DS.space10)
         .padding(.vertical, DS.space8)
-        .background(DS.surfaceContainer, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
+        .modifier(LiquidGlassPanel(cornerRadius: DS.radiusMedium))
     }
 }
 
@@ -105,13 +105,35 @@ private struct SidebarItem: View {
                 Spacer()
             }
             .frame(height: DS.sidebarItemHeight)
-            .background(
-                RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                    .fill(isSelected ? DS.primary.opacity(0.12) : (isHovered ? DS.surfaceHighest.opacity(0.5) : Color.clear))
-            )
+            .modifier(SidebarItemBackground(isSelected: isSelected, isHovered: isHovered))
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+}
+
+private struct SidebarItemBackground: ViewModifier {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            if isSelected || isHovered {
+                content
+                    .glassEffect(
+                        isSelected ? .regular : .regular.interactive(),
+                        in: .rect(cornerRadius: DS.radiusMedium)
+                    )
+            } else {
+                content
+            }
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                        .fill(isSelected ? DS.primary.opacity(0.12) : (isHovered ? DS.surfaceHighest.opacity(0.5) : Color.clear))
+                )
+        }
     }
 }
 
@@ -149,10 +171,7 @@ private struct FocusSidebarButton: View {
                 .foregroundStyle(DS.onPrimaryFixed)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, DS.space10)
-                .background(
-                    DS.primaryContainer,
-                    in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                )
+                .modifier(FocusButtonGlass())
             }
             .buttonStyle(.plain)
         }
@@ -182,6 +201,21 @@ private struct FocusSidebarButton: View {
         }
         .padding(.horizontal, DS.space12)
         .padding(.vertical, DS.space10)
-        .background(bg, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
+        .modifier(LiquidGlassPanel(cornerRadius: DS.radiusMedium))
+    }
+}
+
+private struct FocusButtonGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DS.radiusMedium))
+        } else {
+            content
+                .background(
+                    DS.primaryContainer,
+                    in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                )
+        }
     }
 }

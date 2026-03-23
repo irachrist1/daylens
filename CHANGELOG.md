@@ -2,6 +2,18 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.11] - 2026-03-23
+
+### Added
+- Native macOS Tahoe liquid glass effects across the UI — date navigator, update banner, sidebar items, focus button, floating HUD, filter pills, duration chips, AI input bar, and suggestion chips all use `.glassEffect` on macOS 26+ with graceful fallback on older versions
+- `GlassEffectContainer` wraps the top chrome so adjacent glass elements composite correctly
+
+### Fixed
+- Theme switcher now updates immediately — converted color scheme from a computed UserDefaults property to a stored `@Observable` property so SwiftUI detects changes
+- Sidebar corners and transparent titlebar now appear correctly in release builds — replaced `NSColor(named:)` lookup (which always failed) with inline adaptive color matching `DS.surfaceContainer`
+- Floating date control no longer overlaps traffic lights when sidebar is collapsed — moved from `.overlay(alignment: .topLeading)` to `safeAreaInset` which automatically clears window chrome
+- Update banner and date header now stack naturally via `safeAreaInset` instead of fighting between a VStack and an overlay with manual offsets
+
 ## [1.0.10] - 2026-03-23
 
 ### Fixed

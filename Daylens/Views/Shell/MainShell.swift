@@ -9,57 +9,55 @@ struct MainShell: View {
         appState.selectedSection.showsDateNavigation
     }
 
-    private var headerReservedTopInset: CGFloat {
-        updateChecker.updateAvailable ? DS.space48 : HeaderBar.compactReservedTopInset
-    }
-
-    private var headerFloatingOffset: CGFloat {
-        updateChecker.updateAvailable ? 2 : HeaderBar.compactFloatingOffset
-    }
-
-    private var updateBannerTopPadding: CGFloat {
-        DS.space16
-    }
-
-    private var updateBannerBottomPadding: CGFloat {
-        showsDateNavigation ? DS.space16 : DS.space8
-    }
-
     var body: some View {
         NavigationSplitView {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 200, ideal: DS.sidebarWidth, max: 300)
         } detail: {
-            VStack(spacing: 0) {
-                if updateChecker.updateAvailable {
-                    UpdateBanner()
-                        .padding(.horizontal, DS.space24)
-                        .padding(.top, updateBannerTopPadding)
-                        .padding(.bottom, updateBannerBottomPadding)
-                        .zIndex(1)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+            contentView
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    // Both the update banner and the floating date header live in
+                    // the safeAreaInset. This automatically clears the titlebar
+                    // and traffic lights when the sidebar is collapsed, and
+                    // creates the "floating" effect over scrollable content.
+                    // GlassEffectContainer prevents adjacent glass elements from
+                    // sampling each other and enables morphing transitions.
+                    glassChrome
                 }
-
-                contentView
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        if showsDateNavigation {
-                            Color.clear.frame(height: headerReservedTopInset)
-                        }
-                    }
-                    .overlay(alignment: .topLeading) {
-                        if showsDateNavigation {
-                            HeaderBar()
-                                .offset(y: headerFloatingOffset)
-                        }
-                    }
-            }
-            .background(DS.surfaceContainer)
-            .animation(.easeInOut(duration: 0.22), value: updateChecker.updateAvailable)
+                .background(DS.surfaceContainer)
+                .animation(.easeInOut(duration: 0.22), value: updateChecker.updateAvailable)
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
         .preferredColorScheme(appState.colorScheme)
+    }
+
+    @ViewBuilder
+    private var glassChrome: some View {
+        if #available(macOS 26, *) {
+            GlassEffectContainer {
+                chromeStack
+            }
+        } else {
+            chromeStack
+        }
+    }
+
+    private var chromeStack: some View {
+        VStack(spacing: 0) {
+            if updateChecker.updateAvailable {
+                UpdateBanner()
+                    .padding(.horizontal, DS.space24)
+                    .padding(.top, DS.space10)
+                    .padding(.bottom, showsDateNavigation ? DS.space8 : DS.space10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if showsDateNavigation {
+                HeaderBar()
+                    .padding(.bottom, DS.space4)
+            }
+        }
     }
 
     @ViewBuilder
@@ -367,10 +365,7 @@ private struct DurationChip: View {
                 .foregroundStyle(isSelected ? DS.primary : DS.onSurfaceVariant)
                 .padding(.horizontal, DS.space12)
                 .padding(.vertical, DS.space6)
-                .background(
-                    isSelected ? DS.primary.opacity(0.12) : DS.surfaceHighest,
-                    in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
-                )
+                .modifier(LiquidGlassPanel(cornerRadius: DS.radiusSmall))
         }
         .buttonStyle(.plain)
     }

@@ -41,14 +41,7 @@ struct UpdateBanner: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.accentColor.opacity(0.1))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
-        )
+        .modifier(LiquidGlassPanel(cornerRadius: 10))
     }
 
     @ViewBuilder

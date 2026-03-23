@@ -23,6 +23,17 @@ final class UpdateChecker {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
+
+        #if DEBUG
+        // Launch argument -forceUpdateBanner YES to test banner layout
+        // (add in Xcode scheme → Arguments → Arguments Passed On Launch)
+        if ProcessInfo.processInfo.arguments.contains("-forceUpdateBanner") {
+            updateAvailable = true
+            latestVersion = "99.0.0"
+            releaseNotes = "Debug: forced update banner for layout testing."
+            downloadURL = URL(string: "https://example.com/fake.dmg")
+        }
+        #endif
     }
 
     deinit {

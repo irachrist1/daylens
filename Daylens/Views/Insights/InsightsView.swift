@@ -202,10 +202,7 @@ struct SuggestionChip: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.space14)
             .padding(.vertical, DS.space10)
-            .background(
-                RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
-                    .fill(isHovered ? DS.surfaceHighest : DS.surfaceHigh)
-            )
+            .modifier(LiquidGlassPanel(cornerRadius: DS.radiusMedium))
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -377,7 +374,7 @@ struct FloatingInputBar: View {
                     .foregroundStyle(DS.onSurfaceVariant)
                     .padding(.horizontal, DS.space12)
                     .padding(.vertical, DS.space8)
-                    .background(DS.surfaceHighest, in: Capsule())
+                    .modifier(LiquidGlassCapsuleSmall())
                 }
                 .buttonStyle(.plain)
 
@@ -406,19 +403,7 @@ struct FloatingInputBar: View {
             .padding(.horizontal, DS.space14)
             .padding(.bottom, DS.space14)
         }
-        .background {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(DS.surfaceCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .strokeBorder(
-                            isFocused ? DS.primary.opacity(0.25) : Color.white.opacity(0.05),
-                            lineWidth: isFocused ? 1.5 : 1
-                        )
-                )
-                // Active: 2px primary glow on bottom edge only (spec)
-                .shadow(color: isFocused ? DS.primary.opacity(0.12) : .clear, radius: 12, y: 4)
-        }
+        .modifier(LiquidGlassPanel(cornerRadius: 28))
     }
 
     private var canSend: Bool {

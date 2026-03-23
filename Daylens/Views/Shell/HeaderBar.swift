@@ -3,16 +3,12 @@ import SwiftUI
 /// Top toolbar: date navigation only.
 /// Focus controls live exclusively in the sidebar (FocusSidebarButton).
 struct HeaderBar: View {
-    static let compactReservedTopInset: CGFloat = 28
-    static let compactFloatingOffset: CGFloat = -18
-
     var body: some View {
         HStack {
             DateNavigator()
             Spacer(minLength: 0)
         }
-        .padding(.leading, DS.space20)
-        .padding(.trailing, DS.space20)
+        .padding(.horizontal, DS.space20)
         .padding(.top, DS.space6)
     }
 }

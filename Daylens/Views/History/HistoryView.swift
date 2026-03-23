@@ -319,10 +319,29 @@ private struct FilterPill: View {
                 .foregroundStyle(isSelected ? .white : DS.onSurfaceVariant)
                 .padding(.horizontal, DS.space12)
                 .padding(.vertical, DS.space6)
-                .background(isSelected ? DS.primaryContainer : DS.surfaceHighest.opacity(0.6),
-                            in: Capsule(style: .continuous))
+                .modifier(FilterPillGlass(isSelected: isSelected))
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct FilterPillGlass: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+                .glassEffect(
+                    isSelected ? .regular : .regular.interactive(),
+                    in: .capsule
+                )
+        } else {
+            content
+                .background(
+                    isSelected ? DS.primaryContainer : DS.surfaceHighest.opacity(0.6),
+                    in: Capsule(style: .continuous)
+                )
+        }
     }
 }
 
