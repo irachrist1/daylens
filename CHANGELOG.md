@@ -2,6 +2,15 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.13] - 2026-03-23
+
+### Fixed
+- Update banner now appears correctly when `-forceUpdateBanner` launch argument is passed — polling no longer overwrites the forced state
+- Release builds now compile with full liquid glass support — upgraded CI from macOS 14 / Xcode 16.2 to macOS 26 / Xcode 26.2 (Swift 6.2)
+
+### Added
+- Visible version number at the bottom of Settings view
+
 ## [1.0.12] - 2026-03-23
 
 ### Changed

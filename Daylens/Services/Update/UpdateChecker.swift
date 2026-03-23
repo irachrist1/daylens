@@ -10,6 +10,7 @@ final class UpdateChecker {
     @ObservationIgnored private var pollingTask: Task<Void, Never>?
     @ObservationIgnored private var isChecking = false
     @ObservationIgnored private var dismissedVersion: String?
+    @ObservationIgnored private var isForced = false
 
     private static let latestReleaseURL = URL(string: "https://api.github.com/repos/irachrist1/daylens/releases/latest")!
     private static let allReleasesURL = URL(string: "https://api.github.com/repos/irachrist1/daylens/releases")!
@@ -25,13 +26,14 @@ final class UpdateChecker {
         self.userDefaults = userDefaults
 
         #if DEBUG
-        // Launch argument -forceUpdateBanner YES to test banner layout
+        // Launch argument -forceUpdateBanner to test banner layout
         // (add in Xcode scheme → Arguments → Arguments Passed On Launch)
         if ProcessInfo.processInfo.arguments.contains("-forceUpdateBanner") {
             updateAvailable = true
             latestVersion = "99.0.0"
             releaseNotes = "Debug: forced update banner for layout testing."
             downloadURL = URL(string: "https://example.com/fake.dmg")
+            isForced = true
         }
         #endif
     }
@@ -41,7 +43,7 @@ final class UpdateChecker {
     }
 
     func startPolling() {
-        guard pollingTask == nil else { return }
+        guard pollingTask == nil, !isForced else { return }
 
         pollingTask = Task { [weak self] in
             guard let self else { return }

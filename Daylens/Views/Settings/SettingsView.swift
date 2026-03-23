@@ -21,6 +21,12 @@ struct SettingsView: View {
                         .foregroundStyle(DS.tertiary)
                         .transition(.opacity)
                 }
+
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceVariant.opacity(0.5))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, DS.space8)
             }
             .padding(DS.space24)
         }
