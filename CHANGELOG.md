@@ -2,6 +2,17 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.14] - 2026-03-23
+
+### Fixed
+- In-app update download now works — replaced background URL sessions (which fail on ad-hoc signed builds) with standard URL sessions for both update checking and DMG downloading
+
+### Added
+- Debug builds show a red "DEV" badge on the app icon to distinguish from the installed release version
+
+### Changed
+- Removed `-forceUpdateBanner` launch argument from the scheme
+
 ## [1.0.13] - 2026-03-23
 
 ### Fixed

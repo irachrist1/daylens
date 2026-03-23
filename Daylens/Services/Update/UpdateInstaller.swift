@@ -152,12 +152,10 @@ private final class DMGDownloadClient: NSObject, URLSessionDownloadDelegate {
     private var response: HTTPURLResponse?
 
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "\(Bundle.main.bundleIdentifier ?? "com.daylens.app").update-installer.\(UUID().uuidString)")
-        configuration.isDiscretionary = false
+        let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
         configuration.timeoutIntervalForRequest = 300
         configuration.timeoutIntervalForResource = 3_600
-        configuration.sessionSendsLaunchEvents = false
 
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1

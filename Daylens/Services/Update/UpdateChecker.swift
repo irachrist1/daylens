@@ -283,12 +283,10 @@ private final class ReleaseDownloadClient: NSObject, URLSessionDownloadDelegate 
     private var downloadedResponse: HTTPURLResponse?
 
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "\(Bundle.main.bundleIdentifier ?? "com.daylens.app").update-checker.\(UUID().uuidString)")
-        configuration.isDiscretionary = false
+        let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 120
-        configuration.sessionSendsLaunchEvents = false
 
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1

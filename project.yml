@@ -25,7 +25,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.daylens.app
         PRODUCT_NAME: Daylens
-        MARKETING_VERSION: "1.0.13"
+        MARKETING_VERSION: "1.0.14"
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "5.9"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -36,6 +36,11 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         DAYLENS_CONVEX_SITE_URL: "https://decisive-aardvark-847.convex.site"
         DAYLENS_WEB_DASHBOARD_URL: "https://daylens-web.vercel.app"
+      configs:
+        Debug:
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
+        Release:
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: GRDB
       - sdk: Security.framework
