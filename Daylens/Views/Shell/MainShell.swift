@@ -10,11 +10,19 @@ struct MainShell: View {
     }
 
     private var headerReservedTopInset: CGFloat {
-        updateChecker.updateAvailable ? DS.space40 : HeaderBar.compactReservedTopInset
+        updateChecker.updateAvailable ? DS.space48 : HeaderBar.compactReservedTopInset
     }
 
     private var headerFloatingOffset: CGFloat {
-        updateChecker.updateAvailable ? -8 : HeaderBar.compactFloatingOffset
+        updateChecker.updateAvailable ? 2 : HeaderBar.compactFloatingOffset
+    }
+
+    private var updateBannerTopPadding: CGFloat {
+        DS.space16
+    }
+
+    private var updateBannerBottomPadding: CGFloat {
+        showsDateNavigation ? DS.space16 : DS.space8
     }
 
     var body: some View {
@@ -26,8 +34,9 @@ struct MainShell: View {
                 if updateChecker.updateAvailable {
                     UpdateBanner()
                         .padding(.horizontal, DS.space24)
-                        .padding(.top, DS.space10)
-                        .padding(.bottom, DS.space14)
+                        .padding(.top, updateBannerTopPadding)
+                        .padding(.bottom, updateBannerBottomPadding)
+                        .zIndex(1)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
