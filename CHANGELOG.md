@@ -2,6 +2,11 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.10] - 2026-03-23
+
+### Fixed
+- Kept the in-app update banner fully inside the safe content area so new releases still surface the Update and What's New prompt reliably
+
 ## [1.0.9] - 2026-03-23
 
 ### Changed
