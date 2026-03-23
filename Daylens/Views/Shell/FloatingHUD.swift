@@ -40,13 +40,14 @@ struct FloatingHUD: View {
                         .foregroundStyle(DS.error)
                         .padding(.horizontal, DS.space10)
                         .padding(.vertical, DS.space4)
-                        .modifier(LiquidGlassCapsuleSmall())
+                        .background(DS.errorContainer.opacity(0.4), in: Capsule(style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, DS.space20)
             .padding(.vertical, DS.space12)
-            .modifier(LiquidGlassPanel(cornerRadius: DS.radiusXL))
+            .background(DS.surfaceBright, in: RoundedRectangle(cornerRadius: DS.radiusXL, style: .continuous))
+            .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 4)
             .padding(.horizontal, DS.space32)
             .padding(.bottom, DS.space20)
             .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -69,45 +69,53 @@ struct DateNavigator: View {
 /// Capsule-shaped liquid glass for floating controls like the date navigator.
 private struct LiquidGlassCapsule: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26, *) {
             content
                 .glassEffect(.regular.interactive(), in: .capsule)
         } else {
-            content
-                .background {
-                    Capsule(style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.18),
-                                            DS.primary.opacity(0.08),
-                                            Color.clear
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                        }
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
-                        }
-                        .overlay(alignment: .top) {
-                            Capsule(style: .continuous)
-                                .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
-                                .blur(radius: 0.6)
-                                .mask {
-                                    Rectangle()
-                                        .frame(height: 14)
-                                }
-                        }
-                }
-                .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 10)
-                .shadow(color: Color.white.opacity(0.05), radius: 2, x: 0, y: 1)
+            fallbackCapsule(content)
         }
+        #else
+        fallbackCapsule(content)
+        #endif
+    }
+
+    private func fallbackCapsule(_ content: Content) -> some View {
+        content
+            .background {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.18),
+                                        DS.primary.opacity(0.08),
+                                        Color.clear
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+                    }
+                    .overlay(alignment: .top) {
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.28), lineWidth: 0.8)
+                            .blur(radius: 0.6)
+                            .mask {
+                                Rectangle()
+                                    .frame(height: 14)
+                            }
+                    }
+            }
+            .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 10)
+            .shadow(color: Color.white.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 }
 

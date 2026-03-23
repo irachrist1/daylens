@@ -186,33 +186,29 @@ struct LiquidGlassPanel: ViewModifier {
     var cornerRadius: CGFloat = DS.radiusLarge
 
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26, *) {
             content
                 .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
-            content
-                .background(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-                )
-                .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 4)
+            fallbackPanel(content)
         }
+        #else
+        fallbackPanel(content)
+        #endif
+    }
+
+    private func fallbackPanel(_ content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 4)
     }
 }
 
-/// Small capsule glass for inline buttons (e.g. HUD "End" button).
-struct LiquidGlassCapsuleSmall: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content
-                .glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            content
-                .background(DS.errorContainer.opacity(0.4), in: Capsule(style: .continuous))
-        }
-    }
-}

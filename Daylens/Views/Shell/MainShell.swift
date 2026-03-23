@@ -35,6 +35,7 @@ struct MainShell: View {
 
     @ViewBuilder
     private var glassChrome: some View {
+        #if compiler(>=6.2)
         if #available(macOS 26, *) {
             GlassEffectContainer {
                 chromeStack
@@ -42,6 +43,9 @@ struct MainShell: View {
         } else {
             chromeStack
         }
+        #else
+        chromeStack
+        #endif
     }
 
     private var chromeStack: some View {
@@ -365,7 +369,10 @@ private struct DurationChip: View {
                 .foregroundStyle(isSelected ? DS.primary : DS.onSurfaceVariant)
                 .padding(.horizontal, DS.space12)
                 .padding(.vertical, DS.space6)
-                .modifier(LiquidGlassPanel(cornerRadius: DS.radiusSmall))
+                .background(
+                    RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                        .fill(isSelected ? DS.primary.opacity(0.12) : DS.surfaceHighest.opacity(0.6))
+                )
         }
         .buttonStyle(.plain)
     }

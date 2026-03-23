@@ -2,10 +2,15 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.12] - 2026-03-23
+
+### Changed
+- Rolled back liquid glass from sidebar, filter pills, floating HUD, AI input bar, suggestion chips, and duration chips — glass is now limited to the floating date navigator and update banner only, fixing contrast issues and broken click targets
+
 ## [1.0.11] - 2026-03-23
 
 ### Added
-- Native macOS Tahoe liquid glass effects across the UI — date navigator, update banner, sidebar items, focus button, floating HUD, filter pills, duration chips, AI input bar, and suggestion chips all use `.glassEffect` on macOS 26+ with graceful fallback on older versions
+- Native macOS Tahoe liquid glass on the floating date navigator and update banner — `.glassEffect` on macOS 26+ with graceful `ultraThinMaterial` fallback on older versions
 - `GlassEffectContainer` wraps the top chrome so adjacent glass elements composite correctly
 
 ### Fixed

@@ -202,7 +202,11 @@ struct SuggestionChip: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.space14)
             .padding(.vertical, DS.space10)
-            .modifier(LiquidGlassPanel(cornerRadius: DS.radiusMedium))
+            .background(DS.surfaceCard, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                    .strokeBorder(DS.ghostBorder, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -374,7 +378,7 @@ struct FloatingInputBar: View {
                     .foregroundStyle(DS.onSurfaceVariant)
                     .padding(.horizontal, DS.space12)
                     .padding(.vertical, DS.space8)
-                    .modifier(LiquidGlassCapsuleSmall())
+                    .background(DS.surfaceHighest.opacity(0.6), in: Capsule(style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -403,7 +407,12 @@ struct FloatingInputBar: View {
             .padding(.horizontal, DS.space14)
             .padding(.bottom, DS.space14)
         }
-        .modifier(LiquidGlassPanel(cornerRadius: 28))
+        .background(DS.surfaceCard, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(DS.ghostBorder, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.07), radius: 12, x: 0, y: 2)
     }
 
     private var canSend: Bool {
