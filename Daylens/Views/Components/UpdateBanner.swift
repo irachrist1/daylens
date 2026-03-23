@@ -147,10 +147,14 @@ struct UpdateBanner: View {
     }
 
     private func startInstall() {
-        guard let url = updateChecker.downloadURL else { return }
         updateInstaller.resetFailure()
 
         Task {
+            // Always re-fetch the latest release before downloading so the URL
+            // points at the newest version, not a stale value from the last poll.
+            await updateChecker.refreshBeforeDownload()
+
+            guard let url = updateChecker.downloadURL else { return }
             do {
                 try await updateInstaller.downloadAndInstall(from: url)
             } catch {

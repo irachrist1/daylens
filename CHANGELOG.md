@@ -2,6 +2,11 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.16] - 2026-03-23
+
+### Fixed
+- Clicking Update now always downloads the latest available version, not the version shown in the banner — re-fetches release info before starting download
+
 ## [1.0.15] - 2026-03-23
 
 ### Fixed

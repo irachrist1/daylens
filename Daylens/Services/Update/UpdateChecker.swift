@@ -73,6 +73,13 @@ final class UpdateChecker {
         logger.info("Skipped update prompt for version \(latestVersion, privacy: .public)")
     }
 
+    /// Re-fetches the latest release right before the user triggers a download,
+    /// so the download URL always points at the newest version — not a stale
+    /// value from the last polling cycle.
+    func refreshBeforeDownload() async {
+        await checkForUpdates()
+    }
+
     private func checkForUpdates() async {
         guard !isChecking else { return }
         isChecking = true
