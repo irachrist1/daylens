@@ -314,10 +314,28 @@ private enum UpdateInstallCoordinator {
 
                 // Remove quarantine xattr — copied files from a DMG inherit it,
                 // and Gatekeeper blocks ad-hoc signed apps that are quarantined.
-                _ = try? runCommand(
+                do {
+                    _ = try runCommand(
+                        executable: "/usr/bin/xattr",
+                        arguments: ["-dr", "com.apple.quarantine", stagingURL.path]
+                    )
+                } catch {
+                    logger.warning("xattr -dr com.apple.quarantine failed: \(error.localizedDescription, privacy: .private)")
+                }
+
+                // Verify the quarantine xattr is actually gone — if it persists,
+                // Gatekeeper will block the app on relaunch with no user feedback.
+                let xattrCheck = try? runCommand(
                     executable: "/usr/bin/xattr",
-                    arguments: ["-dr", "com.apple.quarantine", stagingURL.path]
+                    arguments: ["-l", stagingURL.path]
                 )
+                if let xattrCheck, xattrCheck.contains("com.apple.quarantine") {
+                    logger.error("Quarantine xattr still present after strip — update may be blocked by Gatekeeper")
+                    throw UpdateInstallerError.manualInstallRequired(
+                        stagingURL,
+                        "macOS security blocked automatic install. Drag the app from the mounted disk image to Applications, then right-click → Open."
+                    )
+                }
 
                 do {
                     try fileManager.moveItem(at: currentAppURL, to: backupURL)

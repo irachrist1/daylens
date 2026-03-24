@@ -8,11 +8,13 @@ final class ActivityTracker {
     private let logger = Logger(subsystem: "com.daylens.app", category: "TrackingPipeline")
 
     private let database: AppDatabase
+    private let frontmostApplicationProvider: () -> (bundleID: String, appName: String)?
     private var currentApp: ActiveAppInfo?
     private var isRunning = false
     private var isPausedForIdle = false
     private var pendingDeactivation: PendingDeactivation?
     private var isSpaceTransitioning = false
+    private var spaceTransitionReconcileWorkItem: DispatchWorkItem?
     private var spaceTransitionResetWorkItem: DispatchWorkItem?
     private var workspaceObservers: [NSObjectProtocol] = []
     private let deactivationGracePeriod: TimeInterval
@@ -31,11 +33,13 @@ final class ActivityTracker {
     init(
         database: AppDatabase,
         deactivationGracePeriod: TimeInterval = 1.5,
-        spaceTransitionWindow: TimeInterval = 2.0
+        spaceTransitionWindow: TimeInterval = 2.0,
+        frontmostApplicationProvider: @escaping () -> (bundleID: String, appName: String)? = ActivityTracker.defaultFrontmostApplicationInfo
     ) {
         self.database = database
         self.deactivationGracePeriod = deactivationGracePeriod
         self.spaceTransitionWindow = spaceTransitionWindow
+        self.frontmostApplicationProvider = frontmostApplicationProvider
     }
 
     func start() {
@@ -111,6 +115,8 @@ final class ActivityTracker {
 
         pendingDeactivation?.workItem.cancel()
         pendingDeactivation = nil
+        spaceTransitionReconcileWorkItem?.cancel()
+        spaceTransitionReconcileWorkItem = nil
         spaceTransitionResetWorkItem?.cancel()
         spaceTransitionResetWorkItem = nil
         isSpaceTransitioning = false
@@ -184,6 +190,15 @@ final class ActivityTracker {
 
     func simulateActiveSpaceChange() {
         handleActiveSpaceDidChange()
+    }
+
+    func simulateSpaceTransitionFrontmostApp(bundleID: String, appName: String, at timestamp: Date) {
+        reconcileFrontmostApplication(
+            bundleID: bundleID,
+            appName: appName,
+            observedAt: timestamp,
+            source: .nsworkspace
+        )
     }
 
     private func handleAppActivation(bundleID: String, appName: String, activatedAt: Date, source: ActivityEvent.EventSource) {
@@ -369,7 +384,15 @@ final class ActivityTracker {
 
     private func handleActiveSpaceDidChange() {
         isSpaceTransitioning = true
+        spaceTransitionReconcileWorkItem?.cancel()
         spaceTransitionResetWorkItem?.cancel()
+
+        let reconcileWorkItem = DispatchWorkItem { [weak self] in
+            self?.reconcileCurrentFrontmostApplicationAfterSpaceChange()
+        }
+        spaceTransitionReconcileWorkItem = reconcileWorkItem
+        let reconcileDelay = min(0.3, max(0.05, deactivationGracePeriod / 2))
+        DispatchQueue.main.asyncAfter(deadline: .now() + reconcileDelay, execute: reconcileWorkItem)
 
         let workItem = DispatchWorkItem { [weak self] in
             self?.isSpaceTransitioning = false
@@ -405,6 +428,44 @@ final class ActivityTracker {
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + deactivationGracePeriod, execute: workItem)
+    }
+
+    private func reconcileCurrentFrontmostApplicationAfterSpaceChange() {
+        guard let frontApp = frontmostApplicationProvider() else { return }
+        reconcileFrontmostApplication(
+            bundleID: frontApp.bundleID,
+            appName: frontApp.appName,
+            observedAt: Date(),
+            source: .nsworkspace
+        )
+    }
+
+    private func reconcileFrontmostApplication(
+        bundleID: String,
+        appName: String,
+        observedAt: Date,
+        source: ActivityEvent.EventSource
+    ) {
+        guard isRunning, !isPausedForIdle else { return }
+
+        if let pending = pendingDeactivation, pending.app.bundleID == bundleID {
+            logger.debug("Rebinding to frontmost app \(bundleID, privacy: .public) after Space/fullscreen transition")
+            handleAppActivation(bundleID: bundleID, appName: appName, activatedAt: observedAt, source: source)
+            return
+        }
+
+        guard currentApp?.bundleID != bundleID else { return }
+
+        logger.debug("Recovering frontmost app \(bundleID, privacy: .public) after Space/fullscreen transition")
+        handleAppActivation(bundleID: bundleID, appName: appName, activatedAt: observedAt, source: source)
+    }
+
+    private static func defaultFrontmostApplicationInfo() -> (bundleID: String, appName: String)? {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+        return (
+            bundleID: frontApp.bundleIdentifier ?? "unknown",
+            appName: frontApp.localizedName ?? "Unknown"
+        )
     }
 
     private func finalizePendingDeactivationIfNeeded() {

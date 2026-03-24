@@ -124,8 +124,11 @@ struct HistoryView: View {
     }
 
     private var filteredCategorySummaries: [CategoryUsageSummary] {
-        guard let filter = selectedFilter else { return viewModel.categorySummaries }
-        return viewModel.categorySummaries.filter { $0.category == filter }
+        // Recompute from visible (hidden-filtered) summaries so hidden apps
+        // don't appear in the category breakdown card.
+        let base = SemanticUsageRollups.categorySummaries(from: visibleAppSummaries)
+        guard let filter = selectedFilter else { return base }
+        return base.filter { $0.category == filter }
     }
 
     private var shouldShowTopWebsites: Bool {
@@ -177,13 +180,13 @@ struct HistoryView: View {
             )
             StatCard(
                 title: "Apps Used",
-                value: "\(viewModel.appSummaries.count)",
+                value: "\(visibleAppSummaries.count)",
                 icon: "square.grid.2x2.fill",
                 color: DS.secondary
             )
             StatCard(
                 title: "Sites Visited",
-                value: "\(viewModel.websiteSummaries.count)",
+                value: "\(visibleSites.count)",
                 icon: "globe",
                 color: DS.primary
             )

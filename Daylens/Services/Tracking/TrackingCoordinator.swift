@@ -189,6 +189,23 @@ final class TrackingCoordinator {
                   let url = URL(string: urlString.hasPrefix("http") ? urlString : "https://\(urlString)"),
                   let host = url.host else {
                 self.webExtractionFailures += 1
+
+                if let currentBundleID = self.currentWebBundleID, currentBundleID != bundleID {
+                    self.finalizeCurrentWebVisit()
+                    return
+                }
+
+                if self.currentWebBundleID == bundleID, self.currentWebDomain != nil {
+                    // Full-screen browser playback can temporarily hide the address bar and
+                    // break both AX + AppleScript URL extraction even though the user is
+                    // still on the same site. Keep the current visit open until the browser
+                    // actually loses focus or we positively observe a new domain.
+                    if let newTitle = extractedTitle, self.currentWebTitle == nil {
+                        self.currentWebTitle = newTitle
+                    }
+                    return
+                }
+
                 if self.webExtractionFailures >= 3 {
                     self.finalizeCurrentWebVisit()
                 }

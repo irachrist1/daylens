@@ -45,8 +45,7 @@ final class UpdateChecker {
     func startPolling() {
         #if DEBUG
         // Dev builds are deployed via Xcode — the update banner is noise here.
-        guard !isForced else { return }
-        return
+        if !isForced { return }
         #endif
         guard pollingTask == nil, !isForced else { return }
 

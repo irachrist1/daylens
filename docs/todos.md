@@ -1,6 +1,6 @@
 # Daylens macOS — Progress Tracker
 
-**Last updated: 2026-03-21 · Current version: v1.0.4**
+**Last updated: 2026-03-24 · Current version: v1.0.18**
 **Repo: `irachrist1/daylens` · Branch: `main`**
 
 > Windows companion app is tracked separately in `irachrist1/daylens-windows`.
@@ -9,13 +9,14 @@
 
 ## Release Process
 
-1. Increment `MARKETING_VERSION` in `Daylens.xcodeproj` (patch only: `1.0.x` — never bump minor/major)
-2. Add CHANGELOG entry
-3. Commit and push to `main`
-4. `git tag v1.0.x && git push origin v1.0.x` → triggers GitHub Actions build
-5. Wait for build: `gh run list --repo irachrist1/daylens --limit 3`
-6. Get SHA256: `curl -sL https://github.com/irachrist1/daylens/releases/download/v1.0.x/Daylens-1.0.x.dmg.sha256`
-7. Update `homebrew-daylens/Casks/daylens.rb` version + sha256 → push to `master` on that repo
+1. Increment `MARKETING_VERSION` in `project.yml` (patch only: `1.0.x` — never bump minor/major)
+2. Run `xcodegen generate --spec project.yml` so `Daylens.xcodeproj` matches the source-of-truth version
+3. Add CHANGELOG entry and update any release-facing docs/README copy
+4. Commit and push to `main`
+5. `git tag v1.0.x && git push origin v1.0.x` → triggers GitHub Actions build
+6. Wait for build: `gh run list --repo irachrist1/daylens --limit 3`
+7. Get SHA256: `curl -sL https://github.com/irachrist1/daylens/releases/download/v1.0.x/Daylens-1.0.x.dmg.sha256`
+8. Update `homebrew-daylens/Casks/daylens.rb` version + sha256 → push to `master` on that repo
 
 ---
 

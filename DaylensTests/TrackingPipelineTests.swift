@@ -99,7 +99,8 @@ final class TrackingPipelineTests: XCTestCase {
         let tracker = ActivityTracker(
             database: database,
             deactivationGracePeriod: 0.05,
-            spaceTransitionWindow: 0.1
+            spaceTransitionWindow: 0.1,
+            frontmostApplicationProvider: { nil }
         )
         tracker.simulateTrackingStarted()
 
@@ -135,6 +136,51 @@ final class TrackingPipelineTests: XCTestCase {
         let sessions = try database.timelineEvents(for: Date())
         XCTAssertEqual(sessions.count, 1)
         XCTAssertEqual(sessions[0].bundleID, "company.thebrowser.Browser")
+        XCTAssertEqual(sessions[0].duration, switchedAwayAt.timeIntervalSince(start), accuracy: 0.001)
+    }
+
+    func testSpaceTransitionFrontmostReconcileKeepsSessionContinuousWithoutActivationNotification() throws {
+        let database = try AppDatabase.inMemory()
+        var simulatedFrontmostApp: (bundleID: String, appName: String)? = (
+            bundleID: "com.google.Chrome",
+            appName: "Google Chrome"
+        )
+        let tracker = ActivityTracker(
+            database: database,
+            deactivationGracePeriod: 0.05,
+            spaceTransitionWindow: 0.1,
+            frontmostApplicationProvider: { simulatedFrontmostApp }
+        )
+        tracker.simulateTrackingStarted()
+
+        let start = Date(timeIntervalSince1970: 1_710_200_000)
+        let deactivatedAt = start.addingTimeInterval(10)
+        let switchedAwayAt = start.addingTimeInterval(19)
+
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.google.Chrome",
+            appName: "Google Chrome",
+            at: start
+        )
+        tracker.simulateActiveSpaceChange()
+        tracker.simulateAppDeactivation(
+            bundleID: "com.google.Chrome",
+            appName: "Google Chrome",
+            at: deactivatedAt
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        simulatedFrontmostApp = (bundleID: "com.daylens.app", appName: "Daylens")
+        tracker.simulateFrontmostAppChange(
+            bundleID: "com.daylens.app",
+            appName: "Daylens",
+            at: switchedAwayAt
+        )
+
+        let sessions = try database.timelineEvents(for: start)
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions[0].bundleID, "com.google.Chrome")
         XCTAssertEqual(sessions[0].duration, switchedAwayAt.timeIntervalSince(start), accuracy: 0.001)
     }
 }

@@ -5,6 +5,7 @@ struct UpdateBanner: View {
     @Environment(UpdateInstaller.self) private var updateInstaller
 
     @State private var isShowingReleaseNotes = false
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: DS.space12) {
@@ -16,14 +17,8 @@ struct UpdateBanner: View {
 
             Spacer(minLength: DS.space12)
 
-            if showsReleaseNotesButton {
-                Button("What's new") {
-                    isShowingReleaseNotes = true
-                }
-                .buttonStyle(.link)
-                .popover(isPresented: $isShowingReleaseNotes, arrowEdge: .top) {
-                    releaseNotesPopover
-                }
+            if showsReleaseNotesButton || isShowingReleaseNotes {
+                releaseNotesButton
             }
 
             actionArea
@@ -42,6 +37,7 @@ struct UpdateBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .modifier(LiquidGlassPanel(cornerRadius: 10))
+        .onHover { isHovered = $0 }
     }
 
     @ViewBuilder
@@ -123,8 +119,22 @@ struct UpdateBanner: View {
     }
 
     private var showsReleaseNotesButton: Bool {
-        guard case .idle = updateInstaller.phase else { return false }
-        return !(updateChecker.releaseNotes ?? "").isEmpty
+        guard !(updateChecker.releaseNotes ?? "").isEmpty else { return false }
+        return isHovered || isShowingReleaseNotes
+    }
+
+    private var releaseNotesButton: some View {
+        Button {
+            isShowingReleaseNotes = true
+        } label: {
+            Label("What's new", systemImage: "sparkles")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.link)
+        .help("Preview the release notes")
+        .popover(isPresented: $isShowingReleaseNotes, arrowEdge: .top) {
+            releaseNotesPopover
+        }
     }
 
     private var releaseNotesPopover: some View {

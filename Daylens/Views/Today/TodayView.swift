@@ -45,6 +45,13 @@ struct TodayView: View {
         return viewModel.websiteSummaries.filter { !prefs.isDomainHidden($0.domain) }
     }
 
+    /// Category summaries recomputed from filtered app summaries so hidden apps
+    /// don't appear in the time allocation bar or intelligence insight.
+    private var presentationCategorySummaries: [CategoryUsageSummary] {
+        if appState.preferencesService == nil { return viewModel.categorySummaries }
+        return SemanticUsageRollups.categorySummaries(from: presentationSummaries)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space16) {
@@ -72,8 +79,8 @@ struct TodayView: View {
                     }
 
                     // Time allocation stacked bar
-                    if !viewModel.categorySummaries.isEmpty {
-                        AllocationBarCard(categories: viewModel.categorySummaries)
+                    if !presentationCategorySummaries.isEmpty {
+                        AllocationBarCard(categories: presentationCategorySummaries)
                     }
 
                     // Recent sessions + intelligence insight side by side
@@ -88,7 +95,7 @@ struct TodayView: View {
                             .frame(maxWidth: .infinity, minHeight: insightRowHeight, alignment: .top)
                         IntelligenceInsightCard(
                             focusScore: Int(viewModel.focusScoreRatio * 100),
-                            topCategory: viewModel.categorySummaries.first?.category,
+                            topCategory: presentationCategorySummaries.first?.category,
                             totalSeconds: presentationSummaries.reduce(0) { $0 + $1.totalDuration }
                         )
                         .measureCardHeight()

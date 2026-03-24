@@ -2,6 +2,17 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.18] - 2026-03-24
+
+### Fixed
+- Fullscreen movie playback no longer drops app tracking during macOS Space transitions — the tracker now reconciles the real frontmost app after fullscreen hops even when macOS skips the matching activation event
+- Browser fullscreen playback no longer prematurely ends the active website visit when the address bar disappears and URL extraction temporarily fails
+- Automatic update install now verifies that the quarantine xattr was actually removed; if macOS still blocks the staged app, Daylens falls back to a clear manual-install path instead of relaunching into a broken state
+- Hidden apps and sites no longer leak into Today allocation bars, History category breakdowns, or app/site counts after being filtered from the visible UI
+
+### Changed
+- The in-app update banner now reveals a hover-only "What's new" action with the release-notes popover, so the update prompt keeps a cleaner default layout while still exposing release context on demand
+
 ## [1.0.17] - 2026-03-23
 
 ### Fixed

@@ -1,6 +1,6 @@
 # Daylens macOS — Release Testing Checklist
 
-**Last updated: 2026-03-21 (v1.0.4)**
+**Last updated: 2026-03-24 (v1.0.18)**
 
 > Windows testing checklist is in `irachrist1/daylens-windows` repo.
 
@@ -62,6 +62,8 @@ curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh
 - [ ] Session ends correctly when switching apps
 - [ ] Idle detection pauses the session timer
 - [ ] In-flight session visible in Today and Apps before session ends
+- [ ] Fullscreen video playback stays tracked in the owning app/browser instead of dropping the session during the Space transition
+- [ ] Fullscreen browser playback keeps the active website/domain attributed after the address bar disappears
 
 ---
 
@@ -90,3 +92,4 @@ curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh
 - [ ] No internet: AI unavailable message shown, local fallback works
 - [ ] Revoked Accessibility permission: graceful degradation
 - [ ] Quit and relaunch mid-session: no duplicate sessions
+- [ ] Update banner reveals the hover-only "What's new" control and the release-notes popover opens with the current changelog excerpt
