@@ -245,8 +245,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ height: 1, background: 'var(--color-sidebar-border)' }} />
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <NavItem to="/settings" label="Settings" icon={<IconSettings />} />
         <div style={{
           borderRadius: 10,

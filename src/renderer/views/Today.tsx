@@ -539,14 +539,14 @@ export default function Today() {
             {/* Bottom stats */}
             <div style={{
               display: 'flex',
-              alignItems: 'stretch',
+              alignItems: 'center',
               gap: 16,
               marginTop: 24,
               width: '100%',
               borderTop: '1px solid var(--color-border-ghost)',
               paddingTop: 16,
             }}>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, textAlign: 'left' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, textAlign: 'left' }}>
                 <p style={{
                   fontSize: 10,
                   fontWeight: 900,
@@ -567,13 +567,13 @@ export default function Today() {
                   }}>
                     {goalHours}h
                   </span>
-                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                    {goalPct}% complete
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                    {goalPct}%
                   </span>
                 </div>
               </div>
               <div style={{ width: 1, background: 'var(--color-border-ghost)' }} />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
                 <p style={{
                   fontSize: 10,
                   fontWeight: 900,
