@@ -19,6 +19,10 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      WIN_CERTIFICATE_FILE: ${{ secrets.WIN_CERTIFICATE_FILE }}
+      WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+      WIN_CERT_SUBJECT_NAME: ${{ secrets.WIN_CERT_SUBJECT_NAME }}
 
     steps:
       - name: Derive version from tag
@@ -80,13 +84,13 @@ jobs:
       # Obtain an OV or EV code-signing certificate from a trusted CA
       # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
       - name: Decode code-signing certificate
-        if: ${{ secrets.WIN_CERTIFICATE_FILE != '' }}
+        if: ${{ env.WIN_CERTIFICATE_FILE != '' }}
         shell: bash
         run: |
-          echo "${{ secrets.WIN_CERTIFICATE_FILE }}" | base64 --decode > /tmp/cert.pfx
+          echo "$WIN_CERTIFICATE_FILE" | base64 --decode > /tmp/cert.pfx
           echo "WIN_CERTIFICATE_FILE_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
-          echo "WIN_CERTIFICATE_PASSWORD=${{ secrets.WIN_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "WIN_CERT_SUBJECT_NAME=${{ secrets.WIN_CERT_SUBJECT_NAME }}" >> "$GITHUB_ENV"
+          echo "WIN_CERTIFICATE_PASSWORD=$WIN_CERTIFICATE_PASSWORD" >> "$GITHUB_ENV"
+          echo "WIN_CERT_SUBJECT_NAME=$WIN_CERT_SUBJECT_NAME" >> "$GITHUB_ENV"
 
       - name: Package with electron-builder
         run: npx electron-builder --win --publish always --config electron-builder.config.js
