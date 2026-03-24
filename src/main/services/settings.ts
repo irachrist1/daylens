@@ -14,8 +14,8 @@ async function getStore() {
 }
 
 const DEFAULTS: AppSettings = {
-  anthropicApiKey: '',
-  launchOnLogin: false,
+  analyticsOptIn: false,
+  launchOnLogin: true,
   theme: 'system',
   onboardingComplete: false,
   userName: '',
@@ -31,8 +31,8 @@ export function getSettings(): AppSettings {
     return { ...DEFAULTS }
   }
   return {
-    anthropicApiKey: (_store.get('anthropicApiKey', '') as string),
-    launchOnLogin: (_store.get('launchOnLogin', false) as boolean),
+    analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
+    launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
     onboardingComplete: (_store.get('onboardingComplete', false) as boolean),
     userName: (_store.get('userName', '') as string),
@@ -52,4 +52,48 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
 
 export async function initSettings(): Promise<void> {
   await getStore()
+}
+
+// ─── Anthropic API key — stored in OS credential vault, never in plain-text ──
+
+const KEYTAR_SERVICE = 'DaylensWindows'
+const KEYTAR_ACCOUNT = 'anthropic-api-key'
+
+// keytar is a native CJS module — load it with require() to avoid ESM interop issues
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const keytar = require('keytar') as typeof import('keytar')
+
+export async function hasAnthropicApiKey(): Promise<boolean> {
+  try {
+    const key = await keytar.getPassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT)
+    return !!key
+  } catch (err) {
+    console.error('[settings] hasAnthropicApiKey failed:', err)
+    return false
+  }
+}
+
+export async function getAnthropicApiKey(): Promise<string | null> {
+  try {
+    return await keytar.getPassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT)
+  } catch {
+    return null
+  }
+}
+
+export async function setAnthropicApiKey(key: string): Promise<void> {
+  try {
+    await keytar.setPassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT, key)
+  } catch (err) {
+    console.error('[settings] setAnthropicApiKey failed:', err)
+    throw err
+  }
+}
+
+export async function clearAnthropicApiKey(): Promise<void> {
+  try {
+    await keytar.deletePassword(KEYTAR_SERVICE, KEYTAR_ACCOUNT)
+  } catch {
+    // Key may not exist — ignore
+  }
 }

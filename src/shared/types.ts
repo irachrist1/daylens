@@ -35,6 +35,14 @@ export interface FocusSession {
   endTime: number | null
   durationSeconds: number
   label: string | null
+  targetMinutes: number | null
+  plannedApps: string[]
+}
+
+export interface FocusStartPayload {
+  label?: string | null
+  targetMinutes?: number | null
+  plannedApps?: string[]
 }
 
 export interface AIConversation {
@@ -57,10 +65,63 @@ export interface WebsiteSummary {
   browserBundleId: string | null
 }
 
+export interface PeakHoursResult {
+  peakStart: number
+  peakEnd: number
+  focusPct: number
+}
+
+export interface WeeklySummary {
+  totalTrackedSeconds: number
+  totalFocusSeconds: number
+  focusPct: number
+  avgFocusScore: number
+  bestDay: { date: string; focusPct: number } | null
+  mostActiveDay: { date: string; totalSeconds: number } | null
+  topApps: { appName: string; bundleId: string; totalSeconds: number; category: AppCategory }[]
+  dailyBreakdown: {
+    date: string
+    focusSeconds: number
+    totalSeconds: number
+    focusScore: number
+  }[]
+}
+
+export interface AppCharacter {
+  character:
+    | 'deep_focus'
+    | 'flow_compatible'
+    | 'context_switching'
+    | 'distraction'
+    | 'communication'
+    | 'neutral'
+  label: string
+  confidence: number
+  avgSessionMinutes: number
+  sessionCount: number
+}
+
+export interface BreakRecommendation {
+  triggerReason: 'sustained_focus'
+  focusedMinutes: number
+  currentApp: string | null
+  message: string
+  urgency: 'medium' | 'high'
+}
+
+export interface ProcessSnapshot {
+  pid: number
+  name: string
+  cpuPercent: number
+  memoryMb: number
+  capturedAt: number
+}
+
 export type AppTheme = 'system' | 'light' | 'dark'
 
 export interface AppSettings {
-  anthropicApiKey: string
+  // anthropicApiKey removed — stored in OS keychain via keytar (never in plain-text)
+  analyticsOptIn: boolean       // false = no telemetry (default)
   launchOnLogin: boolean
   theme: AppTheme
   onboardingComplete: boolean
@@ -113,6 +174,9 @@ export const IPC = {
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SESSIONS: 'db:get-app-sessions',
     GET_WEBSITE_SUMMARIES: 'db:get-website-summaries',
+    GET_PEAK_HOURS: 'db:get-peak-hours',
+    GET_WEEKLY_SUMMARY: 'db:get-weekly-summary',
+    GET_APP_CHARACTER: 'db:get-app-character',
   },
   DEBUG: {
     GET_INFO: 'debug:get-info',
@@ -122,6 +186,7 @@ export const IPC = {
     STOP: 'focus:stop',
     GET_ACTIVE: 'focus:get-active',
     GET_RECENT: 'focus:get-recent',
+    GET_BREAK_RECOMMENDATION: 'focus:get-break-recommendation',
   },
   AI: {
     SEND_MESSAGE: 'ai:send-message',
@@ -131,9 +196,13 @@ export const IPC = {
   SETTINGS: {
     GET: 'settings:get',
     SET: 'settings:set',
+    HAS_API_KEY: 'settings:has-api-key',
+    SET_API_KEY: 'settings:set-api-key',
+    CLEAR_API_KEY: 'settings:clear-api-key',
   },
   TRACKING: {
     GET_LIVE: 'tracking:get-live',
+    GET_PROCESS_METRICS: 'tracking:get-process-metrics',
   },
   SYNC: {
     GET_STATUS: 'sync:get-status',

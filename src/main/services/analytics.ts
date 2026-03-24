@@ -1,14 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
-import { PostHog } from 'posthog-node'
+import { getSettings } from './settings'
 
 declare const __POSTHOG_KEY__: string
 declare const __POSTHOG_HOST__: string
 
-const posthog = new PostHog(__POSTHOG_KEY__, {
-  host: __POSTHOG_HOST__,
-  flushInterval: 30_000,
-})
+type PostHogClient = { capture: (args: object) => void; shutdown: () => Promise<void> }
+let _posthog: PostHogClient | null = null
 
 // Start with a temporary UUID; replaced with the persisted ID once the store loads
 let distinctId: string = randomUUID()
@@ -29,9 +27,32 @@ void (async () => {
   }
 })()
 
+function getPosthog(): PostHogClient | null {
+  if (!getSettings().analyticsOptIn) return null
+  if (!__POSTHOG_KEY__) return null
+
+  if (!_posthog) {
+    try {
+      // Dynamic require so PostHog is never instantiated unless opted in
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { PostHog } = require('posthog-node') as typeof import('posthog-node')
+      _posthog = new PostHog(__POSTHOG_KEY__, {
+        host: __POSTHOG_HOST__ || 'https://us.i.posthog.com',
+        flushInterval: 30_000,
+      }) as unknown as PostHogClient
+    } catch {
+      return null
+    }
+  }
+
+  return _posthog
+}
+
 export function capture(event: string, properties?: Record<string, unknown>): void {
   try {
-    posthog.capture({
+    const client = getPosthog()
+    if (!client) return
+    client.capture({
       distinctId,
       event,
       properties: {
@@ -47,7 +68,7 @@ export function capture(event: string, properties?: Record<string, unknown>): vo
 
 export function shutdown(): void {
   try {
-    posthog.shutdown()
+    void _posthog?.shutdown()
   } catch {
     // Best-effort
   }

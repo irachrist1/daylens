@@ -1,6 +1,9 @@
 import { ipcMain, app } from 'electron'
 import {
+  getAppCharacter,
   getAppSummariesForRange,
+  getWeeklySummary,
+  getPeakHours,
   getSessionsForRange,
   getSessionsForApp,
   getWebsiteSummariesForRange,
@@ -10,6 +13,7 @@ import {
 } from '../db/queries'
 import { getDb } from '../services/database'
 import { getCurrentSession } from '../services/tracking'
+import { getLatestSnapshot } from '../services/processMonitor'
 import { IPC } from '@shared/types'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -90,9 +94,27 @@ export function registerDbHandlers(): void {
     return getWebsiteSummariesForRange(getDb(), from, todayTo)
   })
 
+  ipcMain.handle(IPC.DB.GET_PEAK_HOURS, () => {
+    const now = Date.now()
+    const fourteenDaysAgo = now - 14 * 24 * 60 * 60 * 1000
+    return getPeakHours(getDb(), fourteenDaysAgo, now)
+  })
+
+  ipcMain.handle(IPC.DB.GET_WEEKLY_SUMMARY, (_e, endDateStr: string) => {
+    return getWeeklySummary(getDb(), endDateStr)
+  })
+
+  ipcMain.handle(IPC.DB.GET_APP_CHARACTER, (_e, bundleId: string, daysBack: number) => {
+    return getAppCharacter(getDb(), bundleId, daysBack)
+  })
+
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
+
+  ipcMain.handle(IPC.TRACKING.GET_PROCESS_METRICS, () => {
+    return getLatestSnapshot()
+  })
 
   // Returns a base64 PNG data URL for a given bundleId/exe path, or null if unavailable.
   // On Windows the bundleId is the full exe path — passed directly to getFileIcon.

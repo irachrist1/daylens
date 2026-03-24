@@ -253,11 +253,24 @@ async function callConvex(
     headers['Authorization'] = `Bearer ${bearerToken}`
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15_000)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if ((err as { name?: string }).name === 'AbortError') {
+      throw new Error('Request timed out — check your internet connection')
+    }
+    throw err
+  } finally {
+    clearTimeout(timeout)
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')

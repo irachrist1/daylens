@@ -11,7 +11,6 @@ const config: ForgeConfig = {
     executableName: 'daylens',
     icon: './build/icon',
     appCopyright: `Copyright © ${new Date().getFullYear()} Daylens`,
-    appVersion:   '0.1.0',
   },
   rebuildConfig: {},
   makers: [

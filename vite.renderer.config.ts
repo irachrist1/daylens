@@ -15,10 +15,18 @@ export default defineConfig({
       '@shared': path.resolve(__dirname, 'src/shared'),
     },
   },
-  ...(isStandalone && {
-    build: {
+  build: {
+    ...(isStandalone && {
       outDir: path.resolve(__dirname, 'dist/renderer/main_window'),
       emptyOutDir: true,
+    }),
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react':  ['react', 'react-dom', 'react-router-dom'],
+          'vendor-charts': ['recharts'],
+        },
+      },
     },
-  }),
+  },
 })

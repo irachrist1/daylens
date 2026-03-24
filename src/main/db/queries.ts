@@ -2,13 +2,29 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
-import type { AppSession, AppUsageSummary, AppCategory, FocusSession, WebsiteSummary } from '@shared/types'
+import { FOCUSED_CATEGORIES } from '@shared/types'
+import type {
+  AppCharacter,
+  AppSession,
+  AppUsageSummary,
+  AppCategory,
+  FocusSession,
+  FocusStartPayload,
+  PeakHoursResult,
+  WeeklySummary,
+  WebsiteSummary,
+} from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
+import { localDayBounds } from '../lib/localDate'
 
 // ─── App name normalization ────────────────────────────────────────────────────
 
 function loadNormMap(): { aliases: Record<string, string>; catalog: Record<string, { displayName: string }> } {
   const candidates = [
+    // Packaged build: extraResources unpacks the JSON next to the asar
+    ...(typeof process !== 'undefined' && (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+      ? [path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, 'app-normalization.v1.json')]
+      : []),
     path.join(__dirname, '..', '..', 'shared', 'app-normalization.v1.json'),
     path.join(process.cwd(), 'shared', 'app-normalization.v1.json'),
   ]
@@ -19,9 +35,11 @@ function loadNormMap(): { aliases: Record<string, string>; catalog: Record<strin
 }
 const normMap = loadNormMap()
 
-function resolveDisplayName(rawName: string): string {
-  const key = normMap.aliases[rawName.toLowerCase()]
-  return (key && normMap.catalog[key]?.displayName) || rawName
+function resolveDisplayName(bundleId: string, fallbackName: string): string {
+  // Look up by bundle_id first (exact match), then by lowercased exe basename
+  const exeBase = path.basename(bundleId).toLowerCase()
+  const key = normMap.aliases[bundleId] ?? normMap.aliases[exeBase]
+  return (key && normMap.catalog[key]?.displayName) || fallbackName
 }
 
 // ─── UX noise filter ──────────────────────────────────────────────────────────
@@ -113,6 +131,70 @@ function mergeSessions(sessions: AppSession[]): AppSession[] {
   return merged
 }
 
+function toLocalDateKey(timestampMs: number): string {
+  const date = new Date(timestampMs)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function shiftLocalDateString(dateStr: string, offsetDays: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return toLocalDateKey(new Date(year, month - 1, day + offsetDays).getTime())
+}
+
+function formatCategoryLabel(category: AppCategory): string {
+  if (category === 'aiTools') return 'AI tools'
+  return category
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function normalizePlannedApps(apps: string[] | null | undefined): string[] {
+  if (!apps || apps.length === 0) return []
+  return apps
+    .map((app) => app.trim())
+    .filter(Boolean)
+    .filter((app, index, arr) => arr.indexOf(app) === index)
+    .slice(0, 6)
+}
+
+interface FocusSessionRow {
+  id: number
+  start_time: number
+  end_time: number | null
+  duration_sec: number
+  label: string | null
+  target_minutes: number | null
+  planned_apps: string | null
+}
+
+function mapFocusSessionRow(row: FocusSessionRow): FocusSession {
+  let plannedApps: string[] = []
+  if (row.planned_apps) {
+    try {
+      const parsed = JSON.parse(row.planned_apps)
+      if (Array.isArray(parsed)) {
+        plannedApps = normalizePlannedApps(parsed.filter((value): value is string => typeof value === 'string'))
+      }
+    } catch {
+      plannedApps = []
+    }
+  }
+
+  return {
+    id: row.id,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    durationSeconds: row.duration_sec,
+    label: row.label,
+    targetMinutes: row.target_minutes,
+    plannedApps,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // App sessions
 // ---------------------------------------------------------------------------
@@ -168,7 +250,7 @@ export function getAppSummariesForRange(
     } else {
       summaryMap.set(session.bundleId, {
         bundleId: session.bundleId,
-        appName: resolveDisplayName(session.appName),
+        appName: resolveDisplayName(session.bundleId, session.appName),
         category: session.category,
         totalSeconds: session.durationSeconds,
         isFocused: isCategoryFocused(session.category),
@@ -202,20 +284,302 @@ export function getSessionsForRange(
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
         const category: AppCategory = overrides[row.bundle_id] ?? row.category
-        return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.app_name))
+        return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.bundle_id, row.app_name))
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
   ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
+}
+
+export function getHourlyBreakdown(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): { hour: number; totalSeconds: number; focusSeconds: number }[] {
+  const focusedCategoryPlaceholders = FOCUSED_CATEGORIES.map(() => '?').join(', ')
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const rows = db
+    .prepare(`
+      SELECT
+        CAST(strftime('%H', app_sessions.start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+        SUM(app_sessions.duration_sec) AS total_seconds,
+        SUM(
+          CASE
+            WHEN COALESCE(category_overrides.category, app_sessions.category) IN (${focusedCategoryPlaceholders})
+              THEN app_sessions.duration_sec
+            ELSE 0
+          END
+        ) AS focus_seconds
+      FROM app_sessions
+      LEFT JOIN category_overrides
+        ON category_overrides.bundle_id = app_sessions.bundle_id
+      WHERE app_sessions.start_time >= ? AND app_sessions.start_time < ?
+        AND ${noiseFilters}
+      GROUP BY hour
+      ORDER BY hour ASC
+    `)
+    .all(
+      ...FOCUSED_CATEGORIES,
+      fromMs,
+      toMs,
+      ...UX_NOISE_SUBSTRINGS.map((substring) => `%${substring}%`),
+    ) as { hour: number; total_seconds: number; focus_seconds: number }[]
+
+  const breakdown = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    totalSeconds: 0,
+    focusSeconds: 0,
+  }))
+
+  for (const row of rows) {
+    breakdown[row.hour] = {
+      hour: row.hour,
+      totalSeconds: row.total_seconds ?? 0,
+      focusSeconds: row.focus_seconds ?? 0,
+    }
+  }
+
+  return breakdown
+}
+
+export function getPeakHours(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): PeakHoursResult | null {
+  const dayRows = db
+    .prepare<[number, number]>(`
+      SELECT start_time, app_name
+      FROM app_sessions
+      WHERE start_time >= ? AND start_time < ?
+      ORDER BY start_time ASC
+    `)
+    .all(fromMs, toMs) as { start_time: number; app_name: string }[]
+
+  const distinctDays = new Set(
+    dayRows
+      .filter((row) => !isUxNoise(row.app_name))
+      .map((row) => toLocalDateKey(row.start_time)),
+  )
+  if (distinctDays.size < 3) return null
+
+  const hourlyBreakdown = getHourlyBreakdown(db, fromMs, toMs)
+  let bestWindow: PeakHoursResult | null = null
+  let bestFocusSeconds = -1
+
+  for (let startHour = 0; startHour < 24; startHour++) {
+    const nextHour = (startHour + 1) % 24
+    const totalSeconds =
+      hourlyBreakdown[startHour].totalSeconds + hourlyBreakdown[nextHour].totalSeconds
+    if (totalSeconds <= 0) continue
+
+    const focusSeconds =
+      hourlyBreakdown[startHour].focusSeconds + hourlyBreakdown[nextHour].focusSeconds
+    const focusPct = Math.round((focusSeconds / totalSeconds) * 100)
+
+    if (
+      bestWindow === null ||
+      focusPct > bestWindow.focusPct ||
+      (focusPct === bestWindow.focusPct && focusSeconds > bestFocusSeconds)
+    ) {
+      bestWindow = {
+        peakStart: startHour,
+        peakEnd: (startHour + 2) % 24,
+        focusPct,
+      }
+      bestFocusSeconds = focusSeconds
+    }
+  }
+
+  return bestWindow
+}
+
+export function getWeeklySummary(
+  db: Database.Database,
+  endDateStr: string,
+): WeeklySummary {
+  const startDateStr = shiftLocalDateString(endDateStr, -6)
+  const [fromMs] = localDayBounds(startDateStr)
+  const [, toMs] = localDayBounds(endDateStr)
+
+  const rows = db
+    .prepare<[string, string]>(`
+      SELECT date, total_active_sec, focus_sec, focus_score
+      FROM daily_summaries
+      WHERE date >= ? AND date <= ?
+      ORDER BY date ASC
+    `)
+    .all(startDateStr, endDateStr) as {
+    date: string
+    total_active_sec: number
+    focus_sec: number
+    focus_score: number
+  }[]
+
+  const totalTrackedSeconds = rows.reduce((sum, row) => sum + row.total_active_sec, 0)
+  const totalFocusSeconds = rows.reduce((sum, row) => sum + row.focus_sec, 0)
+  const focusPct = totalTrackedSeconds > 0
+    ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100)
+    : 0
+  const avgFocusScore = rows.length > 0
+    ? Math.round(rows.reduce((sum, row) => sum + row.focus_score, 0) / rows.length)
+    : 0
+
+  const bestDayRow = rows
+    .filter((row) => row.total_active_sec > 0)
+    .reduce<{
+      date: string
+      focusPct: number
+    } | null>((best, row) => {
+      const rowFocusPct = Math.round((row.focus_sec / row.total_active_sec) * 100)
+      if (best === null || rowFocusPct > best.focusPct) {
+        return { date: row.date, focusPct: rowFocusPct }
+      }
+      return best
+    }, null)
+
+  const mostActiveDayRow = rows.reduce<{
+    date: string
+    totalSeconds: number
+  } | null>((best, row) => {
+    if (best === null || row.total_active_sec > best.totalSeconds) {
+      return { date: row.date, totalSeconds: row.total_active_sec }
+    }
+    return best
+  }, null)
+
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const topAppRows = db
+    .prepare(`
+      SELECT
+        app_sessions.bundle_id,
+        MIN(app_sessions.app_name) AS app_name,
+        COALESCE(category_overrides.category, MIN(app_sessions.category)) AS category,
+        SUM(
+          (
+            MIN(COALESCE(app_sessions.end_time, app_sessions.start_time + app_sessions.duration_sec * 1000), ?) -
+            MAX(app_sessions.start_time, ?)
+          ) / 1000.0
+        ) AS total_seconds
+      FROM app_sessions
+      LEFT JOIN category_overrides
+        ON category_overrides.bundle_id = app_sessions.bundle_id
+      WHERE COALESCE(app_sessions.end_time, app_sessions.start_time + app_sessions.duration_sec * 1000) > ?
+        AND app_sessions.start_time < ?
+        AND ${noiseFilters}
+      GROUP BY app_sessions.bundle_id
+      HAVING total_seconds > 0
+      ORDER BY total_seconds DESC
+      LIMIT 5
+    `)
+    .all(
+      toMs,
+      fromMs,
+      fromMs,
+      toMs,
+      ...UX_NOISE_SUBSTRINGS.map((substring) => `%${substring}%`),
+    ) as {
+    bundle_id: string
+    app_name: string
+    category: AppCategory
+    total_seconds: number
+  }[]
+
+  return {
+    totalTrackedSeconds,
+    totalFocusSeconds,
+    focusPct,
+    avgFocusScore,
+    bestDay: bestDayRow,
+    mostActiveDay: mostActiveDayRow,
+    topApps: topAppRows.map((row) => ({
+      appName: resolveDisplayName(row.bundle_id, row.app_name),
+      bundleId: row.bundle_id,
+      totalSeconds: Math.round(row.total_seconds),
+      category: row.category,
+    })),
+    dailyBreakdown: rows.map((row) => ({
+      date: row.date,
+      focusSeconds: row.focus_sec,
+      totalSeconds: row.total_active_sec,
+      focusScore: row.focus_score,
+    })),
+  }
+}
+
+export function getAppCharacter(
+  db: Database.Database,
+  bundleId: string,
+  daysBack: number,
+): AppCharacter | null {
+  const now = Date.now()
+  const fromMs = now - Math.max(daysBack, 1) * 24 * 60 * 60 * 1000
+  const sessions = getSessionsForApp(db, bundleId, fromMs, now)
+
+  if (sessions.length < 3) return null
+
+  const avgSessionMinutes =
+    sessions.reduce((sum, session) => sum + session.durationSeconds, 0) / sessions.length / 60
+
+  const categoryTotals = new Map<AppCategory, number>()
+  for (const session of sessions) {
+    categoryTotals.set(
+      session.category,
+      (categoryTotals.get(session.category) ?? 0) + session.durationSeconds,
+    )
+  }
+
+  const dominantCategory = [...categoryTotals.entries()]
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? sessions[0].category
+
+  let character: AppCharacter['character'] = 'neutral'
+  let label = formatCategoryLabel(dominantCategory)
+
+  if (dominantCategory === 'meetings' || dominantCategory === 'communication') {
+    character = 'communication'
+    label = 'Communication & calls'
+  } else if (avgSessionMinutes >= 25 && FOCUSED_CATEGORIES.includes(dominantCategory)) {
+    character = 'deep_focus'
+    label = 'Deep focus app'
+  } else if (avgSessionMinutes >= 15 && FOCUSED_CATEGORIES.includes(dominantCategory)) {
+    character = 'flow_compatible'
+    label = 'Keeps you in flow'
+  } else if (sessions.length >= 8 && avgSessionMinutes < 4) {
+    character = 'context_switching'
+    label = 'Context switching trigger'
+  } else if (dominantCategory === 'entertainment' || dominantCategory === 'social') {
+    character = 'distraction'
+    label = 'Frequent distraction'
+  } else if (avgSessionMinutes < 5 && sessions.length >= 5) {
+    character = 'context_switching'
+    label = 'Quick context switches'
+  }
+
+  return {
+    character,
+    label,
+    confidence: Math.min(sessions.length / 10, 1),
+    avgSessionMinutes: Math.round(avgSessionMinutes * 10) / 10,
+    sessionCount: sessions.length,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Focus sessions
 // ---------------------------------------------------------------------------
 
-export function startFocusSession(db: Database.Database, label: string | null): number {
+export function startFocusSession(
+  db: Database.Database,
+  payload: FocusStartPayload = {},
+): number {
+  const label = payload.label ?? null
+  const targetMinutes = payload.targetMinutes ?? null
+  const plannedApps = JSON.stringify(normalizePlannedApps(payload.plannedApps))
   const result = db
-    .prepare(`INSERT INTO focus_sessions (start_time, label) VALUES (?, ?)`)
-    .run(Date.now(), label)
+    .prepare(`
+      INSERT INTO focus_sessions (start_time, label, target_minutes, planned_apps)
+      VALUES (?, ?, ?, ?)
+    `)
+    .run(Date.now(), label, targetMinutes, plannedApps)
   return result.lastInsertRowid as number
 }
 
@@ -236,21 +600,9 @@ export function stopFocusSession(db: Database.Database, id: number): void {
 export function getActiveFocusSession(db: Database.Database): FocusSession | null {
   const row = db
     .prepare(`SELECT * FROM focus_sessions WHERE end_time IS NULL ORDER BY start_time DESC LIMIT 1`)
-    .get() as {
-    id: number
-    start_time: number
-    end_time: number | null
-    duration_sec: number
-    label: string | null
-  } | undefined
+    .get() as FocusSessionRow | undefined
   if (!row) return null
-  return {
-    id: row.id,
-    startTime: row.start_time,
-    endTime: row.end_time,
-    durationSeconds: row.duration_sec,
-    label: row.label,
-  }
+  return mapFocusSessionRow(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,31 +653,24 @@ export function appendConversationMessage(
   role: 'user' | 'assistant',
   content: string,
 ): void {
-  const row = db
-    .prepare(`SELECT messages FROM ai_conversations WHERE id = ?`)
-    .get(conversationId) as { messages: string } | undefined
-  if (!row) return
-  const messages = JSON.parse(row.messages) as object[]
-  messages.push({ role, content, timestamp: Date.now() })
-  db.prepare(`UPDATE ai_conversations SET messages = ? WHERE id = ?`).run(
-    JSON.stringify(messages),
-    conversationId,
-  )
+  db.prepare(
+    `INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)`
+  ).run(conversationId, role, content, Date.now())
 }
 
 export function getConversationMessages(
   db: Database.Database,
   conversationId: number,
 ): { role: 'user' | 'assistant'; content: string }[] {
-  const row = db
-    .prepare(`SELECT messages FROM ai_conversations WHERE id = ?`)
-    .get(conversationId) as { messages: string } | undefined
-  if (!row) return []
-  return JSON.parse(row.messages) as { role: 'user' | 'assistant'; content: string }[]
+  return db
+    .prepare(
+      `SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC`
+    )
+    .all(conversationId) as { role: 'user' | 'assistant'; content: string }[]
 }
 
 export function clearConversation(db: Database.Database, conversationId: number): void {
-  db.prepare(`UPDATE ai_conversations SET messages = '[]' WHERE id = ?`).run(conversationId)
+  db.prepare(`DELETE FROM ai_messages WHERE conversation_id = ?`).run(conversationId)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +701,7 @@ export function getSessionsForApp(
     .filter((r) => !isUxNoise(r.app_name))
     .map((r) => {
       const category: AppCategory = overrides[r.bundle_id] ?? r.category
-      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.app_name))
+      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.bundle_id, r.app_name))
     })
     .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
 
@@ -371,7 +716,8 @@ export function getRecentAppSessions(
 ): { appName: string; category: string; durationSec: number; startTime: number }[] {
   const rows = db
     .prepare<number>(`
-      SELECT app_name   AS appName,
+      SELECT bundle_id,
+             app_name   AS appName,
              category,
              duration_sec AS durationSec,
              start_time   AS startTime
@@ -379,8 +725,8 @@ export function getRecentAppSessions(
       ORDER BY start_time DESC
       LIMIT ?
     `)
-    .all(limit) as { appName: string; category: string; durationSec: number; startTime: number }[]
-  return rows.map((r) => ({ ...r, appName: resolveDisplayName(r.appName) }))
+    .all(limit) as { bundle_id: string; appName: string; category: string; durationSec: number; startTime: number }[]
+  return rows.map(({ bundle_id, ...r }) => ({ ...r, appName: resolveDisplayName(bundle_id, r.appName) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +738,7 @@ export interface WebsiteVisitInsert {
   pageTitle: string | null
   url: string
   visitTime: number        // Unix ms
+  visitTimeUs: bigint      // Microsecond timestamp from source browser (Chrome or Unix epoch µs)
   durationSec: number
   browserBundleId: string
   source: string
@@ -403,13 +750,14 @@ export function insertWebsiteVisit(
 ): void {
   db.prepare(`
     INSERT OR IGNORE INTO website_visits
-      (domain, page_title, url, visit_time, duration_sec, browser_bundle_id, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     visit.domain,
     visit.pageTitle,
     visit.url,
     visit.visitTime,
+    visit.visitTimeUs,
     visit.durationSec,
     visit.browserBundleId,
     visit.source,
@@ -516,18 +864,6 @@ export function getRecentFocusSessions(
       ORDER BY start_time DESC
       LIMIT ?
     `)
-    .all(limit) as {
-    id: number
-    start_time: number
-    end_time: number
-    duration_sec: number
-    label: string | null
-  }[]
-  return rows.map((r) => ({
-    id:              r.id,
-    startTime:       r.start_time,
-    endTime:         r.end_time,
-    durationSeconds: r.duration_sec,
-    label:           r.label,
-  }))
+    .all(limit) as FocusSessionRow[]
+  return rows.map(mapFocusSessionRow)
 }

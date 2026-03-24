@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "DaylensWindows",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Activity tracker and AI insights — Windows",
   "main": ".vite/build/main.js",
   "scripts": {
@@ -9,11 +9,11 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
-    "build:main": "STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
-    "build:preload": "STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
-    "build:renderer": "STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
+    "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
+    "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
+    "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
     "build:all": "npm run build:main && npm run build:preload && npm run build:renderer",
-    "dist:win": "npm run build:all && electron-builder --win",
+    "dist:win": "npm run build:all && electron-builder --win --config electron-builder.config.js",
     "postinstall": "electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar"
   },
   "dependencies": {
@@ -39,6 +39,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "cross-env": "^10.0.0",
     "electron": "^34.5.8",
     "electron-builder": "^25.1.8",
     "electron-rebuild": "^3.2.9",

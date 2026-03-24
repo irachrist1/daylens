@@ -39,10 +39,18 @@ export function stopSync(): void {
     clearInterval(syncTimer)
     syncTimer = null
   }
-  // Final sync attempt for today
+  // Mark today dirty; the before-quit handler will call syncNowForQuit() and await it.
   markDirty(todayStr())
-  void syncNow()
   console.log('[sync] stopped')
+}
+
+/**
+ * Awaitable sync used during orderly shutdown.
+ * Exported separately so before-quit can await it with a timeout.
+ */
+export async function syncNowForQuit(): Promise<void> {
+  markDirty(todayStr())
+  return syncNow()
 }
 
 export function markDirty(dateStr: string): void {

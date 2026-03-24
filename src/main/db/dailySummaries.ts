@@ -1,5 +1,6 @@
 import { getDb } from '../services/database'
-import { computeFocusScore } from '../lib/focusScore'
+import { computeEnhancedFocusScore } from '../lib/focusScore'
+import { localDayBounds } from '../lib/localDate'
 
 /**
  * Daily summary computation and persistence.
@@ -27,34 +28,60 @@ interface DailySummaryRow {
 export function computeDailySummary(dateStr: string): void {
   const db = getDb()
 
-  // Date boundaries (midnight UTC)
-  const dayStart = new Date(dateStr + 'T00:00:00').getTime()
-  const dayEnd = dayStart + 86400_000
+  // Use local day bounds so persisted summaries align with the app's local-day views.
+  const [dayStart, dayEnd] = localDayBounds(dateStr)
 
-  // App session aggregates
-  const appAgg = db
+  // App session aggregates — include sessions that overlap the day boundary (cross-midnight).
+  // Duration is clipped to the day window before summing.
+  const overlapRows = db
     .prepare(
-      `SELECT
-        COUNT(DISTINCT bundle_id) as app_count,
-        COUNT(*) as session_count,
-        COALESCE(SUM(duration_sec), 0) as total_sec,
-        COALESCE(SUM(CASE WHEN is_focused = 1 THEN duration_sec ELSE 0 END), 0) as focus_sec
-      FROM app_sessions
-      WHERE start_time >= ? AND start_time < ?
-        AND duration_sec >= 10`
+      `SELECT bundle_id, is_focused, start_time,
+              COALESCE(end_time, start_time + duration_sec * 1000) AS effective_end
+       FROM app_sessions
+       WHERE COALESCE(end_time, start_time + duration_sec * 1000) > ?
+         AND start_time < ?
+         AND duration_sec >= 10`
     )
-    .get(dayStart, dayEnd) as {
-    app_count: number
-    session_count: number
-    total_sec: number
-    focus_sec: number
+    .all(dayStart, dayEnd) as {
+    bundle_id: string
+    is_focused: number
+    start_time: number
+    effective_end: number
+  }[]
+
+  const bundleIds = new Set<string>()
+  let totalSec = 0
+  let focusSec = 0
+  let sessionCount = 0
+  const scoreSessions: { durationSeconds: number; isFocused: boolean }[] = []
+  for (const row of overlapRows) {
+    const clippedStart = Math.max(row.start_time, dayStart)
+    const clippedEnd   = Math.min(row.effective_end, dayEnd)
+    if (clippedEnd <= clippedStart) continue
+    const clippedSec = Math.round((clippedEnd - clippedStart) / 1000)
+    bundleIds.add(row.bundle_id)
+    totalSec += clippedSec
+    if (row.is_focused) focusSec += clippedSec
+    sessionCount++
+    scoreSessions.push({
+      durationSeconds: clippedSec,
+      isFocused: row.is_focused === 1,
+    })
+  }
+
+  const appAgg = {
+    app_count:     bundleIds.size,
+    session_count: sessionCount,
+    total_sec:     totalSec,
+    focus_sec:     focusSec,
   }
 
   // Context switches (count of distinct consecutive app changes)
   const sessions = db
     .prepare(
       `SELECT bundle_id FROM app_sessions
-       WHERE start_time >= ? AND start_time < ?
+       WHERE COALESCE(end_time, start_time + duration_sec * 1000) > ?
+         AND start_time < ?
          AND duration_sec >= 10
        ORDER BY start_time`
     )
@@ -67,18 +94,21 @@ export function computeDailySummary(dateStr: string): void {
     }
   }
 
-  // Top app
+  // Top app (also using overlap-aware query)
   const topApp = db
     .prepare(
-      `SELECT bundle_id, SUM(duration_sec) as total
+      `SELECT bundle_id,
+              SUM(MIN(COALESCE(end_time, start_time + duration_sec * 1000), ?) -
+                  MAX(start_time, ?)) / 1000 as total
        FROM app_sessions
-       WHERE start_time >= ? AND start_time < ?
+       WHERE COALESCE(end_time, start_time + duration_sec * 1000) > ?
+         AND start_time < ?
          AND duration_sec >= 10
        GROUP BY bundle_id
        ORDER BY total DESC
        LIMIT 1`
     )
-    .get(dayStart, dayEnd) as { bundle_id: string; total: number } | undefined
+    .get(dayEnd, dayStart, dayStart, dayEnd) as { bundle_id: string; total: number } | undefined
 
   // Domain count and top domain
   const domainAgg = db
@@ -101,14 +131,13 @@ export function computeDailySummary(dateStr: string): void {
     .get(dayStart, dayEnd) as { domain: string; total: number } | undefined
 
   // Focus score
-  const totalSec = appAgg.total_sec
-  const focusSec = appAgg.focus_sec
-  const hours = totalSec / 3600
+  const hours = appAgg.total_sec / 3600
   const switchesPerHour = hours > 0 ? switches / hours : 0
-  const focusScore = computeFocusScore({
-    focusedSeconds: focusSec,
-    totalSeconds: totalSec,
+  const focusScore = computeEnhancedFocusScore({
+    focusedSeconds: appAgg.focus_sec,
+    totalSeconds: appAgg.total_sec,
     switchesPerHour,
+    sessions: scoreSessions,
   })
 
   // Upsert
@@ -131,8 +160,8 @@ export function computeDailySummary(dateStr: string): void {
        computed_at = excluded.computed_at`
   ).run(
     dateStr,
-    totalSec,
-    focusSec,
+    appAgg.total_sec,
+    appAgg.focus_sec,
     appAgg.app_count,
     domainAgg.domain_count,
     appAgg.session_count,

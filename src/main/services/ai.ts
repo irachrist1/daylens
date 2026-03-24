@@ -7,18 +7,20 @@ import {
   getConversationMessages,
   getOrCreateConversation,
   getAppSummariesForRange,
+  getPeakHours,
+  getSessionsForRange,
   getWebsiteSummariesForRange,
   getRecentFocusSessions,
   getCategoryOverrides,
 } from '../db/queries'
 import { getDb } from './database'
-import { getSettings } from './settings'
-import { computeFocusScore } from '../lib/focusScore'
+import { getSettings, getAnthropicApiKey } from './settings'
+import { computeEnhancedFocusScore } from '../lib/focusScore'
 
-function buildClient(): Anthropic {
-  const { anthropicApiKey } = getSettings()
-  if (!anthropicApiKey) throw new Error('No API key configured')
-  return new Anthropic({ apiKey: anthropicApiKey })
+async function buildClient(): Promise<Anthropic> {
+  const apiKey = await getAnthropicApiKey()
+  if (!apiKey) throw new Error('No API key configured')
+  return new Anthropic({ apiKey })
 }
 
 function formatDuration(seconds: number): string {
@@ -34,6 +36,192 @@ function dayBounds(date: Date): [number, number] {
   return [from, from + 86_400_000]
 }
 
+function countSwitches(sessions: { bundleId: string }[]): number {
+  let switches = 0
+  for (let i = 1; i < sessions.length; i++) {
+    if (sessions[i].bundleId !== sessions[i - 1].bundleId) {
+      switches++
+    }
+  }
+  return switches
+}
+
+function formatClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
+function formatShortDate(ms: number): string {
+  return new Date(ms).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function formatDateTimeLabel(ms: number): string {
+  return `${formatShortDate(ms)} at ${formatClock(ms)}`
+}
+
+function uniqueAppNames(names: string[]): string[] {
+  return names.filter((name, index) => names.indexOf(name) === index)
+}
+
+function sessionEndMs(session: { startTime: number; endTime: number | null; durationSeconds: number }): number {
+  return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
+}
+
+function buildRecentFocusContext(): string {
+  try {
+    const db = getDb()
+    const sessions = getRecentFocusSessions(db, 5)
+    if (sessions.length === 0) return 'Recent focus sessions: none recorded.'
+
+    const lines = sessions.map((session) => {
+      const apps = uniqueAppNames(
+        getSessionsForRange(db, session.startTime, sessionEndMs(session))
+          .map((item) => item.appName),
+      ).slice(0, 5)
+
+      const plan = session.plannedApps.length > 0
+        ? session.plannedApps.join(', ')
+        : 'not set'
+      const observed = apps.length > 0 ? apps.join(', ') : 'none tracked'
+      const target = session.targetMinutes ? `, target ${session.targetMinutes}m` : ''
+
+      return `- ${formatDateTimeLabel(session.startTime)}: ${session.label || 'Focus session'} for ${formatDuration(session.durationSeconds)}${target}; planned apps ${plan}; observed apps ${observed}`
+    })
+
+    return ['Recent focus sessions:', ...lines].join('\n')
+  } catch {
+    return 'Recent focus sessions: unavailable.'
+  }
+}
+
+function parseTimeParts(hourRaw: string, minuteRaw?: string, meridiemRaw?: string): { hour: number; minute: number } | null {
+  let hour = Number(hourRaw)
+  const minute = Number(minuteRaw ?? '0')
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null
+
+  const meridiem = meridiemRaw?.toLowerCase()
+  if (meridiem === 'am') {
+    if (hour === 12) hour = 0
+  } else if (meridiem === 'pm') {
+    if (hour < 12) hour += 12
+  }
+
+  if (hour < 0 || hour > 23) return null
+  return { hour, minute }
+}
+
+function parseTemporalLookup(userMessage: string): { label: string; targetMs: number; dayStart: number; dayEnd: number } | null {
+  const lower = userMessage.toLowerCase()
+  const now = new Date()
+
+  const relativeFirst = lower.match(/\b(today|yesterday)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)
+  const timeFirst = lower.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(today|yesterday)\b/)
+  const isoDate = lower.match(/\b(\d{4}-\d{2}-\d{2})\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/)
+
+  let baseDate: Date | null = null
+  let label = ''
+  let timeParts: { hour: number; minute: number } | null = null
+
+  if (relativeFirst) {
+    baseDate = new Date(now)
+    if (relativeFirst[1] === 'yesterday') baseDate.setDate(baseDate.getDate() - 1)
+    label = relativeFirst[1]
+    timeParts = parseTimeParts(relativeFirst[2], relativeFirst[3], relativeFirst[4])
+  } else if (timeFirst) {
+    baseDate = new Date(now)
+    if (timeFirst[4] === 'yesterday') baseDate.setDate(baseDate.getDate() - 1)
+    label = timeFirst[4]
+    timeParts = parseTimeParts(timeFirst[1], timeFirst[2], timeFirst[3])
+  } else if (isoDate) {
+    const [year, month, day] = isoDate[1].split('-').map(Number)
+    baseDate = new Date(year, month - 1, day)
+    label = isoDate[1]
+    timeParts = parseTimeParts(isoDate[2], isoDate[3], isoDate[4])
+  }
+
+  if (!baseDate || !timeParts) return null
+
+  baseDate.setHours(timeParts.hour, timeParts.minute, 0, 0)
+  const dayStart = new Date(baseDate)
+  dayStart.setHours(0, 0, 0, 0)
+  const dayEnd = new Date(dayStart)
+  dayEnd.setDate(dayEnd.getDate() + 1)
+
+  return {
+    label,
+    targetMs: baseDate.getTime(),
+    dayStart: dayStart.getTime(),
+    dayEnd: dayEnd.getTime(),
+  }
+}
+
+function buildSpecificTimeContext(userMessage: string): string {
+  try {
+    const lookup = parseTemporalLookup(userMessage)
+    if (!lookup) return ''
+
+    const db = getDb()
+    const daySessions = getSessionsForRange(db, lookup.dayStart, lookup.dayEnd)
+    const containing = daySessions.find((session) => {
+      const end = sessionEndMs(session)
+      return lookup.targetMs >= session.startTime && lookup.targetMs < end
+    })
+    const windowStart = lookup.targetMs - 45 * 60 * 1000
+    const windowEnd = lookup.targetMs + 45 * 60 * 1000
+    const nearby = daySessions
+      .filter((session) => sessionEndMs(session) > windowStart && session.startTime < windowEnd)
+      .slice(0, 5)
+    const nearbySites = getWebsiteSummariesForRange(db, windowStart, windowEnd).slice(0, 3)
+    const focusSession = getRecentFocusSessions(db, 50).find((session) => {
+      const end = sessionEndMs(session)
+      return lookup.targetMs >= session.startTime && lookup.targetMs < end
+    })
+
+    const lines: string[] = [
+      `Specific timeline lookup for ${lookup.label} (${formatDateTimeLabel(lookup.targetMs)}):`,
+    ]
+
+    if (containing) {
+      lines.push(
+        `- Foreground app at that time: ${containing.appName} (${containing.category}), ${formatClock(containing.startTime)}-${formatClock(sessionEndMs(containing))}.`,
+      )
+    } else {
+      lines.push('- No foreground app session covers that exact time.')
+    }
+
+    if (nearby.length > 0) {
+      lines.push(
+        `- Nearby sessions: ${nearby.map((session) => `${session.appName} ${formatClock(session.startTime)}-${formatClock(sessionEndMs(session))}`).join(', ')}.`,
+      )
+    }
+
+    if (focusSession) {
+      const plan = focusSession.plannedApps.length > 0
+        ? focusSession.plannedApps.join(', ')
+        : 'not set'
+      lines.push(
+        `- Focus session overlap: ${focusSession.label || 'Focus session'} for ${formatDuration(focusSession.durationSeconds)}${focusSession.targetMinutes ? ` with ${focusSession.targetMinutes}m target` : ''}; planned apps ${plan}.`,
+      )
+    }
+
+    if (nearbySites.length > 0) {
+      lines.push(
+        `- Browser evidence near that time: ${nearbySites.map((site) => `${site.domain} (${formatDuration(site.totalSeconds)})`).join(', ')}.`,
+      )
+    }
+
+    return lines.join('\n')
+  } catch {
+    return ''
+  }
+}
+
 function buildDayContext(): string {
   try {
     const db = getDb()
@@ -41,14 +229,23 @@ function buildDayContext(): string {
     const now = new Date()
     const [todayFrom, todayTo] = dayBounds(now)
     const summaries = getAppSummariesForRange(db, todayFrom, todayTo)
+    const todaySessions = getSessionsForRange(db, todayFrom, todayTo)
     const websites = getWebsiteSummariesForRange(db, todayFrom, todayTo)
+    const peakHours = getPeakHours(db, todayTo - 14 * 86_400_000, todayTo) ?? undefined
 
     const totalSec = summaries.reduce((s, a) => s + a.totalSeconds, 0)
     const focusSec = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-    const focusScore = computeFocusScore({
+    const switchesPerHour = totalSec > 0 ? countSwitches(todaySessions) / (totalSec / 3600) : 0
+    const focusScore = computeEnhancedFocusScore({
       focusedSeconds: focusSec,
       totalSeconds: totalSec,
-      switchesPerHour: 0,
+      switchesPerHour,
+      sessions: todaySessions.map((session) => ({
+        durationSeconds: session.durationSeconds,
+        isFocused: session.isFocused,
+      })),
+      peakHours,
+      currentHour: now.getHours(),
     })
     const goalHours = settings.dailyFocusGoalHours ?? 4
     const goalSec = goalHours * 3600
@@ -110,13 +307,19 @@ function buildDayContext(): string {
       const date = new Date(todayFrom - offset * 86_400_000)
       const [fromMs, toMs] = dayBounds(date)
       const daySummaries = getAppSummariesForRange(db, fromMs, toMs)
+      const daySessions = getSessionsForRange(db, fromMs, toMs)
       if (daySummaries.length === 0) continue
       const dayTotal = daySummaries.reduce((sum, item) => sum + item.totalSeconds, 0)
       const dayFocus = daySummaries.filter((item) => item.isFocused).reduce((sum, item) => sum + item.totalSeconds, 0)
-      const dayFocusScore = computeFocusScore({
+      const daySwitchesPerHour = dayTotal > 0 ? countSwitches(daySessions) / (dayTotal / 3600) : 0
+      const dayFocusScore = computeEnhancedFocusScore({
         focusedSeconds: dayFocus,
         totalSeconds: dayTotal,
-        switchesPerHour: 0,
+        switchesPerHour: daySwitchesPerHour,
+        sessions: daySessions.map((session) => ({
+          durationSeconds: session.durationSeconds,
+          isFocused: session.isFocused,
+        })),
       })
       const topApp = daySummaries[0]
       recentDays.push(
@@ -124,6 +327,8 @@ function buildDayContext(): string {
         `${formatDuration(dayTotal)} total, focus score ${dayFocusScore}, top app ${topApp?.appName ?? 'n/a'}`,
       )
     }
+
+    const recentFocusContext = buildRecentFocusContext()
 
     return [
       `User: ${userName}`,
@@ -152,6 +357,8 @@ function buildDayContext(): string {
       '',
       recentDays.length > 0 ? 'Recent days:' : '',
       ...recentDays.map((line) => `- ${line}`),
+      '',
+      recentFocusContext,
     ]
       .filter((l) => l !== '')
       .join('\n')
@@ -161,7 +368,7 @@ function buildDayContext(): string {
 }
 
 export async function sendMessage(userMessage: string): Promise<string> {
-  const client = buildClient()
+  const client = await buildClient()
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
 
@@ -172,6 +379,7 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const prior = history.slice(0, -1)
 
   const dayContext = buildDayContext()
+  const specificTimeContext = buildSpecificTimeContext(userMessage)
   const { userName } = getSettings()
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
@@ -183,13 +391,15 @@ export async function sendMessage(userMessage: string): Promise<string> {
     '- Separate tracked facts from interpretation or advice\n' +
     '- If the data is insufficient to answer accurately, say so directly\n' +
     '- Never imply certainty about the exact task the user was doing unless the data explicitly supports it\n' +
+    '- For time-specific questions, prefer exact foreground-app evidence and say when no exact session exists\n' +
     '- Treat website timing as approximate browser evidence unless the question is only about websites\n' +
     '- If you include recommendations, clearly label them as suggestions\n' +
     '- Prefer short headings like "Tracked facts" and "Suggestions" when both are present\n' +
     '- Keep responses concise and grounded\n\n' +
     (dayContext
       ? `Tracked local data context:\n${dayContext}`
-      : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.')
+      : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
+    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
 
   const response = await client.messages.create({
     model: 'claude-opus-4-6',

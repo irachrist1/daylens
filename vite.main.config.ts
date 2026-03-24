@@ -5,12 +5,10 @@ const isStandalone = process.env.STANDALONE_BUILD === '1'
 const convexSiteUrl = JSON.stringify(
   process.env.DAYLENS_CONVEX_SITE_URL || 'https://decisive-aardvark-847.convex.site',
 )
-const posthogKey = JSON.stringify(
-  process.env.POSTHOG_KEY || 'phc_d0IcV73kr5HKVVY3UGGdUf9Meq1sKE3dJxcVq9ZjkCW',
-)
-const posthogHost = JSON.stringify(
-  process.env.POSTHOG_HOST || 'https://us.i.posthog.com',
-)
+// No hardcoded fallback keys — analytics requires an explicit POSTHOG_KEY env var.
+// When the key is absent the analytics module is a no-op.
+const posthogKey = JSON.stringify(process.env.POSTHOG_KEY || '')
+const posthogHost = JSON.stringify(process.env.POSTHOG_HOST || '')
 
 export default defineConfig({
   resolve: {

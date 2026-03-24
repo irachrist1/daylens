@@ -46,6 +46,9 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
+      - name: Typecheck
+        run: npm run typecheck
+
       - name: Build Vite bundles
         shell: bash
         run: |
@@ -54,8 +57,24 @@ jobs:
           npx vite build --config vite.preload.config.ts
           npx vite build --config vite.renderer.config.ts
 
+      # ── Code signing ──────────────────────────────────────────────────────
+      # Requires GitHub Actions secrets:
+      #   WIN_CERTIFICATE_FILE      — base64-encoded PFX (OV or EV certificate)
+      #   WIN_CERTIFICATE_PASSWORD  — PFX password
+      #   WIN_CERT_SUBJECT_NAME     — e.g. "Daylens Inc."
+      # Obtain an OV or EV code-signing certificate from a trusted CA
+      # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
+      - name: Decode code-signing certificate
+        if: ${{ secrets.WIN_CERTIFICATE_FILE != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.WIN_CERTIFICATE_FILE }}" | base64 --decode > /tmp/cert.pfx
+          echo "WIN_CERTIFICATE_FILE_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
+          echo "WIN_CERTIFICATE_PASSWORD=${{ secrets.WIN_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "WIN_CERT_SUBJECT_NAME=${{ secrets.WIN_CERT_SUBJECT_NAME }}" >> "$GITHUB_ENV"
+
       - name: Package with electron-builder
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win --publish always --config electron-builder.config.js
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -69,23 +88,20 @@ jobs:
 
             Your personal activity analyst — now on Windows.
 
-            Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud, no telemetry.
+            Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud. Analytics are opt-in and disabled by default.
 
             ### What's new in ${{ steps.meta.outputs.version }}
             - **Real app icons** — taskbar and Start menu icons for every tracked app (no more initials)
             - **Category overrides** — click any category badge in Apps view to reassign it; pencil icon makes it discoverable
             - **History week view** — 7-day bar chart with per-day category colors; click a bar to drill into that day
-            - **Analytics** — anonymous usage analytics help prioritise improvements (no personal data leaves your machine)
             - **In-app updates** — banner appears and prompts restart when a new version downloads automatically
             - **Feedback** — NPS prompt after 7 days; "Send feedback" button in Settings
-            - **Bug fixes** — all 14 app categories available in override dropdown; week chart bar colors; update banner now shows correctly in Settings
 
             ### Install
 
             1. Download `Daylens-${{ steps.meta.outputs.version }}-Setup.exe` below
-            2. Run it — Windows SmartScreen will warn: click **"More info" → "Run anyway"**
-            3. Follow the installer and click **Finish**
-            4. Launch Daylens from the Desktop shortcut or Start menu
+            2. Run the installer
+            3. Launch Daylens from the Desktop shortcut or Start menu
 
             ### System requirements
             - Windows 10 or later (64-bit)

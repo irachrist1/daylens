@@ -4,11 +4,14 @@ import path from 'node:path'
 let tray: Tray | null = null
 
 export function createTray(mainWindow: BrowserWindow): void {
-  // Load icon — falls back to empty image if asset missing during dev
-  const iconPath = path.join(__dirname, '../../assets/icon.png')
-  const icon = nativeImage.createFromPath(iconPath).isEmpty()
-    ? nativeImage.createEmpty()
-    : nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+  // In packaged builds the assets/ folder is unpacked next to the asar.
+  // In dev the assets/ folder lives at the repo root.
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'build', 'icon.png')
+    : path.join(__dirname, '..', '..', 'build', 'icon.png')
+
+  const raw = nativeImage.createFromPath(iconPath)
+  const icon = raw.isEmpty() ? nativeImage.createEmpty() : raw.resize({ width: 16, height: 16 })
 
   tray = new Tray(icon)
   tray.setToolTip('Daylens')

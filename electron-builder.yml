@@ -9,9 +9,17 @@ directories:
 files:
   - "dist/**/*"
   - "package.json"
+  - "shared/app-normalization.v1.json"
 
 extraMetadata:
   main: dist/main/main.js
+
+# Extra resources unpacked alongside the asar (accessible via process.resourcesPath)
+extraResources:
+  - from: "build/"
+    to: "build"
+  - from: "shared/app-normalization.v1.json"
+    to: "app-normalization.v1.json"
 
 win:
   target:
@@ -19,6 +27,17 @@ win:
       arch: [x64]
   icon: build/icon.ico
   artifactName: "Daylens-${version}-Setup.${ext}"
+  # ── Code signing ──────────────────────────────────────────────────────────
+  # Operator must supply the following GitHub Actions secrets:
+  #   WIN_CERTIFICATE_FILE   — base64-encoded PFX (OV or EV certificate)
+  #   WIN_CERTIFICATE_PASSWORD — password for the PFX
+  #   WIN_CERT_SUBJECT_NAME  — certificate subject, e.g. "Daylens Inc."
+  # The release workflow decodes WIN_CERTIFICATE_FILE to a temp file before
+  # invoking electron-builder. Without these secrets the build is unsigned and
+  # Windows SmartScreen will show an "Unknown publisher" warning.
+  certificateFile: ${env.WIN_CERTIFICATE_FILE_PATH}
+  certificatePassword: ${env.WIN_CERTIFICATE_PASSWORD}
+  certificateSubjectName: ${env.WIN_CERT_SUBJECT_NAME}
 
 nsis:
   oneClick: false
@@ -30,7 +49,7 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Daylens
-  runAfterFinish: false
+  runAfterFinish: true
 
 asar: true
 

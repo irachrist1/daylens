@@ -1,60 +1,101 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Daylens UI";
+  src:
+    local("SF Pro"),
+    local("SF Pro Text"),
+    local("SF Pro Display"),
+    local("SF UI Text"),
+    local("SF UI Display"),
+    local("SFUIText"),
+    local("SFUIDisplay"),
+    local("SF Compact Text"),
+    local("SF Compact Display"),
+    local(".SF NS Text"),
+    local(".SF NS Display"),
+    local("San Francisco"),
+    local("Segoe UI Variable Text"),
+    local("Segoe UI Variable Display"),
+    local("Segoe UI Variable"),
+    local("Segoe UI");
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
 
-  --color-surface-lowest:    #010f20;
-  --color-surface:           #051425;
-  --color-surface-container: #0d1c2e;
-  --color-surface-high:      #122032;
-  --color-surface-card:      #1d2b3d;
-  --color-surface-bright:    #2c3a4d;
-  --color-border:            #1c2d3e;
-  --color-text-primary:      #c8dcf4;
-  --color-text-secondary:    #5e7a92;
-  --color-text-tertiary:     #3d5568;
-  --color-accent:            #b4c5ff;
-  --color-accent-dim:        rgba(180, 197, 255, 0.12);
-  --color-surface-raised:    #122032;
-  --color-surface-overlay:   #1d2b3d;
-  --color-focus-green:       #4fdbc8;
-  --font-sans: -apple-system, "SF Pro Display", "SF Pro Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
-  --color-hero-gradient:     linear-gradient(135deg, #0f2d5e 0%, #173a73 52%, #1b4a8a 100%);
-  --color-hero-border:       rgba(180, 197, 255, 0.18);
-  --color-pill-bg:           rgba(255, 255, 255, 0.08);
-  --color-icon-tint:         rgba(180, 197, 255, 0.14);
-  --color-icon-bg:           rgba(255, 255, 255, 0.06);
-  --color-bar-gradient:      linear-gradient(90deg, #6c8cff, #b4c5ff);
-  /* Brand palette */
-  --color-brand-light:       #68AEFF;
-  --color-brand-deep:        #003EB7;
-  --color-brand-gradient:    linear-gradient(180deg, #68AEFF 0%, #003EB7 100%);
+  --color-bg:                  #0b0e14;
+  --color-surface:             #10131a;
+  --color-surface-low:         #191c22;
+  --color-surface-container:   #1d2026;
+  --color-surface-high:        #272a32;
+  --color-surface-highest:     #32353c;
+  --color-surface-card:        #1d2026;
+  --color-border:              rgba(255,255,255,0.0);
+  --color-border-ghost:        rgba(255,255,255,0.06);
+  --color-text-primary:        #e1e2eb;
+  --color-text-secondary:      #c2c6d6;
+  --color-text-tertiary:       rgba(194,198,214,0.45);
+  --color-primary:             #adc6ff;
+  --color-primary-glow:        #4d8eff;
+  --color-primary-contrast:    #001a42;
+  --color-secondary:           #ffb95f;
+  --color-tertiary:            #4fdbc8;
+  --color-accent:              #adc6ff;
+  --color-accent-dim:          rgba(173,198,255,0.10);
+  --color-focus-green:         #4fdbc8;
+  --color-pill-bg:             rgba(255,255,255,0.055);
+  --color-icon-bg:             rgba(255,255,255,0.055);
+  --color-sidebar-bg:          #0b0e14;
+  --color-sidebar-border:      rgba(50,53,60,0.18);
+  --color-titlebar-bg:         #10131a;
+  --color-glass-bg:            rgba(50,53,60,0.60);
+  --color-glass-border:        rgba(173,198,255,0.20);
+  --color-shadow-soft:         0 24px 60px rgba(0,0,0,0.28);
+  --gradient-primary-from:     #adc6ff;
+  --gradient-primary-to:       #4d8eff;
+  --gradient-primary:          linear-gradient(135deg, #adc6ff, #4d8eff);
+  --font-sans: "Daylens UI", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --radius-card:              10px;
+  --radius-panel:             12px;
+  --radius-pill:              999px;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --color-surface-lowest:    #eef2fb;
-  --color-surface:           #f3f6fd;
-  --color-surface-container: #e8eef8;
-  --color-surface-high:      #dde5f5;
-  --color-surface-card:      #ffffff;
-  --color-surface-bright:    #ffffff;
-  --color-border:            #cfd9ec;
-  --color-text-primary:      #0d1f38;
-  --color-text-secondary:    #4a6180;
-  --color-text-tertiary:     #7d92ad;
-  --color-accent:            #2563eb;
-  --color-accent-dim:        rgba(37, 99, 235, 0.1);
-  --color-surface-raised:    #dde5f5;
-  --color-surface-overlay:   #ffffff;
-  --color-focus-green:       #0d9488;
-  --color-hero-gradient:     linear-gradient(135deg, #dce8fb 0%, #d3e0f8 50%, #c7d9f8 100%);
-  --color-hero-border:       rgba(37, 99, 235, 0.14);
-  --color-pill-bg:           rgba(13, 31, 56, 0.07);
-  --color-icon-tint:         rgba(37, 99, 235, 0.1);
-  --color-icon-bg:           rgba(13, 31, 56, 0.05);
-  --color-bar-gradient:      linear-gradient(90deg, #2563eb, #60a5fa);
+  --color-bg:               #ffffff;
+  --color-surface:          #ffffff;
+  --color-surface-low:      #fafafa;
+  --color-surface-container:#ffffff;
+  --color-surface-high:     #f3f4f6;
+  --color-surface-highest:  #e5e7eb;
+  --color-surface-card:     #ffffff;
+  --color-border:           rgba(0,0,0,0.0);
+  --color-border-ghost:     rgba(17,24,39,0.16);
+  --color-text-primary:     #1f2633;
+  --color-text-secondary:   #5c6474;
+  --color-text-tertiary:    #8b93a3;
+  --color-primary:          #0f63db;
+  --color-primary-glow:     #3a8dff;
+  --color-primary-contrast: #f6f9ff;
+  --color-accent:           #0f63db;
+  --color-accent-dim:       rgba(15,99,219,0.10);
+  --color-secondary:        #b45309;
+  --color-tertiary:         #0f766e;
+  --color-focus-green:      #0f766e;
+  --color-pill-bg:          rgba(31,38,51,0.05);
+  --color-icon-bg:          rgba(31,38,51,0.05);
+  --color-sidebar-bg:       #ffffff;
+  --color-sidebar-border:   rgba(31,38,51,0.14);
+  --color-titlebar-bg:      #ffffff;
+  --color-glass-bg:         rgba(255,255,255,0.94);
+  --color-glass-border:     rgba(17,24,39,0.16);
+  --color-shadow-soft:      none;
+  --gradient-primary-from:  #0f63db;
+  --gradient-primary-to:    #3a8dff;
+  --gradient-primary:       linear-gradient(135deg, #0f63db, #3a8dff);
 }
 
 :root[data-theme="dark"] {
@@ -65,32 +106,45 @@
   :root:not([data-theme="dark"]):not([data-theme="light"]) {
     color-scheme: light;
 
-    --color-surface-lowest:    #eef2fb;
-    --color-surface:           #f3f6fd;
-    --color-surface-container: #e8eef8;
-    --color-surface-high:      #dde5f5;
-    --color-surface-card:      #ffffff;
-    --color-surface-bright:    #ffffff;
-    --color-border:            #cfd9ec;
-    --color-text-primary:      #0d1f38;
-    --color-text-secondary:    #4a6180;
-    --color-text-tertiary:     #7d92ad;
-    --color-accent:            #2563eb;
-    --color-accent-dim:        rgba(37, 99, 235, 0.1);
-    --color-surface-raised:    #dde5f5;
-    --color-surface-overlay:   #ffffff;
-    --color-focus-green:       #0d9488;
-    --color-hero-gradient:     linear-gradient(135deg, #dce8fb 0%, #d3e0f8 50%, #c7d9f8 100%);
-    --color-hero-border:       rgba(37, 99, 235, 0.14);
-    --color-pill-bg:           rgba(13, 31, 56, 0.07);
-    --color-icon-tint:         rgba(37, 99, 235, 0.1);
-    --color-icon-bg:           rgba(13, 31, 56, 0.05);
-    --color-bar-gradient:      linear-gradient(90deg, #2563eb, #60a5fa);
+    --color-bg:               #ffffff;
+    --color-surface:          #ffffff;
+    --color-surface-low:      #fafafa;
+    --color-surface-container:#ffffff;
+    --color-surface-high:     #f3f4f6;
+    --color-surface-highest:  #e5e7eb;
+    --color-surface-card:     #ffffff;
+    --color-border:           rgba(0,0,0,0.0);
+    --color-border-ghost:     rgba(17,24,39,0.16);
+    --color-text-primary:     #1f2633;
+    --color-text-secondary:   #5c6474;
+    --color-text-tertiary:    #8b93a3;
+    --color-primary:          #0f63db;
+    --color-primary-glow:     #3a8dff;
+    --color-primary-contrast: #f6f9ff;
+    --color-accent:           #0f63db;
+    --color-accent-dim:       rgba(15,99,219,0.10);
+    --color-secondary:        #b45309;
+    --color-tertiary:         #0f766e;
+    --color-focus-green:      #0f766e;
+    --color-pill-bg:          rgba(31,38,51,0.05);
+    --color-icon-bg:          rgba(31,38,51,0.05);
+    --color-sidebar-bg:       #ffffff;
+    --color-sidebar-border:   rgba(31,38,51,0.14);
+    --color-titlebar-bg:      #ffffff;
+    --color-glass-bg:         rgba(255,255,255,0.94);
+    --color-glass-border:     rgba(17,24,39,0.16);
+    --color-shadow-soft:      none;
+    --gradient-primary-from:  #0f63db;
+    --gradient-primary-to:    #3a8dff;
+    --gradient-primary:       linear-gradient(135deg, #0f63db, #3a8dff);
   }
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  font-family: var(--font-sans) !important;
 }
 
 html,
@@ -99,12 +153,25 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  background: var(--color-surface);
+  background: var(--color-bg);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select,
+a,
+svg,
+svg text {
+  font: inherit;
+  color: inherit;
 }
 
 /* Electron drag region helpers */
@@ -124,26 +191,44 @@ body,
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--color-border-ghost);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
 
-/* Card base — used across views */
+/* Card base */
 .card {
   background: var(--color-surface-card);
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border-ghost);
   padding: 16px;
 }
+:root[data-theme="light"] .card,
+:root:not([data-theme="dark"]):not([data-theme="light"]) .card {
+  box-shadow: none;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .card {
+    box-shadow: none;
+  }
+}
 
-/* Section header — 10pt uppercase label */
+/* Section header */
 .section-label {
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--color-text-tertiary);
+}
+
+/* Native cursor + selection rules */
+button, [role="button"], nav, .sidebar, header, label, th {
+  user-select: none;
+  cursor: default;
+}
+a[href], button.link-style {
+  cursor: pointer;
 }
