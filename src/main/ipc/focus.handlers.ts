@@ -1,16 +1,22 @@
 import { ipcMain } from 'electron'
+import { FOCUSED_CATEGORIES, IPC } from '@shared/types'
+import type { FocusStartPayload } from '@shared/types'
 import {
   getActiveFocusSession,
   getRecentFocusSessions,
+  getSessionsForRange,
   startFocusSession,
   stopFocusSession,
 } from '../db/queries'
 import { getDb } from '../services/database'
-import { IPC } from '@shared/types'
 
 export function registerFocusHandlers(): void {
-  ipcMain.handle(IPC.FOCUS.START, (_e, label: string | null = null) => {
-    return startFocusSession(getDb(), label)
+  ipcMain.handle(IPC.FOCUS.START, (_e, payload?: FocusStartPayload | string | null) => {
+    const normalized: FocusStartPayload =
+      typeof payload === 'string' || payload === null || payload === undefined
+        ? { label: payload ?? null }
+        : payload
+    return startFocusSession(getDb(), normalized)
   })
 
   ipcMain.handle(IPC.FOCUS.STOP, (_e, id: number) => {
@@ -23,5 +29,28 @@ export function registerFocusHandlers(): void {
 
   ipcMain.handle(IPC.FOCUS.GET_RECENT, (_e, limit: number = 20) => {
     return getRecentFocusSessions(getDb(), limit)
+  })
+
+  ipcMain.handle(IPC.FOCUS.GET_BREAK_RECOMMENDATION, () => {
+    const db = getDb()
+    const now = Date.now()
+    const ninetyMinsAgo = now - 90 * 60 * 1000
+    const recentSessions = getSessionsForRange(db, ninetyMinsAgo, now)
+    const focusedSeconds = recentSessions
+      .filter((session) => FOCUSED_CATEGORIES.includes(session.category))
+      .reduce((sum, session) => sum + session.durationSeconds, 0)
+
+    if (focusedSeconds < 45 * 60) return null
+
+    const focusedMinutes = Math.round(focusedSeconds / 60)
+    const currentApp = recentSessions[recentSessions.length - 1]?.appName ?? null
+
+    return {
+      triggerReason: 'sustained_focus' as const,
+      focusedMinutes,
+      currentApp,
+      message: `You've been focused for ${focusedMinutes} minutes${currentApp ? ` in ${currentApp}` : ''}. A short break will help.`,
+      urgency: (focusedMinutes >= 90 ? 'high' : 'medium') as 'high' | 'medium',
+    }
   })
 }

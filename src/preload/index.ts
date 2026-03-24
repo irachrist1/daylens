@@ -1,5 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppCategory, AppSettings } from '@shared/types'
+import type {
+  AppCategory,
+  AppCharacter,
+  AppSettings,
+  BreakRecommendation,
+  FocusStartPayload,
+  PeakHoursResult,
+  ProcessSnapshot,
+  WeeklySummary,
+} from '@shared/types'
 import { IPC } from '@shared/types'
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
@@ -18,6 +27,12 @@ const api = {
       ipcRenderer.invoke(IPC.DB.GET_APP_SESSIONS, bundleId, days),
     getWebsiteSummaries: (days?: number) =>
       ipcRenderer.invoke(IPC.DB.GET_WEBSITE_SUMMARIES, days),
+    getPeakHours: (): Promise<PeakHoursResult | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_PEAK_HOURS),
+    getWeeklySummary: (endDateStr: string): Promise<WeeklySummary> =>
+      ipcRenderer.invoke(IPC.DB.GET_WEEKLY_SUMMARY, endDateStr),
+    getAppCharacter: (bundleId: string, daysBack: number): Promise<AppCharacter | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_CHARACTER, bundleId, daysBack),
     setCategoryOverride: (bundleId: string, category: AppCategory) =>
       ipcRenderer.invoke('db:set-category-override', bundleId, category),
     clearCategoryOverride: (bundleId: string) =>
@@ -28,10 +43,12 @@ const api = {
       ipcRenderer.invoke('app:get-icon', exePath),
   },
   focus: {
-    start: (label?: string) => ipcRenderer.invoke(IPC.FOCUS.START, label ?? null),
+    start: (payload?: string | FocusStartPayload) => ipcRenderer.invoke(IPC.FOCUS.START, payload ?? null),
     stop: (id: number) => ipcRenderer.invoke(IPC.FOCUS.STOP, id),
     getActive: () => ipcRenderer.invoke(IPC.FOCUS.GET_ACTIVE),
     getRecent: (limit?: number) => ipcRenderer.invoke(IPC.FOCUS.GET_RECENT, limit),
+    getBreakRecommendation: (): Promise<BreakRecommendation | null> =>
+      ipcRenderer.invoke(IPC.FOCUS.GET_BREAK_RECOMMENDATION),
   },
   ai: {
     sendMessage: (message: string) => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
@@ -41,9 +58,14 @@ const api = {
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
     set: (partial: Partial<AppSettings>) => ipcRenderer.invoke(IPC.SETTINGS.SET, partial),
+    hasApiKey: (): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY),
+    setApiKey: (key: string): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key),
+    clearApiKey: (): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
+    getProcessMetrics: (): Promise<ProcessSnapshot[]> =>
+      ipcRenderer.invoke(IPC.TRACKING.GET_PROCESS_METRICS),
   },
   debug: {
     getInfo: () => ipcRenderer.invoke(IPC.DEBUG.GET_INFO),

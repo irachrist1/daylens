@@ -1,58 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
-import { dateStringFromMs, formatDuration, formatRelativeDate, formatTime, percentOf, rollingDayBounds } from '../lib/format'
-import type { AppUsageSummary, FocusSession, LiveSession } from '@shared/types'
+import { dateStringFromMs, formatDuration, formatRelativeDate, percentOf, rollingDayBounds, todayString } from '../lib/format'
+import type { AppSession, AppUsageSummary, FocusSession, LiveSession, PeakHoursResult } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
+import AppIcon from '../components/AppIcon'
+import { buildAppBundleLookup, formatDisplayAppName, resolveBundleIdForName } from '../lib/apps'
 
-// ─── Inline SVG icons ─────────────────────────────────────────────────────────
-
-function IconZap() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="7,1 3.5,6 6,6 5,11 8.5,6 6,6 7,1" />
-    </svg>
-  )
-}
-
-function IconTarget() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-      <circle cx="6" cy="6" r="4.5" />
-      <circle cx="6" cy="6" r="2" />
-    </svg>
-  )
-}
-
-function IconGrid() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1" y="1" width="3.5" height="3.5" rx="0.7" />
-      <rect x="7.5" y="1" width="3.5" height="3.5" rx="0.7" />
-      <rect x="1" y="7.5" width="3.5" height="3.5" rx="0.7" />
-      <rect x="7.5" y="7.5" width="3.5" height="3.5" rx="0.7" />
-    </svg>
-  )
-}
-
-function IconTimerLarge() {
-  return (
-    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <circle cx="16" cy="18" r="11" />
-      <line x1="16" y1="12" x2="16" y2="18" />
-      <line x1="11" y1="4" x2="21" y2="4" />
-      <line x1="16" y1="4" x2="16" y2="8" />
-    </svg>
-  )
-}
-
-function IconCheck() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="2,7 5.5,10.5 12,4" />
-    </svg>
-  )
-}
+const TARGET_PRESETS = [25, 50, 90]
 
 function mergeLiveSummary(
   summaries: AppUsageSummary[],
@@ -88,36 +43,174 @@ function mergeLiveSummary(
   ]
 }
 
+function formatClock(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function getFocusStreak(sessions: FocusSession[]): number {
+  if (sessions.length === 0) return 0
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const daySet = new Set<string>()
+  for (const session of sessions) {
+    const d = new Date(session.startTime)
+    daySet.add([d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-'))
+  }
+  let streak = 0
+  const check = new Date(today)
+  while (true) {
+    const key = [check.getFullYear(), String(check.getMonth() + 1).padStart(2, '0'), String(check.getDate()).padStart(2, '0')].join('-')
+    if (!daySet.has(key)) break
+    streak++
+    check.setDate(check.getDate() - 1)
+  }
+  return streak
+}
+
+function fmtHour(hour: number): string {
+  if (hour === 0) return '12am'
+  if (hour === 12) return '12pm'
+  if (hour > 12) return `${hour - 12}pm`
+  return `${hour}am`
+}
+
+function uniqueNames(names: string[]): string[] {
+  return names.filter((name, index) => names.indexOf(name) === index)
+}
+
+function sessionEndMs(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
+  return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
+}
+
+function overlaps(session: AppSession, fromMs: number, toMs: number): boolean {
+  return sessionEndMs(session) > fromMs && session.startTime < toMs
+}
+
+function buildPlannedApps(summaries: AppUsageSummary[], live: LiveSession | null): string[] {
+  const planned: string[] = []
+  if (live && FOCUSED_CATEGORIES.includes(live.category)) planned.push(live.appName)
+
+  const ranked = summaries
+    .filter((summary) => FOCUSED_CATEGORIES.includes(summary.category))
+    .sort((a, b) => b.totalSeconds - a.totalSeconds)
+    .map((summary) => summary.appName)
+
+  if (ranked.length === 0) {
+    ranked.push(...summaries.slice(0, 3).map((summary) => summary.appName))
+  }
+
+  planned.push(...ranked)
+  return uniqueNames(planned).slice(0, 4)
+}
+
+function buildAppsSeen(active: FocusSession | null, sessions: AppSession[], live: LiveSession | null): string[] {
+  if (!active) return []
+  const sessionApps = sessions
+    .filter((session) => overlaps(session, active.startTime, Date.now()))
+    .map((session) => session.appName)
+  if (live && Date.now() >= active.startTime) sessionApps.push(live.appName)
+  return uniqueNames(sessionApps).slice(0, 6)
+}
+
+function GlassBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      padding: '4px 10px',
+      borderRadius: 999,
+      background: 'var(--color-pill-bg)',
+      color: 'var(--color-text-secondary)',
+      fontSize: 10,
+      fontWeight: 800,
+      letterSpacing: '0.08em',
+      textTransform: 'uppercase',
+    }}>
+      {children}
+    </span>
+  )
+}
+
+function FocusAppRow({
+  appName,
+  bundleId,
+  subtle,
+  live,
+}: {
+  appName: string
+  bundleId?: string | null
+  subtle?: boolean
+  live?: boolean
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: subtle ? '8px 10px' : '9px 12px',
+        borderRadius: 10,
+        border: '1px solid var(--color-border-ghost)',
+        background: live ? 'linear-gradient(135deg, rgba(15,99,219,0.10), rgba(58,141,255,0.04))' : 'var(--color-surface)',
+      }}
+    >
+      <AppIcon bundleId={bundleId} appName={appName} size={24} fontSize={10} />
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: subtle ? 'var(--color-text-secondary)' : 'var(--color-text-primary)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {formatDisplayAppName(appName)}
+      </span>
+    </div>
+  )
+}
+
 export default function Focus() {
-  const [active,      setActive]      = useState<FocusSession | null>(null)
-  const [elapsed,     setElapsed]     = useState(0)
-  const [label,       setLabel]       = useState('')
-  // Brief "session complete" feedback state — stores the completed session duration
+  const [active, setActive] = useState<FocusSession | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const [label, setLabel] = useState('')
+  const [targetMinutes, setTargetMinutes] = useState(50)
   const [justFinished, setJustFinished] = useState<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Today's app tracking data — for the focus stats strip
   const [todaySummaries, setTodaySummaries] = useState<AppUsageSummary[]>([])
+  const [todaySessions, setTodaySessions] = useState<AppSession[]>([])
   const [live, setLive] = useState<LiveSession | null>(null)
-  // Completed focus sessions from DB
   const [recentSessions, setRecentSessions] = useState<FocusSession[]>([])
+  const [peakHours, setPeakHours] = useState<PeakHoursResult | null>(null)
 
-  // Load active session + today's stats + recent focus sessions on mount
   useEffect(() => {
     let cancelled = false
 
     async function refresh() {
-      const [activeSession, summaries, recent, liveSession] = await Promise.all([
-        ipc.focus.getActive(),
-        ipc.db.getToday(),
-        ipc.focus.getRecent(10),
-        ipc.tracking.getLiveSession(),
-      ])
-      if (cancelled) return
-      setActive((activeSession as FocusSession | null) ?? null)
-      setTodaySummaries(summaries as AppUsageSummary[])
-      setRecentSessions(recent as FocusSession[])
-      setLive((liveSession as LiveSession | null) ?? null)
+      if (document.hidden) return
+      try {
+        const [activeSession, summaries, recent, liveSession, peak, daySessions] = await Promise.all([
+          ipc.focus.getActive(),
+          ipc.db.getToday(),
+          ipc.focus.getRecent(10),
+          ipc.tracking.getLiveSession(),
+          ipc.db.getPeakHours().catch(() => null),
+          ipc.db.getHistory(todayString()),
+        ])
+        if (cancelled) return
+        setActive((activeSession as FocusSession | null) ?? null)
+        setTodaySummaries(summaries as AppUsageSummary[])
+        setRecentSessions(recent as FocusSession[])
+        setLive((liveSession as LiveSession | null) ?? null)
+        setPeakHours((peak as PeakHoursResult | null) ?? null)
+        setTodaySessions(daySessions as AppSession[])
+      } catch {
+        // Non-fatal. The view will recover on the next poll.
+      }
     }
 
     void refresh()
@@ -130,17 +223,16 @@ export default function Focus() {
     }
   }, [])
 
-  // Live elapsed counter for active session
   useEffect(() => {
-    if (active) {
-      setElapsed(Math.max(0, Math.round((Date.now() - active.startTime) / 1000)))
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.round((Date.now() - active.startTime) / 1000))
-      }, 1000)
-    } else {
+    if (!active) {
       if (timerRef.current) clearInterval(timerRef.current)
       setElapsed(0)
+      return
     }
+
+    const update = () => setElapsed(Math.max(0, Math.round((Date.now() - active.startTime) / 1000)))
+    update()
+    timerRef.current = setInterval(update, 1000)
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
     }
@@ -148,16 +240,15 @@ export default function Focus() {
 
   async function handleStart() {
     if (active) return
-    const id = (await ipc.focus.start(label || undefined)) as number
-    track('focus_session_started', {})
-    const session: FocusSession = {
-      id,
-      startTime:       Date.now(),
-      endTime:         null,
-      durationSeconds: 0,
-      label:           label || null,
-    }
-    setActive(session)
+    const plannedApps = buildPlannedApps(mergeLiveSummary(todaySummaries, live), live)
+    await ipc.focus.start({
+      label: label || null,
+      targetMinutes,
+      plannedApps,
+    })
+    track('focus_session_started', { target_minutes: targetMinutes, planned_apps: plannedApps.length })
+    const session = await ipc.focus.getActive()
+    setActive((session as FocusSession | null) ?? null)
     setElapsed(0)
     setLabel('')
     setJustFinished(null)
@@ -166,226 +257,505 @@ export default function Focus() {
   async function handleStop() {
     if (!active) return
     const completedDuration = elapsed
-    track('focus_session_ended', { duration_seconds: completedDuration, completed: true })
+    track('focus_session_ended', {
+      duration_seconds: completedDuration,
+      target_minutes: active.targetMinutes ?? null,
+      completed: true,
+    })
     await ipc.focus.stop(active.id)
-    const [updatedRecent, updatedSummaries, updatedLive] = await Promise.all([
+    const [updatedRecent, updatedSummaries, updatedLive, updatedSessions] = await Promise.all([
       ipc.focus.getRecent(10),
       ipc.db.getToday(),
       ipc.tracking.getLiveSession(),
+      ipc.db.getHistory(todayString()),
     ])
     setRecentSessions(updatedRecent as FocusSession[])
     setTodaySummaries(updatedSummaries as AppUsageSummary[])
     setLive(updatedLive as LiveSession | null)
+    setTodaySessions(updatedSessions as AppSession[])
     setActive(null)
-    // Show brief completion feedback, then clear after 4 s
     setJustFinished(completedDuration)
-    setTimeout(() => setJustFinished(null), 4000)
+    setTimeout(() => setJustFinished(null), 5000)
   }
 
-  // Compute today's focus stats from app tracking data
   const mergedTodaySummaries = mergeLiveSummary(todaySummaries, live)
-  const totalTracked = mergedTodaySummaries.reduce((n, a) => n + a.totalSeconds, 0)
-  const focusTracked = mergedTodaySummaries.filter((a) => FOCUSED_CATEGORIES.includes(a.category))
-    .reduce((n, a) => n + a.totalSeconds, 0)
-  const focusPct     = percentOf(focusTracked, totalTracked)
-  const appsTracked  = mergedTodaySummaries.length
+  const totalTracked = mergedTodaySummaries.reduce((n, app) => n + app.totalSeconds, 0)
+  const focusTracked = mergedTodaySummaries
+    .filter((app) => FOCUSED_CATEGORIES.includes(app.category))
+    .reduce((n, app) => n + app.totalSeconds, 0)
+  const focusPct = percentOf(focusTracked, totalTracked)
+  const appsTracked = mergedTodaySummaries.length
+  const streak = getFocusStreak(recentSessions)
+  const recommendedApps = useMemo(() => buildPlannedApps(mergedTodaySummaries, live), [mergedTodaySummaries, live])
+  const activePlannedApps = active?.plannedApps.length ? active.plannedApps : recommendedApps
+  const appsSeen = buildAppsSeen(active, todaySessions, live)
+  const appBundleLookup = useMemo(
+    () => buildAppBundleLookup([
+      mergedTodaySummaries.map((summary) => ({ bundleId: summary.bundleId, appName: summary.appName })),
+      todaySessions.map((session) => ({ bundleId: session.bundleId, appName: session.appName })),
+      live ? [{ bundleId: live.bundleId, appName: live.appName }] : [],
+    ]),
+    [mergedTodaySummaries, todaySessions, live],
+  )
+
+  const now = new Date()
+  const nowHour = now.getHours() + now.getMinutes() / 60
+  let contextStrip: { text: string; color: string } | null = null
+  if (peakHours) {
+    const inPeak = nowHour >= peakHours.peakStart && nowHour < peakHours.peakEnd
+    contextStrip = inPeak
+      ? { text: "You're inside your peak focus window.", color: 'var(--color-tertiary)' }
+      : { text: `Peak focus window: ${fmtHour(peakHours.peakStart)}-${fmtHour(peakHours.peakEnd)}.`, color: 'var(--color-text-secondary)' }
+  }
+
+  const targetSeconds = (active?.targetMinutes ?? targetMinutes) * 60
+  const hasCountdown = (active?.targetMinutes ?? targetMinutes) > 0
+  const remainingSeconds = hasCountdown ? Math.max(0, targetSeconds - elapsed) : 0
+  const overtimeSeconds = hasCountdown ? Math.max(0, elapsed - targetSeconds) : 0
+  const progressRatio = hasCountdown ? Math.min(1, elapsed / Math.max(targetSeconds, 1)) : 0
+  const focusQuality = focusPct >= 70 ? 'Locked In' : focusPct >= 40 ? 'Building Flow' : 'Needs Structure'
+
+  const stats = [
+    { label: 'Focused Today', value: focusTracked > 0 ? formatDuration(focusTracked) : '0m' },
+    { label: 'Focus %', value: `${focusPct}%` },
+    { label: 'Apps Tracked', value: String(appsTracked) },
+    { label: 'Streak', value: streak > 0 ? `${streak}d` : '0d' },
+  ]
+  const liveDisplayName = live?.appName ? formatDisplayAppName(live.appName) : null
 
   return (
-    <div className="p-7 max-w-xl mx-auto">
-      <p className="section-label mb-1">Focus</p>
-      <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-6">
-        {active ? 'Session in progress' : 'Start a session'}
-      </h1>
-
-      {/* ── Timer card ────────────────────────────────────────────────── */}
-      <div className="card flex flex-col items-center gap-6 py-10 mb-4">
-        {/* Session complete feedback */}
-        {justFinished !== null && !active && (
-          <div
-            className="flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium"
-            style={{ background: 'rgba(110,231,183,0.12)', color: '#6ee7b7' }}
-          >
-            <IconCheck /> Session complete · {formatDuration(justFinished)}
-          </div>
-        )}
-
-        {/* Timer display */}
-        <div className="text-[60px] font-mono font-semibold text-[var(--color-text-primary)] tabular-nums leading-none tracking-tighter">
-          {formatDuration(elapsed)}
-        </div>
-
-        {active && (
-          <div className="flex flex-col items-center gap-1 -mt-2">
-            <p className="text-[13px] text-[var(--color-text-secondary)]">
-              {active.label ?? 'Focus session in progress'}
-            </p>
-            <p className="text-[11px] text-[var(--color-text-tertiary)]">
-              Started {formatTime(active.startTime)} · tracked locally
-            </p>
-          </div>
-        )}
-
-        {!active && (
-          <input
-            type="text"
-            placeholder="What are you working on? (optional)"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void handleStart()}
-            className="w-full max-w-xs px-4 py-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-high)] text-[13px] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] outline-none focus:border-[var(--color-accent)] transition-colors"
-          />
-        )}
-
-        <div className="relative flex items-center justify-center">
-          {active && (
-            <span
-              className="absolute rounded-lg"
-              style={{
-                inset: -4,
-                border: '2px solid var(--color-brand-light)',
-                animation: 'focus-pulse 2s ease-in-out infinite',
-              }}
-            />
-          )}
-          <button
-            onClick={active ? () => void handleStop() : () => void handleStart()}
-            className={[
-              'relative px-8 py-2.5 rounded-lg text-[13px] font-medium transition-colors',
-              active
-                ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20'
-                : 'text-[var(--color-surface)] hover:opacity-90',
-            ].join(' ')}
-            style={active ? undefined : { background: 'var(--color-brand-gradient)' }}
-          >
-            {active ? 'End session' : 'Start focus session'}
-          </button>
-        </div>
-        <style>{`
-          @keyframes focus-pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(1.04); }
-          }
-        `}</style>
-
-        {!active && justFinished === null && (
-          <p className="text-[12px] text-[var(--color-text-tertiary)] text-center max-w-sm">
-            Use Focus when you want an intentional work block. The timer is exact. The stats below are separate and based on tracked app categories for today.
-          </p>
-        )}
-      </div>
-
-      {/* ── Today's tracking stats ────────────────────────────────────── */}
-      <div className="card mb-4">
-        <p className="section-label mb-3">Today</p>
-        <div className="grid grid-cols-3 gap-3">
-          <TodayStat
-            icon={<IconZap />}
-            label="Focus time"
-            value={focusTracked > 0 ? formatDuration(focusTracked) : '—'}
-            accent
-          />
-          <TodayStat
-            icon={<IconTarget />}
-            label="Focus share"
-            value={totalTracked > 0 ? `${focusPct}%` : '—'}
-          />
-          <TodayStat
-            icon={<IconGrid />}
-            label="Apps tracked"
-            value={appsTracked > 0 ? String(appsTracked) : '—'}
-          />
-        </div>
-        {totalTracked > 0 && (
-          <div className="mt-3">
-            <div className="h-[4px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
-              <div
-                className="h-full rounded-full transition-all duration-700"
-                style={{
-                  width:      `${focusPct}%`,
-                  background: 'var(--color-bar-gradient)',
-                }}
-              />
+    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+      <div style={{ maxWidth: 1080, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{
+              fontSize: 10,
+              fontWeight: 900,
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: 'var(--color-text-secondary)',
+            }}>
+              Focus
             </div>
-            <p className="text-[10px] text-[var(--color-text-tertiary)] mt-1">
-              {focusPct >= 70 ? 'Strong focus day' :
-               focusPct >= 40 ? 'Mixed focus' :
-               focusPct > 0  ? 'Light focus so far' :
-               'No focused activity tracked yet today'}
-            </p>
-            <p className="text-[10px] text-[var(--color-text-tertiary)] mt-1">
-              Based on tracked app categories, not on manual focus sessions.
+            <h1 style={{
+              fontSize: 38,
+              fontWeight: 900,
+              letterSpacing: '-0.04em',
+              color: 'var(--color-text-primary)',
+              margin: 0,
+              lineHeight: 1,
+            }}>
+              {active ? 'Focus session running.' : 'Set your next focus block.'}
+            </h1>
+            <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', margin: 0, maxWidth: 620, lineHeight: 1.7 }}>
+              {active
+                ? 'Timer, planned apps, and opened apps stay in one place.'
+                : 'Choose a timer and add a label if you want.'}
             </p>
           </div>
-        )}
-      </div>
 
-      {/* ── Recent focus sessions ─────────────────────────────────────── */}
-      <div className="card">
-        <p className="section-label mb-3">Recent Sessions</p>
-        {recentSessions.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-6">
-            <span style={{ color: 'var(--color-text-tertiary)' }}><IconTimerLarge /></span>
-            <p className="text-[13px] font-medium text-[var(--color-text-secondary)]">No focus sessions yet</p>
-            <p className="text-[12px] text-[var(--color-text-tertiary)] text-center max-w-xs">
-              Start a session above to begin tracking your deep work time.
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col divide-y divide-[var(--color-border)]">
-            {recentSessions.map((s) => {
-              const dateLabel = s.startTime
-                ? formatRelativeDate(dateStringFromMs(s.startTime))
-                : ''
-              return (
-                <div key={s.id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
-                  {/* Session dot */}
-                  <div
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ background: 'var(--color-accent)', opacity: 0.7 }}
-                  />
-                  {/* Label */}
-                  <p className="flex-1 text-[13px] text-[var(--color-text-primary)] truncate">
-                    {s.label ?? (
-                      <span className="text-[var(--color-text-tertiary)] italic">Unlabeled</span>
+          {contextStrip && (
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 14px',
+              borderRadius: 999,
+              background: 'var(--color-surface-container)',
+              border: '1px solid var(--color-border-ghost)',
+              color: contextStrip.color,
+              boxShadow: 'var(--color-shadow-soft)',
+            }}>
+              <span style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: contextStrip.color,
+                display: 'inline-block',
+              }} />
+              <span style={{ fontSize: 12, fontWeight: 700 }}>{contextStrip.text}</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
+          gap: 18,
+          alignItems: 'stretch',
+        }}>
+          <div style={{
+            background: 'var(--color-surface-container)',
+            borderRadius: 12,
+            padding: 28,
+            border: '1px solid var(--color-border-ghost)',
+            boxShadow: 'var(--color-shadow-soft)',
+            display: 'grid',
+            gridTemplateColumns: 'minmax(240px, 300px) minmax(0, 1fr)',
+            gap: 24,
+          }}>
+            <div style={{
+              borderRadius: 12,
+              background: 'linear-gradient(180deg, var(--color-surface-low), var(--color-surface))',
+              padding: 20,
+              border: '1px solid var(--color-border-ghost)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              minHeight: 280,
+            }}>
+              <div style={{
+                width: 176,
+                height: 176,
+                borderRadius: '50%',
+                background: `conic-gradient(from -90deg, var(--gradient-primary-from) 0deg, var(--gradient-primary-to) ${Math.max(progressRatio * 360, 6)}deg, var(--color-surface-highest) ${Math.max(progressRatio * 360, 6)}deg 360deg)`,
+                display: 'grid',
+                placeItems: 'center',
+                boxShadow: '0 16px 40px rgba(15,99,219,0.10)',
+              }}>
+                <div style={{
+                  width: 136,
+                  height: 136,
+                  borderRadius: '50%',
+                  background: 'var(--color-surface-container)',
+                  border: '1px solid var(--color-border-ghost)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}>
+                  {justFinished !== null && !active ? (
+                    <>
+                      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-tertiary)' }}>
+                        Session Complete
+                      </span>
+                      <span style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em' }}>
+                        {formatDuration(justFinished)}
+                      </span>
+                    </>
+                  ) : active ? (
+                    <>
+                      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                        {remainingSeconds > 0 ? 'Time Left' : 'Elapsed'}
+                      </span>
+                      <span style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                        {formatClock(remainingSeconds > 0 ? remainingSeconds : elapsed)}
+                      </span>
+                      <span style={{ fontSize: 12, color: overtimeSeconds > 0 ? '#f87171' : 'var(--color-text-secondary)' }}>
+                        {overtimeSeconds > 0 ? `${formatClock(overtimeSeconds)} overtime` : `${formatClock(elapsed)} elapsed`}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                        Target
+                      </span>
+                      <span style={{ fontSize: 30, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                        {targetMinutes}m
+                      </span>
+                      <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                        {focusQuality}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {active && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6 }}>
+                  {active.targetMinutes && <GlassBadge>{active.targetMinutes}m target</GlassBadge>}
+                  <GlassBadge>{focusQuality}</GlassBadge>
+                  {liveDisplayName && <GlassBadge>Live: {liveDisplayName}</GlassBadge>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}>
+                <div style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  letterSpacing: '0.18em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-text-secondary)',
+                }}>
+                  {active ? 'Active Session' : 'Setup'}
+                </div>
+                {active && (
+                  <GlassBadge>{active.label || 'Focus session'}</GlassBadge>
+                )}
+              </div>
+
+              {!active && justFinished === null && (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <label style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                      Label
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="What are you working on?"
+                      value={label}
+                      onChange={(event) => setLabel(event.target.value)}
+                      onKeyDown={(event) => event.key === 'Enter' && void handleStart()}
+                      style={{
+                        width: '100%',
+                        height: 50,
+                        borderRadius: 10,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface-low)',
+                        padding: '0 16px',
+                        fontSize: 14,
+                        color: 'var(--color-text-primary)',
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <label style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                      Timer
+                    </label>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {TARGET_PRESETS.map((preset) => {
+                        const activePreset = targetMinutes === preset
+                        return (
+                          <button
+                            key={preset}
+                            onClick={() => setTargetMinutes(preset)}
+                            style={{
+                              minWidth: 88,
+                              height: 42,
+                              borderRadius: 10,
+                              border: activePreset ? 'none' : '1px solid var(--color-border-ghost)',
+                              background: activePreset ? 'var(--gradient-primary)' : 'var(--color-surface-low)',
+                              color: activePreset ? 'var(--color-primary-contrast)' : 'var(--color-text-primary)',
+                              fontSize: 13,
+                              fontWeight: 800,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {preset} min
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => void handleStart()}
+                    style={{
+                      width: '100%',
+                      minHeight: 52,
+                      borderRadius: 10,
+                      border: 'none',
+                      background: 'var(--gradient-primary)',
+                      color: 'var(--color-primary-contrast)',
+                      fontSize: 15,
+                      fontWeight: 900,
+                      cursor: 'pointer',
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    Start Focus
+                  </button>
+                </>
+              )}
+
+              {active && (
+                <button
+                  onClick={() => void handleStop()}
+                  style={{
+                    width: '100%',
+                    minHeight: 50,
+                    borderRadius: 10,
+                    border: '1px solid rgba(248,113,113,0.26)',
+                    background: 'rgba(248,113,113,0.10)',
+                    color: '#f87171',
+                    fontSize: 15,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Stop
+                </button>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{
+                  borderRadius: 12,
+                  background: 'var(--color-surface-low)',
+                  border: '1px solid var(--color-border-ghost)',
+                  padding: 16,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                      Planned Apps
+                    </div>
+                    <GlassBadge>{activePlannedApps.length > 0 ? `${activePlannedApps.length} apps` : 'Plan'}</GlassBadge>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                    {activePlannedApps.length > 0 ? activePlannedApps.map((app) => (
+                      <FocusAppRow
+                        key={app}
+                        appName={app}
+                        bundleId={resolveBundleIdForName(appBundleLookup, app)}
+                      />
+                    )) : (
+                      <span style={{ gridColumn: '1 / -1', fontSize: 13, color: 'var(--color-text-tertiary)' }}>No strong recommendation yet.</span>
                     )}
-                  </p>
-                  {/* Date */}
-                  <span className="text-[11px] text-[var(--color-text-tertiary)] shrink-0">
-                    {dateLabel}
+                  </div>
+                </div>
+
+                <div style={{
+                  borderRadius: 12,
+                  background: 'var(--color-surface-low)',
+                  border: '1px solid var(--color-border-ghost)',
+                  padding: 16,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                      Apps Opened
+                    </div>
+                    <GlassBadge>{active && appsSeen.length > 0 ? `${appsSeen.length} seen` : 'Waiting'}</GlassBadge>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {active && appsSeen.length > 0 ? appsSeen.map((app) => (
+                      <FocusAppRow
+                        key={app}
+                        appName={app}
+                        bundleId={resolveBundleIdForName(appBundleLookup, app)}
+                        subtle={live?.appName !== app}
+                        live={live?.appName === app}
+                      />
+                    )) : (
+                      <span style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
+                        {active ? 'No tracked apps inside this block yet.' : 'Starts populating once the timer begins.'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+              {stats.map((stat) => (
+                <div
+                  key={stat.label}
+                  style={{
+                    background: 'var(--color-surface-container)',
+                    borderRadius: 10,
+                    border: '1px solid var(--color-border-ghost)',
+                    padding: 18,
+                    boxShadow: 'var(--color-shadow-soft)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                    {stat.label}
                   </span>
-                  {/* Duration */}
-                  <span className="text-[12px] text-[var(--color-text-secondary)] tabular-nums shrink-0 w-14 text-right">
-                    {formatDuration(s.durationSeconds)}
+                  <span style={{ fontSize: 24, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.03em', lineHeight: 1 }}>
+                    {stat.value}
                   </span>
                 </div>
-              )
-            })}
+              ))}
+            </div>
+
+            <div style={{
+              background: 'var(--color-surface-container)',
+              borderRadius: 12,
+              padding: 22,
+              border: '1px solid var(--color-border-ghost)',
+              boxShadow: 'var(--color-shadow-soft)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+                <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
+                  Recent Sessions
+                </span>
+                {streak > 0 && <GlassBadge>{streak} day streak</GlassBadge>}
+              </div>
+
+              {recentSessions.length === 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>
+                  No focus sessions yet. Start one above.
+                </p>
+              ) : (
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  border: '1px solid var(--color-border-ghost)',
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  background: 'var(--color-surface-low)',
+                }}>
+                  {recentSessions.map((session) => {
+                    const dateLabel = session.startTime ? formatRelativeDate(dateStringFromMs(session.startTime)) : ''
+                    const tooShort = session.durationSeconds < 120
+                    const isLast = recentSessions[recentSessions.length - 1]?.id === session.id
+                    return (
+                      <div
+                        key={session.id}
+                        style={{
+                          padding: 14,
+                          borderBottom: isLast ? 'none' : '1px solid var(--color-border-ghost)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            background: tooShort ? '#ffb95f' : 'var(--color-tertiary)',
+                            flexShrink: 0,
+                          }} />
+                          <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                            {session.label || 'Focus session'}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                            {dateLabel}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <GlassBadge>{formatDuration(session.durationSeconds)}</GlassBadge>
+                          {session.targetMinutes && <GlassBadge>{session.targetMinutes}m target</GlassBadge>}
+                          {session.plannedApps.length > 0 && <GlassBadge>{session.plannedApps.slice(0, 2).join(' + ')}</GlassBadge>}
+                          {tooShort && <GlassBadge>Too short</GlassBadge>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-        )}
+        </div>
       </div>
-    </div>
-  )
-}
-
-// ─── Today stat cell ──────────────────────────────────────────────────────────
-
-function TodayStat({
-  icon, label, value, accent,
-}: { icon: React.ReactNode; label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1" style={{ color: 'var(--color-text-tertiary)' }}>
-        <span>{icon}</span>
-        <span className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-[0.5px] font-semibold">
-          {label}
-        </span>
-      </div>
-      <p
-        className="text-[20px] font-bold tabular-nums leading-tight"
-        style={{ color: accent ? 'var(--color-accent)' : 'var(--color-text-primary)' }}
-      >
-        {value}
-      </p>
     </div>
   )
 }

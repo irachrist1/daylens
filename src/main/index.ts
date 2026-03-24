@@ -29,11 +29,14 @@ import { initDb, closeDb } from './services/database'
 import { initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startBrowserTracking, stopBrowserTracking } from './services/browser'
-import { startSync, stopSync, finalizePreviousDay } from './services/syncUploader'
+import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray } from './tray'
 import { initUpdater } from './services/updater'
+import { startDailySummaryNotifier } from './services/dailySummaryNotifier'
+import { startDistractionAlerter } from './services/distractionAlerter'
+import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
 
 // Fix macOS path collision with native Swift companion app.
 // Electron defaults userData to ~/Library/Application Support/<productName> which on macOS
@@ -53,6 +56,9 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 }
+
+// Pin taskbar icon correctly on Windows
+app.setAppUserModelId('com.daylens.windows')
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -89,7 +95,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 16, y: 12 },
     // Prevent white flash before the renderer paints
-    backgroundColor: '#051425',
+    backgroundColor: '#0b0e14',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -112,6 +118,47 @@ function createWindow(): BrowserWindow {
   }
 
   win.once('ready-to-show', () => win.show())
+
+  // Block in-window navigation to external URLs — open in system browser instead.
+  // titleBarStyle: 'hidden' means no native close button, so if the Electron window
+  // ever ends up on an external URL the user has no way to close or go back.
+  function isAppUrl(url: string): boolean {
+    if (MAIN_WINDOW_VITE_DEV_SERVER_URL && url.startsWith(MAIN_WINDOW_VITE_DEV_SERVER_URL)) return true
+    if (url.startsWith('file://')) return true
+    return false
+  }
+
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isAppUrl(url)) {
+      event.preventDefault()
+      try {
+        const parsed = new URL(url)
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(url)
+      } catch { /* ignore malformed URLs */ }
+    }
+  })
+
+  // Belt-and-suspenders: if will-navigate failed to block and navigation completed,
+  // reload back to the app immediately so the user is never trapped on an external page.
+  win.webContents.on('did-navigate', (_, url) => {
+    if (!isAppUrl(url)) {
+      if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+        void win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+      } else {
+        const rendererPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
+        void win.loadFile(rendererPath)
+      }
+    }
+  })
+
+  // Block new window opens (window.open etc.) — redirect to system browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(url)
+    } catch { /* ignore */ }
+    return { action: 'deny' }
+  })
 
   win.webContents.on('render-process-gone', (_, details) => {
     console.error('[renderer] process gone:', details.reason, details.exitCode)
@@ -160,14 +207,30 @@ ipcMain.on('window:close', () => {
   if (!isQuitting) mainWindow.hide()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (isQuitting) return
   isQuitting = true
-  stopTracking()
-  stopBrowserTracking()
-  stopSync()
-  closeDb()
-  destroyTray()
-  shutdown()
+
+  // Prevent immediate quit so we can await the final sync.
+  event.preventDefault()
+
+  void (async () => {
+    stopTracking()
+    stopBrowserTracking()
+    stopSync()
+    stopProcessMonitor()
+
+    // Await final sync with a 5-second timeout so quit doesn't hang if offline.
+    await Promise.race([
+      syncNowForQuit(),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    ])
+
+    closeDb()
+    destroyTray()
+    shutdown()
+    app.quit()
+  })()
 })
 
 // Analytics IPC — renderer sends events through main process (network stays in main)
@@ -178,7 +241,9 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 app.whenReady()
   .then(async () => {
     await initSettings()
-    app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
+    if (app.isPackaged) {
+      app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
+    }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)
     const s = getSettings()
@@ -194,6 +259,7 @@ app.whenReady()
     })
 
     initDb()
+    startProcessMonitor()
 
     registerDbHandlers()
     registerDebugHandlers()
@@ -207,13 +273,17 @@ app.whenReady()
     initUpdater(mainWindow)
 
     startTracking()
-    startBrowserTracking()
     startSync()
+    startDailySummaryNotifier()
+    startDistractionAlerter()
 
-    // Deferred 3s — after window is visible
+    // Deferred 5s — after window is visible: browser tracking + Windows history backfill (#4, #5)
     setTimeout(() => {
-      try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
-    }, 3_000)
+      startBrowserTracking()
+      setImmediate(() => {
+        try { backfillWindowsHistory() } catch (err) { console.warn('[init] win history:', err) }
+      })
+    }, 5_000)
 
     // Deferred 5s — report tracking engine health
     setTimeout(() => {
@@ -236,8 +306,9 @@ app.whenReady()
   })
 
 app.on('window-all-closed', () => {
-  // On macOS keep running in tray; on Windows quit when all windows closed
-  if (process.platform !== 'darwin') app.quit()
+  // The app runs in the system tray on all platforms — do not quit here.
+  // The only exit path is the tray "Quit" menu item which sets isQuitting = true.
+  // On macOS (no tray on some versions), still keep running via app.on('activate').
 })
 
 app.on('activate', () => {

@@ -14,6 +14,12 @@ interface Migration {
   up: () => void
 }
 
+function hasColumn(table: string, column: string): boolean {
+  const db = getDb()
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return rows.some((row) => row.name === column)
+}
+
 const migrations: Migration[] = [
   {
     version: 1,
@@ -72,6 +78,88 @@ const migrations: Migration[] = [
     up: () => {
       const db = getDb()
       db.exec('DELETE FROM daily_summaries')
+    },
+  },
+  {
+    version: 5,
+    description: 'Add visit_time_us column and richer UNIQUE constraint to website_visits',
+    up: () => {
+      const db = getDb()
+      // Add visit_time_us column (microsecond timestamp from source browser)
+      db.exec(`ALTER TABLE website_visits ADD COLUMN visit_time_us INTEGER NOT NULL DEFAULT 0`)
+      // Drop the old (browser_bundle_id, visit_time) unique constraint by recreating the table.
+      // SQLite does not support DROP CONSTRAINT — we rename, copy, drop old, create index.
+      db.exec(`
+        CREATE TABLE website_visits_new (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain            TEXT    NOT NULL,
+          page_title        TEXT,
+          url               TEXT,
+          visit_time        INTEGER NOT NULL,
+          visit_time_us     INTEGER NOT NULL DEFAULT 0,
+          duration_sec      INTEGER NOT NULL DEFAULT 0,
+          browser_bundle_id TEXT,
+          source            TEXT    NOT NULL DEFAULT 'history',
+          UNIQUE (browser_bundle_id, visit_time_us, url)
+        );
+        INSERT OR IGNORE INTO website_visits_new
+          (id, domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
+        SELECT id, domain, page_title, url, visit_time, visit_time * 1000, duration_sec, browser_bundle_id, source
+        FROM website_visits;
+        DROP TABLE website_visits;
+        ALTER TABLE website_visits_new RENAME TO website_visits;
+        CREATE INDEX IF NOT EXISTS idx_website_visits_time   ON website_visits (visit_time);
+        CREATE INDEX IF NOT EXISTS idx_website_visits_domain ON website_visits (domain, visit_time);
+      `)
+    },
+  },
+  {
+    version: 6,
+    description: 'Add ai_messages table for normalised AI conversation storage',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_messages (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id),
+          role            TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
+          content         TEXT    NOT NULL,
+          created_at      INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+      `)
+      // Migrate existing messages from the JSON blob into ai_messages rows
+      const rows = db
+        .prepare('SELECT id, messages FROM ai_conversations')
+        .all() as { id: number; messages: string }[]
+      const insert = db.prepare(
+        'INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)'
+      )
+      const migrate = db.transaction(() => {
+        for (const conv of rows) {
+          try {
+            const msgs = JSON.parse(conv.messages) as { role: string; content: string; timestamp?: number }[]
+            let ts = Date.now()
+            for (const msg of msgs) {
+              insert.run(conv.id, msg.role, msg.content, msg.timestamp ?? ts++)
+            }
+          } catch { /* skip malformed blobs */ }
+        }
+      })
+      migrate()
+    },
+  },
+  {
+    version: 7,
+    description: 'Add focus session targets and planned apps metadata',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('focus_sessions', 'target_minutes')) {
+        db.exec(`ALTER TABLE focus_sessions ADD COLUMN target_minutes INTEGER`)
+      }
+      if (!hasColumn('focus_sessions', 'planned_apps')) {
+        db.exec(`ALTER TABLE focus_sessions ADD COLUMN planned_apps TEXT NOT NULL DEFAULT '[]'`)
+      }
     },
   },
 ]

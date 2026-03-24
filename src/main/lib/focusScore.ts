@@ -1,25 +1,67 @@
 import { FOCUSED_CATEGORIES } from '@shared/types'
-import type { AppCategory } from '@shared/types'
+import type { AppCategory, PeakHoursResult } from '@shared/types'
+
+export interface FocusScoreSession {
+  durationSeconds: number
+  isFocused: boolean
+}
+
+function isHourInPeakWindow(
+  hour: number,
+  peakWindow: Pick<PeakHoursResult, 'peakStart' | 'peakEnd'>,
+): boolean {
+  if (peakWindow.peakStart === peakWindow.peakEnd) return true
+  if (peakWindow.peakStart < peakWindow.peakEnd) {
+    return hour >= peakWindow.peakStart && hour < peakWindow.peakEnd
+  }
+  return hour >= peakWindow.peakStart || hour < peakWindow.peakEnd
+}
+
+export function computeEnhancedFocusScore(params: {
+  focusedSeconds: number
+  totalSeconds: number
+  switchesPerHour: number
+  sessions: FocusScoreSession[]
+  peakHours?: Pick<PeakHoursResult, 'peakStart' | 'peakEnd'>
+  currentHour?: number
+  websiteFocusCreditSeconds?: number
+}): number {
+  const effectiveFocusedSeconds = params.focusedSeconds + (params.websiteFocusCreditSeconds ?? 0)
+  if (params.totalSeconds < 60) return 0
+
+  const focusRatio = effectiveFocusedSeconds / params.totalSeconds
+  const switchPenalty = Math.min(params.switchesPerHour / 20, 0.25)
+
+  const focusedSessions = params.sessions.filter((session) => session.isFocused)
+  const avgSessionMin = focusedSessions.length > 0
+    ? focusedSessions.reduce((sum, session) => sum + session.durationSeconds, 0) / focusedSessions.length / 60
+    : 0
+  const consistencyBonus = Math.min(avgSessionMin / 30, 1) * 10
+
+  const hasFlowState = focusedSessions.some((session) => session.durationSeconds >= 75 * 60)
+  const flowBonus = hasFlowState ? 5 : 0
+  const peakBonus = params.peakHours !== undefined && params.currentHour !== undefined &&
+    isHourInPeakWindow(params.currentHour, params.peakHours)
+    ? 5
+    : 0
+
+  const raw = (focusRatio * 100 * (1 - switchPenalty)) + consistencyBonus + flowBonus + peakBonus
+  return Math.min(Math.round(raw), 100)
+}
 
 export function computeFocusScore(params: {
   focusedSeconds: number
   totalSeconds: number
   switchesPerHour: number
+  sessions?: FocusScoreSession[]
+  peakHours?: Pick<PeakHoursResult, 'peakStart' | 'peakEnd'>
+  currentHour?: number
   websiteFocusCreditSeconds?: number
 }): number {
-  const {
-    focusedSeconds,
-    totalSeconds,
-    switchesPerHour,
-    websiteFocusCreditSeconds = 0,
-  } = params
-
-  if (totalSeconds === 0) return 0
-
-  const focusedRatio = (focusedSeconds + websiteFocusCreditSeconds) / totalSeconds
-  const penalty = Math.min(switchesPerHour / 300, 0.15)
-
-  return Math.round(100 * focusedRatio * (1 - penalty))
+  return computeEnhancedFocusScore({
+    ...params,
+    sessions: params.sessions ?? [],
+  })
 }
 
 export function isCategoryFocused(category: AppCategory | string): boolean {

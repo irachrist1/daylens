@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   start_time   INTEGER NOT NULL,
   end_time     INTEGER,
   duration_sec INTEGER NOT NULL DEFAULT 0,
-  label        TEXT
+  label        TEXT,
+  target_minutes INTEGER,
+  planned_apps TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS ai_conversations (
@@ -28,6 +30,18 @@ CREATE TABLE IF NOT EXISTS ai_conversations (
   created_at INTEGER NOT NULL
 );
 
+-- Normalised AI message storage — appends one row per message instead of
+-- rewriting the entire JSON blob on every chat turn.
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id),
+  role            TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
+  content         TEXT    NOT NULL,
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+
 CREATE TABLE IF NOT EXISTS category_overrides (
   bundle_id TEXT PRIMARY KEY,
   category  TEXT NOT NULL,
@@ -35,17 +49,21 @@ CREATE TABLE IF NOT EXISTS category_overrides (
 );
 
 -- Website visits from local browser history files (browser.ts service).
--- Additive — CREATE TABLE IF NOT EXISTS is safe to run on every launch.
+-- visit_time_us stores the raw microsecond timestamp from the source browser
+-- (Chrome epoch µs for Chromium, Unix epoch µs for Firefox).
+-- The UNIQUE constraint uses (browser_bundle_id, visit_time_us, url) so that
+-- distinct visits with the same millisecond timestamp are preserved.
 CREATE TABLE IF NOT EXISTS website_visits (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   domain            TEXT    NOT NULL,
   page_title        TEXT,
   url               TEXT,
   visit_time        INTEGER NOT NULL,
+  visit_time_us     INTEGER NOT NULL DEFAULT 0,
   duration_sec      INTEGER NOT NULL DEFAULT 0,
   browser_bundle_id TEXT,
   source            TEXT    NOT NULL DEFAULT 'history',
-  UNIQUE (browser_bundle_id, visit_time)
+  UNIQUE (browser_bundle_id, visit_time_us, url)
 );
 
 CREATE INDEX IF NOT EXISTS idx_website_visits_time   ON website_visits (visit_time);

@@ -1,17 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
 import { formatDuration, formatTime, formatFullDate, percentOf, todayString } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
 import type { AppSession, AppCategory } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
-import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { BarChart, Bar, Cell, ResponsiveContainer } from 'recharts'
+import AppIcon from '../components/AppIcon'
+import { formatDisplayAppName } from '../lib/apps'
 
 function isPresentationNoise(session: AppSession): boolean {
   return (session.category === 'system' || session.category === 'uncategorized') &&
     session.durationSeconds < 120
 }
 
-// Shift a YYYY-MM-DD string by ±N days using local date components (timezone-safe)
 function shiftDate(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   const dt = new Date(y, m - 1, d + days)
@@ -23,11 +24,8 @@ function shiftDate(dateStr: string, days: number): string {
 }
 
 // ─── Session grouping ────────────────────────────────────────────────────────
-// Consecutive sessions from the same app with a gap ≤ GAP_MS are merged into
-// one visual row. This collapses repeated rapid app-switches (e.g. alt-tab back
-// and forth) into a single meaningful entry without destroying time information.
 
-const GAP_MS = 60_000 // 1 minute — merge if gap between sessions is ≤ this
+const GAP_MS = 60_000
 
 interface SessionGroup {
   bundleId: string
@@ -37,7 +35,7 @@ interface SessionGroup {
   firstStart: number
   lastEnd: number
   totalSeconds: number
-  count: number         // number of raw sessions merged into this group
+  count: number
 }
 
 function groupSessions(sessions: AppSession[]): SessionGroup[] {
@@ -69,17 +67,14 @@ function groupSessions(sessions: AppSession[]): SessionGroup[] {
     }
   }
 
-  // Drop any group whose total is still negligible (edge case: sessions near the
-  // MIN_DISPLAY_SEC boundary that slipped through before grouping).
   return groups.filter((g) => g.totalSeconds >= 15)
 }
 
-// Returns YYYY-MM-DD string for the Monday of the week containing the given date
 function getWeekStart(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   const dt = new Date(y, m - 1, d)
-  const day = dt.getDay() // 0=Sun, 1=Mon ... 6=Sat
-  const diff = day === 0 ? -6 : 1 - day // shift to Monday
+  const day = dt.getDay()
+  const diff = day === 0 ? -6 : 1 - day
   dt.setDate(dt.getDate() + diff)
   return [
     dt.getFullYear(),
@@ -88,10 +83,191 @@ function getWeekStart(dateStr: string): string {
   ].join('-')
 }
 
+// ─── Category color map ───────────────────────────────────────────────────────
+
+const CAT_COLORS: Record<string, string> = {
+  development:   '#adc6ff',
+  meetings:      '#ffb95f',
+  communication: '#4fdbc8',
+  browsing:      '#94a3b8',
+  entertainment: '#f87171',
+  writing:       '#c084fc',
+  aiTools:       '#34d399',
+  design:        '#e879f9',
+  research:      '#67e8f9',
+  email:         '#fbbf24',
+  productivity:  '#a3e635',
+  social:        '#fb923c',
+  system:        '#6b7280',
+  uncategorized: '#6b7280',
+}
+
+function distColor(category: AppCategory): string {
+  return CAT_COLORS[category] ?? catColor(category) ?? '#52525b'
+}
+
+function usesPrimaryGradient(category: AppCategory): boolean {
+  return category === 'development'
+}
+
+// ─── Timeline constants ───────────────────────────────────────────────────────
+
+const TL_START = 7
+const TL_END   = 23
+const TL_HOURS = TL_END - TL_START
+const HOUR_LABELS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+
+function fmtHour(h: number): string {
+  if (h === 12) return '12p'
+  if (h > 12) return `${h - 12}p`
+  return `${h}a`
+}
+
+function IconChevronLeft() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m10 3.5-4.5 4.5 4.5 4.5" />
+    </svg>
+  )
+}
+
+function IconChevronRight() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 3.5 10.5 8 6 12.5" />
+    </svg>
+  )
+}
+
+// ─── Day Timeline ─────────────────────────────────────────────────────────────
+
+function DayTimeline({ sessions, sortedCats }: { sessions: AppSession[]; sortedCats: { category: string; totalSeconds: number }[] }) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const [trackWidth, setTrackWidth] = useState(0)
+
+  useEffect(() => {
+    if (!trackRef.current) return
+    const obs = new ResizeObserver((entries) => {
+      setTrackWidth(entries[0].contentRect.width)
+    })
+    obs.observe(trackRef.current)
+    setTrackWidth(trackRef.current.clientWidth)
+    return () => obs.disconnect()
+  }, [])
+
+  const finished = sessions.filter(
+    (s): s is AppSession & { endTime: number } =>
+      s.endTime !== null && !isPresentationNoise(s),
+  )
+
+  return (
+    <div style={{
+      background: 'var(--color-surface-low)',
+      borderRadius: 12,
+      padding: 20,
+      marginBottom: 12,
+      border: '1px solid var(--color-border-ghost)',
+      boxShadow: 'var(--color-shadow-soft)',
+    }}>
+      <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: '0 0 12px' }}>
+        Timeline
+      </p>
+
+      {/* Hour axis */}
+      <div style={{ display: 'flex', marginBottom: 6 }}>
+        {HOUR_LABELS.map((h) => (
+          <div
+            key={h}
+            style={{ flex: 1, fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center', flexShrink: 0 }}
+          >
+            {fmtHour(h)}
+          </div>
+        ))}
+      </div>
+
+      {/* Timeline track */}
+      <div
+        ref={trackRef}
+        style={{
+          position: 'relative',
+          height: 56,
+          background: 'var(--color-surface-high)',
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}
+      >
+        {finished.map((s) => {
+          const sd = new Date(s.startTime)
+          const ed = new Date(s.endTime)
+          const startH = sd.getHours() + sd.getMinutes() / 60 + sd.getSeconds() / 3600
+          const endH   = ed.getHours() + ed.getMinutes() / 60 + ed.getSeconds() / 3600
+
+          const clampStart = Math.max(TL_START, Math.min(TL_END, startH))
+          const clampEnd   = Math.max(TL_START, Math.min(TL_END, endH))
+          if (clampEnd <= clampStart) return null
+
+          const leftPct  = ((clampStart - TL_START) / TL_HOURS) * 100
+          const widthPct = ((clampEnd - clampStart) / TL_HOURS) * 100
+          const pxWidth  = trackWidth > 0 ? (widthPct / 100) * trackWidth : 0
+
+          return (
+            <div
+              key={`${s.id}-${s.startTime}`}
+              title={`${s.appName} · ${formatDuration(s.durationSeconds)}`}
+              style={{
+                position: 'absolute',
+                left: `${leftPct}%`,
+                width: `max(4px, ${widthPct}%)`,
+                top: 0,
+                bottom: 0,
+                background: usesPrimaryGradient(s.category) ? 'var(--gradient-primary)' : distColor(s.category),
+                borderRadius: 4,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+            >
+                  {pxWidth > 60 && (
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.84)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 4px' }}>
+                      {formatDisplayAppName(s.appName)}
+                    </span>
+                  )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Category legend chips */}
+      {sortedCats.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+          {sortedCats.map((c) => (
+            <span
+              key={c.category}
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+                padding: '3px 10px',
+                borderRadius: 999,
+                background: usesPrimaryGradient(c.category as AppCategory) ? 'var(--gradient-primary)' : `${distColor(c.category as AppCategory)}1a`,
+                color: usesPrimaryGradient(c.category as AppCategory) ? 'var(--color-primary-contrast)' : distColor(c.category as AppCategory),
+              }}
+            >
+              {formatCategory(c.category)} · {formatDuration(c.totalSeconds)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Week view ────────────────────────────────────────────────────────────────
 
 interface WeekDayData {
-  label: string   // "Mon", "Tue", etc.
+  label: string
   dateStr: string
   totalSeconds: number
   focusSeconds: number
@@ -121,81 +297,69 @@ function WeekView({ onSelectDay }: { onSelectDay: (date: string) => void }) {
     const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
     void Promise.all(days.map((ds) => ipc.db.getHistory(ds))).then((sessionResults) => {
-        const data: WeekDayData[] = days.map((ds, i) => {
-          const sessions = sessionResults[i] as AppSession[]
-          const catTotals = new Map<AppCategory, number>()
-          let totalSec = 0
-          let focusSec = 0
-          const bundleIds = new Set<string>()
-          for (const s of sessions) {
-            totalSec += s.durationSeconds
-            if (FOCUSED_CATEGORIES.includes(s.category)) focusSec += s.durationSeconds
-            catTotals.set(s.category, (catTotals.get(s.category) ?? 0) + s.durationSeconds)
-            bundleIds.add(s.bundleId)
-          }
-          const topCategory = sessions.length > 0
-            ? ([...catTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null)
-            : null
-          return {
-            label: dayLabels[i],
-            dateStr: ds,
-            totalSeconds: totalSec,
-            focusSeconds: focusSec,
-            topCategory,
-            appCount: bundleIds.size,
-            color: topCategory ? catColor(topCategory) : 'var(--color-surface-high)',
-          }
-        })
-        setWeekData(data)
-        setLoading(false)
+      const data: WeekDayData[] = days.map((ds, i) => {
+        const rawSessions = sessionResults[i] as AppSession[]
+        const filteredSessions = rawSessions.filter((s) => !isPresentationNoise(s))
+        const catTotals = new Map<AppCategory, number>()
+        let totalSec = 0
+        let focusSec = 0
+        const bundleIds = new Set<string>()
+        for (const s of filteredSessions) {
+          totalSec += s.durationSeconds
+          if (FOCUSED_CATEGORIES.includes(s.category)) focusSec += s.durationSeconds
+          catTotals.set(s.category, (catTotals.get(s.category) ?? 0) + s.durationSeconds)
+          bundleIds.add(s.bundleId)
+        }
+        const topCategory = filteredSessions.length > 0
+          ? ([...catTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null)
+          : null
+        return {
+          label: dayLabels[i],
+          dateStr: ds,
+          totalSeconds: totalSec,
+          focusSeconds: focusSec,
+          topCategory,
+          appCount: bundleIds.size,
+          color: 'var(--color-primary)',
+        }
       })
+      setWeekData(data)
+      setLoading(false)
+    })
   }, [weekStartStr])
 
   if (loading) {
-    return (
-      <div className="card animate-pulse h-48" />
-    )
+    return <div style={{ height: 160, borderRadius: 8, background: 'var(--color-surface-high)', opacity: 0.5 }} />
   }
 
-  const totalTracked = weekData.reduce((s, d) => s + d.totalSeconds, 0)
-  const totalFocus = weekData.reduce((s, d) => s + d.focusSeconds, 0)
-  const focusPct = totalTracked > 0 ? Math.round((totalFocus / totalTracked) * 100) : 0
-  const allApps = weekData.reduce((s, d) => s + d.appCount, 0)
+  const activeDays = weekData.filter((d) => d.totalSeconds > 0)
+  const mostActiveDay = activeDays.length > 0
+    ? activeDays.reduce((a, b) => a.totalSeconds > b.totalSeconds ? a : b)
+    : null
+  const bestFocusDay = activeDays.length > 0
+    ? activeDays.reduce((a, b) => {
+        const aP = a.totalSeconds > 0 ? a.focusSeconds / a.totalSeconds : 0
+        const bP = b.totalSeconds > 0 ? b.focusSeconds / b.totalSeconds : 0
+        return aP > bP ? a : b
+      })
+    : null
+  const quietestDay = activeDays.length > 1
+    ? activeDays.reduce((a, b) => a.totalSeconds < b.totalSeconds ? a : b)
+    : null
 
   const chartData = weekData.map((d) => ({
     name: d.label,
     dateStr: d.dateStr,
     hours: parseFloat((d.totalSeconds / 3600).toFixed(2)),
-    fill: d.color,
+    focusPct: d.totalSeconds > 0 ? Math.round((d.focusSeconds / d.totalSeconds) * 100) : 0,
   }))
 
+  const bestFocusDateStr = bestFocusDay?.dateStr
+
   return (
-    <div className="card">
-      <p className="section-label mb-4">This week</p>
-      <ResponsiveContainer width="100%" height={180}>
-        <BarChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-          <XAxis
-            dataKey="name"
-            tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }}
-            axisLine={false}
-            tickLine={false}
-            tickFormatter={(v: number) => `${v}h`}
-          />
-          <Tooltip
-            formatter={(value: number) => [`${value}h`, 'Tracked']}
-            contentStyle={{
-              background: 'var(--color-surface-card)',
-              border: '1px solid var(--color-border)',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-          />
+    <div>
+      <ResponsiveContainer width="100%" height={160}>
+        <BarChart data={chartData} margin={{ top: 4, right: 4, left: 4, bottom: 0 }} barSize={20}>
           <Bar
             dataKey="hours"
             radius={[4, 4, 0, 0]}
@@ -203,31 +367,80 @@ function WeekView({ onSelectDay }: { onSelectDay: (date: string) => void }) {
             style={{ cursor: 'pointer' }}
           >
             {chartData.map((entry) => (
-              <Cell key={entry.dateStr} fill={entry.fill} />
+              <Cell
+                key={entry.dateStr}
+                fill={entry.dateStr === bestFocusDateStr && entry.hours > 0
+                  ? '#adc6ff'
+                  : 'var(--color-surface-highest)'}
+              />
             ))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <p className="text-[12px] text-[var(--color-text-secondary)] mt-3">
-        This week: {formatDuration(totalTracked)} tracked · {focusPct}% focus · {allApps} app opens
-      </p>
+
+      {/* Stat cards */}
+      <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+        {mostActiveDay && (
+          <div style={{ flex: 1, background: 'var(--color-surface-container)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--color-border-ghost)' }}>
+            <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: 0 }}>Most Active</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-primary)', margin: '4px 0 0' }}>
+              {mostActiveDay.label} · {formatDuration(mostActiveDay.totalSeconds)}
+            </p>
+          </div>
+        )}
+        {bestFocusDay && bestFocusDay.totalSeconds > 0 && (
+          <div style={{ flex: 1, background: 'var(--color-surface-container)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--color-border-ghost)' }}>
+            <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: 0 }}>Best Focus</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-primary)', margin: '4px 0 0' }}>
+              {bestFocusDay.label} · {percentOf(bestFocusDay.focusSeconds, bestFocusDay.totalSeconds)}%
+            </p>
+          </div>
+        )}
+        {quietestDay && quietestDay !== mostActiveDay && (
+          <div style={{ flex: 1, background: 'var(--color-surface-container)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--color-border-ghost)' }}>
+            <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: 0 }}>Quietest</p>
+            <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-primary)', margin: '4px 0 0' }}>
+              {quietestDay.label} · {formatDuration(quietestDay.totalSeconds)}
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
+
+// ─── App initials helper ──────────────────────────────────────────────────────
+
+// ─── Filter pill categories ───────────────────────────────────────────────────
+
+const FILTER_PILLS = [
+  { key: 'all', label: 'All' },
+  { key: 'development', label: 'Focus' },
+  { key: 'meetings', label: 'Meetings' },
+  { key: 'communication', label: 'Communication' },
+  { key: 'browsing', label: 'Browsing' },
+] as const
+
+type FilterKey = typeof FILTER_PILLS[number]['key']
 
 export default function History() {
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day')
   const [date, setDate] = useState(todayString())
   const [sessions, setSessions] = useState<AppSession[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [activeFilter, setActiveFilter] = useState<FilterKey>('all')
+  const [hoveredGroup, setHoveredGroup] = useState<string | null>(null)
 
   useEffect(() => {
     if (viewMode !== 'day') return
     setLoading(true)
+    setError(null)
     ipc.db.getHistory(date).then((data) => {
       setSessions(data as AppSession[])
-      setLoading(false)
-    })
+    }).catch((err) => {
+      setError(err instanceof Error ? err.message : String(err))
+    }).finally(() => setLoading(false))
   }, [date, viewMode])
 
   const groups    = groupSessions(sessions)
@@ -236,268 +449,431 @@ export default function History() {
   const focusPct  = percentOf(focusSec, totalSec)
   const isToday   = date === todayString()
   const uniqueApps = new Set(groups.map((g) => g.bundleId)).size
-  // Time range of the day: first session start → last session end
-  const firstStart = groups[0]?.firstStart ?? null
-  const lastEnd    = groups[groups.length - 1]?.lastEnd ?? null
 
-  // Top category by time spent (across groups)
-  const catTotals = new Map<string, number>()
-  for (const g of groups) {
-    catTotals.set(g.category, (catTotals.get(g.category) ?? 0) + g.totalSeconds)
-  }
-  const topCat = groups.length > 0
-    ? ([...catTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null)
-    : null
-
-  // Category breakdown from groups (for proportion bar)
   const catMap = new Map<string, number>()
-  for (const g of groups) {
-    catMap.set(g.category, (catMap.get(g.category) ?? 0) + g.totalSeconds)
-  }
+  for (const g of groups) catMap.set(g.category, (catMap.get(g.category) ?? 0) + g.totalSeconds)
   const sortedCats = [...catMap.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([category, totalSeconds]) => ({ category, totalSeconds }))
 
+  // Filter groups based on active filter pill
+  const filteredGroups = activeFilter === 'all'
+    ? groups
+    : activeFilter === 'development'
+      ? groups.filter((g) => g.isFocused)
+      : groups.filter((g) => g.category === activeFilter)
+
+  // Determine if last session is active (no endTime on original sessions)
+  const lastRawSession = sessions.length > 0 ? sessions[sessions.length - 1] : null
+  const lastGroupKey = filteredGroups.length > 0
+    ? `${filteredGroups[filteredGroups.length - 1].bundleId}-${filteredGroups[filteredGroups.length - 1].firstStart}`
+    : null
+
+  const isLastGroupActive = isToday && lastRawSession !== null && lastRawSession.endTime === null
+
+  const goalSeconds = 4 * 3600 // 4h focus goal
+  const goalPct = Math.min(100, Math.round((focusSec / goalSeconds) * 100))
+
   return (
-    <div className="p-7 max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="flex items-end justify-between mb-5">
-        <div>
-          <p className="section-label mb-1">History</p>
-          {viewMode === 'week' ? (
-            <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
-              Weekly overview
-            </h1>
-          ) : groups.length > 0 ? (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+
+      {/* ── Sticky day-view header ──────────────────────────────────────── */}
+      <div style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 10,
+        background: 'var(--color-bg)',
+        padding: '20px 40px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderBottom: '1px solid rgba(66,71,84,0.20)',
+      }}>
+        {/* Left: title + separator + date or "Weekly Overview" */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', letterSpacing: '-0.01em' }}>
+            {viewMode === 'day' ? 'Daily Timeline' : 'Weekly Overview'}
+          </span>
+          {viewMode === 'day' && (
             <>
-              <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
+              <span style={{ width: 1, height: 16, background: 'rgba(66,71,84,0.6)', display: 'inline-block' }} />
+              <span style={{ fontSize: 13, color: 'var(--color-text-secondary)', fontWeight: 500 }}>
                 {formatFullDate(date)}
-              </h1>
-              <p className="text-[13px] text-[var(--color-text-secondary)] mt-0.5">
-                {firstStart && lastEnd
-                  ? `${formatTime(firstStart)} – ${formatTime(lastEnd)} · `
-                  : ''}
-                {formatDuration(totalSec)} active · {groups.length} blocks · {uniqueApps} apps
-              </p>
+              </span>
             </>
-          ) : (
-            <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
-              Browse past days
-            </h1>
           )}
         </div>
 
-        {/* Right side: Day/Week toggle + date navigation */}
-        <div className="flex items-center gap-2">
+        {/* Right: nav arrows + Today pill + Day/Week toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {viewMode === 'day' && (
+            <>
+              <button
+                onClick={() => setDate(shiftDate(date, -1))}
+                style={{
+                  width: 34, height: 34, borderRadius: 10, border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-container)', cursor: 'pointer',
+                  color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', lineHeight: 1, boxShadow: 'var(--color-shadow-soft)',
+                }}
+              >
+                <IconChevronLeft />
+              </button>
+              <button
+                onClick={() => setDate(shiftDate(date, 1))}
+                disabled={isToday}
+                style={{
+                  width: 34, height: 34, borderRadius: 10, border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-container)', cursor: isToday ? 'default' : 'pointer',
+                  color: 'var(--color-text-secondary)', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', opacity: isToday ? 0.3 : 1,
+                  lineHeight: 1, boxShadow: 'var(--color-shadow-soft)',
+                }}
+              >
+                <IconChevronRight />
+              </button>
+              {!isToday && (
+                <button
+                  onClick={() => setDate(todayString())}
+                  style={{
+                    padding: '4px 12px', borderRadius: 10, fontSize: 12, fontWeight: 700,
+                    border: 'none', cursor: 'pointer',
+                    background: 'var(--gradient-primary)',
+                    color: 'var(--color-primary-contrast)',
+                  }}
+                >
+                  Today
+                </button>
+              )}
+            </>
+          )}
+
           {/* Day / Week toggle */}
-          <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-surface-card)] border border-[var(--color-border)]">
+          <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 12, background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)' }}>
             {(['day', 'week'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
-                className={[
-                  'px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors',
-                  viewMode === mode
-                    ? 'bg-[var(--color-surface-high)] text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
-                ].join(' ')}
+                style={{
+                  padding: '5px 14px',
+                  borderRadius: 9,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  border: viewMode === mode ? 'none' : '1px solid transparent',
+                  cursor: 'pointer',
+                  background: viewMode === mode ? 'var(--gradient-primary)' : 'transparent',
+                  color: viewMode === mode ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                  transition: 'all 120ms',
+                }}
               >
                 {mode === 'day' ? 'Day' : 'Week'}
               </button>
             ))}
           </div>
-
-          {/* Date navigation: ‹ [date input] › [Today] — only in day mode */}
-          {viewMode === 'day' && <div className="flex items-center gap-1">
-          <button
-            onClick={() => setDate(shiftDate(date, -1))}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-high)] transition-colors"
-          >
-            ‹
-          </button>
-          <input
-            type="date"
-            value={date}
-            max={todayString()}
-            onChange={(e) => setDate(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-card)] text-[13px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] transition-colors"
-          />
-          <button
-            onClick={() => setDate(shiftDate(date, 1))}
-            disabled={isToday}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-high)] transition-colors disabled:opacity-30 disabled:pointer-events-none"
-          >
-            ›
-          </button>
-          {!isToday && (
-            <button
-              onClick={() => setDate(todayString())}
-              className="ml-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-high)] transition-colors"
-            >
-              Today
-            </button>
-          )}
-          </div>}
         </div>
       </div>
 
-      {/* ── Week view ───────────────────────────────────────────────────── */}
-      {viewMode === 'week' && (
-        <WeekView
-          onSelectDay={(d) => {
-            setDate(d)
-            setViewMode('day')
-          }}
-        />
-      )}
-      {viewMode === 'week' && <div />}
+      {/* ── Scrollable body ─────────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px 0' }}>
 
-      {/* ── Day view content ────────────────────────────────────────────── */}
-      {viewMode === 'day' && <>
+        {/* ── Week view ───────────────────────────────────────────────── */}
+        {viewMode === 'week' && (
+          <div style={{ background: 'var(--color-surface-low)', borderRadius: 12, padding: 24, marginBottom: 32, border: '1px solid var(--color-border-ghost)' }}>
+            <WeekView
+              onSelectDay={(d) => {
+                setDate(d)
+                setViewMode('day')
+              }}
+            />
+          </div>
+        )}
 
-      {/* Day summary section — shown when groups exist */}
-      {!loading && groups.length > 0 && (
-        <div className="card mb-5">
-          {/* Stat pills */}
-          <div className="flex flex-wrap gap-2 mb-4">
-            {focusSec > 0 && (
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] bg-[var(--color-surface-high)]">
-                <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="var(--color-accent)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6.5,1 3,5.5 5.5,5.5 4.5,10 8,5.5 5.5,5.5 6.5,1" /></svg>
-                <span className="text-[var(--color-text-secondary)]">
-                  {formatDuration(focusSec)} focus · {focusPct}%
-                </span>
+        {/* ── Day view content ─────────────────────────────────────────── */}
+        {viewMode === 'day' && (
+          <>
+            {error && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '48px 0', gap: 12 }}>
+                <p style={{ fontSize: 13, color: '#f87171', margin: 0 }}>Failed to load history: {error}</p>
+                <button
+                  onClick={() => { setError(null); setLoading(true) }}
+                  style={{ padding: '6px 16px', borderRadius: 999, border: 'none', cursor: 'pointer', background: 'var(--color-primary)', color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700 }}
+                >
+                  Retry
+                </button>
               </div>
             )}
-            {topCat && (
-              <div
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px]"
-                style={{
-                  background:  catColor(topCat) + '15',
-                  color:       catColor(topCat),
-                }}
-              >
-                <span>▸</span>
-                <span>{formatCategory(topCat)}</span>
-              </div>
+
+            {!error && (
+              <>
+                {/* Filter pills */}
+                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginBottom: 32, paddingBottom: 2 }}>
+                  {FILTER_PILLS.map((pill) => {
+                    const isActive = activeFilter === pill.key
+                    return (
+                      <button
+                        key={pill.key}
+                        onClick={() => setActiveFilter(pill.key)}
+                        style={{
+                          padding: '6px 16px',
+                          borderRadius: 10,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          border: isActive ? 'none' : '1px solid var(--color-border-ghost)',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          background: isActive ? 'var(--gradient-primary)' : 'var(--color-surface-container)',
+                          color: isActive ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                          transition: 'all 120ms',
+                        }}
+                      >
+                        {pill.label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Timeline bar (only when data exists) */}
+                {!loading && sessions.length > 0 && (
+                  <DayTimeline sessions={sessions} sortedCats={sortedCats} />
+                )}
+
+                {/* Vertical timeline session list */}
+                {loading ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+                    {[...Array(6)].map((_, i) => (
+                      <div key={i} style={{ height: 80, background: 'var(--color-surface-low)', borderRadius: 12, opacity: 0.4 }} />
+                    ))}
+                  </div>
+                ) : filteredGroups.length === 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 0', textAlign: 'center' }}>
+                    <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No sessions</p>
+                    <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>No activity recorded for this date.</p>
+                  </div>
+                ) : (
+                  /* Vertical timeline */
+                  <div style={{ position: 'relative', paddingLeft: 64 }}>
+                    {/* Vertical line */}
+                    <div style={{
+                      position: 'absolute',
+                      left: 24,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      background: 'linear-gradient(to bottom, transparent, rgba(66,71,84,0.5), rgba(66,71,84,0.5), transparent)',
+                      pointerEvents: 'none',
+                    }} />
+
+                    {filteredGroups.map((g) => {
+                      const groupKey = `${g.bundleId}-${g.firstStart}`
+                      const isActive = isLastGroupActive && groupKey === lastGroupKey
+                      const isHovered = hoveredGroup === groupKey
+                      const color = distColor(g.category)
+
+                      return (
+                        <div
+                          key={groupKey}
+                          style={{ position: 'relative', marginBottom: 12 }}
+                        >
+                          {/* Icon circle — positioned in the left padding zone */}
+                          <div style={{
+                            position: 'absolute',
+                            left: -40,
+                            top: 16,
+                            width: 48,
+                            height: 48,
+                            borderRadius: 14,
+                            background: 'var(--color-surface-highest)',
+                            border: '4px solid var(--color-bg)',
+                            zIndex: 1,
+                            display: 'grid',
+                            placeItems: 'center',
+                          }}>
+                            {isActive ? (
+                              /* Pulsing dot for active session */
+                              <div style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: '50%',
+                                background: 'var(--color-primary)',
+                                boxShadow: '0 0 0 4px rgba(173,198,255,0.20)',
+                                animation: 'pulse 2s ease-in-out infinite',
+                              }} />
+                            ) : (
+                              <AppIcon bundleId={g.bundleId} appName={g.appName} color={color} size={32} fontSize={11} cornerRadius={10} />
+                            )}
+                          </div>
+
+                          {/* Session card */}
+                          <div
+                            onMouseEnter={() => setHoveredGroup(groupKey)}
+                            onMouseLeave={() => setHoveredGroup(null)}
+                            style={{
+                              background: isActive
+                                ? 'rgba(173,198,255,0.05)'
+                                : isHovered
+                                  ? 'var(--color-surface-container)'
+                                  : 'var(--color-surface-low)',
+                              border: isActive
+                                ? '1px solid rgba(173,198,255,0.20)'
+                                : '1px solid var(--color-border-ghost)',
+                              borderRadius: 12,
+                              padding: 20,
+                              boxShadow: 'var(--color-shadow-soft)',
+                              transition: 'background 150ms, border-color 150ms',
+                              cursor: 'default',
+                            }}
+                          >
+                            {/* Top row: app name + category chip + time range */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {formatDisplayAppName(g.appName)}
+                              </span>
+
+                              {isActive && (
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.1em',
+                                  padding: '3px 10px',
+                                  borderRadius: 999,
+                                  background: 'var(--gradient-primary)',
+                                  color: 'var(--color-primary-contrast)',
+                                }}>
+                                  Active Now
+                                </span>
+                              )}
+
+                              <span style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.1em',
+                                padding: '3px 10px',
+                                borderRadius: 999,
+                                background: usesPrimaryGradient(g.category) ? 'var(--gradient-primary)' : `${color}1a`,
+                                color: usesPrimaryGradient(g.category) ? 'var(--color-primary-contrast)' : color,
+                                flexShrink: 0,
+                              }}>
+                                {formatCategory(g.category)}
+                              </span>
+
+                              <span style={{
+                                fontSize: 12,
+                                color: 'var(--color-text-tertiary)',
+                                flexShrink: 0,
+                                fontVariantNumeric: 'tabular-nums',
+                              }}>
+                                {formatTime(g.firstStart)} – {isActive ? 'now' : formatTime(g.lastEnd)}
+                              </span>
+                            </div>
+
+                            {/* Bottom row: duration + quality note */}
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, borderTop: '1px solid var(--color-border-ghost)', paddingTop: 10 }}>
+                              <span style={{
+                                fontSize: 22,
+                                fontWeight: 900,
+                                color: isActive ? 'var(--color-primary)' : 'var(--color-text-primary)',
+                                letterSpacing: '-0.03em',
+                                fontVariantNumeric: 'tabular-nums',
+                              }}>
+                                {formatDuration(g.totalSeconds)}
+                              </span>
+                              {g.isFocused && (
+                                <span style={{ fontSize: 12, fontStyle: 'italic', color: 'var(--color-text-tertiary)' }}>
+                                  deep work
+                                </span>
+                              )}
+                              {g.count > 1 && (
+                                <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                  {g.count} sessions
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Spacer so footer doesn't clip last card */}
+                <div style={{ height: 100 }} />
+              </>
             )}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[12px] bg-[var(--color-surface-high)]">
-              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="1" width="3.5" height="3.5" rx="0.7" /><rect x="6.5" y="1" width="3.5" height="3.5" rx="0.7" /><rect x="1" y="6.5" width="3.5" height="3.5" rx="0.7" /><rect x="6.5" y="6.5" width="3.5" height="3.5" rx="0.7" /></svg>
-              <span className="text-[var(--color-text-secondary)]">
-                {[...catMap.keys()].length} categories · {uniqueApps} apps
-              </span>
+          </>
+        )}
+      </div>
+
+      {/* ── Sticky footer (day view only) ──────────────────────────────── */}
+      {viewMode === 'day' && !error && !loading && groups.length > 0 && (
+        <div style={{
+          position: 'sticky',
+          bottom: 0,
+          background: 'var(--color-glass-bg)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderTop: '1px solid var(--color-glass-border)',
+          padding: '16px 40px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 24,
+          zIndex: 10,
+        }}>
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: 32 }}>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: '0 0 2px' }}>
+                Total Deep Work
+              </p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: 'var(--color-text-primary)', margin: 0, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {formatDuration(focusSec)}
+              </p>
+            </div>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: '0 0 2px' }}>
+                Focus %
+              </p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: 'var(--color-text-primary)', margin: 0, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {focusPct}%
+              </p>
+            </div>
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: '0 0 2px' }}>
+                Apps
+              </p>
+              <p style={{ fontSize: 15, fontWeight: 800, color: 'var(--color-text-primary)', margin: 0, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {uniqueApps}
+              </p>
             </div>
           </div>
 
-          {/* Proportional bar */}
-          <div className="flex h-[6px] rounded-full overflow-hidden gap-px mb-2.5">
-            {sortedCats.slice(0, 8).map((c) => (
-              <div
-                key={c.category}
-                title={`${c.category} · ${formatDuration(c.totalSeconds)}`}
-                style={{
-                  width:      `${percentOf(c.totalSeconds, totalSec)}%`,
-                  background: catColor(c.category),
-                  minWidth:   3,
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Compact legend */}
-          <div className="flex flex-wrap gap-1.5">
-            {sortedCats.slice(0, 6).map((c) => {
-              const col = catColor(c.category)
-              return (
-                <div
-                  key={c.category}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded"
-                  style={{ background: col + '15' }}
-                >
-                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: col }} />
-                  <span className="text-[10px] font-medium" style={{ color: col }}>
-                    {formatCategory(c.category)}
-                  </span>
-                  <span className="text-[10px] text-[var(--color-text-tertiary)]">
-                    {formatDuration(c.totalSeconds)}
-                  </span>
-                </div>
-              )
-            })}
+          {/* Goal progress bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+              Focus goal {goalPct}%
+            </span>
+            <div style={{ width: 120, height: 6, background: 'rgba(66,71,84,0.5)', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${goalPct}%`,
+                background: goalPct >= 100 ? '#34d399' : 'var(--color-primary)',
+                borderRadius: 999,
+                transition: 'width 400ms ease',
+              }} />
+            </div>
           </div>
         </div>
       )}
 
-      {loading ? (
-        <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-[var(--color-border)]">
-          {[...Array(8)].map((_, i) => (
-            <div key={i} className="h-12 bg-[var(--color-surface-card)] animate-pulse" />
-          ))}
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-12 text-center">
-          <p className="text-[14px] font-medium text-[var(--color-text-primary)] mb-1">No sessions</p>
-          <p className="text-[13px] text-[var(--color-text-secondary)]">No activity recorded for this date.</p>
-        </div>
-      ) : (
-        <div className="card p-0 overflow-hidden">
-          {groups.map((g, i) => {
-            const color    = catColor(g.category)
-            const initials = g.appName.slice(0, 2).toUpperCase()
-            return (
-              <div
-                key={`${g.bundleId}-${g.firstStart}`}
-                className={[
-                  'flex items-center gap-3 px-4 py-3.5 hover:bg-[var(--color-surface-high)] transition-colors',
-                  i < groups.length - 1 ? 'border-b border-[var(--color-border)]' : '',
-                ].join(' ')}
-              >
-                {/* Timestamp */}
-                <span className="text-[11px] text-[var(--color-text-tertiary)] w-[68px] shrink-0 tabular-nums">
-                  {formatTime(g.firstStart)}
-                </span>
-
-                {/* Category-colored initials icon */}
-                <div
-                  className="w-7 h-7 rounded-md flex items-center justify-center text-[11px] font-bold shrink-0"
-                  style={{ background: color + '22', color }}
-                >
-                  {initials}
-                </div>
-
-                {/* App name + subtitle */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0 mb-1">
-                    <p className="text-[13px] text-[var(--color-text-primary)] truncate leading-none">
-                      {g.appName}
-                    </p>
-                    <span
-                      className="text-[9px] font-semibold tracking-[0.4px] px-1.5 py-0.5 rounded shrink-0"
-                      style={{ background: color + '1a', color }}
-                    >
-                      {formatCategory(g.category)}
-                    </span>
-                    {g.count > 1 && (
-                      <span className="text-[9px] text-[var(--color-text-tertiary)] px-1.5 py-0.5 rounded shrink-0 bg-[var(--color-surface-high)]">
-                        ×{g.count}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
-                    {formatTime(g.firstStart)} – {formatTime(g.lastEnd)}
-                  </p>
-                </div>
-
-                {/* Duration */}
-                <span className="text-[12px] text-[var(--color-text-secondary)] shrink-0 tabular-nums">
-                  {formatDuration(g.totalSeconds)}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      </>}
+      {/* Keyframe animation for active session pulse */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(173,198,255,0.30); }
+          50% { box-shadow: 0 0 0 8px rgba(173,198,255,0.00); }
+        }
+      `}</style>
     </div>
   )
 }

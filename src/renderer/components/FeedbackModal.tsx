@@ -72,12 +72,12 @@ export default function FeedbackModal({ onClose }: Props) {
                   height: 36,
                   borderRadius: 8,
                   border: selected
-                    ? '1.5px solid var(--color-brand-light)'
+                    ? '1.5px solid var(--color-accent)'
                     : '1px solid var(--color-border)',
                   background: selected
-                    ? 'var(--color-brand-light)'
+                    ? 'var(--color-accent)'
                     : 'var(--color-surface-high)',
-                  color: selected ? '#051425' : 'var(--color-text-secondary)',
+                  color: selected ? '#1a1a1a' : 'var(--color-text-secondary)',
                   fontSize: 13,
                   fontWeight: selected ? 600 : 400,
                   cursor: 'pointer',

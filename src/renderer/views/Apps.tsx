@@ -1,77 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
-import { formatDuration, formatTime, formatDateShort, percentOf, rollingDayBounds } from '../lib/format'
+import { formatDateShort, formatDuration, formatTime, rollingDayBounds } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
-import type { AppUsageSummary, AppSession, AppCategory, LiveSession } from '@shared/types'
+import { buildHourlyUsage, filterVisibleSessions, groupConsecutiveSessions } from '../lib/activity'
+import type { AppCategory, AppSession, AppUsageSummary, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
-
-// ─── App icon component ───────────────────────────────────────────────────────
-// Fetches the real exe icon via Electron's getFileIcon API and caches it in
-// memory so the same icon is never fetched twice per session.
-
-const iconCache = new Map<string, string | null>()
-
-function AppIcon({
-  bundleId,
-  appName,
-  color,
-  size = 32,
-  fontSize = 11,
-}: {
-  bundleId: string
-  appName: string
-  color: string
-  size?: number
-  fontSize?: number
-}) {
-  const [iconUrl, setIconUrl] = useState<string | null | undefined>(
-    iconCache.has(bundleId) ? iconCache.get(bundleId) : undefined,
-  )
-
-  useEffect(() => {
-    if (iconCache.has(bundleId)) return
-    void ipc.db.getAppIcon(bundleId).then((url) => {
-      iconCache.set(bundleId, url)
-      setIconUrl(url)
-    })
-  }, [bundleId])
-
-  const rounded = Math.round(size * 0.3)
-  const initials = appName.slice(0, 2).toUpperCase()
-
-  if (iconUrl) {
-    return (
-      <img
-        src={iconUrl}
-        alt={appName}
-        width={size}
-        height={size}
-        style={{ borderRadius: rounded, display: 'block', objectFit: 'contain' }}
-        onError={() => setIconUrl(null)}
-      />
-    )
-  }
-
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: rounded,
-        background: color + '22',
-        color,
-        fontSize,
-        fontWeight: 700,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-      }}
-    >
-      {initials}
-    </div>
-  )
-}
+import AppIcon from '../components/AppIcon'
+import { formatDisplayAppName } from '../lib/apps'
 
 const ALL_CATEGORIES: AppCategory[] = [
   'development', 'communication', 'browsing', 'writing', 'design',
@@ -80,20 +15,6 @@ const ALL_CATEGORIES: AppCategory[] = [
 ]
 
 const DAYS_OPTIONS = [1, 7, 30] as const
-
-// ─── Category breakdown helpers ───────────────────────────────────────────────
-
-interface CatSummary { category: AppCategory; totalSeconds: number }
-
-function buildCatBreakdown(summaries: AppUsageSummary[]): CatSummary[] {
-  const map = new Map<AppCategory, number>()
-  for (const a of summaries) {
-    map.set(a.category, (map.get(a.category) ?? 0) + a.totalSeconds)
-  }
-  return [...map.entries()]
-    .map(([category, totalSeconds]) => ({ category, totalSeconds }))
-    .sort((a, b) => b.totalSeconds - a.totalSeconds)
-}
 
 function isPresentationNoise(category: AppCategory, durationSeconds: number): boolean {
   return (category === 'system' || category === 'uncategorized') && durationSeconds < 120
@@ -118,8 +39,7 @@ function mergeLiveSummary(
       index === existingIdx
         ? { ...summary, totalSeconds: summary.totalSeconds + liveDur }
         : summary,
-    )
-      .sort((a, b) => b.totalSeconds - a.totalSeconds)
+    ).sort((a, b) => b.totalSeconds - a.totalSeconds)
   }
 
   return [
@@ -132,26 +52,77 @@ function mergeLiveSummary(
       isFocused: FOCUSED_CATEGORIES.includes(live.category),
       sessionCount: 1,
     },
-  ]
-    .sort((a, b) => b.totalSeconds - a.totalSeconds)
+  ].sort((a, b) => b.totalSeconds - a.totalSeconds)
 }
 
-// ─── Main view ────────────────────────────────────────────────────────────────
+function buildUsageInsight(
+  appName: string,
+  sessionCount: number,
+  avgSessionSeconds: number,
+  totalSeconds: number,
+): string {
+  const displayName = formatDisplayAppName(appName)
+  if (sessionCount > 8 && avgSessionSeconds < 300) {
+    return `You opened ${displayName} ${sessionCount} times with an average of ${formatDuration(avgSessionSeconds)} - this looks like frequent context switching or command execution.`
+  }
+  if (avgSessionSeconds > 1800) {
+    return `You use ${displayName} in long focused blocks (avg ${formatDuration(avgSessionSeconds)}) - this is a deep work tool for you.`
+  }
+  if (sessionCount <= 3 && totalSeconds > 3600) {
+    return `You had ${sessionCount} long sustained ${sessionCount === 1 ? 'session' : 'sessions'} today - consistent and focused usage.`
+  }
+  return `Regular usage across ${sessionCount} ${sessionCount === 1 ? 'session' : 'sessions'} today.`
+}
+
+function buildCharacterLine(
+  category: AppCategory,
+  avgSessionSeconds: number,
+  sessionCount: number,
+): string {
+  if (FOCUSED_CATEGORIES.includes(category) && avgSessionSeconds > 20 * 60) return 'Deep focus app'
+  if ((category === 'browsing' || category === 'entertainment') && avgSessionSeconds < 300) return 'Frequent distraction'
+  if (category === 'meetings') return 'Communication & calls'
+  if (sessionCount > 10 && avgSessionSeconds < 5 * 60) return 'Frequent context switching'
+  return formatCategory(category)
+}
+
+// Canonical category color map
+const CAT_COLORS: Record<string, string> = {
+  development:   '#adc6ff',
+  aiTools:       '#34d399',
+  writing:       '#c084fc',
+  design:        '#e879f9',
+  research:      '#67e8f9',
+  meetings:      '#ffb95f',
+  communication: '#4fdbc8',
+  email:         '#fbbf24',
+  productivity:  '#a3e635',
+  browsing:      '#94a3b8',
+  entertainment: '#f87171',
+  social:        '#fb923c',
+  system:        '#6b7280',
+  uncategorized: '#6b7280',
+}
+
+function distColor(category: AppCategory): string {
+  return CAT_COLORS[category] ?? catColor(category) ?? '#52525b'
+}
 
 export default function Apps() {
-  const [days, setDays]               = useState<(typeof DAYS_OPTIONS)[number]>(7)
-  const [summaries, setSummaries]     = useState<AppUsageSummary[]>([])
-  const [live, setLive]               = useState<LiveSession | null>(null)
-  const [loading, setLoading]         = useState(true)
+  const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(7)
+  const [summaries, setSummaries] = useState<AppUsageSummary[]>([])
+  const [live, setLive] = useState<LiveSession | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [selectedCat, setSelectedCat] = useState<AppCategory | null>(null)
   const [selectedApp, setSelectedApp] = useState<AppUsageSummary | null>(null)
-  const [overrides, setOverrides]     = useState<Record<string, AppCategory>>({})
+  const [, setOverrides] = useState<Record<string, AppCategory>>({})
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const dropdownRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    function handleOutsideClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+    function handleOutsideClick(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setOpenDropdown(null)
       }
     }
@@ -163,22 +134,30 @@ export default function Apps() {
 
   useEffect(() => {
     setLoading(true)
+    setError(null)
     setSelectedCat(null)
     setSelectedApp(null)
 
     let cancelled = false
 
     async function refresh() {
-      const [summaryData, liveData, overrideData] = await Promise.all([
-        ipc.db.getAppSummaries(days),
-        ipc.tracking.getLiveSession(),
-        ipc.db.getCategoryOverrides(),
-      ])
-      if (cancelled) return
-      setSummaries(summaryData as AppUsageSummary[])
-      setLive(liveData as LiveSession | null)
-      setOverrides(overrideData as Record<string, AppCategory>)
-      setLoading(false)
+      if (document.hidden) return
+      try {
+        const [summaryData, liveData, overrideData] = await Promise.all([
+          ipc.db.getAppSummaries(days),
+          ipc.tracking.getLiveSession(),
+          ipc.db.getCategoryOverrides(),
+        ])
+        if (cancelled) return
+        setSummaries(summaryData as AppUsageSummary[])
+        setLive(liveData as LiveSession | null)
+        setOverrides(overrideData as Record<string, AppCategory>)
+        setError(null)
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
     void refresh()
@@ -219,11 +198,13 @@ export default function Apps() {
             (summary) => summary.bundleId === selectedApp.bundleId,
           ) ?? selectedApp)
         : selectedApp
+
     return (
       <AppDetailPanel
         app={selectedSummary}
         days={days}
         onBack={() => setSelectedApp(null)}
+        onDaysChange={setDays}
       />
     )
   }
@@ -232,39 +213,45 @@ export default function Apps() {
     return (
       <div
         ref={dropdownRef}
-        className="absolute top-full left-0 mt-1 z-50 rounded-lg py-1 min-w-[160px]"
         style={{
-          background: 'var(--color-surface-elevated, var(--color-surface-card))',
-          border: '1px solid var(--color-border)',
+          position: 'absolute', top: '100%', left: 0, marginTop: 4,
+          zIndex: 50, borderRadius: 8, padding: '4px 0', minWidth: 160,
+          background: 'var(--color-surface-card)',
+          border: '1px solid var(--color-border-ghost)',
           boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
         }}
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
       >
-        {ALL_CATEGORIES.map((cat) => {
-          const col = catColor(cat)
-          const isActive = cat === currentCategory
+        {ALL_CATEGORIES.map((category) => {
+          const color = distColor(category)
+          const active = category === currentCategory
           return (
             <button
-              key={cat}
-              onClick={() => void handleSetOverride(bundleId, cat)}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-high)] transition-colors"
+              key={category}
+              onClick={() => void handleSetOverride(bundleId, category)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 12px', background: 'transparent', border: 'none',
+                cursor: 'pointer', textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
-              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: col }} />
-              <span
-                className="text-[12px]"
-                style={{ color: isActive ? col : 'var(--color-text-primary)', fontWeight: isActive ? 600 : 400 }}
-              >
-                {formatCategory(cat)}
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: active ? color : 'var(--color-text-primary)', fontWeight: active ? 600 : 400 }}>
+                {formatCategory(category)}
               </span>
             </button>
           )
         })}
-        <div className="border-t border-[var(--color-border)] mt-1 pt-1">
+        <div style={{ borderTop: '1px solid var(--color-border-ghost)', marginTop: 4, paddingTop: 4 }}>
           <button
             onClick={() => void handleClearOverride(bundleId)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-high)] transition-colors"
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
-            <span className="text-[12px] text-[var(--color-text-tertiary)]">Reset to auto</span>
+            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Reset to auto</span>
           </button>
         </div>
       </div>
@@ -275,41 +262,45 @@ export default function Apps() {
   const visibleSummaries = mergedSummaries.filter(
     (summary) => !isPresentationNoise(summary.category, summary.totalSeconds),
   )
-
-  const totalSec     = mergedSummaries.reduce((s, a) => s + a.totalSeconds, 0)
-  const focusSec     = visibleSummaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-  const focusPct     = percentOf(focusSec, totalSec)
-  const catBreakdown = buildCatBreakdown(visibleSummaries)
-
+  const totalSeconds = mergedSummaries.reduce((sum, summary) => sum + summary.totalSeconds, 0)
   const filtered = selectedCat
-    ? visibleSummaries.filter((a) => a.category === selectedCat)
+    ? visibleSummaries.filter((summary) => summary.category === selectedCat)
     : visibleSummaries
-  const maxSec   = filtered[0]?.totalSeconds ?? 1
+
+  const catMap = new Map<AppCategory, number>()
+  for (const s of visibleSummaries) catMap.set(s.category, (catMap.get(s.category) ?? 0) + s.totalSeconds)
+  const catBreakdown = [...catMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([category, seconds]) => ({ category, seconds }))
 
   return (
-    <div className="p-7 max-w-3xl mx-auto">
-
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex items-end justify-between mb-5">
+    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%' }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <p className="section-label mb-1">Apps</p>
-          <h1 className="text-2xl font-semibold text-[var(--color-text-primary)] tracking-tight">
-            Usage breakdown
+          <h1 style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em', lineHeight: 1 }}>
+            App Usage
           </h1>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>
+            {days === 1 ? "Today's" : `Last ${days} days'`} app activity
+          </p>
         </div>
-        <div className="flex gap-1 p-1 rounded-lg bg-[var(--color-surface-card)] border border-[var(--color-border)]">
-          {DAYS_OPTIONS.map((d) => (
+        {/* Range tabs */}
+        <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 12, padding: 4 }}>
+          {DAYS_OPTIONS.map((option) => (
             <button
-              key={d}
-              onClick={() => setDays(d)}
-              className={[
-                'px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors',
-                days === d
-                  ? 'bg-[var(--color-surface-high)] text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
-              ].join(' ')}
+              key={option}
+              onClick={() => setDays(option)}
+              style={{
+                padding: '6px 14px', borderRadius: 8, fontSize: 12,
+                fontWeight: days === option ? 700 : 500,
+                border: 'none', cursor: 'pointer',
+                background: days === option ? 'var(--gradient-primary)' : 'transparent',
+                color: days === option ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                transition: 'all 120ms',
+              }}
             >
-              {d === 1 ? 'Today' : `${d}d`}
+              {option === 1 ? 'Today' : `${option}d`}
             </button>
           ))}
         </div>
@@ -317,195 +308,183 @@ export default function Apps() {
 
       {loading ? (
         <LoadingSkeleton />
+      ) : error ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 0', gap: 12, textAlign: 'center' }}>
+          <p style={{ fontSize: 13, color: '#f87171', margin: 0 }}>Failed to load apps: {error}</p>
+          <button
+            onClick={() => { setError(null); setLoading(true) }}
+            style={{ padding: '8px 20px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'var(--color-primary)', color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700 }}
+          >
+            Retry
+          </button>
+        </div>
       ) : summaries.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-12 text-center">
-          <p className="text-[14px] font-medium text-[var(--color-text-primary)] mb-1">No data</p>
-          <p className="text-[13px] text-[var(--color-text-secondary)]">
-            No app usage recorded for this period.
-          </p>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 0', textAlign: 'center' }}>
+          <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No data</p>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>No app usage recorded for this period.</p>
         </div>
       ) : (
         <>
-          {/* ── Summary stat chips ─────────────────────────────────────── */}
-          <div className="flex gap-2 mb-4 flex-wrap">
-            <StatChip label="Screen time" value={formatDuration(totalSec)} />
-            <StatChip label="Focus time"  value={formatDuration(focusSec)} accent />
-            <StatChip label="Focus share" value={`${focusPct}%`} />
-            <StatChip label="Apps" value={`${visibleSummaries.length}`} />
-          </div>
-
-          {/* ── Category breakdown bar ─────────────────────────────────── */}
-          <div className="card mb-4">
-            <p className="section-label mb-3">Category Breakdown</p>
-
-            {/* Proportional bar */}
-            <div className="flex h-[8px] rounded-full overflow-hidden gap-px mb-3">
-              {catBreakdown.slice(0, 8).map((c) => (
-                <div
-                  key={c.category}
-                  title={`${c.category} · ${formatDuration(c.totalSeconds)}`}
-                  onClick={() => setSelectedCat(selectedCat === c.category ? null : c.category)}
-                  style={{
-                    width:      `${percentOf(c.totalSeconds, totalSec)}%`,
-                    background: catColor(c.category),
-                    minWidth:   3,
-                    cursor:     'pointer',
-                    opacity:    selectedCat && selectedCat !== c.category ? 0.35 : 1,
-                    transition: 'opacity 0.15s',
-                  }}
-                />
-              ))}
-            </div>
-
-            {/* Legend chips — also act as filter pills */}
-            <div className="flex flex-wrap gap-1.5">
-              {catBreakdown.slice(0, 8).map((c) => {
-                const col    = catColor(c.category)
-                const active = selectedCat === c.category
-                return (
-                  <button
-                    key={c.category}
-                    onClick={() => setSelectedCat(active ? null : c.category)}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-full transition-opacity"
-                    style={{
-                      background: col + (active ? '2a' : '1a'),
-                      border:     `1px solid ${col}${active ? '60' : '00'}`,
-                      opacity:    selectedCat && !active ? 0.5 : 1,
-                    }}
-                  >
-                    <div className="w-1.5 h-1.5 rounded-full" style={{ background: col }} />
-                    <span className="text-[11px] font-medium" style={{ color: col }}>
-                      {formatCategory(c.category)}
-                    </span>
-                    <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                      {formatDuration(c.totalSeconds)}
-                    </span>
-                  </button>
-                )
-              })}
-              {selectedCat && (
+          {/* Category filter chips */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
+            <button
+              onClick={() => setSelectedCat(null)}
+              style={{
+                padding: '4px 14px', borderRadius: 999, border: !selectedCat ? '1px solid rgba(173,198,255,0.22)' : '1px solid var(--color-border-ghost)', cursor: 'pointer',
+                fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em',
+                background: !selectedCat ? 'var(--gradient-primary)' : 'var(--color-surface-low)',
+                color: !selectedCat ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                transition: 'all 120ms', flexShrink: 0,
+              }}
+            >
+              All
+            </button>
+            {catBreakdown.slice(0, 8).map((c) => {
+              const active = selectedCat === c.category
+              const color = distColor(c.category)
+              return (
                 <button
-                  onClick={() => setSelectedCat(null)}
-                  className="text-[11px] text-[var(--color-text-tertiary)] px-2 py-1 hover:text-[var(--color-text-secondary)] transition-colors"
+                  key={c.category}
+                  onClick={() => setSelectedCat(active ? null : c.category)}
+                  style={{
+                    padding: '4px 14px', borderRadius: 999, border: active ? `1px solid ${color}33` : '1px solid var(--color-border-ghost)', cursor: 'pointer',
+                    fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em',
+                    background: active && c.category === 'development' ? 'var(--gradient-primary)' : active ? `${color}1a` : 'var(--color-surface-low)',
+                    color: active && c.category === 'development' ? 'var(--color-primary-contrast)' : active ? color : 'var(--color-text-secondary)',
+                    transition: 'all 120ms', flexShrink: 0,
+                  }}
                 >
-                  clear ×
+                  {formatCategory(c.category)}
                 </button>
-              )}
-            </div>
+              )
+            })}
           </div>
 
-          {/* ── App list ───────────────────────────────────────────────── */}
-          <div className="card p-0 overflow-hidden">
-            {filtered.length === 0 ? (
-              <p className="px-4 py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">
-                No apps in this category for the selected period.
-              </p>
-            ) : (
-              filtered.map((app, i) => {
-                const pct    = totalSec > 0 ? Math.round((app.totalSeconds / totalSec) * 100) : 0
-                const barW   = maxSec > 0 ? (app.totalSeconds / maxSec) * 100 : 0
-                const color  = catColor(app.category)
-                const isFocused = FOCUSED_CATEGORIES.includes(app.category)
+          {/* App list */}
+          {filtered.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '40px 0', margin: 0 }}>
+              No apps in this category for the selected period.
+            </p>
+          ) : (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--color-surface-container)',
+              border: '1px solid var(--color-border-ghost)',
+              borderRadius: 12,
+              overflow: 'hidden',
+              boxShadow: 'var(--color-shadow-soft)',
+            }}>
+              {filtered.map((app, index) => {
+                const pct = totalSeconds > 0 ? Math.round((app.totalSeconds / totalSeconds) * 100) : 0
+                const color = distColor(app.category)
+                const displayName = formatDisplayAppName(app.appName)
+                const sc = app.sessionCount ?? 1
+                const avgSec = sc > 0 ? Math.round(app.totalSeconds / sc) : 0
+                const characterLine = buildCharacterLine(app.category, avgSec, sc)
+                const isLive = live?.bundleId === app.bundleId
+
                 return (
-                  <button
+                  <div
                     key={app.bundleId}
                     onClick={() => setSelectedApp(app)}
-                    className={[
-                      'w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-[var(--color-surface-high)] transition-colors',
-                      i < filtered.length - 1 ? 'border-b border-[var(--color-border)]' : '',
-                    ].join(' ')}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      minHeight: 64, padding: '0 18px', cursor: 'pointer',
+                      borderBottom: index < filtered.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
+                      boxShadow: isLive ? 'inset 4px 0 0 var(--color-primary)' : 'none',
+                      background: isLive ? 'linear-gradient(90deg, rgba(15,99,219,0.08), transparent 18%)' : 'transparent',
+                      transition: 'background 120ms',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-low)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
-                    {/* Rank + icon */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[11px] text-[var(--color-text-tertiary)] w-4 text-right tabular-nums">
-                        {i + 1}
-                      </span>
-                      <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={32} fontSize={11} />
+                    {/* Rank */}
+                    <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', width: 20, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                      {index + 1}
+                    </span>
+
+                    {/* Icon */}
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 12,
+                      background: 'var(--color-surface-highest)',
+                      border: '1px solid var(--color-border-ghost)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    }}>
+                      <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={28} fontSize={11} />
                     </div>
 
-                    {/* Name, category, session count, bar */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <p className="text-[13px] text-[var(--color-text-primary)] truncate leading-none">
-                          {app.appName}
-                        </p>
-                        <div className="relative shrink-0">
+                    {/* Name + character line + dropdown */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {displayName}
+                        </span>
+                        <div className="relative" style={{ display: 'inline-block' }}>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation()
+                            onClick={(event) => {
+                              event.stopPropagation()
                               setOpenDropdown(openDropdown === app.bundleId ? null : app.bundleId)
                             }}
                             title="Change category"
-                            className="flex items-center gap-1 text-[10px] font-semibold tracking-[0.3px] px-2 py-0.5 rounded hover:opacity-90 transition-opacity border"
-                            style={{ background: color + '18', color, borderColor: color + '40' }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', padding: 0 }}
                           >
-                            {overrides[app.bundleId] && (
-                              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-                            )}
-                            {formatCategory(app.category)}
-                            {/* pencil icon */}
-                            <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ opacity: 0.7 }}>
-                              <path d="M8.5 1.5a1.415 1.415 0 0 1 2 2L4 10 1 11l1-3 6.5-6.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                            {characterLine}
+                            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ opacity: 0.5 }}>
+                              <path d="M2 3l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           </button>
                           {openDropdown === app.bundleId && renderCategoryDropdown(app.bundleId, app.category)}
                         </div>
-                        {isFocused && (
-                          <span
-                            className="text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0"
-                            style={{ background: 'rgba(180,197,255,0.12)', color: 'var(--color-accent)' }}
-                          >
-                            Focus
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-[3px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
-                          <div
-                            className="h-full rounded-full transition-all"
-                            style={{ width: `${barW}%`, background: color }}
-                          />
-                        </div>
-                        {app.sessionCount != null && (
-                          <span className="text-[10px] text-[var(--color-text-tertiary)] shrink-0 tabular-nums">
-                            {app.sessionCount} {app.sessionCount === 1 ? 'session' : 'sessions'}
-                          </span>
-                        )}
                       </div>
                     </div>
 
-                    {/* Duration */}
-                    <span className="text-[12px] text-[var(--color-text-secondary)] shrink-0 tabular-nums">
-                      {formatDuration(app.totalSeconds)}
-                    </span>
+                    {/* Category chip */}
+                    <div style={{
+                      padding: '3px 10px', borderRadius: 999, flexShrink: 0,
+                      background: `${color}14`, color, fontWeight: 700, fontSize: 10,
+                      textTransform: 'uppercase', letterSpacing: '0.1em',
+                    }}>
+                      {formatCategory(app.category)}
+                    </div>
 
-                    {/* Percentage */}
-                    <span className="text-[11px] text-[var(--color-text-tertiary)] w-9 text-right shrink-0 tabular-nums">
-                      {pct}%
-                    </span>
-                  </button>
+                    {/* Mini progress bar + duration */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                      <div style={{ width: 60, height: 4, borderRadius: 99, background: 'var(--color-surface-highest)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: 'var(--gradient-primary)', borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 900, color: 'var(--color-primary)', fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'right' }}>
+                        {formatDuration(app.totalSeconds)}
+                      </span>
+                    </div>
+                  </div>
                 )
-              })
-            )}
-          </div>
+              })}
+            </div>
+          )}
         </>
       )}
     </div>
   )
 }
 
-// ─── App detail panel ─────────────────────────────────────────────────────────
-
 function AppDetailPanel({
-  app, days, onBack,
+  app,
+  days,
+  onBack,
+  onDaysChange,
 }: {
   app: AppUsageSummary
   days: number
   onBack: () => void
+  onDaysChange: (d: (typeof DAYS_OPTIONS)[number]) => void
 }) {
   const [sessions, setSessions] = useState<AppSession[]>([])
-  const [loading, setLoading]   = useState(true)
-  const [live, setLive]         = useState<LiveSession | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [live, setLive] = useState<LiveSession | null>(null)
+  const [backHovered, setBackHovered] = useState(false)
+  const [hoveredSparkIndex, setHoveredSparkIndex] = useState<number | null>(null)
+  const [hoveredUsageLabel, setHoveredUsageLabel] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -530,7 +509,7 @@ function AppDetailPanel({
     }
   }, [app.bundleId, days])
 
-  const color = catColor(app.category)
+  const color = distColor(app.category)
   const [fromMs, toMs] = rollingDayBounds(days)
   const liveSession = live && live.bundleId === app.bundleId
     ? (() => {
@@ -551,174 +530,531 @@ function AppDetailPanel({
       })()
     : null
   const detailSessions = liveSession ? [liveSession, ...sessions] : sessions
+  const visibleSessions = filterVisibleSessions(detailSessions, 10, false)
+  const groupedSessions = groupConsecutiveSessions(visibleSessions, { gapMs: 5 * 60_000, minSeconds: 10 }).slice().reverse()
+  const displayName = formatDisplayAppName(app.appName)
+  const sessionTotalSeconds = visibleSessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+  const avgSessionSeconds = visibleSessions.length > 0 ? Math.round(sessionTotalSeconds / visibleSessions.length) : 0
+  const longestSession = visibleSessions.length > 0 ? Math.max(...visibleSessions.map((s) => s.durationSeconds)) : 0
 
-  // avgSec: computed from the clipped session rows returned for the selected range.
-  const sessionTotalSec = detailSessions.reduce((s, x) => s + x.durationSeconds, 0)
-  const avgSec          = detailSessions.length > 0 ? Math.round(sessionTotalSec / detailSessions.length) : 0
-  // longestSec: exact — max single session duration from returned rows
-  const longestSec      = detailSessions.reduce((m, s) => Math.max(m, s.durationSeconds), 0)
-  const latestSession = detailSessions[0] ?? null
+  const usageInsight = buildUsageInsight(app.appName, visibleSessions.length, avgSessionSeconds, sessionTotalSeconds)
+  const usageBars = buildHourlyUsage(visibleSessions, 9, 17)
+  const maxHourSeconds = Math.max(...usageBars.map((bar) => bar.seconds), 1)
+  const maxBarIdx = usageBars.reduce((maxIdx, bar, i, arr) => bar.seconds > arr[maxIdx].seconds ? i : maxIdx, 0)
+
+  // Intentionality breakdown
+  const catMap = new Map<AppCategory, number>()
+  for (const s of visibleSessions) catMap.set(s.category, (catMap.get(s.category) ?? 0) + s.durationSeconds)
+  const catBreakdown = [...catMap.entries()].sort((a, b) => b[1] - a[1])
+
+  // Sparkline bars (7 days placeholder distribution based on sessions)
+  const sparkBars = Array.from({ length: 7 }, (_, i) => {
+    const dayBucket = visibleSessions.filter((s) => {
+      const d = new Date(s.startTime)
+      const today = new Date()
+      const diff = Math.floor((today.getTime() - d.getTime()) / 86_400_000)
+      return diff === (6 - i)
+    }).reduce((sum, s) => sum + s.durationSeconds, 0)
+    return dayBucket
+  })
+  const maxSpark = Math.max(...sparkBars, 1)
+  const primaryCategoryPct = catBreakdown[0] ? Math.round((catBreakdown[0][1] / Math.max(sessionTotalSeconds, 1)) * 100) : 0
+  const sparkLabels = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (6 - i))
+    return date.toLocaleDateString('en-US', { weekday: 'short' })
+  })
+  const hoveredSparkText = hoveredSparkIndex !== null
+    ? `${sparkLabels[hoveredSparkIndex]} · ${sparkBars[hoveredSparkIndex] > 0 ? formatDuration(sparkBars[hoveredSparkIndex]) : 'No usage'}`
+    : null
+  const hoveredUsageText = hoveredUsageLabel
+    ? (() => {
+        const bar = usageBars.find((entry) => entry.label === hoveredUsageLabel)
+        if (!bar) return null
+        return `${bar.label}:00 · ${bar.seconds > 0 ? formatDuration(bar.seconds) : 'No usage'}`
+      })()
+    : null
 
   return (
-    <div className="p-7 max-w-3xl mx-auto">
+    <div style={{ overflowY: 'auto', height: '100%' }}>
+      {/* Hero section */}
+      <div style={{ padding: '32px 40px 0' }}>
+        {/* Breadcrumb */}
+        <button
+          onClick={onBack}
+          style={{
+            fontSize: 12, fontWeight: 700, color: backHovered ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+            background: backHovered ? 'var(--gradient-primary)' : 'none', border: 'none', cursor: 'pointer',
+            marginBottom: 24, padding: backHovered ? '6px 12px' : '0',
+            display: 'flex', alignItems: 'center', gap: 6,
+            letterSpacing: '0.02em', borderRadius: 999, transition: 'all 120ms ease',
+          }}
+          onMouseEnter={() => setBackHovered(true)}
+          onMouseLeave={() => setBackHovered(false)}
+        >
+          Back to Apps
+        </button>
 
-      {/* ── Back + header ──────────────────────────────────────────────── */}
-      <button
-        onClick={onBack}
-        className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors mb-5"
-      >
-        ← All Apps
-      </button>
+        {/* App hero row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 32 }}>
+          {/* App icon */}
+          <div style={{
+            width: 96, height: 96, borderRadius: 12,
+            background: 'var(--color-surface-highest)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            boxShadow: `0 8px 32px ${color}18`,
+          }}>
+            <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={64} fontSize={22} />
+          </div>
 
-      <div className="flex items-center gap-3 mb-5">
-        <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={44} fontSize={13} />
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight leading-none mb-0.5">
-            {app.appName}
-          </h1>
-          <span
-            className="text-[10px] font-semibold tracking-[0.4px] px-2 py-0.5 rounded"
-            style={{ background: color + '1a', color }}
-          >
-            {formatCategory(app.category)}
-          </span>
+          {/* Title + category */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 style={{
+              fontSize: 36, fontWeight: 900, color: 'var(--color-text-primary)',
+              margin: '0 0 6px', letterSpacing: '-0.03em', lineHeight: 1,
+            }}>
+              {displayName}
+            </h1>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '3px 12px', borderRadius: 999,
+              background: `${color}1a`, color, fontWeight: 700,
+              fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.15em',
+            }}>
+              {formatCategory(app.category)}
+            </div>
+          </div>
+
+          {/* Range tabs */}
+          <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 12, padding: 4, flexShrink: 0 }}>
+            {DAYS_OPTIONS.map((option) => (
+              <button
+                key={option}
+                onClick={() => onDaysChange(option)}
+                style={{
+                  padding: '6px 14px', borderRadius: 8, fontSize: 12,
+                  fontWeight: days === option ? 700 : 500,
+                  border: 'none', cursor: 'pointer',
+                  background: days === option ? 'var(--gradient-primary)' : 'transparent',
+                  color: days === option ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                  transition: 'all 120ms',
+                }}
+              >
+                {option === 1 ? 'Today' : `${option}d`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* ── Stats row ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-2 mb-5">
-        <MiniStat label="Total time"  value={formatDuration(app.totalSeconds)} />
-        <MiniStat label="Sessions"    value={`${detailSessions.length}`} />
-        <MiniStat label="Avg session" value={avgSec > 0 ? formatDuration(avgSec) : '—'} />
-        <MiniStat label="Longest"     value={longestSec > 0 ? formatDuration(longestSec) : '—'} />
-      </div>
+      {/* Bento row 1: Total Usage (4/12) + Usage Activity (8/12) */}
+      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '4fr 8fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+        {/* Col A: Total Usage card */}
+        <div style={{
+          background: 'var(--color-surface-container)', borderRadius: 12, padding: 32,
+          border: '1px solid var(--color-border-ghost)',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <p style={{
+            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
+            margin: '0 0 12px',
+          }}>
+            Total Usage
+          </p>
+          <p style={{
+            fontSize: 52, fontWeight: 900, color: 'var(--color-text-primary)',
+            margin: '0 0 4px', letterSpacing: '-0.03em', lineHeight: 1,
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {formatDuration(app.totalSeconds)}
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '0 0 auto' }}>
+            {visibleSessions.length} {visibleSessions.length === 1 ? 'session' : 'sessions'}
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: '14px 0 0', lineHeight: 1.6, maxWidth: 300 }}>
+            {usageInsight}
+          </p>
 
-      <div className="card mb-5">
-        <p className="section-label mb-2">Detail</p>
-        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed">
-          {days === 1 ? 'Today' : `Within the last ${days} days`}, this panel is showing{' '}
-          <span className="text-[var(--color-text-primary)] font-medium">
-            {formatDuration(sessionTotalSec)}
-          </span>{' '}
-          of clipped {app.appName} activity across {detailSessions.length}{' '}
-          {detailSessions.length === 1 ? 'session' : 'sessions'}.
-          {latestSession && (
-            <>
-              {' '}Latest activity was at{' '}
-              <span className="text-[var(--color-text-primary)] font-medium">
-                {formatTime(latestSession.startTime)}
-              </span>.
-            </>
+          {/* Sparkline bars */}
+          {hoveredSparkText && (
+            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '18px 0 0' }}>
+              {hoveredSparkText}
+            </p>
           )}
-        </p>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 96, marginTop: hoveredSparkText ? 10 : 24 }}>
+            {sparkBars.map((val, i) => {
+              const isToday = i === sparkBars.length - 1
+              const h = Math.max(4, Math.round((val / maxSpark) * 96))
+              return (
+                <div
+                  key={i}
+                  style={{ flex: 1, height: 96, display: 'flex', alignItems: 'flex-end' }}
+                  onMouseEnter={() => setHoveredSparkIndex(i)}
+                  onMouseLeave={() => setHoveredSparkIndex(null)}
+                  title={`${sparkLabels[i]}: ${val > 0 ? formatDuration(val) : 'No usage'}`}
+                >
+                  <div style={{
+                    width: '100%', height: h,
+                    borderRadius: 4,
+                    background: isToday ? 'var(--gradient-primary)' : 'var(--color-surface-highest)',
+                    opacity: hoveredSparkIndex === null || hoveredSparkIndex === i ? 1 : 0.42,
+                    transition: 'height 300ms, opacity 140ms ease',
+                  }} />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Col B: Usage Activity card */}
+        <div style={{ background: 'var(--color-surface-container)', borderRadius: 12, padding: 32, border: '1px solid var(--color-border-ghost)' }}>
+          <div style={{ marginBottom: 20 }}>
+            <p style={{
+              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+              letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
+              margin: '0 0 4px',
+            }}>
+              Usage Activity
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', margin: 0 }}>
+              {`Hourly breakdown - ${days === 1 ? 'today' : `last ${days} days`}`}
+            </p>
+          </div>
+
+          {/* Bar chart */}
+          {hoveredUsageText && (
+            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '0 0 14px' }}>
+              {hoveredUsageText}
+            </p>
+          )}
+          {usageBars.every((bar) => bar.seconds === 0) ? (
+            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '32px 0', margin: 0 }}>
+              No activity recorded.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 96 }}>
+              {usageBars.map((bar, i) => {
+                const isMax = i === maxBarIdx && bar.seconds > 0
+                const h = Math.max(4, Math.round((bar.seconds / maxHourSeconds) * 96))
+                return (
+                  <div key={bar.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                    <div style={{ width: '100%', height: 96, display: 'flex', alignItems: 'flex-end' }}>
+                      <div
+                        title={`${bar.label}:00 - ${formatDuration(bar.seconds)}`}
+                        onMouseEnter={() => setHoveredUsageLabel(bar.label)}
+                        onMouseLeave={() => setHoveredUsageLabel(null)}
+                        style={{
+                          width: '100%',
+                          height: h,
+                          borderRadius: 6,
+                          background: isMax ? 'var(--gradient-primary)' : 'var(--color-surface-highest)',
+                          boxShadow: isMax || hoveredUsageLabel === bar.label ? '0 0 12px rgba(173,198,255,0.35)' : 'none',
+                          opacity: hoveredUsageLabel === null || hoveredUsageLabel === bar.label ? 1 : 0.42,
+                          transition: 'background 200ms, opacity 140ms ease',
+                          cursor: 'default',
+                        }}
+                      />
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>{bar.label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Recent sessions ────────────────────────────────────────────── */}
-      <div className="card p-0 overflow-hidden">
-        <p className="section-label px-4 pt-4 pb-3">Recent Sessions</p>
-        {loading ? (
-          <div className="px-4 pb-4 flex flex-col gap-2">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="h-12 rounded-lg animate-pulse bg-[var(--color-surface-high)]" />
+      {/* Bento row 2: Intentionality Breakdown (7/12) + Session History (5/12) */}
+      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+        {/* Col A: Glass Intentionality Breakdown */}
+        <div style={{
+          background: 'var(--color-glass-bg)',
+          backdropFilter: 'blur(20px)',
+          border: '1px solid var(--color-glass-border)',
+          borderRadius: 12, padding: 32,
+        }}>
+          <p style={{
+            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
+            margin: '0 0 12px',
+          }}>
+            Usage Profile
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 20 }}>
+            {[
+              { label: 'Avg Session', value: avgSessionSeconds > 0 ? formatDuration(avgSessionSeconds) : '--' },
+              { label: 'Longest', value: longestSession > 0 ? formatDuration(longestSession) : '--' },
+              { label: 'Sessions', value: String(visibleSessions.length) },
+            ].map((stat) => (
+              <div
+                key={stat.label}
+                style={{
+                  borderRadius: 10,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-container)',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.14em',
+                  color: 'var(--color-text-secondary)',
+                }}>
+                  {stat.label}
+                </span>
+                <span style={{
+                  fontSize: 22,
+                  fontWeight: 900,
+                  color: 'var(--color-text-primary)',
+                  letterSpacing: '-0.03em',
+                  lineHeight: 1,
+                  fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {stat.value}
+                </span>
+              </div>
             ))}
           </div>
-        ) : detailSessions.length === 0 ? (
-          <p className="px-4 pb-4 text-[13px] text-[var(--color-text-tertiary)]">No sessions recorded.</p>
-        ) : (
-          detailSessions.map((s, i) => (
-            <div
-              key={s.id}
-              className={[
-                'flex items-center gap-3 px-4 py-3',
-                i < detailSessions.length - 1 ? 'border-b border-[var(--color-border)]' : '',
-              ].join(' ')}
-            >
-              <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
-                {/* Date badge — only shown in multi-day view (7d / 30d) */}
-                {days > 1 && (
-                  <span className="text-[10px] text-[var(--color-text-tertiary)] shrink-0 tabular-nums px-2 py-0.5 rounded-full bg-[var(--color-surface-high)]">
-                    {formatDateShort(s.startTime)}
+          {catBreakdown.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>No data available.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '14px 16px',
+                borderRadius: 10,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-container)',
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{
+                    fontSize: 10,
+                    fontWeight: 900,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.14em',
+                    color: 'var(--color-text-secondary)',
+                  }}>
+                    Primary Mode
                   </span>
-                )}
-                <span className="text-[12px] text-[var(--color-text-primary)] tabular-nums">
-                  {formatTime(s.startTime)}
-                  {s.endTime ? ` – ${formatTime(s.endTime)}` : ''}
+                  <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--color-text-primary)' }}>
+                    {formatCategory(catBreakdown[0][0])}
+                  </span>
+                </div>
+                <span style={{
+                  fontSize: 22,
+                  fontWeight: 900,
+                  color: 'var(--color-primary)',
+                  letterSpacing: '-0.03em',
+                  fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {primaryCategoryPct}%
                 </span>
-                {s.id === -1 && (
-                  <span
-                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
-                    style={{ background: 'var(--color-icon-tint)', color: 'var(--color-accent)' }}
-                  >
-                    live
-                  </span>
-                )}
               </div>
-              <span className="text-[12px] text-[var(--color-text-secondary)] tabular-nums shrink-0">
-                {formatDuration(s.durationSeconds)}
-              </span>
+              {catBreakdown.map(([cat, sec]) => {
+                const pct = Math.round((sec / (sessionTotalSeconds || 1)) * 100)
+                const cColor = distColor(cat as AppCategory)
+                return (
+                  <div key={cat}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: cColor, flexShrink: 0 }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                          {formatCategory(cat)}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>{pct}%</span>
+                    </div>
+                    <div style={{ height: 10, borderRadius: 999, background: 'var(--color-bg)', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', width: `${pct}%`,
+                        background: cColor, borderRadius: 999,
+                        transition: 'width 300ms',
+                      }} />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          ))
-        )}
+          )}
+        </div>
+
+        {/* Col B: Session History card */}
+        <div style={{
+          background: 'var(--color-surface-container)',
+          border: '1px solid var(--color-border-ghost)',
+          borderRadius: 12,
+          padding: 32,
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: 'var(--color-shadow-soft)',
+        }}>
+          <p style={{
+            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
+            margin: '0 0 16px',
+          }}>
+            Session History
+          </p>
+
+          {loading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[...Array(4)].map((_, i) => (
+                <div key={i} style={{ height: 36, borderRadius: 8, background: 'var(--color-surface-high)', opacity: 0.5 }} />
+              ))}
+            </div>
+          ) : groupedSessions.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>No sessions recorded.</p>
+          ) : (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              border: '1px solid var(--color-border-ghost)',
+              borderRadius: 12,
+              overflow: 'hidden',
+              background: 'var(--color-surface-low)',
+            }}>
+              {groupedSessions.slice(0, 6).map((group, index) => (
+                <div
+                  key={group.key}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '10px 12px',
+                    borderBottom: index < Math.min(groupedSessions.length, 6) - 1 ? '1px solid var(--color-border-ghost)' : 'none',
+                    transition: 'background 120ms',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {days > 1 && (
+                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                      {formatDateShort(group.startTime)}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, color: 'var(--color-text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatTime(group.startTime)} - {formatTime(group.endTime)}
+                  </span>
+                  {group.sessionCount > 1 && (
+                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>x{group.sessionCount}</span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontSize: 12, fontWeight: 900, color: 'var(--color-primary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                    {formatDuration(group.totalSeconds)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Stats footer */}
+          {!loading && visibleSessions.length > 0 && (
+            <div style={{
+              display: 'flex', gap: 0, marginTop: 16,
+              borderTop: '1px solid var(--color-border-ghost)', paddingTop: 16,
+            }}>
+              {[
+                { label: 'Avg session', value: avgSessionSeconds > 0 ? formatDuration(avgSessionSeconds) : '--' },
+                { label: 'Longest', value: longestSession > 0 ? formatDuration(longestSession) : '--' },
+              ].map((stat, i) => (
+                <div key={stat.label} style={{
+                  flex: 1,
+                  paddingLeft: i > 0 ? 16 : 0,
+                  borderLeft: i > 0 ? '1px solid var(--color-border-ghost)' : 'none',
+                }}>
+                  <p style={{
+                    fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+                    letterSpacing: '0.15em', color: 'var(--color-text-secondary)',
+                    margin: '0 0 4px',
+                  }}>
+                    {stat.label}
+                  </p>
+                  <p style={{
+                    fontSize: 15, fontWeight: 900, color: 'var(--color-text-primary)',
+                    margin: 0, fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {stat.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* AI Insight footer banner */}
+      <div style={{ padding: '0 40px 32px' }}>
+        <div style={{
+          background: 'linear-gradient(to right, var(--color-surface-container), var(--color-surface-low))',
+          borderRadius: 12, padding: 40,
+          border: '1px solid var(--color-border-ghost)',
+          display: 'flex', alignItems: 'flex-start', gap: 32,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center',
+              padding: '3px 12px', borderRadius: 999,
+              background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)',
+              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+              letterSpacing: '0.15em', marginBottom: 12,
+            }}>
+              AI Insight
+            </div>
+            <h2 style={{
+              fontSize: 18, fontWeight: 900, color: 'var(--color-text-primary)',
+              margin: '0 0 8px', letterSpacing: '-0.02em',
+            }}>
+              Focus Peak Detected
+            </h2>
+            <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
+              {usageInsight}
+            </p>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+            <button style={{
+              padding: '10px 20px', borderRadius: 10,
+              background: 'var(--color-surface-highest)',
+              border: '1px solid var(--color-border-ghost)',
+              color: 'var(--color-text-primary)', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}>
+              Snooze
+            </button>
+            <button style={{
+              padding: '10px 20px', borderRadius: 10,
+              background: 'var(--gradient-primary)',
+              border: 'none',
+              color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}>
+              Optimize
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
 }
-
-// ─── Mini stat ────────────────────────────────────────────────────────────────
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      className="flex flex-col gap-1 p-3 rounded-xl"
-      style={{ background: 'var(--color-surface-card)', border: '1px solid var(--color-border)' }}
-    >
-      <span className="text-[16px] font-semibold text-[var(--color-text-primary)] tabular-nums leading-none">
-        {value}
-      </span>
-      <span className="text-[10px] text-[var(--color-text-tertiary)] uppercase tracking-[0.4px]">
-        {label}
-      </span>
-    </div>
-  )
-}
-
-// ─── Stat chip ────────────────────────────────────────────────────────────────
-
-function StatChip({
-  label, value, accent,
-}: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg"
-      style={{ background: 'var(--color-surface-card)', border: '1px solid var(--color-border)' }}
-    >
-      <span
-        className="text-[13px] font-semibold tabular-nums"
-        style={{ color: accent ? 'var(--color-accent)' : 'var(--color-text-primary)' }}
-      >
-        {value}
-      </span>
-      <span className="text-[11px] text-[var(--color-text-tertiary)]">{label}</span>
-    </div>
-  )
-}
-
-// ─── Loading skeleton ─────────────────────────────────────────────────────────
 
 function LoadingSkeleton() {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex gap-2">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="h-9 w-28 rounded-lg animate-pulse bg-[var(--color-surface-card)]" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        {[0,1,2,3].map((i) => (
+          <div key={i} style={{ height: 30, width: 80, borderRadius: 999, background: 'var(--color-surface-container)', opacity: 0.5 }} />
         ))}
       </div>
-      <div className="h-20 rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-      <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-[var(--color-border)]">
-        {[...Array(6)].map((_, i) => (
-          <div key={i} className="h-14 bg-[var(--color-surface-card)] animate-pulse" />
-        ))}
-      </div>
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} style={{ height: 56, borderRadius: 12, background: 'var(--color-surface-container)', opacity: 0.4 }} />
+      ))}
     </div>
   )
 }

@@ -179,9 +179,9 @@ function Screen2({
                 onClick={() => onGoalToggle(goal.id)}
                 className="onboarding-goal-card"
                 style={{
-                  borderColor: selected ? 'var(--color-brand-light)' : 'rgba(104,174,255,0.2)',
+                  borderColor: selected ? 'var(--color-accent)' : 'rgba(104,174,255,0.2)',
                   background: selected ? 'rgba(104,174,255,0.08)' : 'transparent',
-                  color: selected ? 'var(--color-brand-light)' : 'var(--color-text-secondary)',
+                  color: selected ? 'var(--color-accent)' : 'var(--color-text-secondary)',
                 }}
               >
                 <span className="onboarding-goal-icon">{goal.icon}</span>
@@ -208,11 +208,15 @@ function Screen2({
 function Screen3({
   apiKey,
   onApiKeyChange,
+  launchOnLogin,
+  onLaunchOnLoginChange,
   onFinish,
   onSkip,
 }: {
   apiKey: string
   onApiKeyChange: (v: string) => void
+  launchOnLogin: boolean
+  onLaunchOnLoginChange: (v: boolean) => void
   onFinish: () => void
   onSkip: () => void
 }) {
@@ -275,6 +279,16 @@ function Screen3({
         </button>
       </div>
 
+      <label className="onboarding-checkbox-row">
+        <input
+          type="checkbox"
+          checked={launchOnLogin}
+          onChange={(e) => onLaunchOnLoginChange(e.target.checked)}
+          className="onboarding-checkbox"
+        />
+        <span className="onboarding-checkbox-label">Launch Daylens when I log in</span>
+      </label>
+
       <button onClick={onFinish} className="onboarding-btn-primary">
         Open Daylens
       </button>
@@ -289,11 +303,12 @@ function Screen3({
 // ─── Root Onboarding component ────────────────────────────────────────────────
 
 export default function Onboarding({ onComplete }: { onComplete: () => void }) {
-  const [screen, setScreen]   = useState<1 | 2 | 3>(1)
-  const [exiting, setExiting] = useState(false)
-  const [name, setName]       = useState('')
-  const [goals, setGoals]     = useState<Set<string>>(new Set())
-  const [apiKey, setApiKey]   = useState('')
+  const [screen, setScreen]       = useState<1 | 2 | 3>(1)
+  const [exiting, setExiting]     = useState(false)
+  const [name, setName]           = useState('')
+  const [goals, setGoals]         = useState<Set<string>>(new Set())
+  const [apiKey, setApiKey]       = useState('')
+  const [launchOnLogin, setLaunchOnLogin] = useState(true)
 
   function transition(next: 1 | 2 | 3) {
     setExiting(true)
@@ -320,8 +335,9 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       onboardingComplete: true,
       userName: name.trim(),
       userGoals: Array.from(goals),
-      ...(key ? { anthropicApiKey: key } : {}),
+      launchOnLogin,
     })
+    if (key) await ipc.settings.setApiKey(key)
     onComplete()
   }
 
@@ -362,6 +378,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           <Screen3
             apiKey={apiKey}
             onApiKeyChange={setApiKey}
+            launchOnLogin={launchOnLogin}
+            onLaunchOnLoginChange={setLaunchOnLogin}
             onFinish={() => void finish(false)}
             onSkip={() => void finish(true)}
           />
@@ -372,7 +390,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         .onboarding-root {
           position: fixed;
           inset: 0;
-          background: #051425;
+          background: #1a1a1a;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -520,6 +538,23 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         }
         .onboarding-external-link:hover {
           opacity: 0.75;
+        }
+        .onboarding-checkbox-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          cursor: pointer;
+        }
+        .onboarding-checkbox {
+          width: 16px;
+          height: 16px;
+          accent-color: #68AEFF;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .onboarding-checkbox-label {
+          font-size: 13px;
+          color: #5e7a92;
         }
       `}</style>
     </div>

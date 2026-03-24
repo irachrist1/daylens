@@ -1,59 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { ipc } from '../lib/ipc'
 import { dayBounds, formatDuration, formatTime, percentOf, todayString } from '../lib/format'
 import { catColor, formatCategory } from '../lib/category'
-import type { AppSession, AppUsageSummary, AppCategory, LiveSession, WebsiteSummary } from '@shared/types'
+import type { AppSession, AppUsageSummary, AppCategory, LiveSession, WebsiteSummary, WeeklySummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
-
-// ─── Inline SVG icons ─────────────────────────────────────────────────────────
-
-function IconTimer() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-      <circle cx="7" cy="8" r="5" />
-      <line x1="7" y1="5.5" x2="7" y2="8" />
-      <line x1="5.5" y1="2" x2="8.5" y2="2" />
-      <line x1="7" y1="2" x2="7" y2="3.5" />
-    </svg>
-  )
-}
-
-function IconZap() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="8,1 4,7 7,7 6,13 10,7 7,7 8,1" />
-    </svg>
-  )
-}
-
-function IconTarget() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-      <circle cx="7" cy="7" r="5.5" />
-      <circle cx="7" cy="7" r="2.5" />
-      <circle cx="7" cy="7" r="0.8" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-function IconGrid() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1.5" y="1.5" width="4" height="4" rx="0.8" />
-      <rect x="8.5" y="1.5" width="4" height="4" rx="0.8" />
-      <rect x="1.5" y="8.5" width="4" height="4" rx="0.8" />
-      <rect x="8.5" y="8.5" width="4" height="4" rx="0.8" />
-    </svg>
-  )
-}
-
-function IconSpark() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7 1.5 L8.1 5.2 L12 5.2 L9 7.4 L10 11 L7 8.9 L4 11 L5 7.4 L2 5.2 L5.9 5.2 Z" />
-    </svg>
-  )
-}
+import AppIcon from '../components/AppIcon'
+import { formatDisplayAppName } from '../lib/apps'
 
 // ─── Derived types ────────────────────────────────────────────────────────────
 
@@ -85,20 +37,22 @@ function greeting(name?: string): string {
   return name ? `${base}, ${name}.` : `${base}.`
 }
 
-function focusLabel(pct: number, hasData: boolean): string {
-  if (!hasData) return 'No data yet'
-  if (pct >= 80) return 'Deep focus'
-  if (pct >= 60) return 'Focused'
-  if (pct >= 40) return 'Mixed'
-  if (pct >= 20) return 'Scattered'
-  return 'Low focus'
+function smartSummary(focusPct: number, totalSec: number, appCount: number): string {
+  if (totalSec === 0) return 'No activity tracked yet today.'
+  if (focusPct >= 80) return `Strong focus day so far — ${formatDuration(totalSec)} tracked across ${appCount} apps.`
+  if (focusPct >= 50) return `Balanced day — ${formatDuration(totalSec)} tracked, ${focusPct}% focused.`
+  if (focusPct >= 20) return `Mixed focus — ${formatDuration(totalSec)} tracked across ${appCount} apps.`
+  return `Light focus so far — ${formatDuration(totalSec)} tracked.`
+}
+
+function heroStatement(focusPct: number, totalSeconds: number, focusSeconds: number): string {
+  if (totalSeconds === 0) return 'Nothing tracked yet today.'
+  if (focusPct >= 70) return `Strong day. ${formatDuration(focusSeconds)} of deep work so far.`
+  if (focusPct >= 40) return `Balanced day. ${formatDuration(totalSeconds)} tracked, ${focusPct}% focused.`
+  return `Slow start. ${formatDuration(totalSeconds)} tracked with light focus.`
 }
 
 // ─── Live session merge ───────────────────────────────────────────────────────
-// Merges the in-flight session into DB data for display only — never written to DB.
-// Double-counting is impossible: DB sessions are all committed (endTime set) before
-// currentSession.startTime; there is no temporal overlap.
-// We re-fetch DB data on every tick, so no cached base is needed (unlike the Swift app).
 
 function mergeLive(
   dbSummaries: AppUsageSummary[],
@@ -115,7 +69,6 @@ function mergeLive(
   const liveDur = Math.max(0, Math.round((liveEnd - liveStart) / 1_000))
   if (liveDur < 3) return { summaries: dbSummaries, sessions: dbSessions }
 
-  // Add live duration to existing app summary or create a new entry
   const existingIdx = dbSummaries.findIndex((s) => s.bundleId === live.bundleId)
   const summaries: AppUsageSummary[] =
     existingIdx >= 0
@@ -133,7 +86,6 @@ function mergeLive(
           },
         ]
 
-  // Synthetic session for the timeline (endTime = now so it shows up in the band)
   const liveSession: AppSession = {
     id:              -1,
     bundleId:        live.bundleId,
@@ -158,17 +110,138 @@ function isPresentationNoise(category: AppCategory, durationSeconds: number): bo
     durationSeconds < PRESENTATION_NOISE_SEC
 }
 
-// ─── Timeline constants ───────────────────────────────────────────────────────
+// ─── Session grouping (5-min gap) ────────────────────────────────────────────
 
-const TL_START = 6   // 6 AM
-const TL_END   = 24  // midnight
-const TL_TOTAL = TL_END - TL_START
-const TL_LABELS = [6, 9, 12, 15, 18, 21]
+const GROUP_GAP_MS = 5 * 60_000
 
-function hourLabel(h: number): string {
-  if (h === 12) return '12p'
-  if (h > 12)  return `${h - 12}p`
-  return `${h}a`
+interface GroupedFeedEntry {
+  key: string
+  bundleId: string
+  appName: string
+  category: AppCategory
+  startTime: number
+  endTime: number
+  totalSeconds: number
+  count: number
+}
+
+function groupFeedSessions(sessions: AppSession[]): GroupedFeedEntry[] {
+  const finished = sessions
+    .filter((s): s is AppSession & { endTime: number } => s.endTime !== null && s.durationSeconds >= 10)
+    .slice()
+    .reverse()
+
+  const groups: GroupedFeedEntry[] = []
+  for (const s of finished) {
+    const last = groups[groups.length - 1]
+    if (
+      last &&
+      last.appName === s.appName &&
+      last.startTime - (s.endTime ?? s.startTime) <= GROUP_GAP_MS
+    ) {
+      last.startTime = s.startTime
+      last.totalSeconds += s.durationSeconds
+      last.count++
+    } else {
+      groups.push({
+        key: `${s.bundleId}-${s.startTime}`,
+        bundleId: s.bundleId,
+        appName: s.appName,
+        category: s.category,
+        startTime: s.startTime,
+        endTime: s.endTime ?? (s.startTime + s.durationSeconds * 1000),
+        totalSeconds: s.durationSeconds,
+        count: 1,
+      })
+    }
+  }
+  return groups.slice(0, 8)
+}
+
+// ─── Category color map ───────────────────────────────────────────────────────
+
+const CAT_COLORS: Record<string, string> = {
+  development:   '#adc6ff',
+  meetings:      '#ffb95f',
+  communication: '#4fdbc8',
+  browsing:      '#94a3b8',
+  entertainment: '#f87171',
+  writing:       '#c084fc',
+  aiTools:       '#34d399',
+  design:        '#e879f9',
+  research:      '#67e8f9',
+  email:         '#fbbf24',
+  productivity:  '#a3e635',
+  social:        '#fb923c',
+  system:        '#6b7280',
+  uncategorized: '#6b7280',
+}
+
+function distColor(category: AppCategory): string {
+  return CAT_COLORS[category] ?? catColor(category) ?? '#52525b'
+}
+
+function usesPrimaryGradient(category: AppCategory): boolean {
+  return category === 'development'
+}
+
+const gradientTextStyle: CSSProperties = {
+  backgroundImage: 'var(--gradient-primary)',
+  WebkitBackgroundClip: 'text',
+  backgroundClip: 'text',
+  WebkitTextFillColor: 'transparent',
+}
+
+// ─── Trend data (7-day, backend-backed) ───────────────────────────────────────
+
+interface TrendPoint {
+  date: string
+  label: string
+  focusSeconds: number
+  totalSeconds: number
+  focusScore: number
+}
+
+function shiftDateString(dateStr: string, offsetDays: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const next = new Date(year, month - 1, day + offsetDays)
+  return [
+    next.getFullYear(),
+    String(next.getMonth() + 1).padStart(2, '0'),
+    String(next.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
+function weekdayLabel(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day)
+    .toLocaleDateString('en-US', { weekday: 'short' })
+    .slice(0, 3)
+}
+
+function buildTrendData(
+  weeklySummary: WeeklySummary | null,
+  todayDateStr: string,
+  todayFocusSeconds: number,
+  todayTotalSeconds: number,
+  todayFocusScore: number,
+): TrendPoint[] {
+  const byDate = new Map(
+    (weeklySummary?.dailyBreakdown ?? []).map((day) => [day.date, day] as const),
+  )
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = shiftDateString(todayDateStr, index - 6)
+    const isToday = date === todayDateStr
+    const day = byDate.get(date)
+    return {
+      date,
+      label: weekdayLabel(date),
+      focusSeconds: isToday ? todayFocusSeconds : (day?.focusSeconds ?? 0),
+      totalSeconds: isToday ? todayTotalSeconds : (day?.totalSeconds ?? 0),
+      focusScore: isToday ? todayFocusScore : (day?.focusScore ?? 0),
+    }
+  })
 }
 
 // ─── Main view ────────────────────────────────────────────────────────────────
@@ -176,20 +249,23 @@ function hourLabel(h: number): string {
 export default function Today() {
   const [dbSummaries,    setDbSummaries]    = useState<AppUsageSummary[]>([])
   const [dbSessions,     setDbSessions]     = useState<AppSession[]>([])
+  const [, setDbSites]        = useState<WebsiteSummary[]>([])
   const [live,           setLive]           = useState<LiveSession | null>(null)
   const [loading,        setLoading]        = useState(true)
+  const [error,          setError]          = useState<string | null>(null)
   const [userName,       setUserName]       = useState('')
   const [goalHours,      setGoalHours]      = useState(4)
   const [trackingActive, setTrackingActive] = useState<boolean | null>(null)
+  const [weeklySummary,  setWeeklySummary]  = useState<WeeklySummary | null>(null)
+  const [hoveredTrendDate, setHoveredTrendDate] = useState<string | null>(null)
 
   useEffect(() => {
-    void ipc.settings.get().then((s) => {
+    ipc.settings.get().then((s) => {
       setUserName(s.userName ?? '')
       setGoalHours(s.dailyFocusGoalHours ?? 4)
-    })
+    }).catch(() => { /* non-fatal */ })
   }, [])
 
-  // Poll tracking status every 30s
   useEffect(() => {
     function checkTracking() {
       ipc.debug.getInfo().then((info: unknown) => {
@@ -206,16 +282,27 @@ export default function Today() {
     let cancelled = false
 
     async function refresh() {
-      const [s, sess, lv] = await Promise.all([
-        ipc.db.getToday(),
-        ipc.db.getHistory(todayString()),
-        ipc.tracking.getLiveSession(),
-      ])
-      if (cancelled) return
-      setDbSummaries(s as AppUsageSummary[])
-      setDbSessions(sess as AppSession[])
-      setLive(lv as LiveSession | null)
-      setLoading(false)
+      if (document.hidden) return
+      try {
+        const [s, sess, lv, sites, weekly] = await Promise.all([
+          ipc.db.getToday(),
+          ipc.db.getHistory(todayString()),
+          ipc.tracking.getLiveSession(),
+          ipc.db.getWebsiteSummaries(1),
+          ipc.db.getWeeklySummary(todayString()),
+        ])
+        if (cancelled) return
+        setDbSummaries(s as AppUsageSummary[])
+        setDbSessions(sess as AppSession[])
+        setLive(lv as LiveSession | null)
+        setDbSites(sites as WebsiteSummary[])
+        setWeeklySummary(weekly as WeeklySummary)
+        setError(null)
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
     void refresh()
@@ -229,6 +316,21 @@ export default function Today() {
 
   if (loading) return <LoadingSkeleton />
 
+  if (error) {
+    return (
+      <div className="p-5 flex flex-col items-center justify-center gap-3 h-full">
+        <p className="text-[13px] text-red-400">Failed to load today's data: {error}</p>
+        <button
+          onClick={() => { setError(null); setLoading(true) }}
+          className="px-4 py-2 rounded-md text-[13px] font-medium"
+          style={{ background: 'var(--color-primary)', color: 'var(--color-primary-contrast)' }}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+
   const [fromMs, toMs] = dayBounds(todayString())
   const { summaries, sessions } = mergeLive(dbSummaries, dbSessions, live, fromMs, toMs)
 
@@ -239,681 +341,698 @@ export default function Today() {
     (session) => !isPresentationNoise(session.category, session.durationSeconds),
   )
 
-  const totalSec = summaries.reduce((n, a) => n + a.totalSeconds, 0)
-  const focusSec = meaningfulSummaries
+  const totalSeconds = summaries.reduce((n, a) => n + a.totalSeconds, 0)
+  const focusSeconds = meaningfulSummaries
     .filter((a) => a.isFocused)
     .reduce((n, a) => n + a.totalSeconds, 0)
-  const focusPct = percentOf(focusSec, totalSec)
-  const appCount = meaningfulSummaries.length
-  const cats     = buildCategorySummaries(meaningfulSummaries)
+  const focusPct    = percentOf(focusSeconds, totalSeconds)
+  const appCount    = meaningfulSummaries.length
+  const cats        = buildCategorySummaries(meaningfulSummaries)
+  const feedGroups  = groupFeedSessions(meaningfulSessions)
 
-  return (
-    <div className="p-6 max-w-[920px] mx-auto">
+  const focusQuality = Math.round((focusSeconds / Math.max(totalSeconds, 1)) * 100)
+  const qualityLabel =
+    focusQuality > 80 ? 'Excellent' :
+    focusQuality > 50 ? 'On Track' :
+    focusQuality > 20 ? 'Building' : 'Starting Out'
 
-      {/* ── Tracking indicator ─────────────────────────────────────────── */}
-      {trackingActive !== null && (
-        <div className="flex items-center gap-1.5 mb-4">
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              background: trackingActive ? '#4fdbc8' : 'var(--color-text-tertiary)',
-              boxShadow: trackingActive ? '0 0 4px #4fdbc8' : 'none',
-            }}
-          />
-          <span className="text-[11px] text-[var(--color-text-tertiary)]">
-            {trackingActive ? 'Tracking active' : 'App tracking unavailable — check Settings > Developer Info'}
-          </span>
-        </div>
-      )}
+  const summary = smartSummary(focusPct, totalSeconds, appCount)
+  const hero = heroStatement(focusPct, totalSeconds, focusSeconds)
 
-      {/* ── 1. Hero ────────────────────────────────────────────────────── */}
-      <HeroCard totalSec={totalSec} focusSec={focusSec} appCount={appCount} userName={userName} />
+  // SVG ring (192px)
+  const ringSize = 192
+  const r = 76
+  const cx = ringSize / 2
+  const cy = ringSize / 2
+  const circumference = 2 * Math.PI * r
+  const ringOffset = circumference * (1 - focusQuality / 100)
 
-      {/* ── 2. Stat cards ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-3 mt-4">
-        <StatCard
-          icon={<IconTimer />}
-          label="Screen time"
-          value={totalSec > 0 ? formatDuration(totalSec) : '—'}
-          sub={`${appCount} apps`}
-        />
-        <StatCard
-          icon={<IconZap />}
-          label="Focus time"
-          value={focusSec > 0 ? formatDuration(focusSec) : '—'}
-          sub={totalSec > 0 ? `${focusPct}% of tracked time` : 'No tracked focus yet'}
-          accent
-        />
-        <StatCard
-          icon={<IconTarget />}
-          label="Focus share"
-          value={totalSec > 0 ? `${focusPct}%` : '—'}
-          sub={`${focusLabel(focusPct, totalSec > 0)} · app-category based`}
-        />
-      </div>
+  // Goal progress
+  const goalSeconds = goalHours * 3600
+  const goalPct = Math.min(100, Math.round((focusSeconds / Math.max(goalSeconds, 1)) * 100))
 
-      {/* ── 2b. Daily focus goal ───────────────────────────────────────── */}
-      <GoalProgressRow focusSec={focusSec} goalHours={goalHours} />
-
-      {/* ── 3. Category allocation ─────────────────────────────────────── */}
-      <div className="mt-4">
-        <AllocationCard categories={cats} totalSec={totalSec} />
-      </div>
-
-      {/* ── 4. Activity timeline ───────────────────────────────────────── */}
-      <div className="mt-4">
-        <TimelineCard sessions={meaningfulSessions} cats={cats} />
-      </div>
-
-      {/* ── 5+6. Recent sessions + Insight ────────────────────────────── */}
-      <div className="flex gap-3 mt-4 items-start">
-        <div className="flex-1 min-w-0">
-          <RecentSessionsCard sessions={meaningfulSessions} />
-        </div>
-        <div className="w-[264px] shrink-0">
-          <InsightCard
-            focusSec={focusSec}
-            focusPct={focusPct}
-            topCategory={cats[0]?.category ?? null}
-            totalSec={totalSec}
-          />
-        </div>
-      </div>
-
-      {/* ── 7. Top websites ────────────────────────────────────────────── */}
-      <div className="mt-4 mb-2">
-        <WebsitesCard />
-      </div>
-
-    </div>
+  const trendData = buildTrendData(
+    weeklySummary,
+    todayString(),
+    focusSeconds,
+    totalSeconds,
+    focusQuality,
   )
-}
-
-// ─── 1. Hero card ─────────────────────────────────────────────────────────────
-
-function HeroCard({
-  totalSec,
-  focusSec,
-  appCount,
-  userName,
-}: {
-  totalSec: number
-  focusSec: number
-  appCount: number
-  userName: string
-}) {
-  return (
-    <div
-      className="rounded-xl p-5 flex flex-col gap-2"
-      style={{
-        background: 'var(--color-hero-gradient)',
-        border:     '1px solid var(--color-hero-border)',
-      }}
-    >
-      <p className="text-[13px] text-[var(--color-text-secondary)]">{greeting(userName || undefined)}</p>
-
-      <div className="flex items-baseline gap-2 mt-0.5">
-        <span
-          className="leading-none tracking-[-1.5px] tabular-nums font-bold text-[var(--color-text-primary)]"
-          style={{ fontSize: 48 }}
-        >
-          {totalSec > 0 ? formatDuration(totalSec) : '—'}
-        </span>
-      </div>
-
-      <p className="text-[13px] opacity-60 text-[var(--color-text-secondary)]">active today</p>
-
-      <div className="flex gap-2 mt-1">
-        <HeroPill icon={<IconGrid />}>{appCount} apps</HeroPill>
-        {focusSec > 0 && <HeroPill icon={<IconZap />}>{formatDuration(focusSec)} focus</HeroPill>}
-      </div>
-    </div>
-  )
-}
-
-function HeroPill({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <span
-      className="flex items-center gap-1.5 text-[12px] font-medium text-[var(--color-text-primary)] px-3 py-1 rounded-full"
-      style={{ background: 'var(--color-pill-bg)' }}
-    >
-      {icon && <span className="opacity-70">{icon}</span>}
-      {children}
-    </span>
-  )
-}
-
-// ─── 2. Stat card ─────────────────────────────────────────────────────────────
-
-function StatCard({
-  icon, label, value, sub, accent,
-}: {
-  icon: React.ReactNode
-  label: string
-  value: string
-  sub: string
-  accent?: boolean
-}) {
-  return (
-    <div className="card flex flex-col gap-2">
-      <div
-        className="w-7 h-7 rounded-lg flex items-center justify-center"
-        style={{
-          background: accent ? 'var(--color-icon-tint)' : 'var(--color-icon-bg)',
-          color: accent ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-        }}
-      >
-        {icon}
-      </div>
-
-      <p
-        className="text-[22px] font-bold leading-tight tracking-tight tabular-nums"
-        style={{ color: accent ? 'var(--color-accent)' : 'var(--color-text-primary)' }}
-      >
-        {value}
-      </p>
-
-      <div>
-        <p className="section-label">{label}</p>
-        {sub && (
-          <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5">{sub}</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ─── 2b. Daily focus goal row ─────────────────────────────────────────────────
-
-function GoalProgressRow({ focusSec, goalHours }: { focusSec: number; goalHours: number }) {
-  const goalSec = goalHours * 3600
-  const pct = Math.min(100, goalSec > 0 ? (focusSec / goalSec) * 100 : 0)
-  const reached = focusSec >= goalSec && goalSec > 0
+  const sparkMax = Math.max(...trendData.map((day) => day.focusSeconds), 1)
+  const yesterdayFocusScore = trendData.find((day) => day.date === shiftDateString(todayString(), -1))?.focusScore ?? 0
+  const hoveredTrend = trendData.find((day) => day.date === hoveredTrendDate) ?? null
 
   return (
-    <div className="card mt-4 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="section-label">Today's goal</span>
-        <span className="text-[11px] text-[var(--color-text-secondary)] tabular-nums">
-          {reached
-            ? 'Goal reached'
-            : `${formatDuration(focusSec)} of ${goalHours}h`}
-        </span>
-      </div>
-      <div className="h-[4px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{
-            width: `${pct}%`,
-            background: reached ? 'var(--color-accent)' : 'var(--color-brand-light, var(--color-accent))',
-          }}
-        />
-      </div>
-    </div>
-  )
-}
+    <div style={{ background: 'var(--color-bg)', minHeight: '100%', overflowY: 'auto' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto' }}>
 
-// ─── 3. Category allocation card ──────────────────────────────────────────────
-
-function AllocationCard({ categories, totalSec }: { categories: CategorySummary[]; totalSec: number }) {
-  const hasData = categories.length > 0 && totalSec > 0
-
-  return (
-    <div className="card">
-      <p className="section-label mb-3">Time Allocation</p>
-
-      {/* Stacked proportional bar */}
-      <div className="flex h-[10px] rounded-full overflow-hidden gap-px mb-3">
-        {hasData ? (
-          categories.slice(0, 8).map((cat) => (
-            <div
-              key={cat.category}
-              title={`${cat.category} · ${formatDuration(cat.totalSeconds)}`}
-              style={{
-                width: `${percentOf(cat.totalSeconds, totalSec)}%`,
-                background: catColor(cat.category),
-                minWidth: 3,
-              }}
-            />
-          ))
-        ) : (
-          <div className="w-full bg-[var(--color-surface-high)]" />
-        )}
-      </div>
-
-      {/* Legend chips */}
-      {hasData ? (
-        <div className="flex flex-wrap gap-1.5">
-          {categories.slice(0, 6).map((cat) => {
-            const c = catColor(cat.category)
-            return (
-              <div
-                key={cat.category}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-full"
-                style={{ background: c + '1a' }}
-              >
-                <div className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
-                <span className="text-[11px] font-medium" style={{ color: c }}>
-                  {formatCategory(cat.category)}
-                </span>
-                <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                  {formatDuration(cat.totalSeconds)}
-                </span>
-              </div>
-            )
-          })}
-          {categories.length > 6 && (
-            <span className="text-[11px] text-[var(--color-text-tertiary)] px-2 py-1">
-              +{categories.length - 6} more
+        {/* ── Header row ─────────────────────────────────────────────────── */}
+        <div style={{
+          padding: '32px 40px 0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              fontSize: 10,
+              fontWeight: 900,
+              textTransform: 'uppercase',
+              letterSpacing: '0.2em',
+              color: 'var(--color-text-secondary)',
+            }}>
+              {greeting(userName || undefined)}
             </span>
+            {trackingActive === false && (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+                color: '#f87171',
+                background: 'rgba(248,113,113,0.10)',
+                borderRadius: 999,
+                padding: '2px 8px',
+              }}>
+                Tracking unavailable
+              </span>
+            )}
+          </div>
+
+          {live && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              background: 'rgba(15,99,219,0.08)',
+              border: '1px solid rgba(15,99,219,0.16)',
+              borderRadius: 999,
+              padding: '5px 10px',
+            }}>
+              <AppIcon bundleId={live.bundleId} appName={live.appName} size={16} fontSize={8} cornerRadius={4} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', letterSpacing: '0.02em' }}>
+                {formatDisplayAppName(live.appName)}
+              </span>
+            </div>
           )}
         </div>
-      ) : (
-        <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          No activity recorded yet today.
-        </p>
-      )}
-    </div>
-  )
-}
 
-// ─── 4. Activity timeline card ────────────────────────────────────────────────
+        {/* ── Hero heading ────────────────────────────────────────────────── */}
+        <div style={{ padding: '16px 40px 0' }}>
+          <h1 style={{
+            fontSize: 36,
+            fontWeight: 900,
+            letterSpacing: '-0.03em',
+            color: 'var(--color-text-primary)',
+            margin: 0,
+            lineHeight: 1.15,
+          }}>
+            {hero}
+          </h1>
+        </div>
 
-function TimelineCard({ sessions, cats }: { sessions: AppSession[]; cats: CategorySummary[] }) {
-  // Only sessions that have both start and end times
-  const finished = sessions.filter((s): s is AppSession & { endTime: number } => s.endTime !== null)
-  const recentList = finished
-    .filter((s) => s.durationSeconds >= 30)
-    .slice()
-    .reverse()
-    .slice(0, 8)
+        {/* ── Grid row 1: Focus Score (4) + Focus Trend (8) ───────────────── */}
+        <div style={{
+          padding: '32px 40px 0',
+          display: 'grid',
+          gridTemplateColumns: '4fr 8fr',
+          gap: 24,
+        }}>
 
-  return (
-    <div className="card">
-      <p className="section-label mb-3">Activity Timeline</p>
+          {/* Col A — Daily Focus Score */}
+          <div style={{
+            background: 'var(--color-surface-low)',
+            borderRadius: 12,
+            padding: 32,
+            border: '1px solid var(--color-border-ghost)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+          }}>
+            <span style={{
+              fontSize: 10,
+              fontWeight: 900,
+              textTransform: 'uppercase',
+              letterSpacing: '0.2em',
+              color: 'var(--color-text-secondary)',
+              marginBottom: 24,
+              textAlign: 'center',
+            }}>
+              Daily Focus Score
+            </span>
 
-      {/* Horizontal band */}
-      <div
-        className="relative rounded-[5px] overflow-hidden mb-1"
-        style={{ height: 36, background: 'var(--color-surface-high)' }}
-      >
-        {/* Subtle hour grid lines */}
-        {[9, 12, 15, 18, 21].map((h) => (
-          <div
-            key={h}
-            className="absolute top-0 bottom-0 w-px opacity-20"
-            style={{
-              left: `${((h - TL_START) / TL_TOTAL) * 100}%`,
-              background: 'var(--color-text-tertiary)',
-            }}
-          />
-        ))}
-
-        {/* Session segments */}
-        {finished.map((s) => {
-          const sd = new Date(s.startTime)
-          const ed = new Date(s.endTime)
-          const startH = sd.getHours() + sd.getMinutes() / 60
-          const endH   = ed.getHours() + ed.getMinutes() / 60
-
-          const clampStart = Math.max(TL_START, Math.min(TL_END, startH))
-          const clampEnd   = Math.max(TL_START, Math.min(TL_END, endH))
-          if (clampEnd <= clampStart) return null
-
-          const left  = ((clampStart - TL_START) / TL_TOTAL) * 100
-          const width = ((clampEnd - clampStart) / TL_TOTAL) * 100
-          const color = catColor(s.category)
-
-          return (
-            <div
-              key={s.id}
-              className="absolute top-1 bottom-1 rounded-[3px]"
-              title={`${s.appName} · ${formatDuration(s.durationSeconds)}\n${formatTime(s.startTime)} – ${formatTime(s.endTime)}`}
-              style={{
-                left:     `${left}%`,
-                width:    `${Math.max(0.4, width)}%`,
-                background: color,
-                opacity:  0.85,
-                boxShadow: `0 0 5px ${color}55`,
-              }}
-            />
-          )
-        })}
-      </div>
-
-      {/* Hour labels */}
-      <div className="relative h-4 mb-2">
-        {TL_LABELS.map((h) => (
-          <span
-            key={h}
-            className="absolute text-[10px] text-[var(--color-text-tertiary)]"
-            style={{ left: `${((h - TL_START) / TL_TOTAL) * 100}%`, transform: 'translateX(-50%)' }}
-          >
-            {hourLabel(h)}
-          </span>
-        ))}
-      </div>
-
-      {/* Category legend */}
-      {cats.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {cats.slice(0, 5).map((cat) => {
-            const c = catColor(cat.category)
-            return (
-              <div
-                key={cat.category}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full"
-                style={{ background: c + '15' }}
-              >
-                <div className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
-                <span className="text-[10px] font-medium" style={{ color: c }}>
-                  {formatCategory(cat.category)}
+            {/* SVG Ring */}
+            <div style={{ position: 'relative', width: ringSize, height: ringSize }}>
+              <svg width={ringSize} height={ringSize} viewBox={`0 0 ${ringSize} ${ringSize}`}>
+                <defs>
+                  <linearGradient id="focusRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="var(--gradient-primary-from)" />
+                    <stop offset="100%" stopColor="var(--gradient-primary-to)" />
+                  </linearGradient>
+                  <filter id="ringGlow">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feMerge>
+                      <feMergeNode in="blur" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                </defs>
+                {/* Track */}
+                <circle
+                  cx={cx} cy={cy} r={r}
+                  fill="none"
+                  stroke="var(--color-surface-highest)"
+                  strokeWidth={8}
+                />
+                {/* Progress */}
+                <circle
+                  cx={cx} cy={cy} r={r}
+                  fill="none"
+                  stroke="url(#focusRingGradient)"
+                  strokeWidth={8}
+                  strokeLinecap="round"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={ringOffset}
+                  transform={`rotate(-90 ${cx} ${cy})`}
+                  filter="url(#ringGlow)"
+                />
+              </svg>
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <span style={{
+                  fontSize: 48,
+                  fontWeight: 900,
+                  color: 'var(--color-text-primary)',
+                  letterSpacing: '-0.04em',
+                  lineHeight: 1,
+                }}>
+                  {focusQuality}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#4fdbc8', marginTop: 4, letterSpacing: '0.05em' }}>
+                  <span style={gradientTextStyle}>{qualityLabel}</span>
                 </span>
               </div>
-            )
-          })}
-        </div>
-      )}
+            </div>
 
-      {/* Session list below band */}
-      {recentList.length > 0 ? (
-        <>
-          <div className="border-t border-[var(--color-border)] mb-3" />
-          <div className="flex flex-col gap-2.5">
-            {recentList.map((s) => (
-              <div key={s.id} className="flex items-center gap-3">
-                <AppInitials name={s.appName} category={s.category} size={28} />
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[13px] text-[var(--color-text-primary)] truncate leading-none">
-                      {s.appName}
-                    </span>
-                    <CategoryChip category={s.category} />
-                  </div>
-                  <span className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
-                    {formatTime(s.startTime)} – {formatTime(s.endTime)}
+            {/* Bottom stats */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'stretch',
+              gap: 16,
+              marginTop: 24,
+              width: '100%',
+              borderTop: '1px solid var(--color-border-ghost)',
+              paddingTop: 16,
+            }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, textAlign: 'left' }}>
+                <p style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.15em',
+                  color: 'var(--color-text-secondary)',
+                  margin: 0,
+                }}>
+                  Goal
+                </p>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{
+                    fontSize: 26,
+                    fontWeight: 900,
+                    color: 'var(--color-text-primary)',
+                    letterSpacing: '-0.03em',
+                    lineHeight: 1,
+                  }}>
+                    {goalHours}h
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                    {goalPct}% complete
                   </span>
                 </div>
-
-                <span className="text-[12px] text-[var(--color-text-secondary)] tabular-nums shrink-0">
-                  {formatDuration(s.durationSeconds)}
+              </div>
+              <div style={{ width: 1, background: 'var(--color-border-ghost)' }} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                <p style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.15em',
+                  color: 'var(--color-text-secondary)',
+                  margin: 0,
+                }}>
+                  Yesterday
+                </p>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: 72,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  background: yesterdayFocusScore > 0 ? 'var(--gradient-primary)' : 'var(--color-surface-highest)',
+                  color: yesterdayFocusScore > 0 ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                  fontSize: 18,
+                  fontWeight: 900,
+                  letterSpacing: '-0.02em',
+                }}>
+                  {yesterdayFocusScore > 0 ? `${yesterdayFocusScore}%` : 'No data'}
                 </span>
               </div>
-            ))}
+            </div>
           </div>
-        </>
-      ) : (
-        <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          No completed sessions yet today.
-        </p>
-      )}
-    </div>
-  )
-}
 
-// ─── 5. Recent sessions card ──────────────────────────────────────────────────
+          {/* Col B — Focus Trend */}
+          <div style={{
+            background: 'var(--color-surface-low)',
+            borderRadius: 12,
+            padding: 24,
+            border: '1px solid var(--color-border-ghost)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            <h3 style={{
+              fontSize: 14,
+              fontWeight: 900,
+              color: 'var(--color-text-primary)',
+              margin: '0 0 4px',
+              letterSpacing: '-0.01em',
+            }}>
+              Focus Trend
+            </h3>
+            <p style={{
+              fontSize: 11,
+              color: 'var(--color-text-secondary)',
+              margin: '0 0 6px',
+            }}>
+              Performance over the last 7 days
+            </p>
+            {hoveredTrend && (
+              <p style={{
+                fontSize: 11,
+                color: hoveredTrend.focusSeconds
+                  ? 'var(--color-primary)'
+                  : 'var(--color-text-tertiary)',
+                margin: '0 0 18px',
+                fontWeight: 700,
+                minHeight: 16,
+              }}>
+                {`${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`}
+              </p>
+            )}
 
-function RecentSessionsCard({ sessions }: { sessions: AppSession[] }) {
-  const recentSessions = sessions
-    .filter((s): s is AppSession & { endTime: number } => s.endTime !== null)
-    .filter((s) => s.durationSeconds >= 30)
-    .slice()
-    .reverse()
-    .slice(0, 5)
-
-  return (
-    <div className="card">
-      <p className="section-label mb-3">Recent Sessions</p>
-
-      {recentSessions.length === 0 ? (
-        <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          No meaningful sessions yet. Daylens will fill this in once you spend a little longer in an app.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {recentSessions.map((session) => {
-            const color = catColor(session.category)
-            const dots =
-              session.durationSeconds > 3600 ? 3 :
-              session.durationSeconds > 1800 ? 2 :
-              1
-            return (
-              <div key={session.id} className="flex items-center gap-3">
-                <AppInitials name={session.appName} category={session.category} size={34} />
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[13px] font-medium text-[var(--color-text-primary)] truncate leading-none">
-                      {session.appName}
+            {/* Bar chart */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'flex-end',
+              gap: 8,
+              height: 96,
+              flex: 1,
+            }}>
+              {trendData.map((day) => {
+                const isToday = day.date === todayString()
+                const barH = day.focusSeconds > 0 ? Math.max(6, Math.round((day.focusSeconds / sparkMax) * 80)) : 0
+                const isEmpty = day.focusSeconds === 0
+                return (
+                  <div
+                    key={day.date}
+                    title={`${day.label}: ${day.focusSeconds > 0 ? formatDuration(day.focusSeconds) : 'No focused time'}`}
+                    style={{
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 6,
+                      height: '100%',
+                      justifyContent: 'flex-end',
+                      cursor: 'default',
+                    }}
+                    onMouseEnter={() => setHoveredTrendDate(day.date)}
+                    onMouseLeave={() => setHoveredTrendDate(null)}
+                  >
+                    {isToday && isEmpty && (
+                      <span style={{
+                        fontSize: 8,
+                        fontWeight: 900,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.15em',
+                        color: '#adc6ff',
+                        marginBottom: 2,
+                      }}>
+                        TODAY
+                      </span>
+                    )}
+                    <div style={{
+                      width: '100%',
+                      height: isEmpty ? 4 : barH,
+                      background: isEmpty ? 'var(--color-surface-highest)' : 'var(--gradient-primary)',
+                      opacity: isEmpty ? 1 : hoveredTrendDate === day.date || isToday ? 1 : 0.4,
+                      borderRadius: '4px 4px 2px 2px',
+                      transition: 'height 0.3s ease, opacity 120ms ease',
+                      minHeight: 4,
+                      boxShadow: (isToday || hoveredTrendDate === day.date) && !isEmpty ? '0 8px 18px rgba(15,99,219,0.16)' : 'none',
+                    }} />
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.1em',
+                      color: hoveredTrendDate === day.date || isToday ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                    }}>
+                      {day.label}
                     </span>
-                    <CategoryChip category={session.category} />
                   </div>
-                  <span className="text-[11px] text-[var(--color-text-secondary)] tabular-nums">
-                    {formatTime(session.startTime)} – {formatTime(session.endTime)}
-                    {' · '}
-                    {formatDuration(session.durationSeconds)}
-                  </span>
-                </div>
-
-                {/* Efficiency dots */}
-                <div className="flex gap-1 shrink-0">
-                  {([0, 1, 2] as const).map((i) => (
-                    <div
-                      key={i}
-                      className="w-1.5 h-1.5 rounded-full"
-                      style={{ background: i < dots ? color : 'var(--color-surface-high)' }}
-                    />
-                  ))}
-                </div>
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          </div>
         </div>
-      )}
-    </div>
-  )
-}
 
-// ─── 6. Intelligence insight card ─────────────────────────────────────────────
+        {/* ── Full-width Time Distribution ─────────────────────────────────── */}
+        <div style={{ padding: '24px 40px 0' }}>
+          <div style={{
+            background: 'var(--color-surface-container)',
+            borderRadius: 12,
+            padding: 32,
+            border: '1px solid var(--color-border-ghost)',
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
+              <h3 style={{
+                fontSize: 14,
+                fontWeight: 900,
+                color: 'var(--color-text-primary)',
+                margin: 0,
+                letterSpacing: '-0.01em',
+              }}>
+                Time Distribution
+              </h3>
+              <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+                Today's total: {formatDuration(totalSeconds)}
+              </span>
+            </div>
 
-function InsightCard({
-  focusSec, focusPct, topCategory, totalSec,
-}: {
-  focusSec: number
-  focusPct: number
-  topCategory: AppCategory | null
-  totalSec: number
-}) {
-  const title =
-    totalSec === 0 ? 'Waiting for more activity' :
-    focusPct >= 75 ? 'Strong focus signal' :
-    focusPct >= 50 ? 'Balanced workday' :
-    'Focus looks fragmented'
-
-  function trackedFact(): string {
-    if (!topCategory || totalSec === 0) {
-      return 'Tracked facts will appear here after a few minutes of activity.'
-    }
-    return `${formatDuration(focusSec)} focused activity out of ${formatDuration(totalSec)} tracked today. Top category: ${formatCategory(topCategory)}.`
-  }
-
-  function suggestion(): string {
-    if (totalSec === 0) {
-      return 'Keep Daylens running while you work and this card will switch from placeholders to tracked patterns.'
-    }
-    if (focusPct >= 75) {
-      return 'Your tracked app mix is holding up well. If this matches how the work felt, preserve the same setup for the next block.'
-    }
-    if (focusPct >= 50) {
-      return 'You have a solid base. A cleaner next block or fewer switches would likely move the day into a stronger focus range.'
-    }
-    return 'The day is tilting toward context switching or low-signal activity. A short deliberate focus block would meaningfully improve the mix.'
-  }
-
-  return (
-    <div className="card flex flex-col gap-3">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <div
-          className="w-[22px] h-[22px] rounded-md flex items-center justify-center"
-          style={{ background: 'var(--color-icon-tint)', color: 'var(--color-accent)' }}
-        >
-          <IconSpark />
-        </div>
-        <p className="section-label">Intelligence</p>
-      </div>
-
-      <p className="text-[14px] font-semibold text-[var(--color-text-primary)] leading-snug">
-        {title}
-      </p>
-
-      <div className="flex flex-col gap-2">
-        <div>
-          <p className="section-label mb-1">Tracked facts</p>
-          <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed">
-            {trackedFact()}
-          </p>
-        </div>
-        <div>
-          <p className="section-label mb-1">Suggestion</p>
-          <p className="text-[12px] text-[var(--color-text-secondary)] leading-relaxed">
-            {suggestion()}
-          </p>
-        </div>
-      </div>
-
-      {/* Optimization score bar */}
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="section-label">Optimization score</span>
-          <span
-            className="text-[11px] font-semibold tabular-nums"
-            style={{ color: 'var(--color-accent)' }}
-          >
-            {focusPct}/100
-          </span>
-        </div>
-        <div className="h-[5px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
-          <div
-            className="h-full rounded-full transition-all duration-700"
-            style={{
-              width:      `${focusPct}%`,
-              background: 'var(--color-bar-gradient)',
-            }}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── 7. Top websites ──────────────────────────────────────────────────────────
-
-function WebsitesCard() {
-  const [sites, setSites] = useState<WebsiteSummary[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    ipc.db.getWebsiteSummaries(1).then((data) => {
-      setSites(data as WebsiteSummary[])
-      setLoading(false)
-    })
-  }, [])
-
-  const maxSec = sites[0]?.totalSeconds ?? 1
-
-  return (
-    <div className="card">
-      <p className="section-label mb-3">Top Websites</p>
-
-      {loading ? (
-        <div className="flex flex-col gap-2">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-9 rounded-lg animate-pulse bg-[var(--color-surface-high)]" />
-          ))}
-        </div>
-      ) : sites.length === 0 ? (
-        <p className="text-[12px] text-[var(--color-text-tertiary)]">
-          No browser visits recorded today. Make sure Chrome, Brave, Arc, or Edge is running.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          {sites.slice(0, 5).map((site) => {
-            const barW = (site.totalSeconds / maxSec) * 100
-            return (
-              <div key={site.domain} className="flex items-center gap-3">
+            {/* Stacked horizontal bar */}
+            <div style={{
+              height: 24,
+              borderRadius: 999,
+              overflow: 'hidden',
+              display: 'flex',
+              background: 'var(--color-surface-highest)',
+            }}>
+              {cats.filter((c) => c.totalSeconds > 0).map((cat) => (
                 <div
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold shrink-0"
-                  style={{ background: 'var(--color-icon-tint)', color: 'var(--color-accent)' }}
+                  key={cat.category}
+                  title={`${formatCategory(cat.category)}: ${formatDuration(cat.totalSeconds)}`}
+                  style={{
+                    flexGrow: cat.totalSeconds,
+                    background: usesPrimaryGradient(cat.category) ? 'var(--gradient-primary)' : distColor(cat.category),
+                    minWidth: 3,
+                  }}
+                />
+              ))}
+            </div>
+
+            {/* Category stat chips */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(5, 1fr)',
+              gap: 10,
+              marginTop: 16,
+            }}>
+              {cats.filter((c) => c.totalSeconds > 0).slice(0, 5).map((cat) => (
+                <div
+                  key={cat.category}
+                  style={{
+                    background: 'var(--color-surface-low)',
+                    borderRadius: 8,
+                    padding: '12px 16px',
+                    border: '1px solid var(--color-border-ghost)',
+                  }}
                 >
-                  {site.domain.slice(0, 2).toUpperCase()}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] text-[var(--color-text-primary)] truncate leading-none mb-1">
-                    {site.domain}
+                  <p style={{
+                    fontSize: 10,
+                    fontWeight: 900,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.15em',
+                    color: 'var(--color-text-secondary)',
+                    margin: '0 0 6px',
+                  }}>
+                    {formatCategory(cat.category)}
                   </p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-[3px] rounded-full overflow-hidden bg-[var(--color-surface-high)]">
-                      <div
-                        className="h-full rounded-full"
-                        style={{ width: `${barW}%`, background: 'var(--color-accent)' }}
-                      />
-                    </div>
-                    <span className="text-[10px] text-[var(--color-text-tertiary)] shrink-0 tabular-nums">
-                      {site.visitCount} {site.visitCount === 1 ? 'visit' : 'visits'}
-                    </span>
-                  </div>
+                  <p style={{
+                    fontSize: 18,
+                    fontWeight: 900,
+                    color: usesPrimaryGradient(cat.category) ? 'transparent' : distColor(cat.category),
+                    margin: 0,
+                    letterSpacing: '-0.02em',
+                    ...(usesPrimaryGradient(cat.category) ? gradientTextStyle : {}),
+                  }}>
+                    {formatDuration(cat.totalSeconds)}
+                  </p>
                 </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
-                <span className="text-[12px] text-[var(--color-text-secondary)] shrink-0 tabular-nums">
-                  {formatDuration(site.totalSeconds)}
+        {/* ── Grid row 3: Recent Sessions (7) + AI Insight (5) ─────────────── */}
+        <div style={{
+          padding: '24px 40px 32px',
+          display: 'grid',
+          gridTemplateColumns: '7fr 5fr',
+          gap: 24,
+        }}>
+
+          {/* Col A — Recent Sessions */}
+          <div>
+            <p style={{
+              fontSize: 10,
+              fontWeight: 900,
+              textTransform: 'uppercase',
+              letterSpacing: '0.2em',
+              color: 'var(--color-text-secondary)',
+              margin: '0 0 14px',
+            }}>
+              Recent Sessions
+            </p>
+
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--color-surface-container)',
+              border: '1px solid var(--color-border-ghost)',
+              borderRadius: 12,
+              overflow: 'hidden',
+            }}>
+              {feedGroups.length === 0 ? (
+                <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', padding: '16px 18px', margin: 0 }}>
+                  No sessions yet today.
+                </p>
+              ) : (
+                feedGroups.map((g, index) => {
+                  const color = distColor(g.category)
+                  return (
+                    <div
+                      key={g.key}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: '10px 14px',
+                        borderBottom: index < feedGroups.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
+                        transition: 'background 150ms',
+                        cursor: 'default',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-low)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      {/* Icon circle */}
+                      <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <AppIcon bundleId={g.bundleId} appName={g.appName} color={color} size={40} fontSize={11} cornerRadius={12} />
+                        <span style={{
+                          position: 'absolute',
+                          bottom: 1,
+                          right: 1,
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          background: usesPrimaryGradient(g.category) ? 'var(--color-primary)' : color,
+                          border: '1.5px solid var(--color-bg)',
+                        }} />
+                      </div>
+
+                      {/* App name + time range */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: 'var(--color-text-primary)',
+                          margin: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {formatDisplayAppName(g.appName)}
+                        </p>
+                        <p style={{
+                          fontSize: 11,
+                          color: 'var(--color-text-secondary)',
+                          margin: '2px 0 0',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
+                          {formatTime(g.startTime)} – {formatTime(g.endTime)}
+                        </p>
+                      </div>
+
+                      {/* Duration + quality chip */}
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                        <span style={{
+                          fontSize: 13,
+                          fontWeight: 900,
+                          color: 'var(--color-primary)',
+                          letterSpacing: '-0.01em',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
+                          {formatDuration(g.totalSeconds)}
+                        </span>
+                        <span style={{
+                          background: usesPrimaryGradient(g.category) ? 'var(--gradient-primary)' : `${color}1a`,
+                          color: usesPrimaryGradient(g.category) ? 'var(--color-primary-contrast)' : color,
+                          fontWeight: 700,
+                          fontSize: 10,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.1em',
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                        }}>
+                          {g.category === 'development' || FOCUSED_CATEGORIES.includes(g.category)
+                            ? 'Deep Focus'
+                            : formatCategory(g.category)}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Col B — AI Insight */}
+          <div style={{
+            background: 'linear-gradient(145deg, rgba(15,99,219,0.12) 0%, rgba(58,141,255,0.05) 42%, var(--color-surface-container) 100%)',
+            borderRadius: 12,
+            padding: 32,
+            border: '1px solid var(--color-border-ghost)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            overflow: 'hidden',
+            position: 'relative',
+          }}>
+            <div style={{
+              position: 'absolute',
+              inset: 'auto -40px -60px auto',
+              width: 180,
+              height: 180,
+              borderRadius: '50%',
+              background: 'radial-gradient(circle, rgba(58,141,255,0.24), rgba(58,141,255,0))',
+              pointerEvents: 'none',
+            }} />
+            {/* Sparkle icon */}
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z"
+                fill="var(--gradient-primary-to)"
+                fillOpacity="0.85"
+              />
+              <path
+                d="M19 2L19.75 4.75L22.5 5.5L19.75 6.25L19 9L18.25 6.25L15.5 5.5L18.25 4.75L19 2Z"
+                fill="var(--gradient-primary-from)"
+                fillOpacity="0.5"
+              />
+            </svg>
+
+            <h4 style={{
+              fontSize: 15,
+              fontWeight: 900,
+              color: 'var(--color-text-primary)',
+              margin: 0,
+              letterSpacing: '-0.02em',
+              lineHeight: 1.3,
+            }}>
+              Your Peak Focus window is your competitive edge.
+            </h4>
+
+            <p style={{
+              fontSize: 12,
+              color: 'var(--color-text-secondary)',
+              margin: 0,
+              lineHeight: 1.7,
+            }}>
+              {summary}
+            </p>
+
+            {/* Goal progress bar */}
+            <div style={{ marginTop: 'auto' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginBottom: 8,
+              }}>
+                <span style={{
+                  fontSize: 10,
+                  fontWeight: 900,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.15em',
+                  color: 'var(--color-text-secondary)',
+                }}>
+                  Daily Goal
+                </span>
+                <span style={{
+                  fontSize: 12,
+                  fontWeight: 900,
+                  ...gradientTextStyle,
+                }}>
+                  {goalPct}%
                 </span>
               </div>
-            )
-          })}
+              <div style={{
+                height: 4,
+                borderRadius: 999,
+                background: 'var(--color-surface-highest)',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  width: `${goalPct}%`,
+                  height: '100%',
+                  background: 'var(--gradient-primary)',
+                  borderRadius: 999,
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+            </div>
+
+            <a
+              href="#/insights"
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                color: 'var(--color-primary)',
+                textDecoration: 'none',
+                letterSpacing: '0.02em',
+                alignSelf: 'flex-start',
+              }}
+            >
+              See all insights →
+            </a>
+          </div>
         </div>
-      )}
+
+      </div>
     </div>
-  )
-}
-
-// ─── Shared primitives ────────────────────────────────────────────────────────
-
-function AppInitials({ name, category, size }: { name: string; category: AppCategory; size: number }) {
-  const words = name.trim().split(/\s+/)
-  const initials = words.length >= 2
-    ? (words[0][0] + words[1][0]).toUpperCase()
-    : name.slice(0, 2).toUpperCase()
-  const color = catColor(category)
-
-  return (
-    <div
-      className="flex items-center justify-center rounded-lg shrink-0 font-bold"
-      style={{
-        width:      size,
-        height:     size,
-        background: color + '22',
-        color,
-        fontSize:   Math.round(size * 0.34),
-        borderRadius: Math.round(size * 0.22),
-      }}
-    >
-      {initials}
-    </div>
-  )
-}
-
-function CategoryChip({ category }: { category: AppCategory }) {
-  const color = catColor(category)
-  return (
-    <span
-      className="text-[9px] font-semibold tracking-[0.4px] px-1.5 py-0.5 rounded shrink-0"
-      style={{ background: color + '1a', color }}
-    >
-      {formatCategory(category)}
-    </span>
   )
 }
 
@@ -921,18 +1040,17 @@ function CategoryChip({ category }: { category: AppCategory }) {
 
 function LoadingSkeleton() {
   return (
-    <div className="p-6 max-w-[920px] mx-auto space-y-4">
-      <div className="h-[132px] rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-      <div className="grid grid-cols-3 gap-3">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="h-24 rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-        ))}
+    <div style={{ padding: '32px 40px', maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ height: 20, borderRadius: 8, marginBottom: 20, background: 'var(--color-surface-high)', opacity: 0.5, width: '30%' }} />
+      <div style={{ height: 44, borderRadius: 8, marginBottom: 28, background: 'var(--color-surface-high)', opacity: 0.5, width: '70%' }} />
+      <div style={{ display: 'grid', gridTemplateColumns: '4fr 8fr', gap: 24, marginBottom: 24 }}>
+        <div style={{ height: 320, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
+        <div style={{ height: 320, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
       </div>
-      <div className="h-20 rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-      <div className="h-[160px] rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-      <div className="flex gap-3">
-        <div className="flex-1 h-[180px] rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
-        <div className="w-[264px] h-[180px] rounded-xl animate-pulse bg-[var(--color-surface-card)]" />
+      <div style={{ height: 160, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5, marginBottom: 24 }} />
+      <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 24 }}>
+        <div style={{ height: 280, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
+        <div style={{ height: 280, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
       </div>
     </div>
   )

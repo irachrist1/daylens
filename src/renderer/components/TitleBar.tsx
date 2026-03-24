@@ -48,8 +48,8 @@ function WinControls() {
 export default function TitleBar() {
   return (
     <div
-      className="flex items-center h-10 shrink-0 select-none bg-[var(--color-surface-container)] border-b border-[var(--color-border)]"
-      style={DRAG}
+      className="flex items-center h-10 shrink-0 select-none bg-[var(--color-titlebar-bg)] border-b border-[var(--color-border-ghost)]"
+      style={{ ...DRAG, fontFamily: 'var(--font-sans)' }}
     >
       {/* macOS: 72px inset so native traffic lights aren't obscured */}
       {IS_MAC && <div className="w-[72px] shrink-0" />}

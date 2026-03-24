@@ -17,7 +17,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <p className="text-sm text-[var(--color-text-secondary)]">
             Something went wrong in {this.props.name}.
           </p>
-          <p className="text-xs text-[var(--color-text-muted)] font-mono opacity-60">
+          <p className="text-xs text-[var(--color-text-muted)] opacity-60">
             {this.state.error.message}
           </p>
           <button

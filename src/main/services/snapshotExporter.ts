@@ -90,9 +90,11 @@ let _normMap: NormalizationMap | null = null
 function getNormMap(): NormalizationMap {
   if (_normMap) return _normMap
 
-  // Try loading from bundled resource, fallback to hardcoded path
   const candidates = [
-    path.join(__dirname, '..', '..', 'resources', 'app-normalization.v1.json'),
+    // Packaged build: extraResources unpacks the JSON next to the asar
+    ...(typeof process !== 'undefined' && (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+      ? [path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, 'app-normalization.v1.json')]
+      : []),
     path.join(__dirname, '..', '..', 'shared', 'app-normalization.v1.json'),
     path.join(process.cwd(), 'shared', 'app-normalization.v1.json'),
   ]
@@ -144,13 +146,25 @@ function dayBounds(dateStr: string): [number, number] {
 }
 
 function toISOWithOffset(ms: number): string {
+  // Build the timestamp from local date/time components so the wall-clock
+  // time is correct. Using toISOString() (UTC) and patching the offset suffix
+  // produces an internally inconsistent string.
   const d = new Date(ms)
-  const tzOffset = -d.getTimezoneOffset()
+  const tzOffset = -d.getTimezoneOffset()  // minutes east of UTC
   const sign = tzOffset >= 0 ? '+' : '-'
   const absOffset = Math.abs(tzOffset)
-  const hh = String(Math.floor(absOffset / 60)).padStart(2, '0')
-  const mm = String(absOffset % 60).padStart(2, '0')
-  return d.toISOString().replace('Z', `${sign}${hh}:${mm}`)
+  const oh = String(Math.floor(absOffset / 60)).padStart(2, '0')
+  const om = String(absOffset % 60).padStart(2, '0')
+
+  const yr  = d.getFullYear()
+  const mo  = String(d.getMonth() + 1).padStart(2, '0')
+  const dy  = String(d.getDate()).padStart(2, '0')
+  const hr  = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  const sec = String(d.getSeconds()).padStart(2, '0')
+  const ms3 = String(d.getMilliseconds()).padStart(3, '0')
+
+  return `${yr}-${mo}-${dy}T${hr}:${min}:${sec}.${ms3}${sign}${oh}:${om}`
 }
 
 // ─── Export ──────────────────────────────────────────────────────────────────
@@ -276,7 +290,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
       startAt: toISOWithOffset(f.startTime),
       endAt: toISOWithOffset(f.endTime ?? Date.now()),
       actualDurationSec: f.durationSeconds,
-      targetMinutes: 0,
+      targetMinutes: f.targetMinutes ?? 0,
       status: f.endTime ? 'completed' as const : 'active' as const,
     }))
 
