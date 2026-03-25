@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import type { AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
 import {
   buildCategoryTotalsFromSummaries,
@@ -14,6 +14,7 @@ import { formatDuration, percentOf, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
 import { classifyWebsiteDomain, isDistractingWebsiteCategory } from '../lib/websites'
 import { track } from '../lib/analytics'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -394,7 +395,7 @@ function buildWeeklyTrend(
 }
 
 export default function Insights() {
-  const navigate = useNavigate()
+  const viewportWidth = useViewportWidth()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -454,6 +455,10 @@ export default function Insights() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, activeTab, loading])
 
+  const pagePadding = getPagePadding(viewportWidth)
+  const stackOverviewHero = viewportWidth < 1180
+  const patternColumns = viewportWidth < 920 ? 'minmax(0, 1fr)' : viewportWidth < 1280 ? 'repeat(2, minmax(0, 1fr))' : 'repeat(3, 1fr)'
+
   async function handleSend(text?: string) {
     const message = (text ?? input).trim()
     if (!message || loading || !hasApiKey) return
@@ -510,28 +515,14 @@ export default function Insights() {
     focusPct,
   )
   const hoveredTrend = weeklyTrend.find((day) => day.date === hoveredTrendDate) ?? null
+  const focusIntensityOverlayText = hoveredTrend
+    ? `${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`
+    : ''
   const maxSparkVal = Math.max(...weeklyTrend.map((day) => day.focusSeconds), 1)
 
   const focusQuality = focusPct >= 70 ? 'Peak Velocity' : focusPct >= 40 ? 'Building Momentum' : 'Getting Started'
 
-  const firstInsight = algorithmicInsights[0]
   const lastAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
-
-  function handleApplyRule(insight: AlgorithmicInsight) {
-    if (insight.key === 'peak-hours' || insight.key === 'goal-progress' || insight.key === 'focus-streak' || insight.key === 'context-switching') {
-      track('insight_rule_applied', { insight_key: insight.key, target: 'focus' })
-      navigate('/focus')
-      return
-    }
-    if (insight.key === 'time-allocation' || insight.key === 'website-distraction') {
-      track('insight_rule_applied', { insight_key: insight.key, target: 'history' })
-      navigate('/history')
-      return
-    }
-    track('insight_rule_applied', { insight_key: insight.key, target: 'chat' })
-    setActiveTab('chat')
-    setInput(`Turn this insight into a concrete next step: ${insight.headline}`)
-  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -540,9 +531,9 @@ export default function Insights() {
       <div style={{ flex: 1, overflowY: 'auto' }}>
 
         {/* ── Header ─────────────────────────────────────────────────────────── */}
-        <div style={{ padding: '32px 40px 0', maxWidth: 960, margin: '0 auto', width: '100%' }}>
+        <div style={{ padding: `24px ${pagePadding}px 0`, maxWidth: 960, margin: '0 auto', width: '100%' }}>
           <h1 style={{
-            fontSize: 36, fontWeight: 900, color: 'var(--color-text-primary)',
+            fontSize: viewportWidth < 960 ? 30 : 36, fontWeight: 900, color: 'var(--color-text-primary)',
             letterSpacing: '-0.03em', margin: '0 0 4px',
           }}>
             {activeTab === 'overview' ? 'Your Week in Review' : 'Ask Daylens'}
@@ -553,7 +544,7 @@ export default function Insights() {
               : 'The AI thread now lives in its own workspace so the overview stays usable even after a long conversation.'}
           </p>
 
-          <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+          <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
             {([
               { key: 'overview', label: 'Overview', description: 'Cards and patterns' },
               { key: 'chat', label: 'AI Workspace', description: 'Dedicated conversation' },
@@ -564,7 +555,7 @@ export default function Insights() {
                   key={tab.key}
                   onClick={() => setActiveTab(tab.key)}
                   style={{
-                    minWidth: 188,
+                    minWidth: viewportWidth < 760 ? '100%' : 188,
                     borderRadius: 10,
                     border: active ? 'none' : '1px solid var(--color-border-ghost)',
                     background: active ? 'linear-gradient(135deg, var(--color-primary), var(--color-primary-glow))' : 'var(--color-surface-container)',
@@ -589,12 +580,12 @@ export default function Insights() {
         </div>
 
         {/* ── Bento grid ─────────────────────────────────────────────────────── */}
-        <div style={{ padding: '24px 40px 0', maxWidth: 960, margin: '0 auto', width: '100%' }}>
+        <div style={{ padding: `24px ${pagePadding}px 0`, maxWidth: 960, margin: '0 auto', width: '100%' }}>
 
           {activeTab === 'overview' && (
             <>
           {/* Row 1: AI Summary (60%) + Focus Intensity (40%) */}
-          <div style={{ display: 'grid', gridTemplateColumns: '60fr 40fr', gap: 16, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: stackOverviewHero ? 'minmax(0, 1fr)' : '60fr 40fr', gap: 16, marginBottom: 16 }}>
 
             {/* AI Summary card */}
             <div style={{
@@ -649,7 +640,7 @@ export default function Insights() {
               </p>
 
               {/* Stat chips */}
-              <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 {/* Focus % chip */}
                 <div style={{
                   padding: '8px 16px', background: 'var(--color-surface-highest)',
@@ -714,25 +705,27 @@ export default function Insights() {
               }}>
                 {focusQuality}
               </p>
-              {hoveredTrend && (
-                <p style={{
-                  fontSize: 11,
-                  color: hoveredTrend.focusSeconds
-                    ? 'var(--color-primary)'
-                    : 'var(--color-text-tertiary)',
-                  margin: '0 0 14px',
-                  minHeight: 16,
-                  fontWeight: 700,
-                }}>
-                  {`${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`}
-                </p>
-              )}
-
               {/* Bar chart */}
               <div style={{
+                position: 'relative',
                 display: 'flex', alignItems: 'flex-end', gap: 3,
-                height: 80, marginTop: 'auto',
+                height: 80, marginTop: 'auto', paddingTop: 22,
               }}>
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  textAlign: 'center',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: hoveredTrend?.focusSeconds
+                    ? 'var(--color-primary)'
+                    : 'var(--color-text-tertiary)',
+                  pointerEvents: 'none',
+                }}>
+                  {focusIntensityOverlayText}
+                </div>
                 {weeklyTrend.map((entry) => {
                   const isHighest = entry.focusSeconds === maxSparkVal && entry.focusSeconds > 0
                   const isHovered = hoveredTrendDate === entry.date
@@ -740,7 +733,6 @@ export default function Insights() {
                   return (
                     <div
                       key={entry.date}
-                      title={`${entry.label}: ${entry.focusSeconds > 0 ? formatDuration(entry.focusSeconds) : 'No focused time'}`}
                       style={{
                         flex: 1,
                         borderRadius: '3px 3px 0 0',
@@ -762,7 +754,7 @@ export default function Insights() {
           </div>
 
           {/* Row 2: Pattern cards — 3 columns */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: patternColumns, gap: 16, marginBottom: 24 }}>
             {[0, 1, 2].map((idx) => {
               const insight = algorithmicInsights[idx]
               if (!insight) {
@@ -783,94 +775,6 @@ export default function Insights() {
             })}
           </div>
 
-          {/* Actionable Intelligence section */}
-          {algorithmicInsights.length > 0 && firstInsight && (
-            <div style={{ marginBottom: 32 }}>
-              {/* Section label */}
-              <div style={{
-                fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-                letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20,
-              }}>
-                <span>Actionable Intelligence</span>
-                <div style={{ flex: 1, height: 1, background: 'rgba(66,71,84,0.20)' }} />
-              </div>
-
-              {/* Glass panel */}
-              <div style={{
-                background: 'var(--color-glass-bg)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: 12,
-                border: '1px solid var(--color-glass-border)',
-                padding: 32,
-                display: 'flex', alignItems: 'center', gap: 32,
-                position: 'relative', overflow: 'hidden',
-              }}>
-                {/* Decorative glow */}
-                <div style={{
-                  position: 'absolute', right: -80, bottom: -80,
-                  width: 320, height: 320,
-                  background: 'rgba(173,198,255,0.08)',
-                  borderRadius: '50%', filter: 'blur(60px)',
-                  pointerEvents: 'none',
-                }} />
-
-                {/* Icon box */}
-                <div style={{
-                  width: 80, height: 80, borderRadius: 12,
-                  background: 'var(--gradient-primary)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  flexShrink: 0, boxShadow: '0 8px 32px rgba(173,198,255,0.20)',
-                }}>
-                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-contrast)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 8v4l3 3" />
-                  </svg>
-                </div>
-
-                {/* Text section */}
-                <div style={{ flex: 1, position: 'relative', zIndex: 1 }}>
-                  <p style={{
-                    fontSize: 18, fontWeight: 900, fontStyle: 'italic',
-                    letterSpacing: '-0.02em', color: 'var(--color-text-primary)',
-                    margin: '0 0 8px',
-                  }}>
-                    Optimization Protocol
-                  </p>
-                  <p style={{
-                    fontSize: 15, color: 'var(--color-text-secondary)',
-                    lineHeight: 1.7, margin: 0,
-                  }}>
-                    {firstInsight.body}
-                  </p>
-                </div>
-
-                {/* Action button */}
-                {firstInsight.action ? (
-                  <div style={{ flexShrink: 0 }}>
-                    {firstInsight.action}
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => handleApplyRule(firstInsight)}
-                    style={{
-                      padding: '12px 24px',
-                      background: 'var(--gradient-primary)',
-                      color: 'var(--color-primary-contrast)',
-                      fontWeight: 900, fontSize: 12,
-                      letterSpacing: '-0.01em', textTransform: 'uppercase',
-                      borderRadius: 10, border: 'none', cursor: 'pointer',
-                      flexShrink: 0, transition: 'transform 150ms',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(0.97)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                  >
-                    Apply Rule
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* ── AI Chat section ───────────────────────────────────────────────── */}
             </>
@@ -895,7 +799,7 @@ export default function Insights() {
               <div style={{ flex: 1, height: 1, background: 'rgba(66,71,84,0.20)' }} />
               {lastAssistantMessage && (
                 <span style={{
-                  maxWidth: 240,
+                  maxWidth: viewportWidth < 960 ? 140 : 240,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -966,7 +870,7 @@ export default function Insights() {
                 {/* Starter prompts — shown when no messages */}
                 {messages.length === 0 && !loading && (
                   <div style={{
-                    display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))',
+                    display: 'grid', gridTemplateColumns: viewportWidth < 920 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0,1fr))',
                     gap: 8, marginBottom: 16,
                   }}>
                     {starterPrompts.map((prompt) => (
@@ -991,7 +895,7 @@ export default function Insights() {
                           padding: '10px 14px',
                           borderRadius: '12px 12px 3px 12px',
                           fontSize: 13, fontWeight: 500,
-                          maxWidth: '72%',
+                          maxWidth: viewportWidth < 920 ? '88%' : '72%',
                         }}>
                           {msg.content}
                         </div>
@@ -1061,7 +965,7 @@ export default function Insights() {
       {showChatInput && activeTab === 'chat' && (
         <div style={{
           borderTop: '1px solid rgba(66,71,84,0.15)',
-          padding: '12px 40px 14px',
+          padding: `12px ${pagePadding}px 14px`,
           background: 'var(--color-bg)',
         }}>
           <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', gap: 10, alignItems: 'center' }}>

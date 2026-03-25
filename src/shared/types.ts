@@ -124,6 +124,7 @@ export interface AppSettings {
   analyticsOptIn: boolean       // false = no telemetry (default)
   launchOnLogin: boolean
   theme: AppTheme
+  sidebarCollapsed: boolean
   onboardingComplete: boolean
   userName: string
   userGoals: string[]

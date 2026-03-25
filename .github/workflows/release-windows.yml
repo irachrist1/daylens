@@ -76,13 +76,6 @@ jobs:
           npx vite build --config vite.preload.config.ts
           npx vite build --config vite.renderer.config.ts
 
-      # ── Code signing ──────────────────────────────────────────────────────
-      # Requires GitHub Actions secrets:
-      #   WIN_CERTIFICATE_FILE      — base64-encoded PFX (OV or EV certificate)
-      #   WIN_CERTIFICATE_PASSWORD  — PFX password
-      #   WIN_CERT_SUBJECT_NAME     — e.g. "Daylens Inc."
-      # Obtain an OV or EV code-signing certificate from a trusted CA
-      # (e.g. DigiCert, Sectigo) and store the PFX as a base64 secret.
       - name: Decode code-signing certificate
         if: ${{ env.WIN_CERTIFICATE_FILE != '' }}
         shell: bash
@@ -105,16 +98,14 @@ jobs:
           body: |
             ## Daylens ${{ steps.meta.outputs.version }} for Windows
 
-            Your personal activity analyst — now on Windows.
-
-            Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud. Analytics are opt-in and disabled by default.
+            This release tightens the shell and cleans up the core tracking views so Daylens stays readable while you move between tabs and smaller window sizes.
 
             ### What's new in ${{ steps.meta.outputs.version }}
-            - **Real app icons** — taskbar and Start menu icons for every tracked app (no more initials)
-            - **Category overrides** — click any category badge in Apps view to reassign it; pencil icon makes it discoverable
-            - **History week view** — 7-day bar chart with per-day category colors; click a bar to drill into that day
-            - **In-app updates** — banner appears and prompts restart when a new version downloads automatically
-            - **Feedback** — NPS prompt after 7 days; "Send feedback" button in Settings
+            - **Collapsible sidebar** - one-click icon-only mode, with the preference saved between launches
+            - **Responsive layouts across tabs** - Focus, Today, History, Apps, Insights, and Settings reflow more cleanly at narrower widths
+            - **Cleaner detail views** - removed low-value AI helper cards and simplified chart hover copy
+            - **Sharper update banner** - update download and restart states read more clearly in-app
+            - **Safer releases** - standard Windows CI now validates builds before shipping changes
 
             ### Install
 
@@ -125,8 +116,5 @@ jobs:
             ### System requirements
             - Windows 10 or later (64-bit)
             - Internet connection only for AI features (Claude API key required for Insights)
-
-            ### Also available
-            - **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)
           files: |
             dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe

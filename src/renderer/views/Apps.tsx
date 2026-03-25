@@ -7,6 +7,7 @@ import type { AppCategory, AppSession, AppUsageSummary, LiveSession } from '@sha
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 const ALL_CATEGORIES: AppCategory[] = [
   'development', 'communication', 'browsing', 'writing', 'design',
@@ -109,6 +110,7 @@ function distColor(category: AppCategory): string {
 }
 
 export default function Apps() {
+  const viewportWidth = useViewportWidth()
   const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(7)
   const [summaries, setSummaries] = useState<AppUsageSummary[]>([])
   const [live, setLive] = useState<LiveSession | null>(null)
@@ -272,11 +274,12 @@ export default function Apps() {
   const catBreakdown = [...catMap.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([category, seconds]) => ({ category, seconds }))
+  const pagePadding = getPagePadding(viewportWidth)
 
   return (
-    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%' }}>
+    <div style={{ padding: `24px ${pagePadding}px 32px`, overflowY: 'auto', height: '100%' }}>
       {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24, gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em', lineHeight: 1 }}>
             App Usage
@@ -479,6 +482,7 @@ function AppDetailPanel({
   onBack: () => void
   onDaysChange: (d: (typeof DAYS_OPTIONS)[number]) => void
 }) {
+  const viewportWidth = useViewportWidth()
   const [sessions, setSessions] = useState<AppSession[]>([])
   const [loading, setLoading] = useState(true)
   const [live, setLive] = useState<LiveSession | null>(null)
@@ -574,11 +578,17 @@ function AppDetailPanel({
         return `${bar.label}:00 · ${bar.seconds > 0 ? formatDuration(bar.seconds) : 'No usage'}`
       })()
     : null
+  const pagePadding = getPagePadding(viewportWidth)
+  const stackDetailRows = viewportWidth < 1180
+  const stackHero = viewportWidth < 960
+  const compactStats = viewportWidth < 900
+  const sparkOverlayText = hoveredSparkText ?? ''
+  const usageOverlayText = hoveredUsageText ?? ''
 
   return (
     <div style={{ overflowY: 'auto', height: '100%' }}>
       {/* Hero section */}
-      <div style={{ padding: '32px 40px 0' }}>
+      <div style={{ padding: `24px ${pagePadding}px 0` }}>
         {/* Breadcrumb */}
         <button
           onClick={onBack}
@@ -596,7 +606,7 @@ function AppDetailPanel({
         </button>
 
         {/* App hero row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 32 }}>
+        <div style={{ display: 'flex', alignItems: stackHero ? 'flex-start' : 'center', gap: 20, marginBottom: 32, flexWrap: 'wrap' }}>
           {/* App icon */}
           <div style={{
             width: 96, height: 96, borderRadius: 12,
@@ -610,7 +620,7 @@ function AppDetailPanel({
           {/* Title + category */}
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={{
-              fontSize: 36, fontWeight: 900, color: 'var(--color-text-primary)',
+              fontSize: viewportWidth < 960 ? 30 : 36, fontWeight: 900, color: 'var(--color-text-primary)',
               margin: '0 0 6px', letterSpacing: '-0.03em', lineHeight: 1,
             }}>
               {displayName}
@@ -648,7 +658,7 @@ function AppDetailPanel({
       </div>
 
       {/* Bento row 1: Total Usage (4/12) + Usage Activity (8/12) */}
-      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '4fr 8fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+      <div style={{ padding: `0 ${pagePadding}px`, display: 'grid', gridTemplateColumns: stackDetailRows ? 'minmax(0, 1fr)' : '4fr 8fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
         {/* Col A: Total Usage card */}
         <div style={{
           background: 'var(--color-surface-container)', borderRadius: 12, padding: 32,
@@ -677,12 +687,20 @@ function AppDetailPanel({
           </p>
 
           {/* Sparkline bars */}
-          {hoveredSparkText && (
-            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '18px 0 0' }}>
-              {hoveredSparkText}
-            </p>
-          )}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 96, marginTop: hoveredSparkText ? 10 : 24 }}>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 4, height: 96, marginTop: 24, paddingTop: 22 }}>
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              textAlign: 'center',
+              fontSize: 11,
+              fontWeight: 700,
+              color: hoveredSparkText ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
+              pointerEvents: 'none',
+            }}>
+              {sparkOverlayText}
+            </div>
             {sparkBars.map((val, i) => {
               const isToday = i === sparkBars.length - 1
               const h = Math.max(4, Math.round((val / maxSpark) * 96))
@@ -692,7 +710,6 @@ function AppDetailPanel({
                   style={{ flex: 1, height: 96, display: 'flex', alignItems: 'flex-end' }}
                   onMouseEnter={() => setHoveredSparkIndex(i)}
                   onMouseLeave={() => setHoveredSparkIndex(null)}
-                  title={`${sparkLabels[i]}: ${val > 0 ? formatDuration(val) : 'No usage'}`}
                 >
                   <div style={{
                     width: '100%', height: h,
@@ -723,17 +740,25 @@ function AppDetailPanel({
           </div>
 
           {/* Bar chart */}
-          {hoveredUsageText && (
-            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '0 0 14px' }}>
-              {hoveredUsageText}
-            </p>
-          )}
           {usageBars.every((bar) => bar.seconds === 0) ? (
             <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '32px 0', margin: 0 }}>
               No activity recorded.
             </p>
           ) : (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', height: 96 }}>
+            <div style={{ position: 'relative', display: 'flex', gap: 6, alignItems: 'flex-end', height: 96, paddingTop: 22 }}>
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                textAlign: 'center',
+                fontSize: 11,
+                fontWeight: 700,
+                color: hoveredUsageText ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
+                pointerEvents: 'none',
+              }}>
+                {usageOverlayText}
+              </div>
               {usageBars.map((bar, i) => {
                 const isMax = i === maxBarIdx && bar.seconds > 0
                 const h = Math.max(4, Math.round((bar.seconds / maxHourSeconds) * 96))
@@ -741,7 +766,6 @@ function AppDetailPanel({
                   <div key={bar.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: '100%', height: 96, display: 'flex', alignItems: 'flex-end' }}>
                       <div
-                        title={`${bar.label}:00 - ${formatDuration(bar.seconds)}`}
                         onMouseEnter={() => setHoveredUsageLabel(bar.label)}
                         onMouseLeave={() => setHoveredUsageLabel(null)}
                         style={{
@@ -766,7 +790,7 @@ function AppDetailPanel({
       </div>
 
       {/* Bento row 2: Intentionality Breakdown (7/12) + Session History (5/12) */}
-      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
+      <div style={{ padding: `0 ${pagePadding}px 32px`, display: 'grid', gridTemplateColumns: stackDetailRows ? 'minmax(0, 1fr)' : '7fr 5fr', gap: 16, marginBottom: 0, alignItems: 'start' }}>
         {/* Col A: Glass Intentionality Breakdown */}
         <div style={{
           background: 'var(--color-glass-bg)',
@@ -781,7 +805,7 @@ function AppDetailPanel({
           }}>
             Usage Profile
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: viewportWidth < 760 ? 'minmax(0, 1fr)' : compactStats ? 'repeat(2, minmax(0, 1fr))' : 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 20 }}>
             {[
               { label: 'Avg Session', value: avgSessionSeconds > 0 ? formatDuration(avgSessionSeconds) : '--' },
               { label: 'Longest', value: longestSession > 0 ? formatDuration(longestSession) : '--' },
@@ -927,7 +951,7 @@ function AppDetailPanel({
                 <div
                   key={group.key}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
+                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                     padding: '10px 12px',
                     borderBottom: index < Math.min(groupedSessions.length, 6) - 1 ? '1px solid var(--color-border-ghost)' : 'none',
                     transition: 'background 120ms',
@@ -958,7 +982,7 @@ function AppDetailPanel({
           {/* Stats footer */}
           {!loading && visibleSessions.length > 0 && (
             <div style={{
-              display: 'flex', gap: 0, marginTop: 16,
+              display: 'flex', gap: 0, marginTop: 16, flexWrap: 'wrap',
               borderTop: '1px solid var(--color-border-ghost)', paddingTop: 16,
             }}>
               {[
@@ -990,56 +1014,6 @@ function AppDetailPanel({
         </div>
       </div>
 
-      {/* AI Insight footer banner */}
-      <div style={{ padding: '0 40px 32px' }}>
-        <div style={{
-          background: 'linear-gradient(to right, var(--color-surface-container), var(--color-surface-low))',
-          borderRadius: 12, padding: 40,
-          border: '1px solid var(--color-border-ghost)',
-          display: 'flex', alignItems: 'flex-start', gap: 32,
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center',
-              padding: '3px 12px', borderRadius: 999,
-              background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)',
-              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-              letterSpacing: '0.15em', marginBottom: 12,
-            }}>
-              AI Insight
-            </div>
-            <h2 style={{
-              fontSize: 18, fontWeight: 900, color: 'var(--color-text-primary)',
-              margin: '0 0 8px', letterSpacing: '-0.02em',
-            }}>
-              Focus Peak Detected
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
-              {usageInsight}
-            </p>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
-            <button style={{
-              padding: '10px 20px', borderRadius: 10,
-              background: 'var(--color-surface-highest)',
-              border: '1px solid var(--color-border-ghost)',
-              color: 'var(--color-text-primary)', fontSize: 13, fontWeight: 700,
-              cursor: 'pointer', whiteSpace: 'nowrap',
-            }}>
-              Snooze
-            </button>
-            <button style={{
-              padding: '10px 20px', borderRadius: 10,
-              background: 'var(--gradient-primary)',
-              border: 'none',
-              color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700,
-              cursor: 'pointer', whiteSpace: 'nowrap',
-            }}>
-              Optimize
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

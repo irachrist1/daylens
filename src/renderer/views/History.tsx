@@ -7,6 +7,7 @@ import { FOCUSED_CATEGORIES } from '@shared/types'
 import { BarChart, Bar, Cell, ResponsiveContainer } from 'recharts'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 function isPresentationNoise(session: AppSession): boolean {
   return (session.category === 'system' || session.category === 'uncategorized') &&
@@ -173,69 +174,73 @@ function DayTimeline({ sessions, sortedCats }: { sessions: AppSession[]; sortedC
         Timeline
       </p>
 
-      {/* Hour axis */}
-      <div style={{ display: 'flex', marginBottom: 6 }}>
-        {HOUR_LABELS.map((h) => (
-          <div
-            key={h}
-            style={{ flex: 1, fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center', flexShrink: 0 }}
-          >
-            {fmtHour(h)}
+      <div style={{ overflowX: 'auto', paddingBottom: 2 }}>
+        <div style={{ minWidth: 640 }}>
+          {/* Hour axis */}
+          <div style={{ display: 'flex', marginBottom: 6 }}>
+            {HOUR_LABELS.map((h) => (
+              <div
+                key={h}
+                style={{ flex: 1, fontSize: 10, color: 'var(--color-text-tertiary)', textAlign: 'center', flexShrink: 0 }}
+              >
+                {fmtHour(h)}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {/* Timeline track */}
-      <div
-        ref={trackRef}
-        style={{
-          position: 'relative',
-          height: 56,
-          background: 'var(--color-surface-high)',
-          borderRadius: 8,
-          overflow: 'hidden',
-        }}
-      >
-        {finished.map((s) => {
-          const sd = new Date(s.startTime)
-          const ed = new Date(s.endTime)
-          const startH = sd.getHours() + sd.getMinutes() / 60 + sd.getSeconds() / 3600
-          const endH   = ed.getHours() + ed.getMinutes() / 60 + ed.getSeconds() / 3600
+          {/* Timeline track */}
+          <div
+            ref={trackRef}
+            style={{
+              position: 'relative',
+              height: 56,
+              background: 'var(--color-surface-high)',
+              borderRadius: 8,
+              overflow: 'hidden',
+            }}
+          >
+            {finished.map((s) => {
+              const sd = new Date(s.startTime)
+              const ed = new Date(s.endTime)
+              const startH = sd.getHours() + sd.getMinutes() / 60 + sd.getSeconds() / 3600
+              const endH   = ed.getHours() + ed.getMinutes() / 60 + ed.getSeconds() / 3600
 
-          const clampStart = Math.max(TL_START, Math.min(TL_END, startH))
-          const clampEnd   = Math.max(TL_START, Math.min(TL_END, endH))
-          if (clampEnd <= clampStart) return null
+              const clampStart = Math.max(TL_START, Math.min(TL_END, startH))
+              const clampEnd   = Math.max(TL_START, Math.min(TL_END, endH))
+              if (clampEnd <= clampStart) return null
 
-          const leftPct  = ((clampStart - TL_START) / TL_HOURS) * 100
-          const widthPct = ((clampEnd - clampStart) / TL_HOURS) * 100
-          const pxWidth  = trackWidth > 0 ? (widthPct / 100) * trackWidth : 0
+              const leftPct  = ((clampStart - TL_START) / TL_HOURS) * 100
+              const widthPct = ((clampEnd - clampStart) / TL_HOURS) * 100
+              const pxWidth  = trackWidth > 0 ? (widthPct / 100) * trackWidth : 0
 
-          return (
-            <div
-              key={`${s.id}-${s.startTime}`}
-              title={`${s.appName} · ${formatDuration(s.durationSeconds)}`}
-              style={{
-                position: 'absolute',
-                left: `${leftPct}%`,
-                width: `max(4px, ${widthPct}%)`,
-                top: 0,
-                bottom: 0,
-                background: usesPrimaryGradient(s.category) ? 'var(--gradient-primary)' : distColor(s.category),
-                borderRadius: 4,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-              }}
-            >
-                  {pxWidth > 60 && (
-                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.84)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 4px' }}>
-                      {formatDisplayAppName(s.appName)}
-                    </span>
-                  )}
-            </div>
-          )
-        })}
+              return (
+                <div
+                  key={`${s.id}-${s.startTime}`}
+                  title={`${s.appName} · ${formatDuration(s.durationSeconds)}`}
+                  style={{
+                    position: 'absolute',
+                    left: `${leftPct}%`,
+                    width: `max(4px, ${widthPct}%)`,
+                    top: 0,
+                    bottom: 0,
+                    background: usesPrimaryGradient(s.category) ? 'var(--gradient-primary)' : distColor(s.category),
+                    borderRadius: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  }}
+                >
+                      {pxWidth > 60 && (
+                        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.84)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 4px' }}>
+                          {formatDisplayAppName(s.appName)}
+                        </span>
+                      )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
 
       {/* Category legend chips */}
@@ -379,7 +384,7 @@ function WeekView({ onSelectDay }: { onSelectDay: (date: string) => void }) {
       </ResponsiveContainer>
 
       {/* Stat cards */}
-      <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
         {mostActiveDay && (
           <div style={{ flex: 1, background: 'var(--color-surface-container)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--color-border-ghost)' }}>
             <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: 0 }}>Most Active</p>
@@ -424,6 +429,7 @@ const FILTER_PILLS = [
 type FilterKey = typeof FILTER_PILLS[number]['key']
 
 export default function History() {
+  const viewportWidth = useViewportWidth()
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day')
   const [date, setDate] = useState(todayString())
   const [sessions, setSessions] = useState<AppSession[]>([])
@@ -473,6 +479,8 @@ export default function History() {
 
   const goalSeconds = 4 * 3600 // 4h focus goal
   const goalPct = Math.min(100, Math.round((focusSec / goalSeconds) * 100))
+  const pagePadding = getPagePadding(viewportWidth)
+  const compactTimeline = viewportWidth < 960
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -483,10 +491,12 @@ export default function History() {
         top: 0,
         zIndex: 10,
         background: 'var(--color-bg)',
-        padding: '20px 40px 16px',
+        padding: `20px ${pagePadding}px 16px`,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: 16,
+        flexWrap: 'wrap',
         borderBottom: '1px solid rgba(66,71,84,0.20)',
       }}>
         {/* Left: title + separator + date or "Weekly Overview" */}
@@ -505,7 +515,7 @@ export default function History() {
         </div>
 
         {/* Right: nav arrows + Today pill + Day/Week toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {viewMode === 'day' && (
             <>
               <button
@@ -574,7 +584,7 @@ export default function History() {
       </div>
 
       {/* ── Scrollable body ─────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '32px 40px 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: `32px ${pagePadding}px 0` }}>
 
         {/* ── Week view ───────────────────────────────────────────────── */}
         {viewMode === 'week' && (
@@ -651,7 +661,7 @@ export default function History() {
                   </div>
                 ) : (
                   /* Vertical timeline */
-                  <div style={{ position: 'relative', paddingLeft: 64 }}>
+                  <div style={{ position: 'relative', paddingLeft: compactTimeline ? 44 : 64 }}>
                     {/* Vertical line */}
                     <div style={{
                       position: 'absolute',
@@ -677,7 +687,7 @@ export default function History() {
                           {/* Icon circle — positioned in the left padding zone */}
                           <div style={{
                             position: 'absolute',
-                            left: -40,
+                            left: compactTimeline ? -28 : -40,
                             top: 16,
                             width: 48,
                             height: 48,
@@ -814,15 +824,16 @@ export default function History() {
           backdropFilter: 'blur(20px)',
           WebkitBackdropFilter: 'blur(20px)',
           borderTop: '1px solid var(--color-glass-border)',
-          padding: '16px 40px',
+          padding: `16px ${pagePadding}px`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 24,
+          flexWrap: 'wrap',
           zIndex: 10,
         }}>
           {/* Stats row */}
-          <div style={{ display: 'flex', gap: 32 }}>
+          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
             <div>
               <p style={{ fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em', color: 'var(--color-text-tertiary)', margin: '0 0 2px' }}>
                 Total Deep Work

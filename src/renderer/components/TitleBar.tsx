@@ -10,6 +10,35 @@ const IS_MAC = navigator.platform.startsWith('Mac')
 const DRAG: DragStyle    = { WebkitAppRegion: 'drag' }
 const NO_DRAG: DragStyle = { WebkitAppRegion: 'no-drag' }
 
+function SidebarToggle({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar'
+
+  return (
+    <div style={NO_DRAG} className="pl-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        title={`${label} (Ctrl/Cmd+\\)`}
+        aria-label={label}
+        aria-pressed={collapsed}
+        className="w-9 h-9 rounded-lg flex items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-high)] hover:text-[var(--color-text-primary)] transition-colors"
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.25" y="2.25" width="13.5" height="13.5" rx="2.5" />
+          <path d="M6 2.75v12.5" />
+          {collapsed ? <path d="M10.5 9h2.5" /> : <path d="M9.75 9h3.5" />}
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 function WinControls() {
   return (
     <div className="flex items-stretch h-full" style={NO_DRAG}>
@@ -45,7 +74,13 @@ function WinControls() {
   )
 }
 
-export default function TitleBar() {
+export default function TitleBar({
+  sidebarCollapsed = false,
+  onToggleSidebar,
+}: {
+  sidebarCollapsed?: boolean
+  onToggleSidebar?: () => void
+}) {
   return (
     <div
       className="flex items-center h-10 shrink-0 select-none bg-[var(--color-titlebar-bg)] border-b border-[var(--color-border-ghost)]"
@@ -53,6 +88,10 @@ export default function TitleBar() {
     >
       {/* macOS: 72px inset so native traffic lights aren't obscured */}
       {IS_MAC && <div className="w-[72px] shrink-0" />}
+
+      {onToggleSidebar && (
+        <SidebarToggle collapsed={sidebarCollapsed} onToggle={onToggleSidebar} />
+      )}
 
       {/* Drag region fills the middle */}
       <div className="flex-1" />

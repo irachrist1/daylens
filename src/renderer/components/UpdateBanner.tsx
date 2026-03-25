@@ -27,7 +27,8 @@ export default function UpdateBanner() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 10,
+          gap: 12,
+          flexWrap: 'wrap',
           WebkitAppRegion: 'no-drag',
         } as React.CSSProperties}
       >
@@ -42,11 +43,11 @@ export default function UpdateBanner() {
             flexShrink: 0,
           }}
         />
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
-          Downloading Daylens {update.version}
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '-0.01em' }}>
+          Update downloading
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          You can keep using the app while it downloads.
+          Daylens {update.version} is downloading in the background. Keep working while it finishes.
         </span>
       </div>
     )
@@ -78,11 +79,11 @@ export default function UpdateBanner() {
           flexShrink: 0,
         }}
       />
-      <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
-        Daylens {update.version} is ready
+      <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '-0.01em' }}>
+        Update ready
       </span>
       <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-        Restart once to finish installing the update.
+        Daylens {update.version} is downloaded. Restart once to install the latest fixes and improvements.
       </span>
       <button
         onClick={() => ipc.updater.install()}
@@ -93,14 +94,14 @@ export default function UpdateBanner() {
           background: 'var(--gradient-primary)',
           color: 'var(--color-primary-contrast)',
           fontSize: 12,
-          fontWeight: 700,
+          fontWeight: 800,
           cursor: 'pointer',
           fontFamily: 'inherit',
           letterSpacing: '-0.01em',
           boxShadow: '0 10px 22px rgba(15,99,219,0.18)',
         }}
       >
-        Restart to update
+        Restart now
       </button>
     </div>
   )

@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "DaylensWindows",
-  "version": "1.0.10",
+  "version": "1.0.12",
   "description": "Activity tracker and AI insights — Windows",
   "main": ".vite/build/main.js",
   "scripts": {
