@@ -1,6 +1,6 @@
 # Daylens macOS — Progress Tracker
 
-**Last updated: 2026-03-24 · Current version: v1.0.18**
+**Last updated: 2026-03-25 · Current version: v1.0.19**
 **Repo: `irachrist1/daylens` · Branch: `main`**
 
 > Windows companion app is tracked separately in `irachrist1/daylens-windows`.

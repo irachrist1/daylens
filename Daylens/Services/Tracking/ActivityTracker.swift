@@ -408,6 +408,10 @@ final class ActivityTracker {
                   pending.app.bundleID == app.bundleID,
                   pending.endedAt == endedAt else { return }
 
+            if self.recoverFrontmostApplicationIfActivationWasMissed(for: pending) {
+                return
+            }
+
             if pending.hintedBySpaceChange {
                 self.logger.debug("Finishing deferred deactivation after Space-transition grace expired for \(app.bundleID, privacy: .public)")
             }
@@ -428,6 +432,40 @@ final class ActivityTracker {
         )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + deactivationGracePeriod, execute: workItem)
+    }
+
+    private func recoverFrontmostApplicationIfActivationWasMissed(for pending: PendingDeactivation) -> Bool {
+        guard isRunning, !isPausedForIdle, let frontApp = frontmostApplicationProvider() else {
+            return false
+        }
+
+        if frontApp.bundleID == pending.app.bundleID {
+            logger.debug("Keeping session open for \(pending.app.bundleID, privacy: .public) because it is still frontmost after a missed activation/fullscreen transition")
+            pendingDeactivation = nil
+            currentApp = ActiveAppInfo(
+                bundleID: pending.app.bundleID,
+                appName: frontApp.appName,
+                windowTitle: pending.app.windowTitle,
+                activatedAt: pending.app.activatedAt
+            )
+            lastTrackedApp = frontApp.appName
+            return true
+        }
+
+        logger.debug("Recovering missed activation for frontmost app \(frontApp.bundleID, privacy: .public) after deferred deactivation of \(pending.app.bundleID, privacy: .public)")
+        pendingDeactivation = nil
+        if currentApp?.bundleID == pending.app.bundleID {
+            currentApp = nil
+        }
+
+        finalizeSession(for: pending.app, endedAt: pending.endedAt)
+        handleAppActivation(
+            bundleID: frontApp.bundleID,
+            appName: frontApp.appName,
+            activatedAt: pending.endedAt,
+            source: .nsworkspace
+        )
+        return true
     }
 
     private func reconcileCurrentFrontmostApplicationAfterSpaceChange() {

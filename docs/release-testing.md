@@ -1,6 +1,6 @@
 # Daylens macOS — Release Testing Checklist
 
-**Last updated: 2026-03-24 (v1.0.18)**
+**Last updated: 2026-03-25 (v1.0.19)**
 
 > Windows testing checklist is in `irachrist1/daylens-windows` repo.
 

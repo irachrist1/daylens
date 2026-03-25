@@ -2,6 +2,12 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.19] - 2026-03-25
+
+### Fixed
+- Fullscreen playback no longer stops app tracking when passive viewing triggers system idle; Daylens now keeps the owning app session open while the frontmost window remains fullscreen
+- Fullscreen transitions no longer lose app time when macOS skips an activation event; deferred deactivations now reconcile the real frontmost app before finalizing the previous session
+
 ## [1.0.18] - 2026-03-24
 
 ### Fixed

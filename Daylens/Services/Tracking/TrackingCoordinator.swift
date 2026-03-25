@@ -40,6 +40,8 @@ final class TrackingCoordinator {
     private var currentWebBundleID: String?
     private var currentWebConfidence: ActivityEvent.ConfidenceLevel = .medium
     private var webExtractionFailures = 0
+    private var isPausedForSystemIdle = false
+    private var isHoldingFullscreenIdleSession = false
 
     init(database: AppDatabase, permissionManager: PermissionManager) {
         self.database = database
@@ -74,15 +76,7 @@ final class TrackingCoordinator {
 
         // Start idle detection
         idleDetector.start { [weak self] isIdle in
-            guard let self else { return }
-            if isIdle {
-                self.logger.info("Idle detected; pausing activity tracker")
-                self.finalizeCurrentWebVisit()
-                self.activityTracker.pauseForIdle()
-            } else {
-                self.logger.info("Idle cleared; resuming activity tracker")
-                self.activityTracker.resumeFromIdle()
-            }
+            self?.handleIdleStateChange(isIdle)
         }
 
         // Start browser history polling
@@ -114,6 +108,8 @@ final class TrackingCoordinator {
         accessibilityTimer = nil
         debouncedSummaryWork?.cancel()
         debouncedSummaryWork = nil
+        isPausedForSystemIdle = false
+        isHoldingFullscreenIdleSession = false
         trackingState = .paused
     }
 
@@ -148,13 +144,64 @@ final class TrackingCoordinator {
         }
     }
 
+    func handleIdleStateChange(_ isIdle: Bool, keepTrackingDuringIdle: Bool? = nil) {
+        if isIdle {
+            if keepTrackingDuringIdle ?? shouldKeepTrackingDuringSystemIdle() {
+                if !isHoldingFullscreenIdleSession {
+                    logger.info("Idle detected while the frontmost window is fullscreen; keeping the passive session open")
+                }
+                isHoldingFullscreenIdleSession = true
+                return
+            }
+
+            pauseForSystemIdleIfNeeded()
+            return
+        }
+
+        if isHoldingFullscreenIdleSession {
+            logger.info("User activity resumed; clearing fullscreen idle hold")
+        }
+
+        isHoldingFullscreenIdleSession = false
+        resumeAfterSystemIdleIfNeeded()
+    }
+
+    @discardableResult
+    func refreshIdleSuppressionIfNeeded(keepTrackingDuringIdle: Bool) -> Bool {
+        guard idleDetector.isIdle else {
+            isHoldingFullscreenIdleSession = false
+            return false
+        }
+
+        if keepTrackingDuringIdle {
+            if !isHoldingFullscreenIdleSession {
+                logger.info("Maintaining tracking while fullscreen content remains frontmost during system idle")
+            }
+            isHoldingFullscreenIdleSession = true
+            return false
+        }
+
+        guard isHoldingFullscreenIdleSession else { return false }
+
+        logger.info("Fullscreen idle hold ended; pausing tracking because the frontmost window is no longer fullscreen")
+        isHoldingFullscreenIdleSession = false
+        pauseForSystemIdleIfNeeded()
+        return true
+    }
+
     // MARK: - Accessibility-based enrichment
 
     private func startAccessibilityPolling() {
         accessibilityTimer?.invalidate()
         accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
+            let frontApp = NSWorkspace.shared.frontmostApplication
+            let shouldKeepTrackingDuringIdle = self.shouldKeepTrackingDuringSystemIdle(frontApp: frontApp)
+            if self.refreshIdleSuppressionIfNeeded(keepTrackingDuringIdle: shouldKeepTrackingDuringIdle) {
+                return
+            }
+
+            guard let frontApp else { return }
 
             let title = self.accessibilityService.frontmostWindowTitle(for: frontApp)
             self.activityTracker.updateWindowTitle(title)
@@ -279,5 +326,27 @@ final class TrackingCoordinator {
         currentWebBundleID = nil
         currentWebConfidence = .medium
         webExtractionFailures = 0
+    }
+
+    private func shouldKeepTrackingDuringSystemIdle(frontApp: NSRunningApplication? = NSWorkspace.shared.frontmostApplication) -> Bool {
+        guard let frontApp else { return false }
+        return accessibilityService.isFrontmostWindowFullScreen(for: frontApp)
+    }
+
+    private func pauseForSystemIdleIfNeeded() {
+        guard !isPausedForSystemIdle else { return }
+
+        logger.info("Idle detected; pausing activity tracker")
+        finalizeCurrentWebVisit()
+        activityTracker.pauseForIdle()
+        isPausedForSystemIdle = true
+    }
+
+    private func resumeAfterSystemIdleIfNeeded() {
+        guard isPausedForSystemIdle else { return }
+
+        logger.info("Idle cleared; resuming activity tracker")
+        activityTracker.resumeFromIdle()
+        isPausedForSystemIdle = false
     }
 }
