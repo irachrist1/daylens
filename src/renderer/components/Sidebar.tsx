@@ -83,16 +83,19 @@ function formatTimer(totalSeconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
-function NavItem({ to, label, icon }: NavDef) {
+function NavItem({ to, label, icon, collapsed = false }: NavDef & { collapsed?: boolean }) {
   const [hovered, setHovered] = useState(false)
   return (
     <NavLink
       to={to}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
       style={({ isActive }) => ({
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        padding: '10px 14px',
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        gap: collapsed ? 0 : 12,
+        padding: collapsed ? '10px' : '10px 14px',
         borderRadius: 8,
         fontSize: 13,
         fontWeight: isActive ? 600 : 500,
@@ -125,12 +128,61 @@ function NavItem({ to, label, icon }: NavDef) {
       <span style={{ width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {icon}
       </span>
-      {label}
+      <span
+        aria-hidden={collapsed}
+        style={{
+          maxWidth: collapsed ? 0 : 120,
+          opacity: collapsed ? 0 : 1,
+          overflow: 'hidden',
+          whiteSpace: 'nowrap',
+          transition: 'max-width 160ms ease, opacity 120ms ease',
+        }}
+      >
+        {label}
+      </span>
     </NavLink>
   )
 }
 
-export default function Sidebar() {
+function FocusIconButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string
+  onClick: () => void | Promise<void>
+  children: React.ReactNode
+}) {
+  const [hovered, setHovered] = useState(false)
+
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={() => void onClick()}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        border: hovered ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
+        background: hovered ? 'var(--color-surface-low)' : 'transparent',
+        color: 'var(--color-text-secondary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        transition: 'background 120ms ease, border-color 120ms ease, color 120ms ease',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+export default function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
   const [activeSession, setActiveSession] = useState<FocusSession | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [todayApps, setTodayApps] = useState<AppUsageSummary[]>([])
@@ -217,192 +269,279 @@ export default function Sidebar() {
     ]),
     [todayApps, live],
   )
+  const sidebarWidth = collapsed ? 72 : 256
 
   return (
     <aside
       style={{
-        width: 256,
+        width: sidebarWidth,
         flexShrink: 0,
         background: 'var(--color-sidebar-bg)',
         borderRight: '1px solid var(--color-sidebar-border)',
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        padding: '24px 16px',
+        padding: collapsed ? '18px 10px' : '24px 16px',
         boxSizing: 'border-box',
         fontFamily: 'var(--font-sans)',
+        overflow: 'hidden',
+        transition: 'width 160ms ease, padding 160ms ease',
       }}
     >
-      <div>
-        <div style={{ fontSize: 21, fontWeight: 700, color: 'var(--color-text-primary)', letterSpacing: '-0.03em' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          gap: collapsed ? 0 : 12,
+          minHeight: 32,
+        }}
+      >
+        <div
+          aria-hidden={collapsed}
+          style={{
+            fontSize: 21,
+            fontWeight: 700,
+            color: 'transparent',
+            backgroundImage: 'var(--gradient-primary)',
+            WebkitBackgroundClip: 'text',
+            backgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            letterSpacing: '-0.03em',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            maxWidth: collapsed ? 0 : 140,
+            opacity: collapsed ? 0 : 1,
+            transition: 'max-width 160ms ease, opacity 120ms ease',
+          }}
+        >
           Daylens
         </div>
       </div>
 
-      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, marginTop: 28 }}>
+      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, marginTop: collapsed ? 20 : 28 }}>
         {MAIN_NAV.map((item) => (
-          <NavItem key={item.to} {...item} />
+          <NavItem key={item.to} {...item} collapsed={collapsed} />
         ))}
       </nav>
 
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <NavItem to="/settings" label="Settings" icon={<IconSettings />} />
-        <div style={{
-          borderRadius: 10,
-          padding: 16,
-          background: 'var(--color-surface-container)',
-          border: '1px solid var(--color-border-ghost)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <div>
-              <div style={{
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: 'var(--color-text-secondary)',
-                marginBottom: 4,
-              }}>
-                Focus
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)', letterSpacing: '-0.01em' }}>
-                {activeSession ? progressText : 'Start a timer'}
-              </div>
-            </div>
-            <div style={{
-              width: 40,
-              height: 40,
-              borderRadius: 8,
-              background: activeSession ? 'var(--color-accent-dim)' : 'var(--color-surface-low)',
-              color: 'var(--color-primary)',
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: collapsed ? 8 : 10 }}>
+        <NavItem to="/settings" label="Settings" icon={<IconSettings />} collapsed={collapsed} />
+
+        {collapsed ? (
+          <div
+            style={{
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}>
-              <IconFocus />
-            </div>
-          </div>
-
-          <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
-            {activeSession
-              ? activeSession.label || 'Session running. Open Focus for apps and timer.'
-              : 'Start a 50-minute block. Adjust details in Focus.'}
-          </p>
-
-          {activeSession && metaChips.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {metaChips.map((chip) => (
-                <span
-                  key={chip}
-                  style={{
-                    padding: '3px 9px',
-                    borderRadius: 'var(--radius-pill)',
-                    background: 'var(--color-pill-bg)',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: 10,
-                    fontWeight: 800,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {chip}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {activeSession?.plannedApps && activeSession.plannedApps.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {activeSession.plannedApps.slice(0, 3).map((app) => (
-                <div
-                  key={app}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '7px 9px',
-                    borderRadius: 10,
-                    background: 'var(--color-surface-low)',
-                    border: '1px solid var(--color-border-ghost)',
-                  }}
-                >
-                  <AppIcon
-                    bundleId={resolveBundleIdForName(appBundleLookup, app)}
-                    appName={app}
-                    size={18}
-                    fontSize={9}
-                    cornerRadius={5}
+              gap: 6,
+              paddingTop: 4,
+            }}
+          >
+            <FocusIconButton
+              title={activeSession ? `${progressText} - stop focus session` : 'Start focus session'}
+              onClick={activeSession ? stopSession : quickStartSession}
+            >
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <IconFocus />
+                {activeSession && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: -1,
+                      right: -3,
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: 'var(--color-focus-green)',
+                      border: '1.5px solid var(--color-sidebar-bg)',
+                    }}
                   />
-                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                    {formatDisplayAppName(app)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+                )}
+              </div>
+            </FocusIconButton>
 
-          <div style={{ display: 'flex', gap: 8 }}>
-            {activeSession ? (
-              <button
-                onClick={() => void stopSession()}
-                style={{
-                  flex: 1,
-                  minHeight: 40,
-                  borderRadius: 8,
-                  border: '1px solid rgba(248,113,113,0.26)',
-                  background: 'rgba(248,113,113,0.10)',
-                  color: '#f87171',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                onClick={() => void quickStartSession()}
-                style={{
-                  flex: 1,
-                  minHeight: 40,
-                  borderRadius: 8,
-                  border: 'none',
-                  background: 'var(--gradient-primary)',
-                  color: 'var(--color-primary-contrast)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                Start Focus
-              </button>
-            )}
             <NavLink
               to="/focus"
+              title="Open Focus"
+              aria-label="Open Focus"
               style={{
-                minWidth: 92,
-                minHeight: 40,
-                borderRadius: 8,
+                width: 40,
+                height: 40,
+                borderRadius: 10,
                 border: '1px solid var(--color-border-ghost)',
                 background: 'transparent',
-                color: 'var(--color-text-primary)',
-                fontSize: 12,
-                fontWeight: 600,
+                color: 'var(--color-text-secondary)',
                 textDecoration: 'none',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
             >
-              Open
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3h7v7" />
+                <path d="M10 6 4.5 11.5" />
+              </svg>
             </NavLink>
           </div>
-        </div>
+        ) : (
+          <div style={{
+            borderRadius: 10,
+            padding: 16,
+            background: 'var(--color-surface-container)',
+            border: '1px solid var(--color-border-ghost)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-text-secondary)',
+                  marginBottom: 4,
+                }}>
+                  Focus
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)', letterSpacing: '-0.01em' }}>
+                  {activeSession ? progressText : 'Start a timer'}
+                </div>
+              </div>
+              <div style={{
+                width: 40,
+                height: 40,
+                borderRadius: 8,
+                background: activeSession ? 'var(--color-accent-dim)' : 'var(--color-surface-low)',
+                color: 'var(--color-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <IconFocus />
+              </div>
+            </div>
+
+            <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
+              {activeSession
+                ? activeSession.label || 'Session running. Open Focus for apps and timer.'
+                : 'Start a 50-minute block. Adjust details in Focus.'}
+            </p>
+
+            {activeSession && metaChips.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {metaChips.map((chip) => (
+                  <span
+                    key={chip}
+                    style={{
+                      padding: '3px 9px',
+                      borderRadius: 'var(--radius-pill)',
+                      background: 'var(--color-pill-bg)',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: 10,
+                      fontWeight: 800,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {activeSession?.plannedApps && activeSession.plannedApps.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {activeSession.plannedApps.slice(0, 3).map((app) => (
+                  <div
+                    key={app}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '7px 9px',
+                      borderRadius: 10,
+                      background: 'var(--color-surface-low)',
+                      border: '1px solid var(--color-border-ghost)',
+                    }}
+                  >
+                    <AppIcon
+                      bundleId={resolveBundleIdForName(appBundleLookup, app)}
+                      appName={app}
+                      size={18}
+                      fontSize={9}
+                      cornerRadius={5}
+                    />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                      {formatDisplayAppName(app)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              {activeSession ? (
+                <button
+                  onClick={() => void stopSession()}
+                  style={{
+                    flex: 1,
+                    minHeight: 40,
+                    borderRadius: 8,
+                    border: '1px solid rgba(248,113,113,0.26)',
+                    background: 'rgba(248,113,113,0.10)',
+                    color: '#f87171',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={() => void quickStartSession()}
+                  style={{
+                    flex: 1,
+                    minHeight: 40,
+                    borderRadius: 8,
+                    border: 'none',
+                    background: 'var(--gradient-primary)',
+                    color: 'var(--color-primary-contrast)',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Start Focus
+                </button>
+              )}
+              <NavLink
+                to="/focus"
+                style={{
+                  minWidth: 92,
+                  minHeight: 40,
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'transparent',
+                  color: 'var(--color-text-primary)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                Open
+              </NavLink>
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   )

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.12 - 2026-03-25
+
+- Added a one-click collapsible sidebar with persistent icon-only mode.
+- Reworked Focus, Today, History, Apps, Insights, and Settings to behave more cleanly on smaller widths.
+- Removed low-signal helper copy from chart hovers and stripped the Actionable Intelligence section from Insights.
+- Removed the AI insights card from opened app detail cards.
+- Refreshed the in-app updater banner copy and added a standard Windows CI workflow before releases.
+
 ## v1.2.0 - 2026-03-24
 
 Full redesign to the Stitch Intelligent Monolith design language across every view.

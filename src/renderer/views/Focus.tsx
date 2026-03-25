@@ -6,6 +6,7 @@ import type { AppSession, AppUsageSummary, FocusSession, LiveSession, PeakHoursR
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { buildAppBundleLookup, formatDisplayAppName, resolveBundleIdForName } from '../lib/apps'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 const TARGET_PRESETS = [25, 50, 90]
 
@@ -174,6 +175,7 @@ function FocusAppRow({
 }
 
 export default function Focus() {
+  const viewportWidth = useViewportWidth()
   const [active, setActive] = useState<FocusSession | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [label, setLabel] = useState('')
@@ -322,9 +324,14 @@ export default function Focus() {
     { label: 'Streak', value: streak > 0 ? `${streak}d` : '0d' },
   ]
   const liveDisplayName = live?.appName ? formatDisplayAppName(live.appName) : null
+  const pagePadding = getPagePadding(viewportWidth)
+  const stackPrimaryColumns = viewportWidth < 1480
+  const stackFocusPanel = viewportWidth < 1180
+  const singleStatColumn = viewportWidth < 860
+  const singleAppColumn = viewportWidth < 1080
 
   return (
-    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+    <div style={{ padding: `24px ${pagePadding}px 32px`, overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: 1080, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -338,7 +345,7 @@ export default function Focus() {
               Focus
             </div>
             <h1 style={{
-              fontSize: 38,
+              fontSize: viewportWidth < 960 ? 30 : 38,
               fontWeight: 900,
               letterSpacing: '-0.04em',
               color: 'var(--color-text-primary)',
@@ -380,18 +387,18 @@ export default function Focus() {
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
+          gridTemplateColumns: stackPrimaryColumns ? 'minmax(0, 1fr)' : 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
           gap: 18,
           alignItems: 'stretch',
         }}>
           <div style={{
             background: 'var(--color-surface-container)',
             borderRadius: 12,
-            padding: 28,
+            padding: viewportWidth < 960 ? 20 : 28,
             border: '1px solid var(--color-border-ghost)',
             boxShadow: 'var(--color-shadow-soft)',
             display: 'grid',
-            gridTemplateColumns: 'minmax(240px, 300px) minmax(0, 1fr)',
+            gridTemplateColumns: stackFocusPanel ? 'minmax(0, 1fr)' : 'minmax(240px, 300px) minmax(0, 1fr)',
             gap: 24,
           }}>
             <div style={{
@@ -404,11 +411,11 @@ export default function Focus() {
               alignItems: 'center',
               justifyContent: 'center',
               gap: 12,
-              minHeight: 280,
+              minHeight: viewportWidth < 960 ? 220 : 280,
             }}>
               <div style={{
-                width: 176,
-                height: 176,
+                width: viewportWidth < 960 ? 152 : 176,
+                height: viewportWidth < 960 ? 152 : 176,
                 borderRadius: '50%',
                 background: `conic-gradient(from -90deg, var(--gradient-primary-from) 0deg, var(--gradient-primary-to) ${Math.max(progressRatio * 360, 6)}deg, var(--color-surface-highest) ${Math.max(progressRatio * 360, 6)}deg 360deg)`,
                 display: 'grid',
@@ -416,8 +423,8 @@ export default function Focus() {
                 boxShadow: '0 16px 40px rgba(15,99,219,0.10)',
               }}>
                 <div style={{
-                  width: 136,
-                  height: 136,
+                  width: viewportWidth < 960 ? 116 : 136,
+                  height: viewportWidth < 960 ? 116 : 136,
                   borderRadius: '50%',
                   background: 'var(--color-surface-container)',
                   border: '1px solid var(--color-border-ghost)',
@@ -432,7 +439,7 @@ export default function Focus() {
                       <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-tertiary)' }}>
                         Session Complete
                       </span>
-                      <span style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em' }}>
+                      <span style={{ fontSize: viewportWidth < 960 ? 26 : 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em' }}>
                         {formatDuration(justFinished)}
                       </span>
                     </>
@@ -441,7 +448,7 @@ export default function Focus() {
                       <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
                         {remainingSeconds > 0 ? 'Time Left' : 'Elapsed'}
                       </span>
-                      <span style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                      <span style={{ fontSize: viewportWidth < 960 ? 26 : 32, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
                         {formatClock(remainingSeconds > 0 ? remainingSeconds : elapsed)}
                       </span>
                       <span style={{ fontSize: 12, color: overtimeSeconds > 0 ? '#f87171' : 'var(--color-text-secondary)' }}>
@@ -453,7 +460,7 @@ export default function Focus() {
                       <span style={{ fontSize: 11, fontWeight: 900, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--color-text-secondary)' }}>
                         Target
                       </span>
-                      <span style={{ fontSize: 30, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                      <span style={{ fontSize: viewportWidth < 960 ? 24 : 30, fontWeight: 900, color: 'var(--color-text-primary)', letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
                         {targetMinutes}m
                       </span>
                       <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
@@ -473,7 +480,7 @@ export default function Focus() {
               )}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minWidth: 0 }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -606,7 +613,7 @@ export default function Focus() {
                     </div>
                     <GlassBadge>{activePlannedApps.length > 0 ? `${activePlannedApps.length} apps` : 'Plan'}</GlassBadge>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: singleAppColumn ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
                     {activePlannedApps.length > 0 ? activePlannedApps.map((app) => (
                       <FocusAppRow
                         key={app}
@@ -659,7 +666,7 @@ export default function Focus() {
             flexDirection: 'column',
             gap: 16,
           }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: singleStatColumn ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
               {stats.map((stat) => (
                 <div
                   key={stat.label}

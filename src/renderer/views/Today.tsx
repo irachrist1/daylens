@@ -6,6 +6,7 @@ import type { AppSession, AppUsageSummary, AppCategory, LiveSession, WebsiteSumm
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 // ─── Derived types ────────────────────────────────────────────────────────────
 
@@ -247,6 +248,7 @@ function buildTrendData(
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 export default function Today() {
+  const viewportWidth = useViewportWidth()
   const [dbSummaries,    setDbSummaries]    = useState<AppUsageSummary[]>([])
   const [dbSessions,     setDbSessions]     = useState<AppSession[]>([])
   const [, setDbSites]        = useState<WebsiteSummary[]>([])
@@ -381,6 +383,13 @@ export default function Today() {
   const sparkMax = Math.max(...trendData.map((day) => day.focusSeconds), 1)
   const yesterdayFocusScore = trendData.find((day) => day.date === shiftDateString(todayString(), -1))?.focusScore ?? 0
   const hoveredTrend = trendData.find((day) => day.date === hoveredTrendDate) ?? null
+  const pagePadding = getPagePadding(viewportWidth)
+  const stackPrimaryGrid = viewportWidth < 1180
+  const stackBottomGrid = viewportWidth < 1240
+  const statGridColumns = viewportWidth < 760 ? 'minmax(0, 1fr)' : 'repeat(auto-fit, minmax(140px, 1fr))'
+  const focusTrendOverlayText = hoveredTrend
+    ? `${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`
+    : ''
 
   return (
     <div style={{ background: 'var(--color-bg)', minHeight: '100%', overflowY: 'auto' }}>
@@ -388,10 +397,12 @@ export default function Today() {
 
         {/* ── Header row ─────────────────────────────────────────────────── */}
         <div style={{
-          padding: '32px 40px 0',
+          padding: `32px ${pagePadding}px 0`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{
@@ -438,9 +449,9 @@ export default function Today() {
         </div>
 
         {/* ── Hero heading ────────────────────────────────────────────────── */}
-        <div style={{ padding: '16px 40px 0' }}>
+        <div style={{ padding: `16px ${pagePadding}px 0` }}>
           <h1 style={{
-            fontSize: 36,
+            fontSize: viewportWidth < 960 ? 30 : 36,
             fontWeight: 900,
             letterSpacing: '-0.03em',
             color: 'var(--color-text-primary)',
@@ -453,9 +464,9 @@ export default function Today() {
 
         {/* ── Grid row 1: Focus Score (4) + Focus Trend (8) ───────────────── */}
         <div style={{
-          padding: '32px 40px 0',
+          padding: `32px ${pagePadding}px 0`,
           display: 'grid',
-          gridTemplateColumns: '4fr 8fr',
+          gridTemplateColumns: stackPrimaryGrid ? 'minmax(0, 1fr)' : '4fr 8fr',
           gap: 24,
         }}>
 
@@ -573,7 +584,7 @@ export default function Today() {
                 </div>
               </div>
               <div style={{ width: 1, background: 'var(--color-border-ghost)' }} />
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', textAlign: 'right' }}>
                 <p style={{
                   fontSize: 10,
                   fontWeight: 900,
@@ -624,32 +635,36 @@ export default function Today() {
             <p style={{
               fontSize: 11,
               color: 'var(--color-text-secondary)',
-              margin: '0 0 6px',
+              margin: '0 0 14px',
             }}>
               Performance over the last 7 days
             </p>
-            {hoveredTrend && (
-              <p style={{
-                fontSize: 11,
-                color: hoveredTrend.focusSeconds
-                  ? 'var(--color-primary)'
-                  : 'var(--color-text-tertiary)',
-                margin: '0 0 18px',
-                fontWeight: 700,
-                minHeight: 16,
-              }}>
-                {`${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`}
-              </p>
-            )}
 
             {/* Bar chart */}
             <div style={{
+              position: 'relative',
               display: 'flex',
               alignItems: 'flex-end',
               gap: 8,
               height: 96,
               flex: 1,
+              paddingTop: 22,
             }}>
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                textAlign: 'center',
+                fontSize: 11,
+                fontWeight: 700,
+                color: hoveredTrend?.focusSeconds
+                  ? 'var(--color-primary)'
+                  : 'var(--color-text-tertiary)',
+                pointerEvents: 'none',
+              }}>
+                {focusTrendOverlayText}
+              </div>
               {trendData.map((day) => {
                 const isToday = day.date === todayString()
                 const barH = day.focusSeconds > 0 ? Math.max(6, Math.round((day.focusSeconds / sparkMax) * 80)) : 0
@@ -657,7 +672,6 @@ export default function Today() {
                 return (
                   <div
                     key={day.date}
-                    title={`${day.label}: ${day.focusSeconds > 0 ? formatDuration(day.focusSeconds) : 'No focused time'}`}
                     style={{
                       flex: 1,
                       display: 'flex',
@@ -710,7 +724,7 @@ export default function Today() {
         </div>
 
         {/* ── Full-width Time Distribution ─────────────────────────────────── */}
-        <div style={{ padding: '24px 40px 0' }}>
+        <div style={{ padding: `24px ${pagePadding}px 0` }}>
           <div style={{
             background: 'var(--color-surface-container)',
             borderRadius: 12,
@@ -757,7 +771,7 @@ export default function Today() {
             {/* Category stat chips */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(5, 1fr)',
+              gridTemplateColumns: statGridColumns,
               gap: 10,
               marginTop: 16,
             }}>
@@ -799,9 +813,9 @@ export default function Today() {
 
         {/* ── Grid row 3: Recent Sessions (7) + AI Insight (5) ─────────────── */}
         <div style={{
-          padding: '24px 40px 32px',
+          padding: `24px ${pagePadding}px 32px`,
           display: 'grid',
-          gridTemplateColumns: '7fr 5fr',
+          gridTemplateColumns: stackBottomGrid ? 'minmax(0, 1fr)' : '7fr 5fr',
           gap: 24,
         }}>
 

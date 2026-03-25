@@ -5,6 +5,7 @@ import { track } from '../lib/analytics'
 import { formatDuration, formatTime } from '../lib/format'
 import type { AppSettings, AppTheme } from '@shared/types'
 import FeedbackModal from '../components/FeedbackModal'
+import { getPagePadding, useViewportWidth } from '../lib/responsive'
 
 interface DebugInfo {
   dbPath: string
@@ -136,11 +137,13 @@ function PillToggle({ checked, onChange }: { checked: boolean; onChange: (v: boo
 }
 
 export default function Settings() {
+  const viewportWidth = useViewportWidth()
   const navigate = useNavigate()
   const [settings, setSettings] = useState<AppSettings>({
     analyticsOptIn: false,
     launchOnLogin: true,
     theme: 'system',
+    sidebarCollapsed: false,
     onboardingComplete: true,
     userName: '',
     userGoals: [],
@@ -294,6 +297,8 @@ export default function Settings() {
   }
 
   const version = debug?.appVersion
+  const pagePadding = getPagePadding(viewportWidth)
+  const stackColumns = viewportWidth < 1220
 
   // ─── Shared card style ────────────────────────────────────────────────────
   const cardStyle: React.CSSProperties = {
@@ -305,7 +310,7 @@ export default function Settings() {
   }
 
   return (
-    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%', boxSizing: 'border-box', fontFamily: 'var(--font-sans)' }}>
+    <div style={{ padding: `24px ${pagePadding}px 32px`, overflowY: 'auto', height: '100%', boxSizing: 'border-box', fontFamily: 'var(--font-sans)' }}>
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
 
         {/* ── PAGE HEADER ─────────────────────────────────────────────── */}
@@ -325,7 +330,7 @@ export default function Settings() {
         {debug?.updateAvailable && (
           <div style={{
             borderRadius: 12, padding: '12px 18px', marginBottom: 24,
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
             background: 'rgba(173,198,255,0.08)', border: '1px solid rgba(173,198,255,0.15)',
           }}>
             <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 500 }}>
@@ -344,7 +349,7 @@ export default function Settings() {
         )}
 
         {/* ── 12-COL GRID ─────────────────────────────────────────────── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 32, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: stackColumns ? 'minmax(0, 1fr)' : '7fr 5fr', gap: 32, alignItems: 'start' }}>
 
           {/* ════════════════════════════════════════════════════════════
               LEFT COLUMN  (7 / 12)
@@ -980,7 +985,7 @@ export default function Settings() {
                       <>
                         <DebugRow label="Tracker module" value={debug.trackingStatus.moduleSource ?? 'not loaded — tracking unavailable'} error={!debug.trackingStatus.moduleSource} />
                         {debug.trackingStatus.loadError && <DebugRow label="Tracker load error" value={debug.trackingStatus.loadError} error />}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: viewportWidth < 860 ? 'minmax(0, 1fr)' : '1fr 1fr', gap: 12 }}>
                           <DebugRow label="Version" value={debug.appVersion ?? '—'} />
                           <DebugRow label="Platform" value={debug.platform} />
                           <DebugRow label="Theme" value={settings.theme} />

@@ -39,6 +39,40 @@ function LoadingFallback() {
 function AppContent({ settings }: { settings: AppSettings | null }) {
   const location = useLocation()
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(settings?.sidebarCollapsed ?? false)
+
+  useEffect(() => {
+    setSidebarCollapsed(settings?.sidebarCollapsed ?? false)
+  }, [settings?.sidebarCollapsed])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== '\\') return
+      const target = event.target as HTMLElement | null
+      const tagName = target?.tagName
+      if (target?.isContentEditable || tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+        return
+      }
+
+      event.preventDefault()
+      setSidebarCollapsed((current) => {
+        const next = !current
+        void ipc.settings.set({ sidebarCollapsed: next })
+        return next
+      })
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  const handleSidebarToggle = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current
+      void ipc.settings.set({ sidebarCollapsed: next })
+      return next
+    })
+  }
 
   // Track route changes
   useEffect(() => {
@@ -65,9 +99,9 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
       {/* Full-height shell: title bar on top, sidebar + content below */}
       <div className="flex flex-col h-full overflow-hidden" style={{ fontFamily: 'var(--font-sans)' }}>
-        <TitleBar />
+        <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={handleSidebarToggle} />
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
+          <Sidebar collapsed={sidebarCollapsed} />
           <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
             <Suspense fallback={<LoadingFallback />}>
               <Routes>
