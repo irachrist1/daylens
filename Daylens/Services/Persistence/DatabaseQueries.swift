@@ -95,6 +95,12 @@ extension AppDatabase {
         }
     }
 
+    func deleteUserProfile() throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM user_profiles")
+        }
+    }
+
     func saveMemory(_ memory: UserMemory) throws {
         let memoryToSave = memory
         try dbQueue.write { db in

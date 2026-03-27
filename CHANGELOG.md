@@ -2,6 +2,23 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.21] - 2026-03-27
+
+### Added
+- Rebuilt Focus tab with a day planner: save an intent, drag future time slots to plan focused work blocks, and edit or remove planned slots inline
+- Weekly report generation with optional AI enhancement, alongside a new split-view Reports experience for browsing report history and reading details side by side
+- Notification controls in Settings for daily digests, context-switch nudges, and test notifications
+- Richer profile capture and editing with multi-select roles, more goals and distraction presets, ideal-day suggestions, and a reset flow that clears profile data without touching activity history
+
+### Changed
+- The daily digest scheduler now guards against duplicate same-day scheduling and the notification copy is shorter and more action-oriented
+- Focus history/state logic now lives in a dedicated `FocusViewModel`, so the focus timer, planned slots, and work-context timeline load together
+- Website and release docs now describe the new planning, reporting, and notification capabilities
+
+### Fixed
+- User profile resets now remove the stored profile row instead of leaving stale profile data behind
+- Context-switch nudges now trigger only after repeated rapid switches inside a rolling window, reducing noisy alerts
+
 ## [1.0.20] - 2026-03-27
 
 ### Added

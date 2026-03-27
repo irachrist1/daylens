@@ -70,6 +70,61 @@ final class ReportsViewModel {
         }
     }
 
+    // MARK: - Generate weekly report
+
+    func generateWeeklyReport(database: AppDatabase, aiService: AIService) {
+        guard !isGenerating else { return }
+        isGenerating = true
+        generateError = nil
+
+        Task.detached { [weak self] in
+            let calendar = Calendar.current
+            let today = Date()
+            let weekday = calendar.component(.weekday, from: today)
+            let daysFromMonday = (weekday + 5) % 7
+            let weekStart = calendar.startOfDay(
+                for: calendar.date(byAdding: .day, value: -daysFromMonday, to: today)!)
+
+            let summaries = (try? database.recentDailySummaries(limit: 14)) ?? []
+
+            var markdown = ReportGenerator.generateWeeklyReport(
+                weekStart: weekStart,
+                dailySummaries: summaries
+            )
+
+            var aiEnhanced = false
+            if aiService.isConfigured {
+                let prompt = """
+                Improve this weekly activity report. Add specific observations about patterns, progress, and one concrete suggestion for next week. Keep it under 400 words. Return only Markdown.
+
+                \(markdown)
+                """
+                if let enhanced = try? await aiService.askQuestion(prompt, context: "") {
+                    markdown = enhanced
+                    aiEnhanced = true
+                }
+            }
+
+            let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? today
+            let report = GeneratedReport(
+                id: nil,
+                reportType: "weekly",
+                periodStart: weekStart,
+                periodEnd: weekEnd,
+                markdownContent: markdown,
+                generatedByAI: aiEnhanced,
+                createdAt: today
+            )
+            try? database.saveReport(report)
+
+            let updated = (try? database.fetchRecentReports(limit: 30)) ?? []
+            await MainActor.run { [weak self] in
+                self?.reports = updated
+                self?.isGenerating = false
+            }
+        }
+    }
+
     // MARK: - Enhance with AI
 
     /// Sends an existing report to AI for enhancement, saves the result, and updates the list.

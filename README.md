@@ -17,9 +17,9 @@ Daylens watches the apps, browsers, and websites you use throughout the day, the
 ## Why Daylens
 
 - Local-first tracking for apps, windows, and website activity
-- AI-powered daily summaries and chat grounded in your actual usage history
+- AI-powered daily and weekly reports plus chat grounded in your actual usage history
 - Multi-browser support for Chrome, Arc, Safari, Brave, Edge, and Firefox
-- Focus scoring, history review, category overrides, and JSON export
+- Focus scoring, planned focus blocks, notification nudges, category overrides, and JSON export
 
 ## Install
 
@@ -75,6 +75,13 @@ Daylens reads browser history databases stored on your Mac to recover website vi
 - `Cmd` + `]` moves to the next day
 - `Cmd` + `T` jumps back to today
 - `Shift` + `Cmd` + `P` toggles tracking
+
+## What’s New in 1.0.21
+
+- Rebuilt Focus tab with drag-to-plan focus blocks, inline editing, and a persistent “what are you working on?” intent bar
+- Weekly report generation with optional AI enhancement and a split-detail Reports view
+- Notification controls for daily digests, context-switch nudges, and test notifications
+- Richer profile setup/editing with multi-select roles, more goal presets, and a reset option that preserves tracked activity
 
 ## FAQ
 

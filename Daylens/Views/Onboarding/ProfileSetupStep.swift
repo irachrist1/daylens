@@ -8,24 +8,43 @@ struct ProfileSetupStep: View {
     @Binding var profile: UserProfile
     var onContinue: () -> Void
 
-    private let roles: [(label: String, value: String)] = [
-        ("Developer", "developer"),
-        ("Designer", "designer"),
-        ("Writer", "writer"),
-        ("Manager", "manager"),
-        ("Student", "student"),
-        ("Other", "other"),
+    private let roles: [String] = [
+        "Developer", "Designer", "Writer", "Manager",
+        "Student", "Researcher", "Entrepreneur", "Other",
     ]
 
     private let goalOptions = [
-        "Deep Focus",
-        "Less Distraction",
-        "Time Awareness",
-        "Work-Life Balance",
+        "Deep Focus", "Less Distraction", "Time Awareness",
+        "Work-Life Balance", "Build Better Habits", "Ship More",
     ]
+
+    private let distractionOptions = [
+        "Social Media", "News Sites", "YouTube / Videos", "Email",
+        "Slack / Chat", "Gaming", "Shopping", "Podcasts", "Other",
+    ]
+
+    private let idealDaySuggestions = [
+        "Deep work in the morning, meetings in the afternoon, no late-night work",
+        "Focused coding blocks with short breaks, clear shutdown time",
+        "Creative work in the morning, admin in the afternoon",
+    ]
+
+    private var selectedRoles: [String] {
+        profile.role
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
 
     private var selectedGoals: [String] {
         profile.goals
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var selectedDistractions: [String] {
+        (profile.biggestDistraction ?? "")
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -78,10 +97,17 @@ struct ProfileSetupStep: View {
                 .font(.body.weight(.medium))
                 .foregroundStyle(DS.onSurface)
             ProfileChipGrid(
-                items: roles.map(\.label),
-                selection: roles.first(where: { $0.value == profile.role })?.label ?? "",
-                onSelect: { label in
-                    profile.role = roles.first(where: { $0.label == label })?.value ?? label.lowercased()
+                items: roles,
+                multiSelection: selectedRoles,
+                maxSelect: roles.count,
+                onMultiSelect: { label in
+                    var current = selectedRoles
+                    if current.contains(label) {
+                        current.removeAll { $0 == label }
+                    } else {
+                        current.append(label)
+                    }
+                    profile.role = current.joined(separator: ", ")
                 }
             )
         }
@@ -93,19 +119,19 @@ struct ProfileSetupStep: View {
                 Text("My main goals")
                     .font(.body.weight(.medium))
                     .foregroundStyle(DS.onSurface)
-                Text("Pick up to 2")
+                Text("Pick up to 3")
                     .font(.caption)
                     .foregroundStyle(DS.onSurfaceVariant)
             }
             ProfileChipGrid(
                 items: goalOptions,
                 multiSelection: selectedGoals,
-                maxSelect: 2,
+                maxSelect: 3,
                 onMultiSelect: { goal in
                     var goals = selectedGoals
                     if goals.contains(goal) {
                         goals.removeAll { $0 == goal }
-                    } else if goals.count < 2 {
+                    } else if goals.count < 3 {
                         goals.append(goal)
                     }
                     profile.goals = goals.joined(separator: ", ")
@@ -149,6 +175,33 @@ struct ProfileSetupStep: View {
                 placeholder: "Deep focus in the morning, clear inbox by noon..."
             )
             .frame(minHeight: 64, maxHeight: 80)
+
+            VStack(alignment: .leading, spacing: DS.space4) {
+                ForEach(idealDaySuggestions, id: \.self) { suggestion in
+                    Button {
+                        profile.idealDayDescription = suggestion
+                    } label: {
+                        HStack(spacing: DS.space6) {
+                            Image(systemName: "lightbulb")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(DS.secondary)
+                            Text("\u{201C}\(suggestion)\u{201D}")
+                                .font(.caption)
+                                .foregroundStyle(DS.onSurfaceVariant)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .padding(.horizontal, DS.space10)
+                        .padding(.vertical, DS.space6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DS.surfaceHighest, in: RoundedRectangle(cornerRadius: DS.radiusSmall))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DS.radiusSmall)
+                                .stroke(DS.outlineVariant, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -157,14 +210,21 @@ struct ProfileSetupStep: View {
             Text("Biggest distraction")
                 .font(.body.weight(.medium))
                 .foregroundStyle(DS.onSurface)
-            TextField(
-                "Social media, news sites, Slack... (optional)",
-                text: Binding(
-                    get: { profile.biggestDistraction ?? "" },
-                    set: { profile.biggestDistraction = $0.isEmpty ? nil : $0 }
-                )
+            ProfileChipGrid(
+                items: distractionOptions,
+                multiSelection: selectedDistractions,
+                maxSelect: distractionOptions.count,
+                onMultiSelect: { option in
+                    var current = selectedDistractions
+                    if current.contains(option) {
+                        current.removeAll { $0 == option }
+                    } else {
+                        current.append(option)
+                    }
+                    let joined = current.joined(separator: ", ")
+                    profile.biggestDistraction = joined.isEmpty ? nil : joined
+                }
             )
-            .textFieldStyle(.roundedBorder)
         }
     }
 

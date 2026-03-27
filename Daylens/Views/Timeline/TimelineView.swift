@@ -41,7 +41,7 @@ struct TimelineView: View {
     }
 
     private func blockHeight(for block: WorkContextBlock) -> CGFloat {
-        max(36, CGFloat(block.duration / 3600) * hourHeight)
+        max(4, CGFloat(Double(block.duration) / 3600.0) * hourHeight)
     }
 
     // MARK: - Body

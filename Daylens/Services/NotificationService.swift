@@ -55,7 +55,7 @@ final class NotificationService: ObservableObject {
 
             let content = UNMutableNotificationContent()
             content.title = "Your day at a glance"
-            content.body = "Open Daylens to see how you spent your time today."
+            content.body = "Tap to see today's activity summary"
             content.sound = .default
 
             var dateComponents = DateComponents()
@@ -67,14 +67,14 @@ final class NotificationService: ObservableObject {
                 repeats: true
             )
             let request = UNNotificationRequest(
-                identifier: "daylens.reminder.daily_digest",
+                identifier: "daylens.notification.daily_digest",
                 content: content,
                 trigger: trigger
             )
 
             // Remove any existing daily digest before scheduling
             UNUserNotificationCenter.current()
-                .removePendingNotificationRequests(withIdentifiers: ["daylens.reminder.daily_digest"])
+                .removePendingNotificationRequests(withIdentifiers: ["daylens.notification.daily_digest"])
             try? await UNUserNotificationCenter.current().add(request)
         }
     }
@@ -91,12 +91,12 @@ final class NotificationService: ObservableObject {
             guard await isAuthorized() else { return }
 
             let center = UNUserNotificationCenter.current()
-            let id = "daylens.nudge.context_switch"
+            let id = "daylens.notification.context_switch"
             center.removePendingNotificationRequests(withIdentifiers: [id])
 
             let content = UNMutableNotificationContent()
-            content.title = "Heads up — lots of context switching"
-            content.body = "You've been jumping between apps for a while. Pick one thing and go deep."
+            content.title = "You've been context-switching"
+            content.body = "Try staying in one app for the next 30 minutes"
             content.sound = .default
 
             let trigger = UNTimeIntervalNotificationTrigger(

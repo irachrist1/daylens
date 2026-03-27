@@ -39,49 +39,6 @@ struct FocusSessionRecord: Codable, Identifiable, FetchableRecord, PersistableRe
     }
 }
 
-@Observable
-final class FocusViewModel {
-    var sessions: [FocusSessionRecord] = []
-    var isLoading = false
-
-    func load() {
-        isLoading = true
-        Task { @MainActor in
-            defer { isLoading = false }
-            sessions = (try? await Task.detached(priority: .userInitiated) {
-                try AppDatabase.shared.recentFocusSessions(limit: 30)
-            }.value) ?? []
-        }
-    }
-
-    var completedSessions: [FocusSessionRecord] { sessions.filter { $0.status == .completed } }
-
-    var totalFocusedTime: String { format(completedSessions.reduce(0) { $0 + $1.actualDuration }) }
-    var completedCount: Int { completedSessions.count }
-    var longestSession: String { format(completedSessions.map(\.actualDuration).max() ?? 0) }
-
-    var currentStreakDays: Int {
-        let days = Set(completedSessions.map { Calendar.current.startOfDay(for: $0.date) })
-        guard !days.isEmpty else { return 0 }
-        var streak = 0
-        var day = Calendar.current.startOfDay(for: Date())
-        while days.contains(day) {
-            streak += 1
-            guard let prev = Calendar.current.date(byAdding: .day, value: -1, to: day) else { break }
-            day = prev
-        }
-        return streak
-    }
-
-    private func format(_ seconds: TimeInterval) -> String {
-        guard seconds > 0 else { return "0m" }
-        let h = Int(seconds) / 3600, m = (Int(seconds) % 3600) / 60
-        if h > 0 { return "\(h)h \(m)m" }
-        if m > 0 { return "\(m)m" }
-        return "\(Int(seconds))s"
-    }
-}
-
 /// Pomodoro-style focus timer with configurable duration, breaks, and crash recovery.
 @Observable
 final class FocusSessionManager {

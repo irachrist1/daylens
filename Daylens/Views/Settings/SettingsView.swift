@@ -1,10 +1,14 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = SettingsViewModel()
     @State private var showDeleteConfirmation = false
     @State private var showProfileEdit = false
+
+    @AppStorage("daylens.notifications.dailyDigest") private var dailyDigestEnabled = false
+    @AppStorage("daylens.notifications.focusNudge") private var focusNudgeEnabled = false
 
     var body: some View {
         ScrollView {
@@ -14,6 +18,7 @@ struct SettingsView: View {
                 appearanceSection
                 aiSection
                 generalSection
+                notificationsSection
                 dataSection
                 PrivacySection()
                 WebCompanionSection()
@@ -233,6 +238,93 @@ struct SettingsView: View {
                 .labelsHidden()
             }
             .cardStyle()
+        }
+    }
+
+    // MARK: - Notifications
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            Text("Notifications")
+                .sectionHeader()
+
+            VStack(spacing: DS.space12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: DS.space2) {
+                        Text("Daily Digest")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(DS.onSurface)
+                        Text("Summary notification at 6 PM each day")
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceVariant)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $dailyDigestEnabled)
+                        .labelsHidden()
+                        .onChange(of: dailyDigestEnabled) { _, enabled in
+                            Task { @MainActor in
+                                let granted = await NotificationService.shared.requestPermission()
+                                if granted && enabled {
+                                    NotificationService.shared.scheduleDailyDigest()
+                                } else if !enabled {
+                                    UNUserNotificationCenter.current()
+                                        .removePendingNotificationRequests(withIdentifiers: ["daylens.notification.daily_digest"])
+                                }
+                            }
+                        }
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: DS.space2) {
+                        Text("Focus Nudge")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(DS.onSurface)
+                        Text("Alert when context-switching too often")
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceVariant)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $focusNudgeEnabled)
+                        .labelsHidden()
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading, spacing: DS.space2) {
+                        Button("Send Test Notification") {
+                            sendTestNotification()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Text("If no notification appears, open System Settings → Notifications → Daylens and enable alerts.")
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceVariant.opacity(0.7))
+                    }
+                    Spacer()
+                }
+            }
+            .cardStyle()
+        }
+    }
+
+    private func sendTestNotification() {
+        Task { @MainActor in
+            let granted = await NotificationService.shared.requestPermission()
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Daylens Test"
+            content.body = "Notifications are working correctly."
+            content.sound = .default
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: "daylens.test.\(UUID().uuidString)",
+                content: content,
+                trigger: trigger
+            )
+            try? await UNUserNotificationCenter.current().add(request)
         }
     }
 

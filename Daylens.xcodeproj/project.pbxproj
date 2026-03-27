@@ -26,6 +26,7 @@
 		235557821A72B218975BBA5A /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C2018648C2A730B289B9CE8 /* Constants.swift */; };
 		23D71B5E19D10FBFD3FB43B5 /* ActivityTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F8AE68A4AB8C4BEB20ADCF4 /* ActivityTracker.swift */; };
 		2469E07F98CB07CEBC9EDB9D /* OnboardingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B189177C8272F8917985BD5B /* OnboardingViewModel.swift */; };
+		257010F6BFE9ADE52365B55A /* FocusViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C25BF2B446D20859069C6683 /* FocusViewModel.swift */; };
 		259F2DDDE5C07EE50ECBFDCF /* DailySummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9314612FF4CC9C968FAFA8 /* DailySummary.swift */; };
 		28A0DACE2B122D86DD0756D4 /* MainShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624D0BD8F694B3B333DC8AF3 /* MainShell.swift */; };
 		2B30642C565374430C8CA95D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13554F02796056D25CA3475 /* AppDelegate.swift */; };
@@ -49,6 +50,7 @@
 		613BA8E999D475F953008E43 /* GeneratedReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3862F2BD7DB8754993599BBD /* GeneratedReport.swift */; };
 		690114CA029E0ED97DCCA42C /* BrowserHistoryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED5BFB7317164D51DF56DCD4 /* BrowserHistoryReader.swift */; };
 		6AECBE92A7A3CBB1820DFD02 /* NotificationPermissionStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3F4608BE2B61EDBD3E4C4E /* NotificationPermissionStep.swift */; };
+		6F314299EE901E7E43E24436 /* FocusSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB247226BBCD5BEF0D211F6B /* FocusSlot.swift */; };
 		70704150BB379AB4051BF0C2 /* SyncUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41D99E1B09AC781320DECAD6 /* SyncUploader.swift */; };
 		7428A3618EE184828914E41B /* TimelineGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B2A88E12896291724D8F74 /* TimelineGrid.swift */; };
 		7A2B1159FB8E463A8465EFC6 /* WorkContextBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD3FC34A88A113F78F138BE1 /* WorkContextBlock.swift */; };
@@ -205,10 +207,12 @@
 		B3778ED83E467499933696D5 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		B5E2399B5F8A5AB0B667B473 /* AppleScriptURLProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleScriptURLProvider.swift; sourceTree = "<group>"; };
 		B91F5F8B4992DDD3789C878B /* app-normalization.v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "app-normalization.v1.json"; sourceTree = "<group>"; };
+		BB247226BBCD5BEF0D211F6B /* FocusSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSlot.swift; sourceTree = "<group>"; };
 		BC3341BD130D448859A597C9 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		BCEEC3AAC53B0E34C74CFAAD /* TodayViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayViewModel.swift; sourceTree = "<group>"; };
 		BE6E95B46E12CC757EB7FE78 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C13554F02796056D25CA3475 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		C25BF2B446D20859069C6683 /* FocusViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusViewModel.swift; sourceTree = "<group>"; };
 		C2D9422C6BFBB7B3A8A710A3 /* TopAppsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopAppsCard.swift; sourceTree = "<group>"; };
 		C36C04114D856DE38934DBC6 /* ReadyStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadyStep.swift; sourceTree = "<group>"; };
 		C73267B8FEF4DB070D0F5347 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -283,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				ECFB562B8D7BAC9FA833FFB3 /* AppsViewModel.swift */,
+				C25BF2B446D20859069C6683 /* FocusViewModel.swift */,
 				76E6A00CC889B9ED0261FD30 /* HistoryViewModel.swift */,
 				885E65B3874B5EAD1EC06BF7 /* InsightsViewModel.swift */,
 				B189177C8272F8917985BD5B /* OnboardingViewModel.swift */,
@@ -380,6 +385,7 @@
 				A072A2085762848B19A8E661 /* AppSession.swift */,
 				8615B755B478EE49EE0812C1 /* BrowserSession.swift */,
 				ED9314612FF4CC9C968FAFA8 /* DailySummary.swift */,
+				BB247226BBCD5BEF0D211F6B /* FocusSlot.swift */,
 				3862F2BD7DB8754993599BBD /* GeneratedReport.swift */,
 				F59B716158F1107AE8599D75 /* TrackingState.swift */,
 				F0EA6943606392C0FEAF2CE0 /* UserMemory.swift */,
@@ -739,6 +745,8 @@
 				F77DDB952484A1E90BBB1B26 /* FloatingHUD.swift in Sources */,
 				22FD4B8FBC5491A0EC4EA2AF /* FocusScoreCalculator.swift in Sources */,
 				FA9D7C740F543A8995278805 /* FocusSessionManager.swift in Sources */,
+				6F314299EE901E7E43E24436 /* FocusSlot.swift in Sources */,
+				257010F6BFE9ADE52365B55A /* FocusViewModel.swift in Sources */,
 				613BA8E999D475F953008E43 /* GeneratedReport.swift in Sources */,
 				AE4EDA9EE88CA726F43B5521 /* HeaderBar.swift in Sources */,
 				EE00255E662AB9691B63CA6E /* HistoryView.swift in Sources */,
@@ -903,7 +911,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.20;
+				MARKETING_VERSION = 1.0.21;
 				PRODUCT_BUNDLE_IDENTIFIER = com.daylens.app;
 				PRODUCT_NAME = Daylens;
 				SDKROOT = macosx;
@@ -1002,7 +1010,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.20;
+				MARKETING_VERSION = 1.0.21;
 				PRODUCT_BUNDLE_IDENTIFIER = com.daylens.app;
 				PRODUCT_NAME = Daylens;
 				SDKROOT = macosx;

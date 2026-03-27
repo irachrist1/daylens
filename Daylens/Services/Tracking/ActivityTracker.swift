@@ -24,6 +24,9 @@ final class ActivityTracker {
     var lastTrackedApp: String?
     var onSessionFinalized: (() -> Void)?
 
+    private var recentSwitchTimestamps: [Date] = []
+    private let contextNudgeKey = "daylens.lastContextNudge"
+
     /// The app that is currently frontmost but whose session has not yet been finalized.
     var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
         guard let app = currentApp, !isPausedForIdle else { return nil }
@@ -264,6 +267,7 @@ final class ActivityTracker {
         logger.info("Session started at \(activatedAt.ISO8601Format(), privacy: .public)")
 
         recordActivationEvent(bundleID: bundleID, appName: appName, activatedAt: activatedAt, source: source)
+        checkContextSwitchNudge(at: activatedAt)
     }
 
     private func handleAppDeactivation(_ app: NSRunningApplication) {
@@ -513,6 +517,22 @@ final class ActivityTracker {
         finalizeSession(for: pending.app, endedAt: pending.endedAt)
         if currentApp?.bundleID == pending.app.bundleID {
             currentApp = nil
+        }
+    }
+
+    private func checkContextSwitchNudge(at now: Date) {
+        let windowSeconds: TimeInterval = 20 * 60
+        recentSwitchTimestamps = recentSwitchTimestamps.filter { now.timeIntervalSince($0) <= windowSeconds }
+        recentSwitchTimestamps.append(now)
+
+        guard recentSwitchTimestamps.count >= 5 else { return }
+
+        let lastNudge = UserDefaults.standard.object(forKey: contextNudgeKey) as? Date
+        if let lastNudge, now.timeIntervalSince(lastNudge) < windowSeconds { return }
+
+        UserDefaults.standard.set(now, forKey: contextNudgeKey)
+        Task { @MainActor in
+            NotificationService.shared.scheduleContextSwitchNudge()
         }
     }
 

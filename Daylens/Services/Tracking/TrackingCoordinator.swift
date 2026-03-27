@@ -7,6 +7,7 @@ import OSLog
 final class TrackingCoordinator {
     private let logger = Logger(subsystem: "com.daylens.app", category: "TrackingCoordinator")
     private static let summaryRepairFlag = "daylens_v2_summaries_recomputed"
+    private static let dailyDigestScheduledKey = "daylens.dailyDigestScheduled"
 
     let activityTracker: ActivityTracker
     let idleDetector: IdleDetector
@@ -97,6 +98,7 @@ final class TrackingCoordinator {
         // Compute summary immediately so Today view shows data right away
         computeCurrentDaySummary()
         recomputeHistoricalDailySummariesIfNeeded()
+        scheduleDailyDigestIfNeeded()
 
         // Periodic fallback every 15 seconds (session callbacks handle most updates)
         summaryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -142,6 +144,18 @@ final class TrackingCoordinator {
         }
         debouncedSummaryWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    private func scheduleDailyDigestIfNeeded() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let todayString = formatter.string(from: Date())
+        let key = "\(Self.dailyDigestScheduledKey).\(todayString)"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        Task { @MainActor in
+            NotificationService.shared.scheduleDailyDigest()
+        }
     }
 
     private func recomputeHistoricalDailySummariesIfNeeded() {

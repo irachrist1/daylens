@@ -1,6 +1,6 @@
 # Daylens macOS — Progress Tracker
 
-**Last updated: 2026-03-27 · Current version: v1.0.20**
+**Last updated: 2026-03-27 · Current version: v1.0.21**
 **Repo: `irachrist1/daylens` · Branch: `main`**
 
 > Windows companion app is tracked separately in `irachrist1/daylens-windows`.
@@ -48,6 +48,8 @@
 - [x] History view, Insights view (AI chat), Settings view
 - [x] AI daily summaries and conversational chat (Anthropic API, streaming, local fallback)
 - [x] `ai_conversations` persisted to DB, loaded on appear
+- [x] Focus planner: saved intent bar, drag-to-plan focus slots, inline edit/delete, and shared work-context loading
+- [x] Reports split view with manual weekly report generation and optional AI enhancement
 
 ### Icon & Menu Bar
 - [x] Liquid glass blue gradient app icon
@@ -61,6 +63,8 @@
 - [x] curl installer — `curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh`
 - [x] GitHub Pages marketing site (irachrist1.github.io/daylens) — auto-deploys from `website/` on push to main
 - [x] XcodeGen (`project.yml`) — no `.xcodeproj` in git
+- [x] Notification controls for daily digests, context-switch nudges, and local test notifications
+- [x] Richer profile setup/editing plus a reset flow that preserves activity history
 
 ---
 
@@ -79,7 +83,7 @@
 
 ### Future Features
 - [ ] Browser extension for high-confidence tab/page attribution
-- [ ] Weekly and monthly trend views
+- [ ] Monthly trend views
 - [ ] Command bar / natural-language quick lookup
 - [ ] CSV export (in addition to JSON)
 - [ ] Configurable tracking thresholds (idle grace, min session duration)

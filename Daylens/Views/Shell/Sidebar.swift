@@ -43,6 +43,8 @@ struct Sidebar: View {
 
 private struct UserProfileCard: View {
     @Environment(AppState.self) private var appState
+    @State private var showEditSheet = false
+    @State private var showResetAlert = false
 
     var body: some View {
         HStack(spacing: DS.space10) {
@@ -71,6 +73,36 @@ private struct UserProfileCard: View {
         .padding(.horizontal, DS.space10)
         .padding(.vertical, DS.space8)
         .background(DS.surfaceContainer, in: RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous))
+        .onTapGesture { showEditSheet = true }
+        .contextMenu {
+            Button("Edit Profile") {
+                showEditSheet = true
+            }
+            Divider()
+            Button("Reset Profile", role: .destructive) {
+                showResetAlert = true
+            }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            ProfileEditSheet()
+                .environment(appState)
+        }
+        .alert("Reset your profile?", isPresented: $showResetAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) { resetProfile() }
+        } message: {
+            Text("Your activity data will be preserved. Only your profile settings and memories will be cleared.")
+        }
+    }
+
+    private func resetProfile() {
+        let db = appState.database!
+        Task.detached {
+            try? db.deleteUserProfile()
+            await MainActor.run {
+                NotificationCenter.default.post(name: .userProfileDidReset, object: nil)
+            }
+        }
     }
 }
 

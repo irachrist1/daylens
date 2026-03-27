@@ -3,6 +3,7 @@ import GRDB
 
 extension Notification.Name {
     static let categoryOverrideChanged = Notification.Name("DaylensCategoryOverrideChanged")
+    static let userProfileDidReset = Notification.Name("DaylensUserProfileDidReset")
 }
 
 /// A normalized session of app usage after merging and deduplication.

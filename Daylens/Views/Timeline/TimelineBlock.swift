@@ -9,7 +9,7 @@ struct TimelineBlock: View {
     @State private var isPopoverPresented: Bool = false
 
     var blockHeight: CGFloat {
-        max(36, CGFloat(block.duration / 3600) * hourHeight)
+        max(4, CGFloat(Double(block.duration) / 3600.0) * hourHeight)
     }
 
     var body: some View {
@@ -38,36 +38,40 @@ struct TimelineBlock: View {
                     }
                 }
 
-                // Content
-                HStack(spacing: DS.space8) {
-                    VStack(alignment: .leading, spacing: DS.space2) {
-                        HStack(spacing: 3) {
-                            if isLowConfidence {
-                                Text("~")
-                                    .font(.system(size: 13, weight: .semibold))
+                // Content — only shown when block is >= 5 minutes
+                if block.duration >= 300 {
+                    HStack(spacing: DS.space8) {
+                        VStack(alignment: .leading, spacing: DS.space2) {
+                            HStack(spacing: 3) {
+                                if isLowConfidence {
+                                    Text("~")
+                                        .font(.system(size: block.duration < 900 ? 11 : 13, weight: .semibold))
+                                        .foregroundStyle(DS.onSurfaceVariant)
+                                }
+                                Text(block.displayLabel)
+                                    .font(.system(size: block.duration < 900 ? 11 : 13, weight: .semibold))
+                                    .foregroundStyle(DS.onSurface)
+                                    .lineLimit(1)
+                            }
+                            if block.duration >= 900 {
+                                Text(formattedDuration)
+                                    .font(.system(size: 12, weight: .regular))
                                     .foregroundStyle(DS.onSurfaceVariant)
                             }
-                            Text(block.displayLabel)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(DS.onSurface)
-                                .lineLimit(1)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Text(formattedDuration)
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(DS.onSurfaceVariant)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // Top app icons (up to 3)
-                    HStack(spacing: DS.space4) {
-                        ForEach(block.topApps.prefix(3), id: \.bundleID) { app in
-                            AppIconView(bundleID: app.bundleID, size: 20)
+                        if block.duration >= 900 {
+                            HStack(spacing: DS.space4) {
+                                ForEach(block.topApps.prefix(3), id: \.bundleID) { app in
+                                    AppIconView(bundleID: app.bundleID, size: 20)
+                                }
+                            }
                         }
                     }
+                    .padding(.horizontal, DS.space8)
+                    .padding(.vertical, DS.space6)
                 }
-                .padding(.horizontal, DS.space8)
-                .padding(.vertical, DS.space6)
             }
             .frame(maxHeight: .infinity, alignment: .top)
             .background(accent.opacity(isHovered ? 0.14 : 0.08))
@@ -89,6 +93,24 @@ struct TimelineBlock: View {
             }
         }
         .onTapGesture { isPopoverPresented.toggle() }
+        .contextMenu {
+            Button {
+                NSPasteboard.general.setString(block.displayLabel, forType: .string)
+            } label: {
+                Label("Copy Label", systemImage: "doc.on.doc")
+            }
+            Button {
+                isPopoverPresented = true
+            } label: {
+                Label("View Sessions", systemImage: "list.bullet")
+            }
+            if let firstApp = block.topApps.first {
+                Divider()
+                Button {} label: {
+                    Label("Change Category for \(firstApp.appName)", systemImage: "tag")
+                }
+            }
+        }
         .onHover { isHovered = $0 }
         .help("Click to see session details")
         .popover(isPresented: $isPopoverPresented, arrowEdge: .trailing) {

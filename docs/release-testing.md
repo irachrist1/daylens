@@ -1,6 +1,6 @@
 # Daylens macOS — Release Testing Checklist
 
-**Last updated: 2026-03-27 (v1.0.20)**
+**Last updated: 2026-03-27 (v1.0.21)**
 
 > Windows testing checklist is in `irachrist1/daylens-windows` repo.
 
@@ -64,6 +64,22 @@ curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh
 - [ ] In-flight session visible in Today and Apps before session ends
 - [ ] Fullscreen video playback stays tracked in the owning app/browser instead of dropping the session during the Space transition
 - [ ] Fullscreen browser playback keeps the active website/domain attributed after the address bar disappears
+
+## Focus Planning & Reports
+
+- [ ] Focus tab shows the saved intent bar and starts a focus session with the selected duration
+- [ ] Dragging across future hours creates a planned focus slot with the expected snapped duration
+- [ ] Planned focus slots can be edited and deleted inline without breaking the rest of the day view
+- [ ] Reports view can generate both today's report and this week's report
+- [ ] Selecting a report shows the detail panel and AI enhancement still works
+
+## Notifications & Profile
+
+- [ ] Daily Digest toggle requests permission, schedules the 6 PM notification, and removes it when toggled off
+- [ ] Focus Nudge can be enabled without immediately firing noisy alerts
+- [ ] Send Test Notification delivers a local notification
+- [ ] Profile setup/editing supports multi-select roles, up to 3 goals, distraction presets, and ideal-day suggestions
+- [ ] Reset Profile clears profile/memory data but preserves activity history
 
 ---
 
