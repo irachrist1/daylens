@@ -2,6 +2,17 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.20] - 2026-03-27
+
+### Added
+- New Reports tab with saved daily and weekly report history, one-click daily report generation, and optional AI enhancement for generated writeups
+- Work-context timeline in Today and History, grouping sessions into meaningful blocks with labels, confidence, and drill-down details
+- Profile setup and editing for role, goals, work hours, ideal day, and distractions so Daylens can personalize AI guidance and future nudges
+- Notification permission flow plus local break, daily-digest, and context-switch reminder scheduling infrastructure
+
+### Changed
+- AI prompts now incorporate saved profile and memory context, and block labels are cached so repeated summaries stay more consistent across reloads
+
 ## [1.0.19] - 2026-03-25
 
 ### Fixed
