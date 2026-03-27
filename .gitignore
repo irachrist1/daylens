@@ -35,3 +35,7 @@ dist/
 # AI agent instruction files — never commit, contain sensitive incident history
 CLAUDE.md
 AGENTS.md
+CODEBASE_MAP.md
+
+# Agent docs, prompts, and status — working documents, not part of the shipped codebase
+docs/agents/

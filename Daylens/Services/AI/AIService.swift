@@ -101,8 +101,31 @@ final class AIService {
     // MARK: - Chat
 
     func askQuestion(_ question: String, context: String) async throws -> String {
+        try await askQuestion(question, context: context, systemPrompt: AIPromptBuilder.defaultSystemPrompt)
+    }
+
+    func askQuestion(_ question: String, context: String, systemPrompt: String) async throws -> String {
         let prompt = AIPromptBuilder.questionPrompt(question: question, activityContext: context)
-        return try await sendMessage(prompt)
+        return try await sendMessage(prompt, systemPrompt: systemPrompt)
+    }
+
+    func generateBlockLabel(prompt: String) async throws -> String {
+        try await sendMessage(prompt)
+    }
+
+    func extractMemory(from question: String, answer: String) async throws -> String {
+        let prompt = """
+        Based on this exchange, extract ONE factual sentence about the user's work context,
+        goals, or habits that would be useful to remember. If nothing is worth remembering,
+        reply exactly: NONE.
+        Question: \(question)
+        Answer: \(answer)
+        """
+        return try await sendMessage(
+            prompt,
+            systemPrompt: "You extract durable, factual user memory from productivity conversations.",
+            updatesProcessingState: false
+        )
     }
 
     // MARK: - Streaming Chat
@@ -114,13 +137,23 @@ final class AIService {
 
     // MARK: - API Communication
 
-    private func sendMessage(_ userMessage: String) async throws -> String {
+    private func sendMessage(
+        _ userMessage: String,
+        systemPrompt: String? = nil,
+        updatesProcessingState: Bool = true
+    ) async throws -> String {
         guard let apiKey else {
             throw AIError.noAPIKey
         }
 
-        isProcessing = true
-        defer { isProcessing = false }
+        if updatesProcessingState {
+            isProcessing = true
+        }
+        defer {
+            if updatesProcessingState {
+                isProcessing = false
+            }
+        }
 
         let url = URL(string: "\(baseURL)/messages")!
         var request = URLRequest(url: url)
@@ -129,14 +162,14 @@ final class AIService {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "max_tokens": 1024,
-            "system": AIPromptBuilder.systemPrompt,
             "messages": [
                 ["role": "user", "content": userMessage]
             ]
         ]
+        body["system"] = systemPrompt ?? AIPromptBuilder.defaultSystemPrompt
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -184,7 +217,7 @@ final class AIService {
                     "model": self.model,
                     "max_tokens": 1024,
                     "stream": true,
-                    "system": AIPromptBuilder.systemPrompt,
+                    "system": AIPromptBuilder.defaultSystemPrompt,
                     "messages": [
                         ["role": "user", "content": userMessage]
                     ]

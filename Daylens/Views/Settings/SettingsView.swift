@@ -4,11 +4,13 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = SettingsViewModel()
     @State private var showDeleteConfirmation = false
+    @State private var showProfileEdit = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space20) {
                 profileCard
+                profileSection
                 appearanceSection
                 aiSection
                 generalSection
@@ -62,6 +64,65 @@ struct SettingsView: View {
             Spacer()
         }
         .cardStyle()
+    }
+
+    // MARK: - Profile
+
+    @State private var profileSummary: UserProfile? = nil
+
+    private var profileSection: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            HStack {
+                Text("Profile")
+                    .sectionHeader()
+                Spacer()
+                Button("Edit") { showProfileEdit = true }
+                    .buttonStyle(.bordered)
+                    .sheet(isPresented: $showProfileEdit, onDismiss: { loadProfileSummary() }) {
+                        ProfileEditSheet()
+                            .environment(appState)
+                    }
+            }
+
+            if let p = profileSummary, !p.role.isEmpty {
+                HStack(spacing: DS.space8) {
+                    // Role chip
+                    Text(p.role.capitalized)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(DS.primary)
+                        .padding(.horizontal, DS.space8)
+                        .padding(.vertical, DS.space4)
+                        .background(DS.primaryContainer.opacity(0.4), in: Capsule())
+                        .overlay(Capsule().stroke(DS.primary.opacity(0.4), lineWidth: 1))
+
+                    // Goal chips
+                    let goals = p.goals.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    ForEach(goals, id: \.self) { goal in
+                        Text(goal)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.onSurfaceVariant)
+                            .padding(.horizontal, DS.space8)
+                            .padding(.vertical, DS.space4)
+                            .background(DS.surfaceHighest, in: Capsule())
+                            .overlay(Capsule().stroke(DS.outlineVariant, lineWidth: 1))
+                    }
+                }
+            } else {
+                Text("No profile set up yet.")
+                    .font(.callout)
+                    .foregroundStyle(DS.onSurfaceVariant)
+            }
+        }
+        .cardStyle()
+        .onAppear { loadProfileSummary() }
+    }
+
+    private func loadProfileSummary() {
+        let db = appState.database!
+        Task.detached {
+            let p = try? db.fetchUserProfile()
+            await MainActor.run { profileSummary = p }
+        }
     }
 
     // MARK: - Appearance

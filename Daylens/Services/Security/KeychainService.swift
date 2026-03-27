@@ -18,7 +18,16 @@ enum KeychainError: LocalizedError {
 struct KeychainService {
     let service: String
 
+    private static let testStoreLock = NSLock()
+    private static var testStore: [String: String] = [:]
+
     func string(for account: String) -> String? {
+        if Self.isRunningTests {
+            return Self.withTestStoreLock {
+                Self.testStore[testKey(for: account)]
+            }
+        }
+
         var query = baseQuery(for: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -36,6 +45,13 @@ struct KeychainService {
     }
 
     func setString(_ value: String, for account: String) throws {
+        if Self.isRunningTests {
+            Self.withTestStoreLock {
+                Self.testStore[testKey(for: account)] = value
+            }
+            return
+        }
+
         let data = Data(value.utf8)
         let query = baseQuery(for: account)
         let update: [String: Any] = [
@@ -67,6 +83,13 @@ struct KeychainService {
     }
 
     func removeString(for account: String) throws {
+        if Self.isRunningTests {
+            _ = Self.withTestStoreLock {
+                Self.testStore.removeValue(forKey: testKey(for: account))
+            }
+            return
+        }
+
         let status = SecItemDelete(baseQuery(for: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
@@ -79,5 +102,21 @@ struct KeychainService {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+    }
+
+    private func testKey(for account: String) -> String {
+        "\(service)::\(account)"
+    }
+
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["SWIFT_TESTING_ENABLED"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
+    private static func withTestStoreLock<T>(_ body: () -> T) -> T {
+        testStoreLock.lock()
+        defer { testStoreLock.unlock() }
+        return body()
     }
 }

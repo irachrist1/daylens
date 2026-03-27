@@ -70,6 +70,7 @@ struct MainShell: View {
         case .today:    TodayView()
         case .focus:    FocusView()
         case .history:  HistoryView()
+        case .reports:  ReportsView()
         case .apps:     AppsView()
         case .insights: InsightsView()
         case .settings: SettingsView()

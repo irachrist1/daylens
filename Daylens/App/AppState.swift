@@ -82,8 +82,15 @@ final class AppState {
         database = AppDatabase.shared
         focusSession = FocusSessionManager(database: database)
         permissionManager = PermissionManager()
-        trackingCoordinator = TrackingCoordinator(database: database, permissionManager: permissionManager)
         aiService = AIService()
+        let blockLabelCache = BlockLabelCache()
+        blockLabelCache.pruneExpiredLabels()
+        trackingCoordinator = TrackingCoordinator(
+            database: database,
+            permissionManager: permissionManager,
+            aiService: aiService,
+            blockLabelCache: blockLabelCache
+        )
         logger.info("Daylens services initialized")
 
         if hasCompletedOnboarding, !isRunningTests {
@@ -169,6 +176,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case today = "Today"
     case focus = "Focus"
     case history = "History"
+    case reports = "Reports"
     case apps = "Apps"
     case insights = "Insights"
     case settings = "Settings"
@@ -180,6 +188,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .today: "sun.max"
         case .focus: "timer"
         case .history: "calendar"
+        case .reports: "doc.text.magnifyingglass"
         case .apps: "square.grid.2x2"
         case .insights: "sparkles"
         case .settings: "gearshape"
@@ -189,7 +198,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var showsDateNavigation: Bool {
         switch self {
         case .today, .apps: return true
-        case .focus, .history, .insights, .settings: return false
+        case .focus, .history, .reports, .insights, .settings: return false
         }
     }
 

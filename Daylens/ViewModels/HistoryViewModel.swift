@@ -9,6 +9,7 @@ struct DaySummarySnapshot: Identifiable {
     let appCount: Int
     let topAppName: String?
     let topAppBundleID: String?
+    var focusScore: Double = 0      // 0–1; defaults to 0 when daily_summaries row is absent
 
     var id: Date { date }
 
@@ -37,6 +38,7 @@ final class HistoryViewModel {
     var websiteSummaries: [WebsiteUsageSummary] = []
     var browserSummaries: [BrowserUsageSummary] = []
     var timeline: [AppSession] = []
+    var workBlocks: [WorkContextBlock] = []
     var dailySummary: DailySummary?
     var isLoadingDetail: Bool = false
 
@@ -44,7 +46,16 @@ final class HistoryViewModel {
     var summaryText: String?
     var isGeneratingSummary: Bool = false
 
-    private var database: AppDatabase? { AppDatabase.shared }
+    private let database: AppDatabase?
+    private let blockLabelCache: BlockLabelCache
+
+    init(
+        database: AppDatabase? = AppDatabase.shared,
+        blockLabelCache: BlockLabelCache = BlockLabelCache()
+    ) {
+        self.database = database
+        self.blockLabelCache = blockLabelCache
+    }
 
     func loadDays() {
         isLoadingList = true
@@ -87,23 +98,33 @@ final class HistoryViewModel {
 
             do {
                 let payload = try await Task.detached(priority: .userInitiated) {
-                    try db.combinedDayPayload(for: date)
+                    let day = try db.combinedDayPayload(for: date)
+                    return (
+                        day: day,
+                        workBlocks: Self.buildWorkBlocks(
+                            from: day.timeline,
+                            websiteSummaries: day.websiteSummaries,
+                            date: date,
+                            blockLabelCache: self.blockLabelCache
+                        )
+                    )
                 }.value
 
-                appSummaries = payload.appSummaries
-                websiteSummaries = payload.websiteSummaries
-                browserSummaries = payload.browserSummaries
-                timeline = payload.timeline
-                dailySummary = payload.dailySummary
+                appSummaries = payload.day.appSummaries
+                websiteSummaries = payload.day.websiteSummaries
+                browserSummaries = payload.day.browserSummaries
+                timeline = payload.day.timeline
+                workBlocks = payload.workBlocks
+                dailySummary = payload.day.dailySummary
 
                 // Load persisted summary or generate a local one
-                if let existing = payload.dailySummary?.aiSummary, !existing.isEmpty {
+                if let existing = payload.day.dailySummary?.aiSummary, !existing.isEmpty {
                     summaryText = existing
-                } else if !payload.appSummaries.isEmpty {
+                } else if !payload.day.appSummaries.isEmpty {
                     summaryText = LocalAnalyzer.generateLocalSummary(
-                        appSummaries: payload.appSummaries,
-                        websiteSummaries: payload.websiteSummaries,
-                        dailySummary: payload.dailySummary
+                        appSummaries: payload.day.appSummaries,
+                        websiteSummaries: payload.day.websiteSummaries,
+                        dailySummary: payload.day.dailySummary
                     )
                 } else {
                     summaryText = nil
@@ -113,6 +134,7 @@ final class HistoryViewModel {
                 websiteSummaries = []
                 browserSummaries = []
                 timeline = []
+                workBlocks = []
                 dailySummary = nil
                 summaryText = nil
             }
@@ -239,5 +261,32 @@ final class HistoryViewModel {
             return today.date
         }
         return days.first?.date
+    }
+
+    private static func buildWorkBlocks(
+        from timeline: [AppSession],
+        websiteSummaries: [WebsiteUsageSummary],
+        date: Date,
+        blockLabelCache: BlockLabelCache
+    ) -> [WorkContextBlock] {
+        let groupedBlocks = WorkContextGrouper.group(
+            sessions: timeline,
+            websiteSummaries: websiteSummaries
+        )
+
+        return groupedBlocks.map { block in
+            let browserNames = Set(block.sessions.compactMap { session -> String? in
+                guard Constants.browserCapableBundleIDs.contains(session.bundleID) else {
+                    return nil
+                }
+                return Constants.browserNames[session.bundleID] ?? session.appName
+            })
+
+            let aiLabel = blockLabelCache.loadCachedLabel(for: block, date: date)
+
+            guard !browserNames.isEmpty else { return block.with(aiLabel: aiLabel) }
+            let websites = websiteSummaries.filter { browserNames.contains($0.browserName) }
+            return block.with(websites: websites, aiLabel: aiLabel)
+        }
     }
 }

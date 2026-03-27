@@ -93,7 +93,13 @@ struct HistoryView: View {
                         dayDetailEmpty
                     } else {
                         categoryFilterPills
-                        overviewStats
+                        if !viewModel.workBlocks.isEmpty {
+                            compactStatsRow
+                            TimelineView(blocks: viewModel.workBlocks, date: selectedDate)
+                                .frame(height: 480)
+                        } else {
+                            overviewStats
+                        }
                         daySummaryCard
                         categoryBreakdown
                         RecentSessionsCard(summaries: filteredSummaries)
@@ -105,6 +111,7 @@ struct HistoryView: View {
                 .frame(maxWidth: 780, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(DS.space24)
+                .id(viewModel.selectedDate)
             }
             .background(DS.surfaceContainer)
         } else {
@@ -165,6 +172,26 @@ struct HistoryView: View {
                     .font(.system(size: 40, weight: .bold, design: .default).monospacedDigit())
                     .foregroundStyle(DS.onSurface)
                     .tracking(-0.8)
+            }
+        }
+    }
+
+    private var compactStatsRow: some View {
+        HStack(spacing: DS.space16) {
+            Label(viewModel.focusScoreText, systemImage: "target")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(DS.tertiary)
+            Text(viewModel.focusLabel)
+                .font(.callout)
+                .foregroundStyle(DS.onSurfaceVariant)
+            Spacer()
+            Text("\(visibleAppSummaries.count) apps")
+                .font(.callout)
+                .foregroundStyle(DS.onSurfaceVariant)
+            if !visibleSites.isEmpty {
+                Text("\(visibleSites.count) sites")
+                    .font(.callout)
+                    .foregroundStyle(DS.onSurfaceVariant)
             }
         }
     }

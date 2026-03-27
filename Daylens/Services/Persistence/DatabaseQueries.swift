@@ -70,6 +70,86 @@ extension AppDatabase {
         }
     }
 
+    func saveUserProfile(_ profile: UserProfile) throws {
+        let profileToSave = profile
+        try dbQueue.write { db in
+            if profileToSave.id == nil {
+                try profileToSave.insert(db)
+            } else {
+                try profileToSave.save(db)
+            }
+        }
+    }
+
+    func fetchUserProfile() throws -> UserProfile? {
+        try dbQueue.read { db in
+            try UserProfile
+                .order(Column("updatedAt").desc, Column("id").desc)
+                .fetchOne(db)
+        }
+    }
+
+    func updateUserProfile(_ profile: UserProfile) throws {
+        try dbQueue.write { db in
+            try profile.update(db)
+        }
+    }
+
+    func saveMemory(_ memory: UserMemory) throws {
+        let memoryToSave = memory
+        try dbQueue.write { db in
+            if memoryToSave.id == nil {
+                try memoryToSave.insert(db)
+            } else {
+                try memoryToSave.save(db)
+            }
+        }
+    }
+
+    func fetchRecentMemories(limit: Int) throws -> [UserMemory] {
+        try dbQueue.read { db in
+            try UserMemory
+                .order(Column("createdAt").desc)
+                .limit(limit)
+                .fetchAll(db)
+        }
+    }
+
+    func deleteMemory(id: Int64) throws {
+        try dbQueue.write { db in
+            _ = try UserMemory.deleteOne(db, key: id)
+        }
+    }
+
+    func saveReport(_ report: GeneratedReport) throws {
+        let reportToSave = report
+        try dbQueue.write { db in
+            if reportToSave.id == nil {
+                try reportToSave.insert(db)
+            } else {
+                try reportToSave.save(db)
+            }
+        }
+    }
+
+    func fetchReport(type: String, periodStart: Date) throws -> GeneratedReport? {
+        try dbQueue.read { db in
+            try GeneratedReport
+                .filter(Column("reportType") == type && Column("periodStart") == periodStart)
+                .order(Column("createdAt").desc, Column("id").desc)
+                .fetchOne(db)
+        }
+    }
+
+    func fetchRecentReports(limit: Int) throws -> [GeneratedReport] {
+        try dbQueue.read { db in
+            try GeneratedReport
+                .order(Column("createdAt").desc)
+                .limit(limit)
+                .fetchAll(db)
+        }
+    }
+
     // MARK: - App Sessions
 
     func appUsageSummaries(for date: Date) throws -> [AppUsageSummary] {
@@ -235,16 +315,18 @@ extension AppDatabase {
         try dbQueue.read { db in
             let exclusion = MeaningfulActivityRules.sqlBundleIDExclusion
 
-            // Aggregate totals per day
+            // Aggregate totals per day; LEFT JOIN brings in stored focus score where available
             let aggRows = try Row.fetchAll(db, sql: """
-                SELECT date,
-                       SUM(duration) AS totalDuration,
-                       COUNT(DISTINCT bundleID) AS appCount
-                FROM app_sessions
-                WHERE bundleID NOT IN (\(exclusion))
-                GROUP BY date
+                SELECT a.date,
+                       SUM(a.duration) AS totalDuration,
+                       COUNT(DISTINCT a.bundleID) AS appCount,
+                       COALESCE(d.focusScore, 0) AS focusScore
+                FROM app_sessions a
+                LEFT JOIN daily_summaries d ON d.date = a.date
+                WHERE a.bundleID NOT IN (\(exclusion))
+                GROUP BY a.date
                 HAVING totalDuration > 0
-                ORDER BY date DESC
+                ORDER BY a.date DESC
                 LIMIT ?
                 """, arguments: [limit])
 
@@ -280,13 +362,15 @@ extension AppDatabase {
                 guard let date = row["date"] as Date? else { return nil }
                 let totalDuration: Double = row["totalDuration"] ?? 0
                 let appCount: Int = row["appCount"] ?? 0
+                let focusScore: Double = row["focusScore"] ?? 0
                 let top = topApps[date]
                 return DaySummarySnapshot(
                     date: date,
                     totalActiveTime: totalDuration,
                     appCount: appCount,
                     topAppName: top?.appName,
-                    topAppBundleID: top?.bundleID
+                    topAppBundleID: top?.bundleID,
+                    focusScore: focusScore
                 )
             }
         }
@@ -734,13 +818,17 @@ private extension AppDatabase {
         let totalDuration = summaries.reduce(0) { $0 + $1.totalDuration }
         let topAppName = summaries.first?.appName
         let topAppBundleID = summaries.first?.bundleID
+        let storedFocusScore = (try? DailySummary
+            .filter(Column("date") == dayBounds.start)
+            .fetchOne(db))?.focusScore ?? 0
 
         return DaySummarySnapshot(
             date: dayBounds.start,
             totalActiveTime: totalDuration,
             appCount: summaries.count,
             topAppName: topAppName,
-            topAppBundleID: topAppBundleID
+            topAppBundleID: topAppBundleID,
+            focusScore: storedFocusScore
         )
     }
 

@@ -5,6 +5,9 @@ import GRDB
 final class AppDatabase {
     static let shared: AppDatabase = {
         do {
+            if AppDatabase.isRunningTests {
+                return try AppDatabase.inMemory()
+            }
             return try AppDatabase()
         } catch {
             fatalError("AppDatabase failed to initialize: \(error)")
@@ -92,6 +95,12 @@ final class AppDatabase {
         }
 
         return config
+    }
+
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["SWIFT_TESTING_ENABLED"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     private static var migrator: DatabaseMigrator {
@@ -198,6 +207,42 @@ final class AppDatabase {
         migrator.registerMigration("v4_focus_session_label") { db in
             try db.alter(table: "focus_sessions") { t in
                 t.add(column: "label", .text)
+            }
+        }
+
+        migrator.registerMigration("v5_user_profile") { db in
+            try db.create(table: "user_profiles") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("role", .text).notNull().defaults(to: "other")
+                t.column("goals", .text).notNull().defaults(to: "deep_focus")
+                t.column("workHoursStart", .integer).notNull().defaults(to: 9)
+                t.column("workHoursEnd", .integer).notNull().defaults(to: 18)
+                t.column("idealDayDescription", .text).notNull().defaults(to: "")
+                t.column("biggestDistraction", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+
+        migrator.registerMigration("v6_user_memories") { db in
+            try db.create(table: "user_memories") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("fact", .text).notNull()
+                t.column("source", .text).notNull().defaults(to: "chat")
+                t.column("createdAt", .datetime).notNull()
+            }
+        }
+
+        migrator.registerMigration("v7_generated_reports") { db in
+            try db.create(table: "generated_reports") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("reportType", .text).notNull().defaults(to: "daily")
+                t.column("periodStart", .datetime).notNull()
+                t.column("periodEnd", .datetime).notNull()
+                t.column("markdownContent", .text).notNull().defaults(to: "")
+                t.column("generatedByAI", .boolean).notNull().defaults(to: false)
+                t.column("createdAt", .datetime).notNull()
             }
         }
 

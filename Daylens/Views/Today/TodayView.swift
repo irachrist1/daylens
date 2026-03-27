@@ -1,11 +1,16 @@
 import SwiftUI
 
-/// The main Today dashboard — bento-grid layout.
+/// The main Today dashboard — bento-grid layout with optional Timeline mode.
 struct TodayView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel = TodayViewModel()
     @State private var showAllSites = false
     @State private var insightRowHeight: CGFloat = 0
+    @AppStorage("daylens.todayLayoutMode") private var layoutMode: LayoutMode = .timeline
+
+    private enum LayoutMode: String {
+        case timeline, stats, week
+    }
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -53,8 +58,205 @@ struct TodayView: View {
     }
 
     var body: some View {
+        Group {
+            if layoutMode == .timeline {
+                timelineModeView
+            } else if layoutMode == .week {
+                weekModeView
+            } else {
+                statsModeView
+            }
+        }
+        .onAppear {
+            viewModel.load(for: appState.selectedDate)
+            injectLiveSessionIfNeeded()
+        }
+        .onChange(of: appState.selectedDate) { _, newDate in
+            viewModel.load(for: newDate)
+        }
+        .onReceive(refreshTimer) { _ in
+            if Calendar.current.isDateInToday(appState.selectedDate) {
+                viewModel.load(for: appState.selectedDate)
+                injectLiveSessionIfNeeded()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .categoryOverrideChanged)) { _ in
+            viewModel.load(for: appState.selectedDate)
+        }
+    }
+
+    // MARK: - Layout Toggle
+
+    private var layoutToggle: some View {
+        Picker("", selection: $layoutMode) {
+            Text("Timeline").tag(LayoutMode.timeline)
+            Text("Stats").tag(LayoutMode.stats)
+            Text("Week").tag(LayoutMode.week)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 240)
+    }
+
+    // MARK: - Timeline Mode
+
+    private var timelineModeView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                layoutToggle
+            }
+            .padding(.horizontal, DS.space24)
+            .padding(.vertical, DS.space10)
+
+            Divider()
+
+            if viewModel.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.workBlocks.isEmpty {
+                emptyState
+                    .padding(DS.space24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                let isToday = Calendar.current.isDateInToday(appState.selectedDate)
+                TimelineView(
+                    blocks: viewModel.workBlocks,
+                    date: appState.selectedDate,
+                    scrollAnchor: isToday ? .bottom : .top
+                )
+                .id(appState.selectedDate)
+            }
+        }
+    }
+
+    // MARK: - Week Mode
+
+    private var weekModeView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                layoutToggle
+            }
+            .padding(.horizontal, DS.space24)
+            .padding(.vertical, DS.space10)
+
+            Divider()
+
+            if viewModel.weeklyScores.isEmpty {
+                emptyState
+                    .padding(DS.space24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                weekRowsView
+            }
+        }
+    }
+
+    private var weekRowsView: some View {
+        let scores = viewModel.weeklyScores.sorted { $0.date < $1.date }
+        let maxTime = scores.map(\.totalActiveTime).max().flatMap { $0 > 0 ? $0 : nil } ?? 1
+        let scoredDays = scores.filter { $0.focusScore > 0 }
+        let avgFocus = scoredDays.isEmpty ? 0.0 : scoredDays.map(\.focusScore).reduce(0, +) / Double(scoredDays.count)
+
+        return ScrollView(.vertical) {
+            VStack(spacing: 0) {
+                ForEach(scores) { snapshot in
+                    let activeRatio = min(1.0, snapshot.totalActiveTime / maxTime)
+                    let focusedRatio = activeRatio * snapshot.focusScore
+
+                    HStack(spacing: DS.space12) {
+                        // Day label + date number
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.weekDayFormatter.string(from: snapshot.date))
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(snapshot.isToday ? DS.primary : DS.onSurface)
+                            Text(Self.weekDateFormatter.string(from: snapshot.date))
+                                .font(.system(size: 11))
+                                .foregroundStyle(DS.onSurfaceVariant)
+                        }
+                        .frame(width: 40, alignment: .leading)
+
+                        // Two-tone bar: dim fill = active time, bright fill = focused time
+                        ZStack(alignment: .leading) {
+                            // Empty track
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(DS.surfaceHighest)
+                                .frame(maxWidth: .infinity, minHeight: 6, maxHeight: 6)
+                            // Active time (dim)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(DS.primary.opacity(0.2))
+                                .frame(maxWidth: .infinity, minHeight: 6, maxHeight: 6)
+                                .scaleEffect(x: CGFloat(activeRatio), anchor: .leading)
+                            // Focused time (teal — distinct from blue active track)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(DS.tertiary)
+                                .frame(maxWidth: .infinity, minHeight: 6, maxHeight: 6)
+                                .scaleEffect(x: CGFloat(focusedRatio), anchor: .leading)
+                        }
+
+                        // Active time + focus %
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(snapshot.formattedActiveTime)
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundStyle(DS.onSurface)
+                            if snapshot.focusScore > 0 {
+                                Text("\(Int(snapshot.focusScore * 100))%")
+                                    .font(.system(size: 11).monospacedDigit())
+                                    .foregroundStyle(DS.tertiary)
+                            }
+                        }
+                        .frame(width: 54, alignment: .trailing)
+                    }
+                    .frame(minHeight: 52)
+                    .padding(.horizontal, DS.space24)
+                }
+
+                // Summary row
+                if avgFocus > 0 {
+                    Divider()
+                        .padding(.horizontal, DS.space24)
+                        .padding(.top, DS.space8)
+
+                    HStack {
+                        Text("Avg focus this week")
+                            .font(.system(size: 12))
+                            .foregroundStyle(DS.onSurfaceVariant)
+                        Spacer()
+                        Text("\(Int(avgFocus * 100))%")
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(DS.tertiary)
+                    }
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, DS.space24)
+                }
+            }
+            .padding(.vertical, DS.space8)
+        }
+    }
+
+    private static let weekDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE"
+        return f
+    }()
+
+    private static let weekDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d"
+        return f
+    }()
+
+    // MARK: - Stats Mode
+
+    private var statsModeView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.space16) {
+                HStack {
+                    Spacer()
+                    layoutToggle
+                }
+
                 if presentationSummaries.isEmpty && !viewModel.isLoading {
                     emptyState
                 } else {
@@ -117,22 +319,6 @@ struct TodayView: View {
             .transition(.opacity)
         }
         .animation(.easeOut(duration: 0.2), value: appState.selectedDate)
-        .onAppear {
-            viewModel.load(for: appState.selectedDate)
-            injectLiveSessionIfNeeded()
-        }
-        .onChange(of: appState.selectedDate) { _, newDate in
-            viewModel.load(for: newDate)
-        }
-        .onReceive(refreshTimer) { _ in
-            if Calendar.current.isDateInToday(appState.selectedDate) {
-                viewModel.load(for: appState.selectedDate)
-                injectLiveSessionIfNeeded()
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .categoryOverrideChanged)) { _ in
-            viewModel.load(for: appState.selectedDate)
-        }
     }
 
     // MARK: - Empty State

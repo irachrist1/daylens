@@ -10,7 +10,7 @@ struct AIDayContextPayload {
 
 /// Builds grounded prompts for the Anthropic API using actual tracked data.
 enum AIPromptBuilder {
-    static let systemPrompt = """
+    static let defaultSystemPrompt = """
     You are Daylens, a personal activity analyst for macOS. You analyze the user's \
     computer usage data and provide helpful, grounded insights.
 
@@ -33,6 +33,40 @@ enum AIPromptBuilder {
     - When the user asks what information would help you, tell them: app category overrides for uncategorized apps, their goals for the day, and what specific apps like terminals or custom tools mean in their workflow
 
     """
+
+    static func systemPrompt(profile: UserProfile?, memories: [UserMemory]) -> String {
+        guard let profile else {
+            return "You are a productivity analyst. Analyze the user's activity data below."
+        }
+
+        let memoriesSection: String
+        if memories.isEmpty {
+            memoriesSection = "Nothing remembered yet."
+        } else {
+            memoriesSection = memories.map { "- \($0.fact)" }.joined(separator: "\n")
+        }
+
+        var lines = [
+            "You are a personal productivity analyst for \(profile.name).",
+            "They are a \(profile.role) whose primary goal is \(profile.goals).",
+            "Their typical workday is \(profile.workHoursStart):00-\(profile.workHoursEnd):00.",
+            "Their ideal workday: \(profile.idealDayDescription)",
+        ]
+
+        if let biggestDistraction = profile.biggestDistraction?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !biggestDistraction.isEmpty {
+            lines.append("Their biggest distraction is \(biggestDistraction).")
+        }
+
+        lines.append("")
+        lines.append("Things you remember about them:")
+        lines.append(memoriesSection)
+        lines.append("")
+        lines.append("You have access to their precise activity data below. Be specific, reference actual")
+        lines.append("apps and durations. Never be generic. If you don't have enough data, say so.")
+
+        return lines.joined(separator: "\n")
+    }
 
     /// Build context string from tracked data for a specific day.
     static func buildDayContext(
@@ -185,6 +219,28 @@ enum AIPromptBuilder {
         """
     }
 
+    static func blockLabelPrompt(
+        dominantCategory: AppCategory,
+        appNames: [String],
+        domains: [String],
+        windowTitles: [String],
+        durationMinutes: Int
+    ) -> String {
+        let appsText = joinedContext(appNames)
+        let domainsText = joinedContext(domains)
+        let titlesText = joinedContext(windowTitles)
+
+        return """
+        Write a 3-7 word title-case label for this work block.
+        Return only the label. No quotes. No explanation.
+        Category: \(dominantCategory.rawValue)
+        Duration: \(durationMinutes) minutes
+        Apps: \(appsText)
+        Domains: \(domainsText)
+        Window titles: \(titlesText)
+        """
+    }
+
     private static func formatDuration(_ seconds: TimeInterval) -> String {
         let hours = Int(seconds) / 3600
         let minutes = (Int(seconds) % 3600) / 60
@@ -192,5 +248,12 @@ enum AIPromptBuilder {
             return "\(hours)h \(minutes)m"
         }
         return "\(minutes)m"
+    }
+
+    private static func joinedContext(_ values: [String]) -> String {
+        let trimmed = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return trimmed.isEmpty ? "None" : trimmed.prefix(5).joined(separator: ", ")
     }
 }

@@ -14,6 +14,7 @@ final class TrackingCoordinator {
     let accessibilityService: AccessibilityService
     let sessionNormalizer: SessionNormalizer
     let permissionManager: PermissionManager
+    let aiService: AIService?
 
     var trackingState: TrackingState = .idle
 
@@ -31,6 +32,7 @@ final class TrackingCoordinator {
     private var accessibilityTimer: Timer?
     private var debouncedSummaryWork: DispatchWorkItem?
     private let database: AppDatabase
+    private let blockLabelCache: BlockLabelCache
 
     // Current website visit state — we track one open "session" and finalize on domain change
     private var currentWebDomain: String?
@@ -43,9 +45,16 @@ final class TrackingCoordinator {
     private var isPausedForSystemIdle = false
     private var isHoldingFullscreenIdleSession = false
 
-    init(database: AppDatabase, permissionManager: PermissionManager) {
+    init(
+        database: AppDatabase,
+        permissionManager: PermissionManager,
+        aiService: AIService? = nil,
+        blockLabelCache: BlockLabelCache = BlockLabelCache()
+    ) {
         self.database = database
         self.permissionManager = permissionManager
+        self.aiService = aiService
+        self.blockLabelCache = blockLabelCache
         self.activityTracker = ActivityTracker(database: database)
         self.idleDetector = IdleDetector()
         self.browserHistoryReader = BrowserHistoryReader(database: database)
@@ -114,8 +123,15 @@ final class TrackingCoordinator {
     }
 
     func computeCurrentDaySummary() {
-        Task.detached(priority: .utility) { [sessionNormalizer] in
-            _ = try? sessionNormalizer.computeDailySummary(for: Date())
+        Task.detached(priority: .utility) { [self] in
+            let date = Date()
+            _ = try? sessionNormalizer.computeDailySummary(for: date)
+
+            guard let aiService, aiService.isConfigured else {
+                return
+            }
+
+            await generateBlockLabels(for: date, aiService: aiService)
         }
     }
 
@@ -348,5 +364,51 @@ final class TrackingCoordinator {
         logger.info("Idle cleared; resuming activity tracker")
         activityTracker.resumeFromIdle()
         isPausedForSystemIdle = false
+    }
+
+    private func generateBlockLabels(for date: Date, aiService: AIService) async {
+        let websiteSummaries = (try? database.websiteUsageSummaries(for: date)) ?? []
+        let sessions = (try? database.timelineEvents(for: date)) ?? []
+        guard !sessions.isEmpty else { return }
+
+        let blocks = Self.enrichBlocksWithWebsites(
+            WorkContextGrouper.group(sessions: sessions, websiteSummaries: websiteSummaries),
+            websiteSummaries: websiteSummaries
+        )
+
+        for block in blocks where blockLabelCache.loadCachedLabel(for: block, date: date) == nil {
+            let prompt = AIPromptBuilder.blockLabelPrompt(
+                dominantCategory: block.dominantCategory,
+                appNames: block.topApps.map(\.appName),
+                domains: block.websites.map(\.domain),
+                windowTitles: block.websites.compactMap(\.topPageTitle),
+                durationMinutes: max(1, Int(block.duration / 60))
+            )
+
+            do {
+                let label = try await aiService.generateBlockLabel(prompt: prompt)
+                blockLabelCache.saveCachedLabel(label, for: block, date: date)
+            } catch {
+                continue
+            }
+        }
+    }
+
+    private static func enrichBlocksWithWebsites(
+        _ blocks: [WorkContextBlock],
+        websiteSummaries: [WebsiteUsageSummary]
+    ) -> [WorkContextBlock] {
+        blocks.map { block in
+            let browserNames = Set(block.sessions.compactMap { session -> String? in
+                guard Constants.browserCapableBundleIDs.contains(session.bundleID) else {
+                    return nil
+                }
+                return Constants.browserNames[session.bundleID] ?? session.appName
+            })
+
+            guard !browserNames.isEmpty else { return block }
+            let websites = websiteSummaries.filter { browserNames.contains($0.browserName) }
+            return block.with(websites: websites)
+        }
     }
 }

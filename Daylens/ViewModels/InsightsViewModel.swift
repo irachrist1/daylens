@@ -69,11 +69,15 @@ final class InsightsViewModel {
 
             let contextPayload: AIDayContextPayload
             let previousDays: [AIDayContextPayload]
+            let profile: UserProfile?
+            let memories: [UserMemory]
             do {
-                (contextPayload, previousDays) = try await Task.detached(priority: .userInitiated) {
+                (contextPayload, previousDays, profile, memories) = try await Task.detached(priority: .userInitiated) {
                     (
                         try AppDatabase.shared.aiContextPayload(for: date),
-                        try AppDatabase.shared.recentAIPayloads(endingAt: date, limit: 7)
+                        try AppDatabase.shared.recentAIPayloads(endingAt: date, limit: 7),
+                        try AppDatabase.shared.fetchUserProfile(),
+                        try AppDatabase.shared.fetchRecentMemories(limit: 20)
                     )
                 }.value
             } catch {
@@ -93,14 +97,16 @@ final class InsightsViewModel {
                 primaryDay: contextPayload,
                 previousDays: previousDays
             )
+            let systemPrompt = AIPromptBuilder.systemPrompt(profile: profile, memories: memories)
 
             do {
-                let answer = try await aiService.askQuestion(question, context: context)
+                let answer = try await aiService.askQuestion(question, context: context, systemPrompt: systemPrompt)
                 messages.append(ChatMessage(role: .assistant, content: answer))
                 let q = question, a = answer, d = date
                 Task.detached(priority: .utility) {
                     try? AppDatabase.shared.saveConversationTurn(question: q, answer: a, for: d)
                 }
+                extractMemoryIfNeeded(from: question, answer: answer)
             } catch let error as AIError {
                 appendError(error.localizedDescription)
             } catch is URLError {
@@ -116,5 +122,26 @@ final class InsightsViewModel {
     private func appendError(_ message: String) {
         lastError = message
         messages.append(ChatMessage(role: .error, content: message))
+    }
+
+    private func extractMemoryIfNeeded(from question: String, answer: String) {
+        Task.detached(priority: .utility) {
+            let aiService = AIService()
+            let response = try? await aiService.extractMemory(from: question, answer: answer)
+            guard let response else { return }
+
+            let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            guard trimmed.uppercased() != "NONE" else { return }
+            guard trimmed.count < 200 else { return }
+
+            let memory = UserMemory(
+                id: nil,
+                fact: trimmed,
+                source: "chat",
+                createdAt: Date()
+            )
+            try? AppDatabase.shared.saveMemory(memory)
+        }
     }
 }
