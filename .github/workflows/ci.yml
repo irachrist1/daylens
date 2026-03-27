@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-and-build:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Swift package tests
+        run: swift test
+
+      - name: Build macOS app target
+        run: xcodebuild -project Daylens.xcodeproj -scheme Daylens -configuration Debug -sdk macosx CODE_SIGNING_ALLOWED=NO build

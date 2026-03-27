@@ -91,5 +91,6 @@ enum Constants {
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let anthropicAPIKey = "anthropic_api_key"
         static let anthropicModel = "anthropic_model"
+        static let usageMetricMode = "usage_metric_mode"
     }
 }

@@ -233,14 +233,7 @@ final class AggregationTests: XCTestCase {
 
     func testAppsViewModelInjectLiveWebsiteVisitTargetsSelectedBrowserOnly() {
         let vm = AppsViewModel()
-        vm.selectedApp = AppUsageSummary(
-            bundleID: "com.google.Chrome",
-            appName: "Chrome",
-            totalDuration: 600,
-            sessionCount: 1,
-            category: .browsing,
-            isBrowser: true
-        )
+        vm.selectedBundleID = "com.google.Chrome"
 
         vm.injectLiveWebsiteVisit(
             domain: "chatgpt.com",
@@ -265,6 +258,46 @@ final class AggregationTests: XCTestCase {
         )
 
         XCTAssertEqual(vm.detailWebsites.count, 1, "Non-selected browsers should not inject into the current detail pane")
+    }
+
+    func testTodayViewModelInjectLiveWebsiteVisitAppendsBrowserBreakdown() {
+        let vm = TodayViewModel()
+        vm.websiteSummaries = [
+            WebsiteUsageSummary(
+                domain: "github.com",
+                totalDuration: 120,
+                visitCount: 2,
+                topPageTitle: "Repo",
+                confidence: .high,
+                browserName: "Chrome",
+                browserBreakdowns: [
+                    WebsiteBrowserBreakdown(
+                        browserBundleID: "com.google.Chrome",
+                        browserName: "Chrome",
+                        totalDuration: 120,
+                        representativePageTitle: "Repo",
+                        activePageTitle: nil
+                    )
+                ]
+            )
+        ]
+
+        vm.injectLiveWebsiteVisit(
+            domain: "github.com",
+            url: "https://github.com/openai/daylens",
+            title: "Daylens",
+            startedAt: Date().addingTimeInterval(-25),
+            browserBundleID: "company.thebrowser.Browser"
+        )
+
+        XCTAssertEqual(vm.websiteSummaries.count, 1)
+        XCTAssertEqual(vm.websiteSummaries[0].browserBreakdowns.count, 2)
+        XCTAssertNotNil(vm.websiteSummaries[0].browserBreakdowns.first(where: { $0.browserBundleID == "company.thebrowser.Browser" }))
+        XCTAssertEqual(
+            vm.websiteSummaries[0].browserBreakdowns.first(where: { $0.browserBundleID == "com.google.Chrome" })?.totalDuration ?? 0,
+            120,
+            accuracy: 0.001
+        )
     }
 
     func testFocusLabelBuckets() {

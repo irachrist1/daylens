@@ -11,6 +11,7 @@
 		0552C880063ED22ED40E51FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE6E95B46E12CC757EB7FE78 /* SettingsView.swift */; };
 		08E983324F5A6DF55A003CFE /* Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CD1E9EFDF46F4BBE6BCEDEA /* Sidebar.swift */; };
 		09120E3DD17284FAB5F4F16A /* UsageBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BCE3C382A05D81301B956BF /* UsageBar.swift */; };
+		091F4D1C7B9E4A1D8C3F6721 /* UsageMetricModePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 091F4D1C7B9E4A1D8C3F6720 /* UsageMetricModePicker.swift */; };
 		0C0F20E6CECF2A792EEBA1CA /* PermissionStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75BDC7D6819A3CC86ACF849C /* PermissionStep.swift */; };
 		11056C6854122838DE242B7B /* BrowserHistoryReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE71EA82896C06C024761118 /* BrowserHistoryReaderTests.swift */; };
 		1243CC3B10D88ECBFE24A988 /* AppCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A6E797D31160E4D2953177 /* AppCategory.swift */; };
@@ -20,6 +21,7 @@
 		1894CAC30DA35C9D19A5AAD5 /* ReportsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6081A40C47E47A03AA3C0853 /* ReportsViewModel.swift */; };
 		1CC528DA0A841E0F41B99815 /* InspectorPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1647B37CE7F32062F209DD94 /* InspectorPanel.swift */; };
 		1D0A947921BA9AA56E1520B5 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 777DA5E49C5045BE9EB5191B /* AppState.swift */; };
+		1D8E5B2A4C7F91A3D6E0B852 /* TrackerLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D8E5B2A4C7F91A3D6E0B851 /* TrackerLease.swift */; };
 		20EE7C5E6709D74E68633591 /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF8D392A1824A3A4D07A5BE /* AppsView.swift */; };
 		217CE5EC6D95A473325096E9 /* DatabaseQueries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D61D93A52DA4A2F95BE6D8C /* DatabaseQueries.swift */; };
 		22FD4B8FBC5491A0EC4EA2AF /* FocusScoreCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43649B572457A043804D473 /* FocusScoreCalculator.swift */; };
@@ -49,6 +51,7 @@
 		5CF23277BFB7C58AA21196FD /* AppDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFEF0F2380B96E2D9B171EE8 /* AppDetailView.swift */; };
 		613BA8E999D475F953008E43 /* GeneratedReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3862F2BD7DB8754993599BBD /* GeneratedReport.swift */; };
 		690114CA029E0ED97DCCA42C /* BrowserHistoryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED5BFB7317164D51DF56DCD4 /* BrowserHistoryReader.swift */; };
+		691C2F8D4A7B5E0C13D96245 /* BrowserGroupsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691C2F8D4A7B5E0C13D96244 /* BrowserGroupsCard.swift */; };
 		6AECBE92A7A3CBB1820DFD02 /* NotificationPermissionStep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E3F4608BE2B61EDBD3E4C4E /* NotificationPermissionStep.swift */; };
 		6F314299EE901E7E43E24436 /* FocusSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB247226BBCD5BEF0D211F6B /* FocusSlot.swift */; };
 		70704150BB379AB4051BF0C2 /* SyncUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41D99E1B09AC781320DECAD6 /* SyncUploader.swift */; };
@@ -67,6 +70,7 @@
 		99BCB0CA95C5722C23EE8B7E /* UpdateBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87C88EE376FEDE4C23997891 /* UpdateBanner.swift */; };
 		9EC187501113BB8184B6B864 /* AppleScriptURLProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E2399B5F8A5AB0B667B473 /* AppleScriptURLProvider.swift */; };
 		A0BBEDD485B59ACD0E893C69 /* UserProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E104D319CB1DACBFDD90A21 /* UserProfile.swift */; };
+		A0F7C2D39B4E1685AC21D930 /* UsageMetricMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F7C2D39B4E1685AC21D92F /* UsageMetricMode.swift */; };
 		A318B744EB6D247B298D03FA /* InsightsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36391824EAB7744FAE5EFD4C /* InsightsViewModelTests.swift */; };
 		A6BB4FD9C25883791C070C6D /* WorkContextGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F946447D4E276024FF6FCC /* WorkContextGrouper.swift */; };
 		A6BED140A93B36AE81F772F3 /* BlockLabelCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD20D737CF5DEDA834295BD7 /* BlockLabelCache.swift */; };
@@ -130,11 +134,13 @@
 /* Begin PBXFileReference section */
 		04A561C61EB6455696A1F0FA /* DataLayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataLayerTests.swift; sourceTree = "<group>"; };
 		08970924A0F817567D593E7F /* BlockDetailPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockDetailPopover.swift; sourceTree = "<group>"; };
+		091F4D1C7B9E4A1D8C3F6720 /* UsageMetricModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageMetricModePicker.swift; sourceTree = "<group>"; };
 		0B8F423E6D959330ED5371B9 /* IdleDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleDetector.swift; sourceTree = "<group>"; };
 		0CC64F1E5EB52A47BC0FAD97 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		1647B37CE7F32062F209DD94 /* InspectorPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorPanel.swift; sourceTree = "<group>"; };
 		16A6E797D31160E4D2953177 /* AppCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCategory.swift; sourceTree = "<group>"; };
 		1C2AC28B69BE53C5F38A9AA0 /* ReportGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerator.swift; sourceTree = "<group>"; };
+		1D8E5B2A4C7F91A3D6E0B851 /* TrackerLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackerLease.swift; sourceTree = "<group>"; };
 		1F5AEC68748F888AE074B5AB /* SnapshotExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotExporter.swift; sourceTree = "<group>"; };
 		2121ECCB7C6EECBDF10334AD /* WorkContextViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkContextViewModelTests.swift; sourceTree = "<group>"; };
 		22D17CF9A8E06D60CAF773A1 /* SyncConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConfiguration.swift; sourceTree = "<group>"; };
@@ -169,6 +175,7 @@
 		6081A40C47E47A03AA3C0853 /* ReportsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportsViewModel.swift; sourceTree = "<group>"; };
 		624D0BD8F694B3B333DC8AF3 /* MainShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShell.swift; sourceTree = "<group>"; };
 		665B0DB7979EE2C1DE4C0E7C /* TrackingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingCoordinator.swift; sourceTree = "<group>"; };
+		691C2F8D4A7B5E0C13D96244 /* BrowserGroupsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserGroupsCard.swift; sourceTree = "<group>"; };
 		73CAE10AFDBDAC5B69A59AC8 /* WorkspaceLinker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceLinker.swift; sourceTree = "<group>"; };
 		75BDC7D6819A3CC86ACF849C /* PermissionStep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionStep.swift; sourceTree = "<group>"; };
 		76E6A00CC889B9ED0261FD30 /* HistoryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryViewModel.swift; sourceTree = "<group>"; };
@@ -196,6 +203,7 @@
 		9EFC0671A2AB2694B24CEC25 /* Daylens.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Daylens.entitlements; sourceTree = "<group>"; };
 		9F5389EA0FF40D945E357460 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
 		9F551AF3F4D1B8681DB62A1D /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
+		A0F7C2D39B4E1685AC21D92F /* UsageMetricMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageMetricMode.swift; sourceTree = "<group>"; };
 		A072A2085762848B19A8E661 /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
 		A1608A819C343DBA70B739EB /* TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineView.swift; sourceTree = "<group>"; };
 		A3F946447D4E276024FF6FCC /* WorkContextGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkContextGrouper.swift; sourceTree = "<group>"; };
@@ -388,6 +396,7 @@
 				BB247226BBCD5BEF0D211F6B /* FocusSlot.swift */,
 				3862F2BD7DB8754993599BBD /* GeneratedReport.swift */,
 				F59B716158F1107AE8599D75 /* TrackingState.swift */,
+				A0F7C2D39B4E1685AC21D92F /* UsageMetricMode.swift */,
 				F0EA6943606392C0FEAF2CE0 /* UserMemory.swift */,
 				4E104D319CB1DACBFDD90A21 /* UserProfile.swift */,
 				D56350AA87D644C3190971C5 /* WebsiteVisit.swift */,
@@ -517,11 +526,13 @@
 			isa = PBXGroup;
 			children = (
 				4309D0DD59893EB9A060FFA7 /* AppIconView.swift */,
+				691C2F8D4A7B5E0C13D96244 /* BrowserGroupsCard.swift */,
 				82793891C72F589F120D644C /* CategoryBreakdownCard.swift */,
 				2FEBFE739ECAC33931C1E777 /* DateNavigator.swift */,
 				397313067AB695911513EE22 /* DesignSystem.swift */,
 				33B9B3D001466A2FBBA501AF /* EmptyStateView.swift */,
 				7BCE3C382A05D81301B956BF /* UsageBar.swift */,
+				091F4D1C7B9E4A1D8C3F6720 /* UsageMetricModePicker.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -599,6 +610,7 @@
 				A43649B572457A043804D473 /* FocusScoreCalculator.swift */,
 				0B8F423E6D959330ED5371B9 /* IdleDetector.swift */,
 				B2B88B2E769E539CB1E15D1E /* SessionNormalizer.swift */,
+				1D8E5B2A4C7F91A3D6E0B851 /* TrackerLease.swift */,
 				665B0DB7979EE2C1DE4C0E7C /* TrackingCoordinator.swift */,
 				A3F946447D4E276024FF6FCC /* WorkContextGrouper.swift */,
 				93F7EBD265DD27B976A4E45A /* Browser */,
@@ -729,6 +741,7 @@
 				4C284B4D5BC33011E3CB7DED /* BlockDetailPopover.swift in Sources */,
 				A6BED140A93B36AE81F772F3 /* BlockLabelCache.swift in Sources */,
 				690114CA029E0ED97DCCA42C /* BrowserHistoryReader.swift in Sources */,
+				691C2F8D4A7B5E0C13D96245 /* BrowserGroupsCard.swift in Sources */,
 				D0D861C5878C46A45151C06C /* BrowserRegistry.swift in Sources */,
 				CD4988359B44DE18440E9E0F /* BrowserSession.swift in Sources */,
 				88B840B633717FD12B600A32 /* CategoryBreakdownCard.swift in Sources */,
@@ -785,12 +798,15 @@
 				2DD929174FE22279BD77D6E3 /* TodayView.swift in Sources */,
 				858DF026D512CDFF56FFC015 /* TodayViewModel.swift in Sources */,
 				E87AFED6FAFAE3E76D7C0591 /* TopAppsCard.swift in Sources */,
+				1D8E5B2A4C7F91A3D6E0B852 /* TrackerLease.swift in Sources */,
 				CE1646BA4586823C0A3782C2 /* TrackingCoordinator.swift in Sources */,
 				338AD1BE9988A9D8404DCEE8 /* TrackingState.swift in Sources */,
 				99BCB0CA95C5722C23EE8B7E /* UpdateBanner.swift in Sources */,
 				CFB64A38B38BCCC2F33B5958 /* UpdateChecker.swift in Sources */,
 				FAC8F0F5F87DBD6032CC3B5F /* UpdateInstaller.swift in Sources */,
 				09120E3DD17284FAB5F4F16A /* UsageBar.swift in Sources */,
+				091F4D1C7B9E4A1D8C3F6721 /* UsageMetricModePicker.swift in Sources */,
+				A0F7C2D39B4E1685AC21D930 /* UsageMetricMode.swift in Sources */,
 				F2684BCCC5E16622D7DC2B17 /* UserMemory.swift in Sources */,
 				A0BBEDD485B59ACD0E893C69 /* UserProfile.swift in Sources */,
 				FB3CC94DE9F54E27570AA3AE /* WebCompanionSection.swift in Sources */,
@@ -911,7 +927,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.21;
+				MARKETING_VERSION = 1.0.22;
 				PRODUCT_BUNDLE_IDENTIFIER = com.daylens.app;
 				PRODUCT_NAME = Daylens;
 				SDKROOT = macosx;
@@ -1010,7 +1026,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.21;
+				MARKETING_VERSION = 1.0.22;
 				PRODUCT_BUNDLE_IDENTIFIER = com.daylens.app;
 				PRODUCT_NAME = Daylens;
 				SDKROOT = macosx;

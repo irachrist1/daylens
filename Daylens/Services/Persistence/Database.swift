@@ -15,9 +15,20 @@ final class AppDatabase {
     }()
 
     let dbQueue: DatabaseQueue
+    let databaseURL: URL?
+    let supportDirectoryURL: URL?
 
     init(dbQueue: DatabaseQueue) throws {
         self.dbQueue = dbQueue
+        self.databaseURL = nil
+        self.supportDirectoryURL = nil
+        try Self.migrator.migrate(dbQueue)
+    }
+
+    init(dbQueue: DatabaseQueue, databaseURL: URL?, supportDirectoryURL: URL?) throws {
+        self.dbQueue = dbQueue
+        self.databaseURL = databaseURL
+        self.supportDirectoryURL = supportDirectoryURL
         try Self.migrator.migrate(dbQueue)
     }
 
@@ -32,7 +43,7 @@ final class AppDatabase {
 
         let shouldLogSQL = ProcessInfo.processInfo.environment["DAYLENS_LOG_SQL"] == "1"
         let dbQueue = try DatabaseQueue(path: dbURL.path, configuration: Self.makeConfiguration(logSQL: shouldLogSQL))
-        try self.init(dbQueue: dbQueue)
+        try self.init(dbQueue: dbQueue, databaseURL: dbURL, supportDirectoryURL: daylensDir)
 
         // Take a rolling backup after the connection is open, off the main thread.
         let capturedDirURL = daylensDir

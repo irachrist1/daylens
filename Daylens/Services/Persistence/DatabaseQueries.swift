@@ -4,11 +4,18 @@ import GRDB
 /// All data needed to render a single day's dashboard.
 struct CombinedDayPayload {
     let appSummaries: [AppUsageSummary]
+    let appleLikeAppSummaries: [AppUsageSummary]
     let timeline: [AppSession]
     let websiteSummaries: [WebsiteUsageSummary]
     let browserSummaries: [BrowserUsageSummary]
     let dailySummary: DailySummary?
     let categoryOverrides: [String: AppCategory]
+    let usageMetrics: DayUsageMetrics
+}
+
+private enum UsageProfile {
+    case meaningful
+    case appleLike
 }
 
 /// Reusable database query methods.
@@ -158,10 +165,15 @@ extension AppDatabase {
 
     // MARK: - App Sessions
 
-    func appUsageSummaries(for date: Date) throws -> [AppUsageSummary] {
+    func appUsageSummaries(for date: Date, profile: UsageMetricMode = .meaningful) throws -> [AppUsageSummary] {
         try dbQueue.read { db in
             let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
-            return try self.appUsageSummaries(in: db, dayBounds: DayBounds(for: date), overrides: overrides)
+            return try self.appUsageSummaries(
+                in: db,
+                dayBounds: DayBounds(for: date),
+                overrides: overrides,
+                profile: usageProfile(for: profile)
+            )
         }
     }
 
@@ -264,14 +276,15 @@ extension AppDatabase {
         }
     }
 
-    func appSessions(for date: Date, bundleID: String) throws -> [AppSession] {
+    func appSessions(for date: Date, bundleID: String, profile: UsageMetricMode = .meaningful) throws -> [AppSession] {
         try dbQueue.read { db in
             let overrides = (try? self.categoryOverrides(in: db)) ?? [:]
             return try self.appSessions(
                 in: db,
                 dayBounds: DayBounds(for: date),
                 bundleID: bundleID,
-                overrides: overrides
+                overrides: overrides,
+                profile: usageProfile(for: profile)
             )
         }
     }
@@ -282,18 +295,25 @@ extension AppDatabase {
         try dbQueue.read { db in
             let dayBounds = DayBounds(for: date)
             let overrides = (try? categoryOverrides(in: db)) ?? [:]
-            let sessions = try meaningfulAppSessions(in: db, dayBounds: dayBounds, overrides: overrides)
+            let sessions = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful)
+            let appleLikeSessions = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .appleLike)
             let appSummaries = appUsageSummariesFromSessions(sessions, overrides: overrides)
+            let appleLikeAppSummaries = appUsageSummariesFromSessions(appleLikeSessions, overrides: overrides)
             let websiteSummaries = try websiteUsageSummaries(in: db, dayBounds: dayBounds)
             let browserSummaries = try browserUsageSummaries(in: db, dayBounds: dayBounds)
             let dailySummary = try DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
             return CombinedDayPayload(
                 appSummaries: appSummaries,
+                appleLikeAppSummaries: appleLikeAppSummaries,
                 timeline: sessions,
                 websiteSummaries: websiteSummaries,
                 browserSummaries: browserSummaries,
                 dailySummary: dailySummary,
-                categoryOverrides: overrides
+                categoryOverrides: overrides,
+                usageMetrics: DayUsageMetrics(
+                    meaningfulTotal: sessions.reduce(0) { $0 + $1.duration },
+                    appleLikeTotal: appleLikeSessions.reduce(0) { $0 + $1.duration }
+                )
             )
         }
     }
@@ -319,65 +339,19 @@ extension AppDatabase {
     /// Replaces calling trackedDays + daySummarySnapshot(for:) for each date.
     func trackedDaySnapshots(limit: Int = 60) throws -> [DaySummarySnapshot] {
         try dbQueue.read { db in
-            let exclusion = MeaningfulActivityRules.sqlBundleIDExclusion
-
-            // Aggregate totals per day; LEFT JOIN brings in stored focus score where available
-            let aggRows = try Row.fetchAll(db, sql: """
-                SELECT a.date,
-                       SUM(a.duration) AS totalDuration,
-                       COUNT(DISTINCT a.bundleID) AS appCount,
-                       COALESCE(d.focusScore, 0) AS focusScore
-                FROM app_sessions a
-                LEFT JOIN daily_summaries d ON d.date = a.date
-                WHERE a.bundleID NOT IN (\(exclusion))
-                GROUP BY a.date
-                HAVING totalDuration > 0
-                ORDER BY a.date DESC
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT date
+                FROM app_sessions
+                ORDER BY date DESC
                 LIMIT ?
-                """, arguments: [limit])
+                """, arguments: [limit * 2])
 
-            guard !aggRows.isEmpty else { return [] }
+            let dates = rows.compactMap { $0["date"] as Date? }.prefix(limit)
+            let overrides = (try? categoryOverrides(in: db)) ?? [:]
 
-            // Scope top-app query to the same date window returned by the first query
-            // so it doesn't perform a full-table scan on long-running installs.
-            let minDate = aggRows.compactMap { $0["date"] as Date? }.min()
-            let maxDate = aggRows.compactMap { $0["date"] as Date? }.max()
-
-            // Top app per day (single pass — ORDER BY ensures highest first)
-            let topRows: [Row]
-            if let minDate, let maxDate {
-                topRows = try Row.fetchAll(db, sql: """
-                    SELECT date, bundleID, appName, SUM(duration) AS total
-                    FROM app_sessions
-                    WHERE bundleID NOT IN (\(exclusion))
-                      AND date >= ? AND date <= ?
-                    GROUP BY date, bundleID
-                    ORDER BY date DESC, total DESC
-                    """, arguments: [minDate, maxDate])
-            } else {
-                topRows = []
-            }
-
-            var topApps: [Date: (bundleID: String, appName: String)] = [:]
-            for row in topRows {
-                guard let date = row["date"] as Date?, topApps[date] == nil else { continue }
-                topApps[date] = (row["bundleID"] as String, row["appName"] as String)
-            }
-
-            return aggRows.compactMap { row -> DaySummarySnapshot? in
-                guard let date = row["date"] as Date? else { return nil }
-                let totalDuration: Double = row["totalDuration"] ?? 0
-                let appCount: Int = row["appCount"] ?? 0
-                let focusScore: Double = row["focusScore"] ?? 0
-                let top = topApps[date]
-                return DaySummarySnapshot(
-                    date: date,
-                    totalActiveTime: totalDuration,
-                    appCount: appCount,
-                    topAppName: top?.appName,
-                    topAppBundleID: top?.bundleID,
-                    focusScore: focusScore
-                )
+            return try dates.compactMap { date in
+                let snapshot = try self.daySummarySnapshot(in: db, for: date, overrides: overrides)
+                return snapshot.totalActiveTime > 0 || snapshot.appleLikeTotalActiveTime > 0 ? snapshot : nil
             }
         }
     }
@@ -388,7 +362,7 @@ extension AppDatabase {
             let overrides = (try? categoryOverrides(in: db)) ?? [:]
             return AIDayContextPayload(
                 date: dayBounds.start,
-                appSummaries: try self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides),
+                appSummaries: try self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful),
                 websiteSummaries: try self.websiteUsageSummaries(in: db, dayBounds: dayBounds),
                 browserSummaries: try self.browserUsageSummaries(in: db, dayBounds: dayBounds),
                 dailySummary: try DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
@@ -424,7 +398,7 @@ extension AppDatabase {
                 do {
                     return try AIDayContextPayload(
                         date: dayBounds.start,
-                        appSummaries: self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides),
+                        appSummaries: self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful),
                         websiteSummaries: self.websiteUsageSummaries(in: db, dayBounds: dayBounds),
                         browserSummaries: self.browserUsageSummaries(in: db, dayBounds: dayBounds),
                         dailySummary: DailySummary.filter(Column("date") == dayBounds.start).fetchOne(db)
@@ -649,6 +623,15 @@ private struct EffectiveWebsiteInterval {
     let interval: ClippedInterval
 }
 
+private struct RawAppSessionInterval {
+    let id: Int64?
+    let bundleID: String
+    let appName: String
+    let category: AppCategory
+    let isBrowser: Bool
+    let interval: ClippedInterval
+}
+
 private func clippedInterval(start: Date, end: Date, to dayBounds: DayBounds) -> ClippedInterval? {
     let clippedStart = max(start, dayBounds.start)
     let clippedEnd = min(end, dayBounds.end)
@@ -720,7 +703,8 @@ private enum MeaningfulActivityRules {
         bundleID: String,
         appName: String,
         category: AppCategory,
-        duration: TimeInterval
+        duration: TimeInterval,
+        profile: UsageProfile = .meaningful
     ) -> Bool {
         let normalizedBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedAppName = appName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -737,7 +721,7 @@ private enum MeaningfulActivityRules {
             return false
         }
 
-        if category == .system && duration < 30 {
+        if profile == .meaningful, category == .system && duration < 30 {
             return false
         }
 
@@ -818,10 +802,17 @@ private extension AppDatabase {
     }
 
     func daySummarySnapshot(in db: Database, for date: Date) throws -> DaySummarySnapshot {
-        let dayBounds = DayBounds(for: date)
         let overrides = (try? categoryOverrides(in: db)) ?? [:]
-        let summaries = try self.appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides)
-        let totalDuration = summaries.reduce(0) { $0 + $1.totalDuration }
+        return try daySummarySnapshot(in: db, for: date, overrides: overrides)
+    }
+
+    func daySummarySnapshot(in db: Database, for date: Date, overrides: [String: AppCategory]) throws -> DaySummarySnapshot {
+        let dayBounds = DayBounds(for: date)
+        let meaningfulSessions = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful)
+        let appleLikeSessions = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .appleLike)
+        let summaries = appUsageSummariesFromSessions(meaningfulSessions, overrides: overrides)
+        let totalDuration = meaningfulSessions.reduce(0) { $0 + $1.duration }
+        let appleLikeDuration = appleLikeSessions.reduce(0) { $0 + $1.duration }
         let topAppName = summaries.first?.appName
         let topAppBundleID = summaries.first?.bundleID
         let storedFocusScore = (try? DailySummary
@@ -831,6 +822,7 @@ private extension AppDatabase {
         return DaySummarySnapshot(
             date: dayBounds.start,
             totalActiveTime: totalDuration,
+            appleLikeTotalActiveTime: appleLikeDuration,
             appCount: summaries.count,
             topAppName: topAppName,
             topAppBundleID: topAppBundleID,
@@ -845,9 +837,9 @@ private extension AppDatabase {
         aiSummaryGeneratedAt: Date?
     ) throws -> DailySummary {
         let overrides = (try? categoryOverrides(in: db)) ?? [:]
-        let appSummaries = try appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides)
+        let appSummaries = try appUsageSummaries(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful)
         let websiteSummaries = try websiteUsageSummaries(in: db, dayBounds: dayBounds)
-        let timeline = try meaningfulAppSessions(in: db, dayBounds: dayBounds, overrides: overrides)
+        let timeline = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful)
 
         let totalActiveTime = appSummaries.reduce(0) { $0 + $1.totalDuration }
         let contextSwitches = max(0, timeline.count - 1)
@@ -879,54 +871,7 @@ private extension AppDatabase {
     }
 
     func meaningfulAppSessions(in db: Database, dayBounds: DayBounds, overrides: [String: AppCategory] = [:]) throws -> [AppSession] {
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT id, date, bundleID, appName, startTime, endTime, duration, category, isBrowser
-            FROM app_sessions
-            WHERE startTime < ? AND endTime > ?
-            ORDER BY startTime ASC
-            """, arguments: [dayBounds.end, dayBounds.start])
-
-        let clippedSessions = rows.compactMap { row -> AppSession? in
-            let bundleID: String = row["bundleID"]
-            let appName: String = row["appName"]
-            let startTime: Date = row["startTime"]
-            let endTime: Date = row["endTime"]
-            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else {
-                return nil
-            }
-
-            let storedCategory = AppCategory(rawValue: row["category"] as String) ?? .uncategorized
-            let category: AppCategory
-            if let override = overrides[bundleID] {
-                category = override
-            } else if storedCategory == .uncategorized {
-                category = AppCategory.categorize(bundleID: bundleID, appName: appName)
-            } else {
-                category = storedCategory
-            }
-            guard MeaningfulActivityRules.shouldSurfaceAppSession(
-                bundleID: bundleID,
-                appName: appName,
-                category: category,
-                duration: clipped.duration
-            ) else {
-                return nil
-            }
-
-            return AppSession(
-                id: row["id"],
-                date: dayBounds.start,
-                bundleID: bundleID,
-                appName: appName,
-                startTime: clipped.start,
-                endTime: clipped.end,
-                duration: clipped.duration,
-                category: category,
-                isBrowser: row["isBrowser"]
-            )
-        }
-
-        return mergeAdjacentAppSessions(clippedSessions)
+        try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: .meaningful)
     }
 
     func timelineEvents(in db: Database, dayBounds: DayBounds) throws -> [AppSession] {
@@ -937,9 +882,10 @@ private extension AppDatabase {
         in db: Database,
         dayBounds: DayBounds,
         bundleID: String,
-        overrides: [String: AppCategory] = [:]
+        overrides: [String: AppCategory] = [:],
+        profile: UsageProfile = .meaningful
     ) throws -> [AppSession] {
-        try meaningfulAppSessions(in: db, dayBounds: dayBounds, overrides: overrides)
+        try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: profile)
             .filter { $0.bundleID == bundleID }
     }
 
@@ -1001,8 +947,13 @@ private extension AppDatabase {
         return longestStreak
     }
 
-    func appUsageSummaries(in db: Database, dayBounds: DayBounds, overrides: [String: AppCategory] = [:]) throws -> [AppUsageSummary] {
-        let sessions = try meaningfulAppSessions(in: db, dayBounds: dayBounds, overrides: overrides)
+    func appUsageSummaries(
+        in db: Database,
+        dayBounds: DayBounds,
+        overrides: [String: AppCategory] = [:],
+        profile: UsageProfile = .meaningful
+    ) throws -> [AppUsageSummary] {
+        let sessions = try normalizedAppSessions(in: db, dayBounds: dayBounds, overrides: overrides, profile: profile)
         return appUsageSummariesFromSessions(sessions, overrides: overrides)
     }
 
@@ -1048,6 +999,198 @@ private extension AppDatabase {
                     isBrowser: summary.isBrowser
                 )
             }
+    }
+
+    func usageProfile(for mode: UsageMetricMode) -> UsageProfile {
+        switch mode {
+        case .meaningful: .meaningful
+        case .appleLike: .appleLike
+        }
+    }
+
+    func normalizedAppSessions(
+        in db: Database,
+        dayBounds: DayBounds,
+        overrides: [String: AppCategory],
+        profile: UsageProfile
+    ) throws -> [AppSession] {
+        let rawSessions = try rawAppSessionIntervals(in: db, dayBounds: dayBounds, overrides: overrides, profile: profile)
+        guard !rawSessions.isEmpty else { return [] }
+
+        let idleIntervals = profile == .meaningful ? try inputIdleIntervals(in: db, dayBounds: dayBounds) : []
+        let boundaryDates = Set(rawSessions.flatMap { [$0.interval.start, $0.interval.end] } + idleIntervals.flatMap { [$0.start, $0.end] })
+        let sortedBoundaries = boundaryDates.sorted()
+        guard sortedBoundaries.count >= 2 else { return [] }
+
+        var resolved: [AppSession] = []
+        for index in 0..<(sortedBoundaries.count - 1) {
+            let segmentStart = sortedBoundaries[index]
+            let segmentEnd = sortedBoundaries[index + 1]
+            guard segmentEnd > segmentStart else { continue }
+
+            let segment = ClippedInterval(start: segmentStart, end: segmentEnd)
+            if profile == .meaningful, idleIntervals.contains(where: { $0.start <= segment.start && $0.end >= segment.end }) {
+                continue
+            }
+
+            let covering = rawSessions.filter { $0.interval.start < segment.end && $0.interval.end > segment.start }
+            guard let chosen = covering.max(by: preferredAppInterval) else { continue }
+
+            resolved.append(
+                AppSession(
+                    id: chosen.id,
+                    date: dayBounds.start,
+                    bundleID: chosen.bundleID,
+                    appName: chosen.appName,
+                    startTime: segment.start,
+                    endTime: segment.end,
+                    duration: segment.duration,
+                    category: chosen.category,
+                    isBrowser: chosen.isBrowser
+                )
+            )
+        }
+
+        return mergeNormalizedAppSessions(resolved)
+    }
+
+    func rawAppSessionIntervals(
+        in db: Database,
+        dayBounds: DayBounds,
+        overrides: [String: AppCategory],
+        profile: UsageProfile
+    ) throws -> [RawAppSessionInterval] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT id, bundleID, appName, startTime, endTime, duration, category, isBrowser
+            FROM app_sessions
+            WHERE startTime < ? AND endTime > ?
+            ORDER BY startTime ASC, endTime ASC
+            """, arguments: [dayBounds.end, dayBounds.start])
+
+        return rows.compactMap { row in
+            let bundleID: String = row["bundleID"]
+            let appName: String = row["appName"]
+            let startTime: Date = row["startTime"]
+            let endTime: Date = row["endTime"]
+            guard let clipped = clippedInterval(start: startTime, end: endTime, to: dayBounds) else {
+                return nil
+            }
+
+            let storedCategory = AppCategory(rawValue: row["category"] as String) ?? .uncategorized
+            let category: AppCategory
+            if let override = overrides[bundleID] {
+                category = override
+            } else if storedCategory == .uncategorized {
+                category = AppCategory.categorize(bundleID: bundleID, appName: appName)
+            } else {
+                category = storedCategory
+            }
+
+            guard MeaningfulActivityRules.shouldSurfaceAppSession(
+                bundleID: bundleID,
+                appName: appName,
+                category: category,
+                duration: clipped.duration,
+                profile: profile
+            ) else {
+                return nil
+            }
+
+            return RawAppSessionInterval(
+                id: row["id"],
+                bundleID: bundleID,
+                appName: appName,
+                category: category,
+                isBrowser: row["isBrowser"],
+                interval: clipped
+            )
+        }
+    }
+
+    func inputIdleIntervals(in db: Database, dayBounds: DayBounds) throws -> [ClippedInterval] {
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT timestamp, eventType
+            FROM activity_events
+            WHERE timestamp < ? AND timestamp >= ?
+              AND eventType IN ('idle_start', 'idle_end')
+            ORDER BY timestamp ASC
+            """, arguments: [dayBounds.end, dayBounds.start.addingTimeInterval(-12 * 3600)])
+
+        var idleStart: Date?
+        var intervals: [ClippedInterval] = []
+        for row in rows {
+            let timestamp: Date = row["timestamp"]
+            let eventType = ActivityEvent.EventType(rawValue: row["eventType"] as String)
+
+            switch eventType {
+            case .idleStart:
+                idleStart = timestamp
+            case .idleEnd:
+                if let idleStart,
+                   let clipped = clippedInterval(start: idleStart, end: timestamp, to: dayBounds) {
+                    intervals.append(clipped)
+                }
+                idleStart = nil
+            case .none, .appActivated, .appDeactivated, .websiteVisit:
+                break
+            }
+        }
+
+        if let idleStart,
+           let clipped = clippedInterval(start: idleStart, end: dayBounds.end, to: dayBounds) {
+            intervals.append(clipped)
+        }
+
+        return mergedIntervals(from: intervals, maxGap: 0)
+    }
+
+    func preferredAppInterval(_ lhs: RawAppSessionInterval, _ rhs: RawAppSessionInterval) -> Bool {
+        if lhs.interval.start != rhs.interval.start {
+            return lhs.interval.start < rhs.interval.start
+        }
+        if lhs.interval.end != rhs.interval.end {
+            return lhs.interval.end < rhs.interval.end
+        }
+        return (lhs.id ?? 0) < (rhs.id ?? 0)
+    }
+
+    func mergeNormalizedAppSessions(_ sessions: [AppSession]) -> [AppSession] {
+        let sorted = sessions.sorted { lhs, rhs in
+            if lhs.startTime == rhs.startTime {
+                return lhs.endTime < rhs.endTime
+            }
+            return lhs.startTime < rhs.startTime
+        }
+        var merged: [AppSession] = []
+        let jitterMergeThreshold: TimeInterval = 1.5
+
+        for session in sorted {
+            guard let last = merged.last else {
+                merged.append(session)
+                continue
+            }
+
+            let isSameApp = last.bundleID == session.bundleID && last.appName == session.appName
+            let gap = session.startTime.timeIntervalSince(last.endTime)
+            guard isSameApp, gap <= jitterMergeThreshold else {
+                merged.append(session)
+                continue
+            }
+
+            merged[merged.count - 1] = AppSession(
+                id: last.id,
+                date: last.date,
+                bundleID: last.bundleID,
+                appName: last.appName,
+                startTime: last.startTime,
+                endTime: session.endTime,
+                duration: session.endTime.timeIntervalSince(last.startTime),
+                category: last.category,
+                isBrowser: last.isBrowser
+            )
+        }
+
+        return merged
     }
 
     func websiteUsageSummaries(
@@ -1142,13 +1285,41 @@ private extension AppDatabase {
                 bestConfidence = visits.map(\.confidence).max(by: confidenceRank) ?? .low
             }
 
+            let browserBreakdowns = Dictionary(grouping: visits, by: \.bundleID)
+                .compactMap { bundleID, browserVisits -> WebsiteBrowserBreakdown? in
+                    let bundleMerged = mergedIntervals(from: browserVisits.map(\.interval))
+                    let bundleTotal = bundleMerged.reduce(0.0) { $0 + $1.duration }
+                    guard bundleTotal >= Constants.minimumWebsiteVisitDuration else { return nil }
+
+                    let representativeTitle = browserVisits
+                        .sorted { $0.interval.duration > $1.interval.duration }
+                        .lazy
+                        .compactMap(\.title)
+                        .first(where: { !$0.isEmpty })
+
+                    return WebsiteBrowserBreakdown(
+                        browserBundleID: bundleID,
+                        browserName: Constants.browserNames[bundleID] ?? "Browser",
+                        totalDuration: bundleTotal,
+                        representativePageTitle: representativeTitle,
+                        activePageTitle: nil
+                    )
+                }
+                .sorted { lhs, rhs in
+                    if lhs.totalDuration == rhs.totalDuration {
+                        return lhs.browserName.localizedCaseInsensitiveCompare(rhs.browserName) == .orderedAscending
+                    }
+                    return lhs.totalDuration > rhs.totalDuration
+                }
+
             return WebsiteUsageSummary(
                 domain: domain,
                 totalDuration: totalDuration,
                 visitCount: rawVisitCount,
                 topPageTitle: topTitle,
                 confidence: bestConfidence,
-                browserName: browserName
+                browserName: browserName,
+                browserBreakdowns: browserBreakdowns
             )
         }
         .sorted { lhs, rhs in

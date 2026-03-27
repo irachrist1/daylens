@@ -17,6 +17,7 @@ final class ActivityTracker {
     private var spaceTransitionReconcileWorkItem: DispatchWorkItem?
     private var spaceTransitionResetWorkItem: DispatchWorkItem?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var frontmostReconcileTimer: Timer?
     private let deactivationGracePeriod: TimeInterval
     private let spaceTransitionWindow: TimeInterval
 
@@ -30,6 +31,11 @@ final class ActivityTracker {
     /// The app that is currently frontmost but whose session has not yet been finalized.
     var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
         guard let app = currentApp, !isPausedForIdle else { return nil }
+        return (app.bundleID, app.appName, app.activatedAt)
+    }
+
+    var visibleSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
+        guard let app = currentApp else { return nil }
         return (app.bundleID, app.appName, app.activatedAt)
     }
 
@@ -99,6 +105,11 @@ final class ActivityTracker {
             self?.handleAppTermination(app)
         }
         workspaceObservers.append(terminateObserver)
+
+        frontmostReconcileTimer?.invalidate()
+        frontmostReconcileTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.reconcileWithCurrentFrontmostApplication()
+        }
     }
 
     func stop() {
@@ -115,6 +126,8 @@ final class ActivityTracker {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         workspaceObservers.removeAll()
+        frontmostReconcileTimer?.invalidate()
+        frontmostReconcileTimer = nil
 
         pendingDeactivation?.workItem.cancel()
         pendingDeactivation = nil
@@ -134,15 +147,12 @@ final class ActivityTracker {
 
         finalizePendingDeactivationIfNeeded()
 
-        if let current = currentApp {
-            finalizeSession(for: current, endedAt: Date())
-            currentApp = nil
-        } else if let frontApp = NSWorkspace.shared.frontmostApplication {
+        if currentApp == nil, let frontApp = NSWorkspace.shared.frontmostApplication {
             currentApp = makeActiveAppInfo(from: frontApp, activatedAt: Date())
         }
 
         isPausedForIdle = true
-        trackingState = .idle
+        trackingState = .tracking
     }
 
     func resumeFromIdle() {
@@ -154,12 +164,16 @@ final class ActivityTracker {
         isPausedForIdle = false
         trackingState = .tracking
 
+        if let current = currentApp {
+            lastTrackedApp = current.appName
+            return
+        }
+
         let resumedAt = Date()
-        if let app = currentApp {
-            currentApp = nil
+        if let frontApp = frontmostApplicationProvider() {
             handleAppActivation(
-                bundleID: app.bundleID,
-                appName: app.appName,
+                bundleID: frontApp.bundleID,
+                appName: frontApp.appName,
                 activatedAt: resumedAt,
                 source: .nsworkspace
             )
@@ -210,11 +224,17 @@ final class ActivityTracker {
         if isPausedForIdle {
             pendingDeactivation?.workItem.cancel()
             pendingDeactivation = nil
+
+            if let current = currentApp, current.bundleID != bundleID {
+                finalizeSession(for: current, endedAt: activatedAt)
+            }
+
+            let activatedSessionStart = currentApp?.bundleID == bundleID ? currentApp?.activatedAt ?? activatedAt : activatedAt
             currentApp = ActiveAppInfo(
                 bundleID: bundleID,
                 appName: appName,
-                windowTitle: nil,
-                activatedAt: activatedAt
+                windowTitle: currentApp?.bundleID == bundleID ? currentApp?.windowTitle : nil,
+                activatedAt: activatedSessionStart
             )
             lastTrackedApp = appName
             recordActivationEvent(
@@ -517,6 +537,32 @@ final class ActivityTracker {
         finalizeSession(for: pending.app, endedAt: pending.endedAt)
         if currentApp?.bundleID == pending.app.bundleID {
             currentApp = nil
+        }
+    }
+
+    private func reconcileWithCurrentFrontmostApplication() {
+        guard isRunning, !isPausedForIdle, let frontApp = frontmostApplicationProvider() else { return }
+
+        if let pending = pendingDeactivation, pending.app.bundleID == frontApp.bundleID {
+            _ = recoverFrontmostApplicationIfActivationWasMissed(for: pending)
+            return
+        }
+
+        if let current = currentApp, current.bundleID != frontApp.bundleID {
+            logger.debug("Reconciling missed switch from \(current.bundleID, privacy: .public) to \(frontApp.bundleID, privacy: .public)")
+            handleAppActivation(
+                bundleID: frontApp.bundleID,
+                appName: frontApp.appName,
+                activatedAt: Date(),
+                source: .nsworkspace
+            )
+        } else if currentApp == nil {
+            handleAppActivation(
+                bundleID: frontApp.bundleID,
+                appName: frontApp.appName,
+                activatedAt: Date(),
+                source: .nsworkspace
+            )
         }
     }
 

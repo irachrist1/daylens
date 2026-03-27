@@ -56,6 +56,7 @@ struct FocusRingCard: View {
 ///   the conclusion so the user never has to calculate it.
 struct WeeklySparklineCard: View {
     let days: [DaySummarySnapshot]
+    let mode: UsageMetricMode
 
     /// Always returns Mon–Sun of the current ISO week, zero-filling days with no data.
     /// Future days appear as flat empty bars; today is highlighted.
@@ -78,7 +79,9 @@ struct WeeklySparklineCard: View {
     }
 
     private var maxTime: TimeInterval {
-        weekGrid.map(\.totalActiveTime).max().flatMap { $0 > 0 ? $0 : nil } ?? 1
+        weekGrid.map { mode == .meaningful ? $0.totalActiveTime : $0.appleLikeTotalActiveTime }
+            .max()
+            .flatMap { $0 > 0 ? $0 : nil } ?? 1
     }
 
     var body: some View {
@@ -88,7 +91,11 @@ struct WeeklySparklineCard: View {
 
             HStack(alignment: .bottom, spacing: DS.space6) {
                 ForEach(weekGrid) { day in
-                    SparklineBar(activeTime: day.totalActiveTime, maxTime: maxTime, date: day.date)
+                    SparklineBar(
+                        activeTime: mode == .meaningful ? day.totalActiveTime : day.appleLikeTotalActiveTime,
+                        maxTime: maxTime,
+                        date: day.date
+                    )
                 }
             }
             .frame(maxWidth: .infinity)

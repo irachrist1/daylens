@@ -40,11 +40,37 @@ struct WebsiteUsageSummary: Identifiable {
     let domain: String
     let totalDuration: TimeInterval
     let visitCount: Int
-    let topPageTitle: String?
+    let representativePageTitle: String?
+    let activePageTitle: String?
     let confidence: ActivityEvent.ConfidenceLevel
     let browserName: String
+    let browserBreakdowns: [WebsiteBrowserBreakdown]
 
     var id: String { domain }
+
+    init(
+        domain: String,
+        totalDuration: TimeInterval,
+        visitCount: Int,
+        topPageTitle: String?,
+        confidence: ActivityEvent.ConfidenceLevel,
+        browserName: String,
+        activePageTitle: String? = nil,
+        browserBreakdowns: [WebsiteBrowserBreakdown] = []
+    ) {
+        self.domain = domain
+        self.totalDuration = totalDuration
+        self.visitCount = visitCount
+        self.representativePageTitle = topPageTitle
+        self.activePageTitle = activePageTitle
+        self.confidence = confidence
+        self.browserName = browserName
+        self.browserBreakdowns = browserBreakdowns
+    }
+
+    var topPageTitle: String? {
+        activePageTitle ?? representativePageTitle
+    }
 
     var formattedDuration: String {
         let hours = Int(totalDuration) / 3600
@@ -56,6 +82,20 @@ struct WebsiteUsageSummary: Identifiable {
             return "\(minutes)m"
         }
         return "<1m"
+    }
+}
+
+struct WebsiteBrowserBreakdown: Identifiable, Hashable {
+    let browserBundleID: String
+    let browserName: String
+    let totalDuration: TimeInterval
+    let representativePageTitle: String?
+    let activePageTitle: String?
+
+    var id: String { "\(browserBundleID)|\(browserName)" }
+
+    var subtitle: String? {
+        activePageTitle ?? representativePageTitle
     }
 }
 

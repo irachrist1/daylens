@@ -16,6 +16,7 @@ struct SettingsView: View {
                 profileCard
                 profileSection
                 appearanceSection
+                usageSection
                 aiSection
                 generalSection
                 notificationsSection
@@ -160,6 +161,34 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 200)
+            }
+            .cardStyle()
+        }
+    }
+
+    // MARK: - AI
+
+    private var usageSection: some View {
+        VStack(alignment: .leading, spacing: DS.space12) {
+            Text("Usage Totals")
+                .sectionHeader()
+
+            VStack(alignment: .leading, spacing: DS.space12) {
+                Text("How usage is counted")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(DS.onSurface)
+
+                UsageMetricModePicker(
+                    selection: Bindable(appState).usageMetricMode,
+                    width: 260
+                )
+
+                VStack(alignment: .leading, spacing: DS.space6) {
+                    Text("Active Use counts time while you're actively using apps and websites.")
+                    Text("All Activity also includes passive foreground time, like reading docs or watching a video.")
+                }
+                .font(.caption)
+                .foregroundStyle(DS.onSurfaceVariant)
             }
             .cardStyle()
         }

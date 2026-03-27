@@ -33,11 +33,11 @@ struct TodayView: View {
     /// Presentation-layer filter: strips OS noise and user-hidden apps.
     private var presentationSummaries: [AppUsageSummary] {
         let prefs = appState.preferencesService
-        return viewModel.appSummaries.filter { app in
+        return viewModel.displayAppSummaries(for: appState.usageMetricMode).filter { app in
             let id = app.bundleID.lowercased()
             guard !Self.osNoiseBundleIDs.contains(id) else { return false }
             guard !Self.osNoiseNames.contains(app.appName.lowercased()) else { return false }
-            if app.category == .system && app.totalDuration < 30 { return false }
+            if appState.usageMetricMode == .meaningful, app.category == .system && app.totalDuration < 30 { return false }
             if prefs?.isAppHidden(app.bundleID) == true { return false }
             return true
         }
@@ -155,14 +155,17 @@ struct TodayView: View {
 
     private var weekRowsView: some View {
         let scores = viewModel.weeklyScores.sorted { $0.date < $1.date }
-        let maxTime = scores.map(\.totalActiveTime).max().flatMap { $0 > 0 ? $0 : nil } ?? 1
+        let maxTime = scores.map { appState.usageMetricMode == .meaningful ? $0.totalActiveTime : $0.appleLikeTotalActiveTime }
+            .max()
+            .flatMap { $0 > 0 ? $0 : nil } ?? 1
         let scoredDays = scores.filter { $0.focusScore > 0 }
         let avgFocus = scoredDays.isEmpty ? 0.0 : scoredDays.map(\.focusScore).reduce(0, +) / Double(scoredDays.count)
 
         return ScrollView(.vertical) {
             VStack(spacing: 0) {
                 ForEach(scores) { snapshot in
-                    let activeRatio = min(1.0, snapshot.totalActiveTime / maxTime)
+                    let activeTime = appState.usageMetricMode == .meaningful ? snapshot.totalActiveTime : snapshot.appleLikeTotalActiveTime
+                    let activeRatio = min(1.0, activeTime / maxTime)
                     let focusedRatio = activeRatio * snapshot.focusScore
 
                     HStack(spacing: DS.space12) {
@@ -197,7 +200,7 @@ struct TodayView: View {
 
                         // Active time + focus %
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(snapshot.formattedActiveTime)
+                            Text(snapshot.formattedActiveTime(for: appState.usageMetricMode))
                                 .font(.system(size: 12).monospacedDigit())
                                 .foregroundStyle(DS.onSurface)
                             if snapshot.focusScore > 0 {
@@ -263,7 +266,7 @@ struct TodayView: View {
                     // Hero banner
                     HeroSummaryCard(
                         greeting: viewModel.greeting,
-                        totalActiveTime: viewModel.totalActiveTime,
+                        totalActiveTime: viewModel.totalActiveTime(for: appState.usageMetricMode),
                         appCount: presentationSummaries.count,
                         siteCount: presentationWebsites.count
                     )
@@ -276,7 +279,7 @@ struct TodayView: View {
                         )
                         .fixedSize(horizontal: true, vertical: false)
 
-                        WeeklySparklineCard(days: viewModel.weeklyScores)
+                        WeeklySparklineCard(days: viewModel.weeklyScores, mode: appState.usageMetricMode)
                             .frame(maxWidth: .infinity)
                     }
 
@@ -309,6 +312,12 @@ struct TodayView: View {
                     // Top websites
                     if !viewModel.websiteSummaries.isEmpty {
                         topWebsitesSection
+                        if !viewModel.browserSummaries.isEmpty {
+                            BrowserGroupsCard(
+                                browsers: viewModel.browserSummaries,
+                                websites: visibleSites
+                            )
+                        }
                     }
                 }
             }
@@ -353,13 +362,41 @@ struct TodayView: View {
     // MARK: - Helpers
 
     private func injectLiveSessionIfNeeded() {
-        if let info = appState.trackingCoordinator?.currentSessionInfo,
-           Calendar.current.isDateInToday(appState.selectedDate) {
+        guard Calendar.current.isDateInToday(appState.selectedDate) else { return }
+
+        let meaningfulInfo = appState.trackingCoordinator?.currentSessionInfo
+        let visibleInfo = appState.trackingCoordinator?.currentVisibleSessionInfo
+
+        if let meaningfulInfo, let visibleInfo,
+           meaningfulInfo.bundleID == visibleInfo.bundleID,
+           abs(meaningfulInfo.startedAt.timeIntervalSince(visibleInfo.startedAt)) < 1 {
             viewModel.injectLiveSession(
-                bundleID: info.bundleID,
-                appName: info.appName,
-                startedAt: info.startedAt
+                bundleID: meaningfulInfo.bundleID,
+                appName: meaningfulInfo.appName,
+                startedAt: meaningfulInfo.startedAt,
+                includeInMeaningful: true,
+                includeInAppleLike: true
             )
+        } else {
+            if let meaningfulInfo {
+                viewModel.injectLiveSession(
+                    bundleID: meaningfulInfo.bundleID,
+                    appName: meaningfulInfo.appName,
+                    startedAt: meaningfulInfo.startedAt,
+                    includeInMeaningful: true,
+                    includeInAppleLike: false
+                )
+            }
+
+            if let visibleInfo {
+                viewModel.injectLiveSession(
+                    bundleID: visibleInfo.bundleID,
+                    appName: visibleInfo.appName,
+                    startedAt: visibleInfo.startedAt,
+                    includeInMeaningful: false,
+                    includeInAppleLike: true
+                )
+            }
         }
 
         if let webInfo = appState.trackingCoordinator?.currentWebVisitInfo,

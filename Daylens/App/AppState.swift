@@ -19,6 +19,9 @@ final class AppState {
     // MARK: - ViewModels (session-scoped)
     var insightsViewModel = InsightsViewModel()
     var focusSession = FocusSessionManager()
+    var usageMetricMode: UsageMetricMode {
+        didSet { persistUsageMetricMode() }
+    }
 
     // MARK: - Services
     var database: AppDatabase!
@@ -40,17 +43,27 @@ final class AppState {
         self.userDefaults = .standard
         self.hasCompletedOnboarding = userDefaults.bool(forKey: Constants.DefaultsKey.hasCompletedOnboarding)
         self.colorScheme = Self.loadColorScheme(from: .standard)
+        self.usageMetricMode = Self.loadUsageMetricMode(from: .standard)
     }
 
     init(userDefaults: UserDefaults) {
         self.userDefaults = userDefaults
         self.hasCompletedOnboarding = userDefaults.bool(forKey: Constants.DefaultsKey.hasCompletedOnboarding)
         self.colorScheme = Self.loadColorScheme(from: userDefaults)
+        self.usageMetricMode = Self.loadUsageMetricMode(from: userDefaults)
     }
 
     private static func loadColorScheme(from defaults: UserDefaults) -> ColorScheme? {
         guard let raw = defaults.string(forKey: "colorScheme") else { return nil }
         return raw == "dark" ? .dark : .light
+    }
+
+    private static func loadUsageMetricMode(from defaults: UserDefaults) -> UsageMetricMode {
+        guard let raw = defaults.string(forKey: Constants.DefaultsKey.usageMetricMode),
+              let mode = UsageMetricMode(rawValue: raw) else {
+            return .meaningful
+        }
+        return mode
     }
 
     private func persistColorScheme() {
@@ -59,6 +72,10 @@ final class AppState {
         } else {
             userDefaults.removeObject(forKey: "colorScheme")
         }
+    }
+
+    private func persistUsageMetricMode() {
+        userDefaults.set(usageMetricMode.rawValue, forKey: Constants.DefaultsKey.usageMetricMode)
     }
 
     /// Mark onboarding complete and persist immediately.

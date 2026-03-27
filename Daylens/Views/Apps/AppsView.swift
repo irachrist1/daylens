@@ -6,8 +6,9 @@ struct AppsView: View {
 
     private var visibleSummaries: [AppUsageSummary] {
         let prefs = appState.preferencesService
-        guard let prefs else { return viewModel.summaries }
-        return viewModel.summaries.filter { !prefs.isAppHidden($0.bundleID) }
+        let summaries = viewModel.displaySummaries(for: appState.usageMetricMode)
+        guard let prefs else { return summaries }
+        return summaries.filter { !prefs.isAppHidden($0.bundleID) }
     }
 
     private let refreshTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -23,11 +24,14 @@ struct AppsView: View {
                 .background(DS.surfaceContainer)
         }
         .onAppear {
-            viewModel.load(for: appState.selectedDate)
+            viewModel.load(for: appState.selectedDate, metricMode: appState.usageMetricMode)
             injectLiveSessionIfNeeded()
         }
         .onChange(of: appState.selectedDate) { _, date in
-            viewModel.load(for: date)
+            viewModel.load(for: date, metricMode: appState.usageMetricMode)
+        }
+        .onChange(of: appState.usageMetricMode) { _, _ in
+            viewModel.load(for: appState.selectedDate, metricMode: appState.usageMetricMode)
         }
         .onReceive(refreshTimer) { _ in
             if Calendar.current.isDateInToday(appState.selectedDate) {
@@ -37,18 +41,47 @@ struct AppsView: View {
     }
 
     private func injectLiveSessionIfNeeded() {
-        if let info = appState.trackingCoordinator?.currentSessionInfo,
-           Calendar.current.isDateInToday(appState.selectedDate) {
+        guard Calendar.current.isDateInToday(appState.selectedDate) else { return }
+
+        let meaningfulInfo = appState.trackingCoordinator?.currentSessionInfo
+        let visibleInfo = appState.trackingCoordinator?.currentVisibleSessionInfo
+
+        if let meaningfulInfo, let visibleInfo,
+           meaningfulInfo.bundleID == visibleInfo.bundleID,
+           abs(meaningfulInfo.startedAt.timeIntervalSince(visibleInfo.startedAt)) < 1 {
             viewModel.injectLiveSession(
-                bundleID: info.bundleID,
-                appName: info.appName,
-                startedAt: info.startedAt,
-                for: appState.selectedDate
+                bundleID: meaningfulInfo.bundleID,
+                appName: meaningfulInfo.appName,
+                startedAt: meaningfulInfo.startedAt,
+                for: appState.selectedDate,
+                includeInMeaningful: true,
+                includeInAppleLike: true
             )
+        } else {
+            if let meaningfulInfo {
+                viewModel.injectLiveSession(
+                    bundleID: meaningfulInfo.bundleID,
+                    appName: meaningfulInfo.appName,
+                    startedAt: meaningfulInfo.startedAt,
+                    for: appState.selectedDate,
+                    includeInMeaningful: true,
+                    includeInAppleLike: false
+                )
+            }
+
+            if let visibleInfo {
+                viewModel.injectLiveSession(
+                    bundleID: visibleInfo.bundleID,
+                    appName: visibleInfo.appName,
+                    startedAt: visibleInfo.startedAt,
+                    for: appState.selectedDate,
+                    includeInMeaningful: false,
+                    includeInAppleLike: true
+                )
+            }
         }
 
-        if let webInfo = appState.trackingCoordinator?.currentWebVisitInfo,
-           Calendar.current.isDateInToday(appState.selectedDate) {
+        if let webInfo = appState.trackingCoordinator?.currentWebVisitInfo {
             viewModel.injectLiveWebsiteVisit(
                 domain: webInfo.domain,
                 url: webInfo.url,
@@ -86,13 +119,22 @@ struct AppsView: View {
                             AppRow(
                                 app: app,
                                 maxDuration: maxDuration,
-                                isSelected: viewModel.selectedApp?.bundleID == app.bundleID,
-                                onTap: { viewModel.selectApp(app, for: appState.selectedDate) },
+                                isSelected: viewModel.selectedBundleID == app.bundleID,
+                                onTap: { viewModel.selectApp(app, for: appState.selectedDate, metricMode: appState.usageMetricMode) },
                                 setCategory: { cat in
                                     if let cat {
-                                        viewModel.setOverride(bundleID: app.bundleID, category: cat, for: appState.selectedDate)
+                                        viewModel.setOverride(
+                                            bundleID: app.bundleID,
+                                            category: cat,
+                                            for: appState.selectedDate,
+                                            metricMode: appState.usageMetricMode
+                                        )
                                     } else {
-                                        viewModel.removeOverride(bundleID: app.bundleID, for: appState.selectedDate)
+                                        viewModel.removeOverride(
+                                            bundleID: app.bundleID,
+                                            for: appState.selectedDate,
+                                            metricMode: appState.usageMetricMode
+                                        )
                                     }
                                 },
                                 onHide: appState.preferencesService.map { prefs in
@@ -109,7 +151,7 @@ struct AppsView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        if let selectedApp = viewModel.selectedApp {
+        if let selectedApp = viewModel.selectedApp(for: appState.usageMetricMode) {
             AppDetailView(
                 app: selectedApp,
                 date: appState.selectedDate,
@@ -118,9 +160,18 @@ struct AppsView: View {
                 isLoading: viewModel.isLoadingDetail,
                 setCategory: { cat in
                     if let cat {
-                        viewModel.setOverride(bundleID: selectedApp.bundleID, category: cat, for: appState.selectedDate)
+                        viewModel.setOverride(
+                            bundleID: selectedApp.bundleID,
+                            category: cat,
+                            for: appState.selectedDate,
+                            metricMode: appState.usageMetricMode
+                        )
                     } else {
-                        viewModel.removeOverride(bundleID: selectedApp.bundleID, for: appState.selectedDate)
+                        viewModel.removeOverride(
+                            bundleID: selectedApp.bundleID,
+                            for: appState.selectedDate,
+                            metricMode: appState.usageMetricMode
+                        )
                     }
                 }
             )

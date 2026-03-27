@@ -1,6 +1,6 @@
 # Daylens macOS — Release Testing Checklist
 
-**Last updated: 2026-03-27 (v1.0.21)**
+**Last updated: 2026-03-27 (v1.0.22)**
 
 > Windows testing checklist is in `irachrist1/daylens-windows` repo.
 
@@ -64,6 +64,10 @@ curl -fsSL https://irachrist1.github.io/daylens/install.sh | sh
 - [ ] In-flight session visible in Today and Apps before session ends
 - [ ] Fullscreen video playback stays tracked in the owning app/browser instead of dropping the session during the Space transition
 - [ ] Fullscreen browser playback keeps the active website/domain attributed after the address bar disappears
+- [ ] Settings → Usage Totals lets you switch between `Active Use` and `All Activity`
+- [ ] Today, History, Apps, and the menu bar all update totals consistently after changing the usage-counting preference
+- [ ] Website totals remain cumulative by domain when switching tabs/pages and Browser Groups matches the same totals per browser
+- [ ] Launching a second Daylens instance shows a tracking warning instead of silently writing duplicate sessions
 
 ## Focus Planning & Reports
 

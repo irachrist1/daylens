@@ -371,7 +371,7 @@ final class DataLayerTests: XCTestCase {
         XCTAssertEqual(github?.totalDuration ?? 0, 240, accuracy: 0.001)
     }
 
-    func testAppUsageSummariesMergeShortSameAppGaps() throws {
+    func testAppUsageSummariesDoNotFabricateShortSameAppGaps() throws {
         let database = try AppDatabase.inMemory()
         let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_710_600_000))
 
@@ -403,12 +403,100 @@ final class DataLayerTests: XCTestCase {
 
         let summaries = try database.appUsageSummaries(for: day)
         XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.sessionCount, 2)
+        XCTAssertEqual(summaries.first?.totalDuration ?? 0, 296, accuracy: 0.001)
+
+        let timeline = try database.timelineEvents(for: day)
+        XCTAssertEqual(timeline.count, 2)
+        XCTAssertEqual(timeline.reduce(0) { $0 + $1.duration }, 296, accuracy: 0.001)
+    }
+
+    func testAppUsageSummariesUnionOverlappingDuplicateSessions() throws {
+        let database = try AppDatabase.inMemory()
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_710_650_000))
+
+        try database.insertAppSession(
+            AppSession(
+                date: day,
+                bundleID: "com.google.Chrome",
+                appName: "Chrome",
+                startTime: day.addingTimeInterval(0),
+                endTime: day.addingTimeInterval(300),
+                duration: 300,
+                category: .browsing,
+                isBrowser: true
+            )
+        )
+
+        try database.insertAppSession(
+            AppSession(
+                date: day,
+                bundleID: "com.google.Chrome",
+                appName: "Chrome",
+                startTime: day.addingTimeInterval(60),
+                endTime: day.addingTimeInterval(240),
+                duration: 180,
+                category: .browsing,
+                isBrowser: true
+            )
+        )
+
+        let summaries = try database.appUsageSummaries(for: day, profile: .appleLike)
+        XCTAssertEqual(summaries.count, 1)
         XCTAssertEqual(summaries.first?.sessionCount, 1)
         XCTAssertEqual(summaries.first?.totalDuration ?? 0, 300, accuracy: 0.001)
 
-        let timeline = try database.timelineEvents(for: day)
+        let timeline = try database.appSessions(for: day, bundleID: "com.google.Chrome", profile: .appleLike)
         XCTAssertEqual(timeline.count, 1)
         XCTAssertEqual(timeline.first?.duration ?? 0, 300, accuracy: 0.001)
+    }
+
+    func testAppleLikeUsageRetainsIdleForegroundCoverage() throws {
+        let database = try AppDatabase.inMemory()
+        let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: 1_710_680_000))
+
+        try database.insertAppSession(
+            AppSession(
+                date: day,
+                bundleID: "com.google.Chrome",
+                appName: "Chrome",
+                startTime: day.addingTimeInterval(0),
+                endTime: day.addingTimeInterval(600),
+                duration: 600,
+                category: .browsing,
+                isBrowser: true
+            )
+        )
+
+        try database.insertEvent(
+            ActivityEvent(
+                timestamp: day.addingTimeInterval(120),
+                eventType: .idleStart,
+                bundleID: "com.google.Chrome",
+                appName: "Chrome",
+                isIdle: true,
+                confidence: .high,
+                source: .idle
+            )
+        )
+
+        try database.insertEvent(
+            ActivityEvent(
+                timestamp: day.addingTimeInterval(420),
+                eventType: .idleEnd,
+                bundleID: "com.google.Chrome",
+                appName: "Chrome",
+                isIdle: true,
+                confidence: .high,
+                source: .idle
+            )
+        )
+
+        let meaningful = try database.appUsageSummaries(for: day, profile: .meaningful)
+        let appleLike = try database.appUsageSummaries(for: day, profile: .appleLike)
+
+        XCTAssertEqual(meaningful.first?.totalDuration ?? 0, 300, accuracy: 0.001)
+        XCTAssertEqual(appleLike.first?.totalDuration ?? 0, 600, accuracy: 0.001)
     }
 
     func testFocusSessionsPersistAndReload() throws {

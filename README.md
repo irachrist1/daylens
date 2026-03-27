@@ -76,12 +76,12 @@ Daylens reads browser history databases stored on your Mac to recover website vi
 - `Cmd` + `T` jumps back to today
 - `Shift` + `Cmd` + `P` toggles tracking
 
-## What’s New in 1.0.21
+## What’s New in 1.0.22
 
-- Rebuilt Focus tab with drag-to-plan focus blocks, inline editing, and a persistent “what are you working on?” intent bar
-- Weekly report generation with optional AI enhancement and a split-detail Reports view
-- Notification controls for daily digests, context-switch nudges, and test notifications
-- Richer profile setup/editing with multi-select roles, more goal presets, and a reset option that preserves tracked activity
+- New Settings control for how totals are counted: `Active Use` for active interaction only, or `All Activity` for all foreground time
+- Totals now normalize overlapping and passive foreground time more reliably, reducing gaps caused by missed app transitions
+- Website totals stay cumulative by domain and now show browser-group breakdowns instead of being overwritten by the current page
+- GitHub Actions CI now runs automatically on pushes and pull requests to `main`
 
 ## FAQ
 

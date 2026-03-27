@@ -44,7 +44,8 @@ struct HistoryView: View {
                         ForEach(viewModel.days) { day in
                             DayRow(
                                 snapshot: day,
-                                isSelected: viewModel.selectedDate == day.date
+                                isSelected: viewModel.selectedDate == day.date,
+                                mode: appState.usageMetricMode
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -105,6 +106,12 @@ struct HistoryView: View {
                         RecentSessionsCard(summaries: filteredSummaries)
                         if shouldShowTopWebsites {
                             topWebsitesSection
+                            if !viewModel.browserSummaries.isEmpty {
+                                BrowserGroupsCard(
+                                    browsers: viewModel.browserSummaries,
+                                    websites: visibleSites
+                                )
+                            }
                         }
                     }
                 }
@@ -121,8 +128,9 @@ struct HistoryView: View {
 
     private var visibleAppSummaries: [AppUsageSummary] {
         let prefs = appState.preferencesService
-        guard let prefs else { return viewModel.appSummaries }
-        return viewModel.appSummaries.filter { !prefs.isAppHidden($0.bundleID) }
+        let summaries = viewModel.displayAppSummaries(for: appState.usageMetricMode)
+        guard let prefs else { return summaries }
+        return summaries.filter { !prefs.isAppHidden($0.bundleID) }
     }
 
     private var filteredSummaries: [AppUsageSummary] {
@@ -167,8 +175,8 @@ struct HistoryView: View {
                 .tracking(1.0)
                 .foregroundStyle(DS.onSurfaceVariant)
 
-            if !viewModel.appSummaries.isEmpty {
-                Text("\(viewModel.totalActiveTime) active")
+            if !visibleAppSummaries.isEmpty {
+                Text("\(viewModel.totalActiveTime(for: appState.usageMetricMode)) active")
                     .font(.system(size: 40, weight: .bold, design: .default).monospacedDigit())
                     .foregroundStyle(DS.onSurface)
                     .tracking(-0.8)
@@ -371,6 +379,7 @@ private struct FilterPill: View {
 struct DayRow: View {
     let snapshot: DaySummarySnapshot
     let isSelected: Bool
+    let mode: UsageMetricMode
 
     var body: some View {
         HStack(spacing: DS.space12) {
@@ -387,7 +396,7 @@ struct DayRow: View {
             Spacer(minLength: 0)
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text(snapshot.formattedActiveTime)
+                Text(snapshot.formattedActiveTime(for: mode))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
                     .foregroundStyle(isSelected ? DS.primary : DS.onSurface)
 

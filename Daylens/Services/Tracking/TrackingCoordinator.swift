@@ -16,12 +16,17 @@ final class TrackingCoordinator {
     let sessionNormalizer: SessionNormalizer
     let permissionManager: PermissionManager
     let aiService: AIService?
+    private let trackerLease: TrackerLease?
 
     var trackingState: TrackingState = .idle
+    var trackerOwnershipWarning: String?
 
     /// Forwards the in-flight session from the underlying activity tracker.
     var currentSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
         activityTracker.currentSessionInfo
+    }
+    var currentVisibleSessionInfo: (bundleID: String, appName: String, startedAt: Date)? {
+        activityTracker.visibleSessionInfo
     }
     var currentWebVisitInfo: (domain: String, url: String?, title: String?, startedAt: Date, browserBundleID: String)? {
         guard let domain = currentWebDomain,
@@ -61,6 +66,11 @@ final class TrackingCoordinator {
         self.browserHistoryReader = BrowserHistoryReader(database: database)
         self.accessibilityService = AccessibilityService()
         self.sessionNormalizer = SessionNormalizer(database: database)
+        if let supportDirectoryURL = database.supportDirectoryURL {
+            self.trackerLease = TrackerLease(directoryURL: supportDirectoryURL)
+        } else {
+            self.trackerLease = nil
+        }
     }
 
     deinit {
@@ -73,7 +83,15 @@ final class TrackingCoordinator {
             return
         }
 
+        if let conflict = trackerLease?.acquire() {
+            trackerOwnershipWarning = conflict.message
+            trackingState = .error(conflict.message)
+            logger.error("Tracking disabled because another instance owns the tracker lease: \(conflict.message, privacy: .public)")
+            return
+        }
+
         logger.info("TrackingCoordinator starting tracking pipeline")
+        trackerOwnershipWarning = nil
 
         // Start core app tracking (always available via NSWorkspace)
         activityTracker.start()
@@ -121,6 +139,7 @@ final class TrackingCoordinator {
         debouncedSummaryWork = nil
         isPausedForSystemIdle = false
         isHoldingFullscreenIdleSession = false
+        trackerLease?.release()
         trackingState = .paused
     }
 
@@ -176,6 +195,7 @@ final class TrackingCoordinator {
 
     func handleIdleStateChange(_ isIdle: Bool, keepTrackingDuringIdle: Bool? = nil) {
         if isIdle {
+            recordIdleEvent(type: .idleStart)
             if keepTrackingDuringIdle ?? shouldKeepTrackingDuringSystemIdle() {
                 if !isHoldingFullscreenIdleSession {
                     logger.info("Idle detected while the frontmost window is fullscreen; keeping the passive session open")
@@ -193,6 +213,7 @@ final class TrackingCoordinator {
         }
 
         isHoldingFullscreenIdleSession = false
+        recordIdleEvent(type: .idleEnd)
         resumeAfterSystemIdleIfNeeded()
     }
 
@@ -378,6 +399,19 @@ final class TrackingCoordinator {
         logger.info("Idle cleared; resuming activity tracker")
         activityTracker.resumeFromIdle()
         isPausedForSystemIdle = false
+    }
+
+    private func recordIdleEvent(type: ActivityEvent.EventType) {
+        let event = ActivityEvent(
+            timestamp: Date(),
+            eventType: type,
+            bundleID: currentVisibleSessionInfo?.bundleID ?? "system.idle",
+            appName: currentVisibleSessionInfo?.appName ?? "Idle",
+            isIdle: true,
+            confidence: .high,
+            source: .idle
+        )
+        try? database.insertEvent(event)
     }
 
     private func generateBlockLabels(for date: Date, aiService: AIService) async {

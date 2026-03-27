@@ -4,6 +4,7 @@ import Observation
 @Observable
 final class TodayViewModel {
     var appSummaries: [AppUsageSummary] = []
+    var appleLikeAppSummaries: [AppUsageSummary] = []
     var websiteSummaries: [WebsiteUsageSummary] = []
     var browserSummaries: [BrowserUsageSummary] = []
     var dailySummary: DailySummary?
@@ -20,9 +21,12 @@ final class TodayViewModel {
     /// latest DB snapshot. This prevents injectLiveSession from accumulating
     /// duration on top of a previously-injected value each timer tick.
     private var liveSessionBase: [String: TimeInterval] = [:]
+    private var liveAppleLikeSessionBase: [String: TimeInterval] = [:]
     private var liveWebsiteBase: [String: TimeInterval] = [:]
+    private var liveWebsiteBrowserBase: [String: TimeInterval] = [:]
     private var cachedOverrides: [String: AppCategory] = [:]
     private let blockLabelCache: BlockLabelCache
+    var usageMetrics = DayUsageMetrics(meaningfulTotal: 0, appleLikeTotal: 0)
 
     init(
         database: AppDatabase? = AppDatabase.shared,
@@ -37,7 +41,9 @@ final class TodayViewModel {
         error = nil
         isViewingToday = Calendar.current.isDateInToday(date)
         liveSessionBase = [:]  // Reset so next inject uses fresh DB totals as base.
+        liveAppleLikeSessionBase = [:]
         liveWebsiteBase = [:]
+        liveWebsiteBrowserBase = [:]
 
         Task { @MainActor in
             do {
@@ -61,14 +67,18 @@ final class TodayViewModel {
                     )
                 }.value
                 liveSessionBase = [:]  // Also reset after the async load completes.
+                liveAppleLikeSessionBase = [:]
                 liveWebsiteBase = [:]
+                liveWebsiteBrowserBase = [:]
                 cachedOverrides = payload.day.categoryOverrides
                 appSummaries = payload.day.appSummaries
+                appleLikeAppSummaries = payload.day.appleLikeAppSummaries
                 websiteSummaries = payload.day.websiteSummaries
                 browserSummaries = payload.day.browserSummaries
                 timeline = payload.day.timeline
                 workBlocks = payload.workBlocks
                 dailySummary = payload.day.dailySummary
+                usageMetrics = payload.day.usageMetrics
                 weeklyScores = payload.weeklyScores
                 aiSummary = dailySummary?.aiSummary
             } catch {
@@ -127,7 +137,13 @@ final class TodayViewModel {
     /// Merges the currently-active (unfinalised) app session into summaries so the
     /// frontmost app always appears even before the user switches away from it.
     /// Uses a stable DB base duration so repeated timer-tick calls don't compound.
-    func injectLiveSession(bundleID: String, appName: String, startedAt: Date) {
+    func injectLiveSession(
+        bundleID: String,
+        appName: String,
+        startedAt: Date,
+        includeInMeaningful: Bool = true,
+        includeInAppleLike: Bool = true
+    ) {
         guard isViewingToday else { return }
         let now = Date()
         let liveDuration = now.timeIntervalSince(startedAt)
@@ -135,33 +151,28 @@ final class TodayViewModel {
         let category = cachedOverrides[bundleID] ?? AppCategory.categorize(bundleID: bundleID, appName: appName)
         let isBrowser = Constants.knownBrowserBundleIDs.contains(bundleID)
 
-        if let idx = appSummaries.firstIndex(where: { $0.bundleID == bundleID }) {
-            let existing = appSummaries[idx]
-            // Latch the DB total on first inject; reuse it on every subsequent call
-            // so we always display (dbBase + liveDuration) — not an accumulation.
-            let base = liveSessionBase[bundleID, default: existing.totalDuration]
-            liveSessionBase[bundleID] = base
-            appSummaries[idx] = AppUsageSummary(
-                bundleID: existing.bundleID,
-                appName: existing.appName,
-                totalDuration: base + liveDuration,
-                sessionCount: existing.sessionCount,
-                category: existing.category,
-                isBrowser: existing.isBrowser
-            )
-        } else {
-            // For a brand-new app (no DB sessions yet) the base is 0 — the DB contributed
-            // nothing. Latching 0 means subsequent ticks display (0 + freshLiveDuration)
-            // rather than (initialLiveDuration + freshLiveDuration) which would double-count.
-            liveSessionBase[bundleID] = 0
-            appSummaries.append(AppUsageSummary(
+        if includeInMeaningful {
+            injectLiveSession(
+                into: &appSummaries,
+                baseStore: &liveSessionBase,
                 bundleID: bundleID,
                 appName: appName,
-                totalDuration: liveDuration,
-                sessionCount: 1,
+                liveDuration: liveDuration,
                 category: category,
                 isBrowser: isBrowser
-            ))
+            )
+        }
+
+        if includeInAppleLike {
+            injectLiveSession(
+                into: &appleLikeAppSummaries,
+                baseStore: &liveAppleLikeSessionBase,
+                bundleID: bundleID,
+                appName: appName,
+                liveDuration: liveDuration,
+                category: category,
+                isBrowser: isBrowser
+            )
         }
 
         upsertLiveTimelineSession(
@@ -191,16 +202,26 @@ final class TodayViewModel {
             let existing = websiteSummaries[idx]
             let base = liveWebsiteBase[domain, default: existing.totalDuration]
             liveWebsiteBase[domain] = base
+            let browserBreakdowns = updatedBrowserBreakdowns(
+                existing.browserBreakdowns,
+                domain: domain,
+                browserBundleID: browserBundleID,
+                title: title ?? url,
+                liveDuration: liveDuration
+            )
             websiteSummaries[idx] = WebsiteUsageSummary(
                 domain: existing.domain,
                 totalDuration: base + liveDuration,
                 visitCount: existing.visitCount,
-                topPageTitle: existing.topPageTitle ?? title ?? url,
+                topPageTitle: existing.representativePageTitle ?? title ?? url,
                 confidence: existing.confidence,
-                browserName: existing.browserName
+                browserName: existing.browserName,
+                activePageTitle: title ?? url,
+                browserBreakdowns: browserBreakdowns
             )
         } else {
             liveWebsiteBase[domain] = 0
+            liveWebsiteBrowserBase[websiteBrowserBaseKey(domain: domain, browserBundleID: browserBundleID)] = 0
             websiteSummaries.append(
                 WebsiteUsageSummary(
                     domain: domain,
@@ -208,7 +229,17 @@ final class TodayViewModel {
                     visitCount: 1,
                     topPageTitle: title ?? url,
                     confidence: .medium,
-                    browserName: Constants.browserNames[browserBundleID] ?? "Browser"
+                    browserName: Constants.browserNames[browserBundleID] ?? "Browser",
+                    activePageTitle: title ?? url,
+                    browserBreakdowns: [
+                        WebsiteBrowserBreakdown(
+                            browserBundleID: browserBundleID,
+                            browserName: Constants.browserNames[browserBundleID] ?? "Browser",
+                            totalDuration: liveDuration,
+                            representativePageTitle: title ?? url,
+                            activePageTitle: title ?? url
+                        )
+                    ]
                 )
             )
         }
@@ -253,6 +284,19 @@ final class TodayViewModel {
         return dailySummary?.formattedActiveTime ?? "0m"
     }
 
+    func totalActiveTime(for mode: UsageMetricMode) -> String {
+        let summaries = displayAppSummaries(for: mode)
+        let total = summaries.reduce(0.0) { $0 + $1.totalDuration }
+        if total > 0 {
+            let hours = Int(total) / 3600
+            let minutes = (Int(total) % 3600) / 60
+            if hours > 0 { return "\(hours)h \(minutes)m" }
+            if minutes > 0 { return "\(minutes)m" }
+            return "\(Int(total) % 60)s"
+        }
+        return dailySummary?.formattedActiveTime ?? "0m"
+    }
+
     var focusScoreText: String {
         if !isViewingToday, let summary = dailySummary, summary.focusScore >= 0.01 {
             return "\(summary.focusScorePercent)%"
@@ -280,6 +324,15 @@ final class TodayViewModel {
 
     var categorySummaries: [CategoryUsageSummary] {
         SemanticUsageRollups.categorySummaries(from: appSummaries)
+    }
+
+    func displayAppSummaries(for mode: UsageMetricMode) -> [AppUsageSummary] {
+        switch mode {
+        case .meaningful:
+            return appSummaries
+        case .appleLike:
+            return appleLikeAppSummaries
+        }
     }
 
     var weeklyScores: [DaySummarySnapshot] = []
@@ -372,6 +425,89 @@ final class TodayViewModel {
 
     private func currentLiveSessionStartedAt() -> Date? {
         timeline.last(where: { $0.id == nil })?.startTime
+    }
+
+    private func injectLiveSession(
+        into summaries: inout [AppUsageSummary],
+        baseStore: inout [String: TimeInterval],
+        bundleID: String,
+        appName: String,
+        liveDuration: TimeInterval,
+        category: AppCategory,
+        isBrowser: Bool
+    ) {
+        if let idx = summaries.firstIndex(where: { $0.bundleID == bundleID }) {
+            let existing = summaries[idx]
+            let base = baseStore[bundleID, default: existing.totalDuration]
+            baseStore[bundleID] = base
+            summaries[idx] = AppUsageSummary(
+                bundleID: existing.bundleID,
+                appName: existing.appName,
+                totalDuration: base + liveDuration,
+                sessionCount: existing.sessionCount,
+                category: existing.category,
+                isBrowser: existing.isBrowser
+            )
+        } else {
+            baseStore[bundleID] = 0
+            summaries.append(AppUsageSummary(
+                bundleID: bundleID,
+                appName: appName,
+                totalDuration: liveDuration,
+                sessionCount: 1,
+                category: category,
+                isBrowser: isBrowser
+            ))
+        }
+
+        summaries.sort { lhs, rhs in
+            if lhs.totalDuration == rhs.totalDuration {
+                return lhs.appName.localizedCaseInsensitiveCompare(rhs.appName) == .orderedAscending
+            }
+            return lhs.totalDuration > rhs.totalDuration
+        }
+    }
+
+    private func updatedBrowserBreakdowns(
+        _ breakdowns: [WebsiteBrowserBreakdown],
+        domain: String,
+        browserBundleID: String,
+        title: String?,
+        liveDuration: TimeInterval
+    ) -> [WebsiteBrowserBreakdown] {
+        let browserName = Constants.browserNames[browserBundleID] ?? "Browser"
+        let key = websiteBrowserBaseKey(domain: domain, browserBundleID: browserBundleID)
+
+        if let existingBreakdown = breakdowns.first(where: { $0.browserBundleID == browserBundleID }) {
+            let base = liveWebsiteBrowserBase[key, default: existingBreakdown.totalDuration]
+            liveWebsiteBrowserBase[key] = base
+
+            return breakdowns.map { breakdown in
+                guard breakdown.browserBundleID == browserBundleID else { return breakdown }
+                return WebsiteBrowserBreakdown(
+                    browserBundleID: breakdown.browserBundleID,
+                    browserName: breakdown.browserName,
+                    totalDuration: base + liveDuration,
+                    representativePageTitle: breakdown.representativePageTitle,
+                    activePageTitle: title
+                )
+            }
+        }
+
+        liveWebsiteBrowserBase[key] = 0
+        return breakdowns + [
+            WebsiteBrowserBreakdown(
+                browserBundleID: browserBundleID,
+                browserName: browserName,
+                totalDuration: liveDuration,
+                representativePageTitle: title,
+                activePageTitle: title
+            )
+        ]
+    }
+
+    private func websiteBrowserBaseKey(domain: String, browserBundleID: String) -> String {
+        "\(domain)||\(browserBundleID)"
     }
 
     private static func buildWorkBlocks(

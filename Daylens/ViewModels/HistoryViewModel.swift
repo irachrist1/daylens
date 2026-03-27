@@ -6,6 +6,7 @@ import OSLog
 struct DaySummarySnapshot: Identifiable {
     let date: Date
     let totalActiveTime: TimeInterval
+    let appleLikeTotalActiveTime: TimeInterval
     let appCount: Int
     let topAppName: String?
     let topAppBundleID: String?
@@ -13,9 +14,39 @@ struct DaySummarySnapshot: Identifiable {
 
     var id: Date { date }
 
+    init(
+        date: Date,
+        totalActiveTime: TimeInterval,
+        appleLikeTotalActiveTime: TimeInterval? = nil,
+        appCount: Int,
+        topAppName: String?,
+        topAppBundleID: String?,
+        focusScore: Double = 0
+    ) {
+        self.date = date
+        self.totalActiveTime = totalActiveTime
+        self.appleLikeTotalActiveTime = appleLikeTotalActiveTime ?? totalActiveTime
+        self.appCount = appCount
+        self.topAppName = topAppName
+        self.topAppBundleID = topAppBundleID
+        self.focusScore = focusScore
+    }
+
     var formattedActiveTime: String {
-        let hours = Int(totalActiveTime) / 3600
-        let minutes = (Int(totalActiveTime) % 3600) / 60
+        formattedActiveTime(for: .meaningful)
+    }
+
+    func formattedActiveTime(for mode: UsageMetricMode) -> String {
+        let value: TimeInterval
+        switch mode {
+        case .meaningful:
+            value = totalActiveTime
+        case .appleLike:
+            value = appleLikeTotalActiveTime
+        }
+
+        let hours = Int(value) / 3600
+        let minutes = (Int(value) % 3600) / 60
         if hours > 0 { return "\(hours)h \(minutes)m" }
         if minutes > 0 { return "\(minutes)m" }
         return "<1m"
@@ -35,12 +66,14 @@ final class HistoryViewModel {
 
     // Detail state for the selected day
     var appSummaries: [AppUsageSummary] = []
+    var appleLikeAppSummaries: [AppUsageSummary] = []
     var websiteSummaries: [WebsiteUsageSummary] = []
     var browserSummaries: [BrowserUsageSummary] = []
     var timeline: [AppSession] = []
     var workBlocks: [WorkContextBlock] = []
     var dailySummary: DailySummary?
     var isLoadingDetail: Bool = false
+    var usageMetrics = DayUsageMetrics(meaningfulTotal: 0, appleLikeTotal: 0)
 
     // Summary state
     var summaryText: String?
@@ -111,11 +144,13 @@ final class HistoryViewModel {
                 }.value
 
                 appSummaries = payload.day.appSummaries
+                appleLikeAppSummaries = payload.day.appleLikeAppSummaries
                 websiteSummaries = payload.day.websiteSummaries
                 browserSummaries = payload.day.browserSummaries
                 timeline = payload.day.timeline
                 workBlocks = payload.workBlocks
                 dailySummary = payload.day.dailySummary
+                usageMetrics = payload.day.usageMetrics
 
                 // Load persisted summary or generate a local one
                 if let existing = payload.day.dailySummary?.aiSummary, !existing.isEmpty {
@@ -131,6 +166,7 @@ final class HistoryViewModel {
                 }
             } catch {
                 appSummaries = []
+                appleLikeAppSummaries = []
                 websiteSummaries = []
                 browserSummaries = []
                 timeline = []
@@ -222,8 +258,30 @@ final class HistoryViewModel {
         return dailySummary?.formattedActiveTime ?? "0m"
     }
 
+    func totalActiveTime(for mode: UsageMetricMode) -> String {
+        let summaries = displayAppSummaries(for: mode)
+        let total = summaries.reduce(0.0) { $0 + $1.totalDuration }
+        if total > 0 {
+            let hours = Int(total) / 3600
+            let minutes = (Int(total) % 3600) / 60
+            if hours > 0 { return "\(hours)h \(minutes)m" }
+            if minutes > 0 { return "\(minutes)m" }
+            return "\(Int(total) % 60)s"
+        }
+        return dailySummary?.formattedActiveTime ?? "0m"
+    }
+
     var categorySummaries: [CategoryUsageSummary] {
         SemanticUsageRollups.categorySummaries(from: appSummaries)
+    }
+
+    func displayAppSummaries(for mode: UsageMetricMode) -> [AppUsageSummary] {
+        switch mode {
+        case .meaningful:
+            return appSummaries
+        case .appleLike:
+            return appleLikeAppSummaries
+        }
     }
 
     var focusScoreText: String {

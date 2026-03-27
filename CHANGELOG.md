@@ -2,6 +2,22 @@
 
 All notable changes to Daylens are documented in this file.
 
+## [1.0.22] - 2026-03-27
+
+### Added
+- A new Settings preference for how totals are counted, with plain-language choices for `Active Use` and `All Activity`
+- A standard GitHub Actions CI workflow that runs `swift test` and an Xcode app build on pushes and pull requests targeting `main`
+
+### Changed
+- Today, History, and Apps now read the usage-counting preference from Settings instead of showing the toggle inline in each view
+- Usage totals now support both active-only and all-foreground counting while keeping focus score and insights grounded in active use
+- Website/domain presentation now keeps cumulative domain totals stable and shows browser-group breakdowns instead of replacing totals with the current page only
+
+### Fixed
+- Xcode project membership now includes the new usage-metric and tracking helper files, eliminating the missing-type build errors in the app target
+- Duplicate Daylens instances now refuse to track the same database at the same time and surface a warning instead of corrupting totals
+- Passive foreground viewing and missed focus transitions no longer create large gaps in all-activity totals
+
 ## [1.0.21] - 2026-03-27
 
 ### Added

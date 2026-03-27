@@ -57,6 +57,25 @@ struct MainShell: View {
                     .padding(.bottom, showsDateNavigation ? DS.space8 : DS.space10)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            if let trackerWarning = appState.trackingCoordinator?.trackerOwnershipWarning {
+                HStack(spacing: DS.space10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(DS.error)
+                    Text(trackerWarning)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(DS.onSurface)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, DS.space16)
+                .padding(.vertical, DS.space10)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.radiusLarge, style: .continuous)
+                        .fill(DS.error.opacity(0.10))
+                )
+                .padding(.horizontal, DS.space24)
+                .padding(.bottom, showsDateNavigation ? DS.space8 : DS.space10)
+            }
             if showsDateNavigation {
                 HeaderBar()
                     .padding(.bottom, DS.space4)

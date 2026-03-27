@@ -216,9 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         todaySummaryTask = Task { [weak self] in
+            let mode = self?.appState?.usageMetricMode ?? .meaningful
             let summary = await Task.detached(priority: .utility) {
                 let today = Calendar.current.startOfDay(for: Date())
-                guard let summaries = try? db.appUsageSummaries(for: today), !summaries.isEmpty else {
+                guard let summaries = try? db.appUsageSummaries(for: today, profile: mode), !summaries.isEmpty else {
                     return MenuTodaySummary(activeTime: nil, topApps: [])
                 }
 
