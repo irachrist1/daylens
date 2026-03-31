@@ -455,7 +455,7 @@ export default function Today() {
         <div style={{
           padding: '32px 40px 0',
           display: 'grid',
-          gridTemplateColumns: '4fr 8fr',
+          gridTemplateColumns: 'minmax(min-content, 4fr) minmax(0, 8fr)',
           gap: 24,
         }}>
 
@@ -1036,7 +1036,7 @@ function LoadingSkeleton() {
     <div style={{ padding: '32px 40px', maxWidth: 900, margin: '0 auto' }}>
       <div style={{ height: 20, borderRadius: 8, marginBottom: 20, background: 'var(--color-surface-high)', opacity: 0.5, width: '30%' }} />
       <div style={{ height: 44, borderRadius: 8, marginBottom: 28, background: 'var(--color-surface-high)', opacity: 0.5, width: '70%' }} />
-      <div style={{ display: 'grid', gridTemplateColumns: '4fr 8fr', gap: 24, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(256px, 4fr) minmax(0, 8fr)', gap: 24, marginBottom: 24 }}>
         <div style={{ height: 320, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
         <div style={{ height: 320, borderRadius: 12, background: 'var(--color-surface-high)', opacity: 0.5 }} />
       </div>
