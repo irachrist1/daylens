@@ -20,6 +20,14 @@ function hasColumn(table: string, column: string): boolean {
   return rows.some((row) => row.name === column)
 }
 
+function getTableSql(table: string): string | null {
+  const db = getDb()
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(table) as { sql: string | null } | undefined
+  return row?.sql ?? null
+}
+
 const migrations: Migration[] = [
   {
     version: 1,
@@ -85,11 +93,24 @@ const migrations: Migration[] = [
     description: 'Add visit_time_us column and richer UNIQUE constraint to website_visits',
     up: () => {
       const db = getDb()
-      // Add visit_time_us column (microsecond timestamp from source browser)
-      db.exec(`ALTER TABLE website_visits ADD COLUMN visit_time_us INTEGER NOT NULL DEFAULT 0`)
+      const hasVisitTimeUs = hasColumn('website_visits', 'visit_time_us')
+      const websiteVisitsSql = getTableSql('website_visits') ?? ''
+      const hasCorrectUniqueConstraint = /UNIQUE\s*\(\s*browser_bundle_id\s*,\s*visit_time_us\s*,\s*url\s*\)/i.test(
+        websiteVisitsSql
+      )
+
+      // Fresh installs already get the correct v5 shape from SCHEMA_SQL.
+      if (hasVisitTimeUs && hasCorrectUniqueConstraint) return
+
+      if (!hasVisitTimeUs) {
+        // Add visit_time_us column (microsecond timestamp from source browser)
+        db.exec(`ALTER TABLE website_visits ADD COLUMN visit_time_us INTEGER NOT NULL DEFAULT 0`)
+      }
+
       // Drop the old (browser_bundle_id, visit_time) unique constraint by recreating the table.
       // SQLite does not support DROP CONSTRAINT — we rename, copy, drop old, create index.
       db.exec(`
+        DROP TABLE IF EXISTS website_visits_new;
         CREATE TABLE website_visits_new (
           id                INTEGER PRIMARY KEY AUTOINCREMENT,
           domain            TEXT    NOT NULL,
@@ -104,7 +125,19 @@ const migrations: Migration[] = [
         );
         INSERT OR IGNORE INTO website_visits_new
           (id, domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
-        SELECT id, domain, page_title, url, visit_time, visit_time * 1000, duration_sec, browser_bundle_id, source
+        SELECT
+          id,
+          domain,
+          page_title,
+          url,
+          visit_time,
+          CASE
+            WHEN visit_time_us IS NOT NULL AND visit_time_us != 0 THEN visit_time_us
+            ELSE visit_time * 1000
+          END,
+          duration_sec,
+          browser_bundle_id,
+          source
         FROM website_visits;
         DROP TABLE website_visits;
         ALTER TABLE website_visits_new RENAME TO website_visits;
