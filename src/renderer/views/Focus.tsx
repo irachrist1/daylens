@@ -380,7 +380,7 @@ export default function Focus() {
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)',
+          gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 0.8fr)',
           gap: 18,
           alignItems: 'stretch',
         }}>
@@ -390,21 +390,22 @@ export default function Focus() {
             padding: 28,
             border: '1px solid var(--color-border-ghost)',
             boxShadow: 'var(--color-shadow-soft)',
-            display: 'grid',
-            gridTemplateColumns: 'minmax(240px, 300px) minmax(0, 1fr)',
+            display: 'flex',
+            flexWrap: 'wrap',
             gap: 24,
           }}>
             <div style={{
               borderRadius: 12,
               background: 'linear-gradient(180deg, var(--color-surface-low), var(--color-surface))',
-              padding: 20,
+              padding: '20px 16px',
               border: '1px solid var(--color-border-ghost)',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 12,
-              minHeight: 280,
+              minHeight: 260,
+              flex: '1 1 208px',
             }}>
               <div style={{
                 width: 176,
@@ -473,7 +474,7 @@ export default function Focus() {
               )}
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18, flex: '1 1 200px', minWidth: 0 }}>
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
