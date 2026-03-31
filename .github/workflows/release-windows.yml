@@ -105,16 +105,14 @@ jobs:
           body: |
             ## Daylens ${{ steps.meta.outputs.version }} for Windows
 
-            Your personal activity analyst — now on Windows.
+            Your personal activity analyst for Windows.
 
             Daylens watches the apps, browsers, and websites you use throughout the day, then turns that activity into grounded AI insight. Everything stays on your machine. No subscription, no cloud. Analytics are opt-in and disabled by default.
 
-            ### What's new in ${{ steps.meta.outputs.version }}
-            - **Real app icons** — taskbar and Start menu icons for every tracked app (no more initials)
-            - **Category overrides** — click any category badge in Apps view to reassign it; pencil icon makes it discoverable
-            - **History week view** — 7-day bar chart with per-day category colors; click a bar to drill into that day
-            - **In-app updates** — banner appears and prompts restart when a new version downloads automatically
-            - **Feedback** — NPS prompt after 7 days; "Send feedback" button in Settings
+            ### Included in this release
+            - NSIS installer for Windows 10+ (64-bit)
+            - GitHub Releases metadata for in-app updates (`latest.yml` and blockmap assets)
+            - All app code required for onboarding, tracking, insights, and the web companion flow
 
             ### Install
 
@@ -122,9 +120,9 @@ jobs:
             2. Run the installer
             3. Launch Daylens from the Desktop shortcut or Start menu
 
-            ### System requirements
-            - Windows 10 or later (64-bit)
-            - Internet connection only for AI features (Claude API key required for Insights)
+            ### Update
+
+            Existing installs can pick this up through the in-app updater once the app checks GitHub Releases and downloads the new version in the background.
 
             ### Also available
             - **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)

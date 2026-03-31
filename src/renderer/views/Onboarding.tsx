@@ -212,6 +212,8 @@ function Screen3({
   onLaunchOnLoginChange,
   onFinish,
   onSkip,
+  saving,
+  errorMessage,
 }: {
   apiKey: string
   onApiKeyChange: (v: string) => void
@@ -219,6 +221,8 @@ function Screen3({
   onLaunchOnLoginChange: (v: boolean) => void
   onFinish: () => void
   onSkip: () => void
+  saving: boolean
+  errorMessage: string | null
 }) {
   const [showKey, setShowKey] = useState(false)
 
@@ -240,9 +244,11 @@ function Screen3({
             placeholder="sk-ant-…"
             className="onboarding-input"
             style={{ paddingRight: 44 }}
+            disabled={saving}
           />
           <button
             onClick={() => setShowKey((v) => !v)}
+            disabled={saving}
             style={{
               position: 'absolute',
               right: 12,
@@ -279,22 +285,25 @@ function Screen3({
         </button>
       </div>
 
+      {errorMessage && <p className="onboarding-error">{errorMessage}</p>}
+
       <label className="onboarding-checkbox-row">
         <input
           type="checkbox"
           checked={launchOnLogin}
           onChange={(e) => onLaunchOnLoginChange(e.target.checked)}
           className="onboarding-checkbox"
+          disabled={saving}
         />
         <span className="onboarding-checkbox-label">Launch Daylens when I log in</span>
       </label>
 
-      <button onClick={onFinish} className="onboarding-btn-primary">
-        Open Daylens
+      <button onClick={onFinish} className="onboarding-btn-primary" disabled={saving}>
+        {saving ? 'Saving…' : 'Open Daylens'}
       </button>
 
-      <button onClick={onSkip} className="onboarding-btn-skip">
-        Skip for now
+      <button onClick={onSkip} className="onboarding-btn-skip" disabled={saving}>
+        {saving ? 'Saving…' : 'Skip for now'}
       </button>
     </div>
   )
@@ -309,6 +318,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [goals, setGoals]         = useState<Set<string>>(new Set())
   const [apiKey, setApiKey]       = useState('')
   const [launchOnLogin, setLaunchOnLogin] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [finishError, setFinishError] = useState<string | null>(null)
 
   function transition(next: 1 | 2 | 3) {
     setExiting(true)
@@ -328,17 +339,27 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   }
 
   async function finish(skipApiKey = false) {
+    if (saving) return
     const key = skipApiKey ? '' : apiKey.trim()
-    track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key })
-    if (key) track('api_key_saved', {})
-    await ipc.settings.set({
-      onboardingComplete: true,
-      userName: name.trim(),
-      userGoals: Array.from(goals),
-      launchOnLogin,
-    })
-    if (key) await ipc.settings.setApiKey(key)
-    onComplete()
+    setSaving(true)
+    setFinishError(null)
+
+    try {
+      if (key) await ipc.settings.setApiKey(key)
+      await ipc.settings.set({
+        onboardingComplete: true,
+        userName: name.trim(),
+        userGoals: Array.from(goals),
+        launchOnLogin,
+      })
+      track('onboarding_completed', { goals: Array.from(goals), api_key_entered: !!key })
+      if (key) track('api_key_saved', {})
+      onComplete()
+    } catch (err) {
+      setFinishError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -382,6 +403,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
             onLaunchOnLoginChange={setLaunchOnLogin}
             onFinish={() => void finish(false)}
             onSkip={() => void finish(true)}
+            saving={saving}
+            errorMessage={finishError}
           />
         )}
       </div>
@@ -524,6 +547,11 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           font-size: 12px;
           color: #3d5568;
           margin: -6px 0;
+        }
+        .onboarding-error {
+          font-size: 12px;
+          color: #fca5a5;
+          margin: -4px 0 0;
         }
         .onboarding-external-link {
           background: none;

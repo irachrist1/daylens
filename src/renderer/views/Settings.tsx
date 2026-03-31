@@ -46,6 +46,9 @@ interface LinkResult {
   linkToken: string
 }
 
+const WINDOWS_RELEASES_URL = 'https://github.com/irachrist1/daylens-windows/releases/latest'
+const WEB_COMPANION_LINK_URL = 'https://christian-tonny.dev/daylens/link'
+
 // ─── Section helpers ───────────────────────────────────────────────────────────
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -332,7 +335,7 @@ export default function Settings() {
               Daylens {debug.updateAvailable} is available
             </span>
             <button
-              onClick={() => ipc.shell.openExternal('https://daylens.app')}
+              onClick={() => ipc.shell.openExternal(WINDOWS_RELEASES_URL)}
               style={{
                 fontSize: 12, fontWeight: 700, color: 'var(--color-primary-contrast)', background: 'var(--gradient-primary)',
                 border: 'none', cursor: 'pointer', borderRadius: 8, padding: '5px 14px',
@@ -788,8 +791,8 @@ export default function Settings() {
                       </div>
                       <p style={{ fontSize: 10, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
                         Paste at{' '}
-                        <button onClick={() => ipc.shell.openExternal('https://daylens-web.vercel.app/link')} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, textDecoration: 'underline' }}>
-                          daylens-web.vercel.app/link
+                        <button onClick={() => ipc.shell.openExternal(WEB_COMPANION_LINK_URL)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, textDecoration: 'underline' }}>
+                          christian-tonny.dev/daylens/link
                         </button>
                         {' '}· Expires in 5 minutes
                       </p>

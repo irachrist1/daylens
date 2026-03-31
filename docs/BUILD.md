@@ -55,6 +55,8 @@ The Vite configs are shared between electron-forge (dev) and electron-builder (p
 | File | Description |
 |---|---|
 | `Daylens-{version}-Setup.exe` | NSIS installer — creates Start menu + Desktop shortcuts |
+| `latest.yml` | Windows auto-update metadata consumed by `electron-updater` |
+| `Daylens-{version}-Setup.exe.blockmap` | Differential-update metadata for the installer |
 
 ## Release workflow (GitHub Actions)
 
@@ -65,19 +67,19 @@ Steps:
 2. `npm ci --ignore-scripts`
 3. `electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar` — rebuilds native modules against Electron's Node ABI
 4. Three Vite builds (with `STANDALONE_BUILD=1`)
-5. `electron-builder --win --publish never`
-6. `softprops/action-gh-release@v2` creates the GitHub release with the installer artifact
+5. `electron-builder --win --publish always` — publishes the installer plus `latest.yml`/blockmap metadata to GitHub Releases
+6. `softprops/action-gh-release@v2` finalises the tagged GitHub release page
 
 Workflow file: `.github/workflows/release-windows.yml`
 
 ## Tagging convention
 
-- Windows releases: `v0.x.y-win`
+- Windows releases: `v1.x.y-win`
 - macOS releases (separate repo): `v1.x.y` — never mix versioning
 
 ```bash
-git tag v0.1.5-win
-git push origin v0.1.5-win
+git tag v1.0.13-win
+git push origin v1.0.13-win
 ```
 
 ## Known CI issues resolved
