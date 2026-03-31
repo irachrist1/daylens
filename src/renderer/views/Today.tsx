@@ -596,6 +596,7 @@ export default function Today() {
                   fontSize: 18,
                   fontWeight: 900,
                   letterSpacing: '-0.02em',
+                  whiteSpace: 'nowrap',
                 }}>
                   {yesterdayFocusScore > 0 ? `${yesterdayFocusScore}%` : 'No data'}
                 </span>
