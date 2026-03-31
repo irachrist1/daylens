@@ -1,4 +1,4 @@
-# Current Status — 2026-03-22
+# Current Status — 2026-03-31
 
 ## What's shipped
 
@@ -6,26 +6,26 @@ Windows releases are published at https://github.com/irachrist1/daylens-windows/
 
 Core features currently shipped:
 - Active window tracking (5 s poll, three-state idle detection, session flush)
-- Browser history ingestion (Chrome, Edge, Brave on Windows) with navigation-gap duration estimation
+- Browser history ingestion (Chrome, Edge, Brave, and Firefox profile discovery on Windows) with navigation-gap duration estimation
 - Focus session timer
 - AI insights chat (Anthropic API, streaming)
 - System tray (hide-to-tray, single-instance lock)
-- Settings (API key, theme, launch-on-login)
+- Settings (API key, theme, launch-on-login, web companion linking)
 - NSIS installer via electron-builder
+- In-app update checks via `electron-updater` and GitHub Releases metadata
 - Unified focus score calculator shared across daily summaries, exports, and AI context
 - Same-app session merge (15s gap tolerance) to reduce polling noise
+- First-run onboarding with optional AI key capture and safer completion handling
 
 ### Release health
 - `v0.1.6-win` is a bad Windows installer build: it emits the Electron main process as ESM while the packaged runtime still expects CommonJS semantics on first launch.
 - The fix is to emit the standalone main bundle as CommonJS and keep the app free of Squirrel-only startup hooks, which are not used by the NSIS installer path.
+- Fresh-install schema drift around `website_visits.visit_time_us` is now guarded in the migration path so the latest source can boot cleanly on new databases and partially upgraded ones.
 
 ## What's not done / known gaps
 
 ### Browser tracking — Windows paths not verified in production
 `services/browser.ts` has Windows paths stubbed (`windowsBrowsers()`) but they have not been tested on a real Windows machine. The macOS paths are battle-tested; Windows ones are inferred from known Chromium defaults. Worth verifying on first real-user report.
-
-### Firefox not supported
-Firefox uses a profile-based SQLite layout that differs from Chromium. Currently filtered out. Would need a profile-discovery step before the history read.
 
 ### ARM64 Windows builds not available
 `@paymoapp/active-window` has no prebuilt Windows ARM64 binaries. Building from source via node-gyp fails on Python 3.12+ (`distutils` removed). Options if ARM64 is needed:
@@ -33,8 +33,8 @@ Firefox uses a profile-based SQLite layout that differs from Chromium. Currently
 2. Switch to an alternative active-window library that ships ARM64 binaries
 3. Wait for `@paymoapp/active-window` to add ARM64 prebuild
 
-### No auto-update
-No auto-update or electron-updater wired up. Users must manually download new releases. Would need a code-signing certificate before this is worth implementing.
+### In-app updates depend on GitHub release metadata
+Installed apps can check GitHub Releases and download updates in-app, but the release workflow must publish `latest.yml` and the installer artifacts successfully for updates to appear.
 
 ### No code signing
 The Windows installer is unsigned — Windows Defender / SmartScreen will show a warning on first run. Users must click "More info → Run anyway". Signing requires an EV certificate (~$300/yr).

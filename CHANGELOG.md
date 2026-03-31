@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.13 - 2026-03-31
+
+- Fixed the `visit_time_us` schema migration path so fresh installs and partially upgraded databases no longer fail on startup with a duplicate-column error.
+- Hardened onboarding completion so API-key persistence failures surface to the user instead of leaving first-run state half-saved.
+- Updated in-app update and web-companion links to point at the canonical Windows release and web-linking destinations.
+- Aligned the public web copy with the actual Windows flow: short onboarding, token-based web linking, and background tracking after setup.
+
 ## v1.2.0 - 2026-03-24
 
 Full redesign to the Stitch Intelligent Monolith design language across every view.
