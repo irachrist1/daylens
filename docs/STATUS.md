@@ -40,6 +40,13 @@ Installed apps can check GitHub Releases and download updates in-app, but the re
 ### Update installs now create a local backup
 Before Daylens hands control to the installer, it now creates a rotating backup of the app `userData` directory under `pre-update-backups/` so local history has a recovery path if an update goes wrong.
 
+### AI provider caveats now documented more explicitly
+Launch-prep work on the macOS app surfaced several provider rules that also apply to Windows as the AI layer evolves:
+- Model selection must be stored per provider, not globally, or the UI will show stale models when switching between Anthropic/API and CLI-backed providers.
+- CLI providers should be treated as local subprocesses with request-count and latency telemetry only. They do not currently expose reliable token usage, prompt-cache accounting, or per-request billing.
+- Daily budget guards should pause background AI synthesis only. Interactive chat should remain available even after the background cap is reached.
+- Anthropic prompt caching only pays off when the prompt is split into a stable cacheable prefix plus a volatile activity payload. Retrying validation failures should append feedback after the dynamic payload.
+
 ### No code signing
 The Windows installer is unsigned — Windows Defender / SmartScreen will show a warning on first run. Users must click "More info → Run anyway". Signing requires an EV certificate (~$300/yr).
 
