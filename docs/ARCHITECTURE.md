@@ -9,7 +9,7 @@ main process  (Node.js / Electron)
   ├── services/
   │   ├── tracking.ts     — polls @paymoapp/active-window every 5 s, flushes to DB
   │   ├── browser.ts      — polls Chromium browser history SQLite every 60 s
-  │   ├── ai.ts           — Anthropic SDK, streaming chat with activity context
+  │   ├── ai.ts           — provider bridge for AI chat and timeline analysis
   │   ├── database.ts     — better-sqlite3 singleton, runs schema migrations
   │   ├── snapshotExporter.ts — builds the shared DaySnapshot payload for web sync
   │   ├── syncUploader.ts — uploads snapshots to Convex on a 5-minute cadence
@@ -60,3 +60,12 @@ All channels are declared as constants in `src/shared/types.ts` under the `IPC` 
 - **Custom title bar** (`titleBarStyle: 'hidden'`) — renderer owns all chrome. Window controls (minimize/maximize/close) are handled via IPC (`window:minimize` etc.).
 - **Hide-to-tray on close** — `win.on('close')` is cancelled unless `isQuitting` is set; real quit only via tray menu.
 - **Shared snapshot contract** — Windows exports the same `DaySnapshot` shape as macOS, including per-domain `topPages`, so the web dashboard can merge both platforms consistently.
+
+## AI implementation caveats learned during launch prep
+
+- **Provider state must be provider-specific.** Model selection cannot be stored as a single global value once the app supports API keys plus local CLI providers. Each provider needs its own saved default model, and the UI must refresh immediately when the provider changes.
+- **CLI providers are not API-equivalent.** Claude Code CLI and Codex CLI should be treated as local subprocess providers, not as drop-in Anthropic/OpenAI API replacements. They do not expose per-request token counts, prompt-cache usage, or reliable per-call billing data, and they do not support true streaming in the same way the API path does.
+- **Billing UI must stay honest.** For CLI-backed providers, usage views should show request count and latency only and label billing as included with the subscription instead of inventing estimated cost numbers.
+- **Budget guards should pause background work, not chat.** The daily AI spend cap should stop background synthesis work such as timeline labeling or notification generation once the cap is reached, while keeping interactive chat available.
+- **Prompt caching depends on prompt shape.** The Anthropic path gets the best cache hit behavior when stable instructions live in a cacheable prefix and the volatile activity payload is appended afterward. Retry feedback should stay outside the cached prefix so failures do not poison reuse.
+- **Missing CLIs must degrade gracefully.** If a selected local provider binary is missing, the app should warn clearly, provide install guidance, and fall back safely instead of leaving the AI surface in a half-configured state.

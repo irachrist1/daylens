@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.17 - 2026-04-02
+
+- Documented launch-readiness caveats for the upcoming multi-provider AI layer, especially separate saved models per provider and honest CLI-provider billing/usage behavior.
+- Captured that Claude Code CLI and Codex CLI should be treated as local subprocess providers with no true streaming, no prompt-cache telemetry, and no reliable per-request token billing.
+- Added implementation guidance that daily AI budget guards should pause background synthesis only, while interactive chat stays available.
+- Added prompt-caching guidance for timeline analysis: keep stable instructions in a cacheable prefix, append volatile activity payloads afterward, and place retry feedback outside the cached prefix.
+
 ## v1.0.16 - 2026-04-01
 
 - Added macOS-style timeline blocks in History, with grouped work-context blocks, evidence popovers, and day-level timeline filtering.

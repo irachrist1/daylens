@@ -6,3 +6,4 @@ dist-release/
 *.log
 .DS_Store
 private/
+docs/improvement-plan.md
