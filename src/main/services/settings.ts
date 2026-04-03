@@ -30,6 +30,7 @@ const DEFAULTS: AppSettings = {
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
+  defaultFocusMinutes: 50,
 }
 
 export function getSettings(): AppSettings {
@@ -54,6 +55,7 @@ export function getSettings(): AppSettings {
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
+    defaultFocusMinutes: (_store.get('defaultFocusMinutes', 50) as number),
   }
 }
 
