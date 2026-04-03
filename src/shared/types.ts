@@ -193,6 +193,7 @@ export interface AppSettings {
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   focusIntent?: string
+  defaultFocusMinutes?: number
 }
 
 // In-flight session that has not yet been flushed to the DB.

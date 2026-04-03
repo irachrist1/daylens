@@ -209,14 +209,33 @@ function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 
 
 function isQuotaOrAuthError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
-  const maybeError = error as { status?: number; code?: string; type?: string; error?: { code?: string; status?: string; type?: string } }
+  const maybeError = error as { status?: number; code?: string; type?: string; error?: { code?: string | number; status?: string; type?: string } }
   return maybeError.status === 401
     || maybeError.status === 403
     || maybeError.status === 429
     || maybeError.code === 'insufficient_quota'
     || maybeError.type === 'insufficient_quota'
     || maybeError.error?.code === 'insufficient_quota'
+    || maybeError.error?.code === 429
     || maybeError.error?.status === 'RESOURCE_EXHAUSTED'
+}
+
+function friendlyProviderError(error: unknown, providerLabel: string): Error {
+  if (!error || typeof error !== 'object') {
+    return new Error(`${providerLabel} request failed. Please try again.`)
+  }
+  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; message?: string } }
+
+  // Rate limit / quota exhausted
+  const status = maybeError.status ?? maybeError.error?.code
+  if (status === 429 || maybeError.error?.status === 'RESOURCE_EXHAUSTED') {
+    return new Error(`${providerLabel} quota exceeded. You've hit the free-tier limit — check your plan at the provider's dashboard, or switch AI providers in Settings.`)
+  }
+  // Auth failure
+  if (status === 401 || status === 403) {
+    return new Error(`${providerLabel} rejected the API key. Please check it in Settings.`)
+  }
+  return new Error(`${providerLabel} request failed. Please try again.`)
 }
 
 async function sendWithFallback(
@@ -226,6 +245,7 @@ async function sendWithFallback(
 ): Promise<{ text: string; config: ResolvedProviderConfig }> {
   const configs = await resolveProviderConfigs()
   let lastError: unknown = null
+  let lastConfig: ResolvedProviderConfig | null = null
 
   for (const config of configs) {
     try {
@@ -233,17 +253,31 @@ async function sendWithFallback(
       return { text, config }
     } catch (error) {
       lastError = error
+      lastConfig = config
       if (!isQuotaOrAuthError(error)) {
         throw error
       }
     }
   }
 
-  throw lastError ?? new Error('No AI provider could satisfy the request')
+  const label = lastConfig ? providerLabel(lastConfig.provider) : 'AI provider'
+  throw friendlyProviderError(lastError, label)
 }
 
 function googleHistoryFromMessages(messages: ConversationMessage[]): GoogleContent[] {
-  return messages.map((message) => ({
+  // Google requires strictly alternating user/model roles.
+  // Strip consecutive same-role messages, keeping only the last one in each run
+  // so corrupted histories (e.g. from a prior failed request) don't break the call.
+  const filtered: ConversationMessage[] = []
+  for (const message of messages) {
+    const last = filtered[filtered.length - 1]
+    if (last && last.role === message.role) {
+      filtered[filtered.length - 1] = message
+    } else {
+      filtered.push(message)
+    }
+  }
+  return filtered.map((message) => ({
     role: message.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: message.content }],
   }))
@@ -316,7 +350,16 @@ async function sendWithGoogle(
   })
 
   const response = await chat.sendMessage({ message: userMessage })
-  return response.text ?? ''
+  let text: string
+  try {
+    text = response.text ?? ''
+  } catch {
+    throw new Error('Gemini blocked the response. Try rephrasing or switch AI provider in Settings.')
+  }
+  if (!text) {
+    throw new Error('Gemini returned an empty response. Try rephrasing your question.')
+  }
+  return text
 }
 
 async function runCLIProvider(
@@ -972,11 +1015,8 @@ export async function sendMessage(userMessage: string): Promise<string> {
     return routed.answer
   }
 
-  appendConversationMessage(db, conversationId, 'user', userMessage)
-
   const history = getConversationMessages(db, conversationId)
-  // Last message is the one we just inserted — send all but that as prior context
-  const prior = history.slice(0, -1)
+  const prior = history
 
   const dayContext = buildDayContext()
   const specificTimeContext = buildSpecificTimeContext(userMessage)
@@ -1007,6 +1047,7 @@ export async function sendMessage(userMessage: string): Promise<string> {
 
   const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
 
+  appendConversationMessage(db, conversationId, 'user', userMessage)
   appendConversationMessage(db, conversationId, 'assistant', assistantText)
   conversationTemporalContext.set(conversationId, {
     date: new Date(),

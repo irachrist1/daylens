@@ -230,9 +230,10 @@ export default function Focus() {
     // Load persisted intent + distraction threshold once on mount
     ipc.settings.get().then((s) => {
       if (cancelled) return
-      const settings = s as { focusIntent?: string; distractionAlertThresholdMinutes?: number }
+      const settings = s as { focusIntent?: string; distractionAlertThresholdMinutes?: number; defaultFocusMinutes?: number }
       if (settings.focusIntent) setLabel(settings.focusIntent)
       if (settings.distractionAlertThresholdMinutes != null) setDistractionThreshold(settings.distractionAlertThresholdMinutes)
+      if (settings.defaultFocusMinutes != null) setTargetMinutes(settings.defaultFocusMinutes)
     }).catch(() => {})
 
     void refresh()
@@ -640,7 +641,10 @@ export default function Focus() {
                         return (
                           <button
                             key={preset}
-                            onClick={() => setTargetMinutes(preset)}
+                            onClick={() => {
+                              setTargetMinutes(preset)
+                              void ipc.settings.set({ defaultFocusMinutes: preset })
+                            }}
                             style={{
                               minWidth: 88,
                               height: 42,

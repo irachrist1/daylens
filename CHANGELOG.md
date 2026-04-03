@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.19 - 2026-04-03
+
+### Fixed
+- CLI providers (Claude Code CLI, Codex CLI) no longer require an API key to use the Ask Daylens chat — the API key gate now correctly bypasses itself when the selected provider is CLI-based
+- Gemini responses were silently failing or returning empty placeholder answers ("Tracked facts / Suggestions" with no content) due to history corruption: when any API call failed, the user message was written to the database before a response arrived, leaving an orphaned entry with no assistant reply; subsequent requests sent this invalid consecutive-role history to the Google API, which rejects non-alternating sequences and returns nothing — fixed by writing user and assistant messages together only after a successful response
+- Google chat history is now sanitized before each request to strip any consecutive same-role messages left by prior failures, so existing corrupted conversations recover automatically
+- Gemini blocked or empty responses now surface a clear error message instead of showing a blank chat bubble
+- 429 quota-exhausted and auth errors from AI providers now show a readable message (e.g. "Google Gemini quota exceeded — check your plan") instead of the raw JSON error blob
+- Changing the focus timer duration in the Focus tab (e.g. from 50 to 25 minutes) now updates the sidebar immediately: the selected value is persisted to settings and the sidebar reads it on its next poll, so the description, sprint label, and quick-start button all reflect the correct duration
+
 ## v1.0.18 - 2026-04-02
 
 ### Fixed

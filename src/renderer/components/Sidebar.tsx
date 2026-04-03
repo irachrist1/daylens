@@ -135,21 +135,25 @@ export default function Sidebar() {
   const [elapsed, setElapsed] = useState(0)
   const [todayApps, setTodayApps] = useState<AppUsageSummary[]>([])
   const [live, setLive] = useState<LiveSession | null>(null)
+  const [defaultFocusMinutes, setDefaultFocusMinutes] = useState(50)
 
   useEffect(() => {
     let cancelled = false
 
     const refreshActive = async () => {
       try {
-        const [session, summaries, liveSession] = await Promise.all([
+        const [session, summaries, liveSession, settings] = await Promise.all([
           window.daylens.focus.getActive(),
           window.daylens.db.getToday(),
           window.daylens.tracking.getLiveSession(),
+          window.daylens.settings.get(),
         ])
         if (!cancelled) {
           setActiveSession((session as FocusSession | null) ?? null)
           setTodayApps(summaries as AppUsageSummary[])
           setLive((liveSession as LiveSession | null) ?? null)
+          const mins = (settings as { defaultFocusMinutes?: number }).defaultFocusMinutes
+          if (mins != null) setDefaultFocusMinutes(mins)
         }
       } catch {
         if (!cancelled) {
@@ -181,7 +185,7 @@ export default function Sidebar() {
   }, [activeSession])
 
   const quickStartSession = async () => {
-    await window.daylens.focus.start({ targetMinutes: 50, label: null, plannedApps: [] })
+    await window.daylens.focus.start({ targetMinutes: defaultFocusMinutes, label: null, plannedApps: [] })
     const session = await window.daylens.focus.getActive()
     setActiveSession((session as FocusSession | null) ?? null)
   }
@@ -201,7 +205,7 @@ export default function Sidebar() {
         ? `${formatTimer(remainingSeconds)} left`
         : `${formatTimer(elapsed - targetSeconds)} overtime`
       : `${formatTimer(elapsed)} elapsed`
-    : '50-minute sprint'
+    : `${defaultFocusMinutes}-minute sprint`
 
   const metaChips = useMemo(() => {
     if (!activeSession) return []
@@ -290,7 +294,7 @@ export default function Sidebar() {
           <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: 0, lineHeight: 1.6 }}>
             {activeSession
               ? activeSession.label || 'Session running. Open Focus for apps and timer.'
-              : 'Start a 50-minute block. Adjust details in Focus.'}
+              : `Start a ${defaultFocusMinutes}-minute block. Adjust details in Focus.`}
           </p>
 
           {activeSession && metaChips.length > 0 && (

@@ -439,7 +439,8 @@ export default function Insights() {
 
   async function handleSend(text?: string) {
     const message = (text ?? input).trim()
-    if (!message || loading || !hasApiKey) return
+    const isCliProvider = settings?.aiProvider === 'claude-cli' || settings?.aiProvider === 'codex-cli'
+    if (!message || loading || (!hasApiKey && !isCliProvider)) return
     track('insight_generated', { message_length: message.length })
     setInput('')
     setActiveTab('chat')
