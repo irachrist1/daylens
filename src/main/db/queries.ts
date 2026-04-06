@@ -61,6 +61,15 @@ const UX_NOISE_SUBSTRINGS = [
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
 
+export interface WebsiteVisit {
+  domain: string
+  pageTitle: string | null
+  url: string | null
+  visitTime: number
+  durationSeconds: number
+  browserBundleId: string | null
+}
+
 function isUxNoise(appName: string): boolean {
   const lower = appName.toLowerCase()
   return UX_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
@@ -70,6 +79,7 @@ interface AppSessionRow {
   id: number
   bundle_id: string
   app_name: string
+  window_title: string | null
   start_time: number
   end_time: number | null
   duration_sec: number
@@ -83,6 +93,10 @@ function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'du
 
 function appSessionEndTime(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
   return session.endTime ?? (session.startTime + session.durationSeconds * 1_000)
+}
+
+function normalizedWindowTitle(title?: string | null): string {
+  return (title ?? '').replace(/\s+/g, ' ').trim()
 }
 
 function clipRowToRange(
@@ -100,6 +114,7 @@ function clipRowToRange(
     id: row.id,
     bundleId: row.bundle_id,
     appName: resolvedName ?? row.app_name,
+    windowTitle: row.window_title,
     startTime: clippedStart,
     endTime: clippedEnd,
     durationSeconds: Math.max(1, Math.round((clippedEnd - clippedStart) / 1_000)),
@@ -118,7 +133,11 @@ function mergeSessions(sessions: AppSession[]): AppSession[] {
     const last = merged[merged.length - 1]
     const gap = curr.startTime - appSessionEndTime(last)
 
-    if (curr.bundleId === last.bundleId && gap <= SAME_APP_MERGE_GAP_MS) {
+    if (
+      curr.bundleId === last.bundleId
+      && normalizedWindowTitle(curr.windowTitle) === normalizedWindowTitle(last.windowTitle)
+      && gap <= SAME_APP_MERGE_GAP_MS
+    ) {
       const newEnd = Math.max(appSessionEndTime(last), appSessionEndTime(curr))
       last.endTime = newEnd
       last.durationSeconds = Math.max(1, Math.round((newEnd - last.startTime) / 1000))
@@ -206,11 +225,12 @@ export function insertAppSession(
   session: Omit<AppSession, 'id'>,
 ): number {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec, category, is_focused)
-    VALUES (@bundleId, @appName, @startTime, @endTime, @durationSeconds, @category, @isFocused)
+    INSERT OR IGNORE INTO app_sessions (bundle_id, app_name, window_title, start_time, end_time, duration_sec, category, is_focused)
+    VALUES (@bundleId, @appName, @windowTitle, @startTime, @endTime, @durationSeconds, @category, @isFocused)
   `)
   const result = stmt.run({
     ...session,
+    windowTitle: session.windowTitle ?? null,
     isFocused: session.isFocused ? 1 : 0,
   })
   return result.lastInsertRowid as number
@@ -840,6 +860,37 @@ export function getWebsiteSummariesForRange(
     visitCount:      r.visit_count,
     topTitle:        r.top_title,
     browserBundleId: r.browser_id,
+  }))
+}
+
+export function getWebsiteVisitsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): WebsiteVisit[] {
+  const rows = db
+    .prepare<[number, number]>(`
+      SELECT domain, page_title, url, visit_time, duration_sec, browser_bundle_id
+      FROM website_visits
+      WHERE visit_time >= ? AND visit_time < ?
+      ORDER BY visit_time ASC
+    `)
+    .all(fromMs, toMs) as {
+      domain: string
+      page_title: string | null
+      url: string | null
+      visit_time: number
+      duration_sec: number
+      browser_bundle_id: string | null
+    }[]
+
+  return rows.map((row) => ({
+    domain: row.domain,
+    pageTitle: row.page_title,
+    url: row.url,
+    visitTime: row.visit_time,
+    durationSeconds: row.duration_sec,
+    browserBundleId: row.browser_bundle_id,
   }))
 }
 

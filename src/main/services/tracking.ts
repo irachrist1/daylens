@@ -5,6 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { insertAppSession } from '../db/queries'
 import { getDb } from './database'
+import { ingestLiveBrowserContext } from './browser'
+import { getActiveBrowserTabContext } from './browserActiveTab'
 import type { AppCategory, LiveSession } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 
@@ -25,6 +27,7 @@ interface ActiveWinResult {
 interface InFlightSession {
   bundleId: string
   appName: string
+  windowTitle: string | null
   startTime: number
   category: AppCategory
 }
@@ -154,6 +157,14 @@ function deriveWindowIdentity(win: ActiveWinResult): { bundleId: string; appName
   const appName = win.application || exeName || uwpPackage || 'Unknown app'
   const bundleId = win.path || uwpPackage || appName
   return { bundleId, appName }
+}
+
+function normalizeWindowTitle(title: string | null | undefined): string {
+  return (title ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function shouldSplitOnTitleChange(category: AppCategory): boolean {
+  return category !== 'browsing' && category !== 'system'
 }
 
 // ─── OS noise filter ─────────────────────────────────────────────────────────
@@ -333,8 +344,30 @@ async function poll(): Promise<void> {
     // Skip OS infrastructure processes
     if (isOsNoise(bundleId, appName, win.path)) return
 
-    // App switched → flush the previous session
-    if (currentSession && currentSession.bundleId !== bundleId) {
+    const nextCategory = classifyApp(bundleId, appName)
+    let nextWindowTitle = normalizeWindowTitle(win.title)
+    const activeBrowserTab = getActiveBrowserTabContext(bundleId, appName)
+    if (activeBrowserTab) {
+      if (!nextWindowTitle && activeBrowserTab.pageTitle) {
+        nextWindowTitle = normalizeWindowTitle(activeBrowserTab.pageTitle)
+      }
+      ingestLiveBrowserContext({
+        browserBundleId: activeBrowserTab.browserBundleId,
+        url: activeBrowserTab.url,
+        pageTitle: activeBrowserTab.pageTitle,
+        capturedAt: Date.now(),
+        source: 'active_tab',
+      })
+    } else {
+      ingestLiveBrowserContext(null)
+    }
+    const titleChanged = currentSession
+      && currentSession.bundleId === bundleId
+      && shouldSplitOnTitleChange(nextCategory)
+      && normalizeWindowTitle(currentSession.windowTitle) !== nextWindowTitle
+
+    // App switched or the active document/message changed → flush the previous session
+    if (currentSession && (currentSession.bundleId !== bundleId || titleChanged)) {
       flushCurrent()
     }
 
@@ -343,9 +376,12 @@ async function poll(): Promise<void> {
       currentSession = {
         bundleId,
         appName,
+        windowTitle: nextWindowTitle || null,
         startTime: Date.now(),
-        category:  classifyApp(bundleId, appName),
+        category: nextCategory,
       }
+    } else if (!currentSession.windowTitle && nextWindowTitle) {
+      currentSession.windowTitle = nextWindowTitle
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
@@ -375,6 +411,7 @@ function flushCurrent(overrideEndTime?: number): void {
       insertAppSession(getDb(), {
         bundleId:        currentSession.bundleId,
         appName:         currentSession.appName,
+        windowTitle:     currentSession.windowTitle,
         startTime:       currentSession.startTime,
         endTime,
         durationSeconds,

@@ -66,6 +66,23 @@ interface ProcessedHistoryRow {
   durationSec: number
 }
 
+export interface LiveBrowserContext {
+  browserBundleId: string
+  url: string
+  pageTitle: string | null
+  capturedAt: number
+  source: 'active_tab'
+}
+
+interface InFlightBrowserVisit {
+  browserBundleId: string
+  domain: string
+  pageTitle: string | null
+  url: string
+  startTime: number
+  lastSeenAt: number
+}
+
 function macBrowsers(): BrowserEntry[] {
   const home = os.homedir()
   return [
@@ -301,6 +318,7 @@ function processFirefoxRows(rows: FirefoxHistoryRow[]): ProcessedHistoryRow[] {
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let liveBrowserVisit: InFlightBrowserVisit | null = null
 
 // Per-browser cursor: Map<bundleId, last processed visit_time_us as bigint>
 const browserCursors = new Map<string, bigint>()
@@ -328,10 +346,72 @@ export function stopBrowserTracking(): void {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  flushLiveBrowserVisit()
 }
 
 export function getBrowserStatus() {
   return { ...browserStatus }
+}
+
+function flushLiveBrowserVisit(overrideEndTime?: number): void {
+  if (!liveBrowserVisit) return
+
+  const endTime = overrideEndTime ?? liveBrowserVisit.lastSeenAt
+  const durationSec = Math.max(1, Math.round((endTime - liveBrowserVisit.startTime) / 1000))
+  if (durationSec >= 5) {
+    try {
+      insertWebsiteVisit(getDb(), {
+        domain: liveBrowserVisit.domain,
+        pageTitle: liveBrowserVisit.pageTitle,
+        url: liveBrowserVisit.url,
+        visitTime: liveBrowserVisit.startTime,
+        visitTimeUs: BigInt(liveBrowserVisit.startTime) * 1000n,
+        durationSec,
+        browserBundleId: liveBrowserVisit.browserBundleId,
+        source: 'active_tab',
+      })
+      browserStatus.visitsToday += 1
+    } catch (err) {
+      console.warn('[browser] failed to write live browser visit:', err)
+    }
+  }
+
+  liveBrowserVisit = null
+}
+
+export function ingestLiveBrowserContext(context: LiveBrowserContext | null): void {
+  if (!context) {
+    flushLiveBrowserVisit()
+    return
+  }
+
+  const domain = extractDomain(context.url)
+  if (!domain) {
+    flushLiveBrowserVisit()
+    return
+  }
+
+  if (
+    liveBrowserVisit
+    && liveBrowserVisit.browserBundleId === context.browserBundleId
+    && liveBrowserVisit.url === context.url
+  ) {
+    liveBrowserVisit.lastSeenAt = context.capturedAt
+    if (!liveBrowserVisit.pageTitle && context.pageTitle) {
+      liveBrowserVisit.pageTitle = context.pageTitle
+    }
+    return
+  }
+
+  flushLiveBrowserVisit(context.capturedAt)
+  liveBrowserVisit = {
+    browserBundleId: context.browserBundleId,
+    domain,
+    pageTitle: context.pageTitle,
+    url: context.url,
+    startTime: context.capturedAt,
+    lastSeenAt: context.capturedAt,
+  }
 }
 
 // ─── Chromium poll ─────────────────────────────────────────────────────────────

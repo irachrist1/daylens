@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": ".tmp-benchmark",
+    "rootDir": ".",
+    "noEmit": false,
+    "isolatedModules": false,
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": [
+    "scripts/benchmark-ai-workspace.ts",
+    "src/main/db/queries.ts",
+    "src/main/db/schema.ts",
+    "src/main/lib/focusScore.ts",
+    "src/main/lib/insightsQueryRouter.ts",
+    "src/main/lib/localDate.ts",
+    "src/main/lib/workEvidence.ts",
+    "src/shared/types.ts"
+  ]
+}

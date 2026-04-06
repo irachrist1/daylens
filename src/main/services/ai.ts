@@ -24,7 +24,13 @@ import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { getDb } from './database'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
-import type { AIProviderMode, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import type {
+  AIProviderMode,
+  AIReplyPayload,
+  AppCategorySuggestion,
+  WorkContextBlock,
+  WorkContextInsight,
+} from '@shared/types'
 import { fallbackNarrativeForBlock, userVisibleLabelForBlock } from './workBlocks'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
@@ -55,6 +61,123 @@ class CLIProviderError extends Error {
 
 const CLI_TIMEOUT_MS = 180_000
 const conversationTemporalContext = new Map<number, TemporalContext | null>()
+
+function normalizeSuggestion(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function dedupeSuggestions(values: string[], limit = 4): string[] {
+  const unique = values
+    .map(normalizeSuggestion)
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+  return unique.slice(0, limit)
+}
+
+function parseSuggestionBlock(raw: string): AIReplyPayload {
+  const match = raw.match(/```suggestions\s*([\s\S]*?)```/i)
+  if (!match) {
+    return { content: raw.trim(), suggestions: [] }
+  }
+
+  let suggestions: string[] = []
+  try {
+    const parsed = JSON.parse(match[1].trim()) as unknown
+    if (Array.isArray(parsed)) {
+      suggestions = dedupeSuggestions(
+        parsed.filter((value): value is string => typeof value === 'string'),
+      )
+    }
+  } catch {
+    suggestions = []
+  }
+
+  return {
+    content: raw.replace(match[0], '').trim(),
+    suggestions,
+  }
+}
+
+function fallbackSuggestionsForMessage(userMessage: string): string[] {
+  const normalized = userMessage.toLowerCase()
+
+  const quoted = userMessage.match(/["“]([^"”]+)["”]/)?.[1]
+  const acronym = userMessage.match(/\b[A-Z][A-Z0-9&._-]{1,}\b/)?.[0]
+  const entity = quoted || acronym
+  if (entity && (normalized.includes('how much time') || normalized.includes('how many hours') || normalized.includes('how long'))) {
+    return dedupeSuggestions([
+      `Break ${entity} down by app`,
+      `Which ${entity} titles matched?`,
+      `How much ${entity} time was in Outlook?`,
+    ], 3)
+  }
+
+  if (normalized.includes('what was i doing') || normalized.includes('what happened')) {
+    return dedupeSuggestions([
+      'Where did my time go?',
+      'What was I doing then?',
+      'What distracted me?',
+    ], 3)
+  }
+
+  return dedupeSuggestions([
+    'Where did my time go?',
+    'What distracted me?',
+    'What changed most?',
+  ], 3)
+}
+
+function noProviderReply(userMessage: string): AIReplyPayload {
+  const normalized = userMessage.toLowerCase()
+  const content = normalized.includes('what was i working on')
+    || normalized.includes('where did my time go')
+    || normalized.includes('what was i doing')
+    ? 'I can answer exact evidence-based questions from your local data right now, but deeper analysis still needs an AI provider configured in Settings. Try a narrower question like "What was I working on today?" or connect a provider for richer synthesis.'
+    : 'I can still answer exact evidence-based questions from local tracking, but this question needs an AI provider for a fuller answer. Connect Claude, Codex, OpenAI, Anthropic, or Gemini in Settings, or ask a narrower question tied to recorded activity.'
+
+  return {
+    content,
+    suggestions: dedupeSuggestions(fallbackSuggestionsForMessage(userMessage)),
+  }
+}
+
+async function maybeRewriteRoutedAnswer(
+  userMessage: string,
+  routedAnswer: string,
+  prior: ConversationMessage[],
+  suggestions: string[],
+): Promise<AIReplyPayload | null> {
+  try {
+    const providerConfigs = await resolveProviderConfigs()
+    const preferredConfig = providerConfigs[0]
+    const systemPrompt =
+      'You are Daylens, the assistant inside a local activity-tracking app.\n' +
+      'Rewrite grounded evidence into a user-facing answer that feels like a well-informed teammate, not a raw report.\n' +
+      'Rules:\n' +
+      '- Use only the facts explicitly present in the evidence summary\n' +
+      '- Do not add new claims, clients, durations, apps, or interpretations beyond that evidence\n' +
+      '- If the evidence says coverage is partial or insufficient, keep that limitation explicit\n' +
+      '- Keep the answer concise but natural and helpful\n' +
+      '- Never mention databases, routers, prompt rewriting, or internal implementation\n' +
+      `- If asked about the underlying model, say Daylens is currently using ${providerLabel(preferredConfig.provider)} with model ${preferredConfig.model}\n` +
+      '- End substantive answers with a fenced ```suggestions``` block containing a JSON array of 3 short follow-up questions answerable from recorded activity only'
+
+    const rewritePrompt =
+      `User question:\n${userMessage}\n\n` +
+      `Grounded evidence summary:\n${routedAnswer}\n\n` +
+      'Write the final user-facing answer using only that evidence.'
+
+    const { text } = await sendWithFallback(systemPrompt, prior, rewritePrompt)
+    const parsed = parseSuggestionBlock(text)
+    if (!parsed.content.trim()) return null
+    return {
+      content: parsed.content,
+      suggestions: dedupeSuggestions(parsed.suggestions.length > 0 ? parsed.suggestions : suggestions),
+    }
+  } catch {
+    return null
+  }
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -258,7 +381,7 @@ async function sendWithAnthropic(
   const client = new Anthropic({ apiKey: config.apiKey ?? '' })
   const response = await client.messages.create({
     model: config.model,
-    max_tokens: 1024,
+    max_tokens: 4096,
     system: systemPrompt,
     messages: [
       ...prior.map((message) => ({ role: message.role, content: message.content })),
@@ -286,7 +409,7 @@ async function sendWithOpenAI(
       ...prior,
       { role: 'user', content: userMessage },
     ]),
-    max_output_tokens: 1024,
+    max_output_tokens: 4096,
     store: false,
   })
 
@@ -959,7 +1082,7 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
   }
 }
 
-export async function sendMessage(userMessage: string): Promise<string> {
+export async function sendMessage(userMessage: string): Promise<AIReplyPayload> {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
   const previousContext = conversationTemporalContext.get(conversationId) ?? null
@@ -967,9 +1090,21 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const routed = await routeInsightsQuestion(userMessage, new Date(), previousContext, db)
   if (routed) {
     appendConversationMessage(db, conversationId, 'user', userMessage)
-    appendConversationMessage(db, conversationId, 'assistant', routed.answer)
+    const prior = getConversationMessages(db, conversationId).slice(0, -1)
+    const fallbackReply = {
+      content: routed.answer,
+      suggestions: dedupeSuggestions(routed.suggestions ?? fallbackSuggestionsForMessage(userMessage)),
+    }
+    const rewrittenReply = await maybeRewriteRoutedAnswer(
+      userMessage,
+      routed.answer,
+      prior,
+      fallbackReply.suggestions,
+    )
+    const finalReply = rewrittenReply ?? fallbackReply
+    appendConversationMessage(db, conversationId, 'assistant', finalReply.content)
     conversationTemporalContext.set(conversationId, routed.resolvedContext)
-    return routed.answer
+    return finalReply
   }
 
   appendConversationMessage(db, conversationId, 'user', userMessage)
@@ -984,7 +1119,18 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
-  const providerConfigs = await resolveProviderConfigs()
+  let providerConfigs: ResolvedProviderConfig[]
+  try {
+    providerConfigs = await resolveProviderConfigs()
+  } catch {
+    const fallback = noProviderReply(userMessage)
+    appendConversationMessage(db, conversationId, 'assistant', fallback.content)
+    conversationTemporalContext.set(conversationId, {
+      date: new Date(),
+      timeWindow: null,
+    })
+    return fallback
+  }
   const preferredConfig = providerConfigs[0]
   const systemPrompt =
     persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
@@ -999,20 +1145,27 @@ export async function sendMessage(userMessage: string): Promise<string> {
     '- Treat website timing as approximate browser evidence unless the question is only about websites\n' +
     '- If you include recommendations, clearly label them as suggestions\n' +
     '- Prefer short headings like "Tracked facts" and "Suggestions" when both are present\n' +
-    '- Keep responses concise and grounded\n\n' +
+    '- Match response length to the question. Simple factual questions can be answered in 1-3 sentences. Breakdown, analysis, or drill-down requests deserve full structured answers, without filler and without truncating useful insight\n' +
+    '- End substantive answers with a fenced ```suggestions``` block that contains a JSON array of 3 short follow-up questions\n' +
+    '- Suggestion questions must be answerable from recorded local activity only\n' +
+    '- Keep suggestion questions specific to the latest answer and do not repeat them in the main body\n\n' +
     (dayContext
       ? `Tracked local data context:\n${dayContext}`
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
     (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
 
   const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
+  const parsed = parseSuggestionBlock(assistantText)
 
-  appendConversationMessage(db, conversationId, 'assistant', assistantText)
+  appendConversationMessage(db, conversationId, 'assistant', parsed.content)
   conversationTemporalContext.set(conversationId, {
     date: new Date(),
     timeWindow: null,
   })
-  return assistantText
+  return {
+    content: parsed.content,
+    suggestions: dedupeSuggestions(parsed.suggestions.length > 0 ? parsed.suggestions : fallbackSuggestionsForMessage(userMessage)),
+  }
 }
 
 export function getAIHistory(): { role: 'user' | 'assistant'; content: string }[] {

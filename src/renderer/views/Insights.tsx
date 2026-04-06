@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { AIProvider, AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
+import type { AIProvider, AIReplyPayload, AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
 import {
   buildCategoryTotalsFromSummaries,
   calculateFocusTotals,
@@ -379,6 +379,7 @@ function buildWeeklyTrend(
 export default function Insights() {
   const navigate = useNavigate()
   const [messages, setMessages] = useState<Message[]>([])
+  const [suggestions, setSuggestions] = useState<string[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'chat'>('overview')
@@ -417,10 +418,14 @@ export default function Insights() {
         setTodaySessions(sessionData as AppSession[])
         setSettings(currentSettings as AppSettings)
         setWeeklySummary((weekly as WeeklySummary | null) ?? null)
+        if ((history as Message[]).length === 0) {
+          setSuggestions([])
+        }
       } catch (err) {
         if (cancelled) return
         setMessages([{ role: 'assistant', content: 'Error loading insights: ' + String(err) }])
         setHasApiKey(false)
+        setSuggestions([])
       }
     }
 
@@ -435,21 +440,24 @@ export default function Insights() {
   useEffect(() => {
     if (activeTab !== 'chat') return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, activeTab, loading])
+  }, [messages, suggestions, activeTab, loading])
 
   async function handleSend(text?: string) {
     const message = (text ?? input).trim()
-    if (!message || loading || !hasApiKey) return
+    if (!message || loading) return
     track('insight_generated', { message_length: message.length })
     setInput('')
     setActiveTab('chat')
+    setSuggestions([])
     setMessages((prev) => [...prev, { role: 'user', content: message }])
     setLoading(true)
     try {
-      const reply = (await ipc.ai.sendMessage(message)) as string
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }])
+      const reply = (await ipc.ai.sendMessage(message)) as AIReplyPayload
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply.content }])
+      setSuggestions(reply.suggestions ?? [])
     } catch (err) {
       setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: ' + String(err) }])
+      setSuggestions([])
     } finally {
       setLoading(false)
     }
@@ -479,8 +487,7 @@ export default function Insights() {
   const todayLabel = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
 
   // ── Render ────────────────────────────────────────────────────────────────
-  const isCliProvider = settings.aiProvider === 'claude-cli' || settings.aiProvider === 'codex-cli'
-  const showChatInput = hasApiKey === true || isCliProvider
+  const showChatInput = true
 
   const peakInsight = algorithmicInsights.find((i) => i.key === 'peak-hours')
   const peakHourText = peakInsight ? peakInsight.headline : null
@@ -496,8 +503,6 @@ export default function Insights() {
   const maxSparkVal = Math.max(...weeklyTrend.map((day) => day.focusSeconds), 1)
 
   const focusQuality = focusPct >= 70 ? 'Peak Velocity' : focusPct >= 40 ? 'Building Momentum' : 'Getting Started'
-  const providerMeta = AI_PROVIDER_META[settings.aiProvider]
-
   const firstInsight = algorithmicInsights[0]
   const lastAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
 
@@ -894,7 +899,10 @@ export default function Insights() {
               )}
               {messages.length > 0 && (
                 <button
-                  onClick={() => void ipc.ai.clearHistory().then(() => setMessages([]))}
+                  onClick={() => void ipc.ai.clearHistory().then(() => {
+                    setMessages([])
+                    setSuggestions([])
+                  })}
                   style={{
                     fontSize: 11, fontWeight: 700, background: 'none', border: 'none',
                     cursor: 'pointer', color: 'var(--color-text-secondary)',
@@ -909,42 +917,6 @@ export default function Insights() {
               )}
             </div>
 
-            {/* No API key state */}
-            {!showChatInput && (
-              <div style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                gap: 14, padding: '40px 0', textAlign: 'center',
-              }}>
-                <div style={{
-                  width: 44, height: 44, borderRadius: 12,
-                  background: 'var(--color-accent-dim)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: 'var(--color-primary)',
-                }}>
-                  <IconSparkle />
-                </div>
-                <div>
-                  <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>
-                    Ask about your day
-                  </p>
-                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 260, margin: '0 auto' }}>
-                    Add your {providerMeta.label} API key to ask questions about your productivity.
-                  </p>
-                </div>
-                <Link
-                  to="/settings"
-                  style={{
-                    padding: '9px 20px', borderRadius: 8,
-                    background: 'var(--gradient-primary)',
-                    color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700, textDecoration: 'none',
-                  }}
-                >
-                  Add API key →
-                </Link>
-              </div>
-            )}
-
-            {/* Chat with API key or CLI */}
             {showChatInput && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                 {/* Empty state */}
@@ -1008,40 +980,6 @@ export default function Insights() {
                           borderBottom: i < messages.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
                         }}>
                           <MarkdownMessage content={msg.content} />
-                          {/* Follow-up chips after last assistant message */}
-                          {i === messages.length - 1 && !loading && (
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                              {[
-                                'What changed most?',
-                                'Where did my time go?',
-                                ...(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b(morning|afternoon|evening)\b/i.test(msg.content)
-                                  ? ['What was I doing then?'] : []),
-                              ].map((chip) => (
-                                <button
-                                  key={chip}
-                                  onClick={() => void handleSend(chip)}
-                                  style={{
-                                    padding: '5px 12px', borderRadius: 999, fontSize: 12,
-                                    border: '1px solid var(--color-border-ghost)',
-                                    background: 'transparent',
-                                    color: 'var(--color-text-secondary)',
-                                    cursor: 'pointer', fontFamily: 'inherit',
-                                    transition: 'border-color 120ms, color 120ms',
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    e.currentTarget.style.borderColor = 'var(--color-primary)'
-                                    e.currentTarget.style.color = 'var(--color-primary)'
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.borderColor = 'var(--color-border-ghost)'
-                                    e.currentTarget.style.color = 'var(--color-text-secondary)'
-                                  }}
-                                >
-                                  {chip}
-                                </button>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       </div>
                     )
@@ -1068,6 +1006,35 @@ export default function Insights() {
                           />
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {!loading && suggestions.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 4 }}>
+                      {suggestions.map((chip) => (
+                        <button
+                          key={chip}
+                          onClick={() => void handleSend(chip)}
+                          style={{
+                            padding: '5px 12px', borderRadius: 999, fontSize: 12,
+                            border: '1px solid var(--color-border-ghost)',
+                            background: 'transparent',
+                            color: 'var(--color-text-secondary)',
+                            cursor: 'pointer', fontFamily: 'inherit',
+                            transition: 'border-color 120ms, color 120ms',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--color-primary)'
+                            e.currentTarget.style.color = 'var(--color-primary)'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.borderColor = 'var(--color-border-ghost)'
+                            e.currentTarget.style.color = 'var(--color-text-secondary)'
+                          }}
+                        >
+                          {chip}
+                        </button>
+                      ))}
                     </div>
                   )}
                   <div ref={bottomRef} />
@@ -1133,7 +1100,7 @@ export default function Insights() {
                   ? 'Exact answers use local data. Analysis uses your OpenAI subscription.'
                   : hasApiKey
                     ? `Exact answers use local data. Analysis uses your ${AI_PROVIDER_META[settings.aiProvider as AIProvider].label} key.`
-                    : 'Exact answers use local data. Connect AI in Settings for deeper analysis.'}
+                    : 'Exact answers use local data. Connect AI in Settings for richer analysis and follow-up.'}
             </p>
           </div>
         </div>
