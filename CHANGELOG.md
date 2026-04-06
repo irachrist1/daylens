@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.19 - 2026-04-06
+## v1.0.23 - 2026-04-06
 
 ### Added
 - Added a repeatable AI workspace benchmark harness and QA/release docs so benchmark prompts can be exercised against grounded seeded evidence before shipping
