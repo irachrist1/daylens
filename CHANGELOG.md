@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.19 - 2026-04-06
+
+### Added
+- Added a repeatable AI workspace benchmark harness and QA/release docs so benchmark prompts can be exercised against grounded seeded evidence before shipping
+- Added live Safari active-tab capture on macOS so current browser title and URL can be written into `website_visits` even when Safari history is unavailable to the app
+
+### Changed
+- AI Workspace now stays available for exact local evidence questions even when no provider is configured, and can answer routed questions directly from local tracking
+- Insights routing now handles app-breakdown and title-enumeration follow-ups more naturally, and low-evidence answers stay explicit instead of overstating what Daylens knows
+
+### Fixed
+- Tracking now backfills Safari window titles from the active tab when `active-window` cannot provide them directly
+- Browser evidence is flushed into the local database as real `active_tab` visits so client attribution has a path to browser titles/URLs instead of empty browser sessions
+
 ## v1.0.18 - 2026-04-02
 
 ### Fixed

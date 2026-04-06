@@ -33,6 +33,15 @@ dist/
 
 `electron-builder` then packages `dist/**` + `package.json` into `dist-release/`.
 
+Before treating a build as release-ready, also run:
+
+```bash
+npm run typecheck
+npm run benchmark:ai-workspace
+```
+
+See [QA.md](./QA.md) for the benchmark harness details.
+
 ## Why `STANDALONE_BUILD=1`?
 
 The Vite configs are shared between electron-forge (dev) and electron-builder (prod). The flag switches:
@@ -72,6 +81,8 @@ Steps:
 7. `softprops/action-gh-release@v2` finalises the tagged GitHub release page with install/update notes and release highlights
 
 Workflow file: `.github/workflows/release-windows.yml`
+
+Release-page details and tagging guidance live in [RELEASE_RUNBOOK.md](./RELEASE_RUNBOOK.md).
 
 ## Tagging convention
 

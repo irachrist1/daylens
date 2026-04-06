@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS app_sessions (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   bundle_id       TEXT    NOT NULL,
   app_name        TEXT    NOT NULL,
+  window_title    TEXT,
   start_time      INTEGER NOT NULL,
   end_time        INTEGER,
   duration_sec    INTEGER NOT NULL DEFAULT 0,

@@ -6,6 +6,7 @@ export interface AppSession {
   id: number
   bundleId: string          // exe name on Windows, bundle ID on macOS
   appName: string
+  windowTitle?: string | null
   startTime: number         // Unix ms
   endTime: number | null
   durationSeconds: number
@@ -108,6 +109,11 @@ export interface AIMessage {
   timestamp: number
 }
 
+export interface AIReplyPayload {
+  content: string
+  suggestions: string[]
+}
+
 export interface WebsiteSummary {
   domain: string
   totalSeconds: number
@@ -200,6 +206,7 @@ export interface AppSettings {
 export interface LiveSession {
   bundleId: string
   appName: string
+  windowTitle?: string | null
   startTime: number   // Unix ms
   category: AppCategory
 }

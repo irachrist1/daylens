@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "DaylensWindows",
-  "version": "1.0.17",
+  "version": "1.0.19",
   "description": "Activity tracker and AI insights — Windows",
   "main": ".vite/build/main.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
+    "benchmark:ai-workspace": "tsc -p tsconfig.benchmark.json && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/run-benchmark-ai-workspace.mjs",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
     "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",

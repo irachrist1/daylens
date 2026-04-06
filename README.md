@@ -39,6 +39,7 @@ claude mcp add daylens -- npx -y daylens-mcp
 
 ## Development
 
+- Read [docs/BENCHMARK.md](docs/BENCHMARK.md) before changing the insights, AI workspace, tracking, or export pipeline. It defines the product benchmark the system is expected to meet.
 - `npm start` runs the Electron app in development mode.
 - `npm run typecheck` checks TypeScript without emitting build output.
 - `npm run build:all` builds the main, preload, and renderer bundles.

@@ -176,6 +176,7 @@ function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSe
       id: -1,
       bundleId: live.bundleId,
       appName: live.appName,
+      windowTitle: live.windowTitle ?? null,
       startTime: live.startTime,
       endTime,
       durationSeconds: Math.max(1, Math.round((endTime - live.startTime) / 1000)),

@@ -2,6 +2,8 @@
 
 Read this before touching anything. This is the most important document in the codebase.
 
+Also read [docs/BENCHMARK.md](/Users/tonny/Dev-Personal/daylens-windows/docs/BENCHMARK.md) before building. That file defines the product benchmark every implementation must be judged against.
+
 ---
 
 ## What every other tool gets wrong

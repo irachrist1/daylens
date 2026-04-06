@@ -5,6 +5,7 @@ import type {
   AppSettings,
   AppCategorySuggestion,
   AIProviderMode,
+  AIReplyPayload,
   BreakRecommendation,
   FocusStartPayload,
   HistoryDayPayload,
@@ -69,7 +70,7 @@ const api = {
       ipcRenderer.invoke(IPC.FOCUS.GET_BREAK_RECOMMENDATION),
   },
   ai: {
-    sendMessage: (message: string) => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
+    sendMessage: (message: string): Promise<AIReplyPayload> => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, message),
     getHistory: () => ipcRenderer.invoke(IPC.AI.GET_HISTORY),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
     detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),

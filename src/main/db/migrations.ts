@@ -227,6 +227,16 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 9,
+    description: 'Add window titles to app sessions for document-level attribution',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('app_sessions', 'window_title')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN window_title TEXT`)
+      }
+    },
+  },
 ]
 
 export function runMigrations(): void {

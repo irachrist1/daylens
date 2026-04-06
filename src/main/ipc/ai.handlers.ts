@@ -8,10 +8,10 @@ import {
   suggestAppCategory,
   testCLITool,
 } from '../services/ai'
-import { IPC, type WorkContextBlock } from '@shared/types'
+import { IPC, type AIReplyPayload, type WorkContextBlock } from '@shared/types'
 
 export function registerAIHandlers(): void {
-  ipcMain.handle(IPC.AI.SEND_MESSAGE, async (_e, message: string) => {
+  ipcMain.handle(IPC.AI.SEND_MESSAGE, async (_e, message: string): Promise<AIReplyPayload> => {
     return sendMessage(message)
   })
 

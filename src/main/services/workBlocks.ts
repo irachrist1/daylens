@@ -521,8 +521,13 @@ function buildBlockFromCandidate(
   const switchCount = countAppSwitches(candidate.sessions)
   const websites = getWebsiteSummariesForRange(db, candidate.sessions[0].startTime, candidate.sessions[candidate.sessions.length - 1].endTime ?? (candidate.sessions[candidate.sessions.length - 1].startTime + candidate.sessions[candidate.sessions.length - 1].durationSeconds * 1000)).slice(0, 5)
   const keyPagesByDomain = getTopPagesForDomains(db, candidate.sessions[0].startTime, candidate.sessions[candidate.sessions.length - 1].endTime ?? (candidate.sessions[candidate.sessions.length - 1].startTime + candidate.sessions[candidate.sessions.length - 1].durationSeconds * 1000), websites.map((site) => site.domain), 2)
-  const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
-    .map((page) => page.title?.trim())
+  const nativeWindowTitles = candidate.sessions
+    .map((session) => session.windowTitle?.trim())
+    .filter((title): title is string => Boolean(title))
+  const keyPages = [
+    ...nativeWindowTitles,
+    ...websites.flatMap((site) => keyPagesByDomain[site.domain] ?? []).map((page) => page.title?.trim()),
+  ]
     .filter((title): title is string => Boolean(title))
     .filter((title, index, titles) => titles.indexOf(title) === index)
     .slice(0, 4)
@@ -661,6 +666,7 @@ function mergeLiveSession(sessions: AppSession[], liveSession?: LiveSession | nu
       id: -1,
       bundleId: liveSession.bundleId,
       appName: liveSession.appName,
+      windowTitle: liveSession.windowTitle ?? null,
       startTime: liveSession.startTime,
       endTime: liveEnd,
       durationSeconds: Math.max(1, Math.round((liveEnd - liveSession.startTime) / 1000)),
