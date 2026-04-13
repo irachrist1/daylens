@@ -11,6 +11,13 @@ export interface AppSession {
   durationSeconds: number
   category: AppCategory
   isFocused: boolean
+  windowTitle?: string | null
+  rawAppName?: string | null
+  canonicalAppId?: string | null
+  appInstanceId?: string | null
+  captureSource?: string | null
+  endedReason?: string | null
+  captureVersion?: number
 }
 
 export interface DailySummary {
@@ -22,6 +29,7 @@ export interface DailySummary {
 
 export interface AppUsageSummary {
   bundleId: string
+  canonicalAppId?: string | null
   appName: string
   category: AppCategory
   totalSeconds: number
@@ -52,22 +60,56 @@ export interface WorkContextBlock {
   topApps: WorkContextAppSummary[]
   websites: WebsiteSummary[]
   keyPages: string[]
+  pageRefs: PageRef[]
+  documentRefs: DocumentRef[]
+  topArtifacts: ArtifactRef[]
+  workflowRefs: WorkflowRef[]
+  label: BlockLabel
+  focusOverlap: FocusOverlapSummary
+  evidenceSummary: TimelineEvidenceSummary
+  heuristicVersion: string
+  computedAt: number
   switchCount: number
   confidence: BlockConfidence
   isLive: boolean
 }
 
-export interface HistoryDayPayload {
+export type TimelineBlock = WorkContextBlock
+
+export interface TimelineGapSegment {
+  kind: 'idle_gap' | 'away' | 'machine_off'
+  startTime: number
+  endTime: number
+  label: string
+  source: 'derived_gap' | 'activity_event'
+}
+
+export interface TimelineBlockSegment {
+  kind: 'work_block'
+  startTime: number
+  endTime: number
+  blockId: string
+}
+
+export type TimelineSegment = TimelineBlockSegment | TimelineGapSegment
+
+export interface DayTimelinePayload {
   date: string
   sessions: AppSession[]
   websites: WebsiteSummary[]
   blocks: WorkContextBlock[]
+  segments: TimelineSegment[]
+  focusSessions: FocusSession[]
+  computedAt: number
+  version: string
   totalSeconds: number
   focusSeconds: number
   focusPct: number
   appCount: number
   siteCount: number
 }
+
+export type HistoryDayPayload = DayTimelinePayload
 
 export interface WorkContextInsight {
   label: string | null
@@ -114,6 +156,77 @@ export interface WebsiteSummary {
   visitCount: number
   topTitle: string | null
   browserBundleId: string | null
+  canonicalBrowserId?: string | null
+}
+
+export type LabelSource = 'rule' | 'artifact' | 'workflow' | 'ai' | 'user'
+
+export interface OpenTarget {
+  kind: 'external_url' | 'local_path' | 'unsupported'
+  value: string | null
+}
+
+export interface ArtifactRef {
+  id: string
+  artifactType: 'domain' | 'page' | 'document' | 'project' | 'repo' | 'window'
+  displayTitle: string
+  subtitle?: string | null
+  totalSeconds: number
+  confidence: number
+  canonicalAppId?: string | null
+  url?: string | null
+  path?: string | null
+  host?: string | null
+  canonicalKey?: string
+  openTarget: OpenTarget
+  metadata?: Record<string, unknown> | null
+}
+
+export interface PageRef extends ArtifactRef {
+  artifactType: 'page'
+  domain: string
+  browserBundleId?: string | null
+  canonicalBrowserId?: string | null
+  normalizedUrl?: string | null
+  pageTitle?: string | null
+}
+
+export interface DocumentRef extends ArtifactRef {
+  artifactType: 'document' | 'project' | 'repo' | 'window'
+  sourceSessionIds: number[]
+}
+
+export interface WorkflowRef {
+  id: string
+  signatureKey: string
+  label: string
+  confidence: number
+  dominantCategory: AppCategory
+  canonicalApps: string[]
+  artifactKeys: string[]
+}
+
+export interface BlockLabel {
+  current: string
+  source: LabelSource
+  confidence: number
+  narrative: string | null
+  ruleBased: string
+  aiSuggested: string | null
+  override: string | null
+}
+
+export interface FocusOverlapSummary {
+  totalSeconds: number
+  pct: number
+  sessionIds: number[]
+}
+
+export interface TimelineEvidenceSummary {
+  apps: WorkContextAppSummary[]
+  pages: PageRef[]
+  documents: DocumentRef[]
+  domains: string[]
 }
 
 export interface PeakHoursResult {
@@ -150,6 +263,58 @@ export interface AppCharacter {
   confidence: number
   avgSessionMinutes: number
   sessionCount: number
+}
+
+export interface AppProfile {
+  canonicalAppId: string
+  displayName: string
+  roleSummary: string
+  topArtifacts: ArtifactRef[]
+  pairedApps: Array<{ canonicalAppId: string; displayName: string; totalSeconds: number }>
+  topBlockIds: string[]
+  computedAt: number
+}
+
+export interface WorkflowPattern {
+  id: string
+  signatureKey: string
+  label: string
+  dominantCategory: AppCategory
+  canonicalApps: string[]
+  artifactKeys: string[]
+  occurrenceCount: number
+  lastSeenAt: number
+}
+
+export interface AppDetailPayload {
+  canonicalAppId: string
+  displayName: string
+  appCharacter: AppCharacter | null
+  profile: AppProfile
+  totalSeconds: number
+  sessionCount: number
+  topArtifacts: ArtifactRef[]
+  topPages: PageRef[]
+  pairedApps: Array<{ canonicalAppId: string; displayName: string; totalSeconds: number }>
+  blockAppearances: Array<{
+    blockId: string
+    startTime: number
+    endTime: number
+    label: string
+    dominantCategory: AppCategory
+  }>
+  workflowAppearances: WorkflowRef[]
+  timeOfDayDistribution: Array<{ hour: number; totalSeconds: number }>
+  computedAt: number
+  rangeKey: string
+}
+
+export interface RangeSummaryPayload {
+  rangeKey: string
+  blockCount: number
+  topArtifacts: ArtifactRef[]
+  workflows: WorkflowPattern[]
+  computedAt: number
 }
 
 export interface BreakRecommendation {
@@ -203,6 +368,11 @@ export interface LiveSession {
   appName: string
   startTime: number   // Unix ms
   category: AppCategory
+  windowTitle?: string | null
+  rawAppName?: string | null
+  canonicalAppId?: string | null
+  appInstanceId?: string | null
+  captureSource?: string | null
 }
 
 export type AppCategory =
@@ -236,12 +406,18 @@ export const IPC = {
     GET_TODAY: 'db:get-today',
     GET_HISTORY: 'db:get-history',
     GET_HISTORY_DAY: 'db:get-history-day',
+    GET_TIMELINE_DAY: 'db:get-timeline-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SESSIONS: 'db:get-app-sessions',
     GET_WEBSITE_SUMMARIES: 'db:get-website-summaries',
     GET_PEAK_HOURS: 'db:get-peak-hours',
     GET_WEEKLY_SUMMARY: 'db:get-weekly-summary',
     GET_APP_CHARACTER: 'db:get-app-character',
+    GET_APP_DETAIL: 'db:get-app-detail',
+    GET_BLOCK_DETAIL: 'db:get-block-detail',
+    GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
+    GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
+    SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
   },
   DEBUG: {
     GET_INFO: 'debug:get-info',

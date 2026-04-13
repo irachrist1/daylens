@@ -1,4 +1,5 @@
 import { getDb } from '../services/database'
+import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
 
 /**
  * Versioned migration system for DaylensWindows.
@@ -225,6 +226,245 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_work_context_observations_range
           ON work_context_observations (start_ts, end_ts);
       `)
+    },
+  },
+  {
+    version: 9,
+    description: 'Add raw capture identity columns and activity/browser normalization tables',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('app_sessions', 'window_title')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN window_title TEXT`)
+      }
+      if (!hasColumn('app_sessions', 'raw_app_name')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN raw_app_name TEXT`)
+      }
+      if (!hasColumn('app_sessions', 'canonical_app_id')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN canonical_app_id TEXT`)
+      }
+      if (!hasColumn('app_sessions', 'app_instance_id')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN app_instance_id TEXT`)
+      }
+      if (!hasColumn('app_sessions', 'capture_source')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_source TEXT NOT NULL DEFAULT 'foreground_poll'`)
+      }
+      if (!hasColumn('app_sessions', 'ended_reason')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN ended_reason TEXT`)
+      }
+      if (!hasColumn('app_sessions', 'capture_version')) {
+        db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_version INTEGER NOT NULL DEFAULT 1`)
+      }
+
+      if (!hasColumn('website_visits', 'canonical_browser_id')) {
+        db.exec(`ALTER TABLE website_visits ADD COLUMN canonical_browser_id TEXT`)
+      }
+      if (!hasColumn('website_visits', 'browser_profile_id')) {
+        db.exec(`ALTER TABLE website_visits ADD COLUMN browser_profile_id TEXT`)
+      }
+      if (!hasColumn('website_visits', 'normalized_url')) {
+        db.exec(`ALTER TABLE website_visits ADD COLUMN normalized_url TEXT`)
+      }
+      if (!hasColumn('website_visits', 'page_key')) {
+        db.exec(`ALTER TABLE website_visits ADD COLUMN page_key TEXT`)
+      }
+
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_app_sessions_canonical_app
+          ON app_sessions (canonical_app_id, start_time);
+        CREATE INDEX IF NOT EXISTS idx_website_visits_browser
+          ON website_visits (canonical_browser_id, visit_time);
+        CREATE INDEX IF NOT EXISTS idx_website_visits_page_key
+          ON website_visits (page_key, visit_time);
+
+        CREATE TABLE IF NOT EXISTS activity_state_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_ts INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'system',
+          metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_state_events_time
+          ON activity_state_events (event_ts);
+      `)
+    },
+  },
+  {
+    version: 10,
+    description: 'Add persisted timeline, artifacts, workflows, caches, and block label overrides',
+    up: () => {
+      const db = getDb()
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS timeline_blocks (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          start_time INTEGER NOT NULL,
+          end_time INTEGER NOT NULL,
+          block_kind TEXT NOT NULL,
+          dominant_category TEXT NOT NULL,
+          category_distribution_json TEXT NOT NULL DEFAULT '{}',
+          switch_count INTEGER NOT NULL DEFAULT 0,
+          label_current TEXT NOT NULL,
+          label_source TEXT NOT NULL DEFAULT 'rule',
+          label_confidence REAL NOT NULL DEFAULT 0.5,
+          narrative_current TEXT,
+          evidence_summary_json TEXT NOT NULL DEFAULT '{}',
+          is_live INTEGER NOT NULL DEFAULT 0,
+          heuristic_version TEXT NOT NULL,
+          computed_at INTEGER NOT NULL,
+          invalidated_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_blocks_date
+          ON timeline_blocks (date, start_time);
+        CREATE INDEX IF NOT EXISTS idx_timeline_blocks_valid
+          ON timeline_blocks (date, invalidated_at, start_time);
+
+        CREATE TABLE IF NOT EXISTS timeline_block_members (
+          block_id TEXT NOT NULL REFERENCES timeline_blocks(id) ON DELETE CASCADE,
+          member_type TEXT NOT NULL,
+          member_id TEXT NOT NULL,
+          start_time INTEGER NOT NULL,
+          end_time INTEGER NOT NULL,
+          weight_seconds INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (block_id, member_type, member_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_block_members_member
+          ON timeline_block_members (member_type, member_id);
+
+        CREATE TABLE IF NOT EXISTS timeline_block_labels (
+          id TEXT PRIMARY KEY,
+          block_id TEXT NOT NULL REFERENCES timeline_blocks(id) ON DELETE CASCADE,
+          label TEXT NOT NULL,
+          narrative TEXT,
+          source TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          created_at INTEGER NOT NULL,
+          model_info_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_timeline_block_labels_block
+          ON timeline_block_labels (block_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS artifacts (
+          id TEXT PRIMARY KEY,
+          artifact_type TEXT NOT NULL,
+          canonical_key TEXT NOT NULL UNIQUE,
+          display_title TEXT NOT NULL,
+          url TEXT,
+          path TEXT,
+          host TEXT,
+          canonical_app_id TEXT,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifacts_type
+          ON artifacts (artifact_type, last_seen_at);
+
+        CREATE TABLE IF NOT EXISTS artifact_mentions (
+          id TEXT PRIMARY KEY,
+          artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+          source_type TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          start_time INTEGER NOT NULL,
+          end_time INTEGER NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          evidence_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_mentions_source
+          ON artifact_mentions (source_type, source_id);
+        CREATE INDEX IF NOT EXISTS idx_artifact_mentions_artifact
+          ON artifact_mentions (artifact_id, start_time);
+
+        CREATE TABLE IF NOT EXISTS app_profile_cache (
+          canonical_app_id TEXT NOT NULL,
+          range_key TEXT NOT NULL,
+          character_json TEXT NOT NULL DEFAULT '{}',
+          top_artifacts_json TEXT NOT NULL DEFAULT '[]',
+          paired_apps_json TEXT NOT NULL DEFAULT '[]',
+          top_block_ids_json TEXT NOT NULL DEFAULT '[]',
+          computed_at INTEGER NOT NULL,
+          PRIMARY KEY (canonical_app_id, range_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_signatures (
+          id TEXT PRIMARY KEY,
+          signature_key TEXT NOT NULL UNIQUE,
+          label TEXT NOT NULL,
+          dominant_category TEXT NOT NULL,
+          canonical_apps_json TEXT NOT NULL DEFAULT '[]',
+          artifact_keys_json TEXT NOT NULL DEFAULT '[]',
+          rule_version TEXT NOT NULL,
+          computed_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_occurrences (
+          workflow_id TEXT NOT NULL REFERENCES workflow_signatures(id) ON DELETE CASCADE,
+          block_id TEXT NOT NULL REFERENCES timeline_blocks(id) ON DELETE CASCADE,
+          date TEXT NOT NULL,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          PRIMARY KEY (workflow_id, block_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workflow_occurrences_date
+          ON workflow_occurrences (date, workflow_id);
+
+        CREATE TABLE IF NOT EXISTS block_label_overrides (
+          block_id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          narrative TEXT,
+          updated_at INTEGER NOT NULL
+        );
+      `)
+    },
+  },
+  {
+    version: 11,
+    description: 'Backfill canonical app/browser identity and normalized page keys',
+    up: () => {
+      const db = getDb()
+
+      const sessionRows = db.prepare(`
+        SELECT id, bundle_id, app_name
+        FROM app_sessions
+        WHERE canonical_app_id IS NULL OR app_instance_id IS NULL OR raw_app_name IS NULL
+      `).all() as { id: number; bundle_id: string; app_name: string }[]
+
+      const updateSession = db.prepare(`
+        UPDATE app_sessions
+        SET raw_app_name = ?,
+            canonical_app_id = ?,
+            app_instance_id = ?
+        WHERE id = ?
+      `)
+
+      for (const row of sessionRows) {
+        const identity = resolveCanonicalApp(row.bundle_id, row.app_name)
+        updateSession.run(identity.rawAppName, identity.canonicalAppId, identity.appInstanceId, row.id)
+      }
+
+      const visitRows = db.prepare(`
+        SELECT id, browser_bundle_id, url
+        FROM website_visits
+        WHERE canonical_browser_id IS NULL OR browser_profile_id IS NULL OR normalized_url IS NULL OR page_key IS NULL
+      `).all() as { id: number; browser_bundle_id: string | null; url: string | null }[]
+
+      const updateVisit = db.prepare(`
+        UPDATE website_visits
+        SET canonical_browser_id = ?,
+            browser_profile_id = ?,
+            normalized_url = ?,
+            page_key = ?
+        WHERE id = ?
+      `)
+
+      for (const row of visitRows) {
+        const browserIdentity = resolveCanonicalBrowser(row.browser_bundle_id)
+        updateVisit.run(
+          browserIdentity.canonicalBrowserId,
+          browserIdentity.browserProfileId,
+          normalizeUrlForStorage(row.url),
+          pageKeyForUrl(row.url),
+          row.id,
+        )
+      }
     },
   },
 ]

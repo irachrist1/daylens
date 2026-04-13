@@ -56,10 +56,10 @@ const WEB_COMPANION_LINK_URL = 'https://christian-tonny.dev/daylens/link'
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <p style={{
-      fontSize: 10,
+      fontSize: 11,
       fontWeight: 900,
       textTransform: 'uppercase',
-      letterSpacing: '0.2em',
+      letterSpacing: '0.12em',
       color: 'var(--color-text-secondary)',
       margin: '28px 0 10px',
     }}>
@@ -207,6 +207,7 @@ export default function Settings() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape' && linking) handleCancelLink()
+      if (e.key === 'D' && e.ctrlKey && e.shiftKey) setDebugOpen((o) => !o)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -1117,40 +1118,6 @@ export default function Settings() {
 
               <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
 
-              {/* Focus goal */}
-              <SettingsRow
-                label="Focus Goal"
-                control={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input
-                      type="number"
-                      min={1}
-                      max={12}
-                      step={0.5}
-                      value={settings.dailyFocusGoalHours ?? 4}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value)
-                        if (!isNaN(v) && v >= 1 && v <= 12) {
-                          setSettings((s) => ({ ...s, dailyFocusGoalHours: v }))
-                          void ipc.settings.set({ dailyFocusGoalHours: v }).then(() => flashSaved('Goal updated'))
-                        }
-                      }}
-                      style={{
-                        width: 60, textAlign: 'center',
-                        background: 'var(--color-surface-highest)',
-                        border: 'none', borderRadius: 8,
-                        color: 'var(--color-text-primary)',
-                        fontSize: 14, fontWeight: 700,
-                        padding: '5px 8px', outline: 'none', fontFamily: 'inherit',
-                      }}
-                    />
-                    <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>hours / day</span>
-                  </div>
-                }
-              />
-
-              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
-
               {/* Launch on login */}
               <SettingsRow
                 label="Launch on Login"
@@ -1411,23 +1378,13 @@ export default function Settings() {
                 }
               />
 
-              <div style={{ height: 1, background: 'var(--color-border-ghost)', margin: '0 16px' }} />
-
-              {/* Developer Info collapsible */}
+              {/* Developer Info — hidden panel, toggle with Ctrl+Shift+D */}
               <div style={{ borderRadius: 10, overflow: 'hidden' }}>
-                <button
-                  onClick={() => setDebugOpen((o) => !o)}
-                  style={{
-                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '12px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
-                    transition: 'background 120ms',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-secondary)', margin: 0 }}>Developer Info</p>
-                  <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{debugOpen ? '▲' : '▼'}</span>
-                </button>
+                {debugOpen && (
+                  <div style={{ padding: '8px 16px', borderTop: '1px solid var(--color-border-ghost)' }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', margin: '0 0 10px' }}>Developer Info</p>
+                  </div>
+                )}
 
                 {debugOpen && (
                   <div style={{ padding: '0 16px 16px', borderTop: '1px solid var(--color-border-ghost)', display: 'flex', flexDirection: 'column', gap: 12 }}>

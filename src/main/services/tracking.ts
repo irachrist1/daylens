@@ -3,10 +3,11 @@
 import { app, powerMonitor } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { insertAppSession } from '../db/queries'
+import { insertAppSession, recordActivityStateEvent } from '../db/queries'
 import { getDb } from './database'
 import type { AppCategory, LiveSession } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
+import { resolveCanonicalApp } from '../lib/appIdentity'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,11 @@ interface ActiveWinResult {
 interface InFlightSession {
   bundleId: string
   appName: string
+  windowTitle: string | null
+  rawAppName: string
+  canonicalAppId: string | null
+  appInstanceId: string | null
+  captureSource: string
   startTime: number
   category: AppCategory
 }
@@ -219,20 +225,46 @@ let powerMonitorListenersRegistered = false
 
 function handleLockScreen(): void {
   if (currentSession) {
-    flushCurrent()
+    flushCurrent(undefined, 'lock_screen')
     console.log('[tracking] screen locked — session flushed')
   }
+  recordActivityEvent('lock_screen')
   idleState = 'away'
   provisionalIdleStart = null
 }
 
 function handleSuspend(): void {
   if (currentSession) {
-    flushCurrent()
+    flushCurrent(undefined, 'suspend')
     console.log('[tracking] system suspended — session flushed')
   }
+  recordActivityEvent('suspend')
   idleState = 'away'
   provisionalIdleStart = null
+}
+
+function handleUnlockScreen(): void {
+  recordActivityEvent('unlock_screen')
+}
+
+function handleResume(): void {
+  recordActivityEvent('resume')
+}
+
+function recordActivityEvent(
+  eventType: 'idle_start' | 'idle_end' | 'away_start' | 'away_end' | 'lock_screen' | 'unlock_screen' | 'suspend' | 'resume',
+  metadata: Record<string, unknown> = {},
+): void {
+  try {
+    recordActivityStateEvent(getDb(), {
+      eventTs: Date.now(),
+      eventType,
+      source: 'tracking',
+      metadata,
+    })
+  } catch (err) {
+    console.warn('[tracking] failed to record activity event:', err)
+  }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -241,7 +273,9 @@ export function startTracking(): void {
   if (pollTimer) return
   if (!powerMonitorListenersRegistered) {
     powerMonitor.on('lock-screen', handleLockScreen)
+    powerMonitor.on('unlock-screen', handleUnlockScreen)
     powerMonitor.on('suspend', handleSuspend)
+    powerMonitor.on('resume', handleResume)
     powerMonitorListenersRegistered = true
   }
   // Fire immediately — don't wait 5 s for the first data point
@@ -257,7 +291,9 @@ export function stopTracking(): void {
   }
   if (powerMonitorListenersRegistered) {
     powerMonitor.removeListener('lock-screen', handleLockScreen)
+    powerMonitor.removeListener('unlock-screen', handleUnlockScreen)
     powerMonitor.removeListener('suspend', handleSuspend)
+    powerMonitor.removeListener('resume', handleResume)
     powerMonitorListenersRegistered = false
   }
   flushCurrent()
@@ -279,7 +315,10 @@ async function poll(): Promise<void> {
     if (idleSec >= AWAY_THRESHOLD_SEC) {
       if (idleState !== 'away' && currentSession) {
         const idleStartMs = provisionalIdleStart ?? (Date.now() - Math.round(idleSec) * 1_000)
-        flushCurrent(idleStartMs)
+        if (idleState !== 'provisional_idle') {
+          recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
+        }
+        flushCurrent(idleStartMs, 'away')
         console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
       }
       idleState = 'away'
@@ -289,6 +328,7 @@ async function poll(): Promise<void> {
       if (idleState === 'active') {
         provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
         idleState = 'provisional_idle'
+        recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec) })
         console.log(`[tracking] provisional idle at ${Math.round(idleSec)}s — session held open`)
       }
     } else {
@@ -298,6 +338,7 @@ async function poll(): Promise<void> {
         // The idle time is attributed to the session — this is the desired behaviour.
         // Returning from away: session was already flushed, a new one will start below.
         console.log(`[tracking] user returned from ${idleState}`)
+        recordActivityEvent(idleState === 'away' ? 'away_end' : 'idle_end')
       }
       idleState = 'active'
       provisionalIdleStart = null
@@ -329,23 +370,31 @@ async function poll(): Promise<void> {
 
     // Prefer the display name from the addon, but fall back to exe/UWP metadata on Windows.
     const { bundleId, appName } = deriveWindowIdentity(win)
+    const identity = resolveCanonicalApp(bundleId, appName)
 
     // Skip OS infrastructure processes
     if (isOsNoise(bundleId, appName, win.path)) return
 
     // App switched → flush the previous session
     if (currentSession && currentSession.bundleId !== bundleId) {
-      flushCurrent()
+      flushCurrent(undefined, 'app_switch')
     }
 
     // Start a new session if none is in-flight for this app
     if (!currentSession || currentSession.bundleId !== bundleId) {
       currentSession = {
         bundleId,
-        appName,
+        appName: identity.displayName,
+        windowTitle: win.title?.trim() || null,
+        rawAppName: appName,
+        canonicalAppId: identity.canonicalAppId,
+        appInstanceId: identity.appInstanceId,
+        captureSource: 'foreground_poll',
         startTime: Date.now(),
-        category:  classifyApp(bundleId, appName),
+        category: identity.defaultCategory ?? classifyApp(bundleId, appName),
       }
+    } else {
+      currentSession.windowTitle = win.title?.trim() || null
     }
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
@@ -356,7 +405,7 @@ async function poll(): Promise<void> {
 
 // ─── Flush ────────────────────────────────────────────────────────────────────
 
-function flushCurrent(overrideEndTime?: number): void {
+function flushCurrent(overrideEndTime?: number, endedReason: string | null = null): void {
   if (!currentSession) return
 
   const endTime = overrideEndTime ?? Date.now()
@@ -375,6 +424,13 @@ function flushCurrent(overrideEndTime?: number): void {
       insertAppSession(getDb(), {
         bundleId:        currentSession.bundleId,
         appName:         currentSession.appName,
+        windowTitle:     currentSession.windowTitle,
+        rawAppName:      currentSession.rawAppName,
+        canonicalAppId:  currentSession.canonicalAppId,
+        appInstanceId:   currentSession.appInstanceId,
+        captureSource:   currentSession.captureSource,
+        endedReason,
+        captureVersion:  2,
         startTime:       currentSession.startTime,
         endTime,
         durationSeconds,

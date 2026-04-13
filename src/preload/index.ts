@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AppDetailPayload,
   AppCategory,
   AppCharacter,
   AppSettings,
@@ -8,11 +9,14 @@ import type {
   BreakRecommendation,
   FocusStartPayload,
   HistoryDayPayload,
+  DayTimelinePayload,
   PeakHoursResult,
   ProcessSnapshot,
+  RangeSummaryPayload,
   WeeklySummary,
   WorkContextBlock,
   WorkContextInsight,
+  ArtifactRef,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 
@@ -38,6 +42,7 @@ const api = {
     getToday: () => ipcRenderer.invoke(IPC.DB.GET_TODAY),
     getHistory: (date: string) => ipcRenderer.invoke(IPC.DB.GET_HISTORY, date),
     getHistoryDay: (date: string): Promise<HistoryDayPayload> => ipcRenderer.invoke(IPC.DB.GET_HISTORY_DAY, date),
+    getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
     getAppSummaries: (days?: number) => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSessions: (bundleId: string, days?: number) =>
       ipcRenderer.invoke(IPC.DB.GET_APP_SESSIONS, bundleId, days),
@@ -49,6 +54,16 @@ const api = {
       ipcRenderer.invoke(IPC.DB.GET_WEEKLY_SUMMARY, endDateStr),
     getAppCharacter: (bundleId: string, daysBack: number): Promise<AppCharacter | null> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_CHARACTER, bundleId, daysBack),
+    getAppDetail: (canonicalAppId: string, days?: number): Promise<AppDetailPayload> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
+    getBlockDetail: (blockId: string): Promise<WorkContextBlock | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_BLOCK_DETAIL, blockId),
+    getWorkflowSummaries: (days?: number): Promise<RangeSummaryPayload['workflows']> =>
+      ipcRenderer.invoke(IPC.DB.GET_WORKFLOW_SUMMARIES, days),
+    getArtifactDetails: (artifactId: string): Promise<ArtifactRef | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_ARTIFACT_DETAILS, artifactId),
+    setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }) =>
+      ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     setCategoryOverride: (bundleId: string, category: AppCategory) =>
       ipcRenderer.invoke('db:set-category-override', bundleId, category),
     clearCategoryOverride: (bundleId: string) =>

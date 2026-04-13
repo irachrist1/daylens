@@ -11,9 +11,7 @@ import FeedbackModal from './components/FeedbackModal'
 import type { AppSettings, AppTheme } from '@shared/types'
 
 // Lazy-load route views so the initial bundle is small (#6)
-const Today    = lazy(() => import('./views/Today'))
-const Focus    = lazy(() => import('./views/Focus'))
-const History  = lazy(() => import('./views/History'))
+const Timeline = lazy(() => import('./views/Timeline'))
 const Apps     = lazy(() => import('./views/Apps'))
 const Insights = lazy(() => import('./views/Insights'))
 const Settings = lazy(() => import('./views/Settings'))
@@ -50,7 +48,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
 
   // Track route changes
   useEffect(() => {
-    const view = location.pathname.replace('/', '') || 'today'
+    const view = location.pathname.replace('/', '') || 'timeline'
     track('view_opened', { view })
   }, [location.pathname])
 
@@ -79,10 +77,11 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
           <main className="flex-1 overflow-y-auto bg-[var(--color-bg)]">
             <Suspense fallback={<LoadingFallback />}>
               <Routes>
-                <Route path="/" element={<Navigate to="/today" replace />} />
-                <Route path="/today" element={<ErrorBoundary name="Today"><Today /></ErrorBoundary>} />
-                <Route path="/focus" element={<ErrorBoundary name="Focus"><Focus /></ErrorBoundary>} />
-                <Route path="/history" element={<ErrorBoundary name="History"><History /></ErrorBoundary>} />
+                <Route path="/" element={<Navigate to="/timeline" replace />} />
+                <Route path="/today" element={<Navigate to="/timeline" replace />} />
+                <Route path="/focus" element={<Navigate to="/timeline" replace />} />
+                <Route path="/history" element={<Navigate to="/timeline" replace />} />
+                <Route path="/timeline" element={<ErrorBoundary name="Timeline"><Timeline /></ErrorBoundary>} />
                 <Route path="/apps" element={<ErrorBoundary name="Apps"><Apps /></ErrorBoundary>} />
                 <Route path="/insights" element={<ErrorBoundary name="Insights"><Insights /></ErrorBoundary>} />
                 <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings /></ErrorBoundary>} />
