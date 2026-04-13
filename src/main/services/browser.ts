@@ -18,6 +18,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { getDb } from './database'
 import { insertWebsiteVisit } from '../db/queries'
+import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -385,14 +386,19 @@ function pollChromium(
       const rowsToProcess = isFinalBatch ? rows : rows.slice(0, -1)
 
       for (const processed of processChromiumRows(rowsToProcess)) {
+        const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
         insertWebsiteVisit(db, {
           domain:          processed.domain,
           pageTitle:       processed.pageTitle,
           url:             processed.url,
+          normalizedUrl:   normalizeUrlForStorage(processed.url),
+          pageKey:         pageKeyForUrl(processed.url),
           visitTime:       processed.visitTime,
           visitTimeUs:     processed.visitTimeUs,
           durationSec:     processed.durationSec,
           browserBundleId: browser.bundleId,
+          canonicalBrowserId: browserIdentity.canonicalBrowserId,
+          browserProfileId: browserIdentity.browserProfileId,
           source:          'chrome_history',
         })
         inserted++
@@ -483,14 +489,19 @@ function pollFirefox(
       const rowsToProcess = isFinalBatch ? rows : rows.slice(0, -1)
 
       for (const processed of processFirefoxRows(rowsToProcess)) {
+        const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
         insertWebsiteVisit(db, {
           domain:          processed.domain,
           pageTitle:       processed.pageTitle,
           url:             processed.url,
+          normalizedUrl:   normalizeUrlForStorage(processed.url),
+          pageKey:         pageKeyForUrl(processed.url),
           visitTime:       processed.visitTime,
           visitTimeUs:     processed.visitTimeUs,
           durationSec:     processed.durationSec,
           browserBundleId: browser.bundleId,
+          canonicalBrowserId: browserIdentity.canonicalBrowserId,
+          browserProfileId: browserIdentity.browserProfileId,
           source:          'firefox_history',
         })
         inserted++

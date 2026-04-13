@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipc } from '../lib/ipc'
-import { formatDateShort, formatDuration, formatTime, rollingDayBounds } from '../lib/format'
-import { catColor, formatCategory } from '../lib/category'
-import { filterVisibleSessions, groupConsecutiveSessions } from '../lib/activity'
-import type { AppCategory, AppCategorySuggestion, AppSession, AppUsageSummary, LiveSession } from '@shared/types'
+import { useKeyboardNav } from '../hooks/useKeyboardNav'
+import { formatDuration, rollingDayBounds } from '../lib/format'
+import { formatCategory } from '../lib/category'
+import type { AppCategory, AppCategorySuggestion, AppCharacter, AppDetailPayload, AppUsageSummary, ArtifactRef, LiveSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import AppIcon from '../components/AppIcon'
 import { formatDisplayAppName } from '../lib/apps'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const ALL_CATEGORIES: AppCategory[] = [
   'development', 'communication', 'browsing', 'writing', 'design',
@@ -16,97 +18,101 @@ const ALL_CATEGORIES: AppCategory[] = [
 
 const DAYS_OPTIONS = [1, 7, 30] as const
 
-function isPresentationNoise(category: AppCategory, durationSeconds: number): boolean {
-  return (category === 'system' || category === 'uncategorized') && durationSeconds < 120
+// ─── Category color map ───────────────────────────────────────────────────────
+
+const CAT_COLORS: Record<string, string> = {
+  development:   '#6a91ff',
+  aiTools:       '#d86cff',
+  writing:       '#c084fc',
+  design:        '#ff6bb0',
+  research:      '#7e63ff',
+  meetings:      '#14b8a6',
+  communication: '#ff7a59',
+  email:         '#38bdf8',
+  productivity:  '#4f46e5',
+  browsing:      '#f97316',
+  entertainment: '#f59e0b',
+  social:        '#fb7185',
+  system:        '#94a3b8',
+  uncategorized: '#6b7280',
 }
 
-function mergeLiveSummary(
-  summaries: AppUsageSummary[],
-  live: LiveSession | null,
-  days: number,
-): AppUsageSummary[] {
-  if (!live) return summaries
+function catColor(category: AppCategory): string {
+  return CAT_COLORS[category] ?? '#94a3b8'
+}
 
+function withAlpha(hex: string, alpha: number): string {
+  const n = hex.replace('#', '')
+  const expanded = n.length === 3 ? n.split('').map((p) => `${p}${p}`).join('') : n
+  const v = Number.parseInt(expanded, 16)
+  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`
+}
+
+// ─── Character helpers ────────────────────────────────────────────────────────
+
+function buildCharacterSummary(
+  appName: string,
+  category: AppCategory,
+  character: AppCharacter | null,
+  sessionCount: number,
+  avgSessionSeconds: number,
+): string {
+  const display = formatDisplayAppName(appName)
+  if (!character || character.confidence < 0.25) {
+    if (sessionCount <= 2) return `Not enough data yet to characterize how you use ${display}. Check back after more usage.`
+    if (avgSessionSeconds > 3600) return `You tend to stay in ${display} for long stretches — it's likely a core part of your workflow.`
+    if (avgSessionSeconds > 1800) return `${display} is typically used in sustained sessions, averaging ${formatDuration(avgSessionSeconds)} at a time.`
+    return `You've opened ${display} ${sessionCount} time${sessionCount !== 1 ? 's' : ''} in this period.`
+  }
+  const avg = formatDuration(Math.round(character.avgSessionMinutes * 60))
+  switch (character.character) {
+    case 'deep_focus':
+      return `${display} is a deep-focus tool for you. You stay in it for ${avg} on average — long, uninterrupted blocks of work.`
+    case 'flow_compatible':
+      return `${display} fits into your flow. Sessions run ${avg} on average with few interruptions — it doesn't fragment your attention.`
+    case 'context_switching':
+      return `You visit ${display} frequently and briefly — quick checks rather than sustained work. Typical session: ${avg}.`
+    case 'distraction':
+      return `${display} tends to show up as short breaks between other tasks, averaging ${avg} per visit. Worth noticing if that's intentional.`
+    case 'communication':
+      return `${display} is a communication hub for you — frequent visits averaging ${avg}, likely managing messages and responses throughout the day.`
+    default:
+      if (avgSessionSeconds > 3600) return `${display} is a core part of your day — long sustained use averaging ${avg} per session.`
+      if (category === 'browsing') return `Research and browsing in ${display}, averaging ${avg} per session.`
+      return `Regular use of ${display}, averaging ${avg} per session.`
+  }
+}
+
+// ─── Merge live session into summaries ────────────────────────────────────────
+
+function mergeLiveSummary(summaries: AppUsageSummary[], live: LiveSession | null, days: number): AppUsageSummary[] {
+  if (!live) return summaries
   const [fromMs, toMs] = rollingDayBounds(days)
   const liveStart = Math.max(live.startTime, fromMs)
   const liveEnd = Math.min(Date.now(), toMs)
   const liveDur = Math.max(0, Math.round((liveEnd - liveStart) / 1_000))
   if (liveDur < 3) return summaries
-
-  const existingIdx = summaries.findIndex((summary) => summary.bundleId === live.bundleId)
-  if (existingIdx >= 0) {
-    return summaries.map((summary, index) =>
-      index === existingIdx
-        ? { ...summary, totalSeconds: summary.totalSeconds + liveDur }
-        : summary,
+  const idx = summaries.findIndex((s) => s.bundleId === live.bundleId)
+  if (idx >= 0) {
+    return summaries.map((s, i) =>
+      i === idx ? { ...s, totalSeconds: s.totalSeconds + liveDur } : s,
     ).sort((a, b) => b.totalSeconds - a.totalSeconds)
   }
-
   return [
     ...summaries,
     {
-      bundleId: live.bundleId,
-      appName: live.appName,
-      category: live.category,
-      totalSeconds: liveDur,
-      isFocused: FOCUSED_CATEGORIES.includes(live.category),
-      sessionCount: 1,
+      canonicalAppId: live.canonicalAppId ?? live.bundleId,
+      bundleId: live.bundleId, appName: live.appName, category: live.category,
+      totalSeconds: liveDur, isFocused: FOCUSED_CATEGORIES.includes(live.category), sessionCount: 1,
     },
   ].sort((a, b) => b.totalSeconds - a.totalSeconds)
 }
 
-function buildUsageInsight(
-  appName: string,
-  sessionCount: number,
-  avgSessionSeconds: number,
-  totalSeconds: number,
-): string {
-  const displayName = formatDisplayAppName(appName)
-  if (sessionCount > 8 && avgSessionSeconds < 300) {
-    return `You opened ${displayName} ${sessionCount} times with an average of ${formatDuration(avgSessionSeconds)} - that is a short, repeated-use pattern.`
-  }
-  if (avgSessionSeconds > 1800) {
-    return `You use ${displayName} in long sustained blocks (avg ${formatDuration(avgSessionSeconds)}) - steady usage.`
-  }
-  if (sessionCount <= 3 && totalSeconds > 3600) {
-    return `You had ${sessionCount} long sustained ${sessionCount === 1 ? 'session' : 'sessions'} today - steady usage.`
-  }
-  return `Regular usage across ${sessionCount} ${sessionCount === 1 ? 'session' : 'sessions'} today.`
+function isPresentationNoise(category: AppCategory, durationSeconds: number): boolean {
+  return (category === 'system' || category === 'uncategorized') && durationSeconds < 120
 }
 
-function buildCharacterLine(
-  category: AppCategory,
-  avgSessionSeconds: number,
-  sessionCount: number,
-): string {
-  if (FOCUSED_CATEGORIES.includes(category) && avgSessionSeconds > 20 * 60) return 'Sustained use'
-  if ((category === 'browsing' || category === 'entertainment') && avgSessionSeconds < 300) return 'Short sessions'
-  if (category === 'meetings') return 'Communication & calls'
-  if (sessionCount > 10 && avgSessionSeconds < 5 * 60) return 'Short repeated sessions'
-  return formatCategory(category)
-}
-
-// Canonical category color map
-const CAT_COLORS: Record<string, string> = {
-  development:   '#adc6ff',
-  aiTools:       '#34d399',
-  writing:       '#c084fc',
-  design:        '#e879f9',
-  research:      '#67e8f9',
-  meetings:      '#ffb95f',
-  communication: '#4fdbc8',
-  email:         '#fbbf24',
-  productivity:  '#a3e635',
-  browsing:      '#94a3b8',
-  entertainment: '#f87171',
-  social:        '#fb923c',
-  system:        '#6b7280',
-  uncategorized: '#6b7280',
-}
-
-function distColor(category: AppCategory): string {
-  return CAT_COLORS[category] ?? catColor(category) ?? '#52525b'
-}
+// ─── Apps list ────────────────────────────────────────────────────────────────
 
 export default function Apps() {
   const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(7)
@@ -119,6 +125,7 @@ export default function Apps() {
   const [, setOverrides] = useState<Record<string, AppCategory>>({})
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
   const [categorySuggestions, setCategorySuggestions] = useState<Record<string, AppCategorySuggestion>>({})
+  const [characters, setCharacters] = useState<Record<string, AppCharacter | null>>({})
   const dropdownRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -127,18 +134,12 @@ export default function Apps() {
         setOpenDropdown(null)
       }
     }
-    if (openDropdown) {
-      document.addEventListener('mousedown', handleOutsideClick)
-    }
+    if (openDropdown) document.addEventListener('mousedown', handleOutsideClick)
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [openDropdown])
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    setSelectedCat(null)
-    setSelectedApp(null)
-
+    setLoading(true); setError(null); setSelectedCat(null)
     let cancelled = false
 
     async function refresh() {
@@ -163,20 +164,13 @@ export default function Apps() {
 
     void refresh()
     const timer = setInterval(() => void refresh(), 30_000)
-
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
+    return () => { cancelled = true; clearInterval(timer) }
   }, [days])
 
   async function handleSetOverride(bundleId: string, category: AppCategory) {
     setOpenDropdown(null)
     await ipc.db.setCategoryOverride(bundleId, category)
-    const [summaryData, overrideData] = await Promise.all([
-      ipc.db.getAppSummaries(days),
-      ipc.db.getCategoryOverrides(),
-    ])
+    const [summaryData, overrideData] = await Promise.all([ipc.db.getAppSummaries(days), ipc.db.getCategoryOverrides()])
     setSummaries(summaryData as AppUsageSummary[])
     setOverrides(overrideData as Record<string, AppCategory>)
   }
@@ -184,70 +178,58 @@ export default function Apps() {
   async function handleClearOverride(bundleId: string) {
     setOpenDropdown(null)
     await ipc.db.clearCategoryOverride(bundleId)
-    const [summaryData, overrideData] = await Promise.all([
-      ipc.db.getAppSummaries(days),
-      ipc.db.getCategoryOverrides(),
-    ])
+    const [summaryData, overrideData] = await Promise.all([ipc.db.getAppSummaries(days), ipc.db.getCategoryOverrides()])
     setSummaries(summaryData as AppUsageSummary[])
     setOverrides(overrideData as Record<string, AppCategory>)
   }
 
-  // These must be computed BEFORE any early return — they are deps of the useEffect below.
   const mergedSummaries = mergeLiveSummary(summaries, live, days)
-  const visibleSummaries = mergedSummaries.filter(
-    (summary) => !isPresentationNoise(summary.category, summary.totalSeconds),
-  )
+  const visibleSummaries = mergedSummaries.filter((s) => !isPresentationNoise(s.category, s.totalSeconds))
 
-  // Auto-suggest categories for uncategorized apps. Must be declared before the early
-  // return below, or React will throw "rendered fewer hooks than expected".
+  // Auto-suggest categories for uncategorized apps
   useEffect(() => {
     const uncategorized = visibleSummaries
-      .filter((summary) => summary.category === 'uncategorized' && !categorySuggestions[summary.bundleId])
+      .filter((s) => s.category === 'uncategorized' && !categorySuggestions[s.bundleId])
       .slice(0, 6)
-
     if (uncategorized.length === 0) return
-
     let cancelled = false
     void Promise.all(
-      uncategorized.map(async (summary) => {
-        const suggestion = await ipc.ai.suggestAppCategory(summary.bundleId, summary.appName)
-        return [summary.bundleId, suggestion] as const
+      uncategorized.map(async (s) => {
+        const suggestion = await ipc.ai.suggestAppCategory(s.bundleId, s.appName)
+        return [s.bundleId, suggestion] as const
       }),
     ).then((results) => {
       if (cancelled) return
-      setCategorySuggestions((current) => {
-        const next = { ...current }
-        for (const [bundleId, suggestion] of results) {
-          next[bundleId] = suggestion
-        }
+      setCategorySuggestions((cur) => {
+        const next = { ...cur }
+        for (const [bundleId, suggestion] of results) next[bundleId] = suggestion
         return next
       })
-    }).catch(() => {
-      // Suggestion failure should never break the Apps view.
-    })
-
-    return () => {
-      cancelled = true
-    }
+    }).catch(() => { /* fail silently */ })
+    return () => { cancelled = true }
   }, [categorySuggestions, visibleSummaries])
 
-  if (selectedApp) {
-    const selectedSummary =
-      live && live.bundleId === selectedApp.bundleId
-        ? (mergeLiveSummary([selectedApp], live, days).find(
-            (summary) => summary.bundleId === selectedApp.bundleId,
-          ) ?? selectedApp)
-        : selectedApp
-
-    return (
-      <AppDetailPanel
-        app={selectedSummary}
-        days={days}
-        onBack={() => setSelectedApp(null)}
-        onDaysChange={setDays}
-      />
-    )
-  }
+  // Background-load character data for visible apps
+  useEffect(() => {
+    const toFetch = visibleSummaries.filter((s) => !(s.bundleId in characters)).slice(0, 10)
+    if (toFetch.length === 0) return
+    let cancelled = false
+    void Promise.all(
+      toFetch.map(async (s) => {
+        const ch = await ipc.db.getAppCharacter(s.bundleId, days).catch(() => null)
+        return [s.bundleId, ch] as const
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      setCharacters((cur) => {
+        const next = { ...cur }
+        for (const [bundleId, ch] of results) next[bundleId] = ch
+        return next
+      })
+    })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSummaries.map((s) => s.bundleId).join(','), days])
 
   function renderCategoryDropdown(bundleId: string, currentCategory: AppCategory) {
     const suggestion = categorySuggestions[bundleId]
@@ -257,32 +239,20 @@ export default function Apps() {
         style={{
           position: 'absolute', top: '100%', left: 0, marginTop: 4,
           zIndex: 50, borderRadius: 8, padding: '4px 0', minWidth: 160,
-          background: 'var(--color-surface-card)',
-          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface-card)', border: '1px solid var(--color-border-ghost)',
           boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
         }}
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         {currentCategory === 'uncategorized' && suggestion?.suggestedCategory && (
           <div style={{ padding: '6px 12px 8px' }}>
             <button
-              onClick={(event) => {
-                event.stopPropagation()
-                void handleSetOverride(bundleId, suggestion.suggestedCategory!)
-              }}
+              onClick={(e) => { e.stopPropagation(); void handleSetOverride(bundleId, suggestion.suggestedCategory!) }}
               style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                padding: '8px 10px',
-                borderRadius: 8,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-high)',
-                cursor: 'pointer',
-                textAlign: 'left',
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                padding: '8px 10px', borderRadius: 8, border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-high)', cursor: 'pointer', textAlign: 'left',
               }}
             >
               <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
@@ -298,20 +268,13 @@ export default function Apps() {
           </div>
         )}
         {ALL_CATEGORIES.map((category) => {
-          const color = distColor(category)
+          const color = catColor(category)
           const active = category === currentCategory
           return (
             <button
               key={category}
-              onClick={(event) => {
-                event.stopPropagation()
-                void handleSetOverride(bundleId, category)
-              }}
-              style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                padding: '6px 12px', background: 'transparent', border: 'none',
-                cursor: 'pointer', textAlign: 'left',
-              }}
+              onClick={(e) => { e.stopPropagation(); void handleSetOverride(bundleId, category) }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}
               onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
@@ -324,10 +287,7 @@ export default function Apps() {
         })}
         <div style={{ borderTop: '1px solid var(--color-border-ghost)', marginTop: 4, paddingTop: 4 }}>
           <button
-            onClick={(event) => {
-              event.stopPropagation()
-              void handleClearOverride(bundleId)
-            }}
+            onClick={(e) => { e.stopPropagation(); void handleClearOverride(bundleId) }}
             style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: 'transparent', border: 'none', cursor: 'pointer' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -339,45 +299,182 @@ export default function Apps() {
     )
   }
 
-  const totalSeconds = mergedSummaries.reduce((sum, summary) => sum + summary.totalSeconds, 0)
-  const filtered = selectedCat
-    ? visibleSummaries.filter((summary) => summary.category === selectedCat)
-    : visibleSummaries
+  const filtered = selectedCat ? visibleSummaries.filter((s) => s.category === selectedCat) : visibleSummaries
 
+  // Keyboard navigation for apps list
+  const [highlightedAppIdx, setHighlightedAppIdx] = useState<number | null>(null)
+
+  const selectHighlightedApp = useCallback(() => {
+    if (highlightedAppIdx !== null && filtered[highlightedAppIdx]) {
+      setSelectedApp(filtered[highlightedAppIdx])
+    }
+  }, [highlightedAppIdx, filtered])
+
+  useKeyboardNav([
+    { key: 'Escape', action: () => { setHighlightedAppIdx(null) }, global: true },
+    { key: 'ArrowUp', action: () => {
+      if (filtered.length === 0) return
+      setHighlightedAppIdx((cur) => cur === null || cur <= 0 ? filtered.length - 1 : cur - 1)
+    }},
+    { key: 'ArrowDown', action: () => {
+      if (filtered.length === 0) return
+      setHighlightedAppIdx((cur) => cur === null ? 0 : cur >= filtered.length - 1 ? 0 : cur + 1)
+    }},
+    { key: 'Enter', action: selectHighlightedApp },
+  ], [filtered, highlightedAppIdx, selectHighlightedApp])
+
+  // Category breakdown for filter chips
   const catMap = new Map<AppCategory, number>()
   for (const s of visibleSummaries) catMap.set(s.category, (catMap.get(s.category) ?? 0) + s.totalSeconds)
-  const catBreakdown = [...catMap.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([category, seconds]) => ({ category, seconds }))
+  const catBreakdown = [...catMap.entries()].sort((a, b) => b[1] - a[1]).map(([cat, secs]) => ({ cat, secs }))
+
+  // Group apps by category when count > 8 and no category filter active
+  const shouldGroup = !selectedCat && filtered.length > 8
+  const groupedApps = shouldGroup
+    ? (() => {
+        const groups = new Map<AppCategory, AppUsageSummary[]>()
+        for (const app of filtered) {
+          const list = groups.get(app.category) ?? []
+          list.push(app)
+          groups.set(app.category, list)
+        }
+        // Sort groups by total time descending
+        return [...groups.entries()]
+          .map(([cat, apps]) => ({ cat, apps, totalSeconds: apps.reduce((s, a) => s + a.totalSeconds, 0) }))
+          .sort((a, b) => b.totalSeconds - a.totalSeconds)
+      })()
+    : null
+
+  if (selectedApp) {
+    const selectedSummary =
+      live && live.bundleId === selectedApp.bundleId
+        ? (mergeLiveSummary([selectedApp], live, days).find((s) => s.bundleId === selectedApp.bundleId) ?? selectedApp)
+        : selectedApp
+    return (
+      <AppDetailPanel
+        app={selectedSummary}
+        days={days}
+        onBack={() => setSelectedApp(null)}
+        onDaysChange={setDays}
+      />
+    )
+  }
+
+  function renderAppRow(app: AppUsageSummary, flatIndex: number, showBorder: boolean) {
+    const color = catColor(app.category)
+    const displayName = formatDisplayAppName(app.appName)
+    const sc = app.sessionCount ?? 1
+    const avgSec = sc > 0 ? Math.round(app.totalSeconds / sc) : 0
+    const suggestion = categorySuggestions[app.bundleId]
+    const ch = characters[app.bundleId]
+    const isLive = live?.bundleId === app.bundleId
+    const effectiveCat = (app.category === 'uncategorized' && suggestion?.suggestedCategory)
+      ? suggestion.suggestedCategory : app.category
+    const charSummary = (() => {
+      const full = buildCharacterSummary(app.appName, effectiveCat, ch ?? null, sc, avgSec)
+      const words = full.split(' ')
+      return words.length > 10 ? words.slice(0, 9).join(' ') + '…' : full
+    })()
+    const isHighlighted = highlightedAppIdx === flatIndex
+
+    return (
+      <div
+        key={app.bundleId}
+        onClick={() => setSelectedApp(app)}
+        data-app-idx={flatIndex}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 13,
+          padding: '11px 18px',
+          cursor: 'pointer',
+          borderBottom: showBorder ? '1px solid var(--color-border-ghost)' : 'none',
+          borderLeft: isLive ? '3px solid #4ade80' : '3px solid transparent',
+          background: isHighlighted ? 'var(--color-surface-low)' : undefined,
+          outline: isHighlighted ? '1px solid var(--color-border-ghost)' : 'none',
+          outlineOffset: -1,
+          transition: 'background 120ms',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-low)')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = isHighlighted ? 'var(--color-surface-low)' : 'transparent')}
+      >
+        <div style={{
+          width: 36, height: 36, borderRadius: 10,
+          background: 'var(--color-surface-highest)',
+          border: '1px solid var(--color-border-ghost)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={26} fontSize={10} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayName}
+            </span>
+            {isLive && (
+              <span style={{ fontSize: 8.5, fontWeight: 700, color: '#4ade80', letterSpacing: '0.05em', flexShrink: 0 }}>
+                live
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 1 }}>
+            {charSummary}
+          </div>
+          {!shouldGroup && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 4, height: 4, borderRadius: '50%', background: color, flexShrink: 0 }} />
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === app.bundleId ? null : app.bundleId) }}
+                  title="Change category"
+                  style={{
+                    fontSize: 10.5, background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--color-text-tertiary)',
+                    padding: 0, display: 'flex', alignItems: 'center', gap: 3,
+                  }}
+                >
+                  {formatCategory(effectiveCat)}
+                  <svg width="7" height="7" viewBox="0 0 8 8" fill="none" style={{ opacity: 0.3 }}>
+                    <path d="M2 3l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {openDropdown === app.bundleId && renderCategoryDropdown(app.bundleId, app.category)}
+              </div>
+            </div>
+          )}
+        </div>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+          {formatDuration(app.totalSeconds)}
+        </span>
+      </div>
+    )
+  }
 
   return (
-    <div style={{ padding: '32px 40px', overflowY: 'auto', height: '100%' }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24 }}>
+    <div style={{ padding: '28px 36px', overflowY: 'auto', height: '100%' }}>
+
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 32, fontWeight: 900, color: 'var(--color-text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em', lineHeight: 1 }}>
-            App Usage
+          <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-text-primary)', margin: '0 0 2px', letterSpacing: '-0.02em', lineHeight: 1 }}>
+            Apps
           </h1>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>
-            {days === 1 ? "Today's" : `Last ${days} days'`} app activity
+          <p style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', margin: 0 }}>
+            How you use each tool{days === 1 ? ' today' : `, last ${days} days`}
           </p>
         </div>
-        {/* Range tabs */}
-        <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 12, padding: 4 }}>
-          {DAYS_OPTIONS.map((option) => (
+        <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 10, padding: 3 }}>
+          {DAYS_OPTIONS.map((opt) => (
             <button
-              key={option}
-              onClick={() => setDays(option)}
+              key={opt}
+              onClick={() => setDays(opt)}
               style={{
-                padding: '6px 14px', borderRadius: 8, fontSize: 12,
-                fontWeight: days === option ? 700 : 500,
-                border: 'none', cursor: 'pointer',
-                background: days === option ? 'var(--gradient-primary)' : 'transparent',
-                color: days === option ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                padding: '5px 13px', borderRadius: 7, fontSize: 12,
+                fontWeight: days === opt ? 700 : 500, border: 'none', cursor: 'pointer',
+                background: days === opt ? 'var(--gradient-primary)' : 'transparent',
+                color: days === opt ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
                 transition: 'all 120ms',
               }}
             >
-              {option === 1 ? 'Today' : `${option}d`}
+              {opt === 1 ? 'Today' : `${opt}d`}
             </button>
           ))}
         </div>
@@ -397,44 +494,23 @@ export default function Apps() {
         </div>
       ) : summaries.length === 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '64px 0', textAlign: 'center' }}>
-          <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No data</p>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>No app usage recorded for this period.</p>
+          <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>No app activity yet</p>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>Open some apps and come back.</p>
         </div>
       ) : (
         <>
           {/* Category filter chips */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
-            <button
-              onClick={() => setSelectedCat(null)}
-              style={{
-                padding: '4px 14px', borderRadius: 999, border: !selectedCat ? '1px solid rgba(173,198,255,0.22)' : '1px solid var(--color-border-ghost)', cursor: 'pointer',
-                fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em',
-                background: !selectedCat ? 'var(--gradient-primary)' : 'var(--color-surface-low)',
-                color: !selectedCat ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
-                transition: 'all 120ms', flexShrink: 0,
-              }}
-            >
-              All
-            </button>
-            {catBreakdown.slice(0, 8).map((c) => {
-              const active = selectedCat === c.category
-              const color = distColor(c.category)
-              return (
-                <button
-                  key={c.category}
-                  onClick={() => setSelectedCat(active ? null : c.category)}
-                  style={{
-                    padding: '4px 14px', borderRadius: 999, border: active ? `1px solid ${color}33` : '1px solid var(--color-border-ghost)', cursor: 'pointer',
-                    fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.2em',
-                    background: active && c.category === 'development' ? 'var(--gradient-primary)' : active ? `${color}1a` : 'var(--color-surface-low)',
-                    color: active && c.category === 'development' ? 'var(--color-primary-contrast)' : active ? color : 'var(--color-text-secondary)',
-                    transition: 'all 120ms', flexShrink: 0,
-                  }}
-                >
-                  {formatCategory(c.category)}
-                </button>
-              )
-            })}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16, overflowX: 'auto', paddingBottom: 2 }}>
+            <FilterChip label="All" active={!selectedCat} color="var(--color-text-secondary)" onClick={() => setSelectedCat(null)} />
+            {catBreakdown.slice(0, 8).map(({ cat }) => (
+              <FilterChip
+                key={cat}
+                label={formatCategory(cat)}
+                active={selectedCat === cat}
+                color={catColor(cat)}
+                onClick={() => setSelectedCat(selectedCat === cat ? null : cat)}
+              />
+            ))}
           </div>
 
           {/* App list */}
@@ -442,104 +518,45 @@ export default function Apps() {
             <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', textAlign: 'center', padding: '40px 0', margin: 0 }}>
               No apps in this category for the selected period.
             </p>
+          ) : shouldGroup && groupedApps ? (
+            /* Grouped view: category headers + app rows */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {groupedApps.map(({ cat, apps: groupApps }) => (
+                <div key={cat}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '0 2px', marginBottom: 6,
+                  }}>
+                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: catColor(cat) }} />
+                    <span style={{
+                      fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em',
+                      color: 'var(--color-text-tertiary)',
+                    }}>
+                      {formatCategory(cat)}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', opacity: 0.5 }}>
+                      {formatDuration(groupApps.reduce((s, a) => s + a.totalSeconds, 0))}
+                    </span>
+                  </div>
+                  <div style={{
+                    display: 'flex', flexDirection: 'column',
+                    background: 'var(--color-surface-container)',
+                    border: '1px solid var(--color-border-ghost)',
+                    borderRadius: 12, overflow: 'hidden',
+                  }}>
+                    {groupApps.map((app, idx) => renderAppRow(app, filtered.indexOf(app), idx < groupApps.length - 1))}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
+            /* Flat list */
             <div style={{
-              display: 'flex',
-              flexDirection: 'column',
+              display: 'flex', flexDirection: 'column',
               background: 'var(--color-surface-container)',
               border: '1px solid var(--color-border-ghost)',
-              borderRadius: 12,
-              overflow: 'hidden',
-              boxShadow: 'var(--color-shadow-soft)',
+              borderRadius: 12, overflow: 'hidden',
             }}>
-              {filtered.map((app, index) => {
-                const pct = totalSeconds > 0 ? Math.round((app.totalSeconds / totalSeconds) * 100) : 0
-                const color = distColor(app.category)
-                const displayName = formatDisplayAppName(app.appName)
-                const sc = app.sessionCount ?? 1
-                const avgSec = sc > 0 ? Math.round(app.totalSeconds / sc) : 0
-                const suggestion = categorySuggestions[app.bundleId]
-                const characterLine = app.category === 'uncategorized' && suggestion?.suggestedCategory
-                  ? `AI suggests ${formatCategory(suggestion.suggestedCategory)}`
-                  : buildCharacterLine(app.category, avgSec, sc)
-                const isLive = live?.bundleId === app.bundleId
-
-                return (
-                  <div
-                    key={app.bundleId}
-                    onClick={() => setSelectedApp(app)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      minHeight: 64, padding: '0 18px', cursor: 'pointer',
-                      borderBottom: index < filtered.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
-                      boxShadow: isLive ? 'inset 4px 0 0 var(--color-primary)' : 'none',
-                      background: isLive ? 'linear-gradient(90deg, rgba(15,99,219,0.08), transparent 18%)' : 'transparent',
-                      transition: 'background 120ms',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-low)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    {/* Rank */}
-                    <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', width: 20, textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                      {index + 1}
-                    </span>
-
-                    {/* Icon */}
-                    <div style={{
-                      width: 40, height: 40, borderRadius: 12,
-                      background: 'var(--color-surface-highest)',
-                      border: '1px solid var(--color-border-ghost)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>
-                      <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={28} fontSize={11} />
-                    </div>
-
-                    {/* Name + character line + dropdown */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {displayName}
-                        </span>
-                        <div className="relative" style={{ display: 'inline-block' }}>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setOpenDropdown(openDropdown === app.bundleId ? null : app.bundleId)
-                            }}
-                            title="Change category"
-                            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', padding: 0 }}
-                          >
-                            {characterLine}
-                            <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ opacity: 0.5 }}>
-                              <path d="M2 3l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          </button>
-                          {openDropdown === app.bundleId && renderCategoryDropdown(app.bundleId, app.category)}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Category chip */}
-                    <div style={{
-                      padding: '3px 10px', borderRadius: 999, flexShrink: 0,
-                      background: `${color}14`, color, fontWeight: 700, fontSize: 10,
-                      textTransform: 'uppercase', letterSpacing: '0.1em',
-                    }}>
-                      {formatCategory(app.category)}
-                    </div>
-
-                    {/* Mini progress bar + duration */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                      <div style={{ width: 60, height: 4, borderRadius: 99, background: 'var(--color-surface-highest)', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: 'var(--gradient-primary)', borderRadius: 99 }} />
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 900, color: 'var(--color-primary)', fontVariantNumeric: 'tabular-nums', minWidth: 52, textAlign: 'right' }}>
-                        {formatDuration(app.totalSeconds)}
-                      </span>
-                    </div>
-                  </div>
-                )
-              })}
+              {filtered.map((app, index) => renderAppRow(app, index, index < filtered.length - 1))}
             </div>
           )}
         </>
@@ -547,6 +564,27 @@ export default function Apps() {
     </div>
   )
 }
+
+// ─── Filter chip ──────────────────────────────────────────────────────────────
+
+function FilterChip({ label, active, color, onClick }: { label: string; active: boolean; color: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '4px 12px', borderRadius: 999, fontSize: 11, fontWeight: active ? 700 : 500,
+        border: active ? `1px solid ${withAlpha(color, 0.3)}` : '1px solid var(--color-border-ghost)',
+        background: active ? withAlpha(color, 0.12) : 'var(--color-surface-low)',
+        color: active ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+        cursor: 'pointer', flexShrink: 0, transition: 'all 120ms',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+// ─── App Detail Panel ─────────────────────────────────────────────────────────
 
 function AppDetailPanel({
   app,
@@ -559,464 +597,332 @@ function AppDetailPanel({
   onBack: () => void
   onDaysChange: (d: (typeof DAYS_OPTIONS)[number]) => void
 }) {
-  const [sessions, setSessions] = useState<AppSession[]>([])
+  const [detail, setDetail] = useState<AppDetailPayload | null>(null)
   const [loading, setLoading] = useState(true)
-  const [live, setLive] = useState<LiveSession | null>(null)
-  const [backHovered, setBackHovered] = useState(false)
-  const [hoveredSparkIndex, setHoveredSparkIndex] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [refreshNonce, setRefreshNonce] = useState(0)
+
+  // Escape to go back
+  useKeyboardNav([
+    { key: 'Escape', action: onBack, global: true },
+  ], [onBack])
 
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
+    setError(null)
 
     async function refresh() {
-      const [sessionData, liveData] = await Promise.all([
-        ipc.db.getAppSessions(app.bundleId, days),
-        ipc.tracking.getLiveSession(),
-      ])
-      if (cancelled) return
-      setSessions(sessionData as AppSession[])
-      setLive(liveData as LiveSession | null)
-      setLoading(false)
+      try {
+        const payload = await ipc.db.getAppDetail(app.canonicalAppId ?? app.bundleId, days)
+        if (cancelled) return
+        setDetail(payload)
+        setError(null)
+      } catch (err) {
+        if (cancelled) return
+        setDetail(null)
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
     void refresh()
-    const timer = setInterval(() => void refresh(), 30_000)
+    const timer = setInterval(() => {
+      void refresh()
+    }, 30_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [app.bundleId, app.canonicalAppId, days, refreshNonce])
 
-    return () => {
-      cancelled = true
-      clearInterval(timer)
+  const color = catColor(app.category)
+  const displayName = detail?.displayName ?? formatDisplayAppName(app.appName)
+  const detailCharacter = detail?.appCharacter ?? null
+  const pairedApps = detail?.pairedApps ?? []
+  const timeOfDayDistribution = detail?.timeOfDayDistribution ?? []
+  const topTimeOfDay = [...timeOfDayDistribution]
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+    .filter((entry) => entry.totalSeconds > 0)
+    .slice(0, 2)
+  const artifactItems = (() => {
+    const seen = new Set<string>()
+    const items: ArtifactRef[] = []
+    for (const item of [...(detail?.topPages ?? []), ...(detail?.topArtifacts ?? [])]) {
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      items.push(item)
     }
-  }, [app.bundleId, days])
+    return items.slice(0, 10)
+  })()
 
-  const color = distColor(app.category)
-  const [fromMs, toMs] = rollingDayBounds(days)
-  const liveSession = live && live.bundleId === app.bundleId
-    ? (() => {
-        const startTime = Math.max(live.startTime, fromMs)
-        const endTime = Math.min(Date.now(), toMs)
-        const durationSeconds = Math.max(0, Math.round((endTime - startTime) / 1_000))
-        if (durationSeconds < 3) return null
-        return {
-          id: -1,
-          bundleId: live.bundleId,
-          appName: live.appName,
-          startTime,
-          endTime,
-          durationSeconds,
-          category: live.category,
-          isFocused: FOCUSED_CATEGORIES.includes(live.category),
-        } satisfies AppSession
-      })()
-    : null
-  const detailSessions = liveSession ? [liveSession, ...sessions] : sessions
-  const visibleSessions = filterVisibleSessions(detailSessions, 10, false)
-  const groupedSessions = groupConsecutiveSessions(visibleSessions, { gapMs: 5 * 60_000, minSeconds: 10 }).slice().reverse()
-  const displayName = formatDisplayAppName(app.appName)
-  const sessionTotalSeconds = visibleSessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-  const avgSessionSeconds = visibleSessions.length > 0 ? Math.round(sessionTotalSeconds / visibleSessions.length) : 0
-  const longestSession = visibleSessions.length > 0 ? Math.max(...visibleSessions.map((s) => s.durationSeconds)) : 0
+  function artifactSubtitle(artifact: ArtifactRef): string {
+    if (artifact.artifactType === 'page' || artifact.artifactType === 'domain') {
+      const parts = [artifact.host, artifact.subtitle].filter(Boolean)
+      return parts.join(' · ')
+    }
+    return artifact.subtitle ?? artifact.path ?? artifact.host ?? artifact.artifactType
+  }
 
-  const usageInsight = buildUsageInsight(app.appName, visibleSessions.length, avgSessionSeconds, sessionTotalSeconds)
+  function openArtifact(artifact: ArtifactRef) {
+    if (artifact.openTarget.kind === 'external_url' && artifact.openTarget.value) {
+      window.daylens.shell.openExternal(artifact.openTarget.value)
+    } else if (artifact.url) {
+      window.daylens.shell.openExternal(artifact.url)
+    }
+  }
 
-  // Intentionality breakdown
-  const catMap = new Map<AppCategory, number>()
-  for (const s of visibleSessions) catMap.set(s.category, (catMap.get(s.category) ?? 0) + s.durationSeconds)
-  const catBreakdown = [...catMap.entries()].sort((a, b) => b[1] - a[1])
-
-  // Sparkline bars (7 days placeholder distribution based on sessions)
-  const sparkBars = Array.from({ length: 7 }, (_, i) => {
-    const dayBucket = visibleSessions.filter((s) => {
-      const d = new Date(s.startTime)
-      const today = new Date()
-      const diff = Math.floor((today.getTime() - d.getTime()) / 86_400_000)
-      return diff === (6 - i)
-    }).reduce((sum, s) => sum + s.durationSeconds, 0)
-    return dayBucket
-  })
-  const maxSpark = Math.max(...sparkBars, 1)
-  const primaryCategoryPct = catBreakdown[0] ? Math.round((catBreakdown[0][1] / Math.max(sessionTotalSeconds, 1)) * 100) : 0
-  const sparkLabels = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date()
-    date.setDate(date.getDate() - (6 - i))
-    return date.toLocaleDateString('en-US', { weekday: 'short' })
-  })
-  const hoveredSparkText = hoveredSparkIndex !== null
-    ? `${sparkLabels[hoveredSparkIndex]} · ${sparkBars[hoveredSparkIndex] > 0 ? formatDuration(sparkBars[hoveredSparkIndex]) : 'No usage'}`
-    : null
+  const sectionHeading = (label: string) => (
+    <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+      {label}
+    </div>
+  )
 
   return (
-    <div style={{ overflowY: 'auto', height: '100%' }}>
-      {/* Hero section */}
-      <div style={{ padding: '32px 40px 0' }}>
-        {/* Breadcrumb */}
-        <button
-          onClick={onBack}
-          style={{
-            fontSize: 12, fontWeight: 700, color: backHovered ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
-            background: backHovered ? 'var(--gradient-primary)' : 'none', border: 'none', cursor: 'pointer',
-            marginBottom: 24, padding: backHovered ? '6px 12px' : '0',
-            display: 'flex', alignItems: 'center', gap: 6,
-            letterSpacing: '0.02em', borderRadius: 999, transition: 'all 120ms ease',
-          }}
-          onMouseEnter={() => setBackHovered(true)}
-          onMouseLeave={() => setBackHovered(false)}
-        >
-          Back to Apps
-        </button>
+    <div style={{ overflowY: 'auto', height: '100%', padding: '28px 36px 64px' }}>
 
-        {/* App hero row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 32 }}>
-          {/* App icon */}
+      {/* Back */}
+      <button
+        onClick={onBack}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)',
+          background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 20px', marginBottom: 4,
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-text-primary)')}
+        onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-text-secondary)')}
+      >
+        ← Apps
+      </button>
+
+      {/* App header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
+        <div style={{
+          width: 56, height: 56, borderRadius: 14, flexShrink: 0,
+          background: 'var(--color-surface-highest)', border: '1px solid var(--color-border-ghost)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={40} fontSize={14} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--color-text-primary)', margin: '0 0 6px', letterSpacing: '-0.02em' }}>
+            {displayName}
+          </h1>
+          <span style={{
+            display: 'inline-block', padding: '2px 9px', borderRadius: 999,
+            background: withAlpha(color, 0.14), color, fontWeight: 700,
+            fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.12em',
+          }}>
+            {formatCategory(app.category)}
+          </span>
+        </div>
+        {/* Range tabs */}
+        <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 10, padding: 3, flexShrink: 0 }}>
+          {DAYS_OPTIONS.map((opt) => (
+            <button
+              key={opt}
+              onClick={() => onDaysChange(opt)}
+              style={{
+                padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: days === opt ? 700 : 500,
+                border: 'none', cursor: 'pointer',
+                background: days === opt ? 'var(--gradient-primary)' : 'transparent',
+                color: days === opt ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                transition: 'all 120ms',
+              }}
+            >
+              {opt === 1 ? 'Today' : `${opt}d`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {[80, 120, 160].map((h, i) => (
+            <div key={i} style={{ height: h, borderRadius: 12, background: 'var(--color-surface-container)', opacity: 0.4 }} />
+          ))}
+        </div>
+      ) : error ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '56px 0', gap: 12, textAlign: 'center' }}>
+          <p style={{ fontSize: 13, color: '#f87171', margin: 0 }}>Failed to load app detail: {error}</p>
+          <button
+            onClick={() => { setLoading(true); setError(null); setRefreshNonce((value) => value + 1) }}
+            style={{ padding: '8px 20px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'var(--color-primary)', color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700 }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Character summary */}
           <div style={{
-            width: 96, height: 96, borderRadius: 12,
-            background: 'var(--color-surface-highest)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            boxShadow: `0 8px 32px ${color}18`,
+            padding: '18px 20px', borderRadius: 12,
+            background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
           }}>
-            <AppIcon bundleId={app.bundleId} appName={app.appName} color={color} size={64} fontSize={22} />
-          </div>
-
-          {/* Title + category */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={{
-              fontSize: 36, fontWeight: 900, color: 'var(--color-text-primary)',
-              margin: '0 0 6px', letterSpacing: '-0.03em', lineHeight: 1,
-            }}>
-              {displayName}
-            </h1>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '3px 12px', borderRadius: 999,
-              background: `${color}1a`, color, fontWeight: 700,
-              fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.15em',
-            }}>
-              {formatCategory(app.category)}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+              <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--color-text-primary)', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {formatDuration(detail?.totalSeconds ?? app.totalSeconds)}
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                {days === 1 ? 'today' : `last ${days} days`}
+                {detailCharacter?.label ? ` · ${detailCharacter.label.toLowerCase()}` : ''}
+                {pairedApps[0] ? ` · usually paired with ${pairedApps[0].displayName}` : ''}
+              </span>
             </div>
-          </div>
-
-          {/* Range tabs */}
-          <div style={{ display: 'flex', gap: 2, background: 'var(--color-surface-low)', borderRadius: 12, padding: 4, flexShrink: 0 }}>
-            {DAYS_OPTIONS.map((option) => (
-              <button
-                key={option}
-                onClick={() => onDaysChange(option)}
-                style={{
-                  padding: '6px 14px', borderRadius: 8, fontSize: 12,
-                  fontWeight: days === option ? 700 : 500,
-                  border: 'none', cursor: 'pointer',
-                  background: days === option ? 'var(--gradient-primary)' : 'transparent',
-                  color: days === option ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
-                  transition: 'all 120ms',
-                }}
-              >
-                {option === 1 ? 'Today' : `${option}d`}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
-        {/* Col A: Total Usage card */}
-        <div style={{
-          background: 'var(--color-surface-container)', borderRadius: 12, padding: 32,
-          border: '1px solid var(--color-border-ghost)',
-          display: 'flex', flexDirection: 'column',
-        }}>
-          <p style={{
-            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-            margin: '0 0 12px',
-          }}>
-            Total Usage
-          </p>
-          <p style={{
-            fontSize: 52, fontWeight: 900, color: 'var(--color-text-primary)',
-            margin: '0 0 4px', letterSpacing: '-0.03em', lineHeight: 1,
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            {formatDuration(app.totalSeconds)}
-          </p>
-          <p style={{ fontSize: 12, color: 'var(--color-text-secondary)', margin: '0 0 auto' }}>
-            {visibleSessions.length} {visibleSessions.length === 1 ? 'session' : 'sessions'}
-          </p>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: '14px 0 0', lineHeight: 1.6, maxWidth: 300 }}>
-            {usageInsight}
-          </p>
-
-          {/* Sparkline bars */}
-          {hoveredSparkText && (
-            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-primary)', margin: '18px 0 0' }}>
-              {hoveredSparkText}
+            <p style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: 0 }}>
+              {buildCharacterSummary(
+                detail?.displayName ?? app.appName,
+                app.category,
+                detailCharacter,
+                detail?.sessionCount ?? (app.sessionCount ?? 0),
+                detail && detail.sessionCount > 0 ? Math.round(detail.totalSeconds / detail.sessionCount) : Math.round(app.totalSeconds / Math.max(1, app.sessionCount ?? 1)),
+              )}
             </p>
-          )}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 96, marginTop: hoveredSparkText ? 10 : 24 }}>
-            {sparkBars.map((val, i) => {
-              const isToday = i === sparkBars.length - 1
-              const h = Math.max(4, Math.round((val / maxSpark) * 96))
-              return (
-                <div
-                  key={i}
-                  style={{ flex: 1, height: 96, display: 'flex', alignItems: 'flex-end' }}
-                  onMouseEnter={() => setHoveredSparkIndex(i)}
-                  onMouseLeave={() => setHoveredSparkIndex(null)}
-                  title={`${sparkLabels[i]}: ${val > 0 ? formatDuration(val) : 'No usage'}`}
-                >
-                  <div style={{
-                    width: '100%', height: h,
-                    borderRadius: 4,
-                    background: isToday ? 'var(--gradient-primary)' : 'var(--color-surface-highest)',
-                    opacity: hoveredSparkIndex === null || hoveredSparkIndex === i ? 1 : 0.42,
-                    transition: 'height 300ms, opacity 140ms ease',
-                  }} />
-                </div>
-              )
-            })}
           </div>
-        </div>
-      </div>
 
-      {/* Bento row 2: Intentionality Breakdown (7/12) + Session History (5/12) */}
-      <div style={{ padding: '0 40px', display: 'grid', gridTemplateColumns: '7fr 5fr', gap: 16, marginBottom: 16, alignItems: 'start' }}>
-        {/* Col A: Glass Intentionality Breakdown */}
-        <div style={{
-          background: 'var(--color-glass-bg)',
-          backdropFilter: 'blur(20px)',
-          border: '1px solid var(--color-glass-border)',
-          borderRadius: 12, padding: 32,
-        }}>
-          <p style={{
-            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-            margin: '0 0 12px',
-          }}>
-            Usage Profile
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 20 }}>
-            {[
-              { label: 'Avg Session', value: avgSessionSeconds > 0 ? formatDuration(avgSessionSeconds) : '--' },
-              { label: 'Longest', value: longestSession > 0 ? formatDuration(longestSession) : '--' },
-              { label: 'Sessions', value: String(visibleSessions.length) },
-            ].map((stat) => (
-              <div
-                key={stat.label}
-                style={{
-                  borderRadius: 10,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-container)',
-                  padding: '14px 16px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6,
-                }}
-              >
-                <span style={{
-                  fontSize: 10,
-                  fontWeight: 900,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.14em',
-                  color: 'var(--color-text-secondary)',
-                }}>
-                  {stat.label}
-                </span>
-                <span style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  color: 'var(--color-text-primary)',
-                  letterSpacing: '-0.03em',
-                  lineHeight: 1,
-                  fontVariantNumeric: 'tabular-nums',
-                }}>
-                  {stat.value}
-                </span>
-              </div>
-            ))}
-          </div>
-          {catBreakdown.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>No data available.</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                padding: '14px 16px',
-                borderRadius: 10,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-container)',
-              }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <span style={{
-                    fontSize: 10,
-                    fontWeight: 900,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.14em',
-                    color: 'var(--color-text-secondary)',
-                  }}>
-                    Primary Mode
-                  </span>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--color-text-primary)' }}>
-                    {formatCategory(catBreakdown[0][0])}
-                  </span>
-                </div>
-                <span style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  color: 'var(--color-primary)',
-                  letterSpacing: '-0.03em',
-                  fontVariantNumeric: 'tabular-nums',
-                }}>
-                  {primaryCategoryPct}%
-                </span>
-              </div>
-              {catBreakdown.map(([cat, sec]) => {
-                const pct = Math.round((sec / (sessionTotalSeconds || 1)) * 100)
-                const cColor = distColor(cat as AppCategory)
-                return (
-                  <div key={cat}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: cColor, flexShrink: 0 }} />
-                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                          {formatCategory(cat)}
-                        </span>
+          {/* Key artifacts */}
+          {artifactItems.length > 0 && (
+            <div style={{
+              padding: '18px 20px', borderRadius: 12,
+              background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
+            }}>
+              {sectionHeading('Key Artifacts')}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {artifactItems.map((artifact) => {
+                  const isLinkable = artifact.openTarget.kind === 'external_url' || !!artifact.url
+                  return (
+                    <div
+                      key={artifact.id}
+                      onClick={isLinkable ? () => openArtifact(artifact) : undefined}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '7px 8px', borderRadius: 7,
+                        cursor: isLinkable ? 'pointer' : 'default',
+                        transition: 'background 100ms',
+                      }}
+                      onMouseEnter={(e) => { if (isLinkable) (e.currentTarget as HTMLDivElement).style.background = 'var(--color-surface-low)' }}
+                      onMouseLeave={(e) => { if (isLinkable) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600,
+                          color: isLinkable ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {artifact.displayTitle}
+                        </div>
+                        {artifactSubtitle(artifact) && (
+                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '90%' }}>
+                            {artifactSubtitle(artifact)}
+                          </div>
+                        )}
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>{pct}%</span>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)' }}>{formatDuration(artifact.totalSeconds)}</div>
+                        <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>{formatCategory(app.category)}</div>
+                      </div>
                     </div>
-                    <div style={{ height: 10, borderRadius: 999, background: 'var(--color-bg)', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', width: `${pct}%`,
-                        background: cColor, borderRadius: 999,
-                        transition: 'width 300ms',
-                      }} />
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Appears in work blocks */}
+          {detail && detail.blockAppearances.length > 0 && (
+            <div style={{
+              padding: '18px 20px', borderRadius: 12,
+              background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
+            }}>
+              {sectionHeading('Appears In')}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {detail.blockAppearances.map((wb) => {
+                  const dateStr = new Date(wb.startTime)
+                  const y = dateStr.getFullYear()
+                  const m = String(dateStr.getMonth() + 1).padStart(2, '0')
+                  const d = String(dateStr.getDate()).padStart(2, '0')
+                  const timelineDate = `${y}-${m}-${d}`
+                  const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(wb.startTime))
+                  const timeLabel = `${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(wb.startTime)}–${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(wb.endTime)}`
+                  return (
+                    <div
+                      key={wb.blockId}
+                      onClick={() => { window.location.hash = `#/timeline?view=day&date=${timelineDate}&block=${wb.blockId}` }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '7px 8px', borderRadius: 7,
+                        cursor: 'pointer', transition: 'background 100ms',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-low)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {wb.label}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
+                          {dateLabel} · {timeLabel}
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>
+                        {formatDuration(Math.round((wb.endTime - wb.startTime) / 1000))}
+                      </span>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Col B: Session History card */}
-        <div style={{
-          background: 'var(--color-surface-container)',
-          border: '1px solid var(--color-border-ghost)',
-          borderRadius: 12,
-          padding: 32,
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: 'var(--color-shadow-soft)',
-        }}>
-          <p style={{
-            fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-            letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-            margin: '0 0 16px',
-          }}>
-            Session History
-          </p>
-
-          {loading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {[...Array(4)].map((_, i) => (
-                <div key={i} style={{ height: 36, borderRadius: 8, background: 'var(--color-surface-high)', opacity: 0.5 }} />
-              ))}
-            </div>
-          ) : groupedSessions.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: 0 }}>No sessions recorded.</p>
-          ) : (
+          {/* Patterns */}
+          {detail && (
             <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              flex: 1,
-              border: '1px solid var(--color-border-ghost)',
-              borderRadius: 12,
-              overflow: 'hidden',
-              background: 'var(--color-surface-low)',
+              padding: '18px 20px', borderRadius: 12,
+              background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
             }}>
-              {groupedSessions.slice(0, 6).map((group, index) => (
-                <div
-                  key={group.key}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '10px 12px',
-                    borderBottom: index < Math.min(groupedSessions.length, 6) - 1 ? '1px solid var(--color-border-ghost)' : 'none',
-                    transition: 'background 120ms',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-surface-high)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                >
-                  {days > 1 && (
-                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                      {formatDateShort(group.startTime)}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 12, color: 'var(--color-text-primary)', fontVariantNumeric: 'tabular-nums' }}>
-                    {formatTime(group.startTime)} - {formatTime(group.endTime)}
-                  </span>
-                  {group.sessionCount > 1 && (
-                    <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>x{group.sessionCount}</span>
-                  )}
-                  <span style={{ flex: 1 }} />
-                  <span style={{ fontSize: 12, fontWeight: 900, color: 'var(--color-primary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                    {formatDuration(group.totalSeconds)}
-                  </span>
-                </div>
-              ))}
+              {sectionHeading('Patterns')}
+              <div style={{ display: 'grid', gap: 8 }}>
+                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
+                  {topTimeOfDay.length > 0
+                    ? `Most active: ${topTimeOfDay.map((entry) => {
+                      if (entry.hour < 12) return 'mornings'
+                      if (entry.hour < 17) return 'afternoons'
+                      return 'evenings'
+                    }).filter((value, index, values) => values.indexOf(value) === index).join(' and ')}`
+                    : 'Most active: not enough history yet'}
+                </p>
+                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
+                  {pairedApps.length > 0
+                    ? `Usually paired with: ${pairedApps.slice(0, 3).map((entry) => entry.displayName).join(', ')}`
+                    : 'Usually paired with: no clear pattern yet'}
+                </p>
+                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
+                  {detail.workflowAppearances.length > 0
+                    ? `Repeated workflow: ${detail.workflowAppearances[0].label}`
+                    : `Session character: ${detailCharacter?.label?.toLowerCase() ?? 'still emerging'}`}
+                </p>
+              </div>
             </div>
           )}
 
-          {/* Stats footer */}
-          {!loading && visibleSessions.length > 0 && (
-            <div style={{
-              display: 'flex', gap: 0, marginTop: 16,
-              borderTop: '1px solid var(--color-border-ghost)', paddingTop: 16,
-            }}>
-              {[
-                { label: 'Avg session', value: avgSessionSeconds > 0 ? formatDuration(avgSessionSeconds) : '--' },
-                { label: 'Longest', value: longestSession > 0 ? formatDuration(longestSession) : '--' },
-              ].map((stat, i) => (
-                <div key={stat.label} style={{
-                  flex: 1,
-                  paddingLeft: i > 0 ? 16 : 0,
-                  borderLeft: i > 0 ? '1px solid var(--color-border-ghost)' : 'none',
-                }}>
-                  <p style={{
-                    fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-                    letterSpacing: '0.15em', color: 'var(--color-text-secondary)',
-                    margin: '0 0 4px',
-                  }}>
-                    {stat.label}
-                  </p>
-                  <p style={{
-                    fontSize: 15, fontWeight: 900, color: 'var(--color-text-primary)',
-                    margin: 0, fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {stat.value}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      </div>
+      )}
     </div>
   )
 }
+
+// ─── Loading skeleton ─────────────────────────────────────────────────────────
 
 function LoadingSkeleton() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        {[0,1,2,3].map((i) => (
-          <div key={i} style={{ height: 30, width: 80, borderRadius: 999, background: 'var(--color-surface-container)', opacity: 0.5 }} />
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} style={{ height: 28, width: 72, borderRadius: 999, background: 'var(--color-surface-container)', opacity: 0.5 }} />
         ))}
       </div>
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} style={{ height: 56, borderRadius: 12, background: 'var(--color-surface-container)', opacity: 0.4 }} />
+        <div key={i} style={{ height: 52, borderRadius: 12, background: 'var(--color-surface-container)', opacity: 0.4 }} />
       ))}
     </div>
   )
 }
-
-

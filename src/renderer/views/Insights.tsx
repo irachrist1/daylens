@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import type { AIProvider, AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary, WeeklySummary } from '@shared/types'
+import { Link } from 'react-router-dom'
+import type { AIProvider, AppSession, AppUsageSummary, AppSettings, FocusSession, WebsiteSummary } from '@shared/types'
 import {
   buildCategoryTotalsFromSummaries,
   calculateFocusTotals,
@@ -87,16 +87,6 @@ function IconTarget() {
       <circle cx="8" cy="8" r="6" />
       <circle cx="8" cy="8" r="2.5" />
       <circle cx="8" cy="8" r="0.8" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-function IconSparkle() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 2v2.5M11 17.5V20M2 11h2.5M17.5 11H20" />
-      <path d="M11 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
-      <path d="M5.6 5.6l1.8 1.8M14.6 14.6l1.8 1.8M5.6 16.4l1.8-1.8M14.6 7.4l1.8-1.8" />
     </svg>
   )
 }
@@ -240,7 +230,7 @@ function buildAlgorithmicInsights(params: {
       body: `Average dwell time before each change was ${formatDuration(switching.averageSeconds)} in this window.`,
       icon: <IconSwitch />,
       metric: <span>{switching.count} short sessions</span>,
-      action: <Link to="/focus" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>View focus sessions →</Link>,
+      action: <Link to="/timeline" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>View timeline →</Link>,
       accentColor: '#ffb95f',
     })
   }
@@ -258,7 +248,7 @@ function buildAlgorithmicInsights(params: {
       : `You haven't logged a focus session ${hasFocusToday ? 'today' : 'yet today'}. A 25-minute session now would start your streak.`,
     icon: <IconFlame />,
     metric: <span>{streakDays > 0 ? `${streakDays} days` : '0 days'}</span>,
-    action: <Link to="/focus" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>Open Focus →</Link>,
+    action: <Link to="/timeline" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>Open Timeline →</Link>,
     accentColor: '#4fdbc8',
   })
 
@@ -307,89 +297,23 @@ function buildAlgorithmicInsights(params: {
           : `${formatDuration(remaining)} of focused app time still needed.`,
       icon: <IconTarget />,
       metric: <span>{focusPct}%</span>,
-      action: <Link to="/focus" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>Plan the next block →</Link>,
+      action: <Link to="/timeline" style={{ fontSize: 12, color: 'var(--color-primary)', textDecoration: 'none' }}>View timeline →</Link>,
     })
   }
 
   return insights
 }
 
-function getWeekRange(): string {
-  const now = new Date()
-  const day = now.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  const mon = new Date(now)
-  mon.setDate(now.getDate() + diff)
-  const sun = new Date(mon)
-  sun.setDate(mon.getDate() + 6)
-  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  return `${fmt(mon)} – ${fmt(sun)}, ${now.getFullYear()}`
-}
-
-interface WeeklyTrendPoint {
-  date: string
-  label: string
-  focusSeconds: number
-  totalSeconds: number
-  focusScore: number
-}
-
-function shiftDateString(dateStr: string, offsetDays: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  const next = new Date(year, month - 1, day + offsetDays)
-  return [
-    next.getFullYear(),
-    String(next.getMonth() + 1).padStart(2, '0'),
-    String(next.getDate()).padStart(2, '0'),
-  ].join('-')
-}
-
-function weekdayLabel(dateStr: string): string {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  return new Date(year, month - 1, day)
-    .toLocaleDateString('en-US', { weekday: 'short' })
-    .slice(0, 3)
-}
-
-function buildWeeklyTrend(
-  weeklySummary: WeeklySummary | null,
-  todayDateStr: string,
-  todayFocusSeconds: number,
-  todayTotalSeconds: number,
-  todayFocusScore: number,
-): WeeklyTrendPoint[] {
-  const byDate = new Map(
-    (weeklySummary?.dailyBreakdown ?? []).map((day) => [day.date, day] as const),
-  )
-
-  return Array.from({ length: 7 }, (_, index) => {
-    const date = shiftDateString(todayDateStr, index - 6)
-    const isToday = date === todayDateStr
-    const day = byDate.get(date)
-    return {
-      date,
-      label: weekdayLabel(date),
-      focusSeconds: isToday ? todayFocusSeconds : (day?.focusSeconds ?? 0),
-      totalSeconds: isToday ? todayTotalSeconds : (day?.totalSeconds ?? 0),
-      focusScore: isToday ? todayFocusScore : (day?.focusScore ?? 0),
-    }
-  })
-}
-
 export default function Insights() {
-  const navigate = useNavigate()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'chat'>('overview')
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [summaries, setSummaries] = useState<AppUsageSummary[]>([])
   const [focusSessions, setFocusSessions] = useState<FocusSession[]>([])
   const [websites, setWebsites] = useState<WebsiteSummary[]>([])
   const [todaySessions, setTodaySessions] = useState<AppSession[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [weeklySummary, setWeeklySummary] = useState<WeeklySummary | null>(null)
-  const [hoveredTrendDate, setHoveredTrendDate] = useState<string | null>(null)
   const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const loadingRef = useRef(false)
@@ -401,7 +325,7 @@ export default function Insights() {
     async function refresh() {
       if (document.hidden) return
       try {
-        const [history, hasKey, today, recentFocus, siteData, sessionData, currentSettings, weekly, detectedCliTools] = await Promise.all([
+        const [history, hasKey, today, recentFocus, siteData, sessionData, currentSettings, , detectedCliTools] = await Promise.all([
           ipc.ai.getHistory().catch(() => []),
           ipc.settings.hasApiKey().catch(() => false),
           ipc.db.getToday().catch(() => []),
@@ -431,7 +355,6 @@ export default function Insights() {
         setWebsites(siteData as WebsiteSummary[])
         setTodaySessions(sessionData as AppSession[])
         setSettings(current)
-        setWeeklySummary((weekly as WeeklySummary | null) ?? null)
         setCliTools(resolvedCliTools)
       } catch (err) {
         if (cancelled) return
@@ -450,16 +373,14 @@ export default function Insights() {
   }, [])
 
   useEffect(() => {
-    if (activeTab !== 'chat') return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, activeTab, loading])
+  }, [messages, loading])
 
   async function handleSend(text?: string) {
     const message = (text ?? input).trim()
     if (!message || loading || !hasApiKey) return
     track('insight_generated', { message_length: message.length })
     setInput('')
-    setActiveTab('chat')
     setMessages((prev) => [...prev, { role: 'user', content: message }])
     setLoading(true)
     try {
@@ -481,16 +402,10 @@ export default function Insights() {
   }
 
   const totalTracked = summaries.reduce((n, s) => n + s.totalSeconds, 0)
-  const focusTracked = summaries.filter((s) => s.isFocused).reduce((n, s) => n + s.totalSeconds, 0)
-  const focusPct = percentOf(focusTracked, totalTracked)
-  const streakDays = getFocusStreakDays(focusSessions)
 
   const algorithmicInsights = buildAlgorithmicInsights({ settings, summaries, focusSessions, websites, todaySessions })
 
   const switching = computeContextSwitching(filterVisibleSessions(todaySessions, 10, false), { windowMs: 2 * 60 * 60_000, shortSessionSeconds: 180 })
-
-  const hasWeekData = (weeklySummary?.dailyBreakdown.some((day) => day.totalSeconds > 0) ?? false) || focusSessions.length > 0
-  const weekRange = getWeekRange()
 
   const today = new Date()
   const todayLabel = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
@@ -503,42 +418,27 @@ export default function Insights() {
       ? !!cliTools?.codex
       : false
   const isAIReady = isCliProvider ? selectedCliInstalled : hasApiKey === true
-  const showChatInput = isAIReady
 
   const peakInsight = algorithmicInsights.find((i) => i.key === 'peak-hours')
-  const peakHourText = peakInsight ? peakInsight.headline : null
-
-  const weeklyTrend = buildWeeklyTrend(
-    weeklySummary,
-    todayString(),
-    focusTracked,
-    totalTracked,
-    focusPct,
-  )
-  const hoveredTrend = weeklyTrend.find((day) => day.date === hoveredTrendDate) ?? null
-  const maxSparkVal = Math.max(...weeklyTrend.map((day) => day.focusSeconds), 1)
-
-  const focusQuality = focusPct >= 70 ? 'Peak Velocity' : focusPct >= 40 ? 'Building Momentum' : 'Getting Started'
   const providerMeta = AI_PROVIDER_META[settings.aiProvider]
 
-  const firstInsight = algorithmicInsights[0]
-  const lastAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
+  // Build a proactive summary paragraph from today's data
+  const summaryParagraph = (() => {
+    if (totalTracked === 0) return null
+    const topCats = buildCategoryTotalsFromSummaries(summaries).slice(0, 2)
+    const catDesc = topCats.map((c) => formatCategory(c.category).toLowerCase()).join(' and ')
+    const peakNote = peakInsight ? ` ${peakInsight.headline}.` : ''
+    return `You spent about ${formatDuration(totalTracked)} on ${catDesc} workflows today.${peakNote}${switching.count > 5 ? ` ${switching.count} short app sessions suggest some context switching.` : ''}`
+  })()
 
-  function handleApplyRule(insight: AlgorithmicInsight) {
-    if (insight.key === 'peak-hours' || insight.key === 'goal-progress' || insight.key === 'focus-streak' || insight.key === 'context-switching') {
-      track('insight_rule_applied', { insight_key: insight.key, target: 'focus' })
-      navigate('/focus')
-      return
-    }
-    if (insight.key === 'time-allocation' || insight.key === 'website-distraction') {
-      track('insight_rule_applied', { insight_key: insight.key, target: 'history' })
-      navigate('/history')
-      return
-    }
-    track('insight_rule_applied', { insight_key: insight.key, target: 'chat' })
-    setActiveTab('chat')
-    setInput(`Turn this insight into a concrete next step: ${insight.headline}`)
-  }
+  // Observation chips as follow-up starters
+  const observationChips = [
+    'How many hours on focused work today?',
+    'What repeated most today?',
+    'When did focus break down?',
+    'Where did my time go this week?',
+    'What was my most used app?',
+  ]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -546,459 +446,142 @@ export default function Insights() {
       {/* ── Scrollable body ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
 
-        {/* ── Header ─────────────────────────────────────────────────────────── */}
+        {/* ── Header with range selector ─────────────────────────────────────── */}
         <div style={{ padding: '32px 40px 0', maxWidth: 960, margin: '0 auto', width: '100%' }}>
-          <h1 style={{
-            fontSize: 36, fontWeight: 900, color: 'var(--color-text-primary)',
-            letterSpacing: '-0.03em', margin: '0 0 4px',
-          }}>
-            {activeTab === 'overview' ? 'Your Week in Review' : 'Ask Daylens'}
-          </h1>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', fontWeight: 500, margin: 0 }}>
-            {activeTab === 'overview'
-              ? `${todayLabel}${hasWeekData ? ` · ${weekRange}` : ''}`
-              : 'The AI thread now lives in its own workspace so the overview stays usable even after a long conversation.'}
-          </p>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
-            {([
-              { key: 'overview', label: 'Overview', description: 'Cards and patterns' },
-              { key: 'chat', label: 'AI Workspace', description: 'Dedicated conversation' },
-            ] as const).map((tab) => {
-              const active = activeTab === tab.key
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  style={{
-                    minWidth: 188,
-                    borderRadius: 10,
-                    border: active ? 'none' : '1px solid var(--color-border-ghost)',
-                    background: active ? 'linear-gradient(135deg, var(--color-primary), var(--color-primary-glow))' : 'var(--color-surface-container)',
-                    color: active ? 'var(--color-primary-contrast)' : 'var(--color-text-primary)',
-                    padding: '12px 16px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-start',
-                    gap: 4,
-                    cursor: 'pointer',
-                    boxShadow: active ? 'var(--color-shadow-soft)' : 'none',
-                  }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: 900 }}>{tab.label}</span>
-                  <span style={{ fontSize: 12, color: active ? 'rgba(246,249,255,0.82)' : 'var(--color-text-secondary)' }}>
-                    {tab.description}
-                  </span>
-                </button>
-              )
-            })}
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 24 }}>
+            <div>
+              <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' }}>
+                AI
+              </h1>
+              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>
+                {todayLabel}
+              </p>
+            </div>
+            {messages.length > 0 && (
+              <button
+                onClick={() => void ipc.ai.clearHistory().then(() => setMessages([]))}
+                style={{
+                  fontSize: 11, fontWeight: 700, background: 'none', border: '1px solid var(--color-border-ghost)',
+                  cursor: 'pointer', color: 'var(--color-text-secondary)',
+                  padding: '5px 12px', borderRadius: 7,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-text-primary)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-text-secondary)')}
+              >
+                New chat
+              </button>
+            )}
           </div>
         </div>
 
-        {/* ── Bento grid ─────────────────────────────────────────────────────── */}
-        <div style={{ padding: '24px 40px 0', maxWidth: 960, margin: '0 auto', width: '100%' }}>
+        <div style={{ padding: '0 40px', maxWidth: 960, margin: '0 auto', width: '100%' }}>
 
-          {activeTab === 'overview' && (
-            <>
-          {/* Row 1: AI Summary (60%) + Focus Intensity (40%) */}
-          <div style={{ display: 'grid', gridTemplateColumns: '60fr 40fr', gap: 16, marginBottom: 16 }}>
-
-            {/* AI Summary card */}
+          {/* ── State 1: No AI key configured ─────────────────────────────────── */}
+          {!isAIReady && (
             <div style={{
-              background: 'var(--color-surface-container)', borderRadius: 12,
-              padding: 32, position: 'relative', overflow: 'hidden',
-              border: '1px solid var(--color-border-ghost)',
-              boxShadow: 'var(--color-shadow-soft)',
+              padding: '48px 24px', textAlign: 'center',
+              background: 'var(--color-surface-container)',
+              borderRadius: 12, border: '1px solid var(--color-border-ghost)',
             }}>
-              {/* Decorative blur */}
-              <div style={{
-                position: 'absolute', top: -80, right: -80,
-                width: 200, height: 200,
-                background: 'rgba(173,198,255,0.05)',
-                borderRadius: '50%', filter: 'blur(40px)',
-                pointerEvents: 'none',
-              }} />
-
-              {/* Label row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20 }}>
-                <span style={{ color: 'var(--color-primary)', display: 'flex' }}>
-                  <IconSparkle />
-                </span>
-                <span style={{
-                  fontSize: 10, fontWeight: 900, letterSpacing: '0.15em',
-                  textTransform: 'uppercase', color: 'var(--color-primary)',
-                }}>
-                  Intelligence Summary
-                </span>
-              </div>
-
-              {/* Summary text */}
-              <p style={{
-                fontSize: 20, fontWeight: 400, color: 'var(--color-text-primary)',
-                lineHeight: 1.6, marginBottom: 24, margin: '0 0 24px',
-              }}>
-                You&apos;ve focused for{' '}
-                <span style={{ fontWeight: 900, color: 'var(--color-primary)', fontStyle: 'italic', letterSpacing: '-0.02em' }}>
-                  {formatDuration(focusTracked)}
-                </span>
-                {' '}today.
-                {peakHourText && (
-                  <>{' '}Your{' '}
-                    <span style={{ fontWeight: 900, color: 'var(--color-primary)', fontStyle: 'italic', letterSpacing: '-0.02em' }}>
-                      peak window
-                    </span>
-                    {' '}is driving your best work.
-                  </>
-                )}
-                {switching.count > 0 && (
-                  <>{' '}{switching.count} short app sessions recorded.</>
-                )}
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 8px' }}>
+                To enable AI summaries, add an API key in Settings.
               </p>
-
-              {/* Stat chips */}
-              <div style={{ display: 'flex', gap: 12 }}>
-                {/* Focus % chip */}
-                <div style={{
-                  padding: '8px 16px', background: 'var(--color-surface-highest)',
-                  borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-primary)' }}>
-                    {focusPct}%
-                  </span>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-                    letterSpacing: '0.1em', color: 'var(--color-text-secondary)',
-                  }}>
-                    Focus
-                  </span>
-                </div>
-
-                {/* Streak chip */}
-                {streakDays > 0 && (
-                  <div style={{
-                    padding: '8px 16px', background: 'var(--color-surface-highest)',
-                    borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
-                  }}>
-                    <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--color-tertiary)' }}>
-                      {streakDays}
-                    </span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-                      letterSpacing: '0.1em', color: 'var(--color-text-secondary)',
-                    }}>
-                      Streak
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Focus Intensity card */}
-            <div style={{
-              background: 'var(--color-surface-low)', borderRadius: 12, padding: 28,
-              border: '1px solid var(--color-border-ghost)',
-              boxShadow: 'var(--color-shadow-soft)',
-              display: 'flex', flexDirection: 'column',
-            }}>
-              {/* Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                <span style={{
-                  fontSize: 10, fontWeight: 900, letterSpacing: '0.15em',
-                  textTransform: 'uppercase', color: 'var(--color-text-secondary)',
-                }}>
-                  Focus Intensity
-                </span>
-                <span style={{ color: 'var(--color-primary)', display: 'flex' }}>
-                  <IconPeak />
-                </span>
-              </div>
-
-              {/* Qualitative label */}
-              <p style={{
-                fontSize: 24, fontWeight: 900, fontStyle: 'italic',
-                color: 'var(--color-text-primary)', letterSpacing: '-0.02em',
-                margin: '0 0 8px',
-              }}>
-                {focusQuality}
+              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: '0 0 16px' }}>
+                {isCliProvider
+                  ? `${providerMeta.label} needs to be installed and available.`
+                  : `Add your ${providerMeta.label} API key to get started.`}
               </p>
-              {hoveredTrend && (
-                <p style={{
-                  fontSize: 11,
-                  color: hoveredTrend.focusSeconds
-                    ? 'var(--color-primary)'
-                    : 'var(--color-text-tertiary)',
-                  margin: '0 0 14px',
-                  minHeight: 16,
-                  fontWeight: 700,
-                }}>
-                  {`${hoveredTrend.label} · ${hoveredTrend.focusSeconds > 0 ? formatDuration(hoveredTrend.focusSeconds) : 'No focused time'}`}
-                </p>
-              )}
-
-              {/* Bar chart */}
-              <div style={{
-                display: 'flex', alignItems: 'flex-end', gap: 3,
-                height: 80, marginTop: 'auto',
-              }}>
-                {weeklyTrend.map((entry) => {
-                  const isHighest = entry.focusSeconds === maxSparkVal && entry.focusSeconds > 0
-                  const isHovered = hoveredTrendDate === entry.date
-                  const heightPct = maxSparkVal > 0 ? Math.max((entry.focusSeconds / maxSparkVal) * 100, 10) : 10
-                  return (
-                    <div
-                      key={entry.date}
-                      title={`${entry.label}: ${entry.focusSeconds > 0 ? formatDuration(entry.focusSeconds) : 'No focused time'}`}
-                      style={{
-                        flex: 1,
-                        borderRadius: '3px 3px 0 0',
-                        background: entry.focusSeconds > 0 ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
-                        height: `${heightPct}%`,
-                        minHeight: 8,
-                        opacity: entry.focusSeconds > 0 ? (isHovered || isHighest ? 1 : 0.42) : 1,
-                        boxShadow: isHovered || isHighest ? '0 10px 20px rgba(15,99,219,0.14)' : 'none',
-                        transition: 'background 150ms, opacity 120ms ease',
-                        cursor: 'default',
-                      }}
-                      onMouseEnter={() => setHoveredTrendDate(entry.date)}
-                      onMouseLeave={() => setHoveredTrendDate(null)}
-                    />
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Row 2: Pattern cards — 3 columns */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-            {[0, 1, 2].map((idx) => {
-              const insight = algorithmicInsights[idx]
-              if (!insight) {
-                return <div key={idx} />
-              }
-              const accent = insight.accentColor ?? 'var(--color-primary)'
-              const accentBg = insight.accentColor
-                ? `${insight.accentColor}1a`
-                : 'var(--color-accent-dim)'
-              return (
-                <PatternCard
-                  key={insight.key}
-                  insight={insight}
-                  accent={accent}
-                  accentBg={accentBg}
-                />
-              )
-            })}
-          </div>
-
-          {/* Actionable Intelligence section */}
-          {algorithmicInsights.length > 0 && firstInsight && (
-            <div style={{ marginBottom: 32 }}>
-              {/* Section label */}
-              <div style={{
-                fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-                letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-                display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20,
-              }}>
-                <span>Actionable Intelligence</span>
-                <div style={{ flex: 1, height: 1, background: 'rgba(66,71,84,0.20)' }} />
-              </div>
-
-              {/* Glass panel */}
-              <div style={{
-                background: 'var(--color-glass-bg)',
-                backdropFilter: 'blur(20px)',
-                borderRadius: 12,
-                border: '1px solid var(--color-glass-border)',
-                padding: 32,
-                display: 'flex', alignItems: 'center', gap: 32,
-                position: 'relative', overflow: 'hidden',
-              }}>
-                {/* Decorative glow */}
-                <div style={{
-                  position: 'absolute', right: -80, bottom: -80,
-                  width: 320, height: 320,
-                  background: 'rgba(173,198,255,0.08)',
-                  borderRadius: '50%', filter: 'blur(60px)',
-                  pointerEvents: 'none',
-                }} />
-
-                {/* Icon box */}
-                <div style={{
-                  width: 80, height: 80, borderRadius: 12,
+              <Link
+                to="/settings"
+                style={{
+                  padding: '9px 20px', borderRadius: 8,
                   background: 'var(--gradient-primary)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  flexShrink: 0, boxShadow: '0 8px 32px rgba(173,198,255,0.20)',
-                }}>
-                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-contrast)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 8v4l3 3" />
-                  </svg>
-                </div>
-
-                {/* Text section */}
-                <div style={{ flex: 1, position: 'relative', zIndex: 1 }}>
-                  <p style={{
-                    fontSize: 18, fontWeight: 900, fontStyle: 'italic',
-                    letterSpacing: '-0.02em', color: 'var(--color-text-primary)',
-                    margin: '0 0 8px',
-                  }}>
-                    Optimization Protocol
-                  </p>
-                  <p style={{
-                    fontSize: 15, color: 'var(--color-text-secondary)',
-                    lineHeight: 1.7, margin: 0,
-                  }}>
-                    {firstInsight.body}
-                  </p>
-                </div>
-
-                {/* Action button */}
-                {firstInsight.action ? (
-                  <div style={{ flexShrink: 0 }}>
-                    {firstInsight.action}
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => handleApplyRule(firstInsight)}
-                    style={{
-                      padding: '12px 24px',
-                      background: 'var(--gradient-primary)',
-                      color: 'var(--color-primary-contrast)',
-                      fontWeight: 900, fontSize: 12,
-                      letterSpacing: '-0.01em', textTransform: 'uppercase',
-                      borderRadius: 10, border: 'none', cursor: 'pointer',
-                      flexShrink: 0, transition: 'transform 150ms',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(0.97)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                  >
-                    Apply Rule
-                  </button>
-                )}
-              </div>
+                  color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700, textDecoration: 'none',
+                }}
+              >
+                {isCliProvider ? 'Open Settings' : 'Add API key'}
+              </Link>
             </div>
           )}
 
-          {/* ── AI Chat section ───────────────────────────────────────────────── */}
-            </>
-          )}
-
-          {activeTab === 'chat' && (
-          <div style={{
-            marginBottom: 0,
-            background: 'var(--color-surface-container)',
-            borderRadius: 12,
-            padding: 24,
-            border: '1px solid var(--color-border-ghost)',
-            boxShadow: 'var(--color-shadow-soft)',
-          }}>
-            {/* Section header */}
+          {/* ── State 2: AI ready, no data ────────────────────────────────────── */}
+          {isAIReady && totalTracked === 0 && messages.length === 0 && (
             <div style={{
-              fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
-              letterSpacing: '0.2em', color: 'var(--color-text-secondary)',
-              display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20,
+              padding: '48px 24px', textAlign: 'center',
+              background: 'var(--color-surface-container)',
+              borderRadius: 12, border: '1px solid var(--color-border-ghost)',
             }}>
-              <span>Ask Daylens</span>
-              <div style={{ flex: 1, height: 1, background: 'rgba(66,71,84,0.20)' }} />
-              {lastAssistantMessage && (
-                <span style={{
-                  maxWidth: 240,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  letterSpacing: 'normal',
-                  textTransform: 'none',
-                  color: 'var(--color-text-tertiary)',
-                }}>
-                  {lastAssistantMessage.content}
-                </span>
-              )}
-              {messages.length > 0 && (
-                <button
-                  onClick={() => void ipc.ai.clearHistory().then(() => setMessages([]))}
-                  style={{
-                    fontSize: 11, fontWeight: 700, background: 'none', border: 'none',
-                    cursor: 'pointer', color: 'var(--color-text-secondary)',
-                    padding: '2px 6px', borderRadius: 5, letterSpacing: '0.05em',
-                    textTransform: 'uppercase',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-text-primary)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-text-secondary)')}
-                >
-                  New chat
-                </button>
-              )}
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 8px' }}>
+                Not enough data tracked yet.
+              </p>
+              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: 0 }}>
+                Check back after a full day of activity.
+              </p>
             </div>
+          )}
 
-            {/* No API key state */}
-            {!showChatInput && (
-              <div style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                gap: 14, padding: '40px 0', textAlign: 'center',
-              }}>
+          {/* ── State 3/4: Data present — show summary + conversation ─────────── */}
+          {isAIReady && (totalTracked > 0 || messages.length > 0) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+              {/* Proactive summary */}
+              {summaryParagraph && messages.length === 0 && (
                 <div style={{
-                  width: 44, height: 44, borderRadius: 12,
-                  background: 'var(--color-accent-dim)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: 'var(--color-primary)',
+                  padding: '20px 24px', borderRadius: 12,
+                  background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
                 }}>
-                  <IconSparkle />
+                  <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)', margin: 0 }}>
+                    {summaryParagraph}
+                  </p>
                 </div>
+              )}
+
+              {/* Observation chips — shown when no conversation yet */}
+              {messages.length === 0 && !loading && (
                 <div>
-                  <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)', margin: '0 0 6px' }}>
-                    Ask about your day
-                  </p>
-                  <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', maxWidth: 260, margin: '0 auto' }}>
-                    {isCliProvider
-                      ? `${providerMeta.label} needs to be installed and available before Daylens can answer with live context.`
-                      : `Add your ${providerMeta.label} API key to ask questions about your productivity.`}
-                  </p>
-                </div>
-                <Link
-                  to="/settings"
-                  style={{
-                    padding: '9px 20px', borderRadius: 8,
-                    background: 'var(--gradient-primary)',
-                    color: 'var(--color-primary-contrast)', fontSize: 13, fontWeight: 700, textDecoration: 'none',
-                  }}
-                >
-                  {isCliProvider ? 'Open Settings →' : 'Add API key →'}
-                </Link>
-              </div>
-            )}
-
-            {/* Chat with API key or CLI */}
-            {showChatInput && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                {/* Empty state */}
-                {messages.length === 0 && !loading && (
-                  <div style={{ marginBottom: 20 }}>
-                    <p style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 6px', letterSpacing: '-0.02em' }}>
-                      Ask about your day
-                    </p>
-                    <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', margin: '0 0 16px', lineHeight: 1.6 }}>
-                      What were you working on? When did you settle in best? What changed your activity most?
-                    </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
-                      {[
-                        'What was I working on today?',
-                        'What changed most in my day?',
-                        'When was I most focused?',
-                        'Where did my time go?',
-                      ].map((prompt) => (
-                        <StarterPromptButton key={prompt} prompt={prompt} onSend={() => void handleSend(prompt)} />
-                      ))}
-                    </div>
+                  <div style={{
+                    fontSize: 10, fontWeight: 800, textTransform: 'uppercase',
+                    letterSpacing: '0.1em', color: 'var(--color-text-tertiary)',
+                    marginBottom: 10,
+                  }}>
+                    Observations
                   </div>
-                )}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {observationChips.map((chip) => (
+                      <button
+                        key={chip}
+                        onClick={() => void handleSend(chip)}
+                        style={{
+                          padding: '7px 14px', borderRadius: 999, fontSize: 12, fontWeight: 500,
+                          border: '1px solid var(--color-border-ghost)',
+                          background: 'transparent',
+                          color: 'var(--color-text-secondary)',
+                          cursor: 'pointer', fontFamily: 'inherit',
+                          transition: 'border-color 120ms, color 120ms, background 120ms',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--color-primary)'
+                          e.currentTarget.style.color = 'var(--color-primary)'
+                          e.currentTarget.style.background = 'var(--color-surface-low)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--color-border-ghost)'
+                          e.currentTarget.style.color = 'var(--color-text-secondary)'
+                          e.currentTarget.style.background = 'transparent'
+                        }}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-                {/* Messages */}
+              {/* Conversation thread */}
+              {messages.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   {messages.map((msg, i) =>
                     msg.role === 'user' ? (
-                      /* User bubble */
                       <div key={i} style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <div style={{
                           background: 'var(--color-accent-dim)',
@@ -1012,7 +595,6 @@ export default function Insights() {
                         </div>
                       </div>
                     ) : (
-                      /* AI response */
                       <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                         <div style={{
                           width: 24, height: 24, borderRadius: 6,
@@ -1025,10 +607,8 @@ export default function Insights() {
                           D
                         </div>
                         <div style={{
-                          flex: 1,
-                          fontSize: 13,
-                          color: 'var(--color-text-primary)',
-                          lineHeight: 1.7,
+                          flex: 1, fontSize: 13,
+                          color: 'var(--color-text-primary)', lineHeight: 1.7,
                           paddingBottom: i < messages.length - 1 ? 14 : 8,
                           borderBottom: i < messages.length - 1 ? '1px solid var(--color-border-ghost)' : 'none',
                         }}>
@@ -1097,17 +677,16 @@ export default function Insights() {
                   )}
                   <div ref={bottomRef} />
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
           )}
 
           <div style={{ height: 20 }} />
         </div>
       </div>
 
-      {/* ── Pinned input bar ─────────────────────────────────────────────────── */}
-      {showChatInput && activeTab === 'chat' && (
+      {/* ── Pinned input bar — always visible when AI is ready ─────────────── */}
+      {isAIReady && (
         <div style={{
           borderTop: '1px solid rgba(66,71,84,0.15)',
           padding: '12px 40px 14px',
@@ -1126,7 +705,7 @@ export default function Insights() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && void handleSend()}
-                placeholder="Ask about your productivity..."
+                placeholder="Type a question about your day or week..."
                 disabled={loading}
                 style={{
                   flex: 1, height: 40, background: 'none', border: 'none', outline: 'none',
@@ -1150,7 +729,6 @@ export default function Insights() {
                 Send
               </button>
             </div>
-            {/* Mode label */}
             <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', margin: '6px 0 0', lineHeight: 1.4 }}>
               {settings.aiProvider === 'claude-cli'
                 ? 'Exact answers use local data. Analysis uses your Claude subscription.'
@@ -1165,83 +743,5 @@ export default function Insights() {
       )}
 
     </div>
-  )
-}
-
-function PatternCard({
-  insight,
-  accent,
-  accentBg,
-}: {
-  insight: AlgorithmicInsight
-  accent: string
-  accentBg: string
-}) {
-  const [hovered, setHovered] = useState(false)
-  return (
-    <div
-      style={{
-        background: hovered ? 'var(--color-surface-high)' : 'var(--color-surface-container)',
-        padding: 24, borderRadius: 12,
-        border: '1px solid var(--color-border-ghost)',
-        boxShadow: 'var(--color-shadow-soft)',
-        transition: 'background 200ms',
-        cursor: 'default',
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {/* Icon box */}
-      <div style={{
-        width: 40, height: 40, borderRadius: 12,
-        background: accentBg,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        marginBottom: 16, color: accent,
-      }}>
-        {insight.icon}
-      </div>
-      {/* Tag */}
-      <p style={{
-        fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-        letterSpacing: '0.12em', color: 'var(--color-text-secondary)',
-        marginBottom: 4, margin: '0 0 4px',
-      }}>
-        {insight.tag}
-      </p>
-      {/* Headline */}
-      <p style={{
-        fontSize: 18, fontWeight: 900, color: 'var(--color-text-primary)',
-        marginBottom: 6, margin: '4px 0 6px', letterSpacing: '-0.01em',
-      }}>
-        {insight.headline}
-      </p>
-      {/* Body */}
-      <p style={{
-        fontSize: 12, color: 'var(--color-text-secondary)',
-        lineHeight: 1.6, margin: 0,
-      }}>
-        {insight.body}
-      </p>
-    </div>
-  )
-}
-
-function StarterPromptButton({ prompt, onSend }: { prompt: string; onSend: () => void }) {
-  const [hovered, setHovered] = useState(false)
-  return (
-    <button
-      onClick={onSend}
-      style={{
-        background: hovered ? 'var(--color-surface-high)' : 'var(--color-surface-container)',
-        borderRadius: 10, padding: '14px 16px', fontSize: 13,
-        color: hovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-        cursor: 'pointer', border: '1px solid var(--color-border-ghost)', textAlign: 'left',
-        transition: 'background 150ms, color 150ms',
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {prompt}
-    </button>
   )
 }

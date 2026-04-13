@@ -54,13 +54,24 @@ export default function AppIcon({
     )
   }
 
+  // Derive a subtle background from the category color if provided
+  const fallbackBg = color && color !== 'var(--color-primary)'
+    ? (() => {
+        const hex = color.replace('#', '')
+        if (!/^[0-9a-fA-F]{3,6}$/.test(hex)) return 'var(--color-pill-bg)'
+        const expanded = hex.length === 3 ? hex.split('').map((c) => `${c}${c}`).join('') : hex
+        const v = Number.parseInt(expanded, 16)
+        return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, 0.14)`
+      })()
+    : 'var(--color-pill-bg)'
+
   return (
     <div
       style={{
         width: size,
         height: size,
         borderRadius: rounded,
-        background: 'var(--color-pill-bg)',
+        background: fallbackBg,
         color,
         fontSize,
         fontWeight: 700,

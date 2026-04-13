@@ -1,5 +1,6 @@
 import { ipcMain, app } from 'electron'
 import {
+  setBlockLabelOverride,
   getAppCharacter,
   getAppSummariesForRange,
   getWeeklySummary,
@@ -14,7 +15,14 @@ import {
 import { getDb } from '../services/database'
 import { getCurrentSession } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
-import { getHistoryDayPayload } from '../services/workBlocks'
+import {
+  getAppDetailPayload,
+  getArtifactDetails,
+  getBlockDetailPayload,
+  getHistoryDayPayload,
+  getTimelineDayPayload,
+  getWorkflowSummaries,
+} from '../services/workBlocks'
 import { IPC } from '@shared/types'
 import type { AppSession } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
@@ -58,6 +66,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
     return getHistoryDayPayload(getDb(), dateStr, getLiveSessionForDate(dateStr))
+  })
+
+  ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
+    return getTimelineDayPayload(getDb(), dateStr, getLiveSessionForDate(dateStr))
   })
 
   // App usage summaries for a range — used by Apps view
@@ -113,6 +125,26 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_APP_CHARACTER, (_e, bundleId: string, daysBack: number) => {
     return getAppCharacter(getDb(), bundleId, daysBack)
+  })
+
+  ipcMain.handle(IPC.DB.GET_APP_DETAIL, (_e, canonicalAppId: string, days: number = 7) => {
+    return getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
+  })
+
+  ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {
+    return getBlockDetailPayload(getDb(), blockId, getCurrentSession())
+  })
+
+  ipcMain.handle(IPC.DB.GET_WORKFLOW_SUMMARIES, (_e, days: number = 14) => {
+    return getWorkflowSummaries(getDb(), days)
+  })
+
+  ipcMain.handle(IPC.DB.GET_ARTIFACT_DETAILS, (_e, artifactId: string) => {
+    return getArtifactDetails(getDb(), artifactId)
+  })
+
+  ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; label: string; narrative?: string | null }) => {
+    setBlockLabelOverride(getDb(), payload.blockId, payload.label, payload.narrative ?? null)
   })
 
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
