@@ -7,6 +7,7 @@ import type {
   AppCategory,
   AppSession,
   DayTimelinePayload,
+  TimelineSegment,
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
@@ -156,13 +157,6 @@ function blockNarrative(block: WorkContextBlock): string {
 
 function formatClockTime(ts: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(ts)
-}
-
-function formatHour(h: number): string {
-  if (h === 0 || h === 24) return '12am'
-  if (h < 12) return `${h}am`
-  if (h === 12) return '12pm'
-  return `${h - 12}pm`
 }
 
 function blockDuration(block: WorkContextBlock): string {
@@ -439,14 +433,26 @@ const MIN_BLOCK_HEIGHT = 24
 function CalendarBlock({
   block,
   insight,
-  rangeStartMs,
+  topPx,
+  heightPx,
+  boundaryOffsetsPx,
+  showLiveIndicator,
+  showLiveBadge,
+  currentTimeTopPx,
+  groupBlockIds,
   isSelected,
   isHighlighted,
   onSelect,
 }: {
   block: WorkContextBlock
   insight: WorkContextInsight | null | undefined
-  rangeStartMs: number
+  topPx: number
+  heightPx: number
+  boundaryOffsetsPx?: number[]
+  showLiveIndicator?: boolean
+  showLiveBadge?: boolean
+  currentTimeTopPx?: number | null
+  groupBlockIds?: string[]
   isSelected: boolean
   isHighlighted?: boolean
   onSelect: (rect: DOMRect) => void
@@ -455,9 +461,6 @@ function CalendarBlock({
   const color = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   const label = blockLabel(block, insight)
   const apps = meaningfulApps(block).slice(0, 3)
-  const topPx = Math.max(0, (block.startTime - rangeStartMs) / 60_000 * PX_PER_MIN)
-  const durationMin = (block.endTime - block.startTime) / 60_000
-  const heightPx = Math.max(MIN_BLOCK_HEIGHT, durationMin * PX_PER_MIN)
 
   // Size tiers — at 2.0px/min:
   //   isNano:    < 32px  → < 16min: label only, ultra-compact
@@ -472,6 +475,7 @@ function CalendarBlock({
     <div
       ref={divRef}
       data-block-id={block.id}
+      data-group-block-ids={groupBlockIds?.join(' ')}
       onClick={() => { if (divRef.current) onSelect(divRef.current.getBoundingClientRect()) }}
       style={{
         position: 'absolute',
@@ -501,6 +505,50 @@ function CalendarBlock({
         if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = withAlpha(color, 0.1)
       }}
     >
+      {boundaryOffsetsPx?.map((dividerTop, index) => (
+        <div
+          key={index}
+          style={{
+            position: 'absolute',
+            top: dividerTop,
+            left: 9,
+            right: 8,
+            height: 0,
+            borderTop: `1px dashed ${withAlpha(color, 0.35)}`,
+            pointerEvents: 'none',
+          }}
+        />
+      ))}
+      {showLiveIndicator && currentTimeTopPx !== null && currentTimeTopPx !== undefined && currentTimeTopPx >= 0 && currentTimeTopPx <= heightPx && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              top: currentTimeTopPx - 4,
+              left: -8,
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: '#ef4444',
+              zIndex: 5,
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: currentTimeTopPx,
+              left: 0,
+              right: 0,
+              height: 1,
+              background: '#ef4444',
+              opacity: 0.8,
+              zIndex: 5,
+              pointerEvents: 'none',
+            }}
+          />
+        </>
+      )}
       {/* Top area: label + live badge */}
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, overflow: 'hidden' }}>
         <div style={{
@@ -516,7 +564,7 @@ function CalendarBlock({
         }}>
           {label}
         </div>
-        {block.isLive && (
+        {(showLiveBadge || block.isLive) && (
           <span style={{ fontSize: 8.5, fontWeight: 700, color: '#34d399', letterSpacing: '0.06em', flexShrink: 0 }}>
             live
           </span>
@@ -883,6 +931,39 @@ function StatusStrip({ payload, isToday }: { payload: DayTimelinePayload; isToda
   )
 }
 
+const GAP_LINE_THRESHOLD_MS = 5 * 60_000
+const GAP_BAND_THRESHOLD_MS = 15 * 60_000
+const GAP_EXPANDABLE_THRESHOLD_MS = 60 * 60_000
+const GAP_LARGE_THRESHOLD_MS = 3 * 60 * 60_000
+
+interface PositionedSegment {
+  segment: TimelineSegment
+  topPx: number
+  heightPx: number
+}
+
+function segmentKey(segment: TimelineSegment): string {
+  if (segment.kind === 'work_block') return `work:${segment.blockId}`
+  return `${segment.kind}:${segment.startTime}:${segment.endTime}`
+}
+
+function gapHeightPx(segment: Exclude<TimelineSegment, { kind: 'work_block' }>, expanded: boolean): number {
+  const durationMs = segment.endTime - segment.startTime
+  if (durationMs < GAP_LINE_THRESHOLD_MS) return 0
+  if (expanded) return Math.max(16, durationMs / 60_000 * PX_PER_MIN)
+  if (durationMs < GAP_BAND_THRESHOLD_MS) return 12
+  if (durationMs < GAP_EXPANDABLE_THRESHOLD_MS) return 8
+  return 16
+}
+
+function gapLabel(segment: Exclude<TimelineSegment, { kind: 'work_block' }>): string {
+  const duration = formatDuration(Math.round((segment.endTime - segment.startTime) / 1000))
+  if (segment.kind === 'machine_off') return `${duration} machine off`
+  if (segment.kind === 'away') return `${duration} away`
+  if ((segment.endTime - segment.startTime) >= GAP_LARGE_THRESHOLD_MS) return `${duration} no activity`
+  return `${duration} idle`
+}
+
 // ─── Filter pills ─────────────────────────────────────────────────────────────
 
 const FILTER_PILLS = [
@@ -971,6 +1052,10 @@ export default function Timeline() {
   useEffect(() => {
     setSelectedBlockId(null)
     setSelectedBlockRect(null)
+  }, [date, activeFilter, viewMode])
+
+  useEffect(() => {
+    setExpandedGapKeys(new Set())
   }, [date, activeFilter, viewMode])
 
   useEffect(() => {
@@ -1100,37 +1185,108 @@ export default function Timeline() {
     groups.push(current)
     return groups
   }, [filteredBlocks, insights])
+  const [expandedGapKeys, setExpandedGapKeys] = useState<Set<string>>(new Set())
 
-  // Calendar time range derived from blocks
-  const { rangeStartMs, startHour, endHour } = useMemo(() => {
-    const [yr, mo, dy] = date.split('-').map(Number)
-    const mkRange = (sh: number, eh: number) => ({
-      rangeStartMs: new Date(yr, mo - 1, dy, sh, 0, 0).getTime(),
-      startHour: sh,
-      endHour: Math.min(24, eh),
-    })
+  const rawDisplaySegments = useMemo(() => {
+    if (!payload) return []
 
-    if (filteredBlocks.length === 0) {
-      const nowH = isToday ? new Date(currentTimeMs).getHours() : 12
-      return mkRange(Math.min(8, nowH), isToday ? Math.max(nowH + 2, 20) : 20)
+    if (activeFilter === 'all') {
+      return [...payload.segments].sort((left, right) => left.startTime - right.startTime)
     }
 
-    const firstHour = new Date(filteredBlocks[0].startTime).getHours()
-    const lastMs = filteredBlocks[filteredBlocks.length - 1].endTime
-    const lastHour = new Date(lastMs).getHours() + (new Date(lastMs).getMinutes() > 0 ? 1 : 0)
-    const sh = Math.min(8, firstHour)
-    const nowH = isToday ? new Date(currentTimeMs).getHours() : 0
-    const eh = Math.max(lastHour, isToday ? nowH + 1 : 18) + 1  // +1 padding
-    return mkRange(sh, eh)
-  }, [filteredBlocks, isToday, currentTimeMs, date])
+    const segments: TimelineSegment[] = []
+    for (let index = 0; index < filteredBlocks.length; index++) {
+      const block = filteredBlocks[index]
+      if (index > 0 && block.startTime > filteredBlocks[index - 1].endTime) {
+        segments.push({
+          kind: 'idle_gap',
+          startTime: filteredBlocks[index - 1].endTime,
+          endTime: block.startTime,
+          label: 'Idle gap',
+          source: 'derived_gap',
+        })
+      }
+      segments.push({
+        kind: 'work_block',
+        startTime: block.startTime,
+        endTime: block.endTime,
+        blockId: block.id,
+      })
+    }
+    return segments
+  }, [payload, activeFilter, filteredBlocks])
 
-  const gridHeight = (endHour - startHour) * 60 * PX_PER_MIN
-  const hourMarkers = Array.from({ length: endHour - startHour + 1 }, (_, i) => startHour + i).filter(h => h <= 23)
+  const positionedSegments = useMemo<PositionedSegment[]>(() => {
+    let topPx = 0
+    return rawDisplaySegments.map((segment) => {
+      const heightPx = segment.kind === 'work_block'
+        ? Math.max(MIN_BLOCK_HEIGHT, ((segment.endTime - segment.startTime) / 60_000) * PX_PER_MIN)
+        : gapHeightPx(segment, expandedGapKeys.has(segmentKey(segment)))
+      const positioned = {
+        segment,
+        topPx,
+        heightPx,
+      }
+      topPx += heightPx
+      return positioned
+    })
+  }, [rawDisplaySegments, expandedGapKeys])
 
-  const currentTimeMins = isToday ? (currentTimeMs - rangeStartMs) / 60_000 : null
-  const currentTimeTop = currentTimeMins !== null && currentTimeMins >= 0
-    ? currentTimeMins * PX_PER_MIN
-    : null
+  const gridHeight = positionedSegments.length > 0
+    ? positionedSegments[positionedSegments.length - 1].topPx + positionedSegments[positionedSegments.length - 1].heightPx
+    : 0
+
+  const compressedYForTime = useCallback((targetTime: number, preferEnd = false) => {
+    if (positionedSegments.length === 0) return 0
+
+    for (const entry of positionedSegments) {
+      if (targetTime < entry.segment.startTime) return entry.topPx
+      if (targetTime <= entry.segment.endTime) {
+        if (
+          entry.segment.kind === 'work_block'
+          || (expandedGapKeys.has(segmentKey(entry.segment)) && entry.segment.endTime > entry.segment.startTime)
+        ) {
+          const ratio = (targetTime - entry.segment.startTime) / Math.max(1, entry.segment.endTime - entry.segment.startTime)
+          return entry.topPx + entry.heightPx * ratio
+        }
+        return preferEnd ? entry.topPx + entry.heightPx : entry.topPx
+      }
+    }
+
+    const last = positionedSegments[positionedSegments.length - 1]
+    return last.topPx + last.heightPx
+  }, [positionedSegments, expandedGapKeys])
+
+  const currentTimeTop = isToday ? compressedYForTime(currentTimeMs, true) : null
+
+  const timeMarkers = useMemo(() => {
+    const markers: Array<{ topPx: number; label: string }> = []
+
+    for (const group of mergedBlocks) {
+      const topPx = compressedYForTime(group.mergedStart)
+      const label = formatClockTime(group.mergedStart)
+      const previous = markers[markers.length - 1]
+      if (!previous || Math.abs(previous.topPx - topPx) > 18) {
+        markers.push({ topPx, label })
+      }
+    }
+
+    for (const entry of positionedSegments) {
+      if (entry.segment.kind === 'work_block' || entry.heightPx < 16) continue
+      const label = formatClockTime(entry.segment.startTime)
+      const previous = markers[markers.length - 1]
+      if (!previous || Math.abs(previous.topPx - entry.topPx) > 18) {
+        markers.push({ topPx: entry.topPx, label })
+      }
+    }
+
+    if (positionedSegments.length > 0) {
+      const last = positionedSegments[positionedSegments.length - 1]
+      markers.push({ topPx: last.topPx + last.heightPx - 10, label: formatClockTime(last.segment.endTime) })
+    }
+
+    return markers
+  }, [mergedBlocks, positionedSegments, compressedYForTime])
 
   // Scroll to current time or first block on day change
   useEffect(() => {
@@ -1138,7 +1294,7 @@ export default function Timeline() {
     const targetPx = currentTimeTop !== null
       ? Math.max(0, currentTimeTop - 120)
       : filteredBlocks.length > 0
-        ? Math.max(0, (filteredBlocks[0].startTime - rangeStartMs) / 60_000 * PX_PER_MIN - 40)
+        ? Math.max(0, compressedYForTime(filteredBlocks[0].startTime) - 40)
         : 0
     scrollRef.current.scrollTop = targetPx
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1469,12 +1625,12 @@ export default function Timeline() {
                       position: 'relative',
                       height: gridHeight,
                     }}>
-                      {hourMarkers.map((h) => (
+                      {timeMarkers.map((marker) => (
                         <div
-                          key={h}
+                          key={`${marker.label}:${marker.topPx}`}
                           style={{
                             position: 'absolute',
-                            top: (h - startHour) * 60 * PX_PER_MIN - 7,
+                            top: marker.topPx - 7,
                             left: 0,
                             right: 0,
                             fontSize: 10.5,
@@ -1486,7 +1642,7 @@ export default function Timeline() {
                             userSelect: 'none',
                           }}
                         >
-                          {formatHour(h)}
+                          {marker.label}
                         </div>
                       ))}
                     </div>
@@ -1502,138 +1658,102 @@ export default function Timeline() {
                     >
                       {/* Activity lane — holds all tracked blocks */}
                       <div className="activity-lane" style={{ flex: 1, position: 'relative' }}>
-                        {/* Hour grid lines */}
-                        {hourMarkers.map((h) => (
-                          <div
-                            key={h}
-                            style={{
-                              position: 'absolute',
-                              top: (h - startHour) * 60 * PX_PER_MIN,
-                              left: 0,
-                              right: 0,
-                              height: 1,
-                              background: 'var(--color-border-ghost)',
-                              opacity: 0.45,
-                              pointerEvents: 'none',
-                            }}
-                          />
-                        ))}
+                        {positionedSegments.map((entry) => {
+                          if (entry.segment.kind === 'work_block' || entry.heightPx <= 0) return null
 
-                        {/* Blocks (with merged groups) */}
-                        {mergedBlocks.map((group) => {
-                          if (group.blocks.length === 1) {
-                            const block = group.blocks[0]
+                          const durationMs = entry.segment.endTime - entry.segment.startTime
+                          const key = segmentKey(entry.segment)
+                          const isExpanded = expandedGapKeys.has(key)
+                          const expandable = durationMs >= GAP_EXPANDABLE_THRESHOLD_MS
+                          const isDashed = durationMs >= GAP_LINE_THRESHOLD_MS && durationMs < GAP_BAND_THRESHOLD_MS
+                          const label = durationMs >= GAP_BAND_THRESHOLD_MS ? gapLabel(entry.segment) : null
+
+                          if (isDashed) {
                             return (
-                              <CalendarBlock
-                                key={block.id}
-                                block={block}
-                                insight={insights[block.id]}
-                                rangeStartMs={rangeStartMs}
-                                isSelected={block.id === selectedBlockId}
-                                isHighlighted={highlightedIdx !== null && filteredBlocks[highlightedIdx]?.id === block.id}
-                                onSelect={(rect) => handleBlockClick(block, rect)}
+                              <div
+                                key={key}
+                                style={{
+                                  position: 'absolute',
+                                  top: entry.topPx + entry.heightPx / 2,
+                                  left: 4,
+                                  right: 4,
+                                  borderTop: '1px dashed var(--color-border-ghost)',
+                                  opacity: 0.8,
+                                  pointerEvents: 'none',
+                                }}
                               />
                             )
                           }
-                          // Merged group: render as single visual block spanning full extent
-                          const primary = group.blocks[0]
-                          const color = CATEGORY_COLORS[primary.dominantCategory] ?? CATEGORY_COLORS.uncategorized
-                          const label = blockLabel(primary, insights[primary.id])
-                          const topPx = Math.max(0, (group.mergedStart - rangeStartMs) / 60_000 * PX_PER_MIN)
-                          const durationMin = (group.mergedEnd - group.mergedStart) / 60_000
-                          const heightPx = Math.max(MIN_BLOCK_HEIGHT, durationMin * PX_PER_MIN)
-                          const anySelected = group.blocks.some((b) => b.id === selectedBlockId)
+
                           return (
-                            <div
-                              key={group.blocks.map((b) => b.id).join('-')}
+                            <button
+                              key={key}
+                              onClick={() => {
+                                if (!expandable) return
+                                setExpandedGapKeys((current) => {
+                                  const next = new Set(current)
+                                  if (next.has(key)) next.delete(key)
+                                  else next.add(key)
+                                  return next
+                                })
+                              }}
                               style={{
                                 position: 'absolute',
-                                top: topPx,
+                                top: entry.topPx,
                                 left: 4,
                                 right: 4,
-                                height: heightPx,
-                                borderRadius: 6,
-                                background: anySelected ? withAlpha(color, 0.22) : withAlpha(color, 0.1),
-                                borderLeft: `3px solid ${color}`,
-                                outline: anySelected ? `1px solid ${withAlpha(color, 0.45)}` : '1px solid transparent',
-                                outlineOffset: -1,
-                                padding: '5px 8px 4px 9px',
-                                cursor: 'pointer',
-                                overflow: 'hidden',
-                                boxSizing: 'border-box',
+                                height: entry.heightPx,
+                                borderRadius: 8,
+                                border: '1px solid var(--color-border-ghost)',
+                                background: durationMs >= GAP_EXPANDABLE_THRESHOLD_MS
+                                  ? 'repeating-linear-gradient(45deg, var(--color-surface-low), var(--color-surface-low) 6px, rgba(255,255,255,0.02) 6px, rgba(255,255,255,0.02) 12px)'
+                                  : 'var(--color-surface-low)',
+                                color: 'var(--color-text-tertiary)',
+                                fontSize: durationMs >= GAP_EXPANDABLE_THRESHOLD_MS ? 11 : 10,
+                                cursor: expandable ? 'pointer' : 'default',
                                 display: 'flex',
-                                flexDirection: 'column',
-                                zIndex: anySelected ? 3 : 1,
-                                transition: 'background 100ms',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 0,
+                                overflow: 'hidden',
                               }}
-                              onClick={() => {
-                                // Click selects the first block in the group for popover
-                                const target = group.blocks[0]
-                                const el = document.querySelector(`[data-merged-group="${group.blocks.map((b) => b.id).join('-')}"]`) as HTMLElement | null
-                                if (el) handleBlockClick(target, el.getBoundingClientRect())
-                              }}
-                              data-merged-group={group.blocks.map((b) => b.id).join('-')}
-                              data-group-block-ids={group.blocks.map((b) => b.id).join(' ')}
+                              title={expandable ? (isExpanded ? 'Collapse gap' : 'Expand gap') : undefined}
                             >
-                              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <span style={{ pointerEvents: 'none', whiteSpace: 'nowrap' }}>
                                 {label}
-                              </div>
-                              {/* Internal time dividers between sub-blocks */}
-                              {group.blocks.slice(1).map((sub) => {
-                                const dividerTop = (sub.startTime - group.mergedStart) / 60_000 * PX_PER_MIN
-                                return (
-                                  <div
-                                    key={sub.id}
-                                    style={{
-                                      position: 'absolute',
-                                      top: dividerTop,
-                                      left: 9,
-                                      right: 8,
-                                      height: 0,
-                                      borderTop: `1px dashed ${withAlpha(color, 0.35)}`,
-                                      pointerEvents: 'none',
-                                    }}
-                                  />
-                                )
-                              })}
-                              <span style={{ marginTop: 'auto', fontSize: 10, color: withAlpha(color, 0.65), fontVariantNumeric: 'tabular-nums' }}>
-                                {formatDuration(Math.round((group.mergedEnd - group.mergedStart) / 1000))}
                               </span>
-                            </div>
+                            </button>
                           )
                         })}
 
-                        {/* Current time indicator */}
-                        {isToday && currentTimeTop !== null && currentTimeTop >= 0 && currentTimeTop <= gridHeight && (
-                          <>
-                            <div
-                              style={{
-                                position: 'absolute',
-                                top: currentTimeTop - 4,
-                                left: -8,
-                                width: 8,
-                                height: 8,
-                                borderRadius: '50%',
-                                background: '#ef4444',
-                                zIndex: 5,
-                                pointerEvents: 'none',
-                              }}
+                        {/* Blocks (with merged groups) */}
+                        {mergedBlocks.map((group) => {
+                          const primary = group.blocks[0]
+                          const anySelected = group.blocks.some((b) => b.id === selectedBlockId)
+                          const topPx = compressedYForTime(group.mergedStart)
+                          const heightPx = Math.max(MIN_BLOCK_HEIGHT, compressedYForTime(group.mergedEnd, true) - topPx)
+                          const boundaryOffsetsPx = group.blocks.slice(1).map((sub) => compressedYForTime(sub.startTime) - topPx)
+                          const hasLiveBlock = group.blocks.some((block) => block.isLive)
+                          const currentBlockTimeTop = hasLiveBlock && currentTimeTop !== null ? currentTimeTop - topPx : null
+
+                          return (
+                            <CalendarBlock
+                              key={group.blocks.map((b) => b.id).join('-')}
+                              block={primary}
+                              insight={insights[primary.id]}
+                              topPx={topPx}
+                              heightPx={heightPx}
+                              boundaryOffsetsPx={boundaryOffsetsPx}
+                              showLiveIndicator={hasLiveBlock}
+                              showLiveBadge={hasLiveBlock}
+                              currentTimeTopPx={currentBlockTimeTop}
+                              groupBlockIds={group.blocks.map((block) => block.id)}
+                              isSelected={anySelected}
+                              isHighlighted={highlightedIdx !== null && group.blocks.some((b) => b.id === filteredBlocks[highlightedIdx]?.id)}
+                              onSelect={(rect) => handleBlockClick(primary, rect)}
                             />
-                            <div
-                              style={{
-                                position: 'absolute',
-                                top: currentTimeTop,
-                                left: 0,
-                                right: 0,
-                                height: 1,
-                                background: '#ef4444',
-                                opacity: 0.8,
-                                zIndex: 5,
-                                pointerEvents: 'none',
-                              }}
-                            />
-                          </>
-                        )}
+                          )
+                        })}
                       </div>
                     </div>
                   </div>
