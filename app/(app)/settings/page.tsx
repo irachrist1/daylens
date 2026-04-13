@@ -56,7 +56,7 @@ export default async function SettingsPage() {
       {/* Privacy */}
       <PrivacySection />
 
-      {/* Download Windows app */}
+      {/* Download desktop apps */}
       <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
         <h2 className="text-lg font-semibold">Get the Desktop App</h2>
         <div className="flex items-center justify-between">
@@ -68,6 +68,20 @@ export default async function SettingsPage() {
           </div>
           <a
             href="/daylens/api/download/windows"
+            className="rounded-lg border border-outline-variant/20 px-3 py-1.5 text-sm text-primary hover:bg-primary/5 transition-colors"
+          >
+            Download
+          </a>
+        </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Daylens for Linux</p>
+            <p className="text-xs text-on-surface-variant">
+              Required for activity tracking — runs on your Linux machine in the background
+            </p>
+          </div>
+          <a
+            href="/daylens/api/download/linux"
             className="rounded-lg border border-outline-variant/20 px-3 py-1.5 text-sm text-primary hover:bg-primary/5 transition-colors"
           >
             Download

@@ -92,6 +92,14 @@ function WindowsIcon() {
   );
 }
 
+function LinuxIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M20 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-8 14H8v-2h4v2Zm6-4H6v-2h12v2Zm0-4H6V7h12v2Z"/>
+    </svg>
+  );
+}
+
 function ArrowIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -147,6 +155,14 @@ export function LandingClient() {
               >
                 <WindowsIcon />
                 Download for Windows
+              </a>
+              <a
+                href="/daylens/api/download/linux"
+                className="dl-btn dl-btn--glass"
+                onClick={() => posthog.capture("download_clicked", { platform: "linux" })}
+              >
+                <LinuxIcon />
+                Download for Linux
               </a>
             </div>
           </div>
@@ -221,7 +237,7 @@ export function LandingClient() {
           <div className="dl-final__inner rv">
             <h2 className="dl-final__h2">Start seeing clearly.</h2>
             <p className="dl-final__sub">
-              Free for Mac and Windows. AI is yours to enable — or&nbsp;ignore.
+              Free for Mac, Windows, and Linux. AI is yours to enable — or&nbsp;ignore.
             </p>
             <div className="dl-final__cta">
               <a
@@ -239,6 +255,14 @@ export function LandingClient() {
               >
                 <WindowsIcon />
                 Windows
+              </a>
+              <a
+                href="/daylens/api/download/linux"
+                className="dl-btn dl-btn--ghost"
+                onClick={() => posthog.capture("download_clicked", { platform: "linux", source: "finale" })}
+              >
+                <LinuxIcon />
+                Linux
               </a>
             </div>
           </div>

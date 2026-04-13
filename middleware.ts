@@ -14,6 +14,7 @@ const PUBLIC_API_PATHS = [
   "/api/chat/save",
   "/api/download/mac",
   "/api/download/windows",
+  "/api/download/linux",
 ];
 
 export async function middleware(request: NextRequest) {

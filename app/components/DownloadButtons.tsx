@@ -53,6 +53,26 @@ export function DownloadButtons() {
         <WindowsIcon />
         Download for Windows
       </a>
+      <a
+        href="/daylens/api/download/linux"
+        onClick={() => posthog.capture('download_clicked', { platform: 'linux' })}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "13px 24px",
+          borderRadius: 0,
+          background: "linear-gradient(180deg, #68AEFF 0%, #003EB7 100%)",
+          color: "#fff",
+          fontWeight: 600,
+          fontSize: 14,
+          textDecoration: "none",
+          transition: "opacity 200ms",
+        }}
+      >
+        <LinuxIcon />
+        Download for Linux
+      </a>
     </div>
   )
 }
@@ -76,6 +96,14 @@ function WindowsIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
       <path d="M0 2.357L6.545 1.5v6H0V2.357zM7.273 1.393L16 0v7.5H7.273V1.393zM0 8.5h6.545v6L0 13.643V8.5zM7.273 8.5H16V16l-8.727-1.393V8.5z" />
+    </svg>
+  )
+}
+
+function LinuxIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-8 14H8v-2h4v2Zm6-4H6v-2h12v2Zm0-4H6V7h12v2Z"/>
     </svg>
   )
 }
