@@ -1420,6 +1420,249 @@ function persistTimelineDay(
   persist()
 }
 
+interface PersistedTimelineBlockRow {
+  id: string
+  start_time: number
+  end_time: number
+  dominant_category: AppCategory
+  category_distribution_json: string
+  switch_count: number
+  label_current: string
+  label_source: string
+  label_confidence: number
+  narrative_current: string | null
+  evidence_summary_json: string
+  heuristic_version: string
+  computed_at: number
+}
+
+function confidenceBucketFor(value: number): BlockConfidence {
+  if (value >= 0.85) return 'high'
+  if (value >= 0.6) return 'medium'
+  return 'low'
+}
+
+function getPersistedTimelineRows(
+  db: Database.Database,
+  dateStr: string,
+): PersistedTimelineBlockRow[] {
+  return db.prepare(`
+    SELECT
+      id,
+      start_time,
+      end_time,
+      dominant_category,
+      category_distribution_json,
+      switch_count,
+      label_current,
+      label_source,
+      label_confidence,
+      narrative_current,
+      evidence_summary_json,
+      heuristic_version,
+      computed_at
+    FROM timeline_blocks
+    WHERE date = ?
+      AND invalidated_at IS NULL
+      AND heuristic_version = ?
+    ORDER BY start_time ASC
+  `).all(dateStr, TIMELINE_HEURISTIC_VERSION) as PersistedTimelineBlockRow[]
+}
+
+function persistedWorkflowRefsForBlock(
+  db: Database.Database,
+  blockId: string,
+): WorkflowRef[] {
+  const rows = db.prepare(`
+    SELECT
+      workflow_signatures.id,
+      workflow_signatures.signature_key,
+      workflow_signatures.label,
+      workflow_signatures.dominant_category,
+      workflow_signatures.canonical_apps_json,
+      workflow_signatures.artifact_keys_json,
+      workflow_occurrences.confidence
+    FROM workflow_occurrences
+    JOIN workflow_signatures
+      ON workflow_signatures.id = workflow_occurrences.workflow_id
+    WHERE workflow_occurrences.block_id = ?
+    ORDER BY workflow_occurrences.confidence DESC, workflow_signatures.label ASC
+  `).all(blockId) as Array<{
+    id: string
+    signature_key: string
+    label: string
+    dominant_category: AppCategory
+    canonical_apps_json: string
+    artifact_keys_json: string
+    confidence: number
+  }>
+
+  return rows.map((row) => ({
+    id: row.id,
+    signatureKey: row.signature_key,
+    label: row.label,
+    confidence: row.confidence,
+    dominantCategory: row.dominant_category,
+    canonicalApps: JSON.parse(row.canonical_apps_json) as string[],
+    artifactKeys: JSON.parse(row.artifact_keys_json) as string[],
+  }))
+}
+
+function loadPersistedBlocksForDate(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+): WorkContextBlock[] {
+  const rows = getPersistedTimelineRows(db, dateStr)
+  if (rows.length === 0) return []
+
+  const blockIds = rows.map((row) => row.id)
+  const memberRows = db.prepare(`
+    SELECT block_id, member_type, member_id
+    FROM timeline_block_members
+    WHERE block_id IN (${blockIds.map(() => '?').join(', ')})
+  `).all(...blockIds) as Array<{
+    block_id: string
+    member_type: string
+    member_id: string
+  }>
+
+  const sessionIdsByBlock = new Map<string, Set<number>>()
+  for (const row of memberRows) {
+    if (row.member_type !== 'app_session') continue
+    const bucket = sessionIdsByBlock.get(row.block_id) ?? new Set<number>()
+    bucket.add(Number(row.member_id))
+    sessionIdsByBlock.set(row.block_id, bucket)
+  }
+
+  return rows.map((row) => {
+    const memberSessionIds = sessionIdsByBlock.get(row.id)
+    const blockSessions = sessions.filter((session) => {
+      if (memberSessionIds?.has(session.id)) return true
+      return session.startTime < row.end_time && sessionEndMs(session) > row.start_time
+    })
+
+    const topApps = topAppsFromSessions(blockSessions)
+    const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
+    const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
+    const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
+      .map((page) => page.title?.trim())
+      .filter((title): title is string => Boolean(title))
+      .filter((title, index, titles) => titles.indexOf(title) === index)
+      .slice(0, 4)
+    const pageCandidates = buildPageCandidates(db, row.start_time, row.end_time)
+    const windowCandidates = buildWindowArtifactCandidates(blockSessions)
+    const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
+    const documentRefs = windowCandidates.flatMap((candidate) => candidate.documentRef ? [candidate.documentRef] : [])
+    const topArtifacts = [...pageRefs, ...documentRefs]
+      .sort((left, right) => right.totalSeconds - left.totalSeconds)
+      .slice(0, 6)
+    const workflowRefs = persistedWorkflowRefsForBlock(db, row.id)
+    const baseBlock: WorkContextBlock = {
+      id: row.id,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      dominantCategory: row.dominant_category,
+      categoryDistribution: JSON.parse(row.category_distribution_json || '{}') as Partial<Record<AppCategory, number>>,
+      ruleBasedLabel: prettyCategory(row.dominant_category),
+      aiLabel: row.label_source === 'ai' ? row.label_current : null,
+      sessions: blockSessions,
+      topApps,
+      websites,
+      keyPages,
+      pageRefs,
+      documentRefs,
+      topArtifacts,
+      workflowRefs,
+      label: {
+        current: row.label_current,
+        source: row.label_source as WorkContextBlock['label']['source'],
+        confidence: row.label_confidence,
+        narrative: row.narrative_current,
+        ruleBased: prettyCategory(row.dominant_category),
+        aiSuggested: row.label_source === 'ai' ? row.label_current : null,
+        override: row.label_source === 'user' ? row.label_current : null,
+      },
+      focusOverlap: focusOverlapForRange(db, row.start_time, row.end_time),
+      evidenceSummary: {
+        apps: topApps,
+        pages: pageRefs,
+        documents: documentRefs,
+        domains: websites.map((site) => site.domain),
+      },
+      heuristicVersion: row.heuristic_version,
+      computedAt: row.computed_at,
+      switchCount: row.switch_count,
+      confidence: confidenceBucketFor(row.label_confidence),
+      isLive: false,
+    }
+    const provisionalRuleLabel = websiteAwareLabel(baseBlock)
+
+    const hydrated: WorkContextBlock = {
+      ...baseBlock,
+      ruleBasedLabel: provisionalRuleLabel,
+      label: {
+        current: row.label_current,
+        source: row.label_source as WorkContextBlock['label']['source'],
+        confidence: row.label_confidence,
+        narrative: row.narrative_current,
+        ruleBased: provisionalRuleLabel,
+        aiSuggested: row.label_source === 'ai' ? row.label_current : null,
+        override: row.label_source === 'user' ? row.label_current : null,
+      },
+    }
+
+    return finalizedLabelForBlock(db, hydrated)
+  })
+}
+
+function buildTimelineBlocksForDay(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+  liveSession?: LiveSession | null,
+): WorkContextBlock[] {
+  const hasLiveSession = !!liveSession
+  if (!hasLiveSession) {
+    const persisted = loadPersistedBlocksForDate(db, dateStr, sessions)
+    if (persisted.length > 0 || sessions.length === 0) {
+      return persisted
+    }
+  }
+
+  const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
+  persistTimelineDay(db, dateStr, computed)
+  return hasLiveSession
+    ? [...loadPersistedBlocksForDate(db, dateStr, sessions), ...computed.filter((block) => block.isLive)]
+    : computed
+}
+
+function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
+  if (segments.length <= 1) return segments
+
+  const merged: TimelineSegment[] = [segments[0]]
+  for (let index = 1; index < segments.length; index++) {
+    const current = segments[index]
+    const previous = merged[merged.length - 1]
+
+    if (
+      current.kind !== 'work_block'
+      && previous.kind !== 'work_block'
+      && current.kind === previous.kind
+      && current.source === previous.source
+      && current.startTime <= previous.endTime
+    ) {
+      previous.endTime = Math.max(previous.endTime, current.endTime)
+      previous.label = current.kind === 'machine_off' ? 'Machine off' : current.kind === 'away' ? 'Away' : 'Idle gap'
+      continue
+    }
+
+    merged.push(current)
+  }
+
+  return merged
+}
+
 function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
@@ -1427,39 +1670,12 @@ function buildSegmentsForDay(
 ): TimelineSegment[] {
   const [fromMs, toMs] = localDayBounds(dateStr)
   const events = getActivityStateEventsForRange(db, fromMs, toMs)
-  const segments: TimelineSegment[] = blocks.map((block) => ({
+  const workSegments: TimelineSegment[] = blocks.map((block) => ({
     kind: 'work_block',
     startTime: block.startTime,
     endTime: block.endTime,
     blockId: block.id,
   }))
-
-  let cursor = fromMs
-  const byStart = [...segments].sort((left, right) => left.startTime - right.startTime)
-  const filler: TimelineSegment[] = []
-
-  for (const segment of byStart) {
-    if (segment.startTime > cursor) {
-      filler.push({
-        kind: 'idle_gap',
-        startTime: cursor,
-        endTime: segment.startTime,
-        label: 'Idle gap',
-        source: 'derived_gap',
-      })
-    }
-    cursor = Math.max(cursor, segment.endTime)
-  }
-
-  if (cursor < toMs) {
-    filler.push({
-      kind: 'idle_gap',
-      startTime: cursor,
-      endTime: toMs,
-      label: 'Idle gap',
-      source: 'derived_gap',
-    })
-  }
 
   const eventSegments: TimelineSegment[] = []
   let activeAwayStart: { kind: 'away' | 'machine_off'; startTime: number } | null = null
@@ -1481,9 +1697,69 @@ function buildSegmentsForDay(
     }
   }
 
-  const merged = [...segments, ...filler, ...eventSegments]
+  if (activeAwayStart) {
+    eventSegments.push({
+      kind: activeAwayStart.kind,
+      startTime: activeAwayStart.startTime,
+      endTime: toMs,
+      label: activeAwayStart.kind === 'machine_off' ? 'Machine off' : 'Away',
+      source: 'activity_event',
+    })
+  }
+
+  const gapRanges: Array<{ startTime: number; endTime: number }> = []
+  let cursor = fromMs
+  const byStart = [...workSegments].sort((left, right) => left.startTime - right.startTime)
+  for (const segment of byStart) {
+    if (segment.startTime > cursor) {
+      gapRanges.push({ startTime: cursor, endTime: segment.startTime })
+    }
+    cursor = Math.max(cursor, segment.endTime)
+  }
+  if (cursor < toMs) {
+    gapRanges.push({ startTime: cursor, endTime: toMs })
+  }
+
+  const gapSegments: TimelineSegment[] = []
+  for (const range of gapRanges) {
+    let gapCursor = range.startTime
+    const overlappingEvents = eventSegments
+      .map((segment) => ({
+        ...segment,
+        startTime: Math.max(segment.startTime, range.startTime),
+        endTime: Math.min(segment.endTime, range.endTime),
+      }))
+      .filter((segment) => segment.endTime > segment.startTime)
+      .sort((left, right) => left.startTime - right.startTime)
+
+    for (const eventSegment of overlappingEvents) {
+      if (eventSegment.startTime > gapCursor) {
+        gapSegments.push({
+          kind: 'idle_gap',
+          startTime: gapCursor,
+          endTime: eventSegment.startTime,
+          label: 'Idle gap',
+          source: 'derived_gap',
+        })
+      }
+      gapSegments.push(eventSegment)
+      gapCursor = Math.max(gapCursor, eventSegment.endTime)
+    }
+
+    if (gapCursor < range.endTime) {
+      gapSegments.push({
+        kind: 'idle_gap',
+        startTime: gapCursor,
+        endTime: range.endTime,
+        label: 'Idle gap',
+        source: 'derived_gap',
+      })
+    }
+  }
+
+  const merged = mergeAdjacentSegments([...workSegments, ...gapSegments]
     .filter((segment) => segment.endTime > segment.startTime)
-    .sort((left, right) => left.startTime - right.startTime)
+    .sort((left, right) => left.startTime - right.startTime))
 
   return merged
 }
@@ -1595,9 +1871,8 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = localDayBounds(dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
+  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, liveSession)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
-  persistTimelineDay(db, dateStr, blocks)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions
