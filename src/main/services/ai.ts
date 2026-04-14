@@ -26,7 +26,12 @@ import { getDb } from './database'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
 import type { AIProviderMode, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
-import { fallbackNarrativeForBlock, userVisibleLabelForBlock } from './workBlocks'
+import {
+  fallbackNarrativeForBlock,
+  getTimelineDayPayload,
+  getWorkflowSummaries,
+  userVisibleLabelForBlock,
+} from './workBlocks'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
@@ -665,6 +670,98 @@ function sessionEndMs(session: { startTime: number; endTime: number | null; dura
   return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
 }
 
+function buildTodayBlocksContext(): string {
+  try {
+    const db = getDb()
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    const dateStr = `${year}-${month}-${day}`
+    const payload = getTimelineDayPayload(db, dateStr, null)
+
+    // Only non-trivial blocks (>= 3 min). If nothing non-trivial, still show a short line.
+    const blocks = payload.blocks.filter((b) => b.endTime - b.startTime >= 3 * 60_000)
+    if (blocks.length === 0) return ''
+
+    const lines = blocks.slice(0, 12).map((block) => {
+      const minutes = Math.max(1, Math.round((block.endTime - block.startTime) / 60_000))
+      const label = userVisibleLabelForBlock(block)
+      const timeRange = `${formatClock(block.startTime)}-${formatClock(block.endTime)}`
+      const topApps = block.topApps
+        .filter((app) => app.category !== 'system')
+        .slice(0, 3)
+        .map((app) => app.appName)
+      const topSites = block.websites
+        .slice(0, 3)
+        .map((site) => site.domain.replace(/^www\./, ''))
+      const keyPage = block.keyPages.find((t) => t.trim().length > 0)
+
+      const parts = [
+        `${timeRange} (${minutes}m) — ${label}`,
+      ]
+      if (topApps.length > 0) parts.push(`apps: ${topApps.join(', ')}`)
+      if (topSites.length > 0) parts.push(`sites: ${topSites.join(', ')}`)
+      if (keyPage) parts.push(`key: ${keyPage.slice(0, 80)}`)
+      if (block.label.override) parts.push(`user labeled: ${block.label.override}`)
+      return `- ${parts.join(' • ')}`
+    })
+
+    return ['Today\'s work blocks (chronological):', ...lines].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+function buildWorkflowsContext(): string {
+  try {
+    const db = getDb()
+    const workflows = getWorkflowSummaries(db, 14)
+    const meaningful = workflows.filter((w) => w.occurrenceCount >= 2).slice(0, 6)
+    if (meaningful.length === 0) return ''
+
+    const lines = meaningful.map((w) => {
+      const apps = w.canonicalApps.slice(0, 4).join(' + ')
+      return `- "${w.label}" (${w.dominantCategory}): ${w.occurrenceCount}× in last 14 days${apps ? ` — ${apps}` : ''}`
+    })
+    return ['Recurring workflows (last 14 days):', ...lines].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+function buildHourlyShapeContext(sessions: { startTime: number; durationSeconds: number; category: string }[]): string {
+  if (sessions.length === 0) return ''
+  // Build a coarse morning / midday / afternoon / evening profile from today's sessions.
+  const buckets: Record<string, Map<string, number>> = {
+    morning: new Map(),   // 5-11
+    midday: new Map(),    // 11-14
+    afternoon: new Map(), // 14-18
+    evening: new Map(),   // 18-23
+    night: new Map(),     // 23-5
+  }
+  for (const s of sessions) {
+    const hour = new Date(s.startTime).getHours()
+    const bucket =
+      hour >= 5 && hour < 11 ? 'morning'
+      : hour >= 11 && hour < 14 ? 'midday'
+      : hour >= 14 && hour < 18 ? 'afternoon'
+      : hour >= 18 && hour < 23 ? 'evening'
+      : 'night'
+    const current = buckets[bucket].get(s.category) ?? 0
+    buckets[bucket].set(s.category, current + s.durationSeconds)
+  }
+  const parts: string[] = []
+  for (const [name, map] of Object.entries(buckets)) {
+    if (map.size === 0) continue
+    const topCat = [...map.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (!topCat || topCat[1] < 300) continue // skip buckets with < 5 min
+    parts.push(`${name}: mostly ${topCat[0]} (${formatDuration(topCat[1])})`)
+  }
+  if (parts.length === 0) return ''
+  return `Time-of-day shape: ${parts.join('; ')}`
+}
+
 function buildRecentFocusContext(): string {
   try {
     const db = getDb()
@@ -926,6 +1023,15 @@ function buildDayContext(): string {
     }
 
     const recentFocusContext = buildRecentFocusContext()
+    const todayBlocksContext = buildTodayBlocksContext()
+    const workflowsContext = buildWorkflowsContext()
+    const hourlyShapeContext = buildHourlyShapeContext(
+      todaySessions.map((s) => ({
+        startTime: s.startTime,
+        durationSeconds: s.durationSeconds,
+        category: s.category,
+      })),
+    )
 
     return [
       `User: ${userName}`,
@@ -940,23 +1046,29 @@ function buildDayContext(): string {
         ? `User has recategorized: ${overrideEntries.map(([id, cat]) => `${id} → ${cat}`).join(', ')}`
         : '',
       '',
-      'Data notes:',
-      '- App totals are grounded in tracked foreground-window sessions.',
-      '- Focus score is derived from focused app categories and may not fully capture productive browser work.',
-      '- Website timing comes from local browser evidence and may be approximate.',
-      '',
-      'Today:',
+      'Today (totals):',
       `- Total tracked time: ${formatDuration(totalSec)}`,
       `- Focus score: ${focusScore} (${formatDuration(focusSec)} in focused apps)`,
       `- Evidence summary: ${todayEvidence.evidenceText}`,
       `- Top categories: ${topCategoryList || 'none yet'}`,
       `- Top apps: ${topApps || 'none yet'}`,
       `- Top websites: ${topSites || 'none yet'}`,
+      hourlyShapeContext ? `- ${hourlyShapeContext}` : '',
       '',
-      recentDays.length > 0 ? 'Recent days:' : '',
+      todayBlocksContext,
+      '',
+      workflowsContext,
+      '',
+      recentDays.length > 0 ? 'Recent days (trend):' : '',
       ...recentDays.map((line) => `- ${line}`),
       '',
       recentFocusContext,
+      '',
+      'Data notes:',
+      '- App totals come from tracked foreground-window sessions — reliable.',
+      '- Work blocks are segmented by the local heuristic; labels may be rule-based or AI-generated.',
+      '- Website timing comes from local browser evidence and may undercount background tabs.',
+      '- Focus score weights focused categories (development, writing, design, etc.); browser work may be productive but read as unfocused.',
     ]
       .filter((l) => l !== '')
       .join('\n')
@@ -1092,7 +1204,15 @@ function appCategorySuggestionPrompt(bundleId: string, appName: string): string 
   ].join('\n')
 }
 
+// Cache AI category suggestions to avoid re-sending identical classification requests.
+// Keyed by "bundleId::appName" (lowercased). Survives for the lifetime of the process.
+const _categorySuggestionCache = new Map<string, AppCategorySuggestion>()
+
 export async function suggestAppCategory(bundleId: string, appName: string): Promise<AppCategorySuggestion> {
+  const cacheKey = `${bundleId}::${appName}`.toLowerCase()
+  const cached = _categorySuggestionCache.get(cacheKey)
+  if (cached) return cached
+
   const systemPrompt = [
     'You are Daylens.',
     'You classify productivity apps conservatively.',
@@ -1103,15 +1223,17 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   try {
     const { text } = await sendWithFallback(systemPrompt, [], appCategorySuggestionPrompt(bundleId, appName))
     const parsed = parseSuggestedCategory(text)
-    if (parsed?.suggestedCategory) return parsed
+    if (parsed?.suggestedCategory) {
+      _categorySuggestionCache.set(cacheKey, parsed)
+      return parsed
+    }
   } catch {
     // Fall through to no-suggestion result.
   }
 
-  return {
-    suggestedCategory: null,
-    reason: null,
-  }
+  const noSuggestion: AppCategorySuggestion = { suggestedCategory: null, reason: null }
+  _categorySuggestionCache.set(cacheKey, noSuggestion)
+  return noSuggestion
 }
 
 export async function generateWorkBlockInsight(block: WorkContextBlock): Promise<WorkContextInsight> {
@@ -1194,19 +1316,24 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const providerConfigs = await resolveProviderConfigs()
   const preferredConfig = providerConfigs[0]
   const systemPrompt =
-    persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
-    'When answering:\n' +
-    '- Always speak as Daylens, never as a generic model or raw provider persona\n' +
-    `- If the user asks what model or provider is powering this chat, say that they are chatting with Daylens and that this conversation is currently set to ${providerLabel(preferredConfig.provider)} using the model ${preferredConfig.model}\n` +
-    '- Lead with specific tracked facts when available\n' +
-    '- Separate tracked facts from interpretation or advice\n' +
-    '- If the data is insufficient to answer accurately, say so directly\n' +
-    '- Never imply certainty about the exact task the user was doing unless the data explicitly supports it\n' +
-    '- For time-specific questions, prefer exact foreground-app evidence and say when no exact session exists\n' +
-    '- Treat website timing as approximate browser evidence unless the question is only about websites\n' +
-    '- If you include recommendations, clearly label them as suggestions\n' +
-    '- Prefer short headings like "Tracked facts" and "Suggestions" when both are present\n' +
-    '- Keep responses concise and grounded\n\n' +
+    persona + ' You have access to tracked local activity data — app sessions, website visits, work blocks, and recurring workflows.\n\n' +
+    'Your job is to synthesize, not recite. The user can already see raw totals in the UI. They come to you to understand what the day actually looked like and what was getting done.\n\n' +
+    'How to think:\n' +
+    '- Read the work-block structure first. Each block is a chunk of related activity with a label, apps, and websites. Blocks tell you WHAT the user was working on.\n' +
+    '- Connect apps to intent: Chrome + docs.google.com + a specific title probably means a specific document; Cursor + GitHub likely means code on a specific repo; Slack + a long block means a conversation thread.\n' +
+    '- Notice patterns: recurring workflows show habitual projects or rituals. Time-of-day shape shows when the user focuses vs. communicates.\n' +
+    '- Prefer the specific over the generic. "Drafted the Q2 planning doc in Google Docs around 10-11am, then switched to Slack for 30m" beats "You spent 2h in Chrome."\n' +
+    '- When the evidence is ambiguous, say "looks like" or "probably" rather than inventing specifics. Don\'t hallucinate project names or document titles that aren\'t in the evidence.\n\n' +
+    'How to write:\n' +
+    '- Conversational, grounded, slightly social — a thoughtful friend who reviewed your day, not a dashboard.\n' +
+    '- Lead with the story of the day (what the user was doing and when), then surface totals only if the user asked or if a number matters.\n' +
+    '- Keep it short. 2-5 sentences for most questions. Use bullet points only when listing distinct blocks or suggestions.\n' +
+    '- Reference block time ranges and labels when they add specificity: "between 9:30 and 11:00 you were in a research block on arxiv and Claude".\n' +
+    '- Never say "the user" — address them directly ("you").\n' +
+    '- Always speak as Daylens, never as a raw model/provider persona.\n' +
+    `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
+    '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
+    '- For recommendations, keep them concrete and tied to observed patterns — not generic productivity advice.\n\n' +
     (dayContext
       ? `Tracked local data context:\n${dayContext}`
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +

@@ -244,6 +244,7 @@ interface WeekDayData {
 function WeekView({ selectedDate, onSelectDay }: { selectedDate: string; onSelectDay: (d: string) => void }) {
   const [weekData, setWeekData] = useState<WeekDayData[]>([])
   const [loading, setLoading] = useState(true)
+  const [hoveredDay, setHoveredDay] = useState<string | null>(null)
   const weekStartStr = getWeekStart(selectedDate)
   const today = todayString()
 
@@ -305,33 +306,50 @@ function WeekView({ selectedDate, onSelectDay }: { selectedDate: string; onSelec
     ? activeDays.filter((d) => d.focusPct > 0).reduce((a, b) => a.focusPct > b.focusPct ? a : b)
     : null
 
+  // Collect all categories that appear this week for the legend
+  const weekCategories = new Map<AppCategory, number>()
+  for (const day of weekData) {
+    for (const { cat, seconds } of day.catBreakdown) {
+      weekCategories.set(cat, (weekCategories.get(cat) ?? 0) + seconds)
+    }
+  }
+  const legendCategories = [...weekCategories.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+
+  // Hovered day detail tooltip content
+  const hoveredDayData = hoveredDay ? weekData.find((d) => d.dateStr === hoveredDay) : null
+
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
         {weekData.map((day) => {
           const barH = maxSec > 0 ? Math.max(4, (day.totalSeconds / maxSec) * 128) : 0
-          const isToday = day.dateStr === today
+          const isDayToday = day.dateStr === today
           const isSelected = day.dateStr === selectedDate
+          const isHovered = day.dateStr === hoveredDay
           const [, , dayNum] = day.dateStr.split('-').map(Number)
           return (
             <button
               key={day.dateStr}
               onClick={() => onSelectDay(day.dateStr)}
-              title={`${day.label}: ${formatDuration(day.totalSeconds)} tracked`}
+              onMouseEnter={() => setHoveredDay(day.dateStr)}
+              onMouseLeave={() => setHoveredDay(null)}
               style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                background: isToday
+                background: isDayToday
                   ? 'var(--color-surface-low)'
-                  : isSelected
+                  : isSelected || isHovered
                     ? 'var(--color-surface-container)'
                     : 'transparent',
-                border: isToday || isSelected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
+                border: isDayToday || isSelected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
                 cursor: 'pointer', padding: '10px 4px 8px', borderRadius: 10,
+                transition: 'background 100ms',
               }}
             >
               <span style={{
                 fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
-                color: isToday || isSelected ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+                color: isDayToday || isSelected ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
               }}>
                 {day.shortLabel}
               </span>
@@ -349,6 +367,7 @@ function WeekView({ selectedDate, onSelectDay }: { selectedDate: string; onSelec
                     {day.catBreakdown.map(({ cat, seconds }, idx) => (
                       <div
                         key={cat}
+                        title={`${categoryLabel(cat)}: ${formatDuration(seconds)}`}
                         style={{
                           flexGrow: seconds,
                           flexBasis: 0,
@@ -363,12 +382,8 @@ function WeekView({ selectedDate, onSelectDay }: { selectedDate: string; onSelec
                 )}
               </div>
 
-              {day.totalSeconds > 0 && day.focusPct > 0 ? (
-                <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-tertiary)' }}>
-                  {day.focusPct}%
-                </span>
-              ) : day.totalSeconds > 0 ? (
-                <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>
+              {day.totalSeconds > 0 ? (
+                <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
                   {formatDuration(day.totalSeconds)}
                 </span>
               ) : (
@@ -379,37 +394,100 @@ function WeekView({ selectedDate, onSelectDay }: { selectedDate: string; onSelec
         })}
       </div>
 
-      {activeDays.length > 0 && (() => {
+      {/* Category legend — explains what the color bands mean */}
+      {legendCategories.length > 0 && (
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 14,
+          padding: '0 4px',
+        }}>
+          {legendCategories.map(([cat, secs]) => (
+            <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{
+                width: 8, height: 8, borderRadius: 2,
+                background: CATEGORY_COLORS[cat] ?? '#94a3b8', opacity: 0.85,
+              }} />
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                {categoryLabel(cat)} <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatDuration(secs)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Hover detail — shows category breakdown for hovered day */}
+      {hoveredDayData && hoveredDayData.totalSeconds > 0 && (
+        <div style={{
+          marginTop: 12, padding: '12px 16px', borderRadius: 10,
+          background: 'var(--color-surface-low)', border: '1px solid var(--color-border-ghost)',
+          transition: 'opacity 120ms',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+              {hoveredDayData.label}
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+              {formatDuration(hoveredDayData.totalSeconds)} tracked
+              {hoveredDayData.focusPct > 0 ? ` · ${hoveredDayData.focusPct}% focused` : ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+            {hoveredDayData.catBreakdown.map(({ cat, seconds }) => (
+              <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div style={{ width: 6, height: 6, borderRadius: 2, background: CATEGORY_COLORS[cat] ?? '#94a3b8' }} />
+                <span style={{ fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+                  {categoryLabel(cat)}: {formatDuration(seconds)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Week summary */}
+      {activeDays.length > 0 && !hoveredDay && (() => {
         const weekTotal = activeDays.reduce((s, d) => s + d.totalSeconds, 0)
         const avgPerActiveDay = Math.round(weekTotal / activeDays.length)
+        const weekFocusSec = activeDays.reduce((s, d) => s + Math.round(d.totalSeconds * d.focusPct / 100), 0)
+        const weekFocusPct = percentOf(weekFocusSec, weekTotal)
         const workdayCount = activeDays.filter((d) => {
           const day = new Date(d.dateStr + 'T12:00').getDay()
           return day >= 1 && day <= 5
         }).length
         return (
           <div style={{
-            marginTop: 20, padding: '14px 18px', borderRadius: 12,
+            marginTop: 12, padding: '14px 18px', borderRadius: 12,
             background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
-            display: 'grid', gap: 8,
           }}>
-            {mostActiveDay && (
-              <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                <span style={{ fontWeight: 700, color: 'var(--color-text-primary)' }}>Heaviest day:</span>{' '}
-                {mostActiveDay.label} — {formatDuration(mostActiveDay.totalSeconds)}
-                {mostActiveDay.topCategory ? `, mostly ${categoryLabel(mostActiveDay.topCategory).toLowerCase()}` : ''}
-              </div>
-            )}
-            {bestFocusDay && bestFocusDay.focusPct > 0 && (
-              <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                <span style={{ fontWeight: 700, color: 'var(--color-text-primary)' }}>Best focus:</span>{' '}
-                {bestFocusDay.label} — {bestFocusDay.focusPct}% focused time
-              </div>
-            )}
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-              <span style={{ fontWeight: 700, color: 'var(--color-text-primary)' }}>Total tracked:</span>{' '}
-              {formatDuration(weekTotal)} across {activeDays.length} day{activeDays.length !== 1 ? 's' : ''}
-              {workdayCount > 0 ? ` (${workdayCount} workday${workdayCount !== 1 ? 's' : ''})` : ''}
-              {activeDays.length > 1 ? ` · avg ${formatDuration(avgPerActiveDay)}/day` : ''}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10 }}>
+              <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-text-primary)', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+                {formatDuration(weekTotal)}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                across {activeDays.length} day{activeDays.length !== 1 ? 's' : ''}
+                {workdayCount > 0 ? ` (${workdayCount} workday${workdayCount !== 1 ? 's' : ''})` : ''}
+                {activeDays.length > 1 ? ` · avg ${formatDuration(avgPerActiveDay)}/day` : ''}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gap: 6, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+              {weekFocusPct > 0 && (
+                <div>
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{weekFocusPct}%</span>{' '}
+                  focused time ({formatDuration(weekFocusSec)})
+                </div>
+              )}
+              {mostActiveDay && (
+                <div>
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Busiest:</span>{' '}
+                  {mostActiveDay.label} — {formatDuration(mostActiveDay.totalSeconds)}
+                  {mostActiveDay.topCategory ? `, mostly ${categoryLabel(mostActiveDay.topCategory).toLowerCase()}` : ''}
+                </div>
+              )}
+              {bestFocusDay && bestFocusDay.focusPct > 0 && bestFocusDay.dateStr !== mostActiveDay?.dateStr && (
+                <div>
+                  <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>Best focus:</span>{' '}
+                  {bestFocusDay.label} — {bestFocusDay.focusPct}%
+                </div>
+              )}
             </div>
           </div>
         )
@@ -1024,6 +1102,16 @@ export default function Timeline() {
     return () => clearInterval(timer)
   }, [isToday])
 
+  // Stable payload setter — only updates state when block structure actually changed.
+  // This prevents cascading re-renders from the 3s poll when nothing meaningful changed.
+  const prevBlockKeyRef = useRef('')
+  const stableSetPayload = useCallback((data: DayTimelinePayload, isInitial: boolean) => {
+    const newKey = data.blocks.map((b) => `${b.id}:${b.isLive ? b.endTime : 's'}`).join(',')
+    if (!isInitial && newKey === prevBlockKeyRef.current) return // nothing changed
+    prevBlockKeyRef.current = newKey
+    setPayload(data)
+  }, [])
+
   // Load day payload
   useEffect(() => {
     if (viewMode === 'week') return
@@ -1033,7 +1121,7 @@ export default function Timeline() {
       if (showSpinner) setLoading(true)
       setError(null)
       void ipc.db.getTimelineDay(date)
-        .then((data) => { if (!cancelled) setPayload(data) })
+        .then((data) => { if (!cancelled) stableSetPayload(data, showSpinner) })
         .catch((err) => {
           if (!cancelled) { setPayload(null); setError(err instanceof Error ? err.message : String(err)) }
         })
@@ -1046,7 +1134,7 @@ export default function Timeline() {
       return () => { cancelled = true; window.clearInterval(timer) }
     }
     return () => { cancelled = true }
-  }, [date, viewMode, isToday])
+  }, [date, viewMode, isToday, stableSetPayload])
 
   // Clear selection on context change
   useEffect(() => {
@@ -1088,7 +1176,8 @@ export default function Timeline() {
   const payloadRef = useRef(payload)
   payloadRef.current = payload
 
-  // Background block analysis — only re-runs when new completed blocks appear
+  // Background block analysis — only re-runs when new completed blocks appear.
+  // Batches insight updates to avoid per-block re-renders that cause visual jumps.
   useEffect(() => {
     const p = payloadRef.current
     if (!p) return
@@ -1101,6 +1190,16 @@ export default function Timeline() {
     if (toAnalyze.length === 0) return
 
     async function analyzeAll() {
+      const batch: Record<string, WorkContextInsight> = {}
+      let batchFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+      const flushBatch = () => {
+        if (cancelled || Object.keys(batch).length === 0) return
+        const snapshot = { ...batch }
+        for (const k of Object.keys(snapshot)) delete batch[k]
+        setInsights((cur) => ({ ...cur, ...snapshot }))
+      }
+
       for (const block of toAnalyze) {
         if (cancelled) break
         const fallback: WorkContextInsight = { label: blockLabel(block), narrative: blockNarrative(block) }
@@ -1108,8 +1207,14 @@ export default function Timeline() {
         if (cancelled) break
         _insightCache[block.id] = insight
         _lastAnalyzedAt[block.id] = Date.now()
-        setInsights((cur) => ({ ...cur, [block.id]: insight }))
+        batch[block.id] = insight
+        // Debounce: flush after 300ms of no new insights, or immediately on last block
+        if (batchFlushTimer) clearTimeout(batchFlushTimer)
+        batchFlushTimer = setTimeout(flushBatch, 300)
       }
+      // Final flush
+      if (batchFlushTimer) clearTimeout(batchFlushTimer)
+      flushBatch()
     }
     void analyzeAll()
     return () => { cancelled = true }
