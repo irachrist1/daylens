@@ -59,25 +59,40 @@ function buildCharacterSummary(
 ): string {
   const display = formatDisplayAppName(appName)
   if (!character || character.confidence < 0.25) {
-    if (sessionCount <= 2) return `Not enough data yet to characterize how you use ${display}. Check back after more usage.`
-    if (avgSessionSeconds > 3600) return `You tend to stay in ${display} for long stretches — it's likely a core part of your workflow.`
-    if (avgSessionSeconds > 1800) return `${display} is typically used in sustained sessions, averaging ${formatDuration(avgSessionSeconds)} at a time.`
-    return `You've opened ${display} ${sessionCount} time${sessionCount !== 1 ? 's' : ''} in this period.`
+    if (sessionCount <= 2) {
+      // Lean on category for something useful rather than "not enough data"
+      const catHint: Partial<Record<AppCategory, string>> = {
+        development: `${display} — a development tool. Only ${sessionCount} session${sessionCount !== 1 ? 's' : ''} recorded so far.`,
+        communication: `${display} — communication. Brief usage so far.`,
+        email: `${display} — email. Brief usage so far.`,
+        aiTools: `${display} — AI assistant. Brief usage so far.`,
+        browsing: `${display} — browser. Brief usage so far.`,
+        writing: `${display} — writing tool. Brief usage so far.`,
+        productivity: `${display} — productivity tool. Brief usage so far.`,
+        design: `${display} — design tool. Brief usage so far.`,
+        entertainment: `${display} — entertainment. Brief usage so far.`,
+      }
+      return catHint[category] ?? `${display} — ${sessionCount} session${sessionCount !== 1 ? 's' : ''} recorded so far.`
+    }
+    if (avgSessionSeconds > 3600) return `${display} is used for long stretches — averaging ${formatDuration(avgSessionSeconds)} per session, likely a core part of your workflow.`
+    if (avgSessionSeconds > 1800) return `${display} is used in sustained sessions, averaging ${formatDuration(avgSessionSeconds)} each. ${sessionCount} sessions in this period.`
+    if (avgSessionSeconds > 300) return `${display} — ${sessionCount} sessions averaging ${formatDuration(avgSessionSeconds)} each.`
+    return `${display} — ${sessionCount} brief sessions, typically ${formatDuration(avgSessionSeconds)} each.`
   }
   const avg = formatDuration(Math.round(character.avgSessionMinutes * 60))
   switch (character.character) {
     case 'deep_focus':
-      return `${display} is a deep-focus tool for you. You stay in it for ${avg} on average — long, uninterrupted blocks of work.`
+      return `${display} is a deep-focus tool for you — ${avg} average sessions, long uninterrupted blocks of work.`
     case 'flow_compatible':
-      return `${display} fits into your flow. Sessions run ${avg} on average with few interruptions — it doesn't fragment your attention.`
+      return `${display} fits your flow — ${avg} sessions on average with few interruptions.`
     case 'context_switching':
-      return `You visit ${display} frequently and briefly — quick checks rather than sustained work. Typical session: ${avg}.`
+      return `You visit ${display} frequently and briefly — quick checks rather than sustained work. Typical: ${avg}.`
     case 'distraction':
-      return `${display} tends to show up as short breaks between other tasks, averaging ${avg} per visit. Worth noticing if that's intentional.`
+      return `${display} appears as short breaks between other tasks, averaging ${avg} per visit.`
     case 'communication':
-      return `${display} is a communication hub for you — frequent visits averaging ${avg}, likely managing messages and responses throughout the day.`
+      return `${display} is a communication hub — frequent visits averaging ${avg}, managing messages throughout the day.`
     default:
-      if (avgSessionSeconds > 3600) return `${display} is a core part of your day — long sustained use averaging ${avg} per session.`
+      if (avgSessionSeconds > 3600) return `${display} is a core part of your day — sustained use averaging ${avg} per session.`
       if (category === 'browsing') return `Research and browsing in ${display}, averaging ${avg} per session.`
       return `Regular use of ${display}, averaging ${avg} per session.`
   }
@@ -186,12 +201,16 @@ export default function Apps() {
   const mergedSummaries = mergeLiveSummary(summaries, live, days)
   const visibleSummaries = mergedSummaries.filter((s) => !isPresentationNoise(s.category, s.totalSeconds))
 
-  // Auto-suggest categories for uncategorized apps
+  // Auto-suggest categories for uncategorized apps.
+  // Track which bundleIds we've already requested to prevent re-firing.
+  const requestedSuggestionsRef = useRef(new Set<string>())
   useEffect(() => {
     const uncategorized = visibleSummaries
-      .filter((s) => s.category === 'uncategorized' && !categorySuggestions[s.bundleId])
+      .filter((s) => s.category === 'uncategorized' && !categorySuggestions[s.bundleId] && !requestedSuggestionsRef.current.has(s.bundleId))
       .slice(0, 6)
     if (uncategorized.length === 0) return
+    // Mark these as requested immediately to avoid duplicate calls
+    for (const s of uncategorized) requestedSuggestionsRef.current.add(s.bundleId)
     let cancelled = false
     void Promise.all(
       uncategorized.map(async (s) => {
@@ -207,7 +226,8 @@ export default function Apps() {
       })
     }).catch(() => { /* fail silently */ })
     return () => { cancelled = true }
-  }, [categorySuggestions, visibleSummaries])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSummaries.map((s) => s.bundleId).join(',')])
 
   // Background-load character data for visible apps
   useEffect(() => {
@@ -370,11 +390,7 @@ export default function Apps() {
     const isLive = live?.bundleId === app.bundleId
     const effectiveCat = (app.category === 'uncategorized' && suggestion?.suggestedCategory)
       ? suggestion.suggestedCategory : app.category
-    const charSummary = (() => {
-      const full = buildCharacterSummary(app.appName, effectiveCat, ch ?? null, sc, avgSec)
-      const words = full.split(' ')
-      return words.length > 10 ? words.slice(0, 9).join(' ') + '…' : full
-    })()
+    const charSummary = buildCharacterSummary(app.appName, effectiveCat, ch ?? null, sc, avgSec)
     const isHighlighted = highlightedAppIdx === flatIndex
 
     return (
@@ -880,26 +896,84 @@ function AppDetailPanel({
               background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
             }}>
               {sectionHeading('Patterns')}
-              <div style={{ display: 'grid', gap: 8 }}>
-                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
-                  {topTimeOfDay.length > 0
-                    ? `Most active: ${topTimeOfDay.map((entry) => {
-                      if (entry.hour < 12) return 'mornings'
-                      if (entry.hour < 17) return 'afternoons'
-                      return 'evenings'
-                    }).filter((value, index, values) => values.indexOf(value) === index).join(' and ')}`
-                    : 'Most active: not enough history yet'}
-                </p>
-                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
-                  {pairedApps.length > 0
-                    ? `Usually paired with: ${pairedApps.slice(0, 3).map((entry) => entry.displayName).join(', ')}`
-                    : 'Usually paired with: no clear pattern yet'}
-                </p>
-                <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
-                  {detail.workflowAppearances.length > 0
-                    ? `Repeated workflow: ${detail.workflowAppearances[0].label}`
-                    : `Session character: ${detailCharacter?.label?.toLowerCase() ?? 'still emerging'}`}
-                </p>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {/* Time of day with hour specificity */}
+                {topTimeOfDay.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>
+                      Most active hours
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {topTimeOfDay.map((entry) => {
+                        const hourLabel = entry.hour === 0 ? '12am' : entry.hour < 12 ? `${entry.hour}am` : entry.hour === 12 ? '12pm' : `${entry.hour - 12}pm`
+                        const nextHour = (entry.hour + 1) % 24
+                        const nextLabel = nextHour === 0 ? '12am' : nextHour < 12 ? `${nextHour}am` : nextHour === 12 ? '12pm' : `${nextHour - 12}pm`
+                        return (
+                          <span key={entry.hour} style={{
+                            fontSize: 12, color: 'var(--color-text-secondary)',
+                            padding: '3px 10px', borderRadius: 6,
+                            background: 'var(--color-surface-low)',
+                          }}>
+                            {hourLabel}–{nextLabel}: {formatDuration(entry.totalSeconds)}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Paired apps — shows which other tools are used alongside */}
+                {pairedApps.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>
+                      Often used alongside
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {pairedApps.slice(0, 4).map((entry) => (
+                        <span key={entry.bundleId} style={{
+                          fontSize: 12, color: 'var(--color-text-secondary)',
+                          padding: '3px 10px', borderRadius: 6,
+                          background: 'var(--color-surface-low)',
+                        }}>
+                          {entry.displayName}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Workflow appearance */}
+                {detail.workflowAppearances.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>
+                      Part of workflow
+                    </div>
+                    <p style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', margin: 0 }}>
+                      {detail.workflowAppearances[0].label}
+                    </p>
+                  </div>
+                )}
+
+                {/* Session stats */}
+                {detail.sessionCount > 0 && (
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-secondary)' }}>{detail.sessionCount}</span> sessions
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                      avg <span style={{ fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                        {formatDuration(Math.round(detail.totalSeconds / detail.sessionCount))}
+                      </span> each
+                    </div>
+                    {detailCharacter?.label && (
+                      <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                        character: <span style={{ fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                          {detailCharacter.label.toLowerCase()}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
