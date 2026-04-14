@@ -1009,10 +1009,6 @@ function StatusStrip({ payload, isToday }: { payload: DayTimelinePayload; isToda
   )
 }
 
-const GAP_LINE_THRESHOLD_MS = 5 * 60_000
-const GAP_BAND_THRESHOLD_MS = 15 * 60_000
-const GAP_EXPANDABLE_THRESHOLD_MS = 60 * 60_000
-const GAP_LARGE_THRESHOLD_MS = 3 * 60 * 60_000
 
 interface PositionedSegment {
   segment: TimelineSegment
@@ -1020,27 +1016,19 @@ interface PositionedSegment {
   heightPx: number
 }
 
-function segmentKey(segment: TimelineSegment): string {
-  if (segment.kind === 'work_block') return `work:${segment.blockId}`
-  return `${segment.kind}:${segment.startTime}:${segment.endTime}`
-}
-
-function gapHeightPx(segment: Exclude<TimelineSegment, { kind: 'work_block' }>, expanded: boolean): number {
+function gapHeightPx(segment: Exclude<TimelineSegment, { kind: 'work_block' }>): number {
+  // Gaps are invisible empty space — no UI rendered inside them.
+  // Heights give visual breathing room proportional to real time, capped so
+  // large idle periods don't blow up the layout.
   const durationMs = segment.endTime - segment.startTime
-  if (durationMs < GAP_LINE_THRESHOLD_MS) return 0
-  if (expanded) return Math.max(16, durationMs / 60_000 * PX_PER_MIN)
-  if (durationMs < GAP_BAND_THRESHOLD_MS) return 12
-  if (durationMs < GAP_EXPANDABLE_THRESHOLD_MS) return 8
-  return 16
+  const durationMin = durationMs / 60_000
+  if (durationMin < 3) return 0           // sub-3-min blip: collapse entirely
+  if (durationMin < 15) return 12         // tiny gap: small breath
+  if (durationMin < 60) return Math.round(durationMin * 0.8)  // proportional up to ~48px
+  if (durationMin < 240) return 48        // 1–4 hour gap: fixed 48px
+  return 64                               // >4 hour gap: 64px max — never blow up layout
 }
 
-function gapLabel(segment: Exclude<TimelineSegment, { kind: 'work_block' }>): string {
-  const duration = formatDuration(Math.round((segment.endTime - segment.startTime) / 1000))
-  if (segment.kind === 'machine_off') return `${duration} machine off`
-  if (segment.kind === 'away') return `${duration} away`
-  if ((segment.endTime - segment.startTime) >= GAP_LARGE_THRESHOLD_MS) return `${duration} no activity`
-  return `${duration} idle`
-}
 
 // ─── Filter pills ─────────────────────────────────────────────────────────────
 
@@ -1142,9 +1130,6 @@ export default function Timeline() {
     setSelectedBlockRect(null)
   }, [date, activeFilter, viewMode])
 
-  useEffect(() => {
-    setExpandedGapKeys(new Set())
-  }, [date, activeFilter, viewMode])
 
   useEffect(() => {
     if (!payload || !blockParam) return
@@ -1290,7 +1275,7 @@ export default function Timeline() {
     groups.push(current)
     return groups
   }, [filteredBlocks, insights])
-  const [expandedGapKeys, setExpandedGapKeys] = useState<Set<string>>(new Set())
+  // Gap expansion removed — gaps are invisible empty space
 
   const rawDisplaySegments = useMemo(() => {
     if (!payload) return []
@@ -1326,7 +1311,7 @@ export default function Timeline() {
     return rawDisplaySegments.map((segment) => {
       const heightPx = segment.kind === 'work_block'
         ? Math.max(MIN_BLOCK_HEIGHT, ((segment.endTime - segment.startTime) / 60_000) * PX_PER_MIN)
-        : gapHeightPx(segment, expandedGapKeys.has(segmentKey(segment)))
+        : gapHeightPx(segment)
       const positioned = {
         segment,
         topPx,
@@ -1335,68 +1320,52 @@ export default function Timeline() {
       topPx += heightPx
       return positioned
     })
-  }, [rawDisplaySegments, expandedGapKeys])
+  }, [rawDisplaySegments])
 
   const gridHeight = positionedSegments.length > 0
     ? positionedSegments[positionedSegments.length - 1].topPx + positionedSegments[positionedSegments.length - 1].heightPx
     : 0
 
-  const compressedYForTime = useCallback((targetTime: number, preferEnd = false) => {
+  const compressedYForTime = useCallback((targetTime: number, _preferEnd = false) => {
     if (positionedSegments.length === 0) return 0
 
     for (const entry of positionedSegments) {
       if (targetTime < entry.segment.startTime) return entry.topPx
       if (targetTime <= entry.segment.endTime) {
-        if (
-          entry.segment.kind === 'work_block'
-          || (expandedGapKeys.has(segmentKey(entry.segment)) && entry.segment.endTime > entry.segment.startTime)
-        ) {
-          const ratio = (targetTime - entry.segment.startTime) / Math.max(1, entry.segment.endTime - entry.segment.startTime)
-          return entry.topPx + entry.heightPx * ratio
-        }
-        return preferEnd ? entry.topPx + entry.heightPx : entry.topPx
+        // Always interpolate within a segment proportionally
+        const ratio = (targetTime - entry.segment.startTime) / Math.max(1, entry.segment.endTime - entry.segment.startTime)
+        return entry.topPx + entry.heightPx * ratio
       }
     }
 
     const last = positionedSegments[positionedSegments.length - 1]
     return last.topPx + last.heightPx
-  }, [positionedSegments, expandedGapKeys])
+  }, [positionedSegments])
 
   const currentTimeTop = isToday ? compressedYForTime(currentTimeMs, true) : null
 
   const timeMarkers = useMemo(() => {
-    const markers: Array<{ topPx: number; label: string }> = []
-    const MIN_LABEL_GAP = 28 // px — prevent label crowding
+    if (positionedSegments.length === 0) return []
 
+    const markers: Array<{ topPx: number; label: string }> = []
+    const MIN_LABEL_GAP = 32 // px minimum between labels
+
+    // Anchor: show the start time of every work block
     for (const group of mergedBlocks) {
       const topPx = compressedYForTime(group.mergedStart)
       const label = formatClockTime(group.mergedStart)
-      const previous = markers[markers.length - 1]
-      if (!previous || Math.abs(previous.topPx - topPx) > MIN_LABEL_GAP) {
+      const prev = markers[markers.length - 1]
+      if (!prev || topPx - prev.topPx >= MIN_LABEL_GAP) {
         markers.push({ topPx, label })
       }
     }
 
-    // Only add gap segment markers for large gaps (>= 30 min) and only if not too close
-    for (const entry of positionedSegments) {
-      if (entry.segment.kind === 'work_block' || entry.heightPx < 24) continue
-      const durationMs = entry.segment.endTime - entry.segment.startTime
-      if (durationMs < 30 * 60_000) continue // skip small gaps
-      const label = formatClockTime(entry.segment.startTime)
-      const previous = markers[markers.length - 1]
-      if (!previous || Math.abs(previous.topPx - entry.topPx) > MIN_LABEL_GAP) {
-        markers.push({ topPx: entry.topPx, label })
-      }
-    }
-
-    // End time marker: only add if it won't crowd the last marker
-    if (positionedSegments.length > 0) {
-      const last = positionedSegments[positionedSegments.length - 1]
-      const endTop = last.topPx + last.heightPx - 10
-      const previous = markers[markers.length - 1]
-      if (!previous || Math.abs(previous.topPx - endTop) > MIN_LABEL_GAP) {
-        markers.push({ topPx: endTop, label: formatClockTime(last.segment.endTime) })
-      }
+    // End anchor: show when the last segment ends (only if it won't crowd the last marker)
+    const last = positionedSegments[positionedSegments.length - 1]
+    const endTop = last.topPx + last.heightPx
+    const prevLast = markers[markers.length - 1]
+    if (!prevLast || endTop - prevLast.topPx >= MIN_LABEL_GAP) {
+      markers.push({ topPx: endTop, label: formatClockTime(last.segment.endTime) })
     }
 
     return markers
@@ -1772,75 +1741,7 @@ export default function Timeline() {
                     >
                       {/* Activity lane — holds all tracked blocks */}
                       <div className="activity-lane" style={{ flex: 1, position: 'relative' }}>
-                        {positionedSegments.map((entry) => {
-                          if (entry.segment.kind === 'work_block' || entry.heightPx <= 0) return null
-
-                          const durationMs = entry.segment.endTime - entry.segment.startTime
-                          const key = segmentKey(entry.segment)
-                          const isExpanded = expandedGapKeys.has(key)
-                          const expandable = durationMs >= GAP_EXPANDABLE_THRESHOLD_MS
-                          const isDashed = durationMs >= GAP_LINE_THRESHOLD_MS && durationMs < GAP_BAND_THRESHOLD_MS
-                          const label = durationMs >= GAP_BAND_THRESHOLD_MS ? gapLabel(entry.segment) : null
-
-                          if (isDashed) {
-                            // Small gaps: just a faint horizontal rule — no box, no pattern
-                            return (
-                              <div
-                                key={key}
-                                style={{
-                                  position: 'absolute',
-                                  top: entry.topPx + entry.heightPx / 2,
-                                  left: 12,
-                                  right: 12,
-                                  borderTop: '1px solid var(--color-border-ghost)',
-                                  opacity: 0.4,
-                                  pointerEvents: 'none',
-                                }}
-                              />
-                            )
-                          }
-
-                          return (
-                            <button
-                              key={key}
-                              onClick={() => {
-                                if (!expandable) return
-                                setExpandedGapKeys((current) => {
-                                  const next = new Set(current)
-                                  if (next.has(key)) next.delete(key)
-                                  else next.add(key)
-                                  return next
-                                })
-                              }}
-                              style={{
-                                position: 'absolute',
-                                top: entry.topPx,
-                                left: 4,
-                                right: 4,
-                                height: entry.heightPx,
-                                borderRadius: 6,
-                                border: 'none',
-                                borderTop: '1px solid var(--color-border-ghost)',
-                                borderBottom: '1px solid var(--color-border-ghost)',
-                                background: 'transparent',
-                                color: 'var(--color-text-tertiary)',
-                                fontSize: 11,
-                                opacity: 0.7,
-                                cursor: expandable ? 'pointer' : 'default',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                padding: 0,
-                                overflow: 'hidden',
-                              }}
-                              title={expandable ? (isExpanded ? 'Collapse gap' : 'Expand gap') : undefined}
-                            >
-                              <span style={{ pointerEvents: 'none', whiteSpace: 'nowrap', letterSpacing: '0.01em' }}>
-                                {label}
-                              </span>
-                            </button>
-                          )
-                        })}
+                        {/* Gaps are invisible — pure empty canvas, Apple Calendar-style */}
 
                         {/* Blocks (with merged groups) */}
                         {mergedBlocks.map((group) => {
