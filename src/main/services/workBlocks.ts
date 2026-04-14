@@ -838,8 +838,21 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
 
 function workflowLabelForBlock(apps: string[], block: WorkContextBlock): string {
   if (apps.length === 0) return userVisibleLabelForBlock(block)
-  if (apps.length === 1) return `${apps[0]} loop`
-  return `${apps.slice(0, 2).join(' + ')}`
+  // Map canonical IDs → display names using the block's own topApps list
+  const idToName = new Map(
+    block.topApps.map((a) => {
+      const identity = resolveCanonicalApp(a.bundleId, a.appName)
+      return [identity.canonicalAppId ?? a.bundleId, a.appName]
+    })
+  )
+  const names = apps.map((id) => {
+    const found = idToName.get(id)
+    if (found) return found
+    // Fallback: title-case the canonical ID (better than leaking raw id)
+    return id.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  })
+  if (names.length === 1) return `${names[0]} loop`
+  return `${names.slice(0, 2).join(' + ')}`
 }
 
 function focusOverlapForRange(
@@ -973,10 +986,7 @@ function buildBlockFromCandidate(
   const workflowRef: WorkflowRef = {
     id: workflowIdFor(signatureKey),
     signatureKey,
-    label: workflowLabelForBlock(
-      workflowApps.map((app) => app.replace(/[-_]/g, ' ')),
-      normalizedBlock,
-    ),
+    label: workflowLabelForBlock(workflowApps, normalizedBlock),
     confidence: Math.min(0.9, labelConfidenceValue(confidence)),
     dominantCategory,
     canonicalApps: workflowApps,

@@ -1130,7 +1130,7 @@ export default function Timeline() {
 
     loadDay(true)
     if (isToday) {
-      const timer = window.setInterval(() => loadDay(false), 3_000)
+      const timer = window.setInterval(() => loadDay(false), 30_000)
       return () => { cancelled = true; window.clearInterval(timer) }
     }
     return () => { cancelled = true }

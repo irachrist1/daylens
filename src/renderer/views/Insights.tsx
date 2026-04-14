@@ -356,9 +356,10 @@ export default function Insights() {
         setTodaySessions(sessionData as AppSession[])
         setSettings(current)
         setCliTools(resolvedCliTools)
-      } catch (err) {
+      } catch {
         if (cancelled) return
-        setMessages([{ role: 'assistant', content: 'Error loading insights: ' + String(err) }])
+        // Don't overwrite existing messages on a background refresh failure.
+        // Only reset API key / CLI state so the send button stays disabled.
         setHasApiKey(false)
         setCliTools({ claude: null, codex: null })
       }
@@ -387,7 +388,8 @@ export default function Insights() {
       const reply = (await ipc.ai.sendMessage(message)) as string
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }])
     } catch (err) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: ' + String(err) }])
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setMessages((prev) => [...prev, { role: 'assistant', content: errMsg }])
     } finally {
       setLoading(false)
     }

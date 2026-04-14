@@ -29,6 +29,37 @@ function getTableSql(table: string): string | null {
   return row?.sql ?? null
 }
 
+function ensureAppSessionIdentityColumns(): void {
+  const db = getDb()
+
+  if (!hasColumn('app_sessions', 'raw_app_name')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN raw_app_name TEXT`)
+  }
+  if (!hasColumn('app_sessions', 'canonical_app_id')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN canonical_app_id TEXT`)
+  }
+  if (!hasColumn('app_sessions', 'app_instance_id')) {
+    db.exec(`ALTER TABLE app_sessions ADD COLUMN app_instance_id TEXT`)
+  }
+}
+
+function ensureWebsiteVisitIdentityColumns(): void {
+  const db = getDb()
+
+  if (!hasColumn('website_visits', 'canonical_browser_id')) {
+    db.exec(`ALTER TABLE website_visits ADD COLUMN canonical_browser_id TEXT`)
+  }
+  if (!hasColumn('website_visits', 'browser_profile_id')) {
+    db.exec(`ALTER TABLE website_visits ADD COLUMN browser_profile_id TEXT`)
+  }
+  if (!hasColumn('website_visits', 'normalized_url')) {
+    db.exec(`ALTER TABLE website_visits ADD COLUMN normalized_url TEXT`)
+  }
+  if (!hasColumn('website_visits', 'page_key')) {
+    db.exec(`ALTER TABLE website_visits ADD COLUMN page_key TEXT`)
+  }
+}
+
 const migrations: Migration[] = [
   {
     version: 1,
@@ -236,15 +267,7 @@ const migrations: Migration[] = [
       if (!hasColumn('app_sessions', 'window_title')) {
         db.exec(`ALTER TABLE app_sessions ADD COLUMN window_title TEXT`)
       }
-      if (!hasColumn('app_sessions', 'raw_app_name')) {
-        db.exec(`ALTER TABLE app_sessions ADD COLUMN raw_app_name TEXT`)
-      }
-      if (!hasColumn('app_sessions', 'canonical_app_id')) {
-        db.exec(`ALTER TABLE app_sessions ADD COLUMN canonical_app_id TEXT`)
-      }
-      if (!hasColumn('app_sessions', 'app_instance_id')) {
-        db.exec(`ALTER TABLE app_sessions ADD COLUMN app_instance_id TEXT`)
-      }
+      ensureAppSessionIdentityColumns()
       if (!hasColumn('app_sessions', 'capture_source')) {
         db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_source TEXT NOT NULL DEFAULT 'foreground_poll'`)
       }
@@ -255,18 +278,7 @@ const migrations: Migration[] = [
         db.exec(`ALTER TABLE app_sessions ADD COLUMN capture_version INTEGER NOT NULL DEFAULT 1`)
       }
 
-      if (!hasColumn('website_visits', 'canonical_browser_id')) {
-        db.exec(`ALTER TABLE website_visits ADD COLUMN canonical_browser_id TEXT`)
-      }
-      if (!hasColumn('website_visits', 'browser_profile_id')) {
-        db.exec(`ALTER TABLE website_visits ADD COLUMN browser_profile_id TEXT`)
-      }
-      if (!hasColumn('website_visits', 'normalized_url')) {
-        db.exec(`ALTER TABLE website_visits ADD COLUMN normalized_url TEXT`)
-      }
-      if (!hasColumn('website_visits', 'page_key')) {
-        db.exec(`ALTER TABLE website_visits ADD COLUMN page_key TEXT`)
-      }
+      ensureWebsiteVisitIdentityColumns()
 
       db.exec(`
         CREATE INDEX IF NOT EXISTS idx_app_sessions_canonical_app
@@ -421,6 +433,11 @@ const migrations: Migration[] = [
     up: () => {
       const db = getDb()
 
+      // Some older local databases report earlier versions as applied but still
+      // lack the identity columns. Repair those schemas before backfilling.
+      ensureAppSessionIdentityColumns()
+      ensureWebsiteVisitIdentityColumns()
+
       const sessionRows = db.prepare(`
         SELECT id, bundle_id, app_name
         FROM app_sessions
@@ -465,6 +482,15 @@ const migrations: Migration[] = [
           row.id,
         )
       }
+    },
+  },
+  {
+    version: 12,
+    description: 'Clear workflow signatures so labels regenerate with display names',
+    up: () => {
+      const db = getDb()
+      db.exec('DELETE FROM workflow_occurrences')
+      db.exec('DELETE FROM workflow_signatures')
     },
   },
 ]
