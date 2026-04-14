@@ -849,7 +849,7 @@ function AppDetailPanel({
               padding: '18px 20px', borderRadius: 12,
               background: 'var(--color-surface-container)', border: '1px solid var(--color-border-ghost)',
             }}>
-              {sectionHeading('Appears In')}
+              {sectionHeading('Session History')}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {detail.blockAppearances.map((wb) => {
                   const dateStr = new Date(wb.startTime)

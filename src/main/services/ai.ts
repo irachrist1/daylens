@@ -347,22 +347,33 @@ function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 
 
 function isQuotaOrAuthError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
-  const maybeError = error as { status?: number; code?: string; type?: string; error?: { code?: string | number; status?: string; type?: string } }
+  const maybeError = error as { status?: number; code?: string; type?: string; message?: string; error?: { code?: string | number; status?: string; type?: string } }
   return maybeError.status === 401
     || maybeError.status === 403
     || maybeError.status === 429
+    || maybeError.status === 400  // Anthropic credit_balance_too_low returns HTTP 400
     || maybeError.code === 'insufficient_quota'
     || maybeError.type === 'insufficient_quota'
     || maybeError.error?.code === 'insufficient_quota'
     || maybeError.error?.code === 429
     || maybeError.error?.status === 'RESOURCE_EXHAUSTED'
+    || maybeError.error?.type === 'credit_balance_too_low'
+    || (typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
 }
 
 function friendlyProviderError(error: unknown, providerLabel: string): Error {
   if (!error || typeof error !== 'object') {
     return new Error(`${providerLabel} request failed. Please try again.`)
   }
-  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; message?: string } }
+  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; type?: string; message?: string } }
+
+  // Anthropic credit balance exhausted (HTTP 400 with specific error type)
+  if (
+    maybeError.error?.type === 'credit_balance_too_low'
+    || (maybeError.status === 400 && typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
+  ) {
+    return new Error(`${providerLabel} credit balance is too low. Visit console.anthropic.com to top up, or switch AI provider in Settings.`)
+  }
 
   // Rate limit / quota exhausted
   const status = maybeError.status ?? maybeError.error?.code
