@@ -357,6 +357,25 @@ function isWeeklyQuestion(normalized: string): boolean {
   return normalized.includes('this week') || normalized.includes('last week')
 }
 
+function isAllTimeQuestion(normalized: string): boolean {
+  const patterns = [
+    'across all',
+    'all time',
+    'all-time',
+    'all sessions',
+    'all tracked',
+    'total ever',
+    'since i started',
+    'since you started',
+    'historically',
+    'since tracking',
+    'all my tracked',
+    'all-time total',
+    'total across',
+  ]
+  return patterns.some((pattern) => normalized.includes(pattern))
+}
+
 function isFocusedCategory(category: AppCategory): boolean {
   return FOCUSED_CATEGORIES.includes(category)
 }
@@ -641,9 +660,75 @@ export async function routeInsightsQuestion(
   const normalized = trimmed.toLowerCase()
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
 
+  console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)}`)
+
   // ─── Client/project attribution routing ──────────────────────────────────
   const clientAnswer = tryRouteClientQuestion(normalized, trimmed, resolvedContext, db)
   if (clientAnswer) return { answer: clientAnswer, resolvedContext }
+
+  // ─── All-time / across-all-sessions routing ───────────────────────────────
+  if (isAllTimeQuestion(normalized)) {
+    const toMs = Date.now()
+    const fromMs = toMs - 2 * 365 * 24 * 60 * 60 * 1000
+    const allTimeSites = getWebsiteSummariesForRange(db, fromMs, toMs)
+    const allTimeApps = getAppSummariesForRange(db, fromMs, toMs)
+
+    console.log(`[router] allTime branch: sites=${allTimeSites.length} apps=${allTimeApps.length}`)
+    if (allTimeSites.length === 0 && allTimeApps.length === 0) return null
+
+    const allTimeContext: TemporalContext = { date: new Date(), timeWindow: null }
+    const firstSession = (db.prepare('SELECT MIN(start_time) as t FROM app_sessions').get() as { t: number | null } | undefined)?.t
+    const trackingDays = firstSession
+      ? Math.max(1, Math.round((toMs - firstSession) / (24 * 60 * 60 * 1000)))
+      : Math.max(1, Math.round((toMs - fromMs) / (24 * 60 * 60 * 1000)))
+
+    const DISTRACTION_DOMAINS = [
+      'youtube.com', 'x.com', 'twitter.com', 'instagram.com',
+      'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com',
+    ]
+
+    // If specific sites or apps are named in the question, surface only those
+    const mentionedSites = allTimeSites.filter((site) => {
+      const base = site.domain.toLowerCase().replace(/\.com$|\.org$|\.net$|\.io$/, '')
+      return normalized.includes(site.domain.toLowerCase()) || normalized.includes(base)
+    })
+    const mentionedApps = allTimeApps.filter((app) => normalized.includes(app.appName.toLowerCase()))
+
+    if (mentionedSites.length > 0 || mentionedApps.length > 0) {
+      const lines: string[] = []
+      let totalSeconds = 0
+      for (const site of mentionedSites) {
+        lines.push(`- ${site.domain}: ${formatDuration(site.totalSeconds)}`)
+        totalSeconds += site.totalSeconds
+      }
+      for (const app of mentionedApps) {
+        lines.push(`- ${app.appName}: ${formatDuration(app.totalSeconds)}`)
+        totalSeconds += app.totalSeconds
+      }
+      const header = `Across all tracked sessions (~${trackingDays} days of data):`
+      const total = lines.length > 1 ? `\nTotal: ${formatDuration(totalSeconds)}.` : ''
+      return { answer: `${header}\n${lines.join('\n')}${total}`, resolvedContext: allTimeContext }
+    }
+
+    // General all-time: show distraction sites first, then top sites
+    const distractionSites = allTimeSites.filter((s) =>
+      DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()),
+    )
+    if (distractionSites.length > 0) {
+      const lines = distractionSites.slice(0, 8).map((s) => `- ${s.domain}: ${formatDuration(s.totalSeconds)}`)
+      const totalDistraction = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
+      return {
+        answer: `Across all tracked sessions (~${trackingDays} days of data):\n${lines.join('\n')}\nTotal distraction time: ${formatDuration(totalDistraction)}.`,
+        resolvedContext: allTimeContext,
+      }
+    }
+
+    const topSites = allTimeSites.slice(0, 5).map((s) => `- ${s.domain}: ${formatDuration(s.totalSeconds)}`)
+    return {
+      answer: `Top sites across all tracked sessions (~${trackingDays} days):\n${topSites.join('\n')}`,
+      resolvedContext: allTimeContext,
+    }
+  }
 
   if (isWeeklyQuestion(normalized)) {
     const end = new Date(resolvedContext.date)
@@ -673,6 +758,31 @@ export async function routeInsightsQuestion(
     ) {
       const answer = buildTimelineSummary(apps, sites, sessions) ?? dailyTopCategoryAnswer(apps, sites)
       return answer ? { answer, resolvedContext } : null
+    }
+
+    // Catch-all: generic "this week" / "last week" question with no specific sub-pattern
+    {
+      const totalSeconds = apps.reduce((sum, a) => sum + a.totalSeconds, 0)
+      console.log(`[router] weekly catch-all: apps=${apps.length} sites=${sites.length} totalSec=${totalSeconds}`)
+      if (totalSeconds === 0 && sites.length === 0) return null
+
+      const weekLabel = normalized.includes('last week') ? 'Last week' : 'This week'
+      const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
+      const focusScore = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
+      const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
+      const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
+      const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
+      const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
+      const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
+
+      const lines: string[] = [
+        `${weekLabel}: ${formatDuration(totalSeconds)} tracked, focus score ${focusScore}/100.`,
+        topApps ? `Top apps: ${topApps}.` : null,
+        topSites ? `Top sites: ${topSites}.` : null,
+        distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,
+      ].filter((line): line is string => line !== null)
+
+      return { answer: lines.join('\n'), resolvedContext }
     }
   }
 

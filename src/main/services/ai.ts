@@ -1383,14 +1383,18 @@ export async function sendMessage(userMessage: string): Promise<string> {
   const conversationId = getOrCreateConversation(db)
   const previousContext = conversationTemporalContext.get(conversationId) ?? null
 
+  console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
+
   const routed = await routeInsightsQuestion(userMessage, new Date(), previousContext, db)
   if (routed) {
+    console.log(`[ai:chat] router hit → "${routed.answer.slice(0, 120)}"`)
     appendConversationMessage(db, conversationId, 'user', userMessage)
     appendConversationMessage(db, conversationId, 'assistant', routed.answer)
     conversationTemporalContext.set(conversationId, routed.resolvedContext)
     return routed.answer
   }
 
+  console.log(`[ai:chat] router miss → falling back to LLM`)
   const history = getConversationMessages(db, conversationId)
   // Sanitize prior: remove any trailing user messages (orphaned from a previous
   // failed request under the old code that inserted user messages before the API
@@ -1444,6 +1448,10 @@ export async function sendMessage(userMessage: string): Promise<string> {
     (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
     (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
     (attributionClientCtx ? `\n\nClient/project attribution context (JSON):\n${attributionClientCtx}` : '')
+
+  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  const chatModel = modelForProvider(chatProvider, 'quality', settings)
+  console.log(`[ai:chat] LLM call → provider=${chatProvider} model=${chatModel}`)
 
   const { text: assistantText } = await executeTextAIJob(
     {

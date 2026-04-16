@@ -298,6 +298,8 @@ function TimelineRow({
         background: isSelected ? 'var(--color-surface-low)' : 'var(--color-surface)',
         boxShadow: isSelected ? '0 10px 30px rgba(0,0,0,0.10)' : 'none',
         transition: 'border-color 120ms, background 120ms',
+        overflow: 'hidden',
+        minWidth: 0,
       }}>
         <div style={{
           position: 'absolute',
@@ -345,7 +347,7 @@ function TimelineRow({
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)}
         </div>
         {blockNarrative(block) && (
-          <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px' }}>
+          <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
             {blockNarrative(block)}
           </p>
         )}
