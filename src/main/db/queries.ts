@@ -34,6 +34,7 @@ const UX_NOISE_SUBSTRINGS = [
   'activity tracker and ai insights', // Older app shell title / product description
   'cmux',       // tmux manager shim
   'node.js',    // Node.js runtime windows
+  'loginwindow', // macOS lock screen / auth process — not a user app
 ]
 
 // Minimum session duration exposed to the UI (seconds).
