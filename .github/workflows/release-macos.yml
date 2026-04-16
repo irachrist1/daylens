@@ -1,0 +1,141 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*-mac"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: macOS version number to release
+        required: true
+      tag_name:
+        description: Git tag to publish against
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Derive version from tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${VERSION%-mac}"
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.meta.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package with electron-builder
+        run: npx electron-builder --mac zip dmg --publish always --config electron-builder.config.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+          CHANGELOG_SECTION=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_SECTION="$(awk -v version="$VERSION" '
+              $0 ~ "^## v" version " -" { flag = 1; next }
+              /^## v/ && flag { exit }
+              flag { print }
+            ' CHANGELOG.md)"
+          fi
+
+          if [ -z "$CHANGELOG_SECTION" ]; then
+            CHANGELOG_SECTION="- Preview release build for v$VERSION"
+          fi
+
+          PREV_TAG="$(git tag --list 'v*-mac' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..HEAD" | head -n 12)"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_NAME}"
+          else
+            COMMIT_LINES="$(git log --pretty='- %h %s' HEAD | head -n 12)"
+            COMPARE_URL=""
+          fi
+
+          if [ -z "$COMMIT_LINES" ]; then
+            COMMIT_LINES="- Initial macOS release build"
+          fi
+
+          {
+            echo 'body<<EOF'
+            echo "## Daylens $VERSION for macOS"
+            echo
+            echo "### Highlights"
+            echo "$CHANGELOG_SECTION"
+            echo
+            echo "### Included commits"
+            echo "$COMMIT_LINES"
+            if [ -n "$COMPARE_URL" ]; then
+              echo
+              echo "Compare changes: $COMPARE_URL"
+            fi
+            echo
+            echo "### Install"
+            echo "1. Download the macOS archive or disk image below"
+            echo "2. Open the app bundle and move Daylens into Applications"
+            echo "3. Launch Daylens"
+            echo
+            echo "### Also available"
+            echo "- **Windows**: [Windows releases](https://github.com/irachrist1/daylens-windows/releases)"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Daylens ${{ steps.meta.outputs.version }} (macOS)
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            dist-release/*.dmg
+            dist-release/*.zip

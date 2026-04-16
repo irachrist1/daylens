@@ -1,6 +1,4 @@
 // Raw better-sqlite3 queries — will be typed Drizzle functions in Phase 2a
-import fs from 'node:fs'
-import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import type {
@@ -17,30 +15,10 @@ import type {
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDayBounds } from '../lib/localDate'
-
-// ─── App name normalization ────────────────────────────────────────────────────
-
-function loadNormMap(): { aliases: Record<string, string>; catalog: Record<string, { displayName: string }> } {
-  const candidates = [
-    // Packaged build: extraResources unpacks the JSON next to the asar
-    ...(typeof process !== 'undefined' && (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
-      ? [path.join((process as NodeJS.Process & { resourcesPath: string }).resourcesPath, 'app-normalization.v1.json')]
-      : []),
-    path.join(__dirname, '..', '..', 'shared', 'app-normalization.v1.json'),
-    path.join(process.cwd(), 'shared', 'app-normalization.v1.json'),
-  ]
-  for (const p of candidates) {
-    try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { /* try next */ }
-  }
-  return { aliases: {}, catalog: {} }
-}
-const normMap = loadNormMap()
+import { resolveCanonicalApp } from '../lib/appIdentity'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
-  // Look up by bundle_id first (exact match), then by lowercased exe basename
-  const exeBase = path.basename(bundleId).toLowerCase()
-  const key = normMap.aliases[bundleId] ?? normMap.aliases[exeBase]
-  return (key && normMap.catalog[key]?.displayName) || fallbackName
+  return resolveCanonicalApp(bundleId, fallbackName).displayName
 }
 
 // ─── UX noise filter ──────────────────────────────────────────────────────────
@@ -77,6 +55,26 @@ interface AppSessionRow {
   duration_sec: number
   category: AppCategory
   is_focused: number
+  window_title?: string | null
+  raw_app_name?: string | null
+  canonical_app_id?: string | null
+  app_instance_id?: string | null
+  capture_source?: string | null
+  ended_reason?: string | null
+  capture_version?: number
+}
+
+export interface LiveAppSessionSnapshot {
+  bundleId: string
+  appName: string
+  windowTitle: string | null
+  rawAppName: string
+  canonicalAppId: string | null
+  appInstanceId: string | null
+  captureSource: string
+  category: AppCategory
+  startTime: number
+  lastSeenAt: number
 }
 
 function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'duration_sec'>): number {
@@ -107,6 +105,13 @@ function clipRowToRange(
     durationSeconds: Math.max(1, Math.round((clippedEnd - clippedStart) / 1_000)),
     category,
     isFocused: isCategoryFocused(category),
+    windowTitle: row.window_title ?? null,
+    rawAppName: row.raw_app_name ?? row.app_name,
+    canonicalAppId: row.canonical_app_id ?? null,
+    appInstanceId: row.app_instance_id ?? row.bundle_id,
+    captureSource: row.capture_source ?? 'foreground_poll',
+    endedReason: row.ended_reason ?? null,
+    captureVersion: row.capture_version ?? 1,
   }
 }
 
@@ -208,14 +213,152 @@ export function insertAppSession(
   session: Omit<AppSession, 'id'>,
 ): number {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec, category, is_focused)
-    VALUES (@bundleId, @appName, @startTime, @endTime, @durationSeconds, @category, @isFocused)
+    INSERT OR IGNORE INTO app_sessions (
+      bundle_id,
+      app_name,
+      start_time,
+      end_time,
+      duration_sec,
+      category,
+      is_focused,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      ended_reason,
+      capture_version
+    )
+    VALUES (
+      @bundleId,
+      @appName,
+      @startTime,
+      @endTime,
+      @durationSeconds,
+      @category,
+      @isFocused,
+      @windowTitle,
+      @rawAppName,
+      @canonicalAppId,
+      @appInstanceId,
+      @captureSource,
+      @endedReason,
+      @captureVersion
+    )
   `)
   const result = stmt.run({
     ...session,
     isFocused: session.isFocused ? 1 : 0,
+    windowTitle: session.windowTitle ?? null,
+    rawAppName: session.rawAppName ?? session.appName,
+    canonicalAppId: session.canonicalAppId ?? null,
+    appInstanceId: session.appInstanceId ?? session.bundleId,
+    captureSource: session.captureSource ?? 'foreground_poll',
+    endedReason: session.endedReason ?? null,
+    captureVersion: session.captureVersion ?? 1,
   })
   return result.lastInsertRowid as number
+}
+
+export function upsertLiveAppSessionSnapshot(
+  db: Database.Database,
+  snapshot: LiveAppSessionSnapshot,
+): void {
+  db.prepare(`
+    INSERT INTO live_app_session_snapshot (
+      singleton,
+      bundle_id,
+      app_name,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      category,
+      start_time,
+      last_seen_at
+    )
+    VALUES (
+      1,
+      @bundleId,
+      @appName,
+      @windowTitle,
+      @rawAppName,
+      @canonicalAppId,
+      @appInstanceId,
+      @captureSource,
+      @category,
+      @startTime,
+      @lastSeenAt
+    )
+    ON CONFLICT(singleton) DO UPDATE SET
+      bundle_id = excluded.bundle_id,
+      app_name = excluded.app_name,
+      window_title = excluded.window_title,
+      raw_app_name = excluded.raw_app_name,
+      canonical_app_id = excluded.canonical_app_id,
+      app_instance_id = excluded.app_instance_id,
+      capture_source = excluded.capture_source,
+      category = excluded.category,
+      start_time = excluded.start_time,
+      last_seen_at = excluded.last_seen_at
+  `).run({
+    ...snapshot,
+    windowTitle: snapshot.windowTitle ?? null,
+    canonicalAppId: snapshot.canonicalAppId ?? null,
+    appInstanceId: snapshot.appInstanceId ?? null,
+  })
+}
+
+export function getLiveAppSessionSnapshot(
+  db: Database.Database,
+): LiveAppSessionSnapshot | null {
+  const row = db.prepare(`
+    SELECT
+      bundle_id,
+      app_name,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      category,
+      start_time,
+      last_seen_at
+    FROM live_app_session_snapshot
+    WHERE singleton = 1
+    LIMIT 1
+  `).get() as {
+    bundle_id: string
+    app_name: string
+    window_title: string | null
+    raw_app_name: string | null
+    canonical_app_id: string | null
+    app_instance_id: string | null
+    capture_source: string
+    category: AppCategory
+    start_time: number
+    last_seen_at: number
+  } | undefined
+
+  if (!row) return null
+
+  return {
+    bundleId: row.bundle_id,
+    appName: row.app_name,
+    windowTitle: row.window_title ?? null,
+    rawAppName: row.raw_app_name ?? row.app_name,
+    canonicalAppId: row.canonical_app_id ?? null,
+    appInstanceId: row.app_instance_id ?? null,
+    captureSource: row.capture_source,
+    category: row.category,
+    startTime: row.start_time,
+    lastSeenAt: row.last_seen_at,
+  }
+}
+
+export function clearLiveAppSessionSnapshot(db: Database.Database): void {
+  db.prepare('DELETE FROM live_app_session_snapshot WHERE singleton = 1').run()
 }
 
 export function getAppSummariesForRange(
@@ -238,7 +381,14 @@ export function getAppSummariesForRange(
     rows
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
-        const category: AppCategory = overrides[row.bundle_id] ?? row.category ?? 'uncategorized'
+        // User overrides first; fall through to catalog's default category for
+        // sessions that were captured before the catalog was fully populated.
+        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
+        const category: AppCategory =
+          overrides[row.bundle_id]
+          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
+          ?? catalogCategory
+          ?? 'uncategorized'
         return clipRowToRange(row, fromMs, toMs, category)
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
@@ -252,9 +402,11 @@ export function getAppSummariesForRange(
       existing.totalSeconds += session.durationSeconds
       existing.sessionCount = (existing.sessionCount ?? 0) + 1
     } else {
+      const identity = resolveCanonicalApp(session.bundleId, session.appName)
       summaryMap.set(session.bundleId, {
         bundleId: session.bundleId,
-        appName: resolveDisplayName(session.bundleId, session.appName),
+        canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId,
+        appName: identity.displayName || session.appName,
         category: session.category,
         totalSeconds: session.durationSeconds,
         isFocused: isCategoryFocused(session.category),
@@ -287,7 +439,12 @@ export function getSessionsForRange(
     rows
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
-        const category: AppCategory = overrides[row.bundle_id] ?? row.category
+        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
+        const category: AppCategory =
+          overrides[row.bundle_id]
+          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
+          ?? catalogCategory
+          ?? 'uncategorized'
         return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.bundle_id, row.app_name))
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
@@ -405,19 +562,18 @@ export function getWeeklySummary(
   const [fromMs] = localDayBounds(startDateStr)
   const [, toMs] = localDayBounds(endDateStr)
 
-  const rows = db
-    .prepare<[string, string]>(`
-      SELECT date, total_active_sec, focus_sec, focus_score
-      FROM daily_summaries
-      WHERE date >= ? AND date <= ?
-      ORDER BY date ASC
-    `)
-    .all(startDateStr, endDateStr) as {
+  // Migration v14 dropped daily_summaries in favour of daily_entity_rollups.
+  // Until step 4 rewires WeeklySummary onto the new rollups table, return an
+  // empty per-day list — getWeeklySummary callers fall back to live aggregates.
+  void db
+  void fromMs
+  void toMs
+  const rows: {
     date: string
     total_active_sec: number
     focus_sec: number
     focus_score: number
-  }[]
+  }[] = []
 
   const totalTrackedSeconds = rows.reduce((sum, row) => sum + row.total_active_sec, 0)
   const totalFocusSeconds = rows.reduce((sum, row) => sum + row.focus_sec, 0)
@@ -713,6 +869,88 @@ export function clearConversation(db: Database.Database, conversationId: number)
   db.prepare(`DELETE FROM ai_messages WHERE conversation_id = ?`).run(conversationId)
 }
 
+export function startAIUsageEvent(
+  db: Database.Database,
+  payload: {
+    id: string
+    jobType: string
+    screen: string
+    triggerSource: string
+    provider?: string | null
+    model?: string | null
+    startedAt: number
+  },
+): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO ai_usage_events (
+      id,
+      job_type,
+      screen,
+      trigger_source,
+      provider,
+      model,
+      success,
+      started_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `).run(
+    payload.id,
+    payload.jobType,
+    payload.screen,
+    payload.triggerSource,
+    payload.provider ?? null,
+    payload.model ?? null,
+    payload.startedAt,
+  )
+}
+
+export function finishAIUsageEvent(
+  db: Database.Database,
+  payload: {
+    id: string
+    provider?: string | null
+    model?: string | null
+    success: boolean
+    failureReason?: string | null
+    completedAt: number
+    latencyMs?: number | null
+    inputTokens?: number | null
+    outputTokens?: number | null
+    cacheReadTokens?: number | null
+    cacheWriteTokens?: number | null
+    cacheHit?: boolean
+  },
+): void {
+  db.prepare(`
+    UPDATE ai_usage_events
+    SET provider = COALESCE(?, provider),
+        model = COALESCE(?, model),
+        success = ?,
+        failure_reason = ?,
+        completed_at = ?,
+        latency_ms = ?,
+        input_tokens = ?,
+        output_tokens = ?,
+        cache_read_tokens = ?,
+        cache_write_tokens = ?,
+        cache_hit = ?
+    WHERE id = ?
+  `).run(
+    payload.provider ?? null,
+    payload.model ?? null,
+    payload.success ? 1 : 0,
+    payload.failureReason ?? null,
+    payload.completedAt,
+    payload.latencyMs ?? null,
+    payload.inputTokens ?? null,
+    payload.outputTokens ?? null,
+    payload.cacheReadTokens ?? null,
+    payload.cacheWriteTokens ?? null,
+    payload.cacheHit ? 1 : 0,
+    payload.id,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Recent focus sessions
 // ---------------------------------------------------------------------------
@@ -777,21 +1015,38 @@ export interface WebsiteVisitInsert {
   domain: string
   pageTitle: string | null
   url: string
+  normalizedUrl: string | null
+  pageKey: string | null
   visitTime: number        // Unix ms
   visitTimeUs: bigint      // Microsecond timestamp from source browser (Chrome or Unix epoch µs)
   durationSec: number
   browserBundleId: string
+  canonicalBrowserId: string | null
+  browserProfileId: string | null
   source: string
 }
 
 export function insertWebsiteVisit(
   db: Database.Database,
   visit: WebsiteVisitInsert,
-): void {
-  db.prepare(`
+): boolean {
+  const result = db.prepare(`
     INSERT OR IGNORE INTO website_visits
-      (domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (
+        domain,
+        page_title,
+        url,
+        visit_time,
+        visit_time_us,
+        duration_sec,
+        browser_bundle_id,
+        canonical_browser_id,
+        browser_profile_id,
+        normalized_url,
+        page_key,
+        source
+      )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     visit.domain,
     visit.pageTitle,
@@ -800,8 +1055,13 @@ export function insertWebsiteVisit(
     visit.visitTimeUs,
     visit.durationSec,
     visit.browserBundleId,
+    visit.canonicalBrowserId,
+    visit.browserProfileId,
+    visit.normalizedUrl,
+    visit.pageKey,
     visit.source,
   )
+  return result.changes > 0
 }
 
 export function getWebsiteSummariesForRange(
@@ -821,7 +1081,8 @@ export function getWebsiteSummariesForRange(
              SUM(duration_sec)  AS total_sec,
              COUNT(*)           AS visit_count,
              MAX(page_title)    AS top_title,
-             MIN(browser_bundle_id) AS browser_id
+             MIN(browser_bundle_id) AS browser_id,
+             MIN(canonical_browser_id) AS canonical_browser_id
       FROM website_visits
       WHERE visit_time >= ? AND visit_time < ?${whereExtra}
       GROUP BY domain
@@ -834,6 +1095,7 @@ export function getWebsiteSummariesForRange(
       visit_count: number
       top_title: string | null
       browser_id: string | null
+      canonical_browser_id: string | null
     }[]
 
   return rows.map((r) => ({
@@ -842,6 +1104,7 @@ export function getWebsiteSummariesForRange(
     visitCount:      r.visit_count,
     topTitle:        r.top_title,
     browserBundleId: r.browser_id,
+    canonicalBrowserId: r.canonical_browser_id,
   }))
 }
 
@@ -891,6 +1154,119 @@ export function getTopPagesForDomains(
     },
     {},
   )
+}
+
+export interface WebsiteVisitRecord {
+  id: number
+  domain: string
+  pageTitle: string | null
+  url: string | null
+  normalizedUrl: string | null
+  pageKey: string | null
+  visitTime: number
+  durationSec: number
+  browserBundleId: string | null
+  canonicalBrowserId: string | null
+}
+
+export function getWebsiteVisitsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): WebsiteVisitRecord[] {
+  return db.prepare(`
+    SELECT
+      id,
+      domain,
+      page_title AS pageTitle,
+      url,
+      normalized_url AS normalizedUrl,
+      page_key AS pageKey,
+      visit_time AS visitTime,
+      duration_sec AS durationSec,
+      browser_bundle_id AS browserBundleId,
+      canonical_browser_id AS canonicalBrowserId
+    FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ?
+    ORDER BY visit_time ASC
+  `).all(fromMs, toMs) as WebsiteVisitRecord[]
+}
+
+export interface ActivityStateEventRecord {
+  id: number
+  eventTs: number
+  eventType: string
+  source: string
+  metadataJson: string
+}
+
+export function recordActivityStateEvent(
+  db: Database.Database,
+  payload: {
+    eventTs: number
+    eventType: string
+    source: string
+    metadata?: Record<string, unknown>
+  },
+): number {
+  const result = db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    payload.eventTs,
+    payload.eventType,
+    payload.source,
+    JSON.stringify(payload.metadata ?? {}),
+  )
+  return result.lastInsertRowid as number
+}
+
+export function getActivityStateEventsForRange(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): ActivityStateEventRecord[] {
+  return db.prepare(`
+    SELECT
+      id,
+      event_ts AS eventTs,
+      event_type AS eventType,
+      source,
+      metadata_json AS metadataJson
+    FROM activity_state_events
+    WHERE event_ts >= ? AND event_ts < ?
+    ORDER BY event_ts ASC
+  `).all(fromMs, toMs) as ActivityStateEventRecord[]
+}
+
+export function setBlockLabelOverride(
+  db: Database.Database,
+  blockId: string,
+  label: string,
+  narrative: string | null = null,
+): void {
+  db.prepare(`
+    INSERT INTO block_label_overrides (block_id, label, narrative, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(block_id) DO UPDATE SET
+      label = excluded.label,
+      narrative = excluded.narrative,
+      updated_at = excluded.updated_at
+  `).run(blockId, label, narrative, Date.now())
+}
+
+export function getBlockLabelOverride(
+  db: Database.Database,
+  blockId: string,
+): { label: string; narrative: string | null; updatedAt: number } | null {
+  const row = db.prepare(`
+    SELECT label, narrative, updated_at AS updatedAt
+    FROM block_label_overrides
+    WHERE block_id = ?
+    LIMIT 1
+  `).get(blockId) as { label: string; narrative: string | null; updatedAt: number } | undefined
+
+  return row ?? null
 }
 
 export function getRecentFocusSessions(
