@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ProjectionInvalidationEvent } from '@shared/core'
 import type {
+  AppDetailPayload,
   AppCategory,
   AppCharacter,
   AppSettings,
@@ -8,11 +10,19 @@ import type {
   BreakRecommendation,
   FocusStartPayload,
   HistoryDayPayload,
+  DayTimelinePayload,
   PeakHoursResult,
   ProcessSnapshot,
+  RangeSummaryPayload,
   WeeklySummary,
   WorkContextBlock,
   WorkContextInsight,
+  ArtifactRef,
+  ClientDetailPayload,
+  WorkSessionPayload,
+  ActivitySegmentPayload,
+  RollupEntry,
+  DayWorkSessionsPayload,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 
@@ -38,6 +48,7 @@ const api = {
     getToday: () => ipcRenderer.invoke(IPC.DB.GET_TODAY),
     getHistory: (date: string) => ipcRenderer.invoke(IPC.DB.GET_HISTORY, date),
     getHistoryDay: (date: string): Promise<HistoryDayPayload> => ipcRenderer.invoke(IPC.DB.GET_HISTORY_DAY, date),
+    getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
     getAppSummaries: (days?: number) => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSessions: (bundleId: string, days?: number) =>
       ipcRenderer.invoke(IPC.DB.GET_APP_SESSIONS, bundleId, days),
@@ -49,6 +60,16 @@ const api = {
       ipcRenderer.invoke(IPC.DB.GET_WEEKLY_SUMMARY, endDateStr),
     getAppCharacter: (bundleId: string, daysBack: number): Promise<AppCharacter | null> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_CHARACTER, bundleId, daysBack),
+    getAppDetail: (canonicalAppId: string, days?: number): Promise<AppDetailPayload> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
+    getBlockDetail: (blockId: string): Promise<WorkContextBlock | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_BLOCK_DETAIL, blockId),
+    getWorkflowSummaries: (days?: number): Promise<RangeSummaryPayload['workflows']> =>
+      ipcRenderer.invoke(IPC.DB.GET_WORKFLOW_SUMMARIES, days),
+    getArtifactDetails: (artifactId: string): Promise<ArtifactRef | null> =>
+      ipcRenderer.invoke(IPC.DB.GET_ARTIFACT_DETAILS, artifactId),
+    setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }) =>
+      ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     setCategoryOverride: (bundleId: string, category: AppCategory) =>
       ipcRenderer.invoke('db:set-category-override', bundleId, category),
     clearCategoryOverride: (bundleId: string) =>
@@ -87,6 +108,30 @@ const api = {
     setApiKey: (key: string, provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key, provider),
     clearApiKey: (provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
   },
+  attribution: {
+    getClientQuery: (clientId: string, fromMs: number, toMs: number, question: string) =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_CLIENT_QUERY, clientId, fromMs, toMs, question),
+    getDayContext: (dateStr: string) =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_DAY_CONTEXT, dateStr),
+    findClient: (name: string) =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.FIND_CLIENT, name),
+    listClients: (): Promise<Array<{ id: string; name: string; projectCount: number }>> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS),
+    runForRange: (fromMs: number, toMs: number) =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.RUN_FOR_RANGE, fromMs, toMs),
+    getClientDetail: (clientId: string, fromDate: string, toDate: string): Promise<ClientDetailPayload | null> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_CLIENT_DETAIL, clientId, fromDate, toDate),
+    getWorkSessionsForDay: (dateStr: string): Promise<DayWorkSessionsPayload> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_WORK_SESSIONS_FOR_DAY, dateStr),
+    getWorkSessionSegments: (sessionId: string): Promise<ActivitySegmentPayload[]> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_WORK_SESSION_SEGMENTS, sessionId),
+    getRollups: (clientId: string | null, fromDate: string, toDate: string): Promise<RollupEntry[]> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_ROLLUPS, clientId, fromDate, toDate),
+    getAppWorkSessions: (bundleId: string, days?: number): Promise<WorkSessionPayload[]> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.GET_APP_WORK_SESSIONS, bundleId, days),
+    reassignSession: (sessionId: string, clientId: string | null, projectId: string | null): Promise<void> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.REASSIGN_SESSION, sessionId, clientId, projectId),
+  },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
     getProcessMetrics: (): Promise<ProcessSnapshot[]> =>
@@ -104,6 +149,7 @@ const api = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
+    openPath: (targetPath: string) => ipcRenderer.invoke(IPC.SHELL.OPEN_PATH, targetPath),
   },
   distractionAlerter: {
     setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
@@ -135,6 +181,18 @@ const api = {
     getStatus: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:get-status'),
     check: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:check'),
     install: (): Promise<boolean> => ipcRenderer.invoke('update:install'),
+  },
+  projections: {
+    onInvalidated: (
+      callback: (event: ProjectionInvalidationEvent) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        event: ProjectionInvalidationEvent,
+      ) => callback(event)
+      ipcRenderer.on(IPC.PROJECTIONS.INVALIDATED, handler)
+      return () => { ipcRenderer.removeListener(IPC.PROJECTIONS.INVALIDATED, handler) }
+    },
   },
 }
 

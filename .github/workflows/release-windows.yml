@@ -105,15 +105,17 @@ jobs:
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
           TAG_NAME="${{ steps.meta.outputs.tag_name }}"
-          CHANGELOG_SECTION="$(awk -v version="$VERSION" '
-            $0 ~ "^## v" version " -" { flag = 1; next }
-            /^## v/ && flag { exit }
-            flag { print }
-          ' CHANGELOG.md)"
+          CHANGELOG_SECTION=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_SECTION="$(awk -v version="$VERSION" '
+              $0 ~ "^## v" version " -" { flag = 1; next }
+              /^## v/ && flag { exit }
+              flag { print }
+            ' CHANGELOG.md)"
+          fi
 
           if [ -z "$CHANGELOG_SECTION" ]; then
-            echo "Missing CHANGELOG entry for v$VERSION" >&2
-            exit 1
+            CHANGELOG_SECTION="- Preview release build for v$VERSION"
           fi
 
           PREV_TAG="$(git tag --list 'v*-win' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"

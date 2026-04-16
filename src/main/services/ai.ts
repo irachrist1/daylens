@@ -22,20 +22,23 @@ import {
 } from '../db/queries'
 import { routeInsightsQuestion, type TemporalContext } from '../lib/insightsQueryRouter'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
+import { buildAssistantEvidencePack } from '../core/query/assistantEvidence'
+import { resolveDayContext, findClientByName, resolveClientQuery } from '../core/query/attributionResolvers'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from './database'
-import { getApiKey, getSettings, getSettingsAsync } from './settings'
+import { getSettings } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
-import type { AIProviderMode, AppCategorySuggestion, WorkContextBlock, WorkContextInsight } from '@shared/types'
-import { fallbackNarrativeForBlock, userVisibleLabelForBlock } from './workBlocks'
+import type { AppCategorySuggestion, DayTimelinePayload, WorkContextBlock, WorkContextInsight } from '@shared/types'
+import { executeTextAIJob, modelForProvider, providerLabel, type ProviderTextResponse, type ResolvedProviderConfig } from './aiOrchestration'
+import {
+  fallbackNarrativeForBlock,
+  getTimelineDayPayload,
+  getWorkflowSummaries,
+  userVisibleLabelForBlock,
+} from './workBlocks'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
 const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
-
-interface ResolvedProviderConfig {
-  provider: AIProviderMode
-  apiKey: string | null
-  model: string
-}
 
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -255,146 +258,11 @@ export async function detectCLITools(): Promise<CLIToolDetectionResult> {
   return { claude, codex }
 }
 
-function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {
-  return provider === 'claude-cli' || provider === 'codex-cli'
-}
-
-function uniqueProviders(preferredProvider: AIProviderMode): AIProviderMode[] {
-  return [
-    preferredProvider,
-    'google',
-    'anthropic',
-    'openai',
-  ].filter((provider, index, providers) => providers.indexOf(provider) === index) as AIProviderMode[]
-}
-
-async function resolveProviderConfigs(): Promise<ResolvedProviderConfig[]> {
-  const settings = await getSettingsAsync()
-  const preferred = settings.aiProvider ?? 'anthropic'
-
-  // CLI providers only participate if they are the user's selected provider AND installed.
-  // They are never auto-inserted into the fallback chain because a missing binary throws
-  // a non-quota error that would abort the entire chain before reaching API providers.
-  let orderedProviders: AIProviderMode[]
-  if (providerUsesCLI(preferred)) {
-    orderedProviders = [preferred]
-  } else {
-    orderedProviders = uniqueProviders(preferred)
-  }
-
-  const configs: ResolvedProviderConfig[] = []
-
-  for (const provider of orderedProviders) {
-    const apiKey = await getApiKey(provider)
-    if (!providerUsesCLI(provider) && !apiKey) continue
-
-    configs.push({
-      provider,
-      apiKey,
-      model: modelForProvider(provider, settings),
-    })
-  }
-
-  if (configs.length === 0) {
-    throw new Error('No API key configured for the selected AI provider')
-  }
-
-  return configs
-}
-
-function modelForProvider(provider: AIProviderMode, settings = getSettings()): string {
-  switch (provider) {
-    case 'openai':
-    case 'codex-cli':
-      return settings.openaiModel || 'gpt-5.4'
-    case 'google':
-      return settings.googleModel || 'gemini-3.1-flash-lite-preview'
-    case 'claude-cli':
-      return settings.anthropicModel || 'claude-opus-4-6'
-    case 'anthropic':
-    default:
-      return settings.anthropicModel || 'claude-opus-4-6'
-  }
-}
-
-function providerLabel(provider: AIProviderMode): string {
-  switch (provider) {
-    case 'openai':
-      return 'OpenAI'
-    case 'google':
-      return 'Google Gemini'
-    case 'claude-cli':
-      return 'Claude CLI'
-    case 'codex-cli':
-      return 'Codex CLI'
-    case 'anthropic':
-    default:
-      return 'Anthropic Claude'
-  }
-}
-
 function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages.map((message) => ({
     role: message.role,
     content: message.content,
   }))
-}
-
-function isQuotaOrAuthError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  const maybeError = error as { status?: number; code?: string; type?: string; error?: { code?: string | number; status?: string; type?: string } }
-  return maybeError.status === 401
-    || maybeError.status === 403
-    || maybeError.status === 429
-    || maybeError.code === 'insufficient_quota'
-    || maybeError.type === 'insufficient_quota'
-    || maybeError.error?.code === 'insufficient_quota'
-    || maybeError.error?.code === 429
-    || maybeError.error?.status === 'RESOURCE_EXHAUSTED'
-}
-
-function friendlyProviderError(error: unknown, providerLabel: string): Error {
-  if (!error || typeof error !== 'object') {
-    return new Error(`${providerLabel} request failed. Please try again.`)
-  }
-  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; message?: string } }
-
-  // Rate limit / quota exhausted
-  const status = maybeError.status ?? maybeError.error?.code
-  if (status === 429 || maybeError.error?.status === 'RESOURCE_EXHAUSTED') {
-    return new Error(`${providerLabel} quota exceeded. You've hit the free-tier limit — check your plan at the provider's dashboard, or switch AI providers in Settings.`)
-  }
-  // Auth failure
-  if (status === 401 || status === 403) {
-    return new Error(`${providerLabel} rejected the API key. Please check it in Settings.`)
-  }
-  return new Error(`${providerLabel} request failed. Please try again.`)
-}
-
-async function sendWithFallback(
-  systemPrompt: string,
-  prior: ConversationMessage[],
-  userMessage: string,
-): Promise<{ text: string; config: ResolvedProviderConfig }> {
-  const configs = await resolveProviderConfigs()
-  let lastError: unknown = null
-  let lastConfig: ResolvedProviderConfig | null = null
-
-  for (const config of configs) {
-    try {
-      const text = await sendWithProvider(config, systemPrompt, prior, userMessage)
-      return { text, config }
-    } catch (error) {
-      lastError = error
-      lastConfig = config
-      if (!isQuotaOrAuthError(error)) {
-        throw error
-      }
-    }
-  }
-
-  const label = lastConfig ? providerLabel(lastConfig.provider) : 'AI provider'
-  throw friendlyProviderError(lastError, label)
 }
 
 function googleHistoryFromMessages(messages: ConversationMessage[]): GoogleContent[] {
@@ -421,7 +289,7 @@ async function sendWithAnthropic(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const client = new Anthropic({ apiKey: config.apiKey ?? '' })
   const response = await client.messages.create({
     model: config.model,
@@ -433,10 +301,18 @@ async function sendWithAnthropic(
     ],
   })
 
-  return response.content
-    .filter((item) => item.type === 'text')
-    .map((item) => item.text)
-    .join('')
+  return {
+    text: response.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join(''),
+    usage: {
+      inputTokens: response.usage.input_tokens ?? null,
+      outputTokens: response.usage.output_tokens ?? null,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? null,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? null,
+    },
+  }
 }
 
 async function sendWithOpenAI(
@@ -444,7 +320,7 @@ async function sendWithOpenAI(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const client = new OpenAI({ apiKey: config.apiKey ?? '' })
   const response = await client.responses.create({
     model: config.model,
@@ -457,7 +333,15 @@ async function sendWithOpenAI(
     store: false,
   })
 
-  return response.output_text || ''
+  return {
+    text: response.output_text || '',
+    usage: {
+      inputTokens: response.usage?.input_tokens ?? null,
+      outputTokens: response.usage?.output_tokens ?? null,
+      cacheReadTokens: response.usage?.input_tokens_details?.cached_tokens ?? null,
+      cacheWriteTokens: null,
+    },
+  }
 }
 
 async function sendWithGoogle(
@@ -465,7 +349,7 @@ async function sendWithGoogle(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   const ai = new GoogleGenAI({
     apiKey: config.apiKey ?? '',
     httpOptions: {
@@ -492,7 +376,10 @@ async function sendWithGoogle(
   if (!text) {
     throw new Error('Gemini returned an empty response. Try rephrasing your question.')
   }
-  return text
+  return {
+    text,
+    usage: null,
+  }
 }
 
 async function runCLIProvider(
@@ -592,7 +479,7 @@ async function sendWithProvider(
   systemPrompt: string,
   prior: ConversationMessage[],
   userMessage: string,
-): Promise<string> {
+): Promise<ProviderTextResponse> {
   switch (config.provider) {
     case 'claude-cli':
     case 'codex-cli': {
@@ -603,7 +490,10 @@ async function sendWithProvider(
         `User: ${userMessage}`,
       ].filter(Boolean).join('\n\n')
       const cliPrompt = `System context:\n${systemPrompt}\n\n${existingCLIPrompt}`
-      return runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model)
+      return {
+        text: await runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model),
+        usage: null,
+      }
     }
     case 'openai':
       return sendWithOpenAI(config, systemPrompt, prior, userMessage)
@@ -663,6 +553,98 @@ function uniqueAppNames(names: string[]): string[] {
 
 function sessionEndMs(session: { startTime: number; endTime: number | null; durationSeconds: number }): number {
   return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
+}
+
+function buildTodayBlocksContext(): string {
+  try {
+    const db = getDb()
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    const dateStr = `${year}-${month}-${day}`
+    const payload = getTimelineDayPayload(db, dateStr, null)
+
+    // Only non-trivial blocks (>= 3 min). If nothing non-trivial, still show a short line.
+    const blocks = payload.blocks.filter((b) => b.endTime - b.startTime >= 3 * 60_000)
+    if (blocks.length === 0) return ''
+
+    const lines = blocks.slice(0, 12).map((block) => {
+      const minutes = Math.max(1, Math.round((block.endTime - block.startTime) / 60_000))
+      const label = userVisibleLabelForBlock(block)
+      const timeRange = `${formatClock(block.startTime)}-${formatClock(block.endTime)}`
+      const topApps = block.topApps
+        .filter((app) => app.category !== 'system')
+        .slice(0, 3)
+        .map((app) => app.appName)
+      const topSites = block.websites
+        .slice(0, 3)
+        .map((site) => site.domain.replace(/^www\./, ''))
+      const keyPage = block.keyPages.find((t) => t.trim().length > 0)
+
+      const parts = [
+        `${timeRange} (${minutes}m) — ${label}`,
+      ]
+      if (topApps.length > 0) parts.push(`apps: ${topApps.join(', ')}`)
+      if (topSites.length > 0) parts.push(`sites: ${topSites.join(', ')}`)
+      if (keyPage) parts.push(`key: ${keyPage.slice(0, 80)}`)
+      if (block.label.override) parts.push(`user labeled: ${block.label.override}`)
+      return `- ${parts.join(' • ')}`
+    })
+
+    return ['Today\'s work blocks (chronological):', ...lines].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+function buildWorkflowsContext(): string {
+  try {
+    const db = getDb()
+    const workflows = getWorkflowSummaries(db, 14)
+    const meaningful = workflows.filter((w) => w.occurrenceCount >= 2).slice(0, 6)
+    if (meaningful.length === 0) return ''
+
+    const lines = meaningful.map((w) => {
+      const apps = w.canonicalApps.slice(0, 4).join(' + ')
+      return `- "${w.label}" (${w.dominantCategory}): ${w.occurrenceCount}× in last 14 days${apps ? ` — ${apps}` : ''}`
+    })
+    return ['Recurring workflows (last 14 days):', ...lines].join('\n')
+  } catch {
+    return ''
+  }
+}
+
+function buildHourlyShapeContext(sessions: { startTime: number; durationSeconds: number; category: string }[]): string {
+  if (sessions.length === 0) return ''
+  // Build a coarse morning / midday / afternoon / evening profile from today's sessions.
+  const buckets: Record<string, Map<string, number>> = {
+    morning: new Map(),   // 5-11
+    midday: new Map(),    // 11-14
+    afternoon: new Map(), // 14-18
+    evening: new Map(),   // 18-23
+    night: new Map(),     // 23-5
+  }
+  for (const s of sessions) {
+    const hour = new Date(s.startTime).getHours()
+    const bucket =
+      hour >= 5 && hour < 11 ? 'morning'
+      : hour >= 11 && hour < 14 ? 'midday'
+      : hour >= 14 && hour < 18 ? 'afternoon'
+      : hour >= 18 && hour < 23 ? 'evening'
+      : 'night'
+    const current = buckets[bucket].get(s.category) ?? 0
+    buckets[bucket].set(s.category, current + s.durationSeconds)
+  }
+  const parts: string[] = []
+  for (const [name, map] of Object.entries(buckets)) {
+    if (map.size === 0) continue
+    const topCat = [...map.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (!topCat || topCat[1] < 300) continue // skip buckets with < 5 min
+    parts.push(`${name}: mostly ${topCat[0]} (${formatDuration(topCat[1])})`)
+  }
+  if (parts.length === 0) return ''
+  return `Time-of-day shape: ${parts.join('; ')}`
 }
 
 function buildRecentFocusContext(): string {
@@ -814,6 +796,117 @@ function buildSpecificTimeContext(userMessage: string): string {
   }
 }
 
+function buildStructuredEvidenceContext(): string {
+  try {
+    const now = new Date()
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const db = getDb()
+    const pack = buildAssistantEvidencePack(db, dateStr)
+
+    const dayCtx = resolveDayContext(dateStr, db)
+    const workSessions = dayCtx.sessions.slice(0, 12).map((s) => ({
+      id: s.work_session_id,
+      start: s.start,
+      end: s.end,
+      duration_ms: s.duration_ms,
+      active_ms: s.active_ms,
+      client: s.client,
+      project: s.project,
+      confidence: s.confidence,
+      apps: s.apps.slice(0, 5),
+      evidence: s.evidence.slice(0, 5),
+    }))
+
+    return JSON.stringify({
+      date: pack.date,
+      generatedAt: pack.generatedAt,
+      totals: pack.totals,
+      attribution_summary: {
+        captured_ms: dayCtx.day_summary.captured_ms,
+        active_ms: dayCtx.day_summary.active_ms,
+        attributed_ms: dayCtx.day_summary.attributed_ms,
+        ambiguous_ms: dayCtx.day_summary.ambiguous_ms,
+        unattributed_ms: dayCtx.day_summary.unattributed_ms,
+      },
+      work_sessions: workSessions,
+      topApps: pack.topApps.map((app) => ({
+        appName: app.appName,
+        category: app.category,
+        totalSeconds: app.totalSeconds,
+        canonicalAppId: app.canonicalAppId ?? null,
+      })),
+      topWebsites: pack.topWebsites.map((site) => ({
+        domain: site.domain,
+        totalSeconds: site.totalSeconds,
+        topTitle: site.topTitle,
+      })),
+      blocks: pack.timeline.blocks,
+      workflows: pack.workflows.map((workflow) => ({
+        label: workflow.label,
+        dominantCategory: workflow.dominantCategory,
+        occurrenceCount: workflow.occurrenceCount,
+        canonicalApps: workflow.canonicalApps,
+      })),
+      focusSessions: pack.focusSessions.map((session) => ({
+        label: session.label,
+        durationSeconds: session.durationSeconds,
+        targetMinutes: session.targetMinutes ?? null,
+        plannedApps: session.plannedApps,
+      })),
+      appSpotlights: pack.appSpotlights.map((app) => ({
+        displayName: app.displayName,
+        totalSeconds: app.totalSeconds,
+        topArtifacts: app.topArtifacts.slice(0, 4).map((artifact) => artifact.displayTitle),
+        pairedApps: app.pairedApps.slice(0, 4).map((entry) => entry.displayName),
+        workflows: app.workflowAppearances.slice(0, 4).map((workflow) => workflow.label),
+      })),
+      ambiguous_segments: dayCtx.ambiguous_segments.slice(0, 5),
+      caveats: [
+        ...pack.caveats,
+        'work_sessions are attributed via the pipeline; always separate attributed from ambiguous time.',
+        'When answering "how many hours on X", use work_sessions with client/project fields — not raw app totals.',
+      ],
+    }, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function buildAttributionDayContext(dateStr: string): string {
+  try {
+    const payload = resolveDayContext(dateStr, getDb())
+    if (payload.sessions.length === 0) return ''
+    return JSON.stringify(payload, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function buildAttributionClientContext(userMessage: string): string {
+  try {
+    const clientMatch = userMessage.match(
+      /(?:hours?\s+(?:on|for|with|at)\s+|client\s+|project\s+)['"]?([A-Za-z][\w\s&.-]{1,40})['"]?/i,
+    )
+    if (!clientMatch) return ''
+    const db = getDb()
+    const client = findClientByName(clientMatch[1].trim(), db)
+    if (!client) return ''
+
+    const now = new Date()
+    const weekAgo = new Date(now)
+    weekAgo.setDate(weekAgo.getDate() - 7)
+    weekAgo.setHours(0, 0, 0, 0)
+    const payload = resolveClientQuery(
+      client.id, weekAgo.getTime(), now.getTime(),
+      userMessage, db,
+    )
+    if (!payload) return ''
+    return JSON.stringify(payload, null, 2)
+  } catch {
+    return ''
+  }
+}
+
 function buildDayContext(): string {
   try {
     const db = getDb()
@@ -926,6 +1019,16 @@ function buildDayContext(): string {
     }
 
     const recentFocusContext = buildRecentFocusContext()
+    const todayBlocksContext = buildTodayBlocksContext()
+    const workflowsContext = buildWorkflowsContext()
+    const structuredEvidenceContext = buildStructuredEvidenceContext()
+    const hourlyShapeContext = buildHourlyShapeContext(
+      todaySessions.map((s) => ({
+        startTime: s.startTime,
+        durationSeconds: s.durationSeconds,
+        category: s.category,
+      })),
+    )
 
     return [
       `User: ${userName}`,
@@ -940,23 +1043,31 @@ function buildDayContext(): string {
         ? `User has recategorized: ${overrideEntries.map(([id, cat]) => `${id} → ${cat}`).join(', ')}`
         : '',
       '',
-      'Data notes:',
-      '- App totals are grounded in tracked foreground-window sessions.',
-      '- Focus score is derived from focused app categories and may not fully capture productive browser work.',
-      '- Website timing comes from local browser evidence and may be approximate.',
-      '',
-      'Today:',
+      'Today (totals):',
       `- Total tracked time: ${formatDuration(totalSec)}`,
       `- Focus score: ${focusScore} (${formatDuration(focusSec)} in focused apps)`,
       `- Evidence summary: ${todayEvidence.evidenceText}`,
       `- Top categories: ${topCategoryList || 'none yet'}`,
       `- Top apps: ${topApps || 'none yet'}`,
       `- Top websites: ${topSites || 'none yet'}`,
+      hourlyShapeContext ? `- ${hourlyShapeContext}` : '',
       '',
-      recentDays.length > 0 ? 'Recent days:' : '',
+      todayBlocksContext,
+      '',
+      workflowsContext,
+      '',
+      recentDays.length > 0 ? 'Recent days (trend):' : '',
       ...recentDays.map((line) => `- ${line}`),
       '',
       recentFocusContext,
+      structuredEvidenceContext ? 'Structured evidence pack (JSON):' : '',
+      structuredEvidenceContext,
+      '',
+      'Data notes:',
+      '- App totals come from tracked foreground-window sessions — reliable.',
+      '- Work blocks are segmented by the local heuristic; labels may be rule-based or AI-generated.',
+      '- Website timing comes from local browser evidence and may undercount background tabs.',
+      '- Focus score weights focused categories (development, writing, design, etc.); browser work may be productive but read as unfocused.',
     ]
       .filter((l) => l !== '')
       .join('\n')
@@ -1092,7 +1203,15 @@ function appCategorySuggestionPrompt(bundleId: string, appName: string): string 
   ].join('\n')
 }
 
+// Cache AI category suggestions to avoid re-sending identical classification requests.
+// Keyed by "bundleId::appName" (lowercased). Survives for the lifetime of the process.
+const _categorySuggestionCache = new Map<string, AppCategorySuggestion>()
+
 export async function suggestAppCategory(bundleId: string, appName: string): Promise<AppCategorySuggestion> {
+  const cacheKey = `${bundleId}::${appName}`.toLowerCase()
+  const cached = _categorySuggestionCache.get(cacheKey)
+  if (cached) return cached
+
   const systemPrompt = [
     'You are Daylens.',
     'You classify productivity apps conservatively.',
@@ -1101,20 +1220,34 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
   ].join(' ')
 
   try {
-    const { text } = await sendWithFallback(systemPrompt, [], appCategorySuggestionPrompt(bundleId, appName))
+    const { text } = await executeTextAIJob(
+      {
+        jobType: 'attribution_assist',
+        screen: 'background',
+        triggerSource: 'system',
+        systemPrompt,
+        userMessage: appCategorySuggestionPrompt(bundleId, appName),
+      },
+      sendWithProvider,
+    )
     const parsed = parseSuggestedCategory(text)
-    if (parsed?.suggestedCategory) return parsed
+    if (parsed?.suggestedCategory) {
+      _categorySuggestionCache.set(cacheKey, parsed)
+      return parsed
+    }
   } catch {
     // Fall through to no-suggestion result.
   }
 
-  return {
-    suggestedCategory: null,
-    reason: null,
-  }
+  const noSuggestion: AppCategorySuggestion = { suggestedCategory: null, reason: null }
+  _categorySuggestionCache.set(cacheKey, noSuggestion)
+  return noSuggestion
 }
 
-export async function generateWorkBlockInsight(block: WorkContextBlock): Promise<WorkContextInsight> {
+export async function generateWorkBlockInsight(
+  block: WorkContextBlock,
+  options?: { jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'; triggerSource?: 'system' | 'background' },
+): Promise<WorkContextInsight> {
   const systemPrompt = [
     'You are Daylens.',
     'You label productivity timeline blocks from local activity evidence.',
@@ -1126,7 +1259,16 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
 
   try {
     const { text } = await withTimeout(
-      sendWithFallback(systemPrompt, [], workBlockPrompt(block)),
+      executeTextAIJob(
+        {
+          jobType: options?.jobType ?? (block.isLive ? 'block_label_preview' : 'block_label_finalize'),
+          screen: 'timeline_day',
+          triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
+          systemPrompt,
+          userMessage: workBlockPrompt(block),
+        },
+        sendWithProvider,
+      ),
       BLOCK_INSIGHT_TIMEOUT_MS,
       'Block insight timed out',
     )
@@ -1162,6 +1304,80 @@ export async function generateWorkBlockInsight(block: WorkContextBlock): Promise
   }
 }
 
+const queuedBlockInsightJobs = new Set<string>()
+let lastCleanupAnchorDate: string | null = null
+const BLOCK_FINALIZE_QUIET_MS = 90_000
+const CLEANUP_LOOKBACK_DAYS = 3
+const CLEANUP_BLOCK_LIMIT = 8
+
+function shiftDateString(dateStr: string, offset: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const next = new Date(year, month - 1, day)
+  next.setDate(next.getDate() + offset)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+async function runBlockInsightJob(
+  block: WorkContextBlock,
+  jobType: 'block_label_finalize' | 'block_cleanup_relabel',
+): Promise<void> {
+  if (queuedBlockInsightJobs.has(`${jobType}:${block.id}`)) return
+  queuedBlockInsightJobs.add(`${jobType}:${block.id}`)
+
+  try {
+    await generateWorkBlockInsight(block, { jobType, triggerSource: 'background' })
+    invalidateProjectionScope('timeline', `ai:${jobType}`)
+    invalidateProjectionScope('apps', `ai:${jobType}`)
+    invalidateProjectionScope('insights', `ai:${jobType}`)
+  } catch (error) {
+    console.warn(`[ai] ${jobType} failed for block ${block.id}:`, error)
+  } finally {
+    queuedBlockInsightJobs.delete(`${jobType}:${block.id}`)
+  }
+}
+
+async function runOvernightCleanup(anchorDate: string): Promise<void> {
+  const settings = getSettings()
+  if (!settings.aiBackgroundEnrichment) return
+
+  const db = getDb()
+  const queued: WorkContextBlock[] = []
+  for (let offset = 0; offset > -CLEANUP_LOOKBACK_DAYS; offset--) {
+    const dateStr = shiftDateString(anchorDate, offset)
+    const payload = getTimelineDayPayload(db, dateStr, null)
+    for (const block of payload.blocks) {
+      if (block.isLive) continue
+      if (block.label.override?.trim()) continue
+      if (block.aiLabel?.trim()) continue
+      queued.push(block)
+      if (queued.length >= CLEANUP_BLOCK_LIMIT) break
+    }
+    if (queued.length >= CLEANUP_BLOCK_LIMIT) break
+  }
+
+  for (const block of queued) {
+    await runBlockInsightJob(block, 'block_cleanup_relabel')
+  }
+}
+
+export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
+  const settings = getSettings()
+  if (!settings.aiBackgroundEnrichment) return
+
+  const now = Date.now()
+  for (const block of payload.blocks) {
+    if (block.isLive) continue
+    if (block.label.override?.trim()) continue
+    if (block.aiLabel?.trim()) continue
+    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) continue
+    void runBlockInsightJob(block, 'block_label_finalize')
+  }
+
+  if (lastCleanupAnchorDate === payload.date) return
+  lastCleanupAnchorDate = payload.date
+  void runOvernightCleanup(payload.date)
+}
+
 export async function sendMessage(userMessage: string): Promise<string> {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
@@ -1187,32 +1403,59 @@ export async function sendMessage(userMessage: string): Promise<string> {
 
   const dayContext = buildDayContext()
   const specificTimeContext = buildSpecificTimeContext(userMessage)
-  const { userName } = getSettings()
+  const now = new Date()
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const attributionDayCtx = buildAttributionDayContext(todayStr)
+  const attributionClientCtx = buildAttributionClientContext(userMessage)
+  const settings = getSettings()
+  const { userName } = settings
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
-  const providerConfigs = await resolveProviderConfigs()
-  const preferredConfig = providerConfigs[0]
+  const preferredProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  const preferredConfig = {
+    provider: preferredProvider,
+    model: modelForProvider(preferredProvider, settings),
+  }
   const systemPrompt =
-    persona + ' You have access to tracked local activity data and should answer as a careful analyst, not a hype machine.\n\n' +
-    'When answering:\n' +
-    '- Always speak as Daylens, never as a generic model or raw provider persona\n' +
-    `- If the user asks what model or provider is powering this chat, say that they are chatting with Daylens and that this conversation is currently set to ${providerLabel(preferredConfig.provider)} using the model ${preferredConfig.model}\n` +
-    '- Lead with specific tracked facts when available\n' +
-    '- Separate tracked facts from interpretation or advice\n' +
-    '- If the data is insufficient to answer accurately, say so directly\n' +
-    '- Never imply certainty about the exact task the user was doing unless the data explicitly supports it\n' +
-    '- For time-specific questions, prefer exact foreground-app evidence and say when no exact session exists\n' +
-    '- Treat website timing as approximate browser evidence unless the question is only about websites\n' +
-    '- If you include recommendations, clearly label them as suggestions\n' +
-    '- Prefer short headings like "Tracked facts" and "Suggestions" when both are present\n' +
-    '- Keep responses concise and grounded\n\n' +
+    persona + ' You have access to tracked local activity data — app sessions, website visits, attributed work sessions, and recurring workflows.\n\n' +
+    'Your job is to synthesize, not recite. The user can already see raw totals in the UI. They come to you to understand what the day actually looked like and what was getting done.\n\n' +
+    'How to think:\n' +
+    '- Work sessions are the primary data unit. Each has a client, project, confidence score, app roles, and evidence trail. Use these to answer "what was I working on" and "how much time on X".\n' +
+    '- For client/project questions, use attributed work_sessions. Report attributed hours first, then ambiguous time separately. Never silently include ambiguous time in attributed totals.\n' +
+    '- Read the work-block structure for additional context. Blocks group related activity with labels, apps, and websites.\n' +
+    '- Connect apps to intent: Chrome + docs.google.com + a specific title probably means a specific document; Cursor + GitHub likely means code on a specific repo; Slack + a long block means a conversation thread.\n' +
+    '- Notice patterns: recurring workflows show habitual projects or rituals. Time-of-day shape shows when the user focuses vs. communicates.\n' +
+    '- Prefer the specific over the generic. "Drafted the Q2 planning doc in Google Docs around 10-11am, then switched to Slack for 30m" beats "You spent 2h in Chrome."\n' +
+    '- When the evidence is ambiguous, say "looks like" or "probably" rather than inventing specifics. Don\'t hallucinate project names or document titles that aren\'t in the evidence.\n\n' +
+    'How to write:\n' +
+    '- Conversational, grounded, slightly social — a thoughtful friend who reviewed your day, not a dashboard.\n' +
+    '- Lead with the story of the day (what the user was doing and when), then surface totals only if the user asked or if a number matters.\n' +
+    '- Keep it short. 2-5 sentences for most questions. Use bullet points only when listing distinct blocks or suggestions.\n' +
+    '- Reference block time ranges and labels when they add specificity: "between 9:30 and 11:00 you were in a research block on arxiv and Claude".\n' +
+    '- Never say "the user" — address them directly ("you").\n' +
+    '- Always speak as Daylens, never as a raw model/provider persona.\n' +
+    `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
+    '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
+    '- For recommendations, keep them concrete and tied to observed patterns — not generic productivity advice.\n\n' +
     (dayContext
       ? `Tracked local data context:\n${dayContext}`
       : 'No activity has been recorded yet today. If the user asks about stats, say tracking needs more time to collect evidence.') +
-    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '')
+    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
+    (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
+    (attributionClientCtx ? `\n\nClient/project attribution context (JSON):\n${attributionClientCtx}` : '')
 
-  const { text: assistantText } = await sendWithFallback(systemPrompt, prior, userMessage)
+  const { text: assistantText } = await executeTextAIJob(
+    {
+      jobType: 'chat_answer',
+      screen: 'ai_chat',
+      triggerSource: 'user',
+      systemPrompt,
+      userMessage,
+      prior,
+    },
+    sendWithProvider,
+  )
 
   // Don't save an empty assistant response — it would corrupt future prior
   // history and cause the AI to receive empty content blocks.
