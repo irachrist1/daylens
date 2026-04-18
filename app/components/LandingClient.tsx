@@ -303,15 +303,12 @@ export function LandingClient() {
             </h1>
 
             <p className="dl-hero__sub">
-              Daylens quietly logs apps, windows, browser activity, files, and reconstructed work
-              sessions so you and your AI tools can ask grounded questions about what actually
-              happened. Local-first, evidence-grounded, and built as one product for macOS,
-              Windows, and Linux.
+              Daylens quietly logs your laptop work so you and your AI tools can ask grounded
+              questions later. Local-first and built for macOS, Windows, and Linux.
             </p>
 
             <p className="dl-hero__meta">
-              Google for your workday history. Spotify Wrapped for how you actually spend your
-              time.
+              Google for your workday history. Wrapped for how you actually spend your time.
             </p>
 
             <div className="dl-hero__cta">
@@ -380,9 +377,8 @@ export function LandingClient() {
                 <span className="dl-heading--muted">Not app vanity metrics.</span>
               </h2>
               <p className="dl-body rv rv--d2">
-                Daylens is for understanding a client, repo, class, research thread, or internal
-                project across all the tools that touched it. Apps, tabs, files, meetings, and
-                windows are evidence. The story is the work.
+                Daylens is about the work itself. Apps, tabs, files, meetings, and windows are
+                just evidence.
               </p>
             </div>
 
@@ -444,10 +440,7 @@ export function LandingClient() {
         <section className="dl-section dl-section--cards" id="features">
           <div className="dl-shell">
             <div className="dl-section-head">
-              <p className="dl-label rv">Product shape</p>
-              <h2 className="dl-heading rv rv--d1">
-                Built for desktop work, companion access, and grounded recall.
-              </h2>
+              <h2 className="dl-heading rv rv--d1">Built for real desktop work.</h2>
             </div>
 
             <div className="dl-features dl-features--wide">

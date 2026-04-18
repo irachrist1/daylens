@@ -1005,13 +1005,13 @@ body {
 
 .dl-hero__h1 {
   margin: 0 0 1.35rem;
-  font-size: clamp(3rem, 7vw, 5.3rem);
+  font-size: clamp(3rem, 6.6vw, 5rem);
   font-weight: 700;
   letter-spacing: -0.045em;
   line-height: 0.98;
   color: #fff;
   text-wrap: balance;
-  max-width: 13.5ch;
+  max-width: 16ch;
   text-shadow: 0 22px 56px rgba(3, 14, 32, 0.2);
 }
 
@@ -1021,18 +1021,18 @@ body {
   line-height: 1.78;
   font-weight: 400;
   color: rgba(255, 255, 255, 0.92);
-  max-width: 72ch;
+  max-width: 62ch;
   text-wrap: pretty;
   text-shadow: 0 16px 38px rgba(3, 14, 32, 0.22);
 }
 
 .dl-hero__meta {
-  margin: 0 0 2.1rem;
+  margin: 0 0 1.9rem;
   font-size: 0.98rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: rgba(255, 255, 255, 0.86);
-  max-width: 46rem;
+  max-width: 34rem;
   text-shadow: 0 16px 38px rgba(3, 14, 32, 0.18);
 }
 
@@ -1292,7 +1292,7 @@ body {
 
 .dl-section-head {
   max-width: 44rem;
-  margin-bottom: 2rem;
+  margin-bottom: 1.35rem;
 }
 
 .dl-section-head--center {
@@ -1954,7 +1954,7 @@ body {
   }
 
   .dl-hero__h1 {
-    max-width: 12ch;
+    max-width: 13ch;
   }
 }
 
