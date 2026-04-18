@@ -10,8 +10,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://christian-tonny.dev"),
   title: "Daylens",
-  description: "Your activity companion — view desktop usage insights on any device",
+  description:
+    "Cross-platform work history for your laptop. Local-first activity tracking for grounded timeline recall, AI queries, and editor-ready context.",
   manifest: "/daylens/manifest.json",
   appleWebApp: {
     capable: true,

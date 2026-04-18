@@ -2,8 +2,143 @@
 
 import Link from "next/link";
 import posthog from "posthog-js";
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { MarketingFooter, MarketingInnerNav } from "./MarketingChrome";
+
+const heroPills = [
+  "macOS",
+  "Windows",
+  "Linux",
+  "Local-first",
+  "Evidence-grounded",
+];
+
+const guidingQuestions = [
+  "How much time did I actually spend on Client X this month?",
+  "What did I do between 2 and 4 pm on Wednesday?",
+  "Show me everything I touched for Project X and what changed around it.",
+];
+
+const workflowSteps = [
+  {
+    step: "01",
+    title: "Capture local evidence quietly",
+    body:
+      "Track apps, windows, browser activity, files, and other desktop signals while you work without turning your day into manual logging.",
+  },
+  {
+    step: "02",
+    title: "Reconstruct real work sessions",
+    body:
+      "Group the evidence into coherent blocks so one task can span multiple tools and still read like one piece of work.",
+  },
+  {
+    step: "03",
+    title: "Query or review what happened",
+    body:
+      "Open the timeline for proof, or ask grounded questions, summaries, and exports from the same underlying work history.",
+  },
+];
+
+const featureCards = [
+  {
+    eyebrow: "Timeline first",
+    title: "The proof surface is your workday history",
+    body:
+      "Daylens is built around sessions, artifacts, and context you can inspect directly, not a decorative dashboard of app counts.",
+  },
+  {
+    eyebrow: "Cross-platform",
+    title: "One product direction across laptop OSes",
+    body:
+      "The unified product direction is macOS, Windows, and Linux, with platform-specific validation where it matters.",
+  },
+  {
+    eyebrow: "AI-ready",
+    title: "Ask grounded questions about real work",
+    body:
+      "Use AI to investigate a client, repo, class, project, or workstream from tracked history instead of a vague memory.",
+  },
+  {
+    eyebrow: "Desktop plus companion",
+    title: "Pair the desktop app when browser access helps",
+    body:
+      "The desktop timeline stays primary, while the web companion gives you connected history, chat, and recovery flows when you need them.",
+  },
+];
+
+const integrationCards = [
+  {
+    title: "Grounded AI today",
+    body:
+      "Freeform work-history questions, summaries, and exports should come from tracked local evidence, not a blank assistant prompt.",
+  },
+  {
+    title: "Editor integrations by design",
+    body:
+      "Daylens is being shaped for editor-facing workflows too, including MCP-style context for tools like Claude Code and Cursor.",
+  },
+  {
+    title: "Deterministic first, AI second",
+    body:
+      "The timeline and session reconstruction stay useful on their own. AI is an orchestration layer over local data, not the source of truth.",
+  },
+];
+
+const privacyCards = [
+  {
+    title: "Raw capture belongs on your laptop",
+    body:
+      "The local database is the source of truth for what happened in your day, so your history stays inspectable even without cloud services.",
+  },
+  {
+    title: "Sync should be explicit",
+    body:
+      "When you connect the companion, only the data you choose to sync should leave the device. Privacy is part of the product contract.",
+  },
+  {
+    title: "Use AI on your terms",
+    body:
+      "Daylens should remain valuable without AI turned on, and grounded when you do enable it with the provider setup you trust.",
+  },
+];
+
+const faqItems = [
+  {
+    question: "Is Daylens just an app-usage tracker?",
+    answer:
+      "No. Apps, tabs, files, websites, meetings, and windows are evidence. The main unit is the work session, so the goal is understanding what you were doing, how long it took, and what context surrounded it.",
+  },
+  {
+    question: "Which platforms are part of the product?",
+    answer:
+      "Daylens is being built as one cross-platform product for macOS, Windows, and Linux. Platform-specific packaging and real-machine validation still matter, but the direction is unified.",
+  },
+  {
+    question: "Do I need AI to get value from it?",
+    answer:
+      "No. The timeline is the primary proof surface. AI is there to help you query, summarize, and export grounded history once the underlying evidence already exists.",
+  },
+  {
+    question: "Is the Spotify Wrapped-style recap fully shipped?",
+    answer:
+      "Not as the whole polished recap surface yet. Wrapped-style review is part of the product direction, but the launch-critical experience is the evidence-backed timeline and grounded AI over work history.",
+  },
+  {
+    question: "Can Daylens feed tools like Claude Code or Cursor?",
+    answer:
+      "That is an explicit product direction. Daylens is being built to expose grounded work-history context for editor and agent workflows, including MCP-style integrations where they make sense.",
+  },
+];
+
+type DownloadLinkProps = {
+  href: string;
+  label: string;
+  platform: "mac" | "windows" | "linux";
+  variant: "primary" | "glass" | "white" | "ghost";
+  source?: string;
+  children: ReactNode;
+};
 
 /* ── Scroll-driven custom properties ────────────────────────────────── */
 function useLandingScroll() {
@@ -22,15 +157,12 @@ function useLandingScroll() {
         const vh = window.innerHeight;
         const docH = document.documentElement.scrollHeight - vh;
 
-        // 0→1 over first viewport
         const hero = Math.min(1, Math.max(0, y / (vh * 0.9)));
-        // 0→1 over full page
         const journey = docH > 0 ? Math.min(1, Math.max(0, y / docH)) : 0;
 
         root.style.setProperty("--hero-t", hero.toFixed(4));
         root.style.setProperty("--journey", journey.toFixed(4));
 
-        // Parallax on screenshot
         if (screenshotRef.current) {
           const t = Math.min(1, y / 600);
           const ease = 1 - Math.pow(1 - t, 3);
@@ -59,18 +191,18 @@ function useReveal() {
       const els = document.querySelectorAll(".rv");
       const obs = new IntersectionObserver(
         (entries) => {
-          entries.forEach((e) => {
-            if (e.isIntersecting) {
-              e.target.classList.add("rv--visible");
-              obs.unobserve(e.target);
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("rv--visible");
+              obs.unobserve(entry.target);
             }
           });
         },
         { threshold: 0.08, rootMargin: "0px 0px -40px 0px" }
       );
       els.forEach((el) => obs.observe(el));
-      return () => obs.disconnect();
     }, 100);
+
     return () => clearTimeout(timer);
   }, []);
 }
@@ -95,16 +227,39 @@ function WindowsIcon() {
 function LinuxIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M20 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-8 14H8v-2h4v2Zm6-4H6v-2h12v2Zm0-4H6V7h12v2Z"/>
+      <path d="M20 3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm-8 14H8v-2h4v2Zm6-4H6v-2h12v2Zm0-4H6V7h12v2Z" />
     </svg>
   );
 }
 
 function ArrowIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
       <path d="M3.5 8h9M8.5 4l4 4-4 4" />
     </svg>
+  );
+}
+
+function DownloadLink({ href, label, platform, variant, source, children }: DownloadLinkProps) {
+  return (
+    <a
+      href={href}
+      className={`dl-btn dl-btn--${variant}`}
+      onClick={() => posthog.capture("download_clicked", { platform, ...(source ? { source } : {}) })}
+    >
+      {children}
+      {label}
+    </a>
   );
 }
 
@@ -115,66 +270,89 @@ export function LandingClient() {
 
   return (
     <div ref={rootRef} className="dl">
-      {/* Gradient sky */}
       <div className="dl__sky" aria-hidden="true" />
 
       <MarketingInnerNav current="home" variant="capsule" landing />
 
       <main>
-        {/* ─── Hero ─── */}
         <section className="dl-hero">
           <div className="dl-hero__content">
             <p className="dl-hero__tag lp-overline--recording rv">
               <span className="dl-hero__dot lp-recording-dot" aria-hidden="true" />
-              Private by design
+              Cross-platform laptop activity tracker
             </p>
 
             <h1 className="dl-hero__h1 rv rv--d1">
-              Know where your
-              <br />
-              time goes.
+              Search your workday like it happened five minutes ago.
             </h1>
 
             <p className="dl-hero__sub rv rv--d2">
-              Daylens quietly watches your apps and sites, keeps everything on&nbsp;your device, and turns it into a clear timeline — with optional AI on&nbsp;your terms.
+              Daylens quietly logs apps, windows, browser activity, files, and reconstructed work
+              sessions so you and your AI tools can ask grounded questions about what actually
+              happened. Local-first, evidence-grounded, and built as one product for macOS,
+              Windows, and Linux.
             </p>
 
-            <div className="dl-hero__cta rv rv--d3">
-              <a
+            <p className="dl-hero__meta rv rv--d3">
+              Google for your workday history. Spotify Wrapped for how you actually spend your
+              time.
+            </p>
+
+            <div className="dl-hero__pills rv rv--d3" aria-label="Product highlights">
+              {heroPills.map((pill) => (
+                <span key={pill} className="dl-chip">
+                  {pill}
+                </span>
+              ))}
+            </div>
+
+            <div className="dl-hero__cta rv rv--d4">
+              <DownloadLink
                 href="/daylens/api/download/mac"
-                className="dl-btn dl-btn--primary"
-                onClick={() => posthog.capture("download_clicked", { platform: "mac" })}
+                label="Download for Mac"
+                platform="mac"
+                variant="primary"
               >
                 <AppleIcon />
-                Download for Mac
-              </a>
-              <a
+              </DownloadLink>
+              <DownloadLink
                 href="/daylens/api/download/windows"
-                className="dl-btn dl-btn--glass"
-                onClick={() => posthog.capture("download_clicked", { platform: "windows" })}
+                label="Download for Windows"
+                platform="windows"
+                variant="glass"
               >
                 <WindowsIcon />
-                Download for Windows
-              </a>
-              <a
+              </DownloadLink>
+              <DownloadLink
                 href="/daylens/api/download/linux"
-                className="dl-btn dl-btn--glass"
-                onClick={() => posthog.capture("download_clicked", { platform: "linux" })}
+                label="Download for Linux"
+                platform="linux"
+                variant="glass"
               >
                 <LinuxIcon />
-                Download for Linux
+              </DownloadLink>
+            </div>
+
+            <div className="dl-links dl-links--hero rv rv--d4">
+              <a href="#how-it-works" className="dl-link">
+                How it works <ArrowIcon />
               </a>
+              <Link href="/docs" className="dl-link">
+                Read the docs <ArrowIcon />
+              </Link>
+              <Link href="/link" className="dl-link">
+                Connect desktop app <ArrowIcon />
+              </Link>
             </div>
           </div>
 
-          {/* Floating screenshot */}
-          <div className="dl-screenshot" ref={screenshotRef}>
+          <div className="dl-screenshot rv rv--d4" ref={screenshotRef}>
             <div className="dl-screenshot__glow" aria-hidden="true" />
             <div className="dl-screenshot__frame">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/daylens/screenshots/screenshot-dashboard.png"
-                alt="Daylens dashboard showing your daily activity timeline"
+                src="/daylens/screenshots/screenshot-timeline.png"
+                alt="Daylens timeline showing reconstructed work sessions and supporting evidence"
                 className="dl-screenshot__img"
                 width={1200}
                 height={800}
@@ -185,85 +363,198 @@ export function LandingClient() {
           </div>
         </section>
 
-        {/* ─── Statement ─── */}
-        <section className="dl-section dl-section--light">
-          <div className="dl-prose">
-            <p className="dl-label rv">Clarity</p>
-            <h2 className="dl-heading rv rv--d1">
-              Not screen time.<br />
-              <span className="dl-heading--muted">Real context.</span>
-            </h2>
-            <p className="dl-body rv rv--d2">
-              Named work sessions across every app and browser tab — no extensions, no screenshots. Open any day and see exactly what you did.
+        <section className="dl-section dl-section--light" id="story">
+          <div className="dl-shell dl-story">
+            <div className="dl-prose dl-prose--left">
+              <p className="dl-label rv">Why Daylens</p>
+              <h2 className="dl-heading rv rv--d1">
+                Work sessions first.
+                <br />
+                <span className="dl-heading--muted">Not app vanity metrics.</span>
+              </h2>
+              <p className="dl-body rv rv--d2">
+                Daylens is for understanding a client, repo, class, research thread, or internal
+                project across all the tools that touched it. Apps, tabs, files, meetings, and
+                windows are evidence. The story is the work.
+              </p>
+            </div>
+
+            <div className="dl-question-grid">
+              {guidingQuestions.map((question, index) => (
+                <article key={question} className={`dl-question rv rv--d${index + 1}`}>
+                  <span className="dl-question__kicker">Question {index + 1}</span>
+                  <p className="dl-question__body">{question}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="dl-section dl-section--mist" id="how-it-works">
+          <div className="dl-shell">
+            <div className="dl-section-head dl-section-head--center">
+              <p className="dl-label rv">How it works</p>
+              <h2 className="dl-heading rv rv--d1">A timeline that stays grounded in evidence.</h2>
+              <p className="dl-body rv rv--d2">
+                The local database on your laptop is the source of truth. Daylens captures desktop
+                evidence quietly, reconstructs coherent work blocks, and then lets you inspect or
+                query them without pretending AI is the product.
+              </p>
+            </div>
+
+            <div className="dl-steps">
+              {workflowSteps.map((item, index) => (
+                <article key={item.step} className={`dl-step rv rv--d${index + 1}`}>
+                  <span className="dl-step__num">{item.step}</span>
+                  <h3 className="dl-step__title">{item.title}</h3>
+                  <p className="dl-step__body">{item.body}</p>
+                </article>
+              ))}
+            </div>
+
+            <p className="dl-caption rv rv--d3">
+              Timeline first. AI second. The goal is honest answers backed by what your day
+              actually contained.
             </p>
           </div>
         </section>
 
-        {/* ─── Features ─── */}
-        <section className="dl-section dl-section--cards">
-          <div className="dl-features">
-            <article className="dl-feature rv">
-              <h3 className="dl-feature__title">Local first</h3>
-              <p className="dl-feature__body">
-                Raw activity stays on your machine. The web companion only sees what you explicitly sync. No account required.
+        <section className="dl-section dl-section--cards" id="features">
+          <div className="dl-shell">
+            <div className="dl-section-head">
+              <p className="dl-label rv">Product shape</p>
+              <h2 className="dl-heading rv rv--d1">
+                Built for desktop work, companion access, and grounded recall.
+              </h2>
+              <p className="dl-body rv rv--d2">
+                The current product story is simple: track locally, reconstruct clearly, and make
+                that history useful to you and your tools later.
               </p>
-            </article>
-            <article className="dl-feature rv rv--d1">
-              <h3 className="dl-feature__title">AI on your keys</h3>
-              <p className="dl-feature__body">
-                Ask questions in plain language using your own provider. Grounded in your history, bounded by your rules.
-              </p>
-            </article>
-            <article className="dl-feature rv rv--d2">
-              <h3 className="dl-feature__title">Web companion</h3>
-              <p className="dl-feature__body">
-                Pair once from the desktop app. Dashboard, history, and chat in the browser — where you already are.
-              </p>
-            </article>
-          </div>
+            </div>
 
-          <div className="dl-links rv rv--d3">
-            <Link href="/docs" className="dl-link">
-              How it works <ArrowIcon />
-            </Link>
-            <Link href="/link" className="dl-link">
-              Connect device <ArrowIcon />
-            </Link>
+            <div className="dl-features dl-features--wide">
+              {featureCards.map((card, index) => (
+                <article key={card.title} className={`dl-feature rv rv--d${(index % 3) + 1}`}>
+                  <p className="dl-feature__eyebrow">{card.eyebrow}</p>
+                  <h3 className="dl-feature__title">{card.title}</h3>
+                  <p className="dl-feature__body">{card.body}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
 
-        {/* ─── Final CTA ─── */}
+        <section className="dl-section dl-section--plain" id="integrations">
+          <div className="dl-shell dl-split">
+            <div className="dl-panel dl-panel--dark rv">
+              <p className="dl-label dl-label--light">AI and editors</p>
+              <h2 className="dl-panel__title">
+                Built to feed tools context,
+                <br />
+                not trap it in another dashboard.
+              </h2>
+              <p className="dl-panel__body">
+                Daylens is AI-ready now and being shaped for editor-facing workflows too, including
+                MCP-style context paths for tools like Claude Code and Cursor. The idea is to let
+                your tools ask what actually happened in your day instead of guessing from fragments.
+              </p>
+            </div>
+
+            <div className="dl-stack">
+              {integrationCards.map((card, index) => (
+                <article key={card.title} className={`dl-mini-card rv rv--d${index + 1}`}>
+                  <h3 className="dl-mini-card__title">{card.title}</h3>
+                  <p className="dl-mini-card__body">{card.body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="dl-section dl-section--privacy" id="privacy">
+          <div className="dl-shell">
+            <div className="dl-section-head">
+              <p className="dl-label rv">Privacy</p>
+              <h2 className="dl-heading rv rv--d1">Local-first by default.</h2>
+              <p className="dl-body rv rv--d2">
+                Raw capture belongs on your machine, and the same evidence should stay useful even
+                if you never turn on AI. Privacy is not a settings afterthought. It is part of the
+                product contract.
+              </p>
+            </div>
+
+            <div className="dl-privacy-grid">
+              {privacyCards.map((card, index) => (
+                <article key={card.title} className={`dl-privacy-card rv rv--d${index + 1}`}>
+                  <h3 className="dl-privacy-card__title">{card.title}</h3>
+                  <p className="dl-privacy-card__body">{card.body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="dl-section dl-section--faq" id="faq">
+          <div className="dl-shell dl-shell--narrow">
+            <div className="dl-section-head dl-section-head--center">
+              <p className="dl-label rv">FAQ</p>
+              <h2 className="dl-heading rv rv--d1">What Daylens is, and what it is not.</h2>
+            </div>
+
+            <div className="dl-faq">
+              {faqItems.map((item, index) => (
+                <details key={item.question} className={`dl-faq__item rv rv--d${(index % 3) + 1}`}>
+                  <summary className="dl-faq__question">{item.question}</summary>
+                  <p className="dl-faq__answer">{item.answer}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="dl-final">
           <div className="dl-final__inner rv">
-            <h2 className="dl-final__h2">Start seeing clearly.</h2>
+            <h2 className="dl-final__h2">Build your work history once.</h2>
             <p className="dl-final__sub">
-              Free for Mac, Windows, and Linux. AI is yours to enable — or&nbsp;ignore.
+              Install Daylens on macOS, Windows, or Linux and start collecting evidence you can
+              actually query later.
             </p>
             <div className="dl-final__cta">
-              <a
+              <DownloadLink
                 href="/daylens/api/download/mac"
-                className="dl-btn dl-btn--white"
-                onClick={() => posthog.capture("download_clicked", { platform: "mac", source: "finale" })}
+                label="Download for Mac"
+                platform="mac"
+                variant="white"
+                source="finale"
               >
                 <AppleIcon />
-                Download for Mac
-              </a>
-              <a
+              </DownloadLink>
+              <DownloadLink
                 href="/daylens/api/download/windows"
-                className="dl-btn dl-btn--ghost"
-                onClick={() => posthog.capture("download_clicked", { platform: "windows", source: "finale" })}
+                label="Download for Windows"
+                platform="windows"
+                variant="ghost"
+                source="finale"
               >
                 <WindowsIcon />
-                Windows
-              </a>
-              <a
+              </DownloadLink>
+              <DownloadLink
                 href="/daylens/api/download/linux"
-                className="dl-btn dl-btn--ghost"
-                onClick={() => posthog.capture("download_clicked", { platform: "linux", source: "finale" })}
+                label="Download for Linux"
+                platform="linux"
+                variant="ghost"
+                source="finale"
               >
                 <LinuxIcon />
-                Linux
-              </a>
+              </DownloadLink>
+            </div>
+            <div className="dl-links dl-links--final">
+              <Link href="/docs" className="dl-link">
+                Read documentation <ArrowIcon />
+              </Link>
+              <Link href="/link" className="dl-link">
+                Connect the companion <ArrowIcon />
+              </Link>
             </div>
           </div>
         </section>

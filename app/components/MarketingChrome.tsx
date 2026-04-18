@@ -63,7 +63,7 @@ export function MarketingInnerNav({
           className={landing ? "dl-nav-cta" : "lp-btn-primary dl-nav-cta"}
           style={landing ? undefined : { padding: "0.5rem 1.25rem", fontSize: "0.8125rem" }}
         >
-          {landing ? "Connect" : "Connect Device"}
+          {landing ? "Connect App" : "Connect Desktop App"}
         </Link>
       </nav>
     </header>
@@ -82,14 +82,15 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
           </div>
           <nav className="dl-foot__links" aria-label="Footer">
             <Link href="/docs">Docs</Link>
-            <Link href="/link">Connect</Link>
+            <Link href="/link">Connect App</Link>
             <a href="/daylens/api/download/mac">Mac</a>
             <a href="/daylens/api/download/windows">Windows</a>
+            <a href="/daylens/api/download/linux">Linux</a>
             <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer">GitHub</a>
           </nav>
           <p className="dl-foot__copy">
             <span className="lp-footer-year" title="Click me">&copy; 2026</span>{" "}
-            Christian Tonny
+            Local-first work history by Christian Tonny
           </p>
         </div>
       </footer>
@@ -113,8 +114,8 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
               <span>Daylens</span>
             </div>
             <p className="lp-footer-desc">
-              The quiet layer over your workday. Private activity history for macOS, Windows, and the
-              web companion.
+              Cross-platform work history for macOS, Windows, and Linux. Local-first, AI-ready,
+              and evidence-grounded.
             </p>
             <p className="lp-footer-credit">Made by Christian Tonny</p>
           </div>
@@ -129,7 +130,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
 
           <div className="lp-footer-col">
             <span className="text-label lp-footer-heading">Companion</span>
-            <Link href="/link" className="lp-footer-link">Connect Device</Link>
+            <Link href="/link" className="lp-footer-link">Connect Desktop App</Link>
             <Link href="/dashboard" className="lp-footer-link">Dashboard</Link>
             <Link href="/history" className="lp-footer-link">History</Link>
             <Link href="/chat" className="lp-footer-link">AI Chat</Link>
@@ -140,6 +141,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
             <Link href="/recover" className="lp-footer-link">Recover Account</Link>
             <a href="/daylens/api/download/mac" className="lp-footer-link">Download for Mac</a>
             <a href="/daylens/api/download/windows" className="lp-footer-link">Download for Windows</a>
+            <a href="/daylens/api/download/linux" className="lp-footer-link">Download for Linux</a>
             <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer" className="lp-footer-link">GitHub</a>
           </div>
         </div>
@@ -149,7 +151,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
             <span className="lp-footer-year" title="Click me">&copy; 2026</span>{" "}
             Daylens. Free and open source.
           </p>
-          <p className="lp-footer-copy">Made with coffee and the knowledge that we also waste time on the internet.</p>
+          <p className="lp-footer-copy">Built around work sessions, not app vanity metrics.</p>
         </div>
       </div>
     </footer>
