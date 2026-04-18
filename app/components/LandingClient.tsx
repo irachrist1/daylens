@@ -12,18 +12,18 @@ import {
 
 const storyConversation = [
   {
-    question: "How much time did I actually spend on Client X this month?",
-    answer: "14h 22m across 7 work sessions. Most of it happened in Dia, Safari, and Codex.",
+    question: "How much time did I spend on Client X?",
+    answer: "14h 22m across 7 sessions.",
     side: "right" as const,
   },
   {
-    question: "What did I do between 2 and 4 pm on Wednesday?",
-    answer: "You were in a planning block, then switched into debugging and ticket cleanup.",
+    question: "What happened Wednesday from 2 to 4 pm?",
+    answer: "Planning, debugging, then ticket cleanup.",
     side: "left" as const,
   },
   {
-    question: "Show me everything I touched for Project X and what changed around it.",
-    answer: "I found the related sessions, tabs, files, and follow-up tools. Ready when you are.",
+    question: "Show me everything I touched for Project X.",
+    answer: "Sessions, tabs, files, and follow-up tools are ready.",
     side: "right" as const,
   },
 ];
@@ -32,65 +32,50 @@ const workflowSteps = [
   {
     step: "01",
     title: "Capture local evidence quietly",
-    body:
-      "Track apps, windows, browser activity, files, and other desktop signals while you work without turning your day into manual logging.",
+    body: "Track apps, windows, browser activity, and files while you work.",
   },
   {
     step: "02",
     title: "Reconstruct real work sessions",
-    body:
-      "Group the evidence into coherent blocks so one task can span multiple tools and still read like one piece of work.",
+    body: "Turn scattered signals into clear blocks of actual work.",
   },
   {
     step: "03",
     title: "Query or review what happened",
-    body:
-      "Open the timeline for proof, or ask grounded questions, summaries, and exports from the same underlying work history.",
+    body: "Review the timeline or ask grounded questions about what happened.",
   },
 ];
 
 const featureCards = [
   {
-    eyebrow: "Timeline first",
-    title: "The proof surface is your workday history",
-    body:
-      "Daylens is built around sessions, artifacts, and context you can inspect directly, not a decorative dashboard of app counts.",
+    eyebrow: "Local-first",
+    title: "Your laptop stays the source of truth",
+    body: "The timeline stays useful even before sync, sharing, or AI enters the picture.",
   },
   {
     eyebrow: "Cross-platform",
-    title: "One product direction across laptop OSes",
-    body:
-      "The unified product direction is macOS, Windows, and Linux, with platform-specific validation where it matters.",
+    title: "One direction across macOS, Windows, and Linux",
+    body: "Daylens is being shaped as one product across laptop operating systems.",
   },
   {
     eyebrow: "AI-ready",
-    title: "Ask grounded questions about real work",
-    body:
-      "Use AI to investigate a client, repo, class, project, or workstream from tracked history instead of a vague memory.",
-  },
-  {
-    eyebrow: "Desktop plus companion",
-    title: "Pair the desktop app when browser access helps",
-    body:
-      "The desktop timeline stays primary, while the web companion gives you connected history, chat, and recovery flows when you need them.",
+    title: "Feed tools real context",
+    body: "Give editors and assistants evidence-backed work history instead of guesses.",
   },
 ];
 
 const integrationCards = [
   {
     title: "Grounded AI today",
-    body:
-      "Freeform work-history questions, summaries, and exports should come from tracked local evidence, not a blank assistant prompt.",
+    body: "Questions and summaries should come from tracked evidence, not a blank prompt.",
   },
   {
     title: "Editor integrations by design",
-    body:
-      "Daylens is being shaped for editor-facing workflows too, including MCP-style context for tools like Claude Code and Cursor.",
+    body: "Daylens is being shaped for editor workflows, including MCP-style context paths.",
   },
   {
     title: "Deterministic first, AI second",
-    body:
-      "The timeline and session reconstruction stay useful on their own. AI is an orchestration layer over local data, not the source of truth.",
+    body: "The timeline stands on its own. AI sits on top of local data, not the other way around.",
   },
 ];
 
@@ -298,17 +283,11 @@ export function LandingClient() {
         <section className="dl-hero">
           <div className="dl-hero__content">
             <h1 className="dl-hero__h1">
-              <span className="dl-hero__line">Search your workday</span>
-              <span className="dl-hero__line">like it happened five minutes ago.</span>
+              <span className="dl-hero__line">Search your work history.</span>
             </h1>
 
             <p className="dl-hero__sub">
-              Daylens quietly logs your laptop work so you and your AI tools can ask grounded
-              questions later. Local-first and built for macOS, Windows, and Linux.
-            </p>
-
-            <p className="dl-hero__meta">
-              Google for your workday history. Wrapped for how you actually spend your time.
+              Quietly track laptop work. Recover what happened later.
             </p>
 
             <div className="dl-hero__cta">
@@ -337,18 +316,6 @@ export function LandingClient() {
                 <LinuxIcon />
               </DownloadLink>
             </div>
-
-            <div className="dl-links dl-links--hero">
-              <a href="#how-it-works" className="dl-link">
-                How it works <ArrowIcon />
-              </a>
-              <Link href="/docs" className="dl-link">
-                Read the docs <ArrowIcon />
-              </Link>
-              <Link href="/link" className="dl-link">
-                Connect desktop app <ArrowIcon />
-              </Link>
-            </div>
           </div>
 
           <div className="dl-screenshot" ref={screenshotRef}>
@@ -374,11 +341,10 @@ export function LandingClient() {
               <h2 className="dl-heading rv rv--d1">
                 Work sessions first.
                 <br />
-                <span className="dl-heading--muted">Not app vanity metrics.</span>
+                <span className="dl-heading--muted">Not vanity charts.</span>
               </h2>
               <p className="dl-body rv rv--d2">
-                Daylens is about the work itself. Apps, tabs, files, meetings, and windows are
-                just evidence.
+                Apps, tabs, files, meetings, and windows are just evidence.
               </p>
             </div>
 
@@ -391,7 +357,7 @@ export function LandingClient() {
                 </div>
 
                 <div className="dl-chat__screen">
-                  <p className="dl-chat__intro">Ask your work history what actually happened.</p>
+                  <p className="dl-chat__intro">Ask what happened. Get an answer tied to evidence.</p>
 
                   {storyConversation.map((item, index) => (
                     <div key={item.question} className={`dl-chat__row dl-chat__row--${item.side} rv rv--d${index + 1}`}>
@@ -413,11 +379,7 @@ export function LandingClient() {
         <section className="dl-section dl-section--mist" id="how-it-works">
           <div className="dl-shell">
             <div className="dl-section-head dl-section-head--center">
-              <h2 className="dl-heading rv rv--d1">A timeline that stays grounded in evidence.</h2>
-              <p className="dl-body rv rv--d2">
-                Daylens captures local evidence, reconstructs work sessions, and gives you a
-                timeline you can inspect or query later.
-              </p>
+              <h2 className="dl-heading rv rv--d1">Capture. Reconstruct. Recall.</h2>
             </div>
 
             <div className="dl-steps">
@@ -430,17 +392,13 @@ export function LandingClient() {
               ))}
             </div>
 
-            <p className="dl-caption rv rv--d3">
-              Timeline first. AI second. The goal is honest answers backed by what your day
-              actually contained.
-            </p>
           </div>
         </section>
 
         <section className="dl-section dl-section--cards" id="features">
           <div className="dl-shell">
-            <div className="dl-section-head">
-              <h2 className="dl-heading rv rv--d1">Built for real desktop work.</h2>
+            <div className="dl-section-head dl-section-head--center">
+              <h2 className="dl-heading rv rv--d1">Built for laptop work.</h2>
             </div>
 
             <div className="dl-features dl-features--wide">
@@ -495,7 +453,7 @@ export function LandingClient() {
           <div className="dl-shell dl-shell--narrow">
             <div className="dl-section-head dl-section-head--center">
               <p className="dl-label rv">FAQ</p>
-              <h2 className="dl-heading rv rv--d1">What Daylens is, and what it is not.</h2>
+              <h2 className="dl-heading rv rv--d1">Common questions.</h2>
             </div>
 
             <div className="dl-faq">
