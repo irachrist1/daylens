@@ -17,6 +17,7 @@ import {
   getConversationMessages,
   getConversationState,
   getOrCreateConversation,
+  getThreadMessages,
   getActiveFocusSession,
   getAppSummariesForRange,
   getDistractionCountForSession,
@@ -52,12 +53,20 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from './database'
+import {
+  createArtifact,
+  createThread,
+  deriveTitleFromMessage,
+  getThread,
+  touchThreadLastMessage,
+} from './artifacts'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getSettings, hasApiKey } from './settings'
 import { computeEnhancedFocusScore } from '../lib/focusScore'
 import { getCurrentSession } from './tracking'
 import type {
+  AIArtifactKind,
   AIChatSendRequest,
   AIChatStreamEvent,
   AIMessageArtifact,
@@ -2154,14 +2163,16 @@ function persistChatTurn(
   conversationId: number,
   userMessage: string,
   envelope: AnswerEnvelope,
+  threadId: number | null = null,
 ): AIChatTurnResult {
-  const userEntry = appendConversationMessage(db, conversationId, 'user', userMessage)
+  const userEntry = appendConversationMessage(db, conversationId, 'user', userMessage, { threadId })
   const assistantEntry = appendConversationMessage(
     db,
     conversationId,
     'assistant',
     envelope.assistantText,
     {
+      threadId,
       metadata: buildAssistantMetadata(
         envelope.answerKind,
         envelope.suggestedFollowUps,
@@ -2175,9 +2186,60 @@ function persistChatTurn(
   )
   upsertConversationState(db, conversationId, envelope.conversationState)
   conversationTemporalContext.set(conversationId, envelope.resolvedTemporalContext)
+  if (threadId != null) {
+    touchThreadLastMessage(db, threadId, Date.now())
+    // Also persist AIMessageArtifact entries into the durable ai_artifacts table.
+    if (envelope.artifacts && envelope.artifacts.length > 0) {
+      void persistMessageArtifacts(threadId, assistantEntry.id, envelope.artifacts)
+    }
+  }
   return {
     assistantMessage: assistantEntry,
     conversationState: envelope.conversationState,
+  }
+}
+
+function mapMessageArtifactKind(
+  kind: AIMessageArtifact['kind'],
+  format: AIMessageArtifact['format'],
+): AIArtifactKind {
+  if (kind === 'report') return 'report'
+  if (kind === 'chart' || format === 'html') return 'html_chart'
+  if (kind === 'table' || format === 'json') return 'json_table'
+  if (format === 'csv') return 'csv'
+  return 'markdown'
+}
+
+async function persistMessageArtifacts(
+  threadId: number,
+  messageId: number,
+  artifacts: AIMessageArtifact[],
+): Promise<void> {
+  for (const artifact of artifacts) {
+    try {
+      let fileContent = ''
+      try {
+        fileContent = await fs.readFile(artifact.path, 'utf8')
+      } catch {
+        // ignore — createArtifact with existingFilePath still records the row.
+      }
+      await createArtifact({
+        threadId,
+        messageId,
+        kind: mapMessageArtifactKind(artifact.kind, artifact.format),
+        title: artifact.title,
+        summary: artifact.subtitle ?? null,
+        content: fileContent,
+        existingFilePath: artifact.path,
+        meta: {
+          source: 'assistant_message',
+          originalId: artifact.id,
+          format: artifact.format,
+        },
+      })
+    } catch (error) {
+      console.warn('[ai] failed to persist assistant artifact:', error)
+    }
   }
 }
 
@@ -3488,6 +3550,20 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
   const userMessage = payload.message
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
+  let threadId = payload.threadId ?? null
+  if (threadId == null) {
+    // Silently create a thread titled from the first user message so legacy
+    // call-sites that omit threadId still end up with durable thread rows.
+    const created = createThread(deriveTitleFromMessage(userMessage))
+    threadId = created.id
+  } else {
+    // Ensure the referenced thread exists; if not, fall back to a fresh one.
+    const existing = getThread(threadId)
+    if (!existing) {
+      const created = createThread(deriveTitleFromMessage(userMessage))
+      threadId = created.id
+    }
+  }
   const history = getConversationMessages(db, conversationId)
   const stream = createChatStreamAccumulator(payload.clientRequestId ?? null, options)
   const restoredState = payload.contextOverride ?? restoreConversationState(conversationId)
@@ -3516,7 +3592,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
   const focusIntent = maybeHandleFocusIntent(effectiveUserMessage)
   if (focusIntent) {
     await stream.streamText(focusIntent.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, focusIntent)
+    return persistChatTurn(db, conversationId, userMessage, focusIntent, threadId)
   }
 
   const prior = sanitizeConversationHistory(history)
@@ -3530,7 +3606,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
   })
   if (directReportEnvelope) {
     await stream.streamText(directReportEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, directReportEnvelope)
+    return persistChatTurn(db, conversationId, userMessage, directReportEnvelope, threadId)
   }
 
   const routed = await routeInsightsQuestion(effectiveUserMessage, new Date(), previousContext, db)
@@ -3544,7 +3620,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
   })
   if (reportEnvelope) {
     await stream.streamText(reportEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, reportEnvelope)
+    return persistChatTurn(db, conversationId, userMessage, reportEnvelope, threadId)
   }
 
   if (routed) {
@@ -3600,7 +3676,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
         resolvedTemporalContext,
         conversationState,
         suggestedFollowUps,
-      })
+      }, threadId)
     }
 
     if (process.env.NODE_ENV === 'development') {
@@ -3633,7 +3709,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       resolvedTemporalContext,
       conversationState,
       suggestedFollowUps,
-    })
+    }, threadId)
   }
 
   if (process.env.NODE_ENV === 'development') {
@@ -3745,14 +3821,21 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     resolvedTemporalContext,
     conversationState,
     suggestedFollowUps,
-  })
+  }, threadId)
 }
 
-export function getAIHistory(): AIThreadMessage[] {
+export function getAIHistory(threadId?: number | null): AIThreadMessage[] {
   const db = getDb()
   const conversationId = getOrCreateConversation(db)
   restoreConversationState(conversationId)
+  if (threadId != null) {
+    return getThreadMessages(db, threadId)
+  }
   return getConversationMessages(db, conversationId)
+}
+
+export function getThreadHistory(threadId: number): AIThreadMessage[] {
+  return getThreadMessages(getDb(), threadId)
 }
 
 export async function getWeekReview(weekStartStr: string): Promise<AISurfaceSummary | null> {

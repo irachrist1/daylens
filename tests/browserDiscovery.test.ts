@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveCanonicalBrowser } from '../src/main/lib/appIdentity.ts'
-import { getBrowserEntries } from '../src/main/services/browser.ts'
+import { getBrowserEntries, getBrowserStatus } from '../src/main/services/browser.ts'
 
 function tempHomeDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-browser-home-'))
@@ -71,4 +71,20 @@ test('windows browser discovery finds Arc, Dia, and Comet Chromium profiles', as
   assert.equal(comet?.name, 'Comet')
   assert.equal(comet?.historyPath, cometHistoryPath)
   assert.equal(resolveCanonicalBrowser(comet?.bundleId).canonicalBrowserId, 'comet')
+})
+
+test('browser diagnostics always expose a discoveredBrowsers array', async () => {
+  const homeDir = tempHomeDir()
+  const local = path.join(homeDir, 'AppData', 'Local')
+  const arcHistoryPath = path.join(local, 'The Browser Company', 'Arc', 'User Data', 'Default', 'History')
+
+  touch(arcHistoryPath)
+
+  await withWindowsHome(homeDir, () => {
+    const status = getBrowserStatus()
+    assert.ok(Array.isArray(status.discoveredBrowsers))
+    const arc = status.discoveredBrowsers.find((entry) => entry.bundleId === 'arc.exe')
+    assert.equal(arc?.historyPath, arcHistoryPath)
+    assert.equal(arc?.historyExists, true)
+  })
 })

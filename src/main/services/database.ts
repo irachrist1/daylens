@@ -5,6 +5,7 @@ import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { capture, captureException } from './analytics'
 import { SCHEMA_SQL } from '../db/schema'
 import { runMigrations } from '../db/migrations'
+import { ensureAIThreadSchema } from '../db/aiThreadSchema'
 import { repairStoredAppIdentityObservations } from '../core/inference/appIdentityRegistry'
 import { repairStoredIdentityColumns, syncDerivedStateMetadata } from '../core/projections/metadata'
 
@@ -34,6 +35,11 @@ export function initDb(): void {
     stage = 'migrations'
     // Run versioned migrations (adds daily_summaries, etc.)
     runMigrations()
+
+    stage = 'schema_repair'
+    // Repair additive schema drift that older local DBs may still carry even
+    // when their recorded migration version says they are up to date.
+    ensureAIThreadSchema(_db)
 
     stage = 'metadata_sync'
     // Synchronize versioned derived-state metadata and repair older local DBs

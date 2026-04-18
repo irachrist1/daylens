@@ -9,6 +9,9 @@ import type {
   AIChatTurnResult,
   AISurfaceSummary,
   AIThreadMessage,
+  AIThreadSummary,
+  AIArtifactRecord,
+  AIArtifactContent,
   AIDaySummaryResult,
   AIProvider,
   AppDetailPayload,
@@ -82,9 +85,30 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart }),
     getAppNarrative: (canonicalAppId: string, days?: number): Promise<AISurfaceSummary | null> =>
       ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days }),
-    getHistory: (): Promise<AIThreadMessage[]> => ipcRenderer.invoke(IPC.AI.GET_HISTORY),
+    getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
+      ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
     detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
+    listThreads: (payload?: { includeArchived?: boolean }): Promise<AIThreadSummary[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_THREADS, payload),
+    getThread: (threadId: number): Promise<{ thread: AIThreadSummary | null; messages: AIThreadMessage[] }> =>
+      ipcRenderer.invoke(IPC.AI.GET_THREAD, { threadId }),
+    createThread: (title?: string | null): Promise<AIThreadSummary> =>
+      ipcRenderer.invoke(IPC.AI.CREATE_THREAD, { title }),
+    archiveThread: (threadId: number, archived: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.ARCHIVE_THREAD, { threadId, archived }),
+    renameThread: (threadId: number, title: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.RENAME_THREAD, { threadId, title }),
+    deleteThread: (threadId: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.DELETE_THREAD, { threadId }),
+    listArtifacts: (threadId: number): Promise<AIArtifactRecord[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_ARTIFACTS, { threadId }),
+    getArtifact: (artifactId: number): Promise<AIArtifactContent | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_ARTIFACT, { artifactId }),
+    openArtifact: (artifactId: number): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
+    exportArtifact: (artifactId: number): Promise<{ ok: boolean; path?: string; error?: string; canceled?: boolean }> =>
+      ipcRenderer.invoke(IPC.AI.EXPORT_ARTIFACT, { artifactId }),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),

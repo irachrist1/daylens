@@ -39,6 +39,14 @@ export interface AppUsageSummary {
 
 export type BlockConfidence = 'high' | 'medium' | 'low'
 
+export interface FocusScoreBreakdown {
+  coherence: number          // [0,1] — weighted mean block duration vs 45 min target
+  deepWork: number           // [0,1] — seconds in ≥25 min blocks / total active seconds
+  artifactProgress: number   // [0,1] — log2(1 + unique_artifacts) / log2(1 + 16)
+  switchPenalty: number      // [0,1] — min(1, switches_per_hour / 20); higher is worse
+  score: number              // [0,100] — final composite focus score
+}
+
 export interface WorkContextAppSummary {
   bundleId: string
   appName: string
@@ -350,6 +358,47 @@ export interface AIChatSendRequest {
   message: string
   contextOverride?: AIConversationState | null
   clientRequestId?: string | null
+  threadId?: number | null
+}
+
+// ─── Threads & artifacts (AI surface) ────────────────────────────────────────
+export interface AIThreadSummary {
+  id: number
+  title: string
+  createdAt: number
+  updatedAt: number
+  lastMessageAt: number
+  archived: boolean
+  messageCount: number
+  lastSnippet?: string | null
+}
+
+export type AIArtifactKind =
+  | 'markdown'
+  | 'csv'
+  | 'html_chart'
+  | 'json_table'
+  | 'focus_session'
+  | 'report'
+
+export interface AIArtifactRecord {
+  id: number
+  threadId: number | null
+  messageId: number | null
+  kind: AIArtifactKind
+  title: string
+  summary: string | null
+  filePath: string | null
+  hasInline: boolean
+  mimeType: string
+  byteSize: number
+  meta: Record<string, unknown>
+  createdAt: number
+}
+
+export interface AIArtifactContent {
+  record: AIArtifactRecord
+  content: string | null
 }
 
 export interface AIMessageFeedbackUpdate {
@@ -989,6 +1038,16 @@ export const IPC = {
     SUGGEST_APP_CATEGORY: 'ai:suggest-app-category',
     DETECT_CLI_TOOLS: 'ai:detect-cli-tools',
     TEST_CLI_TOOL: 'ai:test-cli-tool',
+    LIST_THREADS: 'ai:list-threads',
+    GET_THREAD: 'ai:get-thread',
+    CREATE_THREAD: 'ai:create-thread',
+    ARCHIVE_THREAD: 'ai:archive-thread',
+    RENAME_THREAD: 'ai:rename-thread',
+    DELETE_THREAD: 'ai:delete-thread',
+    LIST_ARTIFACTS: 'ai:list-artifacts',
+    GET_ARTIFACT: 'ai:get-artifact',
+    OPEN_ARTIFACT: 'ai:open-artifact',
+    EXPORT_ARTIFACT: 'ai:export-artifact',
   },
   SETTINGS: {
     GET: 'settings:get',

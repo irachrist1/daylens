@@ -1,5 +1,6 @@
 import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { ensureAIThreadSchema } from './aiThreadSchema'
 
 /**
  * Versioned migration system for Daylens.
@@ -1130,6 +1131,21 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_ai_surface_summaries_job
           ON ai_surface_summaries (job_type, updated_at DESC);
       `)
+    },
+  },
+  {
+    version: 19,
+    description: 'Add ai_threads, ai_artifacts tables and thread_id column on ai_messages (backfilled to per-conversation Imported chat threads)',
+    up: () => {
+      const db = getDb()
+      ensureAIThreadSchema(db)
+    },
+  },
+  {
+    version: 20,
+    description: 'Repair ai thread schema drift on older local databases',
+    up: () => {
+      ensureAIThreadSchema(getDb())
     },
   },
 ]

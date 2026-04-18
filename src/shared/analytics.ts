@@ -31,6 +31,13 @@ export const ANALYTICS_EVENT = {
   AI_JOB_COMPLETED: 'ai_job_completed',
   AI_JOB_FAILED: 'ai_job_failed',
 
+  FOCUS_SESSION_STARTED: 'focus_session_started',
+  FOCUS_SESSION_STOPPED: 'focus_session_stopped',
+  ARTIFACT_CREATED: 'artifact_created',
+  AI_THREAD_CREATED: 'ai_thread_created',
+  AI_THREAD_ARCHIVED: 'ai_thread_archived',
+  AI_THREAD_DELETED: 'ai_thread_deleted',
+
   FEEDBACK_SUBMITTED: 'feedback_submitted',
   SETTINGS_CHANGED: 'settings_changed',
   UPDATE_CHECK_REQUESTED: 'update_check_requested',
@@ -115,6 +122,10 @@ const SAFE_STRING_KEYS = new Set([
   'app_version',
   'export_type',
   'version',
+  'duration_bucket',
+  'artifact_kind',
+  'byte_size_bucket',
+  'thread_action',
 ])
 
 const SAFE_NUMBER_KEYS = new Set([
@@ -129,6 +140,8 @@ const SAFE_NUMBER_KEYS = new Set([
   'score',
   'selected_goal_count',
   'suggestion_count',
+  'duration_sec',
+  'target_minutes',
 ])
 
 const SAFE_BOOLEAN_KEYS = new Set([
@@ -262,6 +275,25 @@ export function blockCountBucket(count: number): string {
   if (count <= 7) return '4_7'
   if (count <= 15) return '8_15'
   return '16_plus'
+}
+
+export function focusDurationBucket(totalSeconds: number): string {
+  if (totalSeconds <= 0) return '0m'
+  if (totalSeconds < 5 * 60) return 'under_5m'
+  if (totalSeconds < 15 * 60) return '5_14m'
+  if (totalSeconds < 25 * 60) return '15_24m'
+  if (totalSeconds < 45 * 60) return '25_44m'
+  if (totalSeconds < 90 * 60) return '45_89m'
+  return '90m_plus'
+}
+
+export function byteSizeBucket(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0'
+  if (bytes < 1024) return 'under_1kb'
+  if (bytes < 10 * 1024) return '1_10kb'
+  if (bytes < 100 * 1024) return '10_100kb'
+  if (bytes < 1024 * 1024) return '100kb_1mb'
+  return 'over_1mb'
 }
 
 export function trackedTimeBucket(totalSeconds: number): string {

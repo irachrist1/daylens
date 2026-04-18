@@ -912,18 +912,21 @@ export function appendConversationMessage(
   options?: {
     metadata?: AIThreadMessageMetadata | null
     createdAt?: number
+    threadId?: number | null
   },
 ): AIThreadMessage {
   const createdAt = options?.createdAt ?? Date.now()
   const metadata = options?.metadata ?? null
+  const threadId = options?.threadId ?? null
   const result = db.prepare(
-    `INSERT INTO ai_messages (conversation_id, role, content, created_at, metadata_json) VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO ai_messages (conversation_id, role, content, created_at, metadata_json, thread_id) VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     conversationId,
     role,
     content,
     createdAt,
     JSON.stringify(metadata ?? {}),
+    threadId,
   )
 
   return {
@@ -956,6 +959,27 @@ export function getConversationMessages(
        ORDER BY created_at ASC, id ASC`
     )
     .all(conversationId)
+    .map((row) => mapAIThreadMessage(row as {
+      id: number
+      role: 'user' | 'assistant'
+      content: string
+      createdAt: number
+      metadataJson: string | null
+    })) as AIThreadMessage[]
+}
+
+export function getThreadMessages(
+  db: Database.Database,
+  threadId: number,
+): AIThreadMessage[] {
+  return db
+    .prepare(
+      `SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+       FROM ai_messages
+       WHERE thread_id = ?
+       ORDER BY created_at ASC, id ASC`
+    )
+    .all(threadId)
     .map((row) => mapAIThreadMessage(row as {
       id: number
       role: 'user' | 'assistant'

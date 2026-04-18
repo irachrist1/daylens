@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { ANALYTICS_EVENT, blockCountBucket, classifyAIOutputIntent, trackedTimeBucket } from '@shared/analytics'
 import type {
+  AIArtifactRecord,
   AIChatTurnResult,
   AIMessageArtifact,
   AIMessageAction,
   AIThreadMessage,
+  AIThreadSummary,
   AppSettings,
   DayTimelinePayload,
   FocusSession,
@@ -173,6 +175,15 @@ function IconRetry() {
   )
 }
 
+function IconSend() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 13 13 3" />
+      <path d="M5.5 3H13v7.5" />
+    </svg>
+  )
+}
+
 function IconActionButton({
   label,
   feedbackLabel,
@@ -318,8 +329,14 @@ export default function Insights() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null } | null>(null)
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
+  const [threads, setThreads] = useState<AIThreadSummary[]>([])
+  const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
+  const [artifacts, setArtifacts] = useState<AIArtifactRecord[]>([])
+  const [artifactPreview, setArtifactPreview] = useState<{ record: AIArtifactRecord; content: string | null } | null>(null)
+  const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingRef = useRef(false)
   const historyHydratedRef = useRef(false)
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
@@ -388,12 +405,45 @@ export default function Insights() {
   }, [messages, loading])
 
   useEffect(() => {
+    const textarea = composerTextareaRef.current
+    if (!textarea) return
+
+    textarea.style.height = '0px'
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 24), 140)
+    textarea.style.height = `${nextHeight}px`
+    textarea.style.overflowY = textarea.scrollHeight > 140 ? 'auto' : 'hidden'
+  }, [input])
+
+  useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
     const sync = () => setReducedMotion(media.matches)
     sync()
     media.addEventListener('change', sync)
     return () => media.removeEventListener('change', sync)
   }, [])
+
+  // Hydrate thread list on mount and whenever a response completes so recent
+  // thread titles/timestamps reflect live activity.
+  useEffect(() => {
+    let cancelled = false
+    ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
+      if (!cancelled) setThreads(rows)
+    }).catch(() => { /* best-effort */ })
+    return () => { cancelled = true }
+  }, [messages.length])
+
+  // Load artifacts for the currently active thread.
+  useEffect(() => {
+    if (activeThreadId == null) {
+      setArtifacts([])
+      return
+    }
+    let cancelled = false
+    ipc.ai.listArtifacts(activeThreadId).then((rows) => {
+      if (!cancelled) setArtifacts(rows)
+    }).catch(() => { /* best-effort */ })
+    return () => { cancelled = true }
+  }, [activeThreadId, messages.length])
 
   useEffect(() => {
     return ipc.ai.onStream((event) => {
@@ -551,7 +601,19 @@ export default function Insights() {
         message: prompt,
         contextOverride: options?.contextOverride ?? null,
         clientRequestId: requestId,
+        threadId: activeThreadId,
       }) as AIChatTurnResult
+      if (activeThreadId == null) {
+        // sendMessage silently auto-creates a thread server-side when none is
+        // passed; refresh the list and adopt the newest row as the current
+        // thread so follow-up turns stay linked.
+        try {
+          const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+          setThreads(refreshed)
+          const newest = refreshed[0]
+          if (newest) setActiveThreadId(newest.id)
+        } catch { /* best-effort */ }
+      }
       setMessages((current) => current.map((message) => {
         if (message.id !== assistantId) return message
         return { ...response.assistantMessage, state: 'complete' }
@@ -794,16 +856,44 @@ export default function Insights() {
                 {todayLabel}
               </p>
             </div>
-            {messages.length > 0 && (
+            <div style={{ position: 'relative', display: 'flex', gap: 8 }}>
+              {threads.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setThreadPickerOpen((value) => !value)}
+                  style={{
+                    padding: '7px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--color-border-ghost)',
+                    background: 'var(--color-surface)',
+                    color: 'var(--color-text-secondary)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                  aria-haspopup="listbox"
+                  aria-expanded={threadPickerOpen}
+                >
+                  {activeThreadId
+                    ? (threads.find((t) => t.id === activeThreadId)?.title ?? 'Thread')
+                    : 'Recent chats'}
+                </button>
+              )}
               <button
-                onClick={() => void ipc.ai.clearHistory().then(() => {
+                type="button"
+                onClick={async () => {
+                  const thread = await ipc.ai.createThread(null)
+                  setActiveThreadId(thread.id)
+                  setThreads((prev) => [thread, ...prev.filter((t) => t.id !== thread.id)])
                   setMessages([])
+                  setArtifacts([])
+                  setArtifactPreview(null)
                   setActionFeedback({})
                   setMessageActionState({})
                   setFocusReviewDrafts({})
                   suggestionImpressionsRef.current = {}
                   historyHydratedRef.current = true
-                })}
+                }}
                 style={{
                   padding: '7px 12px',
                   borderRadius: 8,
@@ -817,7 +907,62 @@ export default function Insights() {
               >
                 New chat
               </button>
-            )}
+              {threadPickerOpen && threads.length > 0 && (
+                <div
+                  role="listbox"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    zIndex: 20,
+                    width: 280,
+                    maxHeight: 360,
+                    overflowY: 'auto',
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-border-ghost)',
+                    borderRadius: 10,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                    padding: 6,
+                  }}
+                >
+                  {threads.map((thread) => (
+                    <button
+                      type="button"
+                      key={thread.id}
+                      role="option"
+                      aria-selected={thread.id === activeThreadId}
+                      onClick={async () => {
+                        setThreadPickerOpen(false)
+                        setActiveThreadId(thread.id)
+                        setArtifactPreview(null)
+                        try {
+                          const detail = await ipc.ai.getThread(thread.id)
+                          setMessages(threadMessagesFromHistory(detail.messages))
+                          historyHydratedRef.current = true
+                        } catch { /* best-effort */ }
+                      }}
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        border: 'none',
+                        background: thread.id === activeThreadId ? 'var(--color-surface-muted)' : 'transparent',
+                        color: 'var(--color-text-primary)',
+                        fontSize: 12.5,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.title}</div>
+                      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                        {thread.messageCount} msg{thread.messageCount === 1 ? '' : 's'}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {!hasApiKey && (
@@ -1293,66 +1438,177 @@ export default function Insights() {
         </div>
       </div>
 
-      {hasApiKey && (
+      {artifacts.length > 0 && (
         <div style={{
           borderTop: '1px solid var(--color-border-ghost)',
           background: 'var(--color-bg)',
-          padding: '12px 40px 14px',
+          padding: '10px 40px',
+        }}>
+          <div style={{ maxWidth: 960, margin: '0 auto' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+              Artifacts
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {artifacts.map((artifact) => (
+                <div
+                  key={artifact.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: '1px solid var(--color-border-ghost)',
+                    background: 'var(--color-surface)',
+                    minWidth: 160,
+                    maxWidth: 280,
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {artifact.title}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
+                    {artifact.kind.replace('_', ' ')} · {Math.max(1, Math.round(artifact.byteSize / 1024))} KB
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const loaded = await ipc.ai.getArtifact(artifact.id)
+                        if (loaded) setArtifactPreview({ record: loaded.record, content: loaded.content })
+                      }}
+                      style={{
+                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
+                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
+                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
+                      }}
+                    >Preview</button>
+                    <button
+                      type="button"
+                      onClick={() => void ipc.ai.openArtifact(artifact.id)}
+                      style={{
+                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
+                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
+                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
+                      }}
+                    >Open</button>
+                    <button
+                      type="button"
+                      onClick={() => void ipc.ai.exportArtifact(artifact.id)}
+                      style={{
+                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
+                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
+                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
+                      }}
+                    >Export</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {artifactPreview && (
+              <div style={{
+                marginTop: 10,
+                border: '1px solid var(--color-border-ghost)',
+                borderRadius: 10,
+                background: 'var(--color-surface)',
+                padding: 12,
+                maxHeight: 320,
+                overflow: 'auto',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{artifactPreview.record.title}</div>
+                  <button
+                    type="button"
+                    onClick={() => setArtifactPreview(null)}
+                    style={{ fontSize: 11, fontWeight: 700, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}
+                  >Close</button>
+                </div>
+                {artifactPreview.record.kind === 'html_chart' ? (
+                  <iframe
+                    title={artifactPreview.record.title}
+                    srcDoc={artifactPreview.content ?? ''}
+                    sandbox=""
+                    style={{ width: '100%', height: 260, border: '1px solid var(--color-border-ghost)', borderRadius: 6, background: 'white' }}
+                  />
+                ) : (
+                  <pre style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-primary)' }}>
+                    {artifactPreview.content ?? '(file not available on disk)'}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {hasApiKey && (
+        <div style={{
+          background: 'transparent',
+          padding: '18px 40px 24px',
         }}>
           <div style={{ maxWidth: 960, margin: '0 auto' }}>
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
-              borderRadius: 12,
+              gap: 10,
+              borderRadius: 18,
               border: '1px solid var(--color-border-ghost)',
               background: 'var(--color-surface)',
-              padding: '0 6px 0 16px',
+              padding: '10px 10px 10px 16px',
+              boxShadow: '0 20px 48px rgba(0, 0, 0, 0.18)',
             }}>
-              <input
-                type="text"
+              <textarea
+                ref={composerTextareaRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') void handleSend()
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void handleSend()
+                  }
                 }}
                 disabled={loading}
+                rows={1}
+                aria-label="Ask Daylens about your work history"
                 placeholder="Ask about your day, or ask for a report, chart, table, or export..."
                 style={{
                   flex: 1,
-                  height: 42,
+                  minHeight: 20,
+                  maxHeight: 140,
                   border: 'none',
                   background: 'transparent',
                   outline: 'none',
                   color: 'var(--color-text-primary)',
-                  fontSize: 13,
+                  fontSize: 13.5,
+                  lineHeight: '20px',
+                  resize: 'none',
+                  padding: '8px 0',
+                  display: 'block',
                 }}
               />
               <button
                 onClick={() => void handleSend()}
                 disabled={loading || !input.trim()}
+                type="button"
+                aria-label="Send message"
                 style={{
-                  height: 30,
-                  padding: '0 14px',
-                  borderRadius: 8,
+                  width: 36,
+                  height: 36,
+                  padding: 0,
+                  borderRadius: 999,
                   border: 'none',
                   cursor: loading || !input.trim() ? 'default' : 'pointer',
                   background: input.trim() && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
                   color: input.trim() && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
-                  fontSize: 12,
-                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
                 }}
               >
-                Send
+                <IconSend />
               </button>
             </div>
-            <p style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', margin: '6px 0 0', lineHeight: 1.5 }}>
-              {isCliProvider
-                ? cliMissing
-                  ? `Selected provider: ${providerMeta.label}, but it is not available yet.`
-                  : `Answers are grounded in local activity and routed through ${providerMeta.label}.`
-                : `Answers are grounded in local activity and routed through ${providerMeta.label}.`}
-            </p>
           </div>
         </div>
       )}

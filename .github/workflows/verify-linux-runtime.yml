@@ -10,14 +10,15 @@ on:
 
 jobs:
   verify-linux-runtime:
+    timeout-minutes: 120
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -54,6 +55,14 @@ jobs:
           test "$(stat -c%s "dist-release/Daylens-${VERSION}.AppImage")" -gt 1000000
           test "$(stat -c%s "dist-release/Daylens-${VERSION}.deb")" -gt 1000000
           test "$(stat -c%s "dist-release/Daylens-${VERSION}.rpm")" -gt 1000000
+
+          dpkg-deb --info "dist-release/Daylens-${VERSION}.deb" | tee "$RUNNER_TEMP/daylens-deb-info.txt"
+          grep -Eq '^ Package:' "$RUNNER_TEMP/daylens-deb-info.txt"
+          grep -Eq "^ Version:[[:space:]]*${VERSION}$" "$RUNNER_TEMP/daylens-deb-info.txt"
+
+          rpm -qip "dist-release/Daylens-${VERSION}.rpm" | tee "$RUNNER_TEMP/daylens-rpm-info.txt"
+          grep -Eq '^Name[[:space:]]*:' "$RUNNER_TEMP/daylens-rpm-info.txt"
+          grep -Eq "^Version[[:space:]]*:[[:space:]]*${VERSION}$" "$RUNNER_TEMP/daylens-rpm-info.txt"
 
       - name: Smoke-test AppImage runtime
         shell: bash
@@ -130,12 +139,21 @@ jobs:
                 --require-package-owner
             '
 
-      - name: Upload smoke reports
+      - name: Upload Linux runtime diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: linux-smoke-reports
+          name: linux-runtime-diagnostics
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
           path: |
+            dist-release/**
             ${{ runner.temp }}/daylens-appimage-smoke.json
             ${{ runner.temp }}/daylens-deb-smoke.json
             ${{ runner.temp }}/daylens-rpm-smoke.json
+            ${{ runner.temp }}/daylens-deb-info.txt
+            ${{ runner.temp }}/daylens-rpm-info.txt
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

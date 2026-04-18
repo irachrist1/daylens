@@ -11,6 +11,8 @@
 - Richer MCP and editor integrations for Claude Code, Cursor, and other AI tools for daylens-electron build
 - Better "what changed?" debugging workflows across repos, docs, and browser activity
 - Scheduled or recurring evidence packs on top of the wired core reports/export flow
+- Richer artifact kinds in the AI surface (drafts, outline threads, pinned summaries) on top of the V1 thread + artifact persistence
+- Automatic titling / summarization for AI threads once multi-turn usage stabilises
 - Stronger meeting and collaboration detection
 
 ## Intelligence

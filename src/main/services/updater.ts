@@ -57,6 +57,18 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
     }
   }
 
+  if (process.platform === 'darwin') {
+    // electron-updater drives macOS updates through latest-mac.yml + ZIP
+    // (and optionally DMG) artifacts. Requires the packaged app to be
+    // signed for Squirrel to swap in the update on relaunch, but the
+    // download + download-progress + downloaded states still flow here.
+    return {
+      supported: true,
+      message: null,
+      packageType: null,
+    }
+  }
+
   if (process.platform === 'linux') {
     const packageDiagnostics = getLinuxPackageDiagnostics()
     const packageType = packageDiagnostics?.packageType ?? null
