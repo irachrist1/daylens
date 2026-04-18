@@ -10,18 +10,22 @@ import {
   WINDOWS_DOWNLOAD_HREF,
 } from "../lib/platformLinks";
 
-const heroPills = [
-  "macOS",
-  "Windows",
-  "Linux",
-  "Local-first",
-  "Evidence-grounded",
-];
-
-const guidingQuestions = [
-  "How much time did I actually spend on Client X this month?",
-  "What did I do between 2 and 4 pm on Wednesday?",
-  "Show me everything I touched for Project X and what changed around it.",
+const storyConversation = [
+  {
+    question: "How much time did I actually spend on Client X this month?",
+    answer: "14h 22m across 7 work sessions. Most of it happened in Dia, Safari, and Codex.",
+    side: "right" as const,
+  },
+  {
+    question: "What did I do between 2 and 4 pm on Wednesday?",
+    answer: "You were in a planning block, then switched into debugging and ticket cleanup.",
+    side: "left" as const,
+  },
+  {
+    question: "Show me everything I touched for Project X and what changed around it.",
+    answer: "I found the related sessions, tabs, files, and follow-up tools. Ready when you are.",
+    side: "right" as const,
+  },
 ];
 
 const workflowSteps = [
@@ -273,6 +277,17 @@ export function LandingClient() {
   useReveal();
   const { rootRef, screenshotRef } = useLandingScroll();
 
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const raf = window.requestAnimationFrame(() => {
+      root.classList.add("dl--ready");
+    });
+
+    return () => window.cancelAnimationFrame(raf);
+  }, [rootRef]);
+
   return (
     <div ref={rootRef} className="dl">
       <div className="dl__sky" aria-hidden="true" />
@@ -282,36 +297,24 @@ export function LandingClient() {
       <main>
         <section className="dl-hero">
           <div className="dl-hero__content">
-            <p className="dl-hero__tag lp-overline--recording rv">
-              <span className="dl-hero__dot lp-recording-dot" aria-hidden="true" />
-              Cross-platform laptop activity tracker
-            </p>
-
-            <h1 className="dl-hero__h1 rv rv--d1">
-              Search your workday like it happened five minutes ago.
+            <h1 className="dl-hero__h1">
+              <span className="dl-hero__line">Search your workday</span>
+              <span className="dl-hero__line">like it happened five minutes ago.</span>
             </h1>
 
-            <p className="dl-hero__sub rv rv--d2">
+            <p className="dl-hero__sub">
               Daylens quietly logs apps, windows, browser activity, files, and reconstructed work
               sessions so you and your AI tools can ask grounded questions about what actually
               happened. Local-first, evidence-grounded, and built as one product for macOS,
               Windows, and Linux.
             </p>
 
-            <p className="dl-hero__meta rv rv--d3">
+            <p className="dl-hero__meta">
               Google for your workday history. Spotify Wrapped for how you actually spend your
               time.
             </p>
 
-            <div className="dl-hero__pills rv rv--d3" aria-label="Product highlights">
-              {heroPills.map((pill) => (
-                <span key={pill} className="dl-chip">
-                  {pill}
-                </span>
-              ))}
-            </div>
-
-            <div className="dl-hero__cta rv rv--d4">
+            <div className="dl-hero__cta">
               <DownloadLink
                 href={MAC_DOWNLOAD_HREF}
                 label="Download for Mac"
@@ -338,7 +341,7 @@ export function LandingClient() {
               </DownloadLink>
             </div>
 
-            <div className="dl-links dl-links--hero rv rv--d4">
+            <div className="dl-links dl-links--hero">
               <a href="#how-it-works" className="dl-link">
                 How it works <ArrowIcon />
               </a>
@@ -351,12 +354,12 @@ export function LandingClient() {
             </div>
           </div>
 
-          <div className="dl-screenshot rv rv--d4" ref={screenshotRef}>
+          <div className="dl-screenshot" ref={screenshotRef}>
             <div className="dl-screenshot__glow" aria-hidden="true" />
             <div className="dl-screenshot__frame">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/daylens/screenshots/screenshot-timeline.png"
+                src="/daylens/screenshots/screenshot-hero-timeline-dark.png"
                 alt="Daylens timeline showing reconstructed work sessions and supporting evidence"
                 className="dl-screenshot__img"
                 width={1200}
@@ -371,7 +374,6 @@ export function LandingClient() {
         <section className="dl-section dl-section--light" id="story">
           <div className="dl-shell dl-story">
             <div className="dl-prose dl-prose--left">
-              <p className="dl-label rv">Why Daylens</p>
               <h2 className="dl-heading rv rv--d1">
                 Work sessions first.
                 <br />
@@ -384,13 +386,30 @@ export function LandingClient() {
               </p>
             </div>
 
-            <div className="dl-question-grid">
-              {guidingQuestions.map((question, index) => (
-                <article key={question} className={`dl-question rv rv--d${index + 1}`}>
-                  <span className="dl-question__kicker">Question {index + 1}</span>
-                  <p className="dl-question__body">{question}</p>
-                </article>
-              ))}
+            <div className="dl-chat rv rv--d2" aria-label="Example Daylens conversation">
+              <div className="dl-chat__phone">
+                <div className="dl-chat__topbar">
+                  <span className="dl-chat__camera" aria-hidden="true" />
+                  <span className="dl-chat__contact">Daylens</span>
+                  <span className="dl-chat__status">Now</span>
+                </div>
+
+                <div className="dl-chat__screen">
+                  <p className="dl-chat__intro">Ask your work history what actually happened.</p>
+
+                  {storyConversation.map((item, index) => (
+                    <div key={item.question} className={`dl-chat__row dl-chat__row--${item.side} rv rv--d${index + 1}`}>
+                      <div className="dl-chat__bubble dl-chat__bubble--question">{item.question}</div>
+                      <div className="dl-chat__bubble dl-chat__bubble--answer">{item.answer}</div>
+                    </div>
+                  ))}
+
+                  <div className="dl-chat__composer">
+                    <span className="dl-chat__composer-dot" aria-hidden="true" />
+                    <span className="dl-chat__composer-text">Ask about a client, project, repo, or block...</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -398,12 +417,10 @@ export function LandingClient() {
         <section className="dl-section dl-section--mist" id="how-it-works">
           <div className="dl-shell">
             <div className="dl-section-head dl-section-head--center">
-              <p className="dl-label rv">How it works</p>
               <h2 className="dl-heading rv rv--d1">A timeline that stays grounded in evidence.</h2>
               <p className="dl-body rv rv--d2">
-                The local database on your laptop is the source of truth. Daylens captures desktop
-                evidence quietly, reconstructs coherent work blocks, and then lets you inspect or
-                query them without pretending AI is the product.
+                Daylens captures local evidence, reconstructs work sessions, and gives you a
+                timeline you can inspect or query later.
               </p>
             </div>
 
@@ -431,10 +448,6 @@ export function LandingClient() {
               <h2 className="dl-heading rv rv--d1">
                 Built for desktop work, companion access, and grounded recall.
               </h2>
-              <p className="dl-body rv rv--d2">
-                The current product story is simple: track locally, reconstruct clearly, and make
-                that history useful to you and your tools later.
-              </p>
             </div>
 
             <div className="dl-features dl-features--wide">
@@ -476,27 +489,13 @@ export function LandingClient() {
           </div>
         </section>
 
-        <section className="dl-section dl-section--privacy" id="privacy">
-          <div className="dl-shell">
-            <div className="dl-section-head">
-              <p className="dl-label rv">Privacy</p>
-              <h2 className="dl-heading rv rv--d1">Local-first by default.</h2>
-              <p className="dl-body rv rv--d2">
-                Raw capture belongs on your machine, and the same evidence should stay useful even
-                if you never turn on AI. Privacy is not a settings afterthought. It is part of the
-                product contract.
-              </p>
-            </div>
-
-            <div className="dl-privacy-grid">
-              {privacyCards.map((card, index) => (
-                <article key={card.title} className={`dl-privacy-card rv rv--d${index + 1}`}>
-                  <h3 className="dl-privacy-card__title">{card.title}</h3>
-                  <p className="dl-privacy-card__body">{card.body}</p>
-                </article>
-              ))}
-            </div>
-          </div>
+        <section className="dl-seo-copy" id="privacy" aria-label="Privacy details">
+          {privacyCards.map((card) => (
+            <article key={card.title}>
+              <h3>{card.title}</h3>
+              <p>{card.body}</p>
+            </article>
+          ))}
         </section>
 
         <section className="dl-section dl-section--faq" id="faq">
