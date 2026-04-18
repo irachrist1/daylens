@@ -455,6 +455,8 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
     <div style={{
       position: 'sticky',
       top: 24,
+      maxHeight: 'calc(100vh - 140px)',
+      overflowY: 'auto',
       borderRadius: 18,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',
@@ -568,6 +570,8 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
     <div data-timeline-inspector="true" style={{
       position: 'sticky',
       top: 24,
+      maxHeight: 'calc(100vh - 140px)',
+      overflowY: 'auto',
       borderRadius: 18,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',
@@ -603,20 +607,22 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
         </p>
       )}
 
-      <div style={{ marginBottom: 20, padding: '14px 16px', borderRadius: 14, background: 'var(--color-surface-low)', border: '1px solid var(--color-border-ghost)' }}>
-        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-          Label Override
-        </div>
-        <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
+        <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
+          Block label
+        </label>
+        <div style={{ display: 'flex', gap: 8 }}>
           <input
+            id="timeline-block-label-override"
             type="text"
             value={overrideDraft}
             onChange={(event) => setOverrideDraft(event.target.value)}
             placeholder={block.label.current}
             style={{
-              width: '100%',
-              height: 36,
-              borderRadius: 10,
+              flex: 1,
+              minWidth: 0,
+              height: 34,
+              borderRadius: 9,
               border: '1px solid var(--color-border-ghost)',
               background: 'var(--color-surface-high)',
               color: 'var(--color-text-primary)',
@@ -625,62 +631,59 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
               outline: 'none',
             }}
           />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button
+            type="button"
+            disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+            onClick={() => {
+              const label = overrideDraft.trim()
+              if (!label) return
+              setOverrideSaving(true)
+              void ipc.db.setBlockLabelOverride({
+                blockId: block.id,
+                label,
+                narrative: block.label.narrative,
+              }).finally(() => setOverrideSaving(false))
+            }}
+            style={{
+              height: 34,
+              padding: '0 14px',
+              borderRadius: 9,
+              border: 'none',
+              background: 'var(--gradient-primary)',
+              color: 'var(--color-primary-contrast)',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: overrideSaving ? 'default' : 'pointer',
+              opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
+            }}
+          >
+            {overrideSaving ? 'Saving…' : 'Save'}
+          </button>
+          {hasOverride && (
             <button
               type="button"
-              disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+              disabled={overrideSaving}
               onClick={() => {
-                const label = overrideDraft.trim()
-                if (!label) return
                 setOverrideSaving(true)
-                void ipc.db.setBlockLabelOverride({
-                  blockId: block.id,
-                  label,
-                  narrative: block.label.narrative,
-                }).finally(() => setOverrideSaving(false))
+                void ipc.db.clearBlockLabelOverride(block.id)
+                  .finally(() => setOverrideSaving(false))
               }}
               style={{
-                padding: '8px 12px',
-                borderRadius: 8,
-                border: 'none',
-                background: 'var(--gradient-primary)',
-                color: 'var(--color-primary-contrast)',
+                height: 34,
+                padding: '0 12px',
+                borderRadius: 9,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-secondary)',
                 fontSize: 12,
                 fontWeight: 700,
                 cursor: overrideSaving ? 'default' : 'pointer',
-                opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
+                opacity: overrideSaving ? 0.6 : 1,
               }}
             >
-              {overrideSaving ? 'Saving…' : 'Save label'}
+              Reset
             </button>
-            {hasOverride && (
-              <button
-                type="button"
-                disabled={overrideSaving}
-                onClick={() => {
-                  setOverrideSaving(true)
-                  void ipc.db.clearBlockLabelOverride(block.id)
-                    .finally(() => setOverrideSaving(false))
-                }}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-high)',
-                  color: 'var(--color-text-secondary)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: overrideSaving ? 'default' : 'pointer',
-                  opacity: overrideSaving ? 0.6 : 1,
-                }}
-              >
-                Use auto label
-              </button>
-            )}
-          </div>
-          <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
-            Rename the block when the suggested label misses the actual workstream. This stays local and feeds back into the timeline proof surface.
-          </div>
+          )}
         </div>
       </div>
 

@@ -31,7 +31,9 @@ Current implementation gaps and near-term product backlog live in [docs/ISSUES.m
 - Browser history ingestion for Chromium browsers on both platforms, plus Firefox on Windows
 - Cross-platform icon resolution for apps, sites, files, and artifacts
 - Grounded AI over tracked history, including backend-orchestrated chat streaming, AI-surface focus-session start / stop / review flows, AI-generated report/export artifacts, and week/app summaries implemented pending verification
-- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, and sparse app category overrides implemented pending verification
+- Persistent AI chat threads and artifact library inside the AI surface (thread switcher, artifacts strip with preview / open / export) implemented pending verification
+- Evidence-grounded focus score (coherence + deep-work density + artifact progress + demoted context-switching penalty) implemented pending verification
+- Settings controls for tracking, providers, workspace linking, notifications, privacy, updates, explicit Anthropic / OpenAI model overrides, and sparse app category overrides implemented pending verification
 - Packaged macOS, Windows, and Linux build pipelines upon review
 
 Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md](docs/ISSUES.md), including what was manually validated on macOS versus what still remains implemented pending verification on Windows and Linux.

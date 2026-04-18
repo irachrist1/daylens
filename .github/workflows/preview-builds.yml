@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   build-preview:
+    name: Preview ${{ matrix.platform }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -44,10 +46,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -82,8 +84,24 @@ jobs:
           fi
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload preview diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}-diagnostics
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

@@ -32,6 +32,20 @@ const API_PROVIDERS: Array<{ id: AIProvider; label: string }> = [
   { id: 'google', label: 'Gemini' },
 ]
 
+// Kept in sync with canonical model ids referenced in src/main/services/aiOrchestration.ts.
+// Only exposed when strategy === 'custom'; other strategies route by tier.
+const ANTHROPIC_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'claude-opus-4-7', label: 'claude-opus-4-7' },
+  { value: 'claude-opus-4-6', label: 'claude-opus-4-6' },
+  { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
+  { value: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001' },
+]
+
+const OPENAI_MODEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'gpt-5.4', label: 'gpt-5.4' },
+  { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
+]
+
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
   { value: 'development', label: 'Development' },
   { value: 'communication', label: 'Communication' },
@@ -408,7 +422,7 @@ function UpdatesSection() {
   return (
     <SettingsSection
       title="Updates"
-      description="Check for new builds and install them the next time Daylens restarts."
+      description="Check for new builds. Installs on next restart."
     >
       <div>
         <SettingsRow
@@ -701,27 +715,24 @@ export default function Settings() {
         <h1 style={{ fontSize: 32, lineHeight: 1.05, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)' }}>
           Settings
         </h1>
-        <p style={{ fontSize: 13.5, color: 'var(--color-text-secondary)', margin: '8px 0 0' }}>
-          Real controls only: tracking, AI access, notifications, privacy, updates, and background behavior.
-        </p>
       </div>
 
       <div style={settingsSurfaceStyle}>
         <SettingsSection
           first
           title="Tracking"
-          description="Capture should stay on quietly in the background and survive normal restarts."
+          description="Runs quietly in the background."
         >
           <div>
             <SettingsRow
               first
               title="Automatic tracking"
-              description="Runs in the background while Daylens is open, and keeps tracking even when the main window is closed."
+              description="Keeps tracking while the main window is closed."
               control={<StatusPill label="Active" tone="success" />}
             />
             <SettingsRow
               title="Launch on login"
-              description="Start Daylens automatically so tracking survives restarts and normal daily use."
+              description="Start Daylens on boot so tracking survives restarts."
               control={<Toggle checked={settings.launchOnLogin} onChange={(value) => void persist({ launchOnLogin: value })} />}
             />
             {trackingDiagnostics?.platform === 'linux' && linuxTracking && (
@@ -766,7 +777,7 @@ export default function Settings() {
 
         <SettingsSection
           title="Sync"
-          description="Link this device to a Daylens workspace so exports, browser linking, and editor context can follow the same timeline without turning the product into a cloud-first dashboard."
+          description="Link this device to a Daylens workspace for browser linking and editor context."
         >
           <div>
             <SettingsRow
@@ -775,7 +786,7 @@ export default function Settings() {
               description={
                 syncStatus?.isLinked
                   ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. Last sync: ${formatSyncTimestamp(syncStatus.lastSyncAt)}`
-                  : 'This device is still local-only. Create a workspace when you want cross-device linking and shared context.'
+                  : 'This device is local-only.'
               }
               control={<StatusPill label={syncStatus?.isLinked ? 'Linked' : 'Local only'} tone={syncStatus?.isLinked ? 'success' : 'neutral'} />}
             />
@@ -783,8 +794,8 @@ export default function Settings() {
               title={syncStatus?.isLinked ? 'Workspace actions' : 'Create workspace'}
               description={
                 syncStatus?.isLinked
-                  ? 'Generate a fresh browser link code, reveal the recovery words, or disconnect this device without touching your local history.'
-                  : 'Create an anonymous workspace, get a browser link token, and store the recovery words on this machine.'
+                  ? 'New browser link, reveal recovery words, or disconnect.'
+                  : 'Creates an anonymous workspace and stores recovery words locally.'
               }
               align="start"
               control={
@@ -892,7 +903,7 @@ export default function Settings() {
 
         <SettingsSection
           title="AI"
-          description="Optional provider access for grounded questions, reports, and follow-up work about your history."
+          description="Optional provider access for grounded questions and reports."
         >
           <div style={{ display: 'grid', gap: 18 }}>
             <ConnectAI
@@ -941,8 +952,32 @@ export default function Settings() {
                   <div>
                     <SettingsRow
                       first
+                      title="Anthropic model"
+                      description="Applied when strategy is Custom."
+                      control={
+                        <Select<string>
+                          value={settings.anthropicModel}
+                          width={228}
+                          options={ANTHROPIC_MODEL_OPTIONS}
+                          onChange={(value) => void persist({ anthropicModel: value })}
+                        />
+                      }
+                    />
+                    <SettingsRow
+                      title="OpenAI model"
+                      description="Applied when strategy is Custom."
+                      control={
+                        <Select<string>
+                          value={settings.openaiModel}
+                          width={228}
+                          options={OPENAI_MODEL_OPTIONS}
+                          onChange={(value) => void persist({ openaiModel: value })}
+                        />
+                      }
+                    />
+                    <SettingsRow
                       title="Fallback order"
-                      description="Provider fallback applies when the preferred route is missing, exhausted, or unavailable."
+                      description="Used when the preferred provider is unavailable."
                       control={
                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                           {settings.aiFallbackOrder.map((provider, index) => (
@@ -964,7 +999,7 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Chat provider"
-                      description="Used for the AI view and starter prompts."
+                      description="AI view and starter prompts."
                       control={
                         <Select<AIProviderMode>
                           value={settings.aiChatProvider ?? settings.aiProvider}
@@ -975,7 +1010,7 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Block naming provider"
-                      description="Used for closed-block relabeling and overnight cleanup."
+                      description="Closed-block relabeling and overnight cleanup."
                       control={
                         <Select<AIProviderMode>
                           value={settings.aiBlockNamingProvider ?? settings.aiProvider}
@@ -986,7 +1021,7 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Summary provider"
-                      description="Used for day, week, and app narratives."
+                      description="Day, week, and app narratives."
                       control={
                         <Select<AIProviderMode>
                           value={settings.aiSummaryProvider ?? settings.aiProvider}
@@ -997,7 +1032,7 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Artifact provider"
-                      description="Reserved for report, table, chart, and export generation."
+                      description="Reports, tables, charts, exports."
                       control={
                         <Select<AIProviderMode>
                           value={settings.aiArtifactProvider ?? settings.aiProvider}
@@ -1008,22 +1043,21 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Background enrichment"
-                      description="Runs non-blocking relabel and cleanup jobs without making the timeline depend on AI."
+                      description="Non-blocking relabel and cleanup jobs."
                       control={<Toggle checked={settings.aiBackgroundEnrichment ?? true} onChange={(value) => void persist({ aiBackgroundEnrichment: value })} />}
                     />
                     <SettingsRow
                       title="Active-block preview naming"
-                      description="Keeps provisional live naming opt-in so labels do not visibly thrash while you work."
+                      description="Provisional live labels while you work."
                       control={<Toggle checked={settings.aiActiveBlockPreview ?? false} onChange={(value) => void persist({ aiActiveBlockPreview: value })} />}
                     />
                     <SettingsRow
                       title="Prompt caching"
-                      description="Allows provider-side prompt caching when Daylens is using long stable prefixes or repeated summary jobs."
+                      description="Provider-side caching for repeated prefixes."
                       control={<Toggle checked={settings.aiPromptCachingEnabled ?? true} onChange={(value) => void persist({ aiPromptCachingEnabled: value })} />}
                     />
                     <SettingsRow
-                      title="Spend soft limit"
-                      description="A lightweight guardrail for future usage warnings and cost controls."
+                      title="Spend soft limit (USD)"
                       control={
                         <input
                           type="number"
@@ -1038,12 +1072,12 @@ export default function Settings() {
                     />
                     <SettingsRow
                       title="Redact file paths"
-                      description="Masks local paths before prompts go to cloud providers."
+                      description="Mask local paths in cloud prompts."
                       control={<Toggle checked={settings.aiRedactFilePaths ?? false} onChange={(value) => void persist({ aiRedactFilePaths: value })} />}
                     />
                     <SettingsRow
                       title="Redact email addresses"
-                      description="Masks email-style strings before prompts go to cloud providers."
+                      description="Mask email-style strings in cloud prompts."
                       control={<Toggle checked={settings.aiRedactEmails ?? false} onChange={(value) => void persist({ aiRedactEmails: value })} />}
                     />
                   </div>
@@ -1055,12 +1089,12 @@ export default function Settings() {
 
         <SettingsSection
           title="Labels"
-          description="Keep app categories honest without turning Settings into a taxonomy editor. These overrides only apply to apps Daylens has actually seen."
+          description="Override categories for apps Daylens has seen."
         >
           <div>
             {recentApps.length === 0 ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                Daylens needs a little more tracked history before app category overrides become useful here.
+                Needs a little more tracked history first.
               </div>
             ) : (
               recentApps.map((summary, index) => {
@@ -1072,7 +1106,7 @@ export default function Settings() {
                     key={summary.bundleId}
                     first={index === 0}
                     title={summary.appName}
-                    description={`Seen for ${formatDurationShort(summary.totalSeconds)} over the last 30 days. ${override ? `Override active: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}.` : 'Using the detected category right now.'}`}
+                    description={`${formatDurationShort(summary.totalSeconds)} over 30 days${override ? ` · override: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}` : ''}`}
                     control={
                       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                         <Select<AppCategory>
@@ -1102,28 +1136,27 @@ export default function Settings() {
 
         <SettingsSection
           title="Notifications"
-          description="Keep only the nudges that help you stay on track and close the day well."
+          description="Nudges that help you close the day well."
         >
           <div>
             <SettingsRow
               first
               title="Daily recap"
-              description="Show an end-of-day recap notification using your local summary."
+              description="End-of-day recap from your local summary."
               control={<Toggle checked={settings.dailySummaryEnabled ?? true} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
             />
             <SettingsRow
               title="Morning nudge"
-              description="A small reminder if the day has started and tracking is still quiet."
+              description="Reminder if the day has started and tracking is quiet."
               control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
             />
             <SettingsRow
               title="Distraction alerts"
-              description="Warn when a focus session drifts off course for too long."
+              description="Warn when a focus session drifts."
               control={<Toggle checked={settings.distractionAlertsEnabled ?? false} onChange={(value) => void persist({ distractionAlertsEnabled: value })} />}
             />
             <SettingsRow
-              title="Distraction threshold"
-              description="How long Daylens waits before nudging you during a focus session."
+              title="Distraction threshold (minutes)"
               control={
                 <input
                   type="number"
@@ -1145,14 +1178,14 @@ export default function Settings() {
 
         <SettingsSection
           title="Appearance"
-          description="Keep the window feeling native and calm without turning settings into a theme lab."
+          description="Window theme."
         >
           <div>
             <SettingsRow
               first
               align="start"
               title="Theme"
-              description="Follow the system by default, or pin Daylens to light or dark."
+              description="Follow the system, or pin to light or dark."
               control={
                 <Segmented<AppTheme>
                   value={settings.theme}
@@ -1175,23 +1208,23 @@ export default function Settings() {
 
         <SettingsSection
           title="Privacy"
-          description="Telemetry is optional. Your tracked history stays local unless you explicitly send context to an AI provider, and product telemetry never includes raw titles, paths, URLs, or prompt text."
+          description="History stays local. Telemetry never includes titles, paths, URLs, or prompt text."
         >
           <div>
             <SettingsRow
               first
               title="Analytics"
-              description="Share anonymous product telemetry so crashes and regressions are easier to fix. You can turn it off here at any time."
+              description="Anonymous product telemetry."
               control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
             />
             <SettingsRow
               title="Local data"
-              description="Tracked history stays in your local Daylens database. Export and delete controls should appear here only when the actions are real."
+              description="Tracked history lives in the local Daylens database."
               control={<StatusPill label="Local only" />}
             />
             <SettingsRow
               title="Website icon fallback"
-              description="If a visited site has no local browser favicon or origin icon, allow a domain-only fallback service for better coverage."
+              description="Allow a domain-only fallback when no local favicon exists."
               control={<Toggle checked={settings.allowThirdPartyWebsiteIconFallback ?? true} onChange={(value) => void persist({ allowThirdPartyWebsiteIconFallback: value })} />}
             />
           </div>

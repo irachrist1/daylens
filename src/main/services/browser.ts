@@ -370,6 +370,16 @@ export const browserStatus = {
   browsersPollable: 0,
 }
 
+function getDiscoveredBrowserDiagnostics() {
+  return getBrowserEntries().map((browser) => ({
+    name: browser.name,
+    bundleId: browser.bundleId,
+    type: browser.type,
+    historyPath: browser.historyPath,
+    historyExists: fs.existsSync(browser.historyPath),
+  }))
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function startBrowserTracking(): void {
@@ -393,7 +403,10 @@ export function stopBrowserTracking(): void {
 }
 
 export function getBrowserStatus() {
-  return { ...browserStatus }
+  return {
+    ...browserStatus,
+    discoveredBrowsers: getDiscoveredBrowserDiagnostics(),
+  }
 }
 
 // ─── Chromium poll ─────────────────────────────────────────────────────────────

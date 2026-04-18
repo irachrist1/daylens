@@ -60,10 +60,43 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   role            TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
   content         TEXT    NOT NULL,
   created_at      INTEGER NOT NULL,
-  metadata_json   TEXT    NOT NULL DEFAULT '{}'
+  metadata_json   TEXT    NOT NULL DEFAULT '{}',
+  thread_id       INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+
+-- Thread grouping over ai_messages. Messages reference a thread through the
+-- ai_messages.thread_id column (added via migration on existing databases).
+-- The thread index is created by ensureAIThreadSchema() after legacy databases
+-- have been repaired so startup does not fail before repair can run.
+CREATE TABLE IF NOT EXISTS ai_threads (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  title           TEXT    NOT NULL DEFAULT 'New chat',
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  last_message_at INTEGER NOT NULL,
+  archived        INTEGER NOT NULL DEFAULT 0,
+  metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_ai_threads_updated ON ai_threads (updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ai_artifacts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id       INTEGER REFERENCES ai_threads(id) ON DELETE CASCADE,
+  message_id      INTEGER REFERENCES ai_messages(id) ON DELETE SET NULL,
+  kind            TEXT    NOT NULL,
+  title           TEXT    NOT NULL,
+  summary         TEXT,
+  file_path       TEXT,
+  inline_content  TEXT,
+  mime_type       TEXT    NOT NULL,
+  byte_size       INTEGER NOT NULL DEFAULT 0,
+  meta_json       TEXT    NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_artifacts_thread ON ai_artifacts (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_artifacts_message ON ai_artifacts (message_id);
 
 CREATE TABLE IF NOT EXISTS ai_conversation_state (
   conversation_id INTEGER PRIMARY KEY REFERENCES ai_conversations(id) ON DELETE CASCADE,

@@ -132,6 +132,7 @@ The AI surface must:
 - persist feedback locally and emit product telemetry for later review
 - support charts, tables, artifacts, and reports when requested
 - keep report/export generation inside the AI surface instead of growing a dedicated reports tab unless there is a strong measured reason to change that
+- persist chat threads in `ai_threads` and generated artifacts in `ai_artifacts` (plus files under `userData/artifacts/`), surface them through the in-view thread switcher and artifacts strip, and do not introduce a separate history or artifacts top-level tab
 
 Focus sessions, recap experiences, and report/export workflows should live inside the AI surface or be triggered from it unless there is a strong reason to create a separate entry point. Focus session start / stop / review flows belong here, not in a new top-level route.
 

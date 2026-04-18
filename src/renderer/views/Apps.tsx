@@ -230,7 +230,19 @@ export default function Apps() {
     && detailResource.data.rangeKey === expectedRangeKey
     ? detailResource.data
     : null
-  const narrative = narrativeResource.data ?? null
+  // Only trust the narrative if it was produced for the currently selected
+  // app. Without this guard, switching apps briefly shows a stale narrative
+  // from the previously selected app while the new one loads.
+  // scopeKey format matches `app:${canonicalAppId}:${rangeKey}` produced by
+  // the main-process narrative builder.
+  const expectedNarrativeScopeKey = selectedCanonicalId
+    ? `app:${selectedCanonicalId}:${expectedRangeKey}`
+    : null
+  const narrative = narrativeResource.data
+    && narrativeResource.data.scope === 'app_detail'
+    && narrativeResource.data.scopeKey === expectedNarrativeScopeKey
+    ? narrativeResource.data
+    : null
 
   useEffect(() => {
     if (!detail) return
