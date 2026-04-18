@@ -14,14 +14,14 @@ const PLATFORM_ORDER: SurfaceId[] = ["mac", "windows", "linux", "web"];
 const SURFACE_LABELS: Record<SurfaceId, string> = {
   mac: "macOS",
   windows: "Windows",
-  linux: "Linux",
+  linux: "Linux history",
   web: "Web",
 };
 
 const SURFACE_PANEL_LABELS: Record<SurfaceId, string> = {
   mac: "macOS",
   windows: "Windows",
-  linux: "Linux",
+  linux: "Linux transition",
   web: "Web companion",
 };
 

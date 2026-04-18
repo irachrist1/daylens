@@ -55,14 +55,14 @@ const surfaces = [
   },
   {
     id: "linux",
-    name: "Linux app",
+    name: "Linux transition history",
     repoPath: path.resolve(repoRoot, "..", "daylens-linux"),
     versionSource: () =>
       JSON.parse(
         readFileSync(path.resolve(repoRoot, "..", "daylens-linux", "package.json"), "utf8")
       ).version,
     description:
-      "Electron app focused on Linux tracking fidelity, packaging, updater behavior, and evidence-backed Insights.",
+      "Historical Linux release history preserved from the legacy repo while active cross-platform source-of-truth work moved to daylens-windows.",
     changelogPath: path.resolve(repoRoot, "..", "daylens-linux", "CHANGELOG.md"),
     repoUrl: "https://github.com/irachrist1/daylens-linux",
   },

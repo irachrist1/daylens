@@ -1,4 +1,9 @@
 import Link from "next/link";
+import {
+  LINUX_STATUS_HREF,
+  MAC_DOWNLOAD_HREF,
+  WINDOWS_DOWNLOAD_HREF,
+} from "../lib/platformLinks";
 
 type MarketingNavKey = "home" | "docs" | "roadmap" | "changelog";
 
@@ -83,9 +88,9 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
           <nav className="dl-foot__links" aria-label="Footer">
             <Link href="/docs">Docs</Link>
             <Link href="/link">Connect App</Link>
-            <a href="/daylens/api/download/mac">Mac</a>
-            <a href="/daylens/api/download/windows">Windows</a>
-            <a href="/daylens/api/download/linux">Linux</a>
+            <a href={MAC_DOWNLOAD_HREF}>Mac</a>
+            <a href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
+            <a href={LINUX_STATUS_HREF}>Linux status</a>
             <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer">GitHub</a>
           </nav>
           <p className="dl-foot__copy">
@@ -139,9 +144,9 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
           <div className="lp-footer-col">
             <span className="text-label lp-footer-heading">Access</span>
             <Link href="/recover" className="lp-footer-link">Recover Account</Link>
-            <a href="/daylens/api/download/mac" className="lp-footer-link">Download for Mac</a>
-            <a href="/daylens/api/download/windows" className="lp-footer-link">Download for Windows</a>
-            <a href="/daylens/api/download/linux" className="lp-footer-link">Download for Linux</a>
+            <a href={MAC_DOWNLOAD_HREF} className="lp-footer-link">Download for Mac</a>
+            <a href={WINDOWS_DOWNLOAD_HREF} className="lp-footer-link">Download for Windows</a>
+            <a href={LINUX_STATUS_HREF} className="lp-footer-link">Linux status</a>
             <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer" className="lp-footer-link">GitHub</a>
           </div>
         </div>

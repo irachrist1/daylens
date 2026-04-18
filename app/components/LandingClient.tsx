@@ -4,6 +4,11 @@ import Link from "next/link";
 import posthog from "posthog-js";
 import { type ReactNode, useEffect, useRef } from "react";
 import { MarketingFooter, MarketingInnerNav } from "./MarketingChrome";
+import {
+  LINUX_STATUS_HREF,
+  MAC_DOWNLOAD_HREF,
+  WINDOWS_DOWNLOAD_HREF,
+} from "../lib/platformLinks";
 
 const heroPills = [
   "macOS",
@@ -308,7 +313,7 @@ export function LandingClient() {
 
             <div className="dl-hero__cta rv rv--d4">
               <DownloadLink
-                href="/daylens/api/download/mac"
+                href={MAC_DOWNLOAD_HREF}
                 label="Download for Mac"
                 platform="mac"
                 variant="primary"
@@ -316,7 +321,7 @@ export function LandingClient() {
                 <AppleIcon />
               </DownloadLink>
               <DownloadLink
-                href="/daylens/api/download/windows"
+                href={WINDOWS_DOWNLOAD_HREF}
                 label="Download for Windows"
                 platform="windows"
                 variant="glass"
@@ -324,8 +329,8 @@ export function LandingClient() {
                 <WindowsIcon />
               </DownloadLink>
               <DownloadLink
-                href="/daylens/api/download/linux"
-                label="Download for Linux"
+                href={LINUX_STATUS_HREF}
+                label="Linux Status"
                 platform="linux"
                 variant="glass"
               >
@@ -516,12 +521,12 @@ export function LandingClient() {
           <div className="dl-final__inner rv">
             <h2 className="dl-final__h2">Build your work history once.</h2>
             <p className="dl-final__sub">
-              Install Daylens on macOS, Windows, or Linux and start collecting evidence you can
-              actually query later.
+              Install Daylens on macOS or Windows today, and track Linux rollout through the
+              unified Daylens repo.
             </p>
             <div className="dl-final__cta">
               <DownloadLink
-                href="/daylens/api/download/mac"
+                href={MAC_DOWNLOAD_HREF}
                 label="Download for Mac"
                 platform="mac"
                 variant="white"
@@ -530,7 +535,7 @@ export function LandingClient() {
                 <AppleIcon />
               </DownloadLink>
               <DownloadLink
-                href="/daylens/api/download/windows"
+                href={WINDOWS_DOWNLOAD_HREF}
                 label="Download for Windows"
                 platform="windows"
                 variant="ghost"
@@ -539,8 +544,8 @@ export function LandingClient() {
                 <WindowsIcon />
               </DownloadLink>
               <DownloadLink
-                href="/daylens/api/download/linux"
-                label="Download for Linux"
+                href={LINUX_STATUS_HREF}
+                label="Linux Status"
                 platform="linux"
                 variant="ghost"
                 source="finale"

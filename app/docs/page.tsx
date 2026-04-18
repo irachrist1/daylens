@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { MarketingFooter, MarketingInnerNav } from "../components/MarketingChrome";
 import { MarketingCursor } from "../components/MarketingEffects";
+import { LINUX_STATUS_HREF } from "../lib/platformLinks";
 
 export const metadata = {
   title: "Docs — Daylens",
@@ -70,7 +71,9 @@ export default function DocsPage() {
                       <p className="lp-docs-step-body">
                         Get the macOS or Windows app from{" "}
                         <a href="https://christian-tonny.dev/daylens" className="lp-docs-link">christian-tonny.dev/daylens</a>.
-                        The app is free and open source.
+                        Linux remains part of the unified product direction, and the current rollout
+                        status lives on the{" "}
+                        <a href={LINUX_STATUS_HREF} className="lp-docs-link">Linux status page</a>.
                       </p>
                     </div>
                   </div>
@@ -278,7 +281,7 @@ export default function DocsPage() {
                     },
                     {
                       q: "Does it work on Linux?",
-                      a: "Not currently. macOS and Windows are the supported platforms.",
+                      a: "Linux is part of the unified Daylens direction, but the public installer path is still transitioning into the unified desktop repo and still needs real-machine validation.",
                     },
                     {
                       q: "What browser activity does Daylens track?",

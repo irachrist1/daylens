@@ -7,6 +7,10 @@ import { formatRelativeTime } from "@/app/lib/format";
 import { DisconnectButton } from "./DisconnectButton";
 import { DownloadButton } from "./DownloadButton";
 import { PrivacySection } from "./PrivacySection";
+import {
+  LINUX_STATUS_HREF,
+  WINDOWS_DOWNLOAD_HREF,
+} from "@/app/lib/platformLinks";
 
 export default async function SettingsPage() {
   const session = await getSession();
@@ -67,7 +71,7 @@ export default async function SettingsPage() {
             </p>
           </div>
           <a
-            href="/daylens/api/download/windows"
+            href={WINDOWS_DOWNLOAD_HREF}
             className="rounded-lg border border-outline-variant/20 px-3 py-1.5 text-sm text-primary hover:bg-primary/5 transition-colors"
           >
             Download
@@ -77,14 +81,14 @@ export default async function SettingsPage() {
           <div>
             <p className="text-sm font-medium">Daylens for Linux</p>
             <p className="text-xs text-on-surface-variant">
-              Required for activity tracking — runs on your Linux machine in the background
+              Part of the unified Daylens direction, with installer rollout and validation still in transition
             </p>
           </div>
           <a
-            href="/daylens/api/download/linux"
+            href={LINUX_STATUS_HREF}
             className="rounded-lg border border-outline-variant/20 px-3 py-1.5 text-sm text-primary hover:bg-primary/5 transition-colors"
           >
-            Download
+            Status
           </a>
         </div>
       </section>

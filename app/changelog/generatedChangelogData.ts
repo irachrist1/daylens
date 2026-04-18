@@ -610,8 +610,8 @@ export const generatedChangelogData = {
     },
     {
       "id": "linux",
-      "name": "Linux app",
-      "description": "Electron app focused on Linux tracking fidelity, packaging, updater behavior, and evidence-backed Insights.",
+      "name": "Linux transition history",
+      "description": "Historical Linux release history preserved from the legacy repo while active cross-platform source-of-truth work moved to daylens-windows.",
       "version": "1.0.18",
       "repoPath": "/Users/tonny/Dev-Personal/daylens-linux",
       "latestCommitDateTime": "2026-04-02T13:02:19+02:00",

@@ -1,6 +1,11 @@
 'use client'
 
 import posthog from 'posthog-js'
+import {
+  LINUX_STATUS_HREF,
+  MAC_DOWNLOAD_HREF,
+  WINDOWS_DOWNLOAD_HREF,
+} from '../lib/platformLinks'
 
 export function DownloadButtons() {
   return (
@@ -14,7 +19,7 @@ export function DownloadButtons() {
       }}
     >
       <a
-        href="/daylens/api/download/mac"
+        href={MAC_DOWNLOAD_HREF}
         onClick={() => posthog.capture('download_clicked', { platform: 'mac' })}
         style={{
           display: "inline-flex",
@@ -34,7 +39,7 @@ export function DownloadButtons() {
         Download for Mac
       </a>
       <a
-        href="/daylens/api/download/windows"
+        href={WINDOWS_DOWNLOAD_HREF}
         onClick={() => posthog.capture('download_clicked', { platform: 'windows' })}
         style={{
           display: "inline-flex",
@@ -54,7 +59,7 @@ export function DownloadButtons() {
         Download for Windows
       </a>
       <a
-        href="/daylens/api/download/linux"
+        href={LINUX_STATUS_HREF}
         onClick={() => posthog.capture('download_clicked', { platform: 'linux' })}
         style={{
           display: "inline-flex",
@@ -71,7 +76,7 @@ export function DownloadButtons() {
         }}
       >
         <LinuxIcon />
-        Download for Linux
+        Linux status
       </a>
     </div>
   )

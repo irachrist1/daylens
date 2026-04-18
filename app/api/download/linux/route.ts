@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { LINUX_STATUS_HREF } from "@/app/lib/platformLinks";
 
-const REPO = "irachrist1/daylens-linux";
-const FALLBACK_URL = `https://github.com/${REPO}/releases/latest`;
+const REPO = "irachrist1/daylens-windows";
 
-export async function GET() {
+function fallbackResponse(request: Request) {
+  return NextResponse.redirect(new URL(LINUX_STATUS_HREF, request.url));
+}
+
+export async function GET(request: Request) {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${REPO}/releases/latest`,
@@ -19,20 +23,22 @@ export async function GET() {
     );
 
     if (!res.ok) {
-      return NextResponse.redirect(FALLBACK_URL);
+      return fallbackResponse(request);
     }
 
     const release = await res.json() as {
       assets: Array<{ name: string; browser_download_url: string }>;
     };
 
-    // Find the AppImage installer, fall back to .deb
+    // Prefer Linux installer assets from the unified cross-platform release source.
     const asset =
       release.assets.find((a) => a.name.endsWith(".AppImage")) ??
-      release.assets.find((a) => a.name.endsWith(".deb"));
+      release.assets.find((a) => a.name.endsWith(".deb")) ??
+      release.assets.find((a) => a.name.endsWith(".rpm")) ??
+      release.assets.find((a) => a.name.endsWith(".tar.gz"));
 
     if (!asset) {
-      return NextResponse.redirect(FALLBACK_URL);
+      return fallbackResponse(request);
     }
 
     // Validate the redirect target is actually GitHub/GitHub CDN before redirecting
@@ -44,14 +50,14 @@ export async function GET() {
     try {
       const parsed = new URL(asset.browser_download_url);
       if (!ALLOWED_HOSTS.includes(parsed.hostname)) {
-        return NextResponse.redirect(FALLBACK_URL);
+        return fallbackResponse(request);
       }
     } catch {
-      return NextResponse.redirect(FALLBACK_URL);
+      return fallbackResponse(request);
     }
 
     return NextResponse.redirect(asset.browser_download_url);
   } catch {
-    return NextResponse.redirect(FALLBACK_URL);
+    return fallbackResponse(request);
   }
 }
