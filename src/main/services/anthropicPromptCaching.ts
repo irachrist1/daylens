@@ -24,6 +24,74 @@ export type AnthropicPromptInput = {
   cache_control?: AnthropicCacheControl
 }
 
+function hasCacheControl(block: AnthropicTextBlock | undefined): boolean {
+  return block?.cache_control?.type === 'ephemeral'
+}
+
+function containsCacheControl(content: string | AnthropicTextBlock[]): boolean {
+  return Array.isArray(content) && content.some((block) => hasCacheControl(block))
+}
+
+function assertPromptCachingShape(
+  payload: AnthropicPromptInput,
+  prior: AnthropicConversationMessage[],
+  options?: AITextJobExecutionOptions,
+): void {
+  const cachingEnabled = Boolean(options?.promptCachingEnabled && options.cachePolicy !== 'off')
+  const finalMessage = payload.messages[payload.messages.length - 1]
+
+  if (!cachingEnabled) {
+    if (payload.cache_control) {
+      throw new Error('Anthropic prompt caching shape invalid: top-level cache_control should be absent when caching is disabled.')
+    }
+    if (Array.isArray(payload.system) && payload.system.some((block) => hasCacheControl(block))) {
+      throw new Error('Anthropic prompt caching shape invalid: system blocks should not carry cache_control when caching is disabled.')
+    }
+    if (payload.messages.some((message) => containsCacheControl(message.content))) {
+      throw new Error('Anthropic prompt caching shape invalid: messages should not carry cache_control when caching is disabled.')
+    }
+    return
+  }
+
+  if (options?.cachePolicy === 'stable_prefix') {
+    if (!Array.isArray(payload.system) || payload.system.length !== 1 || !hasCacheControl(payload.system[0])) {
+      throw new Error('Anthropic stable_prefix caching requires an explicit system breakpoint.')
+    }
+    const expectsAutomaticCaching = prior.length > 0
+    if (Boolean(payload.cache_control) !== expectsAutomaticCaching) {
+      throw new Error('Anthropic stable_prefix caching should use top-level automatic caching only for multi-turn requests.')
+    }
+    if (payload.messages.some((message) => containsCacheControl(message.content))) {
+      throw new Error('Anthropic stable_prefix caching should not add message-level cache_control markers.')
+    }
+    if (!finalMessage || finalMessage.role !== 'user' || Array.isArray(finalMessage.content)) {
+      throw new Error('Anthropic stable_prefix caching should leave the newest user turn as plain message content.')
+    }
+    return
+  }
+
+  if (options?.cachePolicy === 'repeated_payload') {
+    if (payload.cache_control) {
+      throw new Error('Anthropic repeated_payload caching should not add top-level automatic caching.')
+    }
+    if (Array.isArray(payload.system)) {
+      throw new Error('Anthropic repeated_payload caching should leave the system prompt unwrapped.')
+    }
+    if (payload.messages.slice(0, -1).some((message) => containsCacheControl(message.content))) {
+      throw new Error('Anthropic repeated_payload caching should keep prior turns unmarked.')
+    }
+    if (
+      !finalMessage
+      || finalMessage.role !== 'user'
+      || !Array.isArray(finalMessage.content)
+      || finalMessage.content.length !== 1
+      || !hasCacheControl(finalMessage.content[0])
+    ) {
+      throw new Error('Anthropic repeated_payload caching should mark only the final user payload.')
+    }
+  }
+}
+
 function cacheControlForOptions(options?: AITextJobExecutionOptions): AnthropicCacheControl | null {
   if (!options?.promptCachingEnabled) return null
   if (options.cachePolicy === 'off') return null
@@ -78,9 +146,12 @@ export function buildAnthropicPromptInput(
     messages.push({ role: 'user', content: userMessage })
   }
 
-  return {
+  const payload: AnthropicPromptInput = {
     cache_control: useAutomaticCacheBreakpoint ? cacheControl ?? undefined : undefined,
     system: systemPromptForOptions(systemPrompt, cacheControl, options),
     messages,
   }
+
+  assertPromptCachingShape(payload, prior, options)
+  return payload
 }
