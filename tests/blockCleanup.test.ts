@@ -245,7 +245,24 @@ test('pending cleanup dates include only unresolved history days', () => {
     VALUES ('block-override', 'Renamed block', NULL, ?)
   `).run(Date.now())
 
-  const pending = listPendingWorkContextCleanupDates(db, '2026-04-13')
+  insertAppSession(db, { year: 2026, month: 4, day: 14, hour: 14 })
+  insertTimelineBlock(db, {
+    id: 'block-strong-ai',
+    date: '2026-04-14',
+    startTime: localMs(2026, 4, 14, 14),
+    endTime: localMs(2026, 4, 14, 15),
+  })
+  upsertWorkContextInsight(db, {
+    startMs: localMs(2026, 4, 14, 14),
+    endMs: localMs(2026, 4, 14, 15),
+    insight: {
+      label: 'Fixing sync uploader retries',
+      narrative: null,
+    },
+    sourceBlockIds: ['block-strong-ai'],
+  })
+
+  const pending = listPendingWorkContextCleanupDates(db, '2026-04-14')
   assert.deepEqual(pending, ['2026-04-09', '2026-04-10', '2026-04-12'])
 
   db.close()
