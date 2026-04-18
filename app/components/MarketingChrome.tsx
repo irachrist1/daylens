@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
+  UNIFIED_DESKTOP_REPO_URL,
   WINDOWS_DOWNLOAD_HREF,
 } from "../lib/platformLinks";
 
@@ -91,7 +92,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
             <a href={MAC_DOWNLOAD_HREF}>Mac</a>
             <a href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
             <a href={LINUX_STATUS_HREF}>Linux status</a>
-            <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href={UNIFIED_DESKTOP_REPO_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
           </nav>
           <p className="dl-foot__copy">
             <span className="lp-footer-year" title="Click me">&copy; 2026</span>{" "}
@@ -134,8 +135,9 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
           </div>
 
           <div className="lp-footer-col">
-            <span className="text-label lp-footer-heading">Companion</span>
-            <Link href="/link" className="lp-footer-link">Connect Desktop App</Link>
+            <span className="text-label lp-footer-heading">Web Access</span>
+            <Link href="/link" className="lp-footer-link">Link Desktop App</Link>
+            <Link href="/recover" className="lp-footer-link">Recover Access</Link>
             <Link href="/dashboard" className="lp-footer-link">Dashboard</Link>
             <Link href="/history" className="lp-footer-link">History</Link>
             <Link href="/chat" className="lp-footer-link">AI Chat</Link>
@@ -143,11 +145,17 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
 
           <div className="lp-footer-col">
             <span className="text-label lp-footer-heading">Access</span>
-            <Link href="/recover" className="lp-footer-link">Recover Account</Link>
             <a href={MAC_DOWNLOAD_HREF} className="lp-footer-link">Download for Mac</a>
             <a href={WINDOWS_DOWNLOAD_HREF} className="lp-footer-link">Download for Windows</a>
             <a href={LINUX_STATUS_HREF} className="lp-footer-link">Linux status</a>
-            <a href="https://github.com/irachrist1/daylens" target="_blank" rel="noopener noreferrer" className="lp-footer-link">GitHub</a>
+            <a
+              href={UNIFIED_DESKTOP_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="lp-footer-link"
+            >
+              GitHub
+            </a>
           </div>
         </div>
 

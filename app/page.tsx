@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     url: "/daylens",
     images: [
       {
-        url: "/daylens/screenshots/screenshot-timeline.png",
+        url: "/daylens/screenshots/screenshot-hero-timeline-dark.png",
         width: 1200,
         height: 800,
         alt: "Daylens timeline showing reconstructed work sessions and evidence",
@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     title: "Daylens — Searchable work history for your laptop",
     description:
       "Local-first work history for macOS, Windows, and Linux, built for grounded questions and editor-ready context.",
-    images: ["/daylens/screenshots/screenshot-timeline.png"],
+    images: ["/daylens/screenshots/screenshot-hero-timeline-dark.png"],
   },
 };
 

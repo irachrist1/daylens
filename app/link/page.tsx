@@ -256,7 +256,7 @@ function LinkPageContent() {
                     className="lp-input lp-input--mono"
                     autoFocus
                   />
-                  <p className="lp-hint-text">Found in Settings → Web Companion on your desktop</p>
+                  <p className="lp-hint-text">Found in Settings → Create workspace / Workspace actions on your desktop</p>
                 </div>
 
                 <button
@@ -312,12 +312,12 @@ function LinkPageContent() {
                 {
                   n: "01",
                   title: "Open Daylens on your computer",
-                  desc: "Go to Settings → Web Companion.",
+                  desc: "Go to Settings and find the workspace section.",
                 },
                 {
                   n: "02",
-                  title: 'Click "Connect to Web"',
-                  desc: "A QR code and link token will appear on screen.",
+                  title: 'Create a workspace, then "Create browser link"',
+                  desc: "Daylens will generate a QR code and link token for browser access.",
                 },
                 {
                   n: "03",
@@ -336,7 +336,7 @@ function LinkPageContent() {
             </div>
 
             <p style={{ fontSize: "0.75rem", fontWeight: 300, color: "rgba(252,249,248,0.2)", lineHeight: 1.65, marginTop: "2.5rem" }}>
-              Your data stays on your device. The web companion syncs only what you explicitly share.
+              Your data stays on your device. Browser access follows the workspace you explicitly create and link.
             </p>
 
           </div>

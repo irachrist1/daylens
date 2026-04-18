@@ -8,8 +8,7 @@ type RoadmapStatus =
   | "Backlog"
   | "Next up"
   | "In progress"
-  | "Ready to ship"
-  | "Done";
+  | "Implemented pending verification";
 
 type RoadmapSurface = "Cross-platform" | "Windows" | "macOS" | "Linux" | "Web companion";
 
@@ -31,8 +30,7 @@ const ROADMAP_ORDER: RoadmapStatus[] = [
   "Backlog",
   "Next up",
   "In progress",
-  "Ready to ship",
-  "Done",
+  "Implemented pending verification",
 ];
 
 const SURFACE_FILTERS: RoadmapSurface[] = [
@@ -45,440 +43,288 @@ const SURFACE_FILTERS: RoadmapSurface[] = [
 
 const ROADMAP_ITEMS: RoadmapItem[] = [
   {
-    title: "App and website blocking during focus",
-    status: "Backlog",
+    title: "Tracking and persistence hardening",
+    status: "In progress",
     summary:
-      "Let users choose which apps and sites to block when a focus session starts, using the system-level Screen Time API for hard enforcement.",
+      "Keep raw capture, activity segments, work sessions, and timeline reconstruction stable enough that relaunches still show real history instead of a fresh slate.",
     whyItMatters:
-      "Distraction detection is only half the story. The product should be able to help users actually stay on task, not just report that they did not.",
+      "If tracking or persistence breaks, the rest of the product becomes presentation over missing evidence.",
     currentFocus: [
-      "Apply for FamilyControls entitlement from Apple.",
-      "Build a blocking picker using FamilyActivityPicker.",
-      "Block on session start, unblock automatically on end.",
+      "Keep the database as the source of truth rather than renderer state.",
+      "Protect history reconstruction across restart, sleep, wake, and idle edges.",
+      "Tighten the proof surface before polishing secondary UI.",
     ],
-    tags: ["Focus", "Blocking", "Screen Time"],
+    tags: ["Tracking", "Persistence", "Timeline"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Active launch-closure pass",
+    owner: "Christian",
+  },
+  {
+    title: "Timeline cleanup and relabel safety",
+    status: "Implemented pending verification",
+    summary:
+      "Background cleanup now targets unresolved history days, unresolved unpersisted dates, and weak legacy AI labels instead of reopening already-good labels indiscriminately.",
+    whyItMatters:
+      "The timeline should improve weak history over time without creating label churn or pretending that every old block needs to be rewritten.",
+    currentFocus: [
+      "Keep cleanup bounded to unresolved dates and legacy weak labels.",
+      "Protect user overrides and already-good deterministic labels.",
+      "Document the exact cleanup scope honestly.",
+    ],
+    tags: ["Timeline", "Cleanup", "Labels"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Implemented pending verification",
+    owner: "Christian",
+  },
+  {
+    title: "Grounded AI prompts and provider caching",
+    status: "Implemented pending verification",
+    summary:
+      "Starter prompts, freeform AI queries, and Anthropic prompt-caching request shaping are implemented with deterministic guardrails and clearer truthfulness around what has and has not been provider-validated.",
+    whyItMatters:
+      "Request-shape tests are useful, but they are not the same thing as live cache-read and cache-write proof. Launch docs need that distinction to stay explicit.",
+    currentFocus: [
+      "Preserve cache-control request-shape guardrails.",
+      "Keep tests focused on payload shape instead of pretending to prove provider behavior.",
+      "Validate live provider behavior only when it can be exercised honestly.",
+    ],
+    tags: ["AI", "Anthropic", "Truthfulness"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Implemented pending verification",
+    owner: "Christian",
+  },
+  {
+    title: "Focus sessions inside AI",
+    status: "Implemented pending verification",
+    summary:
+      "Focus start, stop, and review flows stay inside the AI surface instead of becoming a separate top-level product area.",
+    whyItMatters:
+      "Daylens works best when timers, grounded review, and work history all live in one evidence-backed flow.",
+    currentFocus: [
+      "Keep focus actions reachable from AI messages and prompts.",
+      "Preserve review context after a session ends.",
+      "Validate the full interaction loop in the live app.",
+    ],
+    tags: ["Focus", "AI", "Product shape"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Implemented pending verification",
+    owner: "Christian",
+  },
+  {
+    title: "Reports and export artifacts from AI",
+    status: "Implemented pending verification",
+    summary:
+      "Report creation and artifact export stay within the AI surface so exports are grounded in tracked evidence instead of split into a separate reporting tab.",
+    whyItMatters:
+      "The product goal is to answer what happened and produce useful outputs from that evidence, not to grow disconnected report surfaces.",
+    currentFocus: [
+      "Keep report requests routed through AI orchestration.",
+      "Verify exported artifacts land on disk and can be opened.",
+      "Document any remaining validation gaps honestly.",
+    ],
+    tags: ["Reports", "Exports", "AI"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Implemented pending verification",
+    owner: "Christian",
+  },
+  {
+    title: "macOS launch proof pass",
+    status: "In progress",
+    summary:
+      "Use live macOS validation to confirm the desktop app launches, the core navigation is correct, the timeline reconstructs real history, and the main product surfaces behave credibly.",
+    whyItMatters:
+      "Packaging audits are not enough. The product still needs a real interaction pass on the platform that currently sets the quality bar.",
+    currentFocus: [
+      "Verify the live desktop build uses Timeline, Apps, AI, and Settings as the top-level navigation.",
+      "Confirm persisted prior-day history appears in the Timeline.",
+      "Exercise the highest-value flows that can be tested honestly from the current machine.",
+    ],
+    tags: ["macOS", "Validation", "Launch"],
     surface: "macOS",
-    deliverables: 4,
-    board: "Focus surfaces",
-    updated: "Pending Apple entitlement approval",
-    owner: "Christian",
-  },
-  {
-    title: "Two-stage AI observation pipeline",
-    status: "In progress",
-    summary:
-      "Separate the AI pipeline into a cheap observation pass per 15-minute window and a richer editorial synthesis pass that produces the final timeline cards.",
-    whyItMatters:
-      "The current single-shot approach asks the model to parse raw events and make editorial decisions at the same time. Splitting these two tasks produces dramatically more specific labels and better merge and split decisions.",
-    currentFocus: [
-      "Stage 1 observation windows now exist as a separate prompt path.",
-      "Stage 2 synthesis is being validated as strict JSON with retry feedback.",
-      "Keep stable prompt instructions cacheable while volatile activity payloads stay separate.",
-    ],
-    tags: ["AI", "Pipeline", "Quality"],
-    surface: "Cross-platform",
-    deliverables: 6,
-    board: "Understanding",
-    updated: "Active macOS implementation",
-    owner: "Christian",
-  },
-  {
-    title: "Focus session redesign with intent and ring timer",
-    status: "In progress",
-    summary:
-      "Give the focus tab a stronger start: a prominent intent field, a full-screen ring timer during sessions, and a short reflection card when the session ends.",
-    whyItMatters:
-      "A session with a clear stated purpose is fundamentally different from one that just started. The ring timer makes the session feel real and present rather than a background count.",
-    currentFocus: [
-      "Intent-first session setup is now wired into the current macOS focus flow.",
-      "A full-screen ring timer and break suggestions are implemented in the new focus surface.",
-      "Post-session reflection is being polished before it is treated as shipped.",
-    ],
-    tags: ["Focus", "UI", "Sessions"],
-    surface: "Cross-platform",
-    deliverables: 5,
-    board: "Focus surfaces",
-    updated: "Active macOS implementation",
-    owner: "Christian",
-  },
-  {
-    title: "Distraction detection and interruption",
-    status: "Ready to ship",
-    summary:
-      "Use existing category data to detect when a user switches to a distraction app during a focus session, log it, and optionally surface a gentle floating prompt.",
-    whyItMatters:
-      "Knowing you were distracted after the fact is useful. Knowing in the moment is more so — and the product already has all the data it needs to do this.",
-    currentFocus: [
-      "App activations are now wired into the running focus session.",
-      "Distraction count feeds the new reflection and summary surfaces.",
-      "The non-activating interruption banner is implemented and needs final launch polish.",
-    ],
-    tags: ["Focus", "Distractions", "Tracking"],
-    surface: "Cross-platform",
-    deliverables: 4,
-    board: "Focus surfaces",
-    updated: "Implemented, pending launch polish",
-    owner: "Christian",
-  },
-  {
-    title: "Notification suppression during focus",
-    status: "In progress",
-    summary:
-      "Enable Do Not Disturb automatically when a focus session starts and restore the previous state when it ends.",
-    whyItMatters:
-      "Interruptions are the primary reason focus sessions fail. This is a one-toggle change with an outsized effect on session quality.",
-    currentFocus: [
-      "macOS focus-mode toggling is wired into the active session manager.",
-      "Settings now expose the DND-on-focus preference directly.",
-      "Cross-platform parity and safe restoration behavior still need verification.",
-    ],
-    tags: ["Focus", "DND", "Notifications"],
-    surface: "Cross-platform",
-    deliverables: 2,
-    board: "Focus surfaces",
-    updated: "Active macOS implementation",
-    owner: "Christian",
-  },
-  {
-    title: "Daily summary and morning nudge notifications",
-    status: "Done",
-    summary:
-      "Send a summary notification at 6 PM with the day's highlights, plus a lightweight morning check-in that keeps the review loop visible from the start of the day. Notification taps route into the correct view across all platforms.",
-    whyItMatters:
-      "A notification that opens the app to the wrong screen is barely better than no notification. The tap must land exactly where the user expects — Today for the day recap, Focus for the morning nudge.",
-    currentFocus: [
-      "The 6 PM summary and 9 AM nudge schedule and fire correctly on macOS, Windows, and Linux.",
-      "Notification taps route into Today or Focus on all three platforms instead of stopping at the window foreground.",
-      "Onboarding and Settings both expose the digest flow so launch copy matches the product.",
-    ],
-    tags: ["Notifications", "Focus", "Cross-platform"],
-    surface: "Cross-platform",
     deliverables: 3,
-    board: "Focus surfaces",
-    updated: "Shipped across macOS, Windows, and Linux — April 2",
+    board: "Launch closure",
+    updated: "Active validation pass",
     owner: "Christian",
   },
   {
-    title: "Slack status and calendar automation",
-    status: "Backlog",
-    summary:
-      "Let Daylens update Slack presence during focus sessions and eventually reserve focus time through calendar integrations.",
-    whyItMatters:
-      "Once the core focus loop is trustworthy, the next layer is reducing social interruption and making the session visible to the rest of the user's workday.",
-    currentFocus: [
-      "Keep the current Settings placeholders honest as 'coming soon' launch copy.",
-      "Decide whether Slack status ships before or after calendar automation.",
-      "Avoid promising automation until the core focus surfaces feel stable.",
-    ],
-    tags: ["Focus", "Slack", "Calendar"],
-    surface: "Cross-platform",
-    deliverables: 2,
-    board: "Focus surfaces",
-    updated: "Documented as coming soon",
-    owner: "Christian",
-  },
-  {
-    title: "Timeline recall on mobile",
-    status: "Backlog",
-    summary:
-      "Bring the day view and weekly review to the web companion in a format that still feels readable on a phone.",
-    whyItMatters:
-      "The companion should be somewhere you can genuinely revisit your day, not just a place to link a device and leave.",
-    currentFocus: [
-      "Condense the day view for smaller screens without losing chronology.",
-      "Keep weekly review readable when opened from the phone.",
-      "Preserve session context and labels on narrow layouts.",
-    ],
-    tags: ["History", "Companion", "Mobile"],
-    surface: "Web companion",
-    deliverables: 3,
-    board: "Companion surfaces",
-    updated: "Planned next cycle",
-    owner: "Christian",
-  },
-  {
-    title: "Assistant that starts with context",
-    status: "Backlog",
-    summary:
-      "Use real tracked context so follow-up help begins from the day already in view instead of another blank prompt.",
-    whyItMatters:
-      "The long-term Daylens direction is help that starts with the picture already in memory, not with the user re-explaining their work.",
-    currentFocus: [
-      "Carry the active day and review context into Insights.",
-      "Surface likely relevant blocks before the user asks.",
-      "Reduce how often the assistant starts from zero.",
-    ],
-    tags: ["Insights", "Context", "AI"],
-    surface: "Cross-platform",
-    deliverables: 3,
-    board: "Understanding",
-    updated: "Exploration",
-    owner: "Christian",
-  },
-  {
-    title: "Cross-device day stitching",
-    status: "Backlog",
-    summary:
-      "Make sessions feel continuous when work starts on desktop and gets reviewed later from the web companion.",
-    whyItMatters:
-      "A day should still read like one day even when the user moves between surfaces to review it.",
-    currentFocus: [
-      "Keep linked device identity stable.",
-      "Make review jumps between desktop and web feel seamless.",
-      "Avoid duplicate or fragmented day summaries.",
-    ],
-    tags: ["Sync", "Timeline", "Companion"],
-    surface: "Cross-platform",
-    deliverables: 2,
-    board: "Companion surfaces",
-    updated: "Researching",
-    owner: "Christian",
-  },
-  {
-    title: "Windows browser fidelity",
+    title: "Windows packaging and machine validation",
     status: "Next up",
     summary:
-      "Push Windows closer to parity with stronger browser evidence, profile discovery, and fewer edge-case gaps in activity capture.",
+      "Audit the Windows build, release workflows, and packaging surfaces now, then finish real-machine runtime validation before calling launch fully closed.",
     whyItMatters:
-      "Windows should feel like the same Daylens product, not the version with tracking caveats and missing proof.",
+      "A cross-platform story is only credible if Windows claims stop where real validation stops.",
     currentFocus: [
-      "Verify Chromium and Firefox evidence paths on real installs.",
-      "Reduce silent misses around profiles and history access.",
-      "Keep parity moving without introducing updater regressions.",
+      "Review installer and release workflow configuration.",
+      "Keep docs explicit that runtime validation still needs a Windows machine.",
+      "Avoid overclaiming parity from CI alone.",
     ],
-    tags: ["Windows", "Tracking", "Parity"],
+    tags: ["Windows", "Packaging", "Validation"],
     surface: "Windows",
     deliverables: 3,
-    board: "Tracking quality",
-    updated: "Queued after current Windows push",
+    board: "Platform readiness",
+    updated: "Queued behind current launch pass",
     owner: "Christian",
   },
   {
-    title: "Linux local-first Insights",
-    status: "Done",
+    title: "Linux transition and release truthfulness",
+    status: "In progress",
     summary:
-      "Linux now answers exact-time, resume, and day-overview questions from local evidence before asking the user for an AI key.",
+      "Keep the Linux transition repo narrow and useful while the unified desktop repo remains the product source of truth.",
     whyItMatters:
-      "Linux should feel useful on first launch, not like the version that needs cloud setup before it can explain your day.",
+      "Linux should still be represented as part of Daylens, but not marketed as a polished fully validated install path if that work is not honestly complete yet.",
     currentFocus: [
-      "Temporal routing now handles exact-time and resume-style questions locally.",
-      "Work-evidence summaries now surface the clearest thread and strongest work surface.",
-      "Final QA is about answer quality and wording, not missing plumbing.",
+      "Keep the MIT-licensed transition repo pointed at the unified source of truth.",
+      "Remove stale planning clutter while preserving Linux-specific docs that still help.",
+      "Separate packaging audit confidence from real-machine runtime confidence.",
     ],
-    tags: ["Linux", "Insights", "AI"],
+    tags: ["Linux", "Transition", "Truthfulness"],
     surface: "Linux",
     deliverables: 3,
-    board: "Linux AI",
-    updated: "Shipped April 2",
+    board: "Platform readiness",
+    updated: "Active launch-closure pass",
     owner: "Christian",
   },
   {
-    title: "Weekly review that explains the week",
+    title: "Linux runtime validation on real machines",
     status: "Next up",
     summary:
-      "Shift reports from raw totals toward clearer explanations of where the week went and where focus kept breaking.",
+      "Audit AppImage, deb, rpm, tarball, and diagnostic surfaces now, then finish X11 and Wayland runtime checks on actual Linux environments.",
     whyItMatters:
-      "People do not just want a log. They want the product to tell the story of the week with evidence, not noise.",
+      "Linux launch copy should stay grounded in what has really run, not only in what packages build successfully.",
     currentFocus: [
-      "Make saved reports easier to revisit.",
-      "Improve in-progress week summaries before the week ends.",
-      "Surface key focus breaks before raw tables and charts.",
+      "Review packaging config, smoke scripts, and release workflows.",
+      "Keep fallback diagnostics visible for users who try the transition path early.",
+      "Document that real-machine runtime proof is still pending.",
     ],
-    tags: ["Reports", "Review", "Understanding"],
-    surface: "macOS",
-    deliverables: 3,
-    board: "Review and reports",
-    updated: "Lined up after current macOS polish",
-    owner: "Christian",
-  },
-  {
-    title: "Shared language across surfaces",
-    status: "Next up",
-    summary:
-      "Align desktop and companion copy so history, focus, recovery, and Insights read like one product everywhere.",
-    whyItMatters:
-      "Three surfaces are fine. Three separate personalities are not.",
-    currentFocus: [
-      "Unify public page copy with app behavior.",
-      "Keep onboarding, recovery, and settings language consistent.",
-      "Make navigation feel like one product system.",
-    ],
-    tags: ["Copy", "Navigation", "Companion"],
-    surface: "Cross-platform",
-    deliverables: 2,
-    board: "Product language",
-    updated: "Next writing pass",
-    owner: "Christian",
-  },
-  {
-    title: "Evidence you can trust",
-    status: "In progress",
-    summary:
-      "Tighten session boundaries, cut noisy carryover, and keep switch counts grounded enough to compare over time.",
-    whyItMatters:
-      "If the underlying tracking is noisy, every score, report, and explanation built on top of it gets weaker too.",
-    currentFocus: [
-      "Reduce carryover between adjacent sessions.",
-      "Improve switch counting on long work blocks.",
-      "Keep labels grounded in better evidence.",
-    ],
-    tags: ["Tracking", "Sessions", "Accuracy"],
-    surface: "Cross-platform",
-    deliverables: 3,
-    board: "Tracking quality",
-    updated: "Active work",
-    owner: "Christian",
-  },
-  {
-    title: "Web companion review surface",
-    status: "In progress",
-    summary:
-      "Move the web layer beyond pairing and recovery into a place you revisit for timeline review, reports, and clean reading.",
-    whyItMatters:
-      "The web companion should be a real review surface, not a side utility wrapped around the desktop apps.",
-    currentFocus: [
-      "Build stronger history and changelog surfaces.",
-      "Keep review pages clean on desktop and mobile.",
-      "Preserve the calm companion tone across new pages.",
-    ],
-    tags: ["Dashboard", "Companion", "Reports"],
-    surface: "Web companion",
-    deliverables: 3,
-    board: "Companion surfaces",
-    updated: "Active work",
-    owner: "Christian",
-  },
-  {
-    title: "Insights continuity",
-    status: "In progress",
-    summary:
-      "Hold follow-up context better so Daylens can keep the thread between a block detail, a daily review, and a broader question.",
-    whyItMatters:
-      "The assistant becomes much more useful when it remembers the thread instead of making the user rebuild it.",
-    currentFocus: [
-      "Keep timeframes stable across follow-up questions.",
-      "Preserve block context when moving into broader review.",
-      "Tighten prompt grounding around current context.",
-    ],
-    tags: ["Insights", "AI", "Continuity"],
-    surface: "Cross-platform",
-    deliverables: 3,
-    board: "Understanding",
-    updated: "Active work",
-    owner: "Christian",
-  },
-  {
-    title: "Focus review polish",
-    status: "Done",
-    summary:
-      "The focus readout now speaks in concrete terms: focus time, uninterrupted stretches, and session rhythm instead of vague optimization language.",
-    whyItMatters:
-      "The focus surface is where the product has to prove it can explain the day quickly and credibly.",
-    currentFocus: [
-      "Focus time now sits alongside the score.",
-      "Session rhythm cards call out longest uninterrupted stretch and switch rate.",
-      "Reports mirror the same language so the product reads consistently.",
-    ],
-    tags: ["Focus", "Review", "UI"],
-    surface: "macOS",
-    deliverables: 2,
-    board: "Focus surfaces",
-    updated: "Shipped April 2",
-    owner: "Christian",
-  },
-  {
-    title: "Provider-aware Windows onboarding",
-    status: "Done",
-    summary:
-      "Finish the surrounding onboarding and settings copy now that Windows supports multiple AI providers and model paths.",
-    whyItMatters:
-      "The model picker and provider flow should feel deliberate, not like a powerful feature bolted onto rough onboarding.",
-    currentFocus: [
-      "Clarify provider choice in setup.",
-      "Mirror selected provider in settings and Insights copy.",
-      "Keep key storage and defaults understandable.",
-    ],
-    tags: ["Windows", "AI", "Onboarding"],
-    surface: "Windows",
-    deliverables: 2,
-    board: "Windows AI",
-    updated: "Shipped in current release",
-    owner: "Christian",
-  },
-  {
-    title: "Linux packaging and updater foundation",
-    status: "Done",
-    summary:
-      "Linux now has a real release path with update metadata, package sanity checks, and public artifacts instead of a one-off dev build story.",
-    whyItMatters:
-      "Shipping Linux as a first-class surface means users can trust the install and update path, not just the code running behind it.",
-    currentFocus: [
-      "AppImage, deb, rpm, and tar.gz packaging are wired into the release flow.",
-      "Release metadata now supports Linux updater behavior where the package format allows it.",
-      "Runtime verification moved from local guesswork into repeatable CI checks.",
-    ],
-    tags: ["Linux", "Packaging", "Releases"],
+    tags: ["Linux", "Packaging", "Validation"],
     surface: "Linux",
-    deliverables: 4,
-    board: "Linux platform",
-    updated: "Shipped",
+    deliverables: 3,
+    board: "Platform readiness",
+    updated: "Queued after audit",
     owner: "Christian",
   },
   {
-    title: "Public product pages",
-    status: "Done",
+    title: "Web launch copy and download parity",
+    status: "In progress",
     summary:
-      "Docs, roadmap, and changelog now live as first-class public pages instead of feeling like leftover support screens.",
+      "Keep the landing page, docs, roadmap, and download links aligned with the unified Daylens product story instead of a mix of older navigation and overconfident release copy.",
     whyItMatters:
-      "The product finally has a public surface that explains what Daylens is and where it is going.",
+      "Public pages are part of the launch surface. If they overstate Linux, Wrapped, or old navigation, they undercut trust immediately.",
     currentFocus: [
-      "Keep the public pages aligned with the actual product.",
-      "Tighten the shared navigation and footer shell.",
-      "Make roadmap and changelog easier to revisit.",
+      "Point GitHub and status links at the unified source of truth.",
+      "Keep Linux routed through status rather than a polished direct-install story.",
+      "Remove outdated product language from docs and roadmap copy.",
     ],
-    tags: ["Web", "Docs", "Public pages"],
+    tags: ["Web", "Copy", "Launch"],
     surface: "Web companion",
     deliverables: 3,
-    board: "Public pages",
-    updated: "Shipped",
+    board: "Public surfaces",
+    updated: "Active launch-closure pass",
     owner: "Christian",
   },
   {
-    title: "Multi-provider AI on Windows",
-    status: "Done",
+    title: "Workspace and sync clarity",
+    status: "In progress",
     summary:
-      "Windows now supports Anthropic, OpenAI, and Google with provider-aware model selection and stored credentials.",
+      "Keep workspace, sync, browser access, and recovery flows present without making them sound like the primary product or a required setup step.",
     whyItMatters:
-      "This turned the Windows app from one hardcoded AI path into a real user-controlled setup.",
+      "Daylens is local-first. Optional sync needs to feel additive and clear rather than like a second source of truth.",
     currentFocus: [
-      "Provider-aware model selection.",
-      "Stored credentials per provider.",
-      "Cleaner updater and onboarding follow-through.",
+      "Keep workspace controls in Settings, not as a separate product layer.",
+      "Clarify linking and recovery copy on the website.",
+      "Preserve the desktop database as the base truth layer.",
     ],
-    tags: ["Windows", "AI", "Providers"],
-    surface: "Windows",
-    deliverables: 4,
-    board: "Windows AI",
-    updated: "Shipped March 31",
-    owner: "Christian",
-  },
-  {
-    title: "Reports and widgets on macOS",
-    status: "Done",
-    summary:
-      "macOS keeps pushing the strongest expression of Daylens through reports, widgets, and stronger daily review.",
-    whyItMatters:
-      "macOS is still the clearest expression of the product, so it sets the bar for everything else.",
-    currentFocus: [
-      "Saved reports and richer outputs.",
-      "Cleaner review surfaces.",
-      "Stronger daily and weekly readback.",
-    ],
-    tags: ["macOS", "Reports", "Widgets"],
-    surface: "macOS",
+    tags: ["Sync", "Workspace", "Local-first"],
+    surface: "Cross-platform",
     deliverables: 3,
-    board: "Review and reports",
-    updated: "Shipped March 30",
+    board: "Public surfaces",
+    updated: "Active launch-closure pass",
+    owner: "Christian",
+  },
+  {
+    title: "Apps view usefulness",
+    status: "Implemented pending verification",
+    summary:
+      "The Apps surface should explain real work context with artifacts, paired tools, and work-session detail instead of app vanity metrics.",
+    whyItMatters:
+      "The product is about work sessions, not app rankings. Apps only matter insofar as they help explain the work.",
+    currentFocus: [
+      "Show linked artifacts and evidence in app detail.",
+      "Explain how tools co-occur inside real work sessions.",
+      "Keep the Apps view secondary to the Timeline proof surface.",
+    ],
+    tags: ["Apps", "Evidence", "Launch"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Launch closure",
+    updated: "Implemented pending verification",
+    owner: "Christian",
+  },
+  {
+    title: "Editor and MCP handoff direction",
+    status: "Backlog",
+    summary:
+      "Keep moving toward a product that can feed grounded work-history context into editors and agent workflows without losing the local-first base.",
+    whyItMatters:
+      "One of the long-term promises of Daylens is making your actual work history available to the tools helping you, not forcing you to restate it every time.",
+    currentFocus: [
+      "Keep launch copy explicit about the editor and MCP direction.",
+      "Avoid pretending those integrations are already fully productized.",
+      "Preserve evidence-grounded context as the prerequisite for future tooling.",
+    ],
+    tags: ["MCP", "Editors", "Direction"],
+    surface: "Cross-platform",
+    deliverables: 2,
+    board: "Direction",
+    updated: "Backlog",
+    owner: "Christian",
+  },
+  {
+    title: "Attribution beyond clients and projects",
+    status: "Backlog",
+    summary:
+      "Improve evidence-backed attribution for repos, classes, research topics, and internal initiatives without pretending every workstream already has structured entity support.",
+    whyItMatters:
+      "Launch answers should stay honest about where attribution is first-class today and where evidence still does more of the work.",
+    currentFocus: [
+      "Keep clients and projects as the current first-class entities.",
+      "Use work-block and artifact evidence when structured attribution is missing.",
+      "Avoid fake certainty in AI answers and labels.",
+    ],
+    tags: ["Attribution", "Entities", "Evidence"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Direction",
+    updated: "Backlog",
+    owner: "Christian",
+  },
+  {
+    title: "Wrapped and year-end storytelling",
+    status: "Backlog",
+    summary:
+      "Keep Wrapped-style storytelling out of the launch path unless a nearly finished implementation is only being wired up or polished safely.",
+    whyItMatters:
+      "Wrapped fits the product vision, but it should not steal time from tracking, persistence, reconstruction, and grounded AI launch closure.",
+    currentFocus: [
+      "Keep public copy from overclaiming yearly recap features.",
+      "Reuse the idea only when the implementation is already almost there.",
+      "Treat it as a later storytelling layer, not a launch blocker.",
+    ],
+    tags: ["Wrapped", "Storytelling", "Scope"],
+    surface: "Cross-platform",
+    deliverables: 3,
+    board: "Direction",
+    updated: "Backlog",
     owner: "Christian",
   },
 ];
@@ -487,8 +333,7 @@ const STATUS_TONES: Record<RoadmapStatus, string> = {
   Backlog: "sand",
   "Next up": "violet",
   "In progress": "blue",
-  "Ready to ship": "rose",
-  Done: "green",
+  "Implemented pending verification": "rose",
 };
 
 function IconButton({ type }: { type: "search" | "filter" | "share" }) {
@@ -605,8 +450,8 @@ export function RoadmapPageClient() {
               </h1>
               <p className="lp-ray-board-intro">
                 This is the clearest view of what Daylens is building now, what
-                is lining up next, and what has already shipped across macOS,
-                Windows, Linux, and the web companion.
+                still needs validation, and what remains queued across the
+                unified desktop product and companion web surfaces.
               </p>
               <p className="lp-ray-board-note">
                 Please note that these priorities are not guaranteed and will
