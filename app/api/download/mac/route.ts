@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const REPO = "irachrist1/daylens";
+const REPO = "irachrist1/daylens-windows";
 const FALLBACK_URL = `https://github.com/${REPO}/releases/latest`;
 
 export async function GET() {
