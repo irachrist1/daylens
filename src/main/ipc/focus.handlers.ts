@@ -12,7 +12,10 @@ import {
   stopFocusSession,
 } from '../db/queries'
 import { getDb } from '../services/database'
+import { triggerDistractionCheck } from '../services/distractionAlerter'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { capture } from '../services/analytics'
+import { ANALYTICS_EVENT, focusDurationBucket } from '@shared/analytics'
 
 export function registerFocusHandlers(): void {
   ipcMain.handle(IPC.FOCUS.START, (_e, payload?: FocusStartPayload | string | null) => {
@@ -23,13 +26,30 @@ export function registerFocusHandlers(): void {
     const sessionId = startFocusSession(getDb(), normalized)
     invalidateProjectionScope('timeline', 'focus_session_started')
     invalidateProjectionScope('insights', 'focus_session_started')
+    triggerDistractionCheck()
+    capture(ANALYTICS_EVENT.FOCUS_SESSION_STARTED, {
+      surface: 'focus',
+      trigger: 'manual',
+      target_minutes: typeof normalized.targetMinutes === 'number' ? normalized.targetMinutes : null,
+    })
     return sessionId
   })
 
   ipcMain.handle(IPC.FOCUS.STOP, (_e, id: number) => {
+    const active = getActiveFocusSession(getDb())
+    const durationSec = active && active.id === id
+      ? Math.max(0, Math.round((Date.now() - active.startTime) / 1000))
+      : 0
     stopFocusSession(getDb(), id)
     invalidateProjectionScope('timeline', 'focus_session_stopped')
     invalidateProjectionScope('insights', 'focus_session_stopped')
+    triggerDistractionCheck()
+    capture(ANALYTICS_EVENT.FOCUS_SESSION_STOPPED, {
+      surface: 'focus',
+      trigger: 'manual',
+      duration_bucket: focusDurationBucket(durationSec),
+      duration_sec: durationSec,
+    })
   })
 
   ipcMain.handle(IPC.FOCUS.GET_ACTIVE, () => {

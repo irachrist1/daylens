@@ -1,8 +1,11 @@
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'node:path'
+import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
+import { capture, captureException } from './analytics'
 import { SCHEMA_SQL } from '../db/schema'
 import { runMigrations } from '../db/migrations'
+import { ensureAIThreadSchema } from '../db/aiThreadSchema'
 import { repairStoredAppIdentityObservations } from '../core/inference/appIdentityRegistry'
 import { repairStoredIdentityColumns, syncDerivedStateMetadata } from '../core/projections/metadata'
 
@@ -15,25 +18,58 @@ export function getDb(): Database.Database {
 
 export function initDb(): void {
   const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
-  _db = new Database(dbPath)
+  let stage = 'open'
 
-  // WAL mode for concurrent reads during tracking flushes
-  _db.pragma('journal_mode = WAL')
-  _db.pragma('foreign_keys = ON')
+  try {
+    _db = new Database(dbPath)
 
-  // Apply schema (all CREATE TABLE IF NOT EXISTS — safe to run every launch)
-  _db.exec(SCHEMA_SQL)
+    stage = 'pragma'
+    // WAL mode for concurrent reads during tracking flushes
+    _db.pragma('journal_mode = WAL')
+    _db.pragma('foreign_keys = ON')
 
-  // Run versioned migrations (adds daily_summaries, etc.)
-  runMigrations()
+    stage = 'schema'
+    // Apply schema (all CREATE TABLE IF NOT EXISTS — safe to run every launch)
+    _db.exec(SCHEMA_SQL)
 
-  // Synchronize versioned derived-state metadata and repair older local DBs
-  // whose schema drifted before the formal metadata layer existed.
-  syncDerivedStateMetadata(_db)
-  repairStoredIdentityColumns(_db)
-  repairStoredAppIdentityObservations(_db)
+    stage = 'migrations'
+    // Run versioned migrations (adds daily_summaries, etc.)
+    runMigrations()
 
-  console.log('[db] initialised at', dbPath)
+    stage = 'schema_repair'
+    // Repair additive schema drift that older local DBs may still carry even
+    // when their recorded migration version says they are up to date.
+    ensureAIThreadSchema(_db)
+
+    stage = 'metadata_sync'
+    // Synchronize versioned derived-state metadata and repair older local DBs
+    // whose schema drifted before the formal metadata layer existed.
+    syncDerivedStateMetadata(_db)
+    repairStoredIdentityColumns(_db)
+    repairStoredAppIdentityObservations(_db)
+
+    capture(ANALYTICS_EVENT.DATABASE_HEALTH, {
+      stage,
+      status: 'ok',
+      surface: 'database',
+    })
+    console.log('[db] initialised at', dbPath)
+  } catch (error) {
+    capture(ANALYTICS_EVENT.DATABASE_INIT_FAILED, {
+      failure_kind: classifyFailureKind(error),
+      stage,
+      status: 'error',
+      surface: 'database',
+    })
+    captureException(error, {
+      extra: { stage },
+      tags: {
+        process_type: 'main',
+        reason: 'database_init_failed',
+      },
+    })
+    throw error
+  }
 }
 
 export function closeDb(): void {

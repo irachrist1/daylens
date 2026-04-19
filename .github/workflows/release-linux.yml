@@ -1,0 +1,286 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - "v*-linux"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Linux version number to release
+        required: true
+      tag_name:
+        description: Git tag to publish against
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    timeout-minutes: 120
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Derive version from tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${VERSION%-linux}"
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          RELEASE_TAG="v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+          docker --version
+
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.meta.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package with electron-builder
+        run: npx electron-builder --linux --publish never --config electron-builder.config.js
+
+      - name: Sanity-check Linux release artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          ls -lah dist-release
+          test -f "dist-release/Daylens-${VERSION}.AppImage"
+          test -f "dist-release/Daylens-${VERSION}.deb"
+          test -f "dist-release/Daylens-${VERSION}.rpm"
+          test -f "dist-release/Daylens-${VERSION}.tar.gz"
+          test -f "dist-release/latest-linux.yml"
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.AppImage")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.deb")" -gt 1000000
+          test "$(stat -c%s "dist-release/Daylens-${VERSION}.rpm")" -gt 1000000
+
+          dpkg-deb --info "dist-release/Daylens-${VERSION}.deb" | tee "$RUNNER_TEMP/daylens-deb-info.txt"
+          grep -Eq '^ Package:' "$RUNNER_TEMP/daylens-deb-info.txt"
+          grep -Eq "^ Version:[[:space:]]*${VERSION}$" "$RUNNER_TEMP/daylens-deb-info.txt"
+
+          rpm -qip "dist-release/Daylens-${VERSION}.rpm" | tee "$RUNNER_TEMP/daylens-rpm-info.txt"
+          grep -Eq '^Name[[:space:]]*:' "$RUNNER_TEMP/daylens-rpm-info.txt"
+          grep -Eq "^Version[[:space:]]*:[[:space:]]*${VERSION}$" "$RUNNER_TEMP/daylens-rpm-info.txt"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const yaml = require('js-yaml');
+          const metadata = yaml.load(fs.readFileSync('dist-release/latest-linux.yml', 'utf8'));
+          const advertisedFiles = [
+            metadata.path,
+            ...(Array.isArray(metadata.files) ? metadata.files.map((file) => String(file.url ?? file.path ?? file.name ?? '')) : []),
+          ].filter(Boolean);
+
+          const hasAdvertisedExtension = (ext) => advertisedFiles.some((file) => file.endsWith(ext));
+          if (!String(metadata.path ?? '').endsWith('.AppImage')) {
+            throw new Error(`latest-linux.yml primary path should be an AppImage, got: ${metadata.path}`);
+          }
+          for (const ext of ['.AppImage', '.deb', '.rpm']) {
+            if (!hasAdvertisedExtension(ext)) {
+              throw new Error(`latest-linux.yml is missing an advertised ${ext} artifact`);
+            }
+          }
+          NODE
+
+      - name: Smoke-test AppImage runtime
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          chmod +x "dist-release/Daylens-${VERSION}.AppImage"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            "./dist-release/Daylens-${VERSION}.AppImage" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-appimage-smoke.json" \
+            --expect-package-type appimage \
+            --expect-package-source appimage-env \
+            --expect-updater-supported true
+
+      - name: Smoke-test DEB install
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PACKAGE_FILE="dist-release/Daylens-${VERSION}.deb"
+          PACKAGE_NAME="$(dpkg-deb -f "$PACKAGE_FILE" Package)"
+          sudo dpkg -i "$PACKAGE_FILE" || sudo apt-get install -f -y
+          APP_PATH="$(dpkg -L "$PACKAGE_NAME" | grep '/daylens$' | head -n 1)"
+          test -n "$APP_PATH"
+          xvfb-run -a env \
+            DAYLENS_SMOKE_TEST=1 \
+            DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
+            "$APP_PATH" \
+            --no-sandbox \
+            --disable-setuid-sandbox
+          node scripts/verify-linux-smoke.js \
+            --report "$RUNNER_TEMP/daylens-deb-smoke.json" \
+            --expect-package-type deb \
+            --expect-package-source dpkg-query \
+            --expect-updater-supported true \
+            --require-package-owner
+          sudo apt-get remove -y "$PACKAGE_NAME" || true
+
+      - name: Smoke-test RPM install
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "$RUNNER_TEMP:/smoke" \
+            -w /workspace \
+            fedora:40 \
+            bash -lc '
+              set -euo pipefail
+              dnf install -y nodejs npm findutils grep sed xorg-x11-server-Xvfb xdotool xprop dbus-daemon gtk3 libnotify libXScrnSaver libXtst nss libsecret xdg-utils
+              PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
+              dnf install --nogpgcheck -y "$PACKAGE_FILE"
+              PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
+              APP_PATH="$(rpm -ql "$PACKAGE_NAME" | grep "/daylens$" | head -n 1)"
+              test -n "$APP_PATH"
+              Xvfb :99 -screen 0 1280x720x24 >/tmp/daylens-xvfb.log 2>&1 &
+              XVFB_PID=$!
+              trap "kill $XVFB_PID" EXIT
+              export DISPLAY=:99
+              export DAYLENS_SMOKE_TEST=1
+              export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
+              "$APP_PATH" \
+                --no-sandbox \
+                --disable-setuid-sandbox
+              node scripts/verify-linux-smoke.js \
+                --report /smoke/daylens-rpm-smoke.json \
+                --expect-package-type rpm \
+                --expect-package-source rpm-query \
+                --expect-updater-supported true \
+                --require-package-owner
+            '
+
+      - name: Upload Linux diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-release-diagnostics-${{ steps.meta.outputs.version }}
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            ${{ runner.temp }}/daylens-appimage-smoke.json
+            ${{ runner.temp }}/daylens-deb-smoke.json
+            ${{ runner.temp }}/daylens-rpm-smoke.json
+            ${{ runner.temp }}/daylens-deb-info.txt
+            ${{ runner.temp }}/daylens-rpm-info.txt
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*
+
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          RELEASE_TAG="${{ steps.meta.outputs.release_tag }}"
+          CHANGELOG_SECTION=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_SECTION="$(awk -v version="$VERSION" '
+              $0 ~ "^## v" version " -" { flag = 1; next }
+              /^## v/ && flag { exit }
+              flag { print }
+            ' CHANGELOG.md)"
+          fi
+
+          if [ -z "$CHANGELOG_SECTION" ]; then
+            CHANGELOG_SECTION="- Preview release build for v$VERSION"
+          fi
+
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' | grep -vx "$RELEASE_TAG" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..${{ github.sha }}" | head -n 12)"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.sha }}"
+          else
+            COMMIT_LINES="$(git log --pretty='- %h %s' HEAD | head -n 12)"
+            COMPARE_URL=""
+          fi
+
+          if [ -z "$COMMIT_LINES" ]; then
+            COMMIT_LINES="- Initial cross-platform release build"
+          fi
+
+          {
+            echo 'body<<EOF'
+            echo "## Daylens $VERSION"
+            echo
+            echo "### Highlights"
+            echo "$CHANGELOG_SECTION"
+            echo
+            echo "### Included commits"
+            echo "$COMMIT_LINES"
+            if [ -n "$COMPARE_URL" ]; then
+              echo
+              echo "Compare changes: $COMPARE_URL"
+            fi
+            echo
+            echo "### Release assets"
+            echo "This shared version release is populated by the macOS, Windows, and Linux workflows."
+            echo "Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag."
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Daylens ${{ steps.meta.outputs.version }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ steps.notes.outputs.body }}
+          overwrite_files: true
+          files: |
+            dist-release/*.AppImage
+            dist-release/*.AppImage.blockmap
+            dist-release/*.deb
+            dist-release/*.rpm
+            dist-release/*.tar.gz
+            dist-release/latest-linux.yml

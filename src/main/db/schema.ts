@@ -59,10 +59,66 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id),
   role            TEXT    NOT NULL CHECK(role IN ('user', 'assistant')),
   content         TEXT    NOT NULL,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  metadata_json   TEXT    NOT NULL DEFAULT '{}',
+  thread_id       INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);
+
+-- Thread grouping over ai_messages. Messages reference a thread through the
+-- ai_messages.thread_id column (added via migration on existing databases).
+-- The thread index is created by ensureAIThreadSchema() after legacy databases
+-- have been repaired so startup does not fail before repair can run.
+CREATE TABLE IF NOT EXISTS ai_threads (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  title           TEXT    NOT NULL DEFAULT 'New chat',
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  last_message_at INTEGER NOT NULL,
+  archived        INTEGER NOT NULL DEFAULT 0,
+  metadata_json   TEXT    NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_ai_threads_updated ON ai_threads (updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ai_artifacts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id       INTEGER REFERENCES ai_threads(id) ON DELETE CASCADE,
+  message_id      INTEGER REFERENCES ai_messages(id) ON DELETE SET NULL,
+  kind            TEXT    NOT NULL,
+  title           TEXT    NOT NULL,
+  summary         TEXT,
+  file_path       TEXT,
+  inline_content  TEXT,
+  mime_type       TEXT    NOT NULL,
+  byte_size       INTEGER NOT NULL DEFAULT 0,
+  meta_json       TEXT    NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_artifacts_thread ON ai_artifacts (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_artifacts_message ON ai_artifacts (message_id);
+
+CREATE TABLE IF NOT EXISTS ai_conversation_state (
+  conversation_id INTEGER PRIMARY KEY REFERENCES ai_conversations(id) ON DELETE CASCADE,
+  state_json      TEXT    NOT NULL DEFAULT '{}',
+  updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_surface_summaries (
+  scope_type      TEXT NOT NULL,
+  scope_key       TEXT NOT NULL,
+  job_type        TEXT NOT NULL,
+  title           TEXT,
+  summary_text    TEXT NOT NULL,
+  input_signature TEXT NOT NULL,
+  metadata_json   TEXT NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  PRIMARY KEY (scope_type, scope_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_surface_summaries_job
+  ON ai_surface_summaries (job_type, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS ai_usage_events (
   id TEXT PRIMARY KEY,
@@ -226,7 +282,7 @@ CREATE TABLE IF NOT EXISTS artifact_mentions (
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_source ON artifact_mentions (source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_mentions_artifact ON artifact_mentions (artifact_id, start_time);
 
--- app_profile_cache was removed in migration v14 (per CLAUDE.md). Cache is
+-- app_profile_cache was removed in migration v14. Cache is
 -- recomputed in-memory by workBlocks.ts; no persistent cache is required.
 
 CREATE TABLE IF NOT EXISTS workflow_signatures (
