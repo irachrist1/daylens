@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   build-macos:
+    timeout-minutes: 90
     runs-on: macos-latest
 
     steps:
@@ -33,16 +34,18 @@ jobs:
             VERSION="${VERSION%-mac}"
             TAG_NAME="${GITHUB_REF_NAME}"
           fi
+          RELEASE_TAG="v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -70,16 +73,14 @@ jobs:
         run: npm run build:all
 
       - name: Package with electron-builder
-        run: npx electron-builder --mac zip dmg --publish always --config electron-builder.config.js
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
 
       - name: Build release notes
         id: notes
         shell: bash
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+          RELEASE_TAG="${{ steps.meta.outputs.release_tag }}"
           CHANGELOG_SECTION=""
           if [ -f CHANGELOG.md ]; then
             CHANGELOG_SECTION="$(awk -v version="$VERSION" '
@@ -93,10 +94,10 @@ jobs:
             CHANGELOG_SECTION="- Preview release build for v$VERSION"
           fi
 
-          PREV_TAG="$(git tag --list 'v*-mac' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' | grep -vx "$RELEASE_TAG" | head -n 1 || true)"
           if [ -n "$PREV_TAG" ]; then
-            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..HEAD" | head -n 12)"
-            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_NAME}"
+            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..${{ github.sha }}" | head -n 12)"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.sha }}"
           else
             COMMIT_LINES="$(git log --pretty='- %h %s' HEAD | head -n 12)"
             COMPARE_URL=""
@@ -108,7 +109,7 @@ jobs:
 
           {
             echo 'body<<EOF'
-            echo "## Daylens $VERSION for macOS"
+            echo "## Daylens $VERSION"
             echo
             echo "### Highlights"
             echo "$CHANGELOG_SECTION"
@@ -120,22 +121,37 @@ jobs:
               echo "Compare changes: $COMPARE_URL"
             fi
             echo
-            echo "### Install"
-            echo "1. Download the macOS archive or disk image below"
-            echo "2. Open the app bundle and move Daylens into Applications"
-            echo "3. Launch Daylens"
-            echo
-            echo "### Also available"
-            echo "- **Windows**: [Windows releases](https://github.com/irachrist1/daylens-windows/releases)"
+            echo "### Release assets"
+            echo "This shared version release is populated by the macOS, Windows, and Linux workflows."
+            echo "Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag."
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Daylens ${{ steps.meta.outputs.version }} (macOS)
-          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: Daylens ${{ steps.meta.outputs.version }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
           body: ${{ steps.notes.outputs.body }}
+          overwrite_files: true
           files: |
             dist-release/*.dmg
+            dist-release/*.dmg.blockmap
             dist-release/*.zip
+            dist-release/*.zip.blockmap
+            dist-release/latest-mac.yml
+
+      - name: Upload macOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-release-diagnostics-${{ steps.meta.outputs.version }}
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

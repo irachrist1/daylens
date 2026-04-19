@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   build-windows:
+    timeout-minutes: 90
     runs-on: windows-latest
     env:
       WIN_CERTIFICATE_FILE: ${{ secrets.WIN_CERTIFICATE_FILE }}
@@ -37,16 +38,18 @@ jobs:
             VERSION="${VERSION%-win}"
             TAG_NAME="${GITHUB_REF_NAME}"
           fi
+          RELEASE_TAG="v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -95,16 +98,14 @@ jobs:
           echo "WIN_CERT_SUBJECT_NAME=$WIN_CERT_SUBJECT_NAME" >> "$GITHUB_ENV"
 
       - name: Package with electron-builder
-        run: npx electron-builder --win --publish always --config electron-builder.config.js
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish never --config electron-builder.config.js
 
       - name: Build release notes
         id: notes
         shell: bash
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+          RELEASE_TAG="${{ steps.meta.outputs.release_tag }}"
           CHANGELOG_SECTION=""
           if [ -f CHANGELOG.md ]; then
             CHANGELOG_SECTION="$(awk -v version="$VERSION" '
@@ -118,10 +119,10 @@ jobs:
             CHANGELOG_SECTION="- Preview release build for v$VERSION"
           fi
 
-          PREV_TAG="$(git tag --list 'v*-win' --sort=-version:refname | grep -vx "$TAG_NAME" | head -n 1 || true)"
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' | grep -vx "$RELEASE_TAG" | head -n 1 || true)"
           if [ -n "$PREV_TAG" ]; then
-            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..HEAD" | head -n 12)"
-            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_NAME}"
+            COMMIT_LINES="$(git log --pretty='- %h %s' "${PREV_TAG}..${{ github.sha }}" | head -n 12)"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.sha }}"
           else
             COMMIT_LINES="$(git log --pretty='- %h %s' HEAD | head -n 12)"
             COMPARE_URL=""
@@ -133,7 +134,7 @@ jobs:
 
           {
             echo 'body<<EOF'
-            echo "## Daylens $VERSION for Windows"
+            echo "## Daylens $VERSION"
             echo
             echo "### Highlights"
             echo "$CHANGELOG_SECTION"
@@ -145,26 +146,35 @@ jobs:
               echo "Compare changes: $COMPARE_URL"
             fi
             echo
-            echo "### Install"
-            echo "1. Download \`Daylens-$VERSION-Setup.exe\` below"
-            echo "2. Run the installer"
-            echo "3. Launch Daylens from the Desktop shortcut or Start menu"
-            echo
-            echo "### Update"
-            echo "Existing installs can pick this up through the in-app updater. Daylens will download the release in the background, show progress and highlights in-app, and then restart into the installer to finish."
-            echo
-            echo "### Also available"
-            echo "- **macOS**: [macOS releases](https://github.com/irachrist1/daylens/releases)"
+            echo "### Release assets"
+            echo "This shared version release is populated by the macOS, Windows, and Linux workflows."
+            echo "Updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`) lives on this same release so packaged apps across platforms resolve one version tag."
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Daylens ${{ steps.meta.outputs.version }} (Windows)
-          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: Daylens ${{ steps.meta.outputs.version }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
           body: ${{ steps.notes.outputs.body }}
+          overwrite_files: true
           files: |
             dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe
             dist-release/Daylens-${{ steps.meta.outputs.version }}-Setup.exe.blockmap
             dist-release/latest.yml
+
+      - name: Upload Windows diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-release-diagnostics-${{ steps.meta.outputs.version }}
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

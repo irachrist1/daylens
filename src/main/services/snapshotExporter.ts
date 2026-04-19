@@ -13,7 +13,8 @@ import {
 import fs from 'node:fs'
 import path from 'node:path'
 import { localDateString, localDayBounds } from '../lib/localDate'
-import { computeFocusScore, isCategoryFocused } from '../lib/focusScore'
+import { computeFocusScoreV2, isCategoryFocused } from '../lib/focusScore'
+import { getTimelineDayPayload } from './workBlocks'
 
 // ─── Types matching DaySnapshot v1 contract ──────────────────────────────────
 
@@ -63,7 +64,7 @@ interface FocusSessionOut {
 interface DaySnapshot {
   schemaVersion: 1
   deviceId: string
-  platform: 'windows'
+  platform: 'windows' | 'macos' | 'linux'
   date: string
   generatedAt: string
   isPartialDay: boolean
@@ -86,6 +87,12 @@ interface NormalizationMap {
 }
 
 let _normMap: NormalizationMap | null = null
+
+function currentSnapshotPlatform(): DaySnapshot['platform'] {
+  if (process.platform === 'win32') return 'windows'
+  if (process.platform === 'darwin') return 'macos'
+  return 'linux'
+}
 
 function getNormMap(): NormalizationMap {
   if (_normMap) return _normMap
@@ -118,9 +125,12 @@ function getNormMap(): NormalizationMap {
 function normalize(bundleId: string, appName: string): { appKey: string; displayName: string; category: string } {
   const map = getNormMap()
 
-  // Try exact bundleId match first, then just the exe filename
+  // Try exact and normalized bundle IDs first, then just the executable filename.
   const exeName = path.basename(bundleId).toLowerCase()
-  const appKey = map.aliases[bundleId] || map.aliases[exeName] || exeName.replace(/\.exe$/i, '')
+  const appKey = map.aliases[bundleId]
+    || map.aliases[bundleId.toLowerCase()]
+    || map.aliases[exeName]
+    || exeName.replace(/\.exe$/i, '')
 
   const catalogEntry = map.catalog[appKey]
   if (catalogEntry) {
@@ -234,12 +244,58 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   const hours = totalTrackedSeconds / 3600
   const switchesPerHour = hours > 0 ? switches / hours : 0
 
-  // Focus score
-  const focusScore = computeFocusScore({
-    focusedSeconds: focusSeconds,
-    totalSeconds: totalTrackedSeconds,
+  // Focus score V2 — evidence-grounded composite of coherence, deep-work
+  // density, artifact progress, and context-switching penalty. We derive
+  // blocks from the timeline payload so the score reflects real work
+  // boundaries rather than raw focused-app ratios.
+  let blocksForScore: { durationSeconds: number; activeSeconds: number }[] = []
+  let uniqueArtifactCount: number | undefined
+  let uniqueWindowTitleCount: number | undefined
+  try {
+    const timelinePayload = getTimelineDayPayload(db, dateStr)
+    blocksForScore = timelinePayload.blocks.map((block) => {
+      const span = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
+      const active = block.sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+      return {
+        durationSeconds: span,
+        activeSeconds: Math.min(active, span) || active || span,
+      }
+    })
+    const artifactIds = new Set<string>()
+    for (const block of timelinePayload.blocks) {
+      for (const artifact of block.topArtifacts ?? []) artifactIds.add(artifact.id)
+      for (const page of block.pageRefs ?? []) {
+        if (page.url) artifactIds.add(`page:${page.url}`)
+      }
+      for (const doc of block.documentRefs ?? []) {
+        if (doc.path) artifactIds.add(`doc:${doc.path}`)
+      }
+    }
+    uniqueArtifactCount = artifactIds.size > 0 ? artifactIds.size : undefined
+    if (uniqueArtifactCount === undefined) {
+      const titles = new Set<string>()
+      for (const session of rawSessions) {
+        const title = session.windowTitle?.trim()
+        if (title) titles.add(title.toLowerCase())
+      }
+      uniqueWindowTitleCount = titles.size
+    }
+  } catch {
+    // If block reconstruction fails, fall back to a single pseudo-block so
+    // the score still bounds itself rather than silently zeroing out.
+    blocksForScore = totalTrackedSeconds > 0
+      ? [{ durationSeconds: totalTrackedSeconds, activeSeconds: totalTrackedSeconds }]
+      : []
+  }
+
+  const focusBreakdown = computeFocusScoreV2({
+    blocks: blocksForScore,
+    totalActiveSeconds: totalTrackedSeconds,
     switchesPerHour,
+    uniqueArtifactCount,
+    uniqueWindowTitleCount,
   })
+  const focusScore = focusBreakdown.score
 
   // Timeline — raw sessions mapped to normalized appKeys
   const timeline: TimelineEntry[] = rawSessions.map((s) => {
@@ -297,7 +353,7 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshot {
   return {
     schemaVersion: 1,
     deviceId,
-    platform: 'windows',
+    platform: currentSnapshotPlatform(),
     date: dateStr,
     generatedAt: toISOWithOffset(Date.now()),
     isPartialDay,
