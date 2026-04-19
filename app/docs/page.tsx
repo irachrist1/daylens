@@ -14,6 +14,7 @@ export const metadata = {
 
 const TOC = [
   { href: "#getting-started", label: "Getting Started" },
+  { href: "#product-status", label: "Product Status" },
   { href: "#timeline", label: "Timeline" },
   { href: "#apps", label: "Apps" },
   { href: "#ai", label: "AI" },
@@ -52,8 +53,9 @@ export default function DocsPage() {
               maxWidth: "48ch",
             }}
           >
-            Daylens is a cross-platform laptop activity tracker built to answer a better question
-            than screen time: what were you actually working on?
+            Daylens is a local-first work-history product. These docs explain what is already real
+            today, what still needs validation, and where the public site intentionally stays
+            conservative.
           </p>
         </div>
       </section>
@@ -85,12 +87,12 @@ export default function DocsPage() {
                       <p className="lp-docs-step-title">Install the desktop app</p>
                       <p className="lp-docs-step-body">
                         macOS and Windows builds are available from the download links on the home
-                        page. Linux remains part of the unified Daylens direction, but the public
-                        path still lives on the{" "}
+                        page. Linux is part of the product too, but the public install path still
+                        lives on the{" "}
                         <a href={LINUX_STATUS_HREF} className="lp-docs-link">
                           Linux status page
                         </a>{" "}
-                        while real-machine validation finishes.
+                        while real-machine validation catches up.
                       </p>
                     </div>
                   </div>
@@ -126,6 +128,36 @@ export default function DocsPage() {
                       </p>
                     </div>
                   </div>
+                </div>
+              </section>
+
+              <section id="product-status" style={{ scrollMarginTop: 80 }} className="lp-docs-section">
+                <h2 className="text-headline lp-docs-section-title">Product Status</h2>
+                <p className="lp-docs-body">
+                  Daylens is further along than an idea deck and not as finished as a polished
+                  launch story would suggest. The right way to read the product today is: the core
+                  desktop direction is real, several important features are implemented, and a lot
+                  of honest validation still matters.
+                </p>
+                <ul className="lp-docs-bullets">
+                  {[
+                    "The unified desktop repo is now the cross-platform source of truth for macOS, Windows, and Linux.",
+                    "macOS install, onboarding, and menu-bar polish are implemented, but the final packaged-app feel still needs human validation.",
+                    "A deterministic daily, weekly, and monthly recap now exists inside the AI surface, but it is not yet fully shipped and proven.",
+                    "Persistent AI threads, artifacts, focus flows, exports, and several settings refinements are in the product, with many still marked implemented pending verification.",
+                    "Linux is part of Daylens, but real-machine validation across X11 and Wayland is still incomplete.",
+                    "Provider-backed packaged AI flows are still not fully proven end to end from the current validation environment.",
+                  ].map((item) => (
+                    <li key={item}>
+                      <span className="lp-docs-bullet-dot" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+                <div className="lp-docs-infobox">
+                  <span className="lp-docs-infobox-label">Status rule:</span>
+                  When code exists but still needs broader validation, the website should say so
+                  plainly instead of promoting it as settled product truth.
                 </div>
               </section>
 
@@ -177,6 +209,11 @@ export default function DocsPage() {
                   live here. The AI layer is orchestration over local data, not the primary runtime of
                   the product.
                 </p>
+                <p className="lp-docs-body">
+                  That also means the truthfulness bar is higher here. Deterministic recap cards and
+                  durable AI state are implemented now, while provider-backed packaged flows still
+                  need broader real-world proof before they should be treated as fully settled.
+                </p>
                 <div className="lp-docs-examples">
                   {[
                     "How much time did I spend on Client X this week?",
@@ -220,9 +257,10 @@ export default function DocsPage() {
                   a separate reporting product.
                 </p>
                 <p className="lp-docs-body">
-                  This is where client summaries, weekly recaps, and evidence-backed exports are meant
-                  to live. Wrapped-style yearly storytelling is still out of scope unless a nearly
-                  finished implementation is being wired up safely.
+                  This is where client summaries, recap cards, and evidence-backed exports are meant
+                  to live. Today that includes a deterministic daily, weekly, and monthly recap
+                  foundation inside AI, but it still needs human validation before it should be called
+                  fully shipped. Richer year-end storytelling remains future work.
                 </p>
               </section>
 
@@ -298,7 +336,7 @@ export default function DocsPage() {
                   {[
                     {
                       q: "What platforms are currently supported?",
-                      a: "Daylens is being launched as one unified cross-platform product. macOS and Windows have direct download paths here. Linux is still part of that story, but public install guidance is intentionally routed through the Linux status page until real-machine validation is complete.",
+                      a: "Daylens is one cross-platform desktop product. macOS and Windows have public download paths here today. Linux is part of the product too, but public guidance still routes through the Linux status page until real-machine validation is further along.",
                     },
                     {
                       q: "What does Daylens actually track?",
@@ -314,7 +352,7 @@ export default function DocsPage() {
                     },
                     {
                       q: "Is Wrapped already shipped?",
-                      a: "No. Wrapped-style storytelling remains out of scope for this launch pass unless a nearly finished implementation is only being wired up or polished.",
+                      a: "Not as a fully proven feature. A deterministic daily, weekly, and monthly recap now exists inside the AI surface, but it still needs broader validation before it should be marketed as fully shipped. Richer Wrapped-style storytelling remains future work.",
                     },
                     {
                       q: "Where is the source of truth?",

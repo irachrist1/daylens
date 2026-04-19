@@ -120,8 +120,8 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
               <span>Daylens</span>
             </div>
             <p className="lp-footer-desc">
-              Cross-platform work history for macOS, Windows, and Linux. Local-first, AI-ready,
-              and evidence-grounded.
+              Cross-platform work history with macOS and Windows available now, Linux validation
+              still in progress, and a local-first evidence model underneath it all.
             </p>
             <p className="lp-footer-credit">Made by Christian Tonny</p>
           </div>

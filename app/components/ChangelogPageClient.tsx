@@ -14,15 +14,15 @@ const PLATFORM_ORDER: SurfaceId[] = ["mac", "windows", "linux", "web"];
 const SURFACE_LABELS: Record<SurfaceId, string> = {
   mac: "macOS",
   windows: "Windows",
-  linux: "Linux history",
-  web: "Web",
+  linux: "Linux",
+  web: "Website",
 };
 
 const SURFACE_PANEL_LABELS: Record<SurfaceId, string> = {
   mac: "macOS",
   windows: "Windows",
-  linux: "Linux transition",
-  web: "Web companion",
+  linux: "Linux",
+  web: "Website",
 };
 
 function formatDate(date: string) {
@@ -126,6 +126,10 @@ export function ChangelogPageClient() {
             <h1 id="changelog-title" className="lp-ray-changelog-title">
               Changelog
             </h1>
+            <p className="lp-ray-board-note">
+              These notes separate work that is confidently real today from work that is
+              implemented but still waiting on broader human or platform validation.
+            </p>
 
             <div
               className="lp-ray-platform-switch"
