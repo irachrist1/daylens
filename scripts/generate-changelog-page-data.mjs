@@ -16,7 +16,7 @@ const surfaces = [
       JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")).version,
     description:
       "Marketing site, web companion access, linking, recovery, and public product pages.",
-    changelogPath: null,
+    changelogPath: path.join(repoRoot, "CHANGELOG.md"),
     repoUrl: "https://github.com/irachrist1/daylens-web",
     ignoredCommitPatterns: [
       /^sync changelog data for latest releases$/i,
@@ -27,44 +27,43 @@ const surfaces = [
     id: "mac",
     name: "macOS app",
     repoPath: path.resolve(repoRoot, "..", "daylens"),
-    versionSource: () => {
-      const changelog = readFileSync(
-        path.resolve(repoRoot, "..", "daylens", "CHANGELOG.md"),
-        "utf8"
-      );
-      const match = changelog.match(/^## \[([^\]]+)\] - ([0-9-]+)/m);
-      return match?.[1] ?? "unknown";
-    },
+    versionSource: () =>
+      JSON.parse(
+        readFileSync(path.resolve(repoRoot, "..", "daylens", "package.json"), "utf8")
+      ).version,
     description:
-      "Native SwiftUI app focused on timeline understanding, reports, focus, and Insights.",
+      "Unified desktop macOS release with the shared timeline, AI, recap, and installer work.",
     changelogPath: path.resolve(repoRoot, "..", "daylens", "CHANGELOG.md"),
     repoUrl: "https://github.com/irachrist1/daylens",
+    releaseUrl: (version) => `https://github.com/irachrist1/daylens/releases/tag/v${version}`,
   },
   {
     id: "windows",
     name: "Windows app",
-    repoPath: path.resolve(repoRoot, "..", "daylens-windows"),
+    repoPath: path.resolve(repoRoot, "..", "daylens"),
     versionSource: () =>
       JSON.parse(
-        readFileSync(path.resolve(repoRoot, "..", "daylens-windows", "package.json"), "utf8")
+        readFileSync(path.resolve(repoRoot, "..", "daylens", "package.json"), "utf8")
       ).version,
     description:
-      "Electron app focused on parity, updater flow, Windows packaging, and UI polish.",
-    changelogPath: path.resolve(repoRoot, "..", "daylens-windows", "CHANGELOG.md"),
-    repoUrl: "https://github.com/irachrist1/daylens-windows",
+      "Unified desktop Windows release with shared updater, tracking, recap, and AI behavior.",
+    changelogPath: path.resolve(repoRoot, "..", "daylens", "CHANGELOG.md"),
+    repoUrl: "https://github.com/irachrist1/daylens",
+    releaseUrl: (version) => `https://github.com/irachrist1/daylens/releases/tag/v${version}`,
   },
   {
     id: "linux",
-    name: "Linux transition history",
-    repoPath: path.resolve(repoRoot, "..", "daylens-linux"),
+    name: "Linux app",
+    repoPath: path.resolve(repoRoot, "..", "daylens"),
     versionSource: () =>
       JSON.parse(
-        readFileSync(path.resolve(repoRoot, "..", "daylens-linux", "package.json"), "utf8")
+        readFileSync(path.resolve(repoRoot, "..", "daylens", "package.json"), "utf8")
       ).version,
     description:
-      "Historical Linux release history preserved from the legacy repo while active cross-platform source-of-truth work moved to daylens-windows.",
-    changelogPath: path.resolve(repoRoot, "..", "daylens-linux", "CHANGELOG.md"),
-    repoUrl: "https://github.com/irachrist1/daylens-linux",
+      "Unified desktop Linux release with AppImage, DEB, and RPM packaging from the shared repo.",
+    changelogPath: path.resolve(repoRoot, "..", "daylens", "CHANGELOG.md"),
+    repoUrl: "https://github.com/irachrist1/daylens",
+    releaseUrl: (version) => `https://github.com/irachrist1/daylens/releases/tag/v${version}`,
   },
 ];
 
@@ -235,8 +234,14 @@ function parseMarkdownChangelog(surface) {
         title: compactTitle(surface.name, flatItems),
         intro: introParagraphs(surface.name, version, flatItems, surface.description),
         sections,
-        linkUrl: `${surface.repoUrl}/blob/main/CHANGELOG.md`,
-        linkLabel: "View source changelog",
+        linkUrl:
+          typeof surface.releaseUrl === "function"
+            ? surface.releaseUrl(version)
+            : `${surface.repoUrl}/blob/main/CHANGELOG.md`,
+        linkLabel:
+          typeof surface.releaseUrl === "function"
+            ? "View release"
+            : "View source changelog",
       };
     })
     .filter(Boolean)
