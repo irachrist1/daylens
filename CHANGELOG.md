@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.29 - 2026-04-20
+
+### Changed
+- Rewrote the in-DMG `Start Here.txt` (formerly `If Daylens is "damaged" - READ ME.txt`) for non-technical users: action-first three-step install, visual mockup of the first-launch Gatekeeper prompt, numbered Open Anyway steps, and Homebrew shown as an optional shortcut rather than the fallback
+- `docs/INSTALL.md` leads with the current first-launch flow (the "Not Opened" Gatekeeper prompt that appears after the v1.0.28 ad-hoc re-sign), and demotes the legacy "damaged" dialog fix to a troubleshooting section for anyone still on an older DMG
+
 ## v1.0.28 - 2026-04-20
 
 ### Fixed
