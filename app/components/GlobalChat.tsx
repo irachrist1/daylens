@@ -6,13 +6,16 @@ import type { ChatMessage } from "@/app/lib/chat";
 export function GlobalChat({
   initialMessages,
   date,
+  initialPrompt,
 }: {
   initialMessages: ChatMessage[];
   date?: string;
+  initialPrompt?: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [promptChips, setPromptChips] = useState<string[]>([]);
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const didHydrateRef = useRef(false);
@@ -25,6 +28,37 @@ export function GlobalChat({
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!date) {
+      setPromptChips([]);
+      return;
+    }
+
+    let cancelled = false;
+    void fetch(`/api/snapshots?date=${date}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        const chips = json?.snapshot?.snapshot?.recap?.day?.promptChips;
+        setPromptChips(Array.isArray(chips) ? chips : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPromptChips([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
+  useEffect(() => {
+    if (!initialPrompt?.trim()) {
+      return;
+    }
+    setInput(initialPrompt);
+  }, [initialPrompt]);
 
   useEffect(() => {
     if (!didHydrateRef.current) {
@@ -104,6 +138,24 @@ export function GlobalChat({
     <div className="flex flex-col" style={{ height: "calc(100dvh - 8rem)" }}>
       {/* Messages area — takes remaining space */}
       <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pb-2">
+        {promptChips.length > 0 && messages.length === 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {promptChips.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => {
+                  setInput(chip);
+                  inputRef.current?.focus();
+                }}
+                className="rounded-full bg-surface-low px-3 py-1.5 text-sm text-on-surface hover:bg-surface-high"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-sm text-on-surface-variant/50">

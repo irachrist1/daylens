@@ -13,6 +13,7 @@ export default defineSchema({
     platform: v.union(
       v.literal("macos"),
       v.literal("windows"),
+      v.literal("linux"),
       v.literal("web")
     ),
     displayName: v.string(),

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-/** Client component that polls for fresh data every 30 seconds. */
+/** Refresh on return-to-tab without forcing a background polling loop. */
 export function Poller() {
   const router = useRouter();
 
@@ -14,15 +14,8 @@ export function Poller() {
       }
     };
 
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") {
-        router.refresh();
-      }
-    }, 30_000);
-
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
-      clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [router]);

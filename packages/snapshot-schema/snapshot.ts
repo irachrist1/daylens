@@ -1,9 +1,4 @@
-/**
- * DaySnapshot schema v1 — locked contract.
- * Do not change field names or types without updating all three apps.
- */
-
-export type Platform = "macos" | "windows";
+export type Platform = "macos" | "windows" | "linux";
 
 export type Category =
   | "development"
@@ -25,7 +20,7 @@ export type FocusSessionStatus = "completed" | "cancelled" | "active";
 
 export interface AppSummary {
   appKey: string;
-  bundleID?: string; // Full macOS bundle ID (e.g. "com.google.Chrome"), added in v1.0.7
+  bundleID?: string;
   displayName: string;
   category: Category;
   totalSeconds: number;
@@ -40,8 +35,8 @@ export interface CategoryTotal {
 
 export interface TimelineEntry {
   appKey: string;
-  startAt: string; // ISO8601 with offset
-  endAt: string;   // ISO8601 with offset
+  startAt: string;
+  endAt: string;
 }
 
 export interface TopPage {
@@ -59,21 +54,111 @@ export interface TopDomain {
 
 export interface FocusSession {
   sourceId: string;
-  startAt: string;  // ISO8601 with offset
-  endAt: string;    // ISO8601 with offset
+  startAt: string;
+  endAt: string;
   actualDurationSec: number;
   targetMinutes: number;
   status: FocusSessionStatus;
 }
 
-export interface DaySnapshot {
+export interface FocusScoreV2Snapshot {
+  score: number;
+  coherence: number;
+  deepWorkDensity: number;
+  artifactProgress: number;
+  switchPenalty: number;
+}
+
+export interface WorkBlockSummary {
+  id: string;
+  startAt: string;
+  endAt: string;
+  label: string;
+  labelSource: "user" | "ai" | "rule";
+  dominantCategory: Category;
+  focusSeconds: number;
+  switchCount: number;
+  confidence: "high" | "medium" | "low";
+  topApps: Array<{
+    appKey: string;
+    seconds: number;
+  }>;
+  topPages: Array<{
+    domain: string;
+    title: string | null;
+    seconds: number;
+  }>;
+  artifactIds: string[];
+}
+
+export type RecapChapterId = "headline" | "focus" | "artifacts" | "rhythm" | "change";
+
+export interface RecapSummaryLite {
+  headline: string;
+  chapters: Array<{
+    id: RecapChapterId;
+    eyebrow: string;
+    title: string;
+    body: string;
+  }>;
+  metrics: Array<{
+    label: string;
+    value: string;
+    detail: string;
+  }>;
+  changeSummary: string;
+  promptChips: string[];
+  hasData: boolean;
+}
+
+export interface RecapCoverage {
+  attributedPct: number;
+  untitledPct: number;
+  activeDayCount: number;
+  quietDayCount: number;
+  hasComparison: boolean;
+  coverageNote: string | null;
+}
+
+export interface WorkstreamRollup {
+  label: string;
+  seconds: number;
+  blockCount: number;
+  isUntitled: boolean;
+}
+
+export type ArtifactKind =
+  | "markdown"
+  | "csv"
+  | "json_table"
+  | "html_chart"
+  | "report";
+
+export interface ArtifactRollup {
+  id: string;
+  kind: ArtifactKind;
+  title: string;
+  byteSize: number;
+  generatedAt: string;
+  threadId: string | null;
+}
+
+export interface EntityRollup {
+  id: string;
+  label: string;
+  kind: "client" | "project" | "repo" | "topic";
+  secondsToday: number;
+  blockCount: number;
+}
+
+export interface DaySnapshotV1 {
   schemaVersion: 1;
   deviceId: string;
   platform: Platform;
-  date: string; // YYYY-MM-DD
-  generatedAt: string; // ISO8601 with offset
+  date: string;
+  generatedAt: string;
   isPartialDay: boolean;
-  focusScore: number; // 0–100 integer
+  focusScore: number;
   focusSeconds: number;
   appSummaries: AppSummary[];
   categoryTotals: CategoryTotal[];
@@ -84,23 +169,41 @@ export interface DaySnapshot {
   focusSessions: FocusSession[];
 }
 
-/** Focus score formula — identical on both platforms. */
+export interface DaySnapshotV2 extends Omit<DaySnapshotV1, "schemaVersion"> {
+  schemaVersion: 2;
+  focusScoreV2: FocusScoreV2Snapshot;
+  workBlocks: WorkBlockSummary[];
+  recap: {
+    day: RecapSummaryLite;
+    week: RecapSummaryLite | null;
+    month: RecapSummaryLite | null;
+  };
+  coverage: RecapCoverage;
+  topWorkstreams: WorkstreamRollup[];
+  standoutArtifacts: ArtifactRollup[];
+  entities: EntityRollup[];
+  hiddenByPreferences: boolean;
+}
+
+export type DaySnapshot = DaySnapshotV1 | DaySnapshotV2;
+
+export function isSnapshotV2(snapshot: DaySnapshot): snapshot is DaySnapshotV2 {
+  return snapshot.schemaVersion === 2;
+}
+
+export function readSnapshotFocusScore(snapshot: DaySnapshot): number {
+  return snapshot.schemaVersion === 2
+    ? snapshot.focusScoreV2.score
+    : snapshot.focusScore;
+}
+
 export function computeFocusScore(
   focusedSeconds: number,
   totalTrackedSeconds: number,
-  switchesPerHour: number,
+  switchesPerHour: number
 ): number {
   if (totalTrackedSeconds === 0) return 0;
   const focusedRatio = focusedSeconds / totalTrackedSeconds;
   const penalty = Math.min(switchesPerHour / 300, 0.15);
   return Math.round(100 * focusedRatio * (1 - penalty));
 }
-
-/** Categories considered "focused" for the focus score. */
-export const FOCUSED_CATEGORIES: ReadonlySet<Category> = new Set([
-  "development",
-  "writing",
-  "design",
-  "research",
-  "aiTools",
-]);

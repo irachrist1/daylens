@@ -17,6 +17,8 @@ interface SnapshotDoc {
     focusScore: number;
     focusSeconds: number;
     appSummaries: { appKey: string }[];
+    focusScoreV2?: { score: number };
+    workBlocks?: { id: string }[];
   } | null;
 }
 
@@ -42,6 +44,10 @@ function dateLabel(localDate: string, today: string, yesterday: string): string 
   return formatDate(localDate);
 }
 
+function readFocusScore(snapshot: SnapshotDoc["snapshot"]): number {
+  return snapshot?.focusScoreV2?.score ?? snapshot?.focusScore ?? 0;
+}
+
 export function HistoryClient() {
   const [today] = useState(getLocalDate);
   const [yesterday] = useState(getYesterday);
@@ -56,8 +62,8 @@ export function HistoryClient() {
       .then((json) => {
         if (cancelled) return;
 
-        const list = Array.isArray(json?.snapshots)
-          ? [...json.snapshots].sort((a, b) => b.localDate.localeCompare(a.localDate))
+        const list = Array.isArray(json?.summaries)
+          ? [...json.summaries].sort((a, b) => b.localDate.localeCompare(a.localDate))
           : [];
 
         setSnapshots(list);
@@ -123,12 +129,20 @@ export function HistoryClient() {
           ) : null}
         </div>
         {selectedDate ? (
-          <Link
-            href={`/chat?date=${selectedDate}`}
-            className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
-          >
-            Ask AI
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/chat?date=${selectedDate}`}
+              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
+            >
+              Ask AI
+            </Link>
+            <Link
+              href={`/recap?date=${selectedDate}`}
+              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
+            >
+              Recap
+            </Link>
+          </div>
         ) : null}
       </div>
 
@@ -180,9 +194,10 @@ export function HistoryClient() {
         <div className="space-y-2">
           {snapshots.map((doc) => {
             const snap = doc.snapshot;
-            const focusScore = snap?.focusScore ?? 0;
+            const focusScore = readFocusScore(snap);
             const focusSeconds = snap?.focusSeconds ?? 0;
             const appCount = snap?.appSummaries?.length ?? 0;
+            const blockCount = snap?.workBlocks?.length ?? 0;
             const scoreColor =
               focusScore >= 70
                 ? "text-success"
@@ -219,7 +234,7 @@ export function HistoryClient() {
                       ) : null}
                     </p>
                     <p className="text-xs text-on-surface-variant">
-                      {formatDuration(focusSeconds)} focused · {appCount} apps
+                      {formatDuration(focusSeconds)} focused · {blockCount || appCount} {blockCount ? "blocks" : "apps"}
                     </p>
                   </div>
                 </div>

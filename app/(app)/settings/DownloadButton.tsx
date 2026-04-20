@@ -2,7 +2,7 @@
 
 export function DownloadButton() {
   async function handleDownload() {
-    const res = await fetch("/api/snapshots");
+    const res = await fetch("/api/snapshots?full=1");
     const data = await res.json();
 
     const blob = new Blob([JSON.stringify(data.snapshots, null, 2)], {

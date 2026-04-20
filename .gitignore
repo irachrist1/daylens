@@ -48,3 +48,6 @@ DEPLOYMENT.md
 
 # Local planning docs — not for public repo
 REDESIGN.md
+
+# Local Codex runtime files — not for public repo
+.codex/

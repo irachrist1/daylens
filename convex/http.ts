@@ -5,7 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import type { DaySnapshot, Platform } from "../packages/snapshot-schema/snapshot";
 
 const http = httpRouter();
-const DESKTOP_PLATFORMS = new Set<Platform>(["macos", "windows"]);
+const DESKTOP_PLATFORMS = new Set<Platform>(["macos", "windows", "linux"]);
 const CREATE_WORKSPACE_LIMIT = 50;
 const RECOVER_WORKSPACE_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
@@ -67,7 +67,7 @@ function parseDesktopPlatform(value: unknown): Platform | null {
     : null;
 }
 
-function isValidSnapshotV1(snapshot: unknown): snapshot is DaySnapshot {
+function isValidSnapshot(snapshot: unknown): snapshot is DaySnapshot {
   if (!snapshot || typeof snapshot !== "object") {
     return false;
   }
@@ -85,8 +85,8 @@ function isValidSnapshotV1(snapshot: unknown): snapshot is DaySnapshot {
     candidate.categoryOverrides = {};
   }
 
-  return (
-    candidate.schemaVersion === 1 &&
+  const isBaseSnapshot =
+    (candidate.schemaVersion === 1 || candidate.schemaVersion === 2) &&
     typeof candidate.deviceId === "string" &&
     parseDesktopPlatform(candidate.platform) !== null &&
     typeof candidate.date === "string" &&
@@ -101,7 +101,28 @@ function isValidSnapshotV1(snapshot: unknown): snapshot is DaySnapshot {
     (candidate.aiSummary === null ||
       candidate.aiSummary === undefined ||
       typeof candidate.aiSummary === "string") &&
-    hasArrayField("focusSessions")
+    hasArrayField("focusSessions");
+
+  if (!isBaseSnapshot) {
+    return false;
+  }
+
+  if (candidate.schemaVersion === 1) {
+    return true;
+  }
+
+  return (
+    typeof candidate.focusScoreV2 === "object" &&
+    candidate.focusScoreV2 !== null &&
+    hasArrayField("workBlocks") &&
+    typeof candidate.recap === "object" &&
+    candidate.recap !== null &&
+    typeof candidate.coverage === "object" &&
+    candidate.coverage !== null &&
+    hasArrayField("topWorkstreams") &&
+    hasArrayField("standoutArtifacts") &&
+    hasArrayField("entities") &&
+    typeof candidate.hiddenByPreferences === "boolean"
   );
 }
 
@@ -153,7 +174,7 @@ http.route({
       return jsonResponse({ error: "Missing or invalid required fields" }, 400);
     }
 
-    if (!isValidSnapshotV1(snapshot)) {
+    if (!isValidSnapshot(snapshot)) {
       const s = snapshot as Record<string, unknown> | null;
       console.error("[uploadSnapshot] Invalid snapshot", {
         schemaVersion: s?.schemaVersion,

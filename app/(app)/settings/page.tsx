@@ -20,7 +20,7 @@ export default async function SettingsPage() {
 
   const devices = await client.query(api.devices.listByWorkspace, {});
 
-  const snapshots = await client.query(api.snapshots.list, {});
+  const snapshots = await client.query(api.snapshots.listSummaries, {});
 
   return (
     <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">

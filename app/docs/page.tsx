@@ -48,9 +48,9 @@ export default function DocsPage() {
               fontSize: "1rem",
               fontWeight: 400,
               lineHeight: 1.65,
-              color: "rgba(10,22,40,0.5)",
+              color: "rgba(15,23,42,0.64)",
               margin: 0,
-              maxWidth: "48ch",
+              maxWidth: "44ch",
             }}
           >
             Daylens is a local-first work-history product. These docs explain what is already real

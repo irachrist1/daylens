@@ -9,8 +9,15 @@ import { requireSessionIdentity } from "./authHelpers";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   computeFocusScore,
+  type AppSummary,
   type DaySnapshot,
+  type DaySnapshotV1,
+  type DaySnapshotV2,
   type Platform,
+  type WorkstreamRollup,
+  type ArtifactRollup,
+  type EntityRollup,
+  type RecapSummaryLite,
 } from "../packages/snapshot-schema/snapshot";
 import { daySnapshotValidator } from "./snapshotValidator";
 
@@ -26,13 +33,16 @@ const FOCUSED_CATEGORIES = new Set([
 
 type SnapshotDoc = Doc<"day_snapshots">;
 type DeviceDoc = Doc<"devices">;
+type WorkspacePreferencesDoc = Doc<"workspace_preferences"> | null;
 type LegacyFocusSession = {
   appKey: string;
   startAt: string;
   endAt: string;
   durationSeconds: number;
 };
-type StoredFocusSession = DaySnapshot["focusSessions"][number] | LegacyFocusSession;
+type StoredFocusSession =
+  | DaySnapshotV1["focusSessions"][number]
+  | LegacyFocusSession;
 
 function parseGeneratedAtMs(snapshot: unknown): number {
   if (
@@ -49,7 +59,7 @@ function parseGeneratedAtMs(snapshot: unknown): number {
 
 function normalizeFocusSession(
   session: StoredFocusSession
-): DaySnapshot["focusSessions"][number] {
+): DaySnapshotV1["focusSessions"][number] {
   if ("sourceId" in session) {
     return session;
   }
@@ -64,26 +74,40 @@ function normalizeFocusSession(
   };
 }
 
+function emptyRecapSummary(): RecapSummaryLite {
+  return {
+    headline: "",
+    chapters: [],
+    metrics: [],
+    changeSummary: "",
+    promptChips: [],
+    hasData: false,
+  };
+}
+
 function normalizeSnapshot(snapshot: unknown): DaySnapshot | null {
   if (!snapshot || typeof snapshot !== "object") {
     return null;
   }
 
   const candidate = snapshot as Record<string, unknown>;
+  const schemaVersion =
+    candidate.schemaVersion === 2 ? 2 : candidate.schemaVersion === 1 ? 1 : null;
+  const platform = candidate.platform;
   if (
-    candidate.schemaVersion !== 1 ||
+    schemaVersion === null ||
     typeof candidate.deviceId !== "string" ||
-    (candidate.platform !== "macos" && candidate.platform !== "windows") ||
+    (platform !== "macos" && platform !== "windows" && platform !== "linux") ||
     typeof candidate.date !== "string" ||
     typeof candidate.generatedAt !== "string"
   ) {
     return null;
   }
 
-  return {
+  const base: DaySnapshotV1 = {
     schemaVersion: 1,
     deviceId: candidate.deviceId,
-    platform: candidate.platform,
+    platform,
     date: candidate.date,
     generatedAt: candidate.generatedAt,
     isPartialDay: candidate.isPartialDay === true,
@@ -92,20 +116,20 @@ function normalizeSnapshot(snapshot: unknown): DaySnapshot | null {
     focusSeconds:
       typeof candidate.focusSeconds === "number" ? candidate.focusSeconds : 0,
     appSummaries: Array.isArray(candidate.appSummaries)
-      ? (candidate.appSummaries as DaySnapshot["appSummaries"]).map((app) => ({
+      ? (candidate.appSummaries as DaySnapshotV1["appSummaries"]).map((app) => ({
           ...app,
           iconBase64:
             typeof app.iconBase64 === "string" ? app.iconBase64 : undefined,
         }))
       : [],
     categoryTotals: Array.isArray(candidate.categoryTotals)
-      ? (candidate.categoryTotals as DaySnapshot["categoryTotals"])
+      ? (candidate.categoryTotals as DaySnapshotV1["categoryTotals"])
       : [],
     timeline: Array.isArray(candidate.timeline)
-      ? (candidate.timeline as DaySnapshot["timeline"])
+      ? (candidate.timeline as DaySnapshotV1["timeline"])
       : [],
     topDomains: Array.isArray(candidate.topDomains)
-      ? (candidate.topDomains as DaySnapshot["topDomains"]).map((topDomain) => ({
+      ? (candidate.topDomains as DaySnapshotV1["topDomains"]).map((topDomain) => ({
           ...topDomain,
           topPages: Array.isArray(topDomain.topPages) ? topDomain.topPages : [],
         }))
@@ -114,18 +138,100 @@ function normalizeSnapshot(snapshot: unknown): DaySnapshot | null {
       candidate.categoryOverrides &&
       typeof candidate.categoryOverrides === "object" &&
       !Array.isArray(candidate.categoryOverrides)
-        ? (candidate.categoryOverrides as DaySnapshot["categoryOverrides"])
+        ? (candidate.categoryOverrides as DaySnapshotV1["categoryOverrides"])
         : {},
-    aiSummary: typeof candidate.aiSummary === "string" ? candidate.aiSummary : null,
+    aiSummary:
+      typeof candidate.aiSummary === "string" ? candidate.aiSummary : null,
     focusSessions: Array.isArray(candidate.focusSessions)
       ? (candidate.focusSessions as StoredFocusSession[]).map(normalizeFocusSession)
       : [],
   };
+
+  if (schemaVersion === 1) {
+    return base;
+  }
+
+  return {
+    ...base,
+    schemaVersion: 2,
+    focusScoreV2:
+      candidate.focusScoreV2 &&
+      typeof candidate.focusScoreV2 === "object"
+        ? {
+            score:
+              typeof (candidate.focusScoreV2 as { score?: unknown }).score === "number"
+                ? ((candidate.focusScoreV2 as { score: number }).score)
+                : base.focusScore,
+            coherence:
+              typeof (candidate.focusScoreV2 as { coherence?: unknown }).coherence === "number"
+                ? ((candidate.focusScoreV2 as { coherence: number }).coherence)
+                : 0,
+            deepWorkDensity:
+              typeof (candidate.focusScoreV2 as { deepWorkDensity?: unknown }).deepWorkDensity === "number"
+                ? ((candidate.focusScoreV2 as { deepWorkDensity: number }).deepWorkDensity)
+                : 0,
+            artifactProgress:
+              typeof (candidate.focusScoreV2 as { artifactProgress?: unknown }).artifactProgress === "number"
+                ? ((candidate.focusScoreV2 as { artifactProgress: number }).artifactProgress)
+                : 0,
+            switchPenalty:
+              typeof (candidate.focusScoreV2 as { switchPenalty?: unknown }).switchPenalty === "number"
+                ? ((candidate.focusScoreV2 as { switchPenalty: number }).switchPenalty)
+                : 0,
+          }
+        : {
+            score: base.focusScore,
+            coherence: 0,
+            deepWorkDensity: 0,
+            artifactProgress: 0,
+            switchPenalty: 0,
+          },
+    workBlocks: Array.isArray(candidate.workBlocks)
+      ? (candidate.workBlocks as DaySnapshotV2["workBlocks"])
+      : [],
+    recap:
+      candidate.recap && typeof candidate.recap === "object"
+        ? {
+            day:
+              (candidate.recap as { day?: RecapSummaryLite }).day ??
+              emptyRecapSummary(),
+            week:
+              (candidate.recap as { week?: RecapSummaryLite | null }).week ?? null,
+            month:
+              (candidate.recap as { month?: RecapSummaryLite | null }).month ?? null,
+          }
+        : {
+            day: emptyRecapSummary(),
+            week: null,
+            month: null,
+          },
+    coverage:
+      candidate.coverage && typeof candidate.coverage === "object"
+        ? (candidate.coverage as DaySnapshotV2["coverage"])
+        : {
+            attributedPct: 0,
+            untitledPct: 0,
+            activeDayCount: 0,
+            quietDayCount: 0,
+            hasComparison: false,
+            coverageNote: null,
+          },
+    topWorkstreams: Array.isArray(candidate.topWorkstreams)
+      ? (candidate.topWorkstreams as DaySnapshotV2["topWorkstreams"])
+      : [],
+    standoutArtifacts: Array.isArray(candidate.standoutArtifacts)
+      ? (candidate.standoutArtifacts as DaySnapshotV2["standoutArtifacts"])
+      : [],
+    entities: Array.isArray(candidate.entities)
+      ? (candidate.entities as DaySnapshotV2["entities"])
+      : [],
+    hiddenByPreferences: candidate.hiddenByPreferences === true,
+  };
 }
 
 function mergeTopPages(
-  existingPages: NonNullable<DaySnapshot["topDomains"][number]["topPages"]>,
-  nextPages: NonNullable<DaySnapshot["topDomains"][number]["topPages"]>
+  existingPages: NonNullable<DaySnapshotV1["topDomains"][number]["topPages"]>,
+  nextPages: NonNullable<DaySnapshotV1["topDomains"][number]["topPages"]>
 ) {
   const pageMap = new Map<string, (typeof existingPages)[number]>();
 
@@ -144,6 +250,280 @@ function mergeTopPages(
     .slice(0, 5);
 }
 
+function mergeWorkstreams(snapshots: DaySnapshotV2[]): WorkstreamRollup[] {
+  const workstreams = new Map<string, WorkstreamRollup>();
+  for (const snapshot of snapshots) {
+    for (const item of snapshot.topWorkstreams) {
+      const existing = workstreams.get(item.label);
+      if (existing) {
+        existing.seconds += item.seconds;
+        existing.blockCount += item.blockCount;
+        existing.isUntitled = existing.isUntitled || item.isUntitled;
+      } else {
+        workstreams.set(item.label, { ...item });
+      }
+    }
+  }
+  return [...workstreams.values()]
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 8);
+}
+
+function mergeArtifacts(snapshots: DaySnapshotV2[]): ArtifactRollup[] {
+  const artifacts = new Map<string, ArtifactRollup>();
+  for (const snapshot of snapshots) {
+    for (const artifact of snapshot.standoutArtifacts) {
+      const existing = artifacts.get(artifact.id);
+      if (!existing) {
+        artifacts.set(artifact.id, { ...artifact });
+        continue;
+      }
+      if (artifact.generatedAt > existing.generatedAt) {
+        artifacts.set(artifact.id, { ...artifact });
+      }
+    }
+  }
+  return [...artifacts.values()]
+    .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
+    .slice(0, 8);
+}
+
+function mergeEntities(snapshots: DaySnapshotV2[]): EntityRollup[] {
+  const entities = new Map<string, EntityRollup>();
+  for (const snapshot of snapshots) {
+    for (const entity of snapshot.entities) {
+      const key = `${entity.kind}:${entity.id}`;
+      const existing = entities.get(key);
+      if (existing) {
+        existing.secondsToday += entity.secondsToday;
+        existing.blockCount += entity.blockCount;
+      } else {
+        entities.set(key, { ...entity });
+      }
+    }
+  }
+  return [...entities.values()]
+    .sort((a, b) => b.secondsToday - a.secondsToday)
+    .slice(0, 12);
+}
+
+function mergeFocusScoreV2(
+  snapshots: DaySnapshotV2[],
+  mergedAppSummaries: AppSummary[]
+): DaySnapshotV2["focusScoreV2"] {
+  const weighted = {
+    coherence: 0,
+    deepWorkDensity: 0,
+    artifactProgress: 0,
+    switchPenalty: 0,
+  };
+  let totalWeight = 0;
+
+  for (const snapshot of snapshots) {
+    const weight = Math.max(
+      1,
+      snapshot.appSummaries.reduce((sum, app) => sum + app.totalSeconds, 0)
+    );
+    totalWeight += weight;
+    weighted.coherence += snapshot.focusScoreV2.coherence * weight;
+    weighted.deepWorkDensity += snapshot.focusScoreV2.deepWorkDensity * weight;
+    weighted.artifactProgress += snapshot.focusScoreV2.artifactProgress * weight;
+    weighted.switchPenalty += snapshot.focusScoreV2.switchPenalty * weight;
+  }
+
+  const coherence = totalWeight > 0 ? weighted.coherence / totalWeight : 0;
+  const deepWorkDensity =
+    totalWeight > 0 ? weighted.deepWorkDensity / totalWeight : 0;
+  const artifactProgress =
+    totalWeight > 0 ? weighted.artifactProgress / totalWeight : 0;
+  const switchPenalty =
+    totalWeight > 0 ? weighted.switchPenalty / totalWeight : 0;
+
+  const totalTrackedSeconds = mergedAppSummaries.reduce(
+    (sum, app) => sum + app.totalSeconds,
+    0
+  );
+  const score =
+    totalTrackedSeconds <= 0
+      ? 0
+      : Math.round(
+          Math.max(
+            0,
+            Math.min(
+              1,
+              0.35 * coherence +
+                0.25 * deepWorkDensity +
+                0.2 * artifactProgress +
+                0.2 * (1 - switchPenalty)
+            )
+          ) * 100
+        );
+
+  return {
+    score,
+    coherence,
+    deepWorkDensity,
+    artifactProgress,
+    switchPenalty,
+  };
+}
+
+function normalizeDomain(domain: string): string {
+  return domain.replace(/^www\./, "").toLowerCase();
+}
+
+function isDomainHidden(domain: string, hiddenDomains: Set<string>) {
+  const normalized = normalizeDomain(domain);
+  for (const hidden of hiddenDomains) {
+    if (normalized === hidden || normalized.endsWith(`.${hidden}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hideRecapText(summary: RecapSummaryLite): RecapSummaryLite {
+  return {
+    ...summary,
+    headline:
+      "Some hidden apps or sites were removed per your privacy preferences.",
+    chapters: summary.hasData
+      ? [
+          {
+            id: "headline",
+            eyebrow: "Privacy",
+            title: "This recap is partially hidden",
+            body:
+              "Some activity is hidden by your workspace preferences, so web recap copy is suppressed for this day.",
+          },
+        ]
+      : [],
+    promptChips: [],
+    changeSummary: summary.hasData
+      ? "Open this day on desktop for the full recap after adjusting privacy preferences."
+      : summary.changeSummary,
+  };
+}
+
+function filterSnapshotForPreferences(
+  snapshot: DaySnapshot,
+  prefs: WorkspacePreferencesDoc
+): DaySnapshot {
+  if (!prefs) {
+    return snapshot;
+  }
+
+  const hiddenApps = new Set(prefs.hiddenApps);
+  const hiddenDomains = new Set(prefs.hiddenDomains.map(normalizeDomain));
+
+  if (hiddenApps.size === 0 && hiddenDomains.size === 0) {
+    return snapshot;
+  }
+
+  const filteredApps = snapshot.appSummaries.filter(
+    (app) => !hiddenApps.has(app.appKey)
+  );
+  const filteredTimeline = snapshot.timeline.filter(
+    (entry) => !hiddenApps.has(entry.appKey)
+  );
+  const filteredTopDomains = snapshot.topDomains.filter(
+    (domain) => !isDomainHidden(domain.domain, hiddenDomains)
+  );
+  const filteredCategoryTotals = (() => {
+    const totals = new Map<string, number>();
+    for (const app of filteredApps) {
+      totals.set(app.category, (totals.get(app.category) ?? 0) + app.totalSeconds);
+    }
+    return [...totals.entries()]
+      .map(([category, totalSeconds]) => ({
+        category: category as DaySnapshot["categoryTotals"][number]["category"],
+        totalSeconds,
+      }))
+      .sort((a, b) => b.totalSeconds - a.totalSeconds);
+  })();
+
+  const hiddenByPreferences =
+    filteredApps.length !== snapshot.appSummaries.length ||
+    filteredTimeline.length !== snapshot.timeline.length ||
+    filteredTopDomains.length !== snapshot.topDomains.length;
+
+  const focusSeconds = filteredApps
+    .filter((app) => FOCUSED_CATEGORIES.has(app.category))
+    .reduce((sum, app) => sum + app.totalSeconds, 0);
+  const totalTrackedSeconds = filteredApps.reduce(
+    (sum, app) => sum + app.totalSeconds,
+    0
+  );
+
+  let switches = 0;
+  for (let index = 1; index < filteredTimeline.length; index += 1) {
+    if (filteredTimeline[index]?.appKey !== filteredTimeline[index - 1]?.appKey) {
+      switches += 1;
+    }
+  }
+  const hours = totalTrackedSeconds / 3600;
+  const switchesPerHour = hours > 0 ? switches / hours : 0;
+
+  if (snapshot.schemaVersion === 1) {
+    return {
+      ...snapshot,
+      focusScore: computeFocusScore(
+        focusSeconds,
+        totalTrackedSeconds,
+        switchesPerHour
+      ),
+      focusSeconds,
+      appSummaries: filteredApps,
+      categoryTotals: filteredCategoryTotals,
+      timeline: filteredTimeline,
+      topDomains: filteredTopDomains,
+    };
+  }
+
+  let removedFromBlocks = false;
+  const filteredWorkBlocks = snapshot.workBlocks.map((block) => {
+    const topApps = block.topApps.filter((app) => !hiddenApps.has(app.appKey));
+    const topPages = block.topPages.filter(
+      (page) => !isDomainHidden(page.domain, hiddenDomains)
+    );
+    if (
+      topApps.length !== block.topApps.length ||
+      topPages.length !== block.topPages.length
+    ) {
+      removedFromBlocks = true;
+    }
+    return {
+      ...block,
+      topApps,
+      topPages,
+    };
+  });
+
+  return {
+    ...snapshot,
+    focusScore: computeFocusScore(
+      focusSeconds,
+      totalTrackedSeconds,
+      switchesPerHour
+    ),
+    focusSeconds,
+    appSummaries: filteredApps,
+    categoryTotals: filteredCategoryTotals,
+    timeline: filteredTimeline,
+    topDomains: filteredTopDomains,
+    workBlocks: filteredWorkBlocks,
+    recap: hiddenByPreferences || removedFromBlocks
+      ? {
+          day: hideRecapText(snapshot.recap.day),
+          week: snapshot.recap.week ? hideRecapText(snapshot.recap.week) : null,
+          month: snapshot.recap.month ? hideRecapText(snapshot.recap.month) : null,
+        }
+      : snapshot.recap,
+    hiddenByPreferences:
+      snapshot.hiddenByPreferences || hiddenByPreferences || removedFromBlocks,
+  };
+}
+
 async function loadWorkspaceDevices(
   ctx: QueryCtx,
   workspaceId: Id<"workspaces">
@@ -154,6 +534,16 @@ async function loadWorkspaceDevices(
     .take(100);
 
   return new Map(devices.map((device) => [device.deviceId, device]));
+}
+
+async function loadWorkspacePreferences(
+  ctx: QueryCtx,
+  workspaceId: Id<"workspaces">
+) {
+  return await ctx.db
+    .query("workspace_preferences")
+    .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+    .first();
 }
 
 function mergeSnapshots(
@@ -170,16 +560,17 @@ function mergeSnapshots(
       (entry): entry is { doc: SnapshotDoc; snapshot: DaySnapshot } =>
         entry.snapshot !== null
     )
-    .sort(
-      (a, b) =>
-        parseGeneratedAtMs(a.snapshot) - parseGeneratedAtMs(b.snapshot)
-    );
+    .sort((a, b) => parseGeneratedAtMs(a.snapshot) - parseGeneratedAtMs(b.snapshot));
 
   if (normalizedDocs.length === 0) {
     return null;
   }
 
   const latest = normalizedDocs[normalizedDocs.length - 1];
+  const v2Snapshots = normalizedDocs
+    .map(({ snapshot }) => snapshot)
+    .filter((snapshot): snapshot is DaySnapshotV2 => snapshot.schemaVersion === 2);
+
   const appMap = new Map<string, DaySnapshot["appSummaries"][number]>();
   const topDomainMap = new Map<string, DaySnapshot["topDomains"][number]>();
   const categoryOverrides: DaySnapshot["categoryOverrides"] = {};
@@ -288,8 +679,49 @@ function mergeSnapshots(
     })
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
 
-  const mergedSnapshot: DaySnapshot = {
-    schemaVersion: 1,
+  const base = {
+    _id: latest.doc._id,
+    _creationTime: latest.doc._creationTime,
+    workspaceId: latest.doc.workspaceId,
+    localDate: latest.doc.localDate,
+    syncedAt: Math.max(...normalizedDocs.map(({ doc }) => doc.syncedAt)),
+    devices,
+  };
+
+  if (v2Snapshots.length === 0) {
+    const mergedSnapshot: DaySnapshotV1 = {
+      schemaVersion: 1,
+      deviceId: latest.snapshot.deviceId,
+      platform: latest.snapshot.platform,
+      date: latest.snapshot.date,
+      generatedAt: latest.snapshot.generatedAt,
+      isPartialDay: normalizedDocs.some(({ snapshot }) => snapshot.isPartialDay),
+      focusScore,
+      focusSeconds,
+      appSummaries,
+      categoryTotals,
+      timeline,
+      topDomains,
+      categoryOverrides,
+      aiSummary:
+        [...normalizedDocs]
+          .reverse()
+          .find(({ snapshot }) => snapshot.aiSummary)?.snapshot.aiSummary ?? null,
+      focusSessions,
+    };
+
+    return {
+      ...base,
+      snapshot: mergedSnapshot,
+    };
+  }
+
+  const workBlocks = v2Snapshots
+    .flatMap((snapshot) => snapshot.workBlocks)
+    .sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const latestV2 = v2Snapshots[v2Snapshots.length - 1]!;
+  const mergedSnapshot: DaySnapshotV2 = {
+    schemaVersion: 2,
     deviceId: latest.snapshot.deviceId,
     platform: latest.snapshot.platform,
     date: latest.snapshot.date,
@@ -307,15 +739,18 @@ function mergeSnapshots(
         .reverse()
         .find(({ snapshot }) => snapshot.aiSummary)?.snapshot.aiSummary ?? null,
     focusSessions,
+    focusScoreV2: mergeFocusScoreV2(v2Snapshots, appSummaries),
+    workBlocks,
+    recap: latestV2.recap,
+    coverage: latestV2.coverage,
+    topWorkstreams: mergeWorkstreams(v2Snapshots),
+    standoutArtifacts: mergeArtifacts(v2Snapshots),
+    entities: mergeEntities(v2Snapshots),
+    hiddenByPreferences: false,
   };
 
   return {
-    _id: latest.doc._id,
-    _creationTime: latest.doc._creationTime,
-    workspaceId: latest.doc.workspaceId,
-    localDate: latest.doc.localDate,
-    syncedAt: Math.max(...normalizedDocs.map(({ doc }) => doc.syncedAt)),
-    devices,
+    ...base,
     snapshot: mergedSnapshot,
   };
 }
@@ -324,12 +759,13 @@ async function loadMergedSnapshotsForWorkspace(
   ctx: QueryCtx,
   workspaceId: Id<"workspaces">
 ) {
-  const [docs, deviceMap] = await Promise.all([
+  const [docs, deviceMap, prefs] = await Promise.all([
     ctx.db
       .query("day_snapshots")
       .withIndex("by_workspace_date", (q) => q.eq("workspaceId", workspaceId))
       .take(MAX_SNAPSHOT_DOCS),
     loadWorkspaceDevices(ctx, workspaceId),
+    loadWorkspacePreferences(ctx, workspaceId),
   ]);
 
   const grouped = new Map<string, SnapshotDoc[]>();
@@ -342,7 +778,11 @@ async function loadMergedSnapshotsForWorkspace(
   return [...grouped.entries()]
     .sort((a, b) => b[0].localeCompare(a[0]))
     .map(([, dayDocs]) => mergeSnapshots(dayDocs, deviceMap))
-    .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+    .filter((doc): doc is NonNullable<typeof doc> => doc !== null)
+    .map((doc) => ({
+      ...doc,
+      snapshot: filterSnapshotForPreferences(doc.snapshot, prefs),
+    }));
 }
 
 export const list = query({
@@ -353,13 +793,42 @@ export const list = query({
   },
 });
 
+export const listSummaries = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await requireSessionIdentity(ctx);
+    const docs = await loadMergedSnapshotsForWorkspace(ctx, identity.workspaceId);
+
+    return docs.map((doc) => ({
+      _id: doc._id,
+      localDate: doc.localDate,
+      syncedAt: doc.syncedAt,
+      snapshot: {
+        schemaVersion: doc.snapshot.schemaVersion,
+        focusScore:
+          doc.snapshot.schemaVersion === 2
+            ? doc.snapshot.focusScoreV2.score
+            : doc.snapshot.focusScore,
+        focusSeconds: doc.snapshot.focusSeconds,
+        appSummaries: doc.snapshot.appSummaries.map((app) => ({
+          appKey: app.appKey,
+        })),
+        workBlocks:
+          doc.snapshot.schemaVersion === 2
+            ? doc.snapshot.workBlocks.map((block) => ({ id: block.id }))
+            : [],
+      },
+    }));
+  },
+});
+
 export const getByDate = query({
   args: {
     localDate: v.string(),
   },
   handler: async (ctx, args) => {
     const identity = await requireSessionIdentity(ctx);
-    const [docs, deviceMap] = await Promise.all([
+    const [docs, deviceMap, prefs] = await Promise.all([
       ctx.db
         .query("day_snapshots")
         .withIndex("by_workspace_date", (q) =>
@@ -367,9 +836,18 @@ export const getByDate = query({
         )
         .take(50),
       loadWorkspaceDevices(ctx, identity.workspaceId),
+      loadWorkspacePreferences(ctx, identity.workspaceId),
     ]);
 
-    return mergeSnapshots(docs, deviceMap);
+    const merged = mergeSnapshots(docs, deviceMap);
+    if (!merged) {
+      return null;
+    }
+
+    return {
+      ...merged,
+      snapshot: filterSnapshotForPreferences(merged.snapshot, prefs),
+    };
   },
 });
 
@@ -427,7 +905,7 @@ export const getByWorkspaceAndDate = internalQuery({
     localDate: v.string(),
   },
   handler: async (ctx, args) => {
-    const [docs, deviceMap] = await Promise.all([
+    const [docs, deviceMap, prefs] = await Promise.all([
       ctx.db
         .query("day_snapshots")
         .withIndex("by_workspace_date", (q) =>
@@ -435,9 +913,17 @@ export const getByWorkspaceAndDate = internalQuery({
         )
         .take(50),
       loadWorkspaceDevices(ctx, args.workspaceId),
+      loadWorkspacePreferences(ctx, args.workspaceId),
     ]);
 
-    return mergeSnapshots(docs, deviceMap);
+    const merged = mergeSnapshots(docs, deviceMap);
+    if (!merged) {
+      return null;
+    }
+    return {
+      ...merged,
+      snapshot: filterSnapshotForPreferences(merged.snapshot, prefs),
+    };
   },
 });
 

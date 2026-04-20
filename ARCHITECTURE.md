@@ -1,18 +1,28 @@
 # Daylens Web — Architecture
 
-> The web companion for Daylens. A read-only dashboard that displays activity data synced from the desktop app (macOS or Windows).
+> The web companion for Daylens. A read-only dashboard that displays activity data synced from the desktop app (macOS, Windows, or Linux).
 
 ## How the System Works
 
-Daylens is a **three-repo system**:
+Daylens currently spans a unified desktop repo plus a small set of companion or archival repos:
 
-| Repo | Purpose | Tech | URL |
-|------|---------|------|-----|
-| [`daylens`](https://github.com/irachrist1/daylens) | macOS desktop app + marketing site | Swift / SwiftUI | `irachrist1.github.io/daylens` |
-| [`daylens-windows`](https://github.com/irachrist1/daylens-windows) | Windows desktop app | Electron / React / Vite | GitHub Releases |
-| [`daylens-web`](https://github.com/irachrist1/daylens-web) | Web dashboard + Convex backend | Next.js / Convex | Vercel |
+| Repo | Purpose | Tech |
+|------|---------|------|
+| `daylens` | Unified cross-platform desktop app (macOS + Windows + Linux) | Electron / React / Vite / TypeScript |
+| `daylens-web` | Web dashboard, marketing/docs site, and Convex backend | Next.js / Convex |
+| `daylens-linux` | Public MIT transition repo; points contributors back to `daylens` | — |
+| `daylens-swiftUI` | Legacy macOS SwiftUI prototype (archived, non-shipping) | Swift / SwiftUI |
 
 **The web app cannot work alone.** It only displays data that the desktop app collects and syncs.
+
+---
+
+## Status vs. `daylens` desktop
+
+This doc describes the web companion only. The desktop app's current implementation
+status, platform validation state, and open gaps live in the unified repo's
+`docs/ISSUES.md`. When this doc and that one disagree, `docs/ISSUES.md` wins for
+desktop behavior and this one wins for web behavior.
 
 ---
 
@@ -20,7 +30,7 @@ Daylens is a **three-repo system**:
 
 ```
 ┌──────────────────────────────────┐
-│  Desktop App (macOS or Windows)  │
+│ Desktop App (macOS/Windows/Linux)│
 │                                  │
 │  1. Tracks app/browser usage     │
 │  2. Stores data locally (SQLite) │
@@ -131,9 +141,10 @@ Web Browser                          Next.js API          Convex
 | File | Purpose |
 |------|---------|
 | `page.tsx` | Landing page — QR scanner, token paste, connect flow |
-| `(app)/dashboard/DashboardClient.tsx` | Main dashboard (client component) — selected-date navigation, focus scores, top apps, expandable top sites |
-| `(app)/history/HistoryClient.tsx` | History browser (client component) — synced-day list plus selected-day detail and date navigation |
+| `(app)/dashboard/DashboardClient.tsx` | Main dashboard (client component) — selected-date navigation, focus scores, recap headline, work blocks, and supporting app/site evidence |
+| `(app)/history/HistoryClient.tsx` | History browser (client component) — synced-day list plus selected-day detail with recap/work-block-aware snapshot rendering |
 | `(app)/chat/page.tsx` | AI chat page — renders GlobalChat |
+| `(app)/recap/RecapClient.tsx` | Dedicated recap route for synced day/week/month recap payloads plus workstream/entity/artifact rollups |
 | `(app)/apps/[date]/page.tsx` | Day detail — app usage, categories, top sites, AI summary |
 | `(app)/settings/page.tsx` | Settings — AI API key, disconnect |
 | `api/chat/route.ts` | POST endpoint — AI chat (accepts both `{messages}` and `{question,date}` formats) |
@@ -161,6 +172,10 @@ Web Browser                          Next.js API          Convex
 
 ## Database Schema
 
+> Snapshot schema v1 is documented below and is what the web renders today.
+> Snapshot v2 is in design. See `.intent/web.md` in the unified `daylens` repo
+> for the proposed contract, and update this doc when v2 lands.
+
 ```
 workspaces
   _id: Id
@@ -171,7 +186,7 @@ devices
   _id: Id
   workspaceId: Id<workspaces>
   deviceId: string                 ← UUID generated on each device
-  platform: "macos" | "windows" | "web"
+  platform: "macos" | "windows" | "linux" | "web"
   displayName: string
   lastSyncAt: number
   index: by_workspace
@@ -190,7 +205,7 @@ day_snapshots
   workspaceId: Id<workspaces>
   deviceId: string
   localDate: string                ← "2026-03-21"
-  snapshot: DaySnapshot v1         ← Validated snapshot payload (apps, icons, sites, focus data)
+  snapshot: DaySnapshot v1 or v2   ← Validated snapshot payload (legacy app/site data plus v2 work blocks, recap, entities, and focus-score breakdown when available)
   syncedAt: number
   index: by_workspace_date
 
@@ -207,6 +222,11 @@ web_chats
   index: by_workspace
 ```
 
+Linux platform support requires the Snapshot v1 validator to be widened; see
+`.intent/web.md` Phase 1 in the unified `daylens` repo. Linux is architecturally
+supported today but will still be rejected by the current Convex validator until
+that phase ships.
+
 ---
 
 ## Deployment
@@ -217,10 +237,10 @@ web_chats
 - **Convex**: Already deployed at `decisive-aardvark-847.convex.cloud`
 
 ### Marketing Site
-- **Platform**: Vercel (static HTML/CSS)
-- **Source**: `daylens` repo → `website/` directory
+- **Platform**: Vercel (served from this Next.js repo alongside the dashboard/docs routes)
+- **Source**: `daylens-web` repo → `app/` routes and shared marketing components
 - **URL**: `https://getdaylens.vercel.app` (also `daylens-eight.vercel.app`)
-- **Deploy**: `cd website && vercel --prod`
+- **Deploy**: `vercel --prod`
 
 ---
 
@@ -279,4 +299,6 @@ npm run dev
 # Open http://localhost:3000
 ```
 
-To test the full flow, you need a desktop app running and syncing data. See the [daylens](https://github.com/irachrist1/daylens) or [daylens-windows](https://github.com/irachrist1/daylens-windows) repos.
+To test the full flow, you need a desktop app running and syncing data. See the
+unified `daylens` repo and its `docs/ISSUES.md` for the current cross-platform
+desktop source of truth.

@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const date = searchParams.get("date");
+  const full = searchParams.get("full");
 
   const client = getConvexClient(session.token);
 
@@ -21,6 +22,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ snapshot });
   }
 
-  const snapshots = await client.query(api.snapshots.list, {});
-  return NextResponse.json({ snapshots });
+  if (full === "1") {
+    const snapshots = await client.query(api.snapshots.list, {});
+    return NextResponse.json({ snapshots });
+  }
+
+  const summaries = await client.query(api.snapshots.listSummaries, {});
+  return NextResponse.json({ summaries });
 }

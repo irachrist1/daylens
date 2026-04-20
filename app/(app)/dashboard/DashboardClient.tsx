@@ -24,19 +24,64 @@ interface AppSummary {
 }
 
 interface Snapshot {
+  schemaVersion?: number;
   focusScore: number;
   focusSeconds: number;
   isPartialDay?: boolean;
+  hiddenByPreferences?: boolean;
   appSummaries: AppSummary[];
   categoryTotals: { category: string; totalSeconds: number }[];
   topDomains: TopDomainItem[];
   focusSessions?: { sourceId: string }[];
+  focusScoreV2?: {
+    score: number;
+    coherence: number;
+    deepWorkDensity: number;
+    artifactProgress: number;
+    switchPenalty: number;
+  };
+  workBlocks?: Array<{
+    id: string;
+    startAt: string;
+    endAt: string;
+    label: string;
+    focusSeconds: number;
+    switchCount: number;
+    topApps: Array<{ appKey: string; seconds: number }>;
+    topPages: Array<{ domain: string; title: string | null; seconds: number }>;
+  }>;
+  recap?: {
+    day?: {
+      headline: string;
+      hasData: boolean;
+      chapters: Array<{ id: string; eyebrow: string; title: string; body: string }>;
+      metrics: Array<{ label: string; value: string; detail: string }>;
+    };
+  };
+  coverage?: {
+    coverageNote?: string | null;
+  };
+  topWorkstreams?: Array<{ label: string; seconds: number; blockCount: number }>;
+  entities?: Array<{ id: string; label: string; kind: string; secondsToday: number }>;
 }
 
 interface SnapshotDoc {
   snapshot: Snapshot;
   syncedAt?: number;
   localDate: string;
+}
+
+interface SnapshotSummaryDoc {
+  _id: string;
+  localDate: string;
+  syncedAt?: number;
+  snapshot: {
+    schemaVersion?: number;
+    focusScore: number;
+    focusSeconds: number;
+    appSummaries: { appKey: string }[];
+    workBlocks?: { id: string }[];
+  } | null;
 }
 
 function getLocalDate(): string {
@@ -66,6 +111,15 @@ function shiftDate(date: string, deltaDays: number) {
   const nextDate = new Date(`${date}T12:00:00`);
   nextDate.setDate(nextDate.getDate() + deltaDays);
   return nextDate.toLocaleDateString("en-CA");
+}
+
+function readFocusScore(snapshot: Snapshot | null | undefined): number {
+  return snapshot?.focusScoreV2?.score ?? snapshot?.focusScore ?? 0;
+}
+
+function blockDurationSeconds(block: { startAt: string; endAt: string }) {
+  const duration = Date.parse(block.endAt) - Date.parse(block.startAt);
+  return Number.isFinite(duration) && duration > 0 ? Math.round(duration / 1000) : 0;
 }
 
 export function DashboardClient() {
@@ -145,24 +199,23 @@ export function DashboardClient() {
       .then((json) => {
         if (cancelled) return;
 
-        const snapshots = Array.isArray(json?.snapshots)
-          ? [...json.snapshots].sort((a, b) => b.localDate.localeCompare(a.localDate))
+        const summaries: SnapshotSummaryDoc[] = Array.isArray(json?.summaries)
+          ? [...json.summaries].sort((a, b) => b.localDate.localeCompare(a.localDate))
           : [];
 
-        setAvailableDates(snapshots.map((snapshot) => snapshot.localDate));
+        setAvailableDates(summaries.map((snapshot) => snapshot.localDate));
 
-        if (snapshots.length === 0) {
+        if (summaries.length === 0) {
           setSelectedDate(today);
           setData(null);
           setIsInitialLatestFallback(false);
           return;
         }
 
-        const todaySnapshot = snapshots.find((snapshot) => snapshot.localDate === today);
-        const initialDate = todaySnapshot?.localDate ?? snapshots[0]!.localDate;
-        const initialSnapshot = todaySnapshot ?? snapshots[0] ?? null;
+        const todaySnapshot = summaries.find((snapshot) => snapshot.localDate === today);
+        const initialDate = todaySnapshot?.localDate ?? summaries[0]!.localDate;
         setSelectedDate(initialDate);
-        setData(initialSnapshot);
+        setData(undefined);
         setIsInitialLatestFallback(initialDate !== today);
       })
       .catch(() => {
@@ -337,12 +390,20 @@ export function DashboardClient() {
           ) : null}
         </div>
         <div className="flex flex-col items-end gap-2">
-          <Link
-            href={`/chat?date=${selectedDate}`}
-            className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
-          >
-            Ask AI
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/chat?date=${selectedDate}`}
+              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
+            >
+              Ask AI
+            </Link>
+            <Link
+              href={`/recap?date=${selectedDate}`}
+              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
+            >
+              Recap
+            </Link>
+          </div>
           {data.syncedAt ? (
             <span className="text-xs text-on-surface-variant">
               Synced {formatRelativeTime(data.syncedAt)}
@@ -374,7 +435,7 @@ export function DashboardClient() {
       </div>
 
       <div className="flex items-center gap-4 sm:gap-6 rounded-2xl glass-card p-4 sm:p-6">
-        <ScoreRing score={snapshot.focusScore || 0} size={100} />
+        <ScoreRing score={readFocusScore(snapshot)} size={100} />
         <div className="flex-1 space-y-3">
           <div>
             <span className="text-[0.6875rem] font-semibold tracking-wide uppercase text-on-surface-variant">
@@ -384,17 +445,133 @@ export function DashboardClient() {
           </div>
           <div>
             <span className="text-[0.6875rem] font-semibold tracking-wide uppercase text-on-surface-variant">
-              Apps Used
+              Work Blocks
             </span>
-            <p className="text-xl font-bold">{snapshot.appSummaries.length}</p>
+            <p className="text-xl font-bold">{snapshot.workBlocks?.length ?? 0}</p>
           </div>
           {snapshot.isPartialDay && (
             <span className="inline-block rounded bg-primary-container/20 px-2 py-0.5 text-[0.6875rem] font-medium text-primary">
               In progress
             </span>
           )}
+          {snapshot.hiddenByPreferences && (
+            <span className="inline-block rounded bg-warning/10 px-2 py-0.5 text-[0.6875rem] font-medium text-warning">
+              Some apps and sites are hidden
+            </span>
+          )}
         </div>
       </div>
+
+      {snapshot.recap?.day?.hasData && (
+        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">Daily Recap</h2>
+              <p className="mt-1 text-sm leading-relaxed text-on-surface/90">
+                {snapshot.recap.day.headline}
+              </p>
+            </div>
+            <Link href={`/recap?date=${selectedDate}`} className="text-xs text-primary hover:underline">
+              Open full recap
+            </Link>
+          </div>
+          {snapshot.coverage?.coverageNote ? (
+            <div className="rounded-xl bg-warning/10 px-3 py-2 text-sm text-on-surface/85">
+              {snapshot.coverage.coverageNote}
+            </div>
+          ) : null}
+          <div className="space-y-3">
+            {snapshot.recap.day.chapters.slice(0, 3).map((chapter) => (
+              <div key={chapter.id} className="rounded-xl bg-surface-low px-4 py-3">
+                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
+                  {chapter.eyebrow}
+                </p>
+                <p className="mt-1 text-sm font-semibold text-on-surface">{chapter.title}</p>
+                <p className="mt-1 text-sm text-on-surface/85">{chapter.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {(snapshot.workBlocks?.length || 0) > 0 && (
+        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
+          <h2 className="text-lg font-semibold">Work Blocks</h2>
+          <div className="space-y-3">
+            {snapshot.workBlocks!.slice(0, 8).map((block) => (
+              <div key={block.id} className="rounded-xl bg-surface-low px-4 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-on-surface">{block.label}</p>
+                    <p className="mt-1 text-[0.6875rem] text-on-surface-variant">
+                      {formatDuration(blockDurationSeconds(block))} · {block.switchCount} switches
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary">
+                    {formatDuration(block.focusSeconds)} focus
+                  </span>
+                </div>
+                {(block.topApps.length || block.topPages.length) > 0 && (
+                  <div className="mt-3 space-y-1 text-[0.6875rem] text-on-surface-variant">
+                    {block.topApps.length > 0 && (
+                      <p>Apps: {block.topApps.map((app) => app.appKey).join(", ")}</p>
+                    )}
+                    {block.topPages.length > 0 && (
+                      <p>
+                        Pages: {block.topPages.map((page) => page.title || page.domain).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {((snapshot.topWorkstreams?.length || 0) > 0 || (snapshot.entities?.length || 0) > 0) && (
+        <div className="grid gap-4 sm:gap-6 sm:grid-cols-2">
+          {(snapshot.topWorkstreams?.length || 0) > 0 && (
+            <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
+              <h2 className="text-lg font-semibold">Top Workstreams</h2>
+              <div className="space-y-3">
+                {snapshot.topWorkstreams!.slice(0, 5).map((item) => (
+                  <div key={item.label} className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">{item.label}</p>
+                      <p className="text-[0.6875rem] text-on-surface-variant">
+                        {item.blockCount} blocks
+                      </p>
+                    </div>
+                    <p className="text-sm font-medium text-on-surface">
+                      {formatDuration(item.seconds)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {(snapshot.entities?.length || 0) > 0 && (
+            <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
+              <h2 className="text-lg font-semibold">Entities</h2>
+              <div className="space-y-3">
+                {snapshot.entities!.slice(0, 5).map((entity) => (
+                  <div key={`${entity.kind}-${entity.id}`} className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-on-surface">{entity.label}</p>
+                      <p className="text-[0.6875rem] text-on-surface-variant">{entity.kind}</p>
+                    </div>
+                    <p className="text-sm font-medium text-on-surface">
+                      {formatDuration(entity.secondsToday)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
 
       {categoryTotals.length > 0 && (
         <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
@@ -406,7 +583,7 @@ export function DashboardClient() {
       {topApps.length > 0 && (
         <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Top Apps</h2>
+            <h2 className="text-lg font-semibold">Supporting Apps</h2>
             <Link
               href={`/apps/${selectedDate}`}
               className="text-xs text-primary hover:underline"

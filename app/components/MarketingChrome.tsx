@@ -69,7 +69,7 @@ export function MarketingInnerNav({
           className={landing ? "dl-nav-cta" : "lp-btn-primary dl-nav-cta"}
           style={landing ? undefined : { padding: "0.5rem 1.25rem", fontSize: "0.8125rem" }}
         >
-          {landing ? "Connect App" : "Connect Desktop App"}
+          Connect App
         </Link>
       </nav>
     </header>

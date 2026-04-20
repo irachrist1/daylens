@@ -37,6 +37,16 @@ function PlatformBadge({ platform }: { platform: string }) {
       </span>
     );
   }
+  if (platform === "linux") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[0.6875rem] text-on-surface-variant">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+          <path d="M12 2a3 3 0 013 3v1.1c2.86 1.04 5 3.78 5 7.04 0 2.61-1.38 4.94-3.45 6.25.08.19.12.41.12.61a1.5 1.5 0 01-3 0c0-.2.04-.42.12-.61-.58.14-1.18.21-1.79.21-.61 0-1.21-.07-1.79-.21.08.19.12.41.12.61a1.5 1.5 0 01-3 0c0-.2.04-.42.12-.61A7.46 7.46 0 014 13.14c0-3.26 2.14-6 5-7.04V5a3 3 0 013-3zm0 2a1 1 0 00-1 1v.56c.33-.04.66-.06 1-.06s.67.02 1 .06V5a1 1 0 00-1-1zm-4.5 9.14a1.25 1.25 0 101.25-1.25 1.25 1.25 0 00-1.25 1.25zm7.75-1.25a1.25 1.25 0 100 2.5 1.25 1.25 0 000-2.5z" />
+        </svg>
+        Linux
+      </span>
+    );
+  }
   return (
     <span className="text-[0.6875rem] text-on-surface-variant">{platform}</span>
   );

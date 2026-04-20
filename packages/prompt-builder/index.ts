@@ -3,7 +3,11 @@
  * Same system prompt, same section headers, same semantic labels.
  */
 
-import type { DaySnapshot } from "../snapshot-schema/snapshot";
+import {
+  isSnapshotV2,
+  readSnapshotFocusScore,
+  type DaySnapshot,
+} from "../snapshot-schema/snapshot";
 
 // ─── System prompt (identical to macOS) ──────────────────────────────
 
@@ -89,8 +93,59 @@ export function buildDayContext(snapshot: DaySnapshot): string {
   context += `- Total active time: ${formatDuration(totalSeconds)}\n`;
   context += `- Apps used: ${snapshot.appSummaries.length}\n`;
   context += `- Websites visited: ${snapshot.topDomains.length}\n`;
-  context += `- Focus score: ${snapshot.focusScore}%\n`;
+  context += `- Focus score: ${readSnapshotFocusScore(snapshot)}%\n`;
   context += `- Focus time: ${formatDuration(snapshot.focusSeconds)}\n\n`;
+
+  if (isSnapshotV2(snapshot)) {
+    context += "### Work Blocks\n";
+    if (snapshot.workBlocks.length === 0) {
+      context += "- No closed work blocks were synced for this day.\n";
+    } else {
+      snapshot.workBlocks.slice(0, 10).forEach((block, index) => {
+        const apps = block.topApps.map((app) => app.appKey).join(", ");
+        const pages = block.topPages.map((page) => page.domain).join(", ");
+        const evidence = [apps ? `apps: ${apps}` : "", pages ? `pages: ${pages}` : ""]
+          .filter(Boolean)
+          .join(" | ");
+        context += `${index + 1}. ${block.label} — ${formatDuration(durationBetween(block.startAt, block.endAt))} | focus: ${formatDuration(block.focusSeconds)} | switches: ${block.switchCount}${evidence ? ` | ${evidence}` : ""}\n`;
+      });
+    }
+    context += "\n";
+
+    context += "### Focus Score V2\n";
+    context += `- Coherence: ${formatPct(snapshot.focusScoreV2.coherence)}\n`;
+    context += `- Deep work density: ${formatPct(snapshot.focusScoreV2.deepWorkDensity)}\n`;
+    context += `- Artifact progress: ${formatPct(snapshot.focusScoreV2.artifactProgress)}\n`;
+    context += `- Switch penalty: ${formatPct(snapshot.focusScoreV2.switchPenalty)}\n\n`;
+
+    if (snapshot.topWorkstreams.length > 0) {
+      context += "### Top Workstreams\n";
+      snapshot.topWorkstreams.slice(0, 5).forEach((workstream, index) => {
+        context += `${index + 1}. ${workstream.label} — ${formatDuration(workstream.seconds)} | ${workstream.blockCount} blocks\n`;
+      });
+      context += "\n";
+    }
+
+    if (snapshot.entities.length > 0) {
+      context += "### Entities\n";
+      snapshot.entities.slice(0, 6).forEach((entity, index) => {
+        context += `${index + 1}. ${entity.label} (${entity.kind}) — ${formatDuration(entity.secondsToday)}\n`;
+      });
+      context += "\n";
+    }
+
+    if (snapshot.recap.day.hasData) {
+      context += "### Recap\n";
+      context += `- Headline: ${snapshot.recap.day.headline}\n`;
+      snapshot.recap.day.chapters.forEach((chapter) => {
+        context += `- ${chapter.eyebrow}: ${chapter.body}\n`;
+      });
+      if (snapshot.coverage.coverageNote) {
+        context += `- Coverage note: ${snapshot.coverage.coverageNote}\n`;
+      }
+      context += "\n";
+    }
+  }
 
   // Category breakdown
   if (snapshot.categoryTotals.length > 0) {
@@ -200,4 +255,14 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function durationBetween(startAt: string, endAt: string): number {
+  const durationMs = Date.parse(endAt) - Date.parse(startAt);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 0;
+  return Math.round(durationMs / 1000);
+}
+
+function formatPct(value: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }

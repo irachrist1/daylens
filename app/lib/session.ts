@@ -1,6 +1,4 @@
 import { cookies } from "next/headers";
-import { getConvexClient } from "@/app/lib/convex";
-import { api } from "@/convex/_generated/api";
 import {
   SESSION_COOKIE,
   verifySessionToken,
@@ -28,9 +26,6 @@ export async function getSession(): Promise<Session | null> {
     if (payload.sessionKind !== "web") {
       return null;
     }
-
-    const client = getConvexClient(raw);
-    await client.query(api.sessionStatus.validate, {});
 
     return {
       token: raw,
