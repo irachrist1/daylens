@@ -1,0 +1,56 @@
+flowchart TB
+    subgraph runtime[Runtime Systems]
+        desktop[Desktop App]
+        web[Web App]
+        convex[Convex Backend]
+    end
+
+    subgraph sentry[Sentry]
+        errors[Errors + Exceptions]
+        traces[Performance + AI Traces]
+        releases[Release Health + Source Maps]
+    end
+
+    subgraph posthog[PostHog]
+        analytics[Product Analytics]
+        flags[Feature Flags + Kill Switches]
+        replay[Masked Web Replay]
+    end
+
+    subgraph delivery[Delivery Pipeline]
+        ci[CI / Contract Checks]
+        preview[Preview Deploys]
+        smoke[Remote Smoke Tests]
+        phased[Phased Rollout]
+        rollback[Instant Rollback]
+    end
+
+    desktop --> errors
+    desktop --> traces
+    web --> errors
+    web --> traces
+    convex --> errors
+    convex --> traces
+    web --> replay
+
+    desktop --> analytics
+    web --> analytics
+    convex --> analytics
+
+    flags --> phased
+    flags --> rollback
+
+    ci --> preview --> smoke --> phased
+    releases --> phased
+    errors --> rollback
+    traces --> rollback
+    analytics --> phased
+
+    classDef runtimeFill fill:#eef5ff,stroke:#4f7cff,color:#122033
+    classDef sentryFill fill:#f9eef7,stroke:#c35aa0,color:#3d1732
+    classDef hogFill fill:#fff7e8,stroke:#cc8b1f,color:#3a2a0c
+    classDef deliveryFill fill:#eefaf2,stroke:#2f9e67,color:#123020
+    class desktop,web,convex runtimeFill
+    class errors,traces,releases sentryFill
+    class analytics,flags,replay hogFill
+    class ci,preview,smoke,phased,rollback deliveryFill

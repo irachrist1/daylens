@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    actor U as Laptop User
+    participant T as Desktop Tracker
+    participant DB as Local SQLite
+    participant Q as Sync Queue
+    participant C as Convex Cloud
+    participant W as Web Client
+
+    U->>T: Work events, windows, tabs, files
+    T->>DB: Persist raw capture + derived state
+    T->>Q: Emit live delta / heartbeat
+    Q->>C: Push live presence update
+    C-->>W: Reactive freshness + current block update
+
+    Note over T,Q: Near-live path target: seconds, not minutes
+
+    T->>Q: Emit durable current-day delta
+    Q->>C: Upload incremental work blocks / artifacts / entities
+    C->>C: Materialize day summaries + search index
+    C-->>W: Dashboard / history / search now reflect new state
+
+    alt Laptop offline or cloud unreachable
+        Q->>Q: Retain unsent deltas locally
+        C-->>W: Mark workspace stale after threshold
+    else Healthy path
+        C-->>W: Show linked + fresh + synced
+    end
+
+    Note over DB,C: SQLite remains canonical, and cloud is the remote access layer

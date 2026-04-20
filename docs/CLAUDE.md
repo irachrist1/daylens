@@ -5,13 +5,20 @@ Use these files as the current source of truth, in this order:
 1. `../README.md` for the canonical product description
 2. `ABOUT.md` for concise reusable product copy
 3. `AGENTS.md` for the product and build contract
-4. `ISSUES.md` for current constraints and known gaps
-5. `IDEAS.md` for future directions
+4. `PRD.md` for the current product definition of the remote companion
+5. `SRS.md` for the current system requirements and architecture plan
+6. `REMOTE_PARITY_MATRIX.md` for the remote launch parity checklist
+7. `REMOTE_CONTRACT.md` for the shared remote sync and AI continuity contract
+8. `REMOTE_EXECUTION_PLAN.md` for milestone sequencing and release gates
+9. `ISSUES.md` for current constraints and known gaps
+10. `IDEAS.md` for future directions
 
 Notes:
 
 - Keep `CLAUDE.md` small. It is a guide for sessions and contributors, not a second product spec.
 - Do not duplicate long architecture docs here.
+- `PRD.md` and `SRS.md` are approved planning docs for the remote companion only while they remain actively maintained.
+- `REMOTE_PARITY_MATRIX.md`, `REMOTE_CONTRACT.md`, and `REMOTE_EXECUTION_PLAN.md` are implementation-facing companions to the PRD/SRS, not separate strategy forks. Keep them aligned or remove them.
 - `ISSUES.md` owns current implementation status, near-term backlog, platform validation snapshots, and what's open vs. fixed. Update that file instead of scattering status notes across the other docs.
 - Keep the docs honest about attribution scope: clients and projects now have first-class routed coverage, while broader workstream attribution still belongs in `ISSUES.md` until users validate it.
 - Keep launch-on-login, tray or menu-bar quick access, updater messaging, and workspace-device labeling truthful across macOS, Windows, and Linux. Linux tray or AppIndicator caveats belong in `ISSUES.md` until they are validated on real desktops.

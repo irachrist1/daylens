@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveCanonicalApp } from '../src/main/lib/appIdentity.ts'
+import { normalizeWebsiteTitleForDisplay, resolveCanonicalApp, websiteDisplayLabel } from '../src/main/lib/appIdentity.ts'
 import { formatDisplayAppName } from '../src/renderer/lib/apps.ts'
 
 test('mac-specific app aliases resolve to the right canonical app identities', () => {
@@ -17,4 +17,13 @@ test('renderer display aliases stay human on mac-focused app names', () => {
   assert.equal(formatDisplayAppName('System Settings'), 'System Settings')
   assert.equal(formatDisplayAppName('TickTick'), 'TickTick')
   assert.equal(formatDisplayAppName('DaylensWindows'), 'Daylens')
+})
+
+test('website labels normalize X and strip generic badge-count titles', () => {
+  assert.equal(websiteDisplayLabel('x.com'), 'X (Twitter)')
+  assert.equal(websiteDisplayLabel('twitter.com'), 'X (Twitter)')
+  assert.equal(normalizeWebsiteTitleForDisplay('x.com', '(4) Home / X'), 'X (Twitter)')
+  assert.equal(normalizeWebsiteTitleForDisplay('twitter.com', 'Twitter'), 'X (Twitter)')
+  assert.equal(normalizeWebsiteTitleForDisplay('x.com', 'Notifications / X'), 'X (Twitter) notifications')
+  assert.equal(normalizeWebsiteTitleForDisplay('github.com', 'Home'), 'GitHub')
 })

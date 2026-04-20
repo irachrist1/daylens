@@ -1,0 +1,61 @@
+flowchart LR
+    subgraph clients[Client Entry Points]
+        desktop[Desktop AI Surface]
+        web[Web AI Surface]
+    end
+
+    subgraph contract[Shared Daylens AI Contract]
+        prompts[Prompt + Answer Contract]
+        router[Deterministic Router]
+        context[Context Assembler]
+        modelroute[Per-Job Model Routing]
+        prompts --> router --> context --> modelroute
+    end
+
+    subgraph evidence[Evidence Adapters]
+        local[Local Evidence Adapter]
+        cloud[Cloud Evidence Adapter]
+    end
+
+    subgraph providers[Provider Tier]
+        fast[Fast Tier\nHaiku / GPT-5.4-mini]
+        chat[Interactive Tier\nSonnet / GPT-5.4]
+        deep[Deep Tier\nOpus / GPT-5.4-pro]
+    end
+
+    subgraph persistence[Daylens-Owned Persistence]
+        threads[(Threads + Messages)]
+        artifacts[(Artifacts + Files)]
+        jobs[(AI Jobs + Usage Metrics)]
+    end
+
+    streamed[Streamed Answer / Report / Artifact]
+
+    desktop --> prompts
+    web --> prompts
+
+    local --> context
+    cloud --> context
+
+    modelroute --> fast
+    modelroute --> chat
+    modelroute --> deep
+
+    fast --> streamed
+    chat --> streamed
+    deep --> streamed
+
+    streamed --> threads
+    streamed --> artifacts
+    modelroute --> jobs
+
+    classDef clientFill fill:#eef5ff,stroke:#4f7cff,color:#122033
+    classDef contractFill fill:#f4f0ff,stroke:#7b61d1,color:#24193f
+    classDef evidenceFill fill:#eefaf2,stroke:#2f9e67,color:#123020
+    classDef providerFill fill:#fff7e8,stroke:#cc8b1f,color:#3a2a0c
+    classDef persistenceFill fill:#f9eef7,stroke:#c35aa0,color:#3d1732
+    class desktop,web clientFill
+    class prompts,router,context,modelroute contractFill
+    class local,cloud evidenceFill
+    class fast,chat,deep providerFill
+    class threads,artifacts,jobs persistenceFill
