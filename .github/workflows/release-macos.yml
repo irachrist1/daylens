@@ -76,20 +76,17 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
 
-      - name: Require signing and notarization credentials
+      - name: Detect signing mode
+        id: signing
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$CSC_LINK"
-          test -n "$CSC_KEY_PASSWORD"
-
-          if [ -n "${APPLE_API_KEY:-}" ]; then
-            test -n "$APPLE_API_KEY_ID"
-            test -n "$APPLE_API_ISSUER"
+          if [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
+            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
+            echo "Developer ID signing credentials detected; electron-builder will sign and notarize."
           else
-            test -n "$APPLE_ID"
-            test -n "$APPLE_APP_SPECIFIC_PASSWORD"
-            test -n "$APPLE_TEAM_ID"
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+            echo "No Developer ID credentials; will build ad-hoc signed DMG. The afterSign hook will re-sign the bundle deeply so Gatekeeper does not report it as 'damaged'."
           fi
 
       - name: Typecheck
@@ -99,7 +96,15 @@ jobs:
         run: npm run build:all
 
       - name: Package with electron-builder
-        run: npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_MODE" = "adhoc" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
 
       - name: Build release notes
         id: notes

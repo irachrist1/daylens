@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.28 - 2026-04-20
+
+### Fixed
+- macOS DMG no longer triggers the "Daylens is damaged and can't be opened" dialog on Finder double-click: the release pipeline now re-signs the bundle ad-hoc with `codesign --force --deep --sign -` in an `afterSign` hook, producing a complete signature with sealed resources that Gatekeeper can verify
+- Release workflow auto-detects whether Developer ID credentials are present; without them it builds an ad-hoc signed DMG instead of failing the "Require signing and notarization credentials" gate
+
+### Added
+- `docs/INSTALL.md` with Homebrew, manual DMG, Windows, and Linux instructions plus the one-line `codesign` + `xattr` fix for users on older builds
+- Homebrew tap at `irachrist1/homebrew-daylens` so users can `brew install --cask irachrist1/daylens/daylens` and skip the Gatekeeper dance entirely
+- `build/dmg-README.txt` ships inside the mounted DMG so manual-DMG users who never read GitHub still see the fix
+
 ## v1.0.27 - 2026-04-19
 
 ### Added
