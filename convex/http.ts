@@ -3,6 +3,10 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { DaySnapshot, Platform } from "../packages/snapshot-schema/snapshot";
+import type {
+  RemoteSyncPayload,
+  WorkspaceLivePresence,
+} from "../packages/remote-contract/index";
 
 const http = httpRouter();
 const DESKTOP_PLATFORMS = new Set<Platform>(["macos", "windows", "linux"]);
@@ -122,8 +126,69 @@ function isValidSnapshot(snapshot: unknown): snapshot is DaySnapshot {
     hasArrayField("topWorkstreams") &&
     hasArrayField("standoutArtifacts") &&
     hasArrayField("entities") &&
-    typeof candidate.hiddenByPreferences === "boolean"
+    (typeof candidate.privacyFiltered === "boolean" ||
+      typeof candidate.hiddenByPreferences === "boolean")
   );
+}
+
+function isValidPresencePayload(payload: unknown): payload is WorkspaceLivePresence {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  return (
+    typeof candidate.contractVersion === "string" &&
+    typeof candidate.deviceId === "string" &&
+    typeof candidate.localDate === "string" &&
+    typeof candidate.state === "string" &&
+    typeof candidate.heartbeatAt === "number" &&
+    typeof candidate.capturedAt === "number" &&
+    typeof candidate.lastMeaningfulCaptureAt === "number"
+  );
+}
+
+function isValidRemoteSyncPayload(payload: unknown): payload is RemoteSyncPayload {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  return (
+    typeof candidate.contractVersion === "string" &&
+    typeof candidate.deviceId === "string" &&
+    typeof candidate.localDate === "string" &&
+    typeof candidate.generatedAt === "string" &&
+    !!candidate.daySummary &&
+    Array.isArray(candidate.workBlocks) &&
+    Array.isArray(candidate.entities) &&
+    Array.isArray(candidate.artifacts)
+  );
+}
+
+async function recordSyncFailure(
+  ctx: HttpCtx,
+  args: {
+    workspaceId: Id<"workspaces">;
+    deviceId: string;
+    localDate: string | null;
+    reason: string;
+    detail?: string | null;
+    contractVersion?: string | null;
+  }
+) {
+  await ctx.runMutation(internal.remoteSync.recordFailure, {
+    workspaceId: args.workspaceId,
+    deviceId: args.deviceId,
+    failure: {
+      contractVersion: args.contractVersion ?? "unknown",
+      deviceId: args.deviceId,
+      localDate: args.localDate,
+      failedAt: Date.now(),
+      reason: args.reason,
+      detail: args.detail ?? null,
+    },
+  });
 }
 
 async function enforceRateLimit(
@@ -154,6 +219,130 @@ async function enforceRateLimit(
 
   return null;
 }
+
+http.route({
+  path: "/remote/heartbeat",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      return jsonResponse({ error: "Not authenticated" }, 401);
+    }
+
+    const workspaceId = identity.workspaceId as Id<"workspaces">;
+    const sessionDeviceId = identity.deviceId;
+    if (typeof sessionDeviceId !== "string") {
+      return jsonResponse({ error: "Missing device" }, 400);
+    }
+
+    const body = await req.json();
+    if (!isValidPresencePayload(body)) {
+      return jsonResponse({ error: "Invalid live presence payload" }, 400);
+    }
+
+    const registeredDevice = (await ctx.runQuery(
+      internal.devices.getByWorkspaceAndDeviceId,
+      {
+        workspaceId,
+        deviceId: sessionDeviceId,
+      }
+    )) as DeviceRecord | null;
+
+    if (!registeredDevice) {
+      return jsonResponse({ error: "Unknown device" }, 403);
+    }
+
+    if (body.deviceId !== sessionDeviceId) {
+      return jsonResponse({ error: "Presence identity mismatch" }, 403);
+    }
+
+    await ctx.runMutation(internal.remoteSync.recordHeartbeat, {
+      workspaceId,
+      deviceId: sessionDeviceId,
+      presence: body,
+    });
+
+    return jsonResponse({ success: true }, 200);
+  }),
+});
+
+http.route({
+  path: "/remote/syncDay",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      return jsonResponse({ error: "Not authenticated" }, 401);
+    }
+
+    const workspaceId = identity.workspaceId as Id<"workspaces">;
+    const sessionDeviceId = identity.deviceId;
+    if (typeof sessionDeviceId !== "string") {
+      return jsonResponse({ error: "Missing device" }, 400);
+    }
+
+    const body = await req.json();
+    if (!isValidRemoteSyncPayload(body)) {
+      await recordSyncFailure(ctx, {
+        workspaceId,
+        deviceId: sessionDeviceId,
+        localDate: typeof (body as { localDate?: unknown })?.localDate === "string"
+          ? ((body as { localDate: string }).localDate)
+          : null,
+        reason: "invalid_payload",
+        detail: "Invalid remote sync payload",
+        contractVersion: typeof (body as { contractVersion?: unknown })?.contractVersion === "string"
+          ? ((body as { contractVersion: string }).contractVersion)
+          : null,
+      });
+      return jsonResponse({ error: "Invalid remote sync payload" }, 400);
+    }
+
+    const registeredDevice = (await ctx.runQuery(
+      internal.devices.getByWorkspaceAndDeviceId,
+      {
+        workspaceId,
+        deviceId: sessionDeviceId,
+      }
+    )) as DeviceRecord | null;
+
+    if (!registeredDevice) {
+      return jsonResponse({ error: "Unknown device" }, 403);
+    }
+
+    if (body.deviceId !== sessionDeviceId || body.daySummary.deviceId !== sessionDeviceId) {
+      await recordSyncFailure(ctx, {
+        workspaceId,
+        deviceId: sessionDeviceId,
+        localDate: body.localDate,
+        reason: "identity_mismatch",
+        detail: "Remote sync identity mismatch",
+        contractVersion: body.contractVersion,
+      });
+      return jsonResponse({ error: "Remote sync identity mismatch" }, 403);
+    }
+
+    try {
+      await ctx.runMutation(internal.remoteSync.syncDay, {
+        workspaceId,
+        deviceId: sessionDeviceId,
+        payload: body,
+      });
+      return jsonResponse({ success: true }, 200);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await recordSyncFailure(ctx, {
+        workspaceId,
+        deviceId: sessionDeviceId,
+        localDate: body.localDate,
+        reason: "sync_day_failed",
+        detail,
+        contractVersion: body.contractVersion,
+      });
+      return jsonResponse({ error: "Remote day sync failed" }, 500);
+    }
+  }),
+});
 
 http.route({
   path: "/uploadSnapshot",

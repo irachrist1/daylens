@@ -17,19 +17,19 @@ export const categoryValidator = v.union(
   v.literal("uncategorized")
 );
 
-const platformValidator = v.union(
+export const platformValidator = v.union(
   v.literal("macos"),
   v.literal("windows"),
   v.literal("linux")
 );
 
 export const topPageValidator = v.object({
-  url: v.string(),
-  title: v.optional(v.union(v.string(), v.null())),
+  domain: v.string(),
+  label: v.optional(v.union(v.string(), v.null())),
   seconds: v.number(),
 });
 
-const focusSessionValidator = v.object({
+export const focusSessionValidator = v.object({
   sourceId: v.string(),
   startAt: v.string(),
   endAt: v.string(),
@@ -42,14 +42,14 @@ const focusSessionValidator = v.object({
   ),
 });
 
-const legacyFocusSessionValidator = v.object({
+export const legacyFocusSessionValidator = v.object({
   appKey: v.string(),
   startAt: v.string(),
   endAt: v.string(),
   durationSeconds: v.number(),
 });
 
-const appSummaryValidator = v.object({
+export const appSummaryValidator = v.object({
   appKey: v.string(),
   bundleID: v.optional(v.string()),
   displayName: v.string(),
@@ -59,25 +59,25 @@ const appSummaryValidator = v.object({
   iconBase64: v.optional(v.string()),
 });
 
-const categoryTotalValidator = v.object({
+export const categoryTotalValidator = v.object({
   category: categoryValidator,
   totalSeconds: v.number(),
 });
 
-const timelineEntryValidator = v.object({
+export const timelineEntryValidator = v.object({
   appKey: v.string(),
   startAt: v.string(),
   endAt: v.string(),
 });
 
-const topDomainValidator = v.object({
+export const topDomainValidator = v.object({
   domain: v.string(),
   seconds: v.number(),
   category: categoryValidator,
   topPages: v.optional(v.array(topPageValidator)),
 });
 
-const recapChapterIdValidator = v.union(
+export const recapChapterIdValidator = v.union(
   v.literal("headline"),
   v.literal("focus"),
   v.literal("artifacts"),
@@ -85,7 +85,7 @@ const recapChapterIdValidator = v.union(
   v.literal("change")
 );
 
-const recapSummaryLiteValidator = v.object({
+export const recapSummaryLiteValidator = v.object({
   headline: v.string(),
   chapters: v.array(
     v.object({
@@ -107,7 +107,7 @@ const recapSummaryLiteValidator = v.object({
   hasData: v.boolean(),
 });
 
-const workBlockSummaryValidator = v.object({
+export const workBlockSummaryValidator = v.object({
   id: v.string(),
   startAt: v.string(),
   endAt: v.string(),
@@ -126,14 +126,14 @@ const workBlockSummaryValidator = v.object({
   topPages: v.array(
     v.object({
       domain: v.string(),
-      title: v.union(v.string(), v.null()),
+      label: v.union(v.string(), v.null()),
       seconds: v.number(),
     })
   ),
   artifactIds: v.array(v.string()),
 });
 
-const focusScoreV2Validator = v.object({
+export const focusScoreV2Validator = v.object({
   score: v.number(),
   coherence: v.number(),
   deepWorkDensity: v.number(),
@@ -141,7 +141,7 @@ const focusScoreV2Validator = v.object({
   switchPenalty: v.number(),
 });
 
-const recapCoverageValidator = v.object({
+export const recapCoverageValidator = v.object({
   attributedPct: v.number(),
   untitledPct: v.number(),
   activeDayCount: v.number(),
@@ -150,29 +150,31 @@ const recapCoverageValidator = v.object({
   coverageNote: v.union(v.string(), v.null()),
 });
 
-const workstreamRollupValidator = v.object({
+export const workstreamRollupValidator = v.object({
   label: v.string(),
   seconds: v.number(),
   blockCount: v.number(),
   isUntitled: v.boolean(),
 });
 
-const artifactRollupValidator = v.object({
+export const artifactKindValidator = v.union(
+  v.literal("markdown"),
+  v.literal("csv"),
+  v.literal("json_table"),
+  v.literal("html_chart"),
+  v.literal("report")
+);
+
+export const artifactRollupValidator = v.object({
   id: v.string(),
-  kind: v.union(
-    v.literal("markdown"),
-    v.literal("csv"),
-    v.literal("json_table"),
-    v.literal("html_chart"),
-    v.literal("report")
-  ),
+  kind: artifactKindValidator,
   title: v.string(),
   byteSize: v.number(),
   generatedAt: v.string(),
   threadId: v.union(v.string(), v.null()),
 });
 
-const entityRollupValidator = v.object({
+export const entityRollupValidator = v.object({
   id: v.string(),
   label: v.string(),
   kind: v.union(
@@ -221,10 +223,125 @@ export const daySnapshotV2Validator = v.object({
   topWorkstreams: v.array(workstreamRollupValidator),
   standoutArtifacts: v.array(artifactRollupValidator),
   entities: v.array(entityRollupValidator),
-  hiddenByPreferences: v.boolean(),
+  privacyFiltered: v.boolean(),
 });
 
 export const daySnapshotValidator = v.union(
   daySnapshotV1Validator,
   daySnapshotV2Validator
 );
+
+export const workspacePresenceStateValidator = v.union(
+  v.literal("active"),
+  v.literal("idle"),
+  v.literal("meeting"),
+  v.literal("sleeping"),
+  v.literal("offline"),
+  v.literal("stale")
+);
+
+export const workspaceLivePresenceValidator = v.object({
+  contractVersion: v.string(),
+  deviceId: v.string(),
+  localDate: v.string(),
+  state: workspacePresenceStateValidator,
+  heartbeatAt: v.number(),
+  capturedAt: v.number(),
+  lastMeaningfulCaptureAt: v.number(),
+  currentBlockLabel: v.union(v.string(), v.null()),
+  currentCategory: v.union(categoryValidator, v.null()),
+  currentAppKey: v.union(v.string(), v.null()),
+  currentFocusSeconds: v.union(v.number(), v.null()),
+});
+
+export const syncedDaySummaryValidator = v.object({
+  contractVersion: v.string(),
+  deviceId: v.string(),
+  localDate: v.string(),
+  generatedAt: v.string(),
+  isPartialDay: v.boolean(),
+  focusScore: v.number(),
+  focusSeconds: v.number(),
+  focusScoreV2: v.union(focusScoreV2Validator, v.null()),
+  recap: v.object({
+    day: recapSummaryLiteValidator,
+    week: v.union(recapSummaryLiteValidator, v.null()),
+    month: v.union(recapSummaryLiteValidator, v.null()),
+  }),
+  coverage: recapCoverageValidator,
+  topWorkstreams: v.array(workstreamRollupValidator),
+  latestWorkBlockId: v.union(v.string(), v.null()),
+  workBlockCount: v.number(),
+  entityCount: v.number(),
+  artifactCount: v.number(),
+  privacyFiltered: v.boolean(),
+});
+
+export const remoteSyncPayloadValidator = v.object({
+  contractVersion: v.string(),
+  deviceId: v.string(),
+  localDate: v.string(),
+  generatedAt: v.string(),
+  daySummary: syncedDaySummaryValidator,
+  workBlocks: v.array(workBlockSummaryValidator),
+  entities: v.array(entityRollupValidator),
+  artifacts: v.array(artifactRollupValidator),
+});
+
+export const syncRunSummaryValidator = v.object({
+  contractVersion: v.string(),
+  deviceId: v.string(),
+  localDate: v.string(),
+  startedAt: v.number(),
+  finishedAt: v.number(),
+  status: v.union(v.literal("success"), v.literal("failed")),
+  workBlockCount: v.number(),
+  entityCount: v.number(),
+  artifactCount: v.number(),
+  message: v.union(v.string(), v.null()),
+});
+
+export const syncFailureSummaryValidator = v.object({
+  contractVersion: v.string(),
+  deviceId: v.string(),
+  localDate: v.union(v.string(), v.null()),
+  failedAt: v.number(),
+  reason: v.string(),
+  detail: v.union(v.string(), v.null()),
+});
+
+export const workspaceThreadSourceValidator = v.union(
+  v.literal("desktop"),
+  v.literal("web")
+);
+
+export const workspaceAiThreadValidator = v.object({
+  workspaceThreadId: v.string(),
+  title: v.string(),
+  source: workspaceThreadSourceValidator,
+  createdAt: v.number(),
+  updatedAt: v.number(),
+  archived: v.boolean(),
+});
+
+export const workspaceAiMessageValidator = v.object({
+  workspaceMessageId: v.string(),
+  workspaceThreadId: v.string(),
+  role: v.union(v.literal("user"), v.literal("assistant"), v.literal("system")),
+  content: v.string(),
+  createdAt: v.number(),
+  provider: v.union(v.string(), v.null()),
+  model: v.union(v.string(), v.null()),
+  failureReason: v.union(v.string(), v.null()),
+});
+
+export const workspaceAiArtifactValidator = v.object({
+  workspaceArtifactId: v.string(),
+  workspaceThreadId: v.string(),
+  workspaceMessageId: v.union(v.string(), v.null()),
+  title: v.string(),
+  kind: artifactKindValidator,
+  createdAt: v.number(),
+  storageId: v.union(v.string(), v.null()),
+  textContent: v.union(v.string(), v.null()),
+});

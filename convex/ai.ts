@@ -10,16 +10,25 @@ import {
   buildDayContext,
   questionPrompt,
 } from "../packages/prompt-builder/index";
+import type { WorkspaceAIThread } from "../packages/remote-contract/index";
 import { requireSessionIdentity } from "./authHelpers";
+
+type AskQuestionResult = {
+  response: string;
+  threadId?: string;
+  provider?: string;
+  model?: string;
+};
 
 export const askQuestion = action({
   args: {
     question: v.string(),
     date: v.string(),
+    threadId: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<AskQuestionResult> => {
     const identity = await requireSessionIdentity(ctx);
-    const snapshotDoc = await ctx.runQuery(internal.snapshots.getByWorkspaceAndDate, {
+    const snapshotDoc = await ctx.runQuery(internal.remoteSync.getTimelineDayForWorkspace, {
       workspaceId: identity.workspaceId,
       localDate: args.date,
     });
@@ -63,8 +72,9 @@ export const askQuestion = action({
 
     // Call Anthropic API
     const client = new Anthropic({ apiKey: anthropicKey });
+    const model = "claude-sonnet-4-20250514";
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model,
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
@@ -73,22 +83,28 @@ export const askQuestion = action({
     const responseText =
       message.content[0].type === "text" ? message.content[0].text : "";
 
-    // Append to web_chats
-    const existingChats = await ctx.runQuery(internal.webChats.getByWorkspace, {
+    const thread: WorkspaceAIThread = await ctx.runMutation(internal.webAiThreads.ensureThread, {
       workspaceId: identity.workspaceId,
+      workspaceThreadId: args.threadId,
+      title: args.question,
+      source: "web",
     });
 
-    const messages = existingChats?.messages || [];
-    messages.push(
-      { role: "user", content: args.question, date: args.date },
-      { role: "assistant", content: responseText, date: args.date }
-    );
-
-    await ctx.runMutation(internal.webChats.upsert, {
+    await ctx.runMutation(internal.webAiThreads.appendTurn, {
       workspaceId: identity.workspaceId,
-      messages,
+      workspaceThreadId: thread.workspaceThreadId,
+      userContent: args.question,
+      assistantContent: responseText,
+      provider: "anthropic",
+      model,
+      failureReason: null,
     });
 
-    return { response: responseText };
+    return {
+      response: responseText,
+      threadId: thread.workspaceThreadId,
+      provider: "anthropic",
+      model,
+    };
   },
 });

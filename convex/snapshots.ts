@@ -225,7 +225,9 @@ function normalizeSnapshot(snapshot: unknown): DaySnapshot | null {
     entities: Array.isArray(candidate.entities)
       ? (candidate.entities as DaySnapshotV2["entities"])
       : [],
-    hiddenByPreferences: candidate.hiddenByPreferences === true,
+    privacyFiltered:
+      candidate.privacyFiltered === true ||
+      candidate.hiddenByPreferences === true,
   };
 }
 
@@ -236,12 +238,13 @@ function mergeTopPages(
   const pageMap = new Map<string, (typeof existingPages)[number]>();
 
   for (const page of [...existingPages, ...nextPages]) {
-    const existing = pageMap.get(page.url);
+    const key = `${page.domain}|${page.label ?? ""}`;
+    const existing = pageMap.get(key);
     if (existing) {
       existing.seconds += page.seconds;
-      existing.title = existing.title || page.title || undefined;
+      existing.label = existing.label || page.label || undefined;
     } else {
-      pageMap.set(page.url, { ...page });
+      pageMap.set(key, { ...page });
     }
   }
 
@@ -386,7 +389,7 @@ function hideRecapText(summary: RecapSummaryLite): RecapSummaryLite {
   return {
     ...summary,
     headline:
-      "Some hidden apps or sites were removed per your privacy preferences.",
+      "Some synced evidence is hidden or generalized by Daylens privacy protections.",
     chapters: summary.hasData
       ? [
           {
@@ -394,13 +397,13 @@ function hideRecapText(summary: RecapSummaryLite): RecapSummaryLite {
             eyebrow: "Privacy",
             title: "This recap is partially hidden",
             body:
-              "Some activity is hidden by your workspace preferences, so web recap copy is suppressed for this day.",
+              "Some evidence is hidden or generalized by privacy protections, so web recap copy is suppressed for this day.",
           },
         ]
       : [],
     promptChips: [],
     changeSummary: summary.hasData
-      ? "Open this day on desktop for the full recap after adjusting privacy preferences."
+      ? "Open this day on desktop for the full local recap if you need the richer unsynced context."
       : summary.changeSummary,
   };
 }
@@ -442,7 +445,7 @@ function filterSnapshotForPreferences(
       .sort((a, b) => b.totalSeconds - a.totalSeconds);
   })();
 
-  const hiddenByPreferences =
+  const preferenceFiltered =
     filteredApps.length !== snapshot.appSummaries.length ||
     filteredTimeline.length !== snapshot.timeline.length ||
     filteredTopDomains.length !== snapshot.topDomains.length;
@@ -512,15 +515,15 @@ function filterSnapshotForPreferences(
     timeline: filteredTimeline,
     topDomains: filteredTopDomains,
     workBlocks: filteredWorkBlocks,
-    recap: hiddenByPreferences || removedFromBlocks
+    recap: preferenceFiltered || removedFromBlocks
       ? {
           day: hideRecapText(snapshot.recap.day),
           week: snapshot.recap.week ? hideRecapText(snapshot.recap.week) : null,
           month: snapshot.recap.month ? hideRecapText(snapshot.recap.month) : null,
         }
       : snapshot.recap,
-    hiddenByPreferences:
-      snapshot.hiddenByPreferences || hiddenByPreferences || removedFromBlocks,
+    privacyFiltered:
+      snapshot.privacyFiltered || preferenceFiltered || removedFromBlocks,
   };
 }
 
@@ -746,7 +749,7 @@ function mergeSnapshots(
     topWorkstreams: mergeWorkstreams(v2Snapshots),
     standoutArtifacts: mergeArtifacts(v2Snapshots),
     entities: mergeEntities(v2Snapshots),
-    hiddenByPreferences: false,
+    privacyFiltered: false,
   };
 
   return {

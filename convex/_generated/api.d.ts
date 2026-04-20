@@ -18,13 +18,15 @@ import type * as keys from "../keys.js";
 import type * as keysMutations from "../keysMutations.js";
 import type * as linkCodes from "../linkCodes.js";
 import type * as preferences from "../preferences.js";
+import type * as remoteSync from "../remoteSync.js";
 import type * as sessionConfig from "../sessionConfig.js";
 import type * as sessionPublicJwks from "../sessionPublicJwks.js";
 import type * as sessionStatus from "../sessionStatus.js";
 import type * as sessionTokens from "../sessionTokens.js";
 import type * as snapshotValidator from "../snapshotValidator.js";
 import type * as snapshots from "../snapshots.js";
-import type * as webChats from "../webChats.js";
+import type * as webAiArtifacts from "../webAiArtifacts.js";
+import type * as webAiThreads from "../webAiThreads.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
@@ -44,13 +46,15 @@ declare const fullApi: ApiFromModules<{
   keysMutations: typeof keysMutations;
   linkCodes: typeof linkCodes;
   preferences: typeof preferences;
+  remoteSync: typeof remoteSync;
   sessionConfig: typeof sessionConfig;
   sessionPublicJwks: typeof sessionPublicJwks;
   sessionStatus: typeof sessionStatus;
   sessionTokens: typeof sessionTokens;
   snapshotValidator: typeof snapshotValidator;
   snapshots: typeof snapshots;
-  webChats: typeof webChats;
+  webAiArtifacts: typeof webAiArtifacts;
+  webAiThreads: typeof webAiThreads;
   workspaces: typeof workspaces;
 }>;
 

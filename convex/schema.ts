@@ -1,6 +1,16 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { daySnapshotValidator } from "./snapshotValidator";
+import {
+  daySnapshotValidator,
+  syncedDaySummaryValidator,
+  workBlockSummaryValidator,
+  entityRollupValidator,
+  artifactRollupValidator,
+  workspaceLivePresenceValidator,
+  workspaceAiThreadValidator,
+  workspaceAiMessageValidator,
+  workspaceAiArtifactValidator,
+} from "./snapshotValidator";
 
 export default defineSchema({
   workspaces: defineTable({
@@ -47,16 +57,121 @@ export default defineSchema({
     workspaceId: v.id("workspaces"),
     encryptedAnthropicKey: v.string(),
   }).index("by_workspace", ["workspaceId"]),
+  workspace_live_presence: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    presence: workspaceLivePresenceValidator,
+    heartbeatAt: v.number(),
+  })
+    .index("by_workspace", ["workspaceId"])
+    .index("by_workspace_device", ["workspaceId", "deviceId"])
+    .index("by_workspace_heartbeat", ["workspaceId", "heartbeatAt"]),
+  sync_runs: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.string(),
+    contractVersion: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    status: v.union(v.literal("success"), v.literal("failed")),
+    workBlockCount: v.number(),
+    entityCount: v.number(),
+    artifactCount: v.number(),
+    message: v.union(v.string(), v.null()),
+  })
+    .index("by_workspace_finished", ["workspaceId", "finishedAt"])
+    .index("by_workspace_date", ["workspaceId", "localDate"]),
+  sync_failures: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.union(v.string(), v.null()),
+    contractVersion: v.string(),
+    failedAt: v.number(),
+    reason: v.string(),
+    detail: v.union(v.string(), v.null()),
+  })
+    .index("by_workspace_failed_at", ["workspaceId", "failedAt"])
+    .index("by_workspace_date", ["workspaceId", "localDate"]),
+  synced_day_summaries: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.string(),
+    summary: syncedDaySummaryValidator,
+    syncedAt: v.number(),
+  })
+    .index("by_workspace_date", ["workspaceId", "localDate"])
+    .index("by_workspace_device_date", ["workspaceId", "deviceId", "localDate"]),
+  synced_work_blocks: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.string(),
+    blockId: v.string(),
+    block: workBlockSummaryValidator,
+    syncedAt: v.number(),
+  })
+    .index("by_workspace_date", ["workspaceId", "localDate"])
+    .index("by_workspace_device_date", ["workspaceId", "deviceId", "localDate"])
+    .index("by_workspace_block", ["workspaceId", "blockId"]),
+  synced_entities: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.string(),
+    entityKey: v.string(),
+    entity: entityRollupValidator,
+    syncedAt: v.number(),
+  })
+    .index("by_workspace_date", ["workspaceId", "localDate"])
+    .index("by_workspace_entity", ["workspaceId", "entityKey"])
+    .index("by_workspace_device_date", ["workspaceId", "deviceId", "localDate"]),
+  synced_artifacts: defineTable({
+    workspaceId: v.id("workspaces"),
+    deviceId: v.string(),
+    localDate: v.string(),
+    artifactId: v.string(),
+    artifact: artifactRollupValidator,
+    syncedAt: v.number(),
+  })
+    .index("by_workspace_date", ["workspaceId", "localDate"])
+    .index("by_workspace_artifact", ["workspaceId", "artifactId"])
+    .index("by_workspace_device_date", ["workspaceId", "deviceId", "localDate"]),
   http_rate_limits: defineTable({
     key: v.string(),
     count: v.number(),
     expiresAt: v.number(),
   }).index("by_key", ["key"]),
-  web_chats: defineTable({
+  web_ai_threads: defineTable({
     workspaceId: v.id("workspaces"),
-    messages: v.any(),
+    workspaceThreadId: v.string(),
+    title: v.string(),
+    source: v.union(v.literal("desktop"), v.literal("web")),
+    createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_workspace", ["workspaceId"]),
+    archived: v.boolean(),
+    thread: workspaceAiThreadValidator,
+  })
+    .index("by_workspace", ["workspaceId"])
+    .index("by_workspace_updated", ["workspaceId", "updatedAt"])
+    .index("by_workspace_thread", ["workspaceId", "workspaceThreadId"]),
+  web_ai_messages: defineTable({
+    workspaceId: v.id("workspaces"),
+    threadId: v.string(),
+    workspaceMessageId: v.string(),
+    createdAt: v.number(),
+    message: workspaceAiMessageValidator,
+  })
+    .index("by_workspace_thread", ["workspaceId", "threadId"])
+    .index("by_workspace_message", ["workspaceId", "workspaceMessageId"]),
+  web_ai_artifacts: defineTable({
+    workspaceId: v.id("workspaces"),
+    threadId: v.string(),
+    artifactId: v.string(),
+    createdAt: v.number(),
+    artifact: workspaceAiArtifactValidator,
+  })
+    .index("by_workspace_thread", ["workspaceId", "threadId"])
+    .index("by_workspace_thread_created", ["workspaceId", "threadId", "createdAt"])
+    .index("by_workspace_created", ["workspaceId", "createdAt"])
+    .index("by_workspace_artifact", ["workspaceId", "artifactId"]),
   workspace_preferences: defineTable({
     workspaceId: v.id("workspaces"),
     hiddenApps: v.array(v.string()),
