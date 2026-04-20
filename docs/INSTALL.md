@@ -1,6 +1,16 @@
 # Installing Daylens
 
-Daylens ships for macOS, Windows, and Linux from one [GitHub release page](https://github.com/irachrist1/daylens/releases/latest).
+## Direct downloads (v1.0.28)
+
+Click a link — the download starts immediately.
+
+- **macOS (Apple Silicon):** [Daylens-1.0.28-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.28/Daylens-1.0.28-arm64.dmg)
+- **Windows:** [Daylens-1.0.27-Setup.exe](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27-Setup.exe)
+- **Linux:** [AppImage](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.AppImage) · [deb](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.deb) · [rpm](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.rpm) · [tar.gz](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.tar.gz)
+
+Full [GitHub releases page](https://github.com/irachrist1/daylens/releases/latest) if you want to pick another version.
+
+## Contents
 
 - [macOS](#macos) — Homebrew (recommended) or manual DMG
 - [Windows](#windows) — one-click installer
