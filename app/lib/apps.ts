@@ -20,6 +20,14 @@ const APP_NAME_ALIASES: Record<string, string> = {
   daylenswindows: "Daylens",
   daylens: "Daylens",
   comet: "Comet",
+  spark: "Spark",
+  sparkdesktop: "Spark",
+  comreaddlesparkdesktop: "Spark",
+  dia: "Dia",
+  aidiamac: "Dia",
+  appdiadesktop: "Dia",
+  comdiaapp: "Dia",
+  companythebrowserdia: "Dia",
 };
 
 function toTitleCase(value: string): string {

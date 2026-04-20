@@ -52,7 +52,6 @@ export function AppsDayClient({
         <div className="apps-header__copy">
           <p className="timeline-kicker">Apps</p>
           <h1>{formatDateLabel(date)}</h1>
-          <p>Which tools helped, what they supported, and what showed up beside them in the same synced work blocks.</p>
         </div>
         <div className="apps-header__actions">
           <Link href="/dashboard" className="daylens-secondary-button">

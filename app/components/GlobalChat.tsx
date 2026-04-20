@@ -15,6 +15,20 @@ import type {
 
 type RecapPeriod = "day" | "week" | "month";
 type ExportKind = "report" | "csv" | "chart";
+type ChatErrorCode =
+  | "not_authenticated"
+  | "empty_question"
+  | "no_data"
+  | "missing_key"
+  | "billing_exhausted"
+  | "rate_limited"
+  | "service_updating"
+  | "unknown";
+type SurfaceErrorState = {
+  code: ChatErrorCode | null;
+  title: string;
+  message: string;
+};
 
 type SnapshotRecapPayload = {
   recap: {
@@ -64,6 +78,53 @@ function friendlyError(fallback: string, error: unknown): string {
     return `${fallback} ${error.message.trim()}`;
   }
   return fallback;
+}
+
+function buildSurfaceError(code: ChatErrorCode | null, message: string): SurfaceErrorState {
+  switch (code) {
+    case "billing_exhausted":
+      return {
+        code,
+        title: "Provider credits exhausted",
+        message,
+      };
+    case "rate_limited":
+      return {
+        code,
+        title: "Provider temporarily busy",
+        message,
+      };
+    case "missing_key":
+      return {
+        code,
+        title: "AI setup needs attention",
+        message,
+      };
+    case "no_data":
+      return {
+        code,
+        title: "No synced evidence for this date",
+        message,
+      };
+    case "service_updating":
+      return {
+        code,
+        title: "AI service updating",
+        message,
+      };
+    case "not_authenticated":
+      return {
+        code,
+        title: "Session expired",
+        message,
+      };
+    default:
+      return {
+        code,
+        title: "AI reply unavailable",
+        message,
+      };
+  }
 }
 
 function periodLabel(period: RecapPeriod): string {
@@ -190,7 +251,7 @@ export function GlobalChat({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [artifactLoading, setArtifactLoading] = useState<ExportKind | null>(null);
-  const [surfaceError, setSurfaceError] = useState<string | null>(null);
+  const [surfaceError, setSurfaceError] = useState<SurfaceErrorState | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -334,7 +395,16 @@ export function GlobalChat({
       const data = await response.json();
 
       if (!response.ok || typeof data.response !== "string") {
-        throw new Error(data.error || "The provider did not return a usable response.");
+        setSurfaceError(
+          buildSurfaceError(
+            typeof data.code === "string" ? (data.code as ChatErrorCode) : null,
+            typeof data.error === "string"
+              ? data.error
+              : "The provider did not return a usable response.",
+          ),
+        );
+        setLoading(false);
+        return;
       }
 
       const nextThreadId =
@@ -362,9 +432,12 @@ export function GlobalChat({
       await refreshArtifacts(nextThreadId ?? null);
     } catch (error) {
       setSurfaceError(
-        friendlyError(
-          "Daylens couldn't get an AI response right now. The thread is still intact, so you can retry once the provider settles.",
-          error,
+        buildSurfaceError(
+          null,
+          friendlyError(
+            "Daylens couldn't get an AI response right now. The thread is still intact, so you can retry once the provider settles.",
+            error,
+          ),
         ),
       );
     } finally {
@@ -418,9 +491,12 @@ export function GlobalChat({
       await refreshArtifacts(nextThreadId ?? null);
     } catch (error) {
       setSurfaceError(
-        friendlyError(
-          "Daylens couldn't generate that artifact right now. Your thread and existing artifacts are still available.",
-          error,
+        buildSurfaceError(
+          null,
+          friendlyError(
+            "Daylens couldn't generate that artifact right now. Your thread and existing artifacts are still available.",
+            error,
+          ),
         ),
       );
     } finally {
@@ -471,7 +547,10 @@ export function GlobalChat({
 
           {surfaceError ? (
             <div className="ai-chat__notice">
-              <p>{surfaceError}</p>
+              <div className="ai-chat__notice-copy">
+                <strong>{surfaceError.title}</strong>
+                <p>{surfaceError.message}</p>
+              </div>
             </div>
           ) : null}
 

@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 
-import { appInitials, formatDisplayAppName, normalizeAppNameKey } from "@/app/lib/apps";
+import {
+  appInitials,
+  formatDisplayAppName,
+  formatVisibleAppName,
+  normalizeAppNameKey,
+} from "@/app/lib/apps";
 import { CATEGORY_COLORS } from "@/app/lib/format";
 
 /**
@@ -29,6 +34,10 @@ const BUNDLE_TO_DOMAIN: Record<string, string> = {
   "com.googlecode.iterm2": "iterm2.com",
   "com.sublimetext.4": "sublimetext.com",
   "com.jetbrains.intellij": "jetbrains.com",
+  "ai.dia.mac": "diabrowser.com",
+  "app.dia.desktop": "diabrowser.com",
+  "com.dia.app": "diabrowser.com",
+  "company.thebrowser.dia": "diabrowser.com",
 
   // Communication
   "com.tinyspeck.slackmacgap": "slack.com",
@@ -37,6 +46,7 @@ const BUNDLE_TO_DOMAIN: Record<string, string> = {
   "ru.keepcoder.Telegram": "telegram.org",
   "com.hnc.Discord": "discord.com",
   "WhatsApp": "whatsapp.com",
+  "com.readdle.SparkDesktop": "sparkmailapp.com",
 
   // Productivity
   "com.microsoft.Word": "word.office.com",
@@ -112,11 +122,45 @@ const NAME_TO_DOMAIN: Record<string, string> = {
   "messages": "apple.com",
   "music": "music.apple.com",
   "spotify": "spotify.com",
+  "spark": "sparkmailapp.com",
   "chatgpt": "chatgpt.com",
   "claude": "claude.ai",
   "codex": "openai.com",
   "daylens": "daylens.app",
+  "dia": "diabrowser.com",
 };
+
+const NORMALIZED_NAME_TO_DOMAIN = Object.fromEntries(
+  Object.entries(NAME_TO_DOMAIN).map(([name, domain]) => [normalizeAppNameKey(name), domain]),
+);
+
+function resolveDomain(bundleID: string, displayName: string) {
+  const bundleDomain = BUNDLE_TO_DOMAIN[bundleID];
+  if (bundleDomain) return bundleDomain;
+
+  const candidates = [
+    displayName,
+    formatVisibleAppName(bundleID),
+    formatDisplayAppName(bundleID),
+    bundleID,
+  ].filter((value): value is string => Boolean(value?.trim()));
+
+  for (const candidate of candidates) {
+    const normalized = normalizeAppNameKey(candidate);
+    if (!normalized) continue;
+
+    const directBundleDomain = BUNDLE_TO_DOMAIN[candidate];
+    if (directBundleDomain) return directBundleDomain;
+
+    const normalizedBundleDomain = BUNDLE_TO_DOMAIN[normalized];
+    if (normalizedBundleDomain) return normalizedBundleDomain;
+
+    const nameDomain = NORMALIZED_NAME_TO_DOMAIN[normalized];
+    if (nameDomain) return nameDomain;
+  }
+
+  return null;
+}
 
 function resolveIconSrc(bundleID: string, displayName: string, iconBase64?: string | null) {
   // 1. Try iconBase64 from snapshot
@@ -127,19 +171,10 @@ function resolveIconSrc(bundleID: string, displayName: string, iconBase64?: stri
       : `data:image/png;base64,${trimmed}`;
   }
 
-  // 2. Try known bundle ID → domain
-  const domainFromBundle = BUNDLE_TO_DOMAIN[bundleID];
-  if (domainFromBundle) {
-    return `https://www.google.com/s2/favicons?domain=${domainFromBundle}&sz=128`;
-  }
-
-  // 3. Try display name → domain (case-insensitive)
-  const nameLower = normalizeAppNameKey(displayName);
-  const domainFromName = Object.entries(NAME_TO_DOMAIN).find(
-    ([name]) => normalizeAppNameKey(name) === nameLower,
-  )?.[1];
-  if (domainFromName) {
-    return `https://www.google.com/s2/favicons?domain=${domainFromName}&sz=128`;
+  // 2. Try known bundle/app aliases → domain
+  const resolvedDomain = resolveDomain(bundleID, displayName);
+  if (resolvedDomain) {
+    return `https://www.google.com/s2/favicons?domain=${resolvedDomain}&sz=128`;
   }
 
   return null;
@@ -159,7 +194,9 @@ export function AppIcon({
   size?: number;
 }) {
   const px = `${size / 16}rem`;
-  const safeDisplayName = formatDisplayAppName(displayName || bundleID);
+  const safeDisplayName =
+    formatVisibleAppName(displayName || bundleID) ??
+    formatDisplayAppName(displayName || bundleID);
   const iconSrc = resolveIconSrc(bundleID, safeDisplayName, iconBase64);
   const [didFail, setDidFail] = useState(false);
 

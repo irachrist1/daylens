@@ -295,8 +295,8 @@ body {
 }
 
 .daylens-nav-item--active {
-  background: rgba(180, 197, 255, 0.08);
-  border-color: rgba(180, 197, 255, 0.12);
+  background: rgba(124, 185, 245, 0.06);
+  border-color: rgba(124, 185, 245, 0.1);
   color: var(--color-on-surface);
 }
 
@@ -352,6 +352,30 @@ body {
   flex-wrap: wrap;
   gap: 0.45rem;
   align-items: center;
+}
+
+.sync-inline-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.7rem;
+  color: var(--color-on-surface-variant);
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+.sync-inline-status span {
+  position: relative;
+}
+
+.sync-inline-status span + span::before {
+  content: "•";
+  margin-right: 0.7rem;
+  color: rgba(180, 197, 255, 0.28);
+}
+
+.sync-inline-status--warning {
+  color: #fbbf24;
 }
 
 .sync-pill {
@@ -814,8 +838,8 @@ body {
 
 .timeline-row--selected .timeline-row__card,
 .timeline-row:hover .timeline-row__card {
-  border-color: color-mix(in srgb, var(--timeline-accent) 34%, transparent);
-  background: rgba(255, 255, 255, 0.045);
+  border-color: color-mix(in srgb, var(--timeline-accent) 20%, transparent);
+  background: rgba(255, 255, 255, 0.032);
 }
 
 .timeline-row:hover .timeline-row__card {
@@ -847,7 +871,8 @@ body {
 }
 
 .timeline-chip--active {
-  background: rgba(180, 197, 255, 0.1);
+  background: rgba(124, 185, 245, 0.06);
+  border-color: rgba(124, 185, 245, 0.1);
   color: var(--color-on-surface);
 }
 
@@ -942,8 +967,8 @@ body {
 
 .apps-list__item--active,
 .ai-thread-card--active {
-  background: rgba(180, 197, 255, 0.08);
-  border-color: rgba(180, 197, 255, 0.12);
+  background: rgba(124, 185, 245, 0.05);
+  border-color: rgba(124, 185, 245, 0.1);
 }
 
 .apps-list__item-copy,
@@ -1112,15 +1137,28 @@ body {
 }
 
 .ai-chat__notice {
-  padding: 0.8rem 0.9rem;
+  padding: 0.7rem 0.85rem;
   border-radius: 1rem;
-  background: rgba(248, 113, 113, 0.09);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(180, 197, 255, 0.08);
   color: var(--color-on-surface);
-  line-height: 1.6;
+}
+
+.ai-chat__notice-copy {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.ai-chat__notice strong {
+  color: var(--color-on-surface);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .ai-chat__notice p {
   margin: 0;
+  color: var(--color-on-surface-variant);
+  line-height: 1.55;
 }
 
 .ai-chat__messages {

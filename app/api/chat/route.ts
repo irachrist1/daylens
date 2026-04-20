@@ -3,10 +3,23 @@ import { getConvexClient } from "@/app/lib/convex";
 import { getSession } from "@/app/lib/session";
 import { api } from "../../../convex/_generated/api";
 
+type ChatErrorCode =
+  | "not_authenticated"
+  | "empty_question"
+  | "no_data"
+  | "missing_key"
+  | "billing_exhausted"
+  | "rate_limited"
+  | "service_updating"
+  | "unknown";
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Not authenticated", code: "not_authenticated" satisfies ChatErrorCode },
+      { status: 401 },
+    );
   }
 
   const body = await request.json();
@@ -32,7 +45,7 @@ export async function POST(request: NextRequest) {
 
   if (!question) {
     return NextResponse.json(
-      { error: "Please type a question." },
+      { error: "Please type a question.", code: "empty_question" satisfies ChatErrorCode },
       { status: 400 }
     );
   }
@@ -48,6 +61,7 @@ export async function POST(request: NextRequest) {
       {
         error:
           "No synced activity data is available yet. Open Daylens on your computer and let it sync first.",
+        code: "no_data" satisfies ChatErrorCode,
       },
       { status: 400 }
     );
@@ -97,26 +111,33 @@ export async function POST(request: NextRequest) {
       raw.includes("overloaded_error");
 
     let userMessage: string;
+    let code: ChatErrorCode;
     if (isKeyError) {
+      code = "missing_key";
       userMessage =
         "Your API key isn't set up yet. Open Daylens on your computer, go to Settings, and save your Anthropic API key.";
     } else if (isBillingError) {
+      code = "billing_exhausted";
       userMessage =
         "Your Anthropic API key is linked, but the provider account does not have enough credits right now. Top up that key or switch providers in Daylens on your computer.";
     } else if (isUsageLimit) {
+      code = "rate_limited";
       userMessage =
         "The AI provider is rate-limiting this workspace right now. Try again in a few minutes.";
     } else if (isNotDeployed) {
+      code = "service_updating";
       userMessage =
         "The AI service is being updated. Please try again in a few minutes.";
     } else if (isNoData) {
+      code = "no_data";
       userMessage =
         `No activity data found for ${date}. Make sure Daylens is running on your computer and synced that day.`;
     } else {
+      code = "unknown";
       userMessage =
         "Something went wrong. Please try again.";
     }
 
-    return NextResponse.json({ error: userMessage }, { status: 500 });
+    return NextResponse.json({ error: userMessage, code }, { status: 500 });
   }
 }

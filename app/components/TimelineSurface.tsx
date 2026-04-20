@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { DaySnapshotV2, WorkBlockSummary } from "../../packages/remote-contract";
 import { AppIcon } from "@/app/components/AppIcon";
@@ -67,7 +67,7 @@ function DaySummaryInspector({
     .slice(0, 4);
 
   return (
-    <div className="timeline-inspector">
+    <div className="timeline-inspector" data-timeline-keep-selection="true">
       <div className="timeline-inspector__header">
         <p className="timeline-kicker">Day summary</p>
         <h2>{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`))}</h2>
@@ -160,7 +160,7 @@ function BlockInspector({
     .slice(0, 6);
 
   return (
-    <div className="timeline-inspector">
+    <div className="timeline-inspector" data-timeline-keep-selection="true">
       <div className="timeline-inspector__header">
         <p className="timeline-kicker">Selected block</p>
         <h2>{readableBlockLabel(block)}</h2>
@@ -255,6 +255,7 @@ function TimelineRow({
       onClick={onSelect}
       className={`timeline-row ${isSelected ? "timeline-row--selected" : ""}`}
       style={{ ["--timeline-accent" as string]: accent }}
+      data-timeline-keep-selection="true"
     >
       <div className="timeline-row__rail">
         <strong>{formatClockTime(block.startAt)}</strong>
@@ -322,12 +323,41 @@ export function TimelineSurface({
   date: string;
   liveLabel?: string | null;
 }) {
+  const shellRef = useRef<HTMLElement | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const selectedBlock = snapshot.workBlocks?.find((block) => block.id === selectedBlockId) ?? null;
   const recap = sanitizeRecapSummary(snapshot.recap?.day);
 
+  useEffect(() => {
+    if (!selectedBlockId) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+
+      const shell = shellRef.current;
+      if (!shell) return;
+
+      if (!shell.contains(target)) {
+        setSelectedBlockId(null);
+        return;
+      }
+
+      if (target instanceof Element && target.closest("[data-timeline-keep-selection='true']")) {
+        return;
+      }
+
+      setSelectedBlockId(null);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [selectedBlockId]);
+
   return (
-    <section className="timeline-shell">
+    <section className="timeline-shell" ref={shellRef}>
       <div className="timeline-strip">
         <InlineMetric value={formatDuration(trackedSeconds(snapshot))} label="tracked" />
         <InlineMetric value={formatDuration(snapshot.focusSeconds)} label="focused" />
@@ -335,9 +365,6 @@ export function TimelineSurface({
         <InlineMetric value={`${visibleAppCount(snapshot)}`} label={`app${visibleAppCount(snapshot) === 1 ? "" : "s"}`} />
         <InlineMetric value={`${visibleSiteCount(snapshot)}`} label={`site${visibleSiteCount(snapshot) === 1 ? "" : "s"}`} />
         {liveLabel ? <InlineMetric value={liveLabel} label="live now" live /> : null}
-        {snapshot.privacyFiltered ? (
-          <span className="timeline-chip timeline-chip--warning">Privacy-filtered evidence</span>
-        ) : null}
       </div>
 
       {(snapshot.workBlocks?.length ?? 0) === 0 ? (
@@ -354,7 +381,7 @@ export function TimelineSurface({
                 block={block}
                 snapshot={snapshot}
                 isSelected={selectedBlock?.id === block.id}
-                onSelect={() => setSelectedBlockId(block.id)}
+                onSelect={() => setSelectedBlockId((current) => (current === block.id ? null : block.id))}
               />
             ))}
           </div>

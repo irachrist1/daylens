@@ -20,8 +20,8 @@ interface SyncBannerStatus {
 export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
   if (!status) {
     return (
-      <div className="sync-row">
-        <span className="sync-pill">Checking workspace sync…</span>
+      <div className="sync-inline-status">
+        <span>Checking workspace sync…</span>
       </div>
     );
   }
@@ -54,27 +54,18 @@ export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
   }
 
   return (
-    <div className="sync-row">
+    <div
+      className={`sync-inline-status ${status.health === "stale" ? "sync-inline-status--warning" : ""}`}
+    >
+      <span>Sync {status.health === "stale" ? "stale" : "healthy"}</span>
       {status.lastHeartbeatAt ? (
-        <span className="sync-pill">Last heartbeat {formatRelativeTime(status.lastHeartbeatAt)}</span>
+        <span>Heartbeat {formatRelativeTime(status.lastHeartbeatAt)}</span>
       ) : null}
       {status.lastSuccessfulSyncAt ? (
-        <span className="sync-pill">Last durable sync {formatRelativeTime(status.lastSuccessfulSyncAt)}</span>
-      ) : null}
-      {status.latestPresence?.state ? (
-        <span className="sync-pill sync-pill--strong">
-          {status.latestPresence.state}
-        </span>
-      ) : null}
-      {status.latestPresence?.currentBlockLabel ? (
-        <span className="sync-pill">
-          {status.latestPresence.currentBlockLabel}
-        </span>
+        <span>Durable sync {formatRelativeTime(status.lastSuccessfulSyncAt)}</span>
       ) : null}
       {status.health === "stale" && (
-        <span className="sync-pill sync-pill--warning">
-          Your laptop has gone stale. Open Daylens to refresh live state.
-        </span>
+        <span>Open Daylens on your laptop to refresh live state.</span>
       )}
     </div>
   );
