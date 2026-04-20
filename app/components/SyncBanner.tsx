@@ -20,15 +20,15 @@ interface SyncBannerStatus {
 export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
   if (!status) {
     return (
-      <div className="rounded-lg bg-warning/10 px-4 py-2 text-sm text-warning">
-        Checking workspace sync status...
+      <div className="sync-row">
+        <span className="sync-pill">Checking workspace sync…</span>
       </div>
     );
   }
 
   if (status.health === "pending_first_sync") {
     return (
-      <div className="rounded-lg bg-warning/10 px-4 py-2 text-sm text-warning">
+      <div className="sync-banner sync-banner--warning">
         Linked, but no synced day has landed yet. Keep Daylens running on your laptop to finish the first sync.
       </div>
     );
@@ -36,7 +36,7 @@ export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
 
   if (status.health === "failed") {
     return (
-      <div className="rounded-lg bg-error/10 px-4 py-2 text-sm text-error">
+      <div className="sync-banner sync-banner--error">
         Sync failed{status.latestFailure?.reason ? `: ${status.latestFailure.reason}` : ""}.
         {status.lastHeartbeatAt ? ` Heartbeat is still arriving ${formatRelativeTime(status.lastHeartbeatAt)}.` : ""}
         {status.lastSuccessfulSyncAt ? ` Last durable sync was ${formatRelativeTime(status.lastSuccessfulSyncAt)}.` : ""}
@@ -47,32 +47,32 @@ export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
 
   if (!status.lastHeartbeatAt && !status.lastSuccessfulSyncAt) {
     return (
-      <div className="rounded-lg bg-warning/10 px-4 py-2 text-sm text-warning">
+      <div className="sync-banner sync-banner--warning">
         No heartbeat or durable sync has landed yet.
       </div>
     );
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
+    <div className="sync-row">
       {status.lastHeartbeatAt ? (
-        <span>Last heartbeat {formatRelativeTime(status.lastHeartbeatAt)}</span>
+        <span className="sync-pill">Last heartbeat {formatRelativeTime(status.lastHeartbeatAt)}</span>
       ) : null}
       {status.lastSuccessfulSyncAt ? (
-        <span>Last durable sync {formatRelativeTime(status.lastSuccessfulSyncAt)}</span>
+        <span className="sync-pill">Last durable sync {formatRelativeTime(status.lastSuccessfulSyncAt)}</span>
       ) : null}
       {status.latestPresence?.state ? (
-        <span className="rounded bg-surface-low px-2 py-0.5 text-on-surface">
+        <span className="sync-pill sync-pill--strong">
           {status.latestPresence.state}
         </span>
       ) : null}
       {status.latestPresence?.currentBlockLabel ? (
-        <span className="rounded bg-surface-low px-2 py-0.5 text-on-surface">
+        <span className="sync-pill">
           {status.latestPresence.currentBlockLabel}
         </span>
       ) : null}
       {status.health === "stale" && (
-        <span className="rounded bg-warning/15 px-2 py-0.5 text-warning">
+        <span className="sync-pill sync-pill--warning">
           Your laptop has gone stale. Open Daylens to refresh live state.
         </span>
       )}

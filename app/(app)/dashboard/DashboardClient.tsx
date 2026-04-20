@@ -1,74 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ScoreRing } from "@/app/components/ScoreRing";
-import { CategoryBar } from "@/app/components/CategoryBar";
-import {
-  formatDate,
-  formatDuration,
-  formatRelativeTime,
-  CATEGORY_LABELS,
-} from "@/app/lib/format";
-import { AppIcon } from "@/app/components/AppIcon";
-import { TopSitesList, type TopDomainItem } from "@/app/components/TopSitesList";
-import { SyncBanner } from "@/app/components/SyncBanner";
 import Link from "next/link";
+import { SyncBanner } from "@/app/components/SyncBanner";
+import { TimelineSurface } from "@/app/components/TimelineSurface";
 import { apiPath } from "@/app/lib/basePath";
-
-interface AppSummary {
-  appKey: string;
-  bundleID?: string;
-  displayName: string;
-  category: string;
-  totalSeconds: number;
-  sessionCount: number;
-  iconBase64?: string | null;
-}
-
-interface Snapshot {
-  schemaVersion?: number;
-  focusScore: number;
-  focusSeconds: number;
-  isPartialDay?: boolean;
-  privacyFiltered?: boolean;
-  appSummaries: AppSummary[];
-  categoryTotals: { category: string; totalSeconds: number }[];
-  topDomains: TopDomainItem[];
-  focusSessions?: { sourceId: string }[];
-  focusScoreV2?: {
-    score: number;
-    coherence: number;
-    deepWorkDensity: number;
-    artifactProgress: number;
-    switchPenalty: number;
-  };
-  workBlocks?: Array<{
-    id: string;
-    startAt: string;
-    endAt: string;
-    label: string;
-    focusSeconds: number;
-    switchCount: number;
-    topApps: Array<{ appKey: string; seconds: number }>;
-    topPages: Array<{ domain: string; label: string | null; seconds: number }>;
-  }>;
-  recap?: {
-    day?: {
-      headline: string;
-      hasData: boolean;
-      chapters: Array<{ id: string; eyebrow: string; title: string; body: string }>;
-      metrics: Array<{ label: string; value: string; detail: string }>;
-    };
-  };
-  coverage?: {
-    coverageNote?: string | null;
-  };
-  topWorkstreams?: Array<{ label: string; seconds: number; blockCount: number }>;
-  entities?: Array<{ id: string; label: string; kind: string; secondsToday: number }>;
-}
+import { formatDate, formatRelativeTime } from "@/app/lib/format";
+import type { DaySnapshot } from "../../../packages/remote-contract";
+import { isSnapshotV2 } from "../../../packages/remote-contract";
 
 interface SnapshotDoc {
-  snapshot: Snapshot;
+  snapshot: DaySnapshot;
   syncedAt?: number;
   localDate: string;
 }
@@ -76,14 +18,6 @@ interface SnapshotDoc {
 interface SnapshotSummaryDoc {
   _id: string;
   localDate: string;
-  syncedAt?: number;
-  snapshot: {
-    schemaVersion?: number;
-    focusScore: number;
-    focusSeconds: number;
-    appSummaries: { appKey: string }[];
-    workBlocks?: { id: string }[];
-  } | null;
 }
 
 interface WorkspaceStatus {
@@ -105,21 +39,17 @@ function getLocalDate(): string {
   return new Date().toLocaleDateString("en-CA");
 }
 
-/** Strip www. and lowercase so "www.YouTube.com" → "youtube.com" */
 function normalizeDomain(domain: string): string {
   return domain.replace(/^www\./, "").toLowerCase();
 }
 
-/**
- * Returns true if `domain` should be hidden.
- * Hiding "youtube.com" also hides "music.youtube.com", "m.youtube.com", etc.
- */
 function isDomainHidden(domain: string, hiddenDomains: Set<string>): boolean {
   const normalized = normalizeDomain(domain);
   for (const hidden of hiddenDomains) {
-    const h = normalizeDomain(hidden);
-    if (normalized === h) return true;
-    if (normalized.endsWith(`.${h}`)) return true;
+    const candidate = normalizeDomain(hidden);
+    if (normalized === candidate || normalized.endsWith(`.${candidate}`)) {
+      return true;
+    }
   }
   return false;
 }
@@ -130,13 +60,30 @@ function shiftDate(date: string, deltaDays: number) {
   return nextDate.toLocaleDateString("en-CA");
 }
 
-function readFocusScore(snapshot: Snapshot | null | undefined): number {
-  return snapshot?.focusScoreV2?.score ?? snapshot?.focusScore ?? 0;
-}
+function filterSnapshot(snapshot: DaySnapshot, hiddenApps: Set<string>, hiddenDomains: Set<string>): DaySnapshot {
+  const filteredAppSummaries = snapshot.appSummaries.filter((app) => !hiddenApps.has(app.appKey));
+  const filteredTopDomains = snapshot.topDomains.filter((domain) => !isDomainHidden(domain.domain, hiddenDomains));
 
-function blockDurationSeconds(block: { startAt: string; endAt: string }) {
-  const duration = Date.parse(block.endAt) - Date.parse(block.startAt);
-  return Number.isFinite(duration) && duration > 0 ? Math.round(duration / 1000) : 0;
+  if (!isSnapshotV2(snapshot)) {
+    return {
+      ...snapshot,
+      appSummaries: filteredAppSummaries,
+      topDomains: filteredTopDomains,
+    };
+  }
+
+  const filteredWorkBlocks = snapshot.workBlocks.map((block) => ({
+    ...block,
+    topApps: block.topApps.filter((app) => !hiddenApps.has(app.appKey)),
+    topPages: block.topPages.filter((page) => !isDomainHidden(page.domain, hiddenDomains)),
+  }));
+
+  return {
+    ...snapshot,
+    appSummaries: filteredAppSummaries,
+    topDomains: filteredTopDomains,
+    workBlocks: filteredWorkBlocks,
+  };
 }
 
 export function DashboardClient() {
@@ -151,74 +98,27 @@ export function DashboardClient() {
 
   useEffect(() => {
     void fetch(apiPath("/api/preferences"))
-      .then(async (r) => {
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({})) as { error?: string };
-          console.error("[preferences] load failed:", body.error ?? r.status);
-          return null;
-        }
-        return r.json() as Promise<{ hiddenApps: string[]; hiddenDomains: string[] }>;
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json() as Promise<{ hiddenApps: string[]; hiddenDomains: string[] }>;
       })
       .then((prefs) => {
-        if (prefs) {
-          setHiddenApps(new Set(prefs.hiddenApps ?? []));
-          setHiddenDomains(new Set((prefs.hiddenDomains ?? []).map(normalizeDomain)));
-        }
+        if (!prefs) return;
+        setHiddenApps(new Set(prefs.hiddenApps ?? []));
+        setHiddenDomains(new Set((prefs.hiddenDomains ?? []).map(normalizeDomain)));
       })
       .catch(() => {});
   }, []);
-
-  function hideApp(appKey: string) {
-    setHiddenApps((prev) => new Set([...prev, appKey]));
-    void fetch(apiPath("/api/preferences"), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "hideApp", appKey }),
-    }).then((res) => {
-      if (!res.ok) {
-        console.error("[hideApp] save failed: HTTP", res.status);
-        throw new Error("save failed");
-      }
-    }).catch(() => {
-      setHiddenApps((prev) => {
-        const next = new Set(prev);
-        next.delete(appKey);
-        return next;
-      });
-    });
-  }
-
-  function hideCurrentDomain(domain: string) {
-    const normalized = normalizeDomain(domain);
-    setHiddenDomains((prev) => new Set([...prev, normalized]));
-    void fetch(apiPath("/api/preferences"), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "hideDomain", domain: normalized }),
-    }).then((res) => {
-      if (!res.ok) {
-        console.error("[hideDomain] save failed: HTTP", res.status);
-        throw new Error("save failed");
-      }
-    }).catch(() => {
-      setHiddenDomains((prev) => {
-        const next = new Set(prev);
-        next.delete(normalized);
-        return next;
-      });
-    });
-  }
 
   useEffect(() => {
     let cancelled = false;
 
     void fetch(apiPath("/api/snapshots"))
-      .then((res) => (res.ok ? res.json() : null))
+      .then((response) => (response.ok ? response.json() : null))
       .then((json) => {
         if (cancelled) return;
-
         const summaries: SnapshotSummaryDoc[] = Array.isArray(json?.summaries)
-          ? [...json.summaries].sort((a, b) => b.localDate.localeCompare(a.localDate))
+          ? [...json.summaries].sort((left, right) => right.localDate.localeCompare(left.localDate))
           : [];
 
         setAvailableDates(summaries.map((snapshot) => snapshot.localDate));
@@ -231,7 +131,7 @@ export function DashboardClient() {
         }
 
         const todaySnapshot = summaries.find((snapshot) => snapshot.localDate === today);
-        const initialDate = todaySnapshot?.localDate ?? summaries[0]!.localDate;
+        const initialDate = todaySnapshot?.localDate ?? summaries[0]?.localDate ?? today;
         setSelectedDate(initialDate);
         setData(undefined);
         setIsInitialLatestFallback(initialDate !== today);
@@ -253,7 +153,7 @@ export function DashboardClient() {
     let cancelled = false;
 
     void fetch(apiPath("/api/workspace-status"))
-      .then((res) => (res.ok ? res.json() : null))
+      .then((response) => (response.ok ? response.json() : null))
       .then((json) => {
         if (cancelled) return;
         setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
@@ -269,19 +169,14 @@ export function DashboardClient() {
   }, []);
 
   useEffect(() => {
-    if (!selectedDate) {
-      return;
-    }
-
-    if (data && data.localDate === selectedDate) {
-      return;
-    }
+    if (!selectedDate) return;
+    if (data && data.localDate === selectedDate) return;
 
     let cancelled = false;
     setData(undefined);
 
     void fetch(apiPath(`/api/snapshots?date=${selectedDate}`))
-      .then((res) => (res.ok ? res.json() : null))
+      .then((response) => (response.ok ? response.json() : null))
       .then((json) => {
         if (cancelled) return;
         setData(json?.snapshot ?? null);
@@ -305,23 +200,24 @@ export function DashboardClient() {
       }
 
       void fetch(apiPath(`/api/snapshots?date=${selectedDate}`))
-        .then((res) => (res.ok ? res.json() : null))
+        .then((response) => (response.ok ? response.json() : null))
         .then((json) => {
           if (json?.snapshot) {
             setData(json.snapshot);
             if (json.snapshot.localDate === today) {
               setIsInitialLatestFallback(false);
             }
-            // Add to available dates if new
             setAvailableDates((prev) =>
-              prev.includes(selectedDate) ? prev : [...prev, selectedDate].sort((a, b) => b.localeCompare(a))
+              prev.includes(selectedDate)
+                ? prev
+                : [...prev, selectedDate].sort((left, right) => right.localeCompare(left)),
             );
           }
         })
         .catch(() => {});
 
       void fetch(apiPath("/api/workspace-status"))
-        .then((res) => (res.ok ? res.json() : null))
+        .then((response) => (response.ok ? response.json() : null))
         .then((json) => {
           setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
         })
@@ -329,385 +225,119 @@ export function DashboardClient() {
     };
 
     poll();
-    const interval = window.setInterval(
-      poll,
-      selectedDate === today ? 15_000 : 30_000,
-    );
+    const interval = window.setInterval(poll, selectedDate === today ? 15_000 : 30_000);
     return () => window.clearInterval(interval);
   }, [selectedDate, today]);
 
   if (!selectedDate || data === undefined) {
     return (
-      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
-        <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-        <div className="rounded-2xl glass-card p-4 sm:p-6 animate-pulse h-40" />
+      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+        <div className="timeline-page-shell">
+          <div className="timeline-empty timeline-empty--loading">
+            <h2>Loading timeline</h2>
+            <p>Pulling the latest synced day and rebuilding the proof surface.</p>
+          </div>
+        </div>
       </div>
     );
   }
 
-  const snapshot = data?.snapshot;
+  const snapshot = data?.snapshot ? filterSnapshot(data.snapshot, hiddenApps, hiddenDomains) : null;
   const isToday = selectedDate === today;
-  const topApps = (snapshot?.appSummaries || [])
-    .filter((app) => !hiddenApps.has(app.appKey))
-    .slice(0, 8);
-  const categoryTotals = snapshot?.categoryTotals || [];
-  const topDomains = (snapshot?.topDomains || [])
-    .filter((d) => !isDomainHidden(d.domain, hiddenDomains))
-    .slice(0, 5);
-  const hiddenCount = hiddenApps.size + hiddenDomains.size;
-  const earliestDate =
-    availableDates.length > 0 ? availableDates[availableDates.length - 1]! : today;
+  const earliestDate = availableDates.length > 0 ? availableDates[availableDates.length - 1] ?? today : today;
   const canGoPrev = selectedDate > earliestDate;
   const canGoNext = selectedDate < today;
 
   function selectDate(nextDate: string) {
-    setIsInitialLatestFallback(false);
     setSelectedDate(nextDate);
+    setIsInitialLatestFallback(false);
   }
 
   if (!snapshot) {
     return (
-      <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 sm:py-8">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">
-              {isToday ? "Today" : formatDate(selectedDate)}
-            </h1>
-            <p className="text-sm text-on-surface-variant mt-1">
-              No activity data for {selectedDate}.
-            </p>
+      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+        <div className="timeline-page-shell">
+          <div className="timeline-topbar">
+            <div className="timeline-topbar__date">
+              <button type="button" onClick={() => selectDate(shiftDate(selectedDate, -1))} disabled={!canGoPrev}>
+                Previous
+              </button>
+              <span>{isToday ? "Today" : formatDate(selectedDate)}</span>
+              <button type="button" onClick={() => selectDate(shiftDate(selectedDate, 1))} disabled={!canGoNext}>
+                Next
+              </button>
+            </div>
           </div>
-          <Link
-            href={`/chat?date=${selectedDate}`}
-            className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
-          >
-            Ask AI
-          </Link>
-        </div>
 
-        <div className="flex items-center justify-between rounded-2xl glass-card p-3">
-          <button
-            type="button"
-            onClick={() => selectDate(shiftDate(selectedDate, -1))}
-            disabled={!canGoPrev}
-            className="rounded-full px-3 py-1.5 text-sm text-on-surface hover:bg-surface-high disabled:opacity-40"
-          >
-            Previous day
-          </button>
-          <span className="text-sm font-medium text-on-surface">
-            {isToday ? "Today" : formatDate(selectedDate)}
-          </span>
-          <button
-            type="button"
-            onClick={() => selectDate(shiftDate(selectedDate, 1))}
-            disabled={!canGoNext}
-            className="rounded-full px-3 py-1.5 text-sm text-on-surface hover:bg-surface-high disabled:opacity-40"
-          >
-            Next day
-          </button>
-        </div>
-
-        <div className="rounded-2xl glass-card p-4 sm:p-6 text-center space-y-2">
-          {availableDates.length > 0 ? (
-            <p className="text-on-surface-variant">
-              No activity was synced for this day.
-            </p>
-          ) : (
-            <>
-              <p className="text-on-surface-variant">
-                Daylens hasn&apos;t synced any days yet.
-              </p>
-              <p className="text-sm text-on-surface-variant/60">
-                Keep the desktop app running and linked to start syncing.
-              </p>
-            </>
-          )}
+          <div className="timeline-empty">
+            <h2>No synced activity for this day</h2>
+            <p>Keep Daylens running on your laptop and linked to this workspace to let the next durable snapshot land here.</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="mx-auto max-w-5xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
-      <SyncBanner status={workspaceStatus} />
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">
-            {isToday ? "Today" : formatDate(selectedDate)}
-          </h1>
-          {isInitialLatestFallback ? (
-            <p className="text-xs text-on-surface-variant mt-0.5">
-              No data for {today}. Showing the latest synced day instead.
-            </p>
-          ) : null}
+  if (!isSnapshotV2(snapshot)) {
+    return (
+      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+        <div className="timeline-page-shell">
+          <div className="timeline-empty">
+            <h2>This synced day needs the newer timeline format</h2>
+            <p>Daylens Web can only render the proof-first timeline once the desktop app syncs a schema v2 snapshot for this date.</p>
+          </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
-            <Link
-              href={`/chat?date=${selectedDate}`}
-              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
-            >
+      </div>
+    );
+  }
+
+  const liveLabel = isToday ? workspaceStatus?.latestPresence?.currentBlockLabel ?? null : null;
+
+  return (
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="timeline-page-shell">
+        <div className="timeline-topbar">
+          <div className="timeline-topbar__date">
+            <button type="button" onClick={() => selectDate(shiftDate(selectedDate, -1))} disabled={!canGoPrev}>
+              Previous
+            </button>
+            <span>{isToday ? "Today" : formatDate(selectedDate)}</span>
+            <button type="button" onClick={() => selectDate(shiftDate(selectedDate, 1))} disabled={!canGoNext}>
+              Next
+            </button>
+          </div>
+
+          <div className="timeline-topbar__actions">
+            {!isToday ? (
+              <button type="button" className="daylens-secondary-button" onClick={() => selectDate(today)}>
+                Today
+              </button>
+            ) : null}
+            <Link href={`/apps/${selectedDate}`} className="daylens-secondary-button">
+              Apps
+            </Link>
+            <Link href={`/chat?date=${selectedDate}`} className="daylens-secondary-button">
               Ask AI
             </Link>
-            <Link
-              href={`/recap?date=${selectedDate}`}
-              className="rounded-full border border-outline-variant/20 px-3 py-1.5 text-sm text-on-surface hover:bg-surface-low"
-            >
-              Recap
-            </Link>
           </div>
-          {data.syncedAt ? (
-            <span className="text-xs text-on-surface-variant">
-              Synced {formatRelativeTime(data.syncedAt)}
-            </span>
-          ) : null}
         </div>
-      </div>
 
-      <div className="flex items-center justify-between rounded-2xl glass-card p-3">
-        <button
-          type="button"
-          onClick={() => selectDate(shiftDate(selectedDate, -1))}
-          disabled={!canGoPrev}
-          className="rounded-full px-3 py-1.5 text-sm text-on-surface hover:bg-surface-high disabled:opacity-40"
-        >
-          Previous day
-        </button>
-        <span className="text-sm font-medium text-on-surface">
-          {isToday ? "Today" : formatDate(selectedDate)}
-        </span>
-        <button
-          type="button"
-          onClick={() => selectDate(shiftDate(selectedDate, 1))}
-          disabled={!canGoNext}
-          className="rounded-full px-3 py-1.5 text-sm text-on-surface hover:bg-surface-high disabled:opacity-40"
-        >
-          Next day
-        </button>
-      </div>
-
-      <div className="flex items-center gap-4 rounded-2xl glass-card p-4 sm:gap-6 sm:p-6">
-        <ScoreRing score={readFocusScore(snapshot)} size={100} />
-        <div className="min-w-0 flex-1 space-y-3">
+        <div className="timeline-subhead">
           <div>
-            <span className="text-[0.6875rem] font-semibold tracking-wide uppercase text-on-surface-variant">
-              Focus Time
-            </span>
-            <p className="text-xl font-bold">{formatDuration(snapshot.focusSeconds || 0)}</p>
+            <h1>{isToday ? "Timeline" : formatDate(selectedDate)}</h1>
+            {isInitialLatestFallback ? (
+              <p>No synced day exists for today yet, so this is showing the latest durable day instead.</p>
+            ) : data?.syncedAt ? (
+              <p>Durably synced {formatRelativeTime(data.syncedAt)}.</p>
+            ) : (
+              <p>The timeline is grounded in the latest synced day payload for this date.</p>
+            )}
           </div>
-          <div>
-            <span className="text-[0.6875rem] font-semibold tracking-wide uppercase text-on-surface-variant">
-              Work Blocks
-            </span>
-            <p className="text-xl font-bold">{snapshot.workBlocks?.length ?? 0}</p>
-          </div>
-          {snapshot.isPartialDay && (
-            <span className="inline-block rounded bg-primary-container/20 px-2 py-0.5 text-[0.6875rem] font-medium text-primary">
-              In progress
-            </span>
-          )}
-          {snapshot.privacyFiltered && (
-            <span className="inline-block rounded bg-warning/10 px-2 py-0.5 text-[0.6875rem] font-medium text-warning">
-              Some synced evidence is privacy-limited
-            </span>
-          )}
+          <SyncBanner status={workspaceStatus} />
         </div>
+
+        <TimelineSurface snapshot={snapshot} date={selectedDate} liveLabel={liveLabel} />
       </div>
-
-      {snapshot.recap?.day?.hasData && (
-        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">Daily Recap</h2>
-              <p className="mt-1 break-words text-sm leading-relaxed text-on-surface/90">
-                {snapshot.recap.day.headline}
-              </p>
-            </div>
-            <Link href={`/recap?date=${selectedDate}`} className="text-xs text-primary hover:underline">
-              Open full recap
-            </Link>
-          </div>
-          {snapshot.coverage?.coverageNote ? (
-            <div className="rounded-xl bg-warning/10 px-3 py-2 text-sm text-on-surface/85">
-              {snapshot.coverage.coverageNote}
-            </div>
-          ) : null}
-          <div className="space-y-3">
-            {snapshot.recap.day.chapters.slice(0, 3).map((chapter) => (
-              <div key={chapter.id} className="rounded-xl bg-surface-low px-4 py-3">
-                <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
-                  {chapter.eyebrow}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-on-surface">{chapter.title}</p>
-                <p className="mt-1 text-sm text-on-surface/85">{chapter.body}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {(snapshot.workBlocks?.length || 0) > 0 && (
-        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
-          <h2 className="text-lg font-semibold">Work Blocks</h2>
-          <div className="space-y-3">
-            {snapshot.workBlocks!.slice(0, 8).map((block) => (
-              <div key={block.id} className="rounded-xl bg-surface-low px-4 py-3">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="break-words text-sm font-semibold text-on-surface">{block.label}</p>
-                    <p className="mt-1 text-[0.6875rem] text-on-surface-variant">
-                      {formatDuration(blockDurationSeconds(block))} · {block.switchCount} switches
-                    </p>
-                  </div>
-                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary">
-                    {formatDuration(block.focusSeconds)} focus
-                  </span>
-                </div>
-                {(block.topApps.length || block.topPages.length) > 0 && (
-                  <div className="mt-3 space-y-1 break-words text-[0.6875rem] text-on-surface-variant">
-                    {block.topApps.length > 0 && (
-                      <p>Apps: {block.topApps.map((app) => app.appKey).join(", ")}</p>
-                    )}
-                    {block.topPages.length > 0 && (
-                      <p>
-                        Pages: {block.topPages.map((page) => page.label || page.domain).join(", ")}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {((snapshot.topWorkstreams?.length || 0) > 0 || (snapshot.entities?.length || 0) > 0) && (
-        <div className="grid gap-4 sm:gap-6 sm:grid-cols-2">
-          {(snapshot.topWorkstreams?.length || 0) > 0 && (
-            <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
-              <h2 className="text-lg font-semibold">Top Workstreams</h2>
-              <div className="space-y-3">
-                {snapshot.topWorkstreams!.slice(0, 5).map((item) => (
-                  <div key={item.label} className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-on-surface">{item.label}</p>
-                      <p className="text-[0.6875rem] text-on-surface-variant">
-                        {item.blockCount} blocks
-                      </p>
-                    </div>
-                    <p className="shrink-0 text-sm font-medium text-on-surface">
-                      {formatDuration(item.seconds)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {(snapshot.entities?.length || 0) > 0 && (
-            <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
-              <h2 className="text-lg font-semibold">Entities</h2>
-              <div className="space-y-3">
-                {snapshot.entities!.slice(0, 5).map((entity) => (
-                  <div key={`${entity.kind}-${entity.id}`} className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-on-surface">{entity.label}</p>
-                      <p className="text-[0.6875rem] text-on-surface-variant">{entity.kind}</p>
-                    </div>
-                    <p className="shrink-0 text-sm font-medium text-on-surface">
-                      {formatDuration(entity.secondsToday)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
-
-      {categoryTotals.length > 0 && (
-        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Categories</h2>
-          <CategoryBar totals={categoryTotals} />
-        </section>
-      )}
-
-      {topApps.length > 0 && (
-        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Supporting Apps</h2>
-            <Link
-              href={`/apps/${selectedDate}`}
-              className="text-xs text-primary hover:underline"
-            >
-              View all
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {topApps.map((app) => (
-              <div key={app.appKey} className="group flex items-center justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
-                  <AppIcon
-                    bundleID={app.bundleID || app.appKey}
-                    displayName={app.displayName}
-                    category={app.category}
-                    iconBase64={app.iconBase64}
-                  />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{app.displayName}</p>
-                    <p className="text-[0.6875rem] text-on-surface-variant">
-                      {CATEGORY_LABELS[app.category] || app.category}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => hideApp(app.appKey)}
-                    className="rounded px-2 py-0.5 text-[0.6875rem] text-on-surface-variant opacity-0 transition-opacity hover:text-error group-hover:opacity-100"
-                    aria-label={`Hide ${app.displayName}`}
-                  >
-                    Hide
-                  </button>
-                  <div className="text-right">
-                    <p className="text-sm font-medium">{formatDuration(app.totalSeconds)}</p>
-                    <p className="text-[0.6875rem] text-on-surface-variant">
-                      {app.sessionCount} sessions
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          {hiddenCount > 0 && (
-            <p className="text-center text-[0.6875rem] text-on-surface-variant">
-              {hiddenCount} item{hiddenCount === 1 ? "" : "s"} hidden ·{" "}
-              <Link href="/settings#privacy" className="text-primary hover:underline">
-                Manage
-              </Link>
-            </p>
-          )}
-        </section>
-      )}
-
-      {topDomains.length > 0 && (
-        <section className="rounded-2xl glass-card p-4 sm:p-6 space-y-3">
-          <h2 className="text-lg font-semibold">Top Sites</h2>
-          <TopSitesList domains={topDomains} onHideDomain={hideCurrentDomain} />
-        </section>
-      )}
-
-      {(snapshot.focusSessions?.length || 0) > 0 && (
-        <Link
-          href={`/focus/${selectedDate}`}
-          className="block rounded-2xl glass-card p-4 sm:p-6 card-hover"
-        >
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Focus Sessions</h2>
-            <span className="text-sm text-primary">{snapshot.focusSessions!.length} sessions</span>
-          </div>
-        </Link>
-      )}
     </div>
   );
 }

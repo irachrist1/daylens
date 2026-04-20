@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { appInitials, formatDisplayAppName, normalizeAppNameKey } from "@/app/lib/apps";
 import { CATEGORY_COLORS } from "@/app/lib/format";
 
 /**
@@ -133,8 +134,10 @@ function resolveIconSrc(bundleID: string, displayName: string, iconBase64?: stri
   }
 
   // 3. Try display name → domain (case-insensitive)
-  const nameLower = displayName.toLowerCase();
-  const domainFromName = NAME_TO_DOMAIN[nameLower];
+  const nameLower = normalizeAppNameKey(displayName);
+  const domainFromName = Object.entries(NAME_TO_DOMAIN).find(
+    ([name]) => normalizeAppNameKey(name) === nameLower,
+  )?.[1];
   if (domainFromName) {
     return `https://www.google.com/s2/favicons?domain=${domainFromName}&sz=128`;
   }
@@ -156,7 +159,8 @@ export function AppIcon({
   size?: number;
 }) {
   const px = `${size / 16}rem`;
-  const iconSrc = resolveIconSrc(bundleID, displayName, iconBase64);
+  const safeDisplayName = formatDisplayAppName(displayName || bundleID);
+  const iconSrc = resolveIconSrc(bundleID, safeDisplayName, iconBase64);
   const [didFail, setDidFail] = useState(false);
 
   useEffect(() => {
@@ -172,7 +176,7 @@ export function AppIcon({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={iconSrc}
-          alt={displayName || bundleID}
+          alt={safeDisplayName || bundleID}
           className="block h-full w-full object-contain"
           onLoad={(event) => {
             if (
@@ -198,7 +202,7 @@ export function AppIcon({
         color: CATEGORY_COLORS[category] || "#475569",
       }}
     >
-      {(displayName || bundleID).charAt(0)}
+      {appInitials(safeDisplayName || bundleID).slice(0, 2) || "?"}
     </div>
   );
 }
