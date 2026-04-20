@@ -16,12 +16,21 @@ This repository is historically named `daylens-windows`, but the Electron deskto
 
 ## Install
 
-Grab the latest build from the [releases page](https://github.com/irachrist1/daylens/releases/latest). Full instructions, platform-by-platform fixes, and a Homebrew path live in [docs/INSTALL.md](docs/INSTALL.md).
+Direct downloads for v1.0.28 (click = download starts immediately):
 
-- **macOS (recommended):** `brew install --cask irachrist1/daylens/daylens`
-- **macOS (manual DMG):** download, drag to Applications, then run `xattr -cr /Applications/Daylens.app` if macOS says *"Daylens is damaged"* — see [docs/INSTALL.md](docs/INSTALL.md#why-macos-shows-daylens-is-damaged) for why and for the no-Terminal "Open Anyway" path.
-- **Windows:** download `Daylens-<version>-Setup.exe` and run it. On SmartScreen, click **More info → Run anyway**.
-- **Linux:** AppImage, deb, rpm, and tar.gz are all published on each release.
+- **[macOS (Apple Silicon) — Daylens-1.0.28-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.28/Daylens-1.0.28-arm64.dmg)**
+- **[Windows — Daylens-1.0.27-Setup.exe](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27-Setup.exe)**
+- **[Linux AppImage — Daylens-1.0.27.AppImage](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.AppImage)**  •  [.deb](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.deb)  •  [.rpm](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.rpm)  •  [.tar.gz](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.tar.gz)
+
+Prefer a package manager on macOS (zero prompts, zero clicks):
+
+```bash
+brew install --cask irachrist1/daylens/daylens
+```
+
+After manual install on macOS, double-click `/Applications/Daylens.app`. You'll see **"Daylens cannot be opened because Apple cannot check it for malicious software"** — this is the standard unsigned-app prompt, not the old "damaged" error. Fix once: **System Settings → Privacy & Security → Open Anyway**.
+
+Full per-platform notes, troubleshooting, and build-from-source instructions live in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Current product surfaces
 
