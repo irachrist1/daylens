@@ -1,4 +1,5 @@
-import type { DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import { inferWorkIntent } from '@shared/workIntent'
 import { formatDuration, todayString } from './format'
 
 export type RecapPeriod = 'day' | 'week' | 'month'
@@ -62,6 +63,8 @@ interface WorkstreamAccumulator {
   seconds: number
   blockCount: number
   isUntitled: boolean
+  isAmbient: boolean
+  isGeneric: boolean
 }
 
 interface ArtifactAccumulator {
@@ -102,6 +105,8 @@ interface AggregatedRecapStats {
   quietDayCount: number
   switchCount: number
   untitledSeconds: number
+  ambientSeconds: number
+  genericSeconds: number
   longestBlock: LongestBlock | null
   mostSwitchyBlock: SwitchyBlock | null
   peakDay: DayAccumulator | null
@@ -119,6 +124,49 @@ interface RecapRangeDefinition {
 }
 
 const UNTITLED_LABEL = 'Untitled work block'
+const GENERIC_RECAP_LABELS = new Set([
+  'x (twitter)',
+  'github',
+  'chatgpt',
+  'claude',
+  'gmail',
+  'google docs',
+  'google calendar',
+  'google meet',
+  'youtube',
+  'daylens',
+  'loading...',
+  'loading…',
+  'home',
+  'dashboard',
+  'inbox',
+  'calendar',
+  'messages',
+  'notifications',
+  'new tab',
+  'start page',
+])
+
+const SOCIAL_RECAP_DOMAINS = new Set([
+  'x.com',
+  'twitter.com',
+  'linkedin.com',
+  'facebook.com',
+  'instagram.com',
+  'reddit.com',
+])
+
+const LOW_SIGNAL_RECAP_DOMAINS = new Set([
+  'youtube.com',
+  'goojara.to',
+  'ww1.goojara.to',
+  'web.wootly.ch',
+  'netflix.com',
+  'primevideo.com',
+  'hulu.com',
+  'max.com',
+  'disneyplus.com',
+])
 
 const DAY_PROMPT_TEMPLATES = [
   'What did I actually get done today?',
@@ -306,6 +354,8 @@ function aggregatePayloads(payloads: DayTimelinePayload[]): AggregatedRecapStats
   let longestBlock: LongestBlock | null = null
   let mostSwitchyBlock: SwitchyBlock | null = null
   let untitledSeconds = 0
+  let ambientSeconds = 0
+  let genericSeconds = 0
 
   const perDay: DayAccumulator[] = payloads.map((payload) => ({
     date: payload.date,
@@ -318,18 +368,25 @@ function aggregatePayloads(payloads: DayTimelinePayload[]): AggregatedRecapStats
   for (const payload of payloads) {
     for (const block of payload.blocks) {
       const blockSeconds = blockDurationSeconds(block)
-      const workstreamLabel = normalizeBlockLabel(block)
-      const isUntitled = workstreamLabel === UNTITLED_LABEL
+      const workstream = deriveRecapWorkstream(block)
+      const workstreamLabel = workstream.label
+      const isUntitled = workstream.isUntitled
       if (isUntitled) untitledSeconds += blockSeconds
+      if (workstream.isAmbient) ambientSeconds += blockSeconds
+      if (workstream.isGeneric) genericSeconds += blockSeconds
 
       const currentWorkstream = workstreams.get(workstreamLabel) ?? {
         label: workstreamLabel,
         seconds: 0,
         blockCount: 0,
         isUntitled,
+        isAmbient: workstream.isAmbient,
+        isGeneric: workstream.isGeneric,
       }
       currentWorkstream.seconds += blockSeconds
       currentWorkstream.blockCount += 1
+      currentWorkstream.isAmbient = currentWorkstream.isAmbient || workstream.isAmbient
+      currentWorkstream.isGeneric = currentWorkstream.isGeneric || workstream.isGeneric
       workstreams.set(workstreamLabel, currentWorkstream)
 
       if (!longestBlock || blockSeconds > longestBlock.seconds) {
@@ -350,8 +407,8 @@ function aggregatePayloads(payloads: DayTimelinePayload[]): AggregatedRecapStats
       }
 
       for (const artifact of block.topArtifacts) {
+        if (!artifactRefIsUseful(artifact)) continue
         const label = normalizeText(artifact.displayTitle)
-        if (!label) continue
         const currentArtifact = artifacts.get(label) ?? { label, seconds: 0, mentionCount: 0 }
         currentArtifact.seconds += artifact.totalSeconds > 0 ? artifact.totalSeconds : blockSeconds
         currentArtifact.mentionCount += 1
@@ -375,6 +432,8 @@ function aggregatePayloads(payloads: DayTimelinePayload[]): AggregatedRecapStats
     quietDayCount,
     switchCount,
     untitledSeconds,
+    ambientSeconds,
+    genericSeconds,
     longestBlock,
     mostSwitchyBlock,
     peakDay,
@@ -441,11 +500,27 @@ function buildChapters(
 }
 
 function buildHeadlineTitle(period: RecapPeriod, stats: AggregatedRecapStats): string {
-  const primary = stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
+  const primary = primaryStoryWorkstream(stats)
   if (!primary) {
     if (period === 'day') return 'Today was tracked, but unlabeled'
     if (period === 'week') return 'This week is tracked, but mostly unlabeled'
     return 'This month is tracked, but mostly unlabeled'
+  }
+  const dominant = stats.topWorkstreams[0] ?? null
+  if ((dominant?.isAmbient || dominant?.isGeneric) && !(primary.isAmbient || primary.isGeneric) && dominant.label !== primary.label) {
+    if (period === 'day') return `Today mixed context with ${primary.label}`
+    if (period === 'week') return `This week mixed context with ${primary.label}`
+    return `This month mixed context with ${primary.label}`
+  }
+  if (primary.isAmbient) {
+    if (period === 'day') return 'Today skewed toward context browsing'
+    if (period === 'week') return 'This week skewed toward context browsing'
+    return 'This month skewed toward context browsing'
+  }
+  if (primary.isGeneric) {
+    if (period === 'day') return 'Today was mixed, but loosely labeled'
+    if (period === 'week') return 'This week was mixed, but loosely labeled'
+    return 'This month was mixed, but loosely labeled'
   }
   if (period === 'day') return `Today leaned on ${primary.label}`
   if (period === 'week') return `This week is anchored in ${primary.label}`
@@ -453,9 +528,9 @@ function buildHeadlineTitle(period: RecapPeriod, stats: AggregatedRecapStats): s
 }
 
 function buildHeadlineBody(period: RecapPeriod, stats: AggregatedRecapStats, coverage: RecapCoverage): string {
-  const primary = stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
+  const primary = primaryStoryWorkstream(stats)
   const secondary = primary
-    ? stats.topWorkstreams.find((workstream) => !workstream.isUntitled && workstream.label !== primary.label)
+    ? secondaryStoryWorkstream(stats, primary.label)
     : null
 
   if (!primary) {
@@ -463,6 +538,34 @@ function buildHeadlineBody(period: RecapPeriod, stats: AggregatedRecapStats, cov
       ? `Today captured ${formatDuration(stats.totalSeconds)} across ${stats.blockCount} block${stats.blockCount === 1 ? '' : 's'}, but none of them have a clear workstream label yet.`
       : `${period === 'week' ? 'This week' : 'This month'} captured ${formatDuration(stats.totalSeconds)} across ${stats.activeDayCount} active day${stats.activeDayCount === 1 ? '' : 's'}, but the blocks are mostly unlabeled so the story is thin.`
     return lead
+  }
+
+  const dominant = stats.topWorkstreams[0] ?? null
+  if ((dominant?.isAmbient || dominant?.isGeneric) && !(primary.isAmbient || primary.isGeneric) && dominant.label !== primary.label) {
+    const lead = period === 'day'
+      ? `Today spent ${formatDuration(dominant.seconds)} in loosely labeled browsing/context work, but the clearest named thread was ${primary.label} for ${formatDuration(primary.seconds)}`
+      : `${period === 'week' ? 'This week' : 'This month'} spent ${formatDuration(dominant.seconds)} in loosely labeled browsing/context work, but the clearest named thread was ${primary.label} for ${formatDuration(primary.seconds)}`
+    const tail = secondary
+      ? `, with ${secondary.label} as the next concrete thread.`
+      : '.'
+    const coverageSentence = coverage.coverageNote ? ` ${coverage.coverageNote}` : ''
+    return `${lead}${tail}${coverageSentence}`
+  }
+
+  if (primary.isAmbient) {
+    const lead = period === 'day'
+      ? `Today was dominated by generic browsing/context activity for ${formatDuration(primary.seconds)}`
+      : `${period === 'week' ? 'This week' : 'This month'} was dominated by generic browsing/context activity for ${formatDuration(primary.seconds)}`
+    const coverageSentence = coverage.coverageNote ? ` ${coverage.coverageNote}` : ''
+    return `${lead}.${coverageSentence}`.trim()
+  }
+
+  if (primary.isGeneric) {
+    const lead = period === 'day'
+      ? `Today captured ${formatDuration(primary.seconds)} in loosely labeled work`
+      : `${period === 'week' ? 'This week' : 'This month'} captured ${formatDuration(primary.seconds)} in loosely labeled work`
+    const coverageSentence = coverage.coverageNote ? ` ${coverage.coverageNote}` : ''
+    return `${lead}.${coverageSentence}`.trim()
   }
 
   const lead = period === 'day'
@@ -577,7 +680,7 @@ function buildChangeSummary(
 }
 
 function firstNamedWorkstream(stats: AggregatedRecapStats): string | null {
-  const named = stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
+  const named = primaryStoryWorkstream(stats) ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
   return named?.label ?? stats.topWorkstreams[0]?.label ?? null
 }
 
@@ -593,13 +696,14 @@ function buildCoverage(stats: AggregatedRecapStats, hasComparison: boolean): Rec
     }
   }
 
+  const partialSeconds = stats.untitledSeconds + stats.ambientSeconds + stats.genericSeconds
   const untitledPct = stats.totalSeconds > 0
-    ? Math.round((stats.untitledSeconds / stats.totalSeconds) * 100)
+    ? Math.round((partialSeconds / stats.totalSeconds) * 100)
     : 0
   const attributedPct = Math.max(0, 100 - untitledPct)
 
   const coverageNote = untitledPct >= 20
-    ? `About ${untitledPct}% of that time is in unnamed blocks, so the shape is partial.`
+    ? `About ${untitledPct}% of that time is in unnamed or generic context blocks, so the shape is partial.`
     : null
 
   return {
@@ -714,7 +818,7 @@ function promptChipsForPeriod(period: RecapPeriod, stats: AggregatedRecapStats |
 
   if (!stats || !stats.hasData) return [...templates]
 
-  const topNamed = stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
+  const topNamed = primaryStoryWorkstream(stats) ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
   const dynamic: string[] = []
   if (topNamed) {
     dynamic.push(
@@ -785,6 +889,203 @@ function emptyDayPayload(date: string): DayTimelinePayload {
 
 function normalizeBlockLabel(block: WorkContextBlock): string {
   return normalizeText(block.label.current) || normalizeText(block.label.override) || UNTITLED_LABEL
+}
+
+function primaryStoryWorkstream(stats: AggregatedRecapStats): WorkstreamAccumulator | null {
+  return stats.topWorkstreams.find((workstream) => !workstream.isUntitled && !workstream.isAmbient && !workstream.isGeneric)
+    ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled && !workstream.isAmbient)
+    ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled)
+    ?? null
+}
+
+function secondaryStoryWorkstream(stats: AggregatedRecapStats, primaryLabel: string): WorkstreamAccumulator | null {
+  return stats.topWorkstreams.find((workstream) => !workstream.isUntitled && !workstream.isAmbient && !workstream.isGeneric && workstream.label !== primaryLabel)
+    ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled && !workstream.isAmbient && workstream.label !== primaryLabel)
+    ?? stats.topWorkstreams.find((workstream) => !workstream.isUntitled && workstream.label !== primaryLabel)
+    ?? null
+}
+
+function recapLabelLooksGeneric(label: string | null | undefined): boolean {
+  const normalized = normalizeText(label).toLowerCase()
+  if (!normalized) return true
+  if (GENERIC_RECAP_LABELS.has(normalized)) return true
+  if (/^loading(?:\.\.\.|…)?$/i.test(normalized)) return true
+  if (/^(home|dashboard|inbox|calendar|messages|notifications)(\s*\/.*)?$/i.test(normalized)) return true
+  if (/^(x|twitter|x\.com)$/i.test(normalized)) return true
+  if (/^home\s*\/\s*x$/i.test(normalized)) return true
+  return false
+}
+
+function displayRecapLabel(label: string | null | undefined): string {
+  const normalized = normalizeText(label)
+  if (!normalized) return normalized
+
+  const titleHead = normalized.split(/\s+[—-]\s+/)[0]?.trim()
+  if (titleHead && !recapLabelLooksGeneric(titleHead)) return titleHead
+
+  const xAuthorMatch = normalized.match(/^(.+?)\s+on X:/i)
+  if (xAuthorMatch?.[1]) {
+    const author = normalizeText(xAuthorMatch[1])
+    if (author && !recapLabelLooksGeneric(author)) return `${author} on X`
+  }
+
+  if (/\/\s*X$/i.test(normalized) && normalized.length > 72) return 'X (Twitter) thread'
+  return compactSubjectLabel(normalized)
+}
+
+function compactSubjectLabel(subject: string): string {
+  const normalized = normalizeText(subject)
+  if (!normalized) return normalized
+
+  if (normalized.includes('/') || normalized.includes('\\')) {
+    const segments = normalized.split(/[\\/]/).filter(Boolean)
+    return segments.at(-1) ?? normalized
+  }
+
+  if (normalized.length <= 48) return normalized
+  return `${normalized.slice(0, 45).trimEnd()}...`
+}
+
+function recapLabelFromIntent(block: WorkContextBlock): { label: string; isUntitled: boolean; isAmbient: boolean; isGeneric: boolean } {
+  const intent = inferWorkIntent(block)
+  const overrideLabel = normalizeText(block.label.override)
+  const currentLabel = normalizeText(block.label.current)
+
+  if (overrideLabel) {
+    return {
+      label: displayRecapLabel(overrideLabel),
+      isUntitled: false,
+      isAmbient: intent.role === 'ambient',
+      isGeneric: false,
+    }
+  }
+
+  if (currentLabel && !recapLabelLooksGeneric(currentLabel)) {
+    return {
+      label: displayRecapLabel(currentLabel),
+      isUntitled: false,
+      isAmbient: intent.role === 'ambient',
+      isGeneric: recapWorkstreamIsGeneric(currentLabel),
+    }
+  }
+
+  const subject = intent.subject && !recapLabelLooksGeneric(intent.subject)
+    ? displayRecapLabel(intent.subject)
+    : null
+
+  switch (intent.role) {
+    case 'execution':
+      return {
+        label: subject ?? 'Execution work',
+        isUntitled: false,
+        isAmbient: false,
+        isGeneric: !subject,
+      }
+    case 'research':
+      return {
+        label: subject ? `Research on ${subject}` : 'Research / context gathering',
+        isUntitled: false,
+        isAmbient: false,
+        isGeneric: !subject,
+      }
+    case 'review':
+      return {
+        label: subject ? `Reviewing ${subject}` : 'Review work',
+        isUntitled: false,
+        isAmbient: false,
+        isGeneric: !subject,
+      }
+    case 'communication':
+      return {
+        label: subject ? `Communication on ${subject}` : 'Communication',
+        isUntitled: false,
+        isAmbient: false,
+        isGeneric: !subject,
+      }
+    case 'coordination':
+      return {
+        label: subject ? `Coordination on ${subject}` : 'Coordination',
+        isUntitled: false,
+        isAmbient: false,
+        isGeneric: !subject,
+      }
+    case 'ambient':
+      return {
+        label: subject ? `Ambient browsing on ${subject}` : 'Ambient browsing',
+        isUntitled: false,
+        isAmbient: true,
+        isGeneric: !subject,
+      }
+    case 'ambiguous':
+    default:
+      return {
+        label: currentLabel || UNTITLED_LABEL,
+        isUntitled: !currentLabel,
+        isAmbient: false,
+        isGeneric: Boolean(currentLabel) && recapWorkstreamIsGeneric(currentLabel),
+      }
+  }
+}
+
+function recapWorkstreamIsGeneric(label: string | null | undefined): boolean {
+  const normalized = normalizeText(label).toLowerCase()
+  return normalized === 'execution work'
+    || normalized === 'research / context gathering'
+    || normalized === 'review work'
+    || normalized === 'communication'
+    || normalized === 'coordination'
+    || normalized === 'ambient browsing'
+}
+
+function deriveRecapWorkstream(block: WorkContextBlock): { label: string; isUntitled: boolean; isAmbient: boolean; isGeneric: boolean } {
+  const fallbackLabel = normalizeBlockLabel(block)
+  if (fallbackLabel === UNTITLED_LABEL) {
+    if (!blockHasConcreteWorkstreamEvidence(block)) {
+      return { label: UNTITLED_LABEL, isUntitled: true, isAmbient: false, isGeneric: false }
+    }
+    const derived = recapLabelFromIntent(block)
+    return derived.label ? derived : { label: UNTITLED_LABEL, isUntitled: true, isAmbient: false, isGeneric: false }
+  }
+
+  const derived = recapLabelFromIntent(block)
+  if (!recapLabelLooksGeneric(fallbackLabel)) {
+    return {
+      label: displayRecapLabel(fallbackLabel),
+      isUntitled: false,
+      isAmbient: derived.isAmbient,
+      isGeneric: recapWorkstreamIsGeneric(fallbackLabel),
+    }
+  }
+
+  return derived
+}
+
+function artifactLabelIsUseful(label: string | null | undefined): boolean {
+  const normalized = normalizeText(label)
+  if (!normalized) return false
+  if (recapLabelLooksGeneric(normalized)) return false
+  if (/^daylens$/i.test(normalized)) return false
+  if (/^watch\s.+\(\d{4}\)$/i.test(normalized)) return false
+  if (/ on X:/i.test(normalized)) return false
+  return true
+}
+
+function artifactRefIsUseful(artifact: ArtifactRef): boolean {
+  const label = normalizeText(artifact.displayTitle)
+  if (!artifactLabelIsUseful(label)) return false
+  if (artifact.artifactType !== 'page') return true
+
+  const host = normalizeText(artifact.host ?? '').toLowerCase().replace(/^www\./, '')
+  if (SOCIAL_RECAP_DOMAINS.has(host)) return false
+  if (LOW_SIGNAL_RECAP_DOMAINS.has(host)) return false
+  return true
+}
+
+function blockHasConcreteWorkstreamEvidence(block: WorkContextBlock): boolean {
+  if (block.documentRefs.some((artifact) => artifactLabelIsUseful(artifact.displayTitle))) return true
+  if (block.pageRefs.some((page) => artifactLabelIsUseful(page.pageTitle ?? page.displayTitle))) return true
+  if (block.topApps.some((app) => !app.isBrowser && app.category !== 'system' && app.category !== 'uncategorized')) return true
+  return false
 }
 
 function normalizeText(value: string | null | undefined): string {

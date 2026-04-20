@@ -821,10 +821,20 @@ export default function Settings() {
               title="Workspace status"
               description={
                 syncStatus?.isLinked
-                  ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. Last sync: ${formatSyncTimestamp(syncStatus.lastSyncAt)}`
+                  ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. State: ${syncStatus.state.replace(/_/g, ' ')}. Last heartbeat: ${formatSyncTimestamp(syncStatus.lastHeartbeatAt)}. Last durable sync: ${formatSyncTimestamp(syncStatus.lastSuccessfulSyncAt)}${syncStatus.lastFailureMessage ? ` · Last durable sync failure: ${syncStatus.lastFailureMessage}` : ''}`
                   : 'This device is local-only.'
               }
-              control={<StatusPill label={syncStatus?.isLinked ? 'Linked' : 'Local only'} tone={syncStatus?.isLinked ? 'success' : 'neutral'} />}
+              control={<StatusPill label={syncStatus?.isLinked ? syncStatus.state.replace(/_/g, ' ') : 'Local only'} tone={
+                !syncStatus?.isLinked
+                  ? 'neutral'
+                  : syncStatus.state === 'healthy'
+                    ? 'success'
+                    : syncStatus.state === 'failed'
+                      ? 'error'
+                      : syncStatus.state === 'stale' || syncStatus.state === 'pending_first_sync'
+                        ? 'warning'
+                        : 'neutral'
+              } />}
             />
             <SettingsRow
               title={syncStatus?.isLinked ? 'Workspace actions' : 'Create workspace'}

@@ -1,0 +1,59 @@
+flowchart TB
+    user[User]
+
+    subgraph desktop[Desktop Daylens]
+        capture[Tracking Engine]
+        sqlite[(Local SQLite)]
+        localai[Local AI Orchestrator]
+        syncpack[Sync Packager + Upload Queue]
+        capture --> sqlite
+        sqlite --> localai
+        sqlite --> syncpack
+    end
+
+    subgraph cloud[Cloud Companion Layer]
+        auth[Workspace Linking + Sessions]
+        live[Live Presence + Heartbeats]
+        query[(Remote Query Index)]
+        ai[Remote AI Orchestrator]
+        jobs[Recap / Report / Notification Jobs]
+        auth --> live
+        auth --> query
+        query --> ai
+        query --> jobs
+    end
+
+    subgraph clients[Remote Clients]
+        web[Web App]
+        mobile[Mobile Browser]
+        reports[AI Recap / Report Views]
+    end
+
+    user --> capture
+    user --> web
+    user --> mobile
+
+    syncpack --> auth
+    syncpack --> live
+    syncpack --> query
+
+    web --> auth
+    web --> live
+    web --> query
+    web --> ai
+
+    mobile --> auth
+    mobile --> live
+    mobile --> query
+    mobile --> ai
+
+    jobs --> reports
+    query --> reports
+    ai --> reports
+
+    classDef desktopFill fill:#eef5ff,stroke:#4f7cff,color:#122033
+    classDef cloudFill fill:#eefaf2,stroke:#2f9e67,color:#123020
+    classDef clientFill fill:#fff7e8,stroke:#cc8b1f,color:#3a2a0c
+    class capture,sqlite,localai,syncpack desktopFill
+    class auth,live,query,ai,jobs cloudFill
+    class web,mobile,reports clientFill

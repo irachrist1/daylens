@@ -75,5 +75,11 @@ Detailed validation status and any truthfulness caveats live in [docs/ISSUES.md]
 - [docs/CLAUDE.md](docs/CLAUDE.md) for a lightweight session guide
 - [docs/ABOUT.md](docs/ABOUT.md) for reusable product copy
 - [docs/AGENTS.md](docs/AGENTS.md) for the product and build contract
+- [docs/PRD.md](docs/PRD.md) for the remote companion product definition and phased product scope
+- [docs/SRS.md](docs/SRS.md) for the remote companion system requirements and architecture plan
+- [docs/REMOTE_PARITY_MATRIX.md](docs/REMOTE_PARITY_MATRIX.md) for the launch parity checklist across Timeline, Apps, AI, Settings, notifications, and Wrapped
+- [docs/REMOTE_CONTRACT.md](docs/REMOTE_CONTRACT.md) for the shared remote data, sync, session, and AI continuity contract
+- [docs/REMOTE_EXECUTION_PLAN.md](docs/REMOTE_EXECUTION_PLAN.md) for the milestone-by-milestone execution plan and release gates
+- [docs/diagrams/README.md](docs/diagrams/README.md) for rendered Mermaid architecture diagrams that visualize the remote companion plan
 - [docs/IDEAS.md](docs/IDEAS.md) for future directions
 - [docs/ISSUES.md](docs/ISSUES.md) for current constraints and open problems

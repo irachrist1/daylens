@@ -19,6 +19,7 @@ import { formatDuration, todayString } from '../lib/format'
 import { AI_PROVIDER_META, getSelectedModel } from '../lib/aiProvider'
 import { buildRecapSummaries, recapDateWindow, type RecapChapter, type RecapPeriod, type RecapSummary } from '../lib/recap'
 import ConnectAI from '../components/ConnectAI'
+import { inferWorkIntent } from '../../shared/workIntent'
 
 type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
@@ -153,7 +154,7 @@ function RecapMetricCard({
     <div style={{
       borderRadius: 16,
       border: '1px solid var(--color-border-ghost)',
-      background: 'rgba(255, 255, 255, 0.03)',
+      background: 'var(--color-recap-panel)',
       padding: '14px 14px 12px',
       minHeight: 96,
     }}>
@@ -200,7 +201,7 @@ function RecapList({
     <div style={{
       borderRadius: 16,
       border: '1px solid var(--color-border-ghost)',
-      background: 'rgba(255, 255, 255, 0.03)',
+      background: 'var(--color-recap-panel)',
       padding: '14px 14px 12px',
     }}>
       <div style={{
@@ -275,7 +276,7 @@ function RecapTrend({
     <div style={{
       borderRadius: 16,
       border: '1px solid var(--color-border-ghost)',
-      background: 'rgba(255, 255, 255, 0.03)',
+      background: 'var(--color-recap-panel)',
       padding: '14px 14px 12px',
     }}>
       <div style={{
@@ -313,8 +314,8 @@ function RecapTrend({
                 <div style={{
                   width: '100%',
                   borderRadius: 14,
-                  border: '1px solid rgba(173, 198, 255, 0.18)',
-                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid var(--color-recap-bar-border)',
+                  background: 'var(--color-recap-track)',
                   overflow: 'hidden',
                   height: trackedHeight,
                   display: 'flex',
@@ -361,7 +362,7 @@ function RecapChapterBlock({
       gap: 16,
       alignItems: 'start',
       padding: '16px 22px',
-      borderBottom: index < total - 1 ? '1px solid rgba(173, 198, 255, 0.08)' : 'none',
+      borderBottom: index < total - 1 ? '1px solid var(--color-recap-divider)' : 'none',
     }}>
       <div style={{
         position: 'relative',
@@ -374,9 +375,9 @@ function RecapChapterBlock({
           width: 28,
           height: 28,
           borderRadius: 999,
-          border: '1px solid rgba(173, 198, 255, 0.28)',
-          background: 'rgba(173, 198, 255, 0.06)',
-          color: 'rgba(221, 235, 255, 0.88)',
+          border: '1px solid var(--color-recap-shell-border)',
+          background: 'var(--color-recap-panel-strong)',
+          color: 'var(--color-recap-title)',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -393,7 +394,7 @@ function RecapChapterBlock({
             width: 1,
             marginTop: 8,
             minHeight: 24,
-            background: 'linear-gradient(180deg, rgba(173, 198, 255, 0.22), rgba(173, 198, 255, 0))',
+            background: 'var(--color-recap-line)',
           }} />
         )}
       </div>
@@ -403,7 +404,7 @@ function RecapChapterBlock({
           fontWeight: 800,
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
-          color: 'rgba(221, 235, 255, 0.54)',
+          color: 'var(--color-recap-dim)',
         }}>
           {chapter.eyebrow}
         </div>
@@ -411,7 +412,7 @@ function RecapChapterBlock({
           fontSize: 16,
           fontWeight: 740,
           letterSpacing: '-0.02em',
-          color: '#f8fbff',
+          color: 'var(--color-recap-title)',
           marginTop: 6,
           lineHeight: 1.35,
         }}>
@@ -420,7 +421,7 @@ function RecapChapterBlock({
         <div style={{
           fontSize: 13.5,
           lineHeight: 1.7,
-          color: 'rgba(229, 238, 255, 0.82)',
+          color: 'var(--color-recap-body)',
           marginTop: 8,
           maxWidth: 680,
         }}>
@@ -445,21 +446,20 @@ function RecapPanel({
   onPromptClick: (prompt: string, source: string) => void
 }) {
   const active = recap[activePeriod]
-  const coverageLine = active.hasData && active.coverage.coverageNote
 
   return (
     <div style={{
       borderRadius: 24,
-      border: '1px solid rgba(173, 198, 255, 0.18)',
-      background: 'linear-gradient(180deg, rgba(14, 24, 43, 0.92), rgba(11, 20, 35, 0.88))',
-      boxShadow: '0 28px 64px rgba(6, 12, 24, 0.24)',
+      border: '1px solid var(--color-recap-shell-border)',
+      background: 'var(--color-recap-shell)',
+      boxShadow: 'var(--color-recap-shell-shadow)',
       overflow: 'hidden',
       marginBottom: 20,
     }}>
       <div style={{
         padding: '22px 22px 20px',
-        borderBottom: '1px solid rgba(173, 198, 255, 0.12)',
-        background: 'radial-gradient(circle at top right, rgba(125, 193, 255, 0.18), transparent 48%)',
+        borderBottom: '1px solid var(--color-recap-divider)',
+        background: 'var(--color-recap-hero-glow)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div>
@@ -468,26 +468,25 @@ function RecapPanel({
               fontWeight: 800,
               letterSpacing: '0.10em',
               textTransform: 'uppercase',
-              color: 'rgba(221, 235, 255, 0.72)',
+              color: 'var(--color-recap-kicker)',
               marginBottom: 10,
             }}>
               Work recap
             </div>
-            <div style={{ fontSize: 28, fontWeight: 780, letterSpacing: '-0.04em', color: '#f8fbff' }}>
+            <div style={{ fontSize: 28, fontWeight: 780, letterSpacing: '-0.04em', color: 'var(--color-recap-title)' }}>
               {active.title}
             </div>
-            <div style={{ fontSize: 13, color: 'rgba(221, 235, 255, 0.72)', marginTop: 6 }}>
+            <div style={{ fontSize: 13, color: 'var(--color-recap-kicker)', marginTop: 6 }}>
               {active.subtitle}
             </div>
           </div>
-
           <div style={{
             display: 'inline-flex',
             gap: 4,
             padding: 4,
             borderRadius: 999,
-            border: '1px solid rgba(173, 198, 255, 0.14)',
-            background: 'rgba(255, 255, 255, 0.03)',
+            border: '1px solid var(--color-recap-shell-border)',
+            background: 'var(--color-recap-panel)',
           }}>
             {(['day', 'week', 'month'] as RecapPeriod[]).map((period) => (
               <button
@@ -499,7 +498,7 @@ function RecapPanel({
                   borderRadius: 999,
                   border: 'none',
                   background: activePeriod === period ? 'var(--gradient-primary)' : 'transparent',
-                  color: activePeriod === period ? 'var(--color-primary-contrast)' : 'rgba(221, 235, 255, 0.74)',
+                  color: activePeriod === period ? 'var(--color-primary-contrast)' : 'var(--color-recap-kicker)',
                   fontSize: 12,
                   fontWeight: 750,
                   cursor: 'pointer',
@@ -510,38 +509,17 @@ function RecapPanel({
             ))}
           </div>
         </div>
-
         <div style={{
-          marginTop: 18,
+          marginTop: 14,
           fontSize: 15,
           lineHeight: 1.7,
-          color: '#f8fbff',
+          color: 'var(--color-recap-title)',
           maxWidth: 760,
           fontWeight: 560,
           letterSpacing: '-0.005em',
         }}>
           {active.headline}
         </div>
-        {coverageLine && (
-          <div style={{
-            marginTop: 10,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '5px 10px',
-            borderRadius: 999,
-            border: '1px solid rgba(244, 200, 130, 0.24)',
-            background: 'rgba(244, 200, 130, 0.08)',
-            fontSize: 11.5,
-            color: 'rgba(252, 226, 179, 0.92)',
-          }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: 999,
-              background: 'rgba(244, 200, 130, 0.85)',
-            }} />
-            {active.coverage.attributedPct}% of tracked time has a named workstream
-          </div>
-        )}
       </div>
 
       {active.hasData && active.chapters.length > 0 && (
@@ -562,7 +540,7 @@ function RecapPanel({
           padding: '22px 22px 24px',
           fontSize: 13.5,
           lineHeight: 1.75,
-          color: 'rgba(229, 238, 255, 0.78)',
+          color: 'var(--color-recap-body)',
           maxWidth: 720,
         }}>
           {active.summary}
@@ -573,8 +551,8 @@ function RecapPanel({
         padding: '20px 22px 22px',
         display: 'grid',
         gap: 16,
-        borderTop: '1px solid rgba(173, 198, 255, 0.12)',
-        background: 'rgba(6, 12, 24, 0.22)',
+        borderTop: '1px solid var(--color-recap-divider)',
+        background: 'var(--color-recap-track)',
       }}>
         <div style={{
           display: 'grid',
@@ -631,9 +609,9 @@ function RecapPanel({
                 style={{
                   padding: '8px 14px',
                   borderRadius: 999,
-                  border: '1px solid rgba(173, 198, 255, 0.18)',
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  color: 'rgba(241, 247, 255, 0.86)',
+                  border: '1px solid var(--color-recap-shell-border)',
+                  background: 'var(--color-recap-panel)',
+                  color: 'var(--color-recap-title)',
                   fontSize: 12.5,
                   cursor: hasProviderAccess ? 'pointer' : 'default',
                   opacity: hasProviderAccess ? 1 : 0.6,
@@ -782,22 +760,24 @@ function summaryText(today: DayTimelinePayload | null): string {
     return 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.'
   }
 
-  const topBlocks = today.blocks
+  const rankedBlocks = [...today.blocks]
+    .sort((left, right) => (right.endTime - right.startTime) - (left.endTime - left.startTime))
     .slice(0, 3)
-    .map((block) => block.label.current)
-    .filter(Boolean)
-
-  const topArtifacts = today.blocks
+  const primaryIntent = rankedBlocks[0] ? inferWorkIntent(rankedBlocks[0]) : null
+  const topArtifacts = rankedBlocks
     .flatMap((block) => block.topArtifacts)
-    .slice(0, 3)
     .map((artifact) => artifact.displayTitle)
     .filter(Boolean)
+    .filter((title, index, titles) => titles.indexOf(title) === index)
+    .slice(0, 3)
 
   const parts = [
     `You tracked ${formatDuration(today.totalSeconds)} across ${today.blocks.length} block${today.blocks.length !== 1 ? 's' : ''} today.`,
-    topBlocks.length > 0 ? `The strongest threads were ${topBlocks.join(', ')}.` : null,
+    primaryIntent ? `The clearest thread was ${primaryIntent.summary.toLowerCase()}.` : null,
     topArtifacts.length > 0 ? `Key artifacts included ${topArtifacts.join(', ')}.` : null,
-    `Focus time was ${formatDuration(today.focusSeconds)} (${today.focusPct}%).`,
+    today.focusPct >= 70
+      ? `Focus held for ${formatDuration(today.focusSeconds)} (${today.focusPct}%).`
+      : `Focus was more fragmented, with ${formatDuration(today.focusSeconds)} counted as focused time (${today.focusPct}%).`,
   ]
 
   return parts.filter(Boolean).join(' ')
@@ -1473,7 +1453,7 @@ export default function Insights() {
                     background: 'var(--color-surface)',
                     border: '1px solid var(--color-border-ghost)',
                     borderRadius: 10,
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                    boxShadow: 'var(--color-shadow-floating)',
                     padding: 6,
                   }}
                 >
@@ -2111,7 +2091,7 @@ export default function Insights() {
               border: '1px solid var(--color-border-ghost)',
               background: 'var(--color-surface)',
               padding: '10px 10px 10px 16px',
-              boxShadow: '0 20px 48px rgba(0, 0, 0, 0.18)',
+              boxShadow: 'var(--color-shadow-floating)',
             }}>
               <textarea
                 ref={composerTextareaRef}

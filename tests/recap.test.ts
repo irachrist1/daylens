@@ -1,6 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
+import type {
+  ArtifactRef,
+  DayTimelinePayload,
+  DocumentRef,
+  PageRef,
+  WebsiteSummary,
+  WorkContextAppSummary,
+  WorkContextBlock,
+  WorkflowRef,
+} from '../src/shared/types.ts'
 import { buildRecapSummaries, getMonthStart, getWeekStart, recapDateWindow, shiftDate } from '../src/renderer/lib/recap.ts'
 
 function makeArtifact(title: string, totalSeconds: number): ArtifactRef {
@@ -14,26 +23,89 @@ function makeArtifact(title: string, totalSeconds: number): ArtifactRef {
   }
 }
 
+function makeDocumentRef(title: string, totalSeconds: number): DocumentRef {
+  return {
+    ...makeArtifact(title, totalSeconds),
+    artifactType: 'document',
+    sourceSessionIds: [],
+  }
+}
+
+function makePage(title: string, domain: string, url: string, totalSeconds: number): PageRef {
+  return {
+    id: `page:${domain}:${title}`,
+    artifactType: 'page',
+    displayTitle: title,
+    pageTitle: title,
+    domain,
+    totalSeconds,
+    confidence: 0.9,
+    openTarget: { kind: 'external_url', value: url },
+    url,
+    normalizedUrl: url,
+  }
+}
+
+function makeWebsite(domain: string, totalSeconds: number, topTitle: string | null): WebsiteSummary {
+  return {
+    domain,
+    totalSeconds,
+    visitCount: 1,
+    topTitle,
+    browserBundleId: 'arc.bundle',
+    canonicalBrowserId: 'arc',
+  }
+}
+
+function makeApp(appName: string, category: WorkContextAppSummary['category'], totalSeconds: number, isBrowser = false): WorkContextAppSummary {
+  return {
+    bundleId: `${appName.toLowerCase()}.bundle`,
+    appName,
+    category,
+    totalSeconds,
+    sessionCount: 1,
+    isBrowser,
+  }
+}
+
+function makeWorkflow(label: string): WorkflowRef {
+  return {
+    id: `workflow:${label}`,
+    signatureKey: label,
+    label,
+    confidence: 0.7,
+    dominantCategory: 'development',
+    canonicalApps: [],
+    artifactKeys: [],
+  }
+}
+
 function makeBlock(label: string, startTime: number, durationSeconds: number, options?: {
+  dominantCategory?: WorkContextBlock['dominantCategory']
   switchCount?: number
   artifacts?: ArtifactRef[]
+  topApps?: WorkContextAppSummary[]
+  websites?: WebsiteSummary[]
+  pageRefs?: PageRef[]
+  documentRefs?: DocumentRef[]
+  workflowRefs?: WorkflowRef[]
 }): WorkContextBlock {
   return {
     id: `block:${label}:${startTime}`,
     startTime,
     endTime: startTime + durationSeconds * 1_000,
-    dominantCategory: 'development',
-    categoryDistribution: { development: durationSeconds },
+    dominantCategory: options?.dominantCategory ?? 'development',
+    categoryDistribution: { [options?.dominantCategory ?? 'development']: durationSeconds },
     ruleBasedLabel: label,
     aiLabel: null,
     sessions: [],
-    topApps: [],
-    websites: [],
+    topApps: options?.topApps ?? [],
+    websites: options?.websites ?? [],
     keyPages: [],
-    pageRefs: [],
-    documentRefs: [],
+    pageRefs: options?.pageRefs ?? [],
+    documentRefs: options?.documentRefs ?? [],
     topArtifacts: options?.artifacts ?? [],
-    workflowRefs: [],
+    workflowRefs: options?.workflowRefs ?? [],
     label: {
       current: label,
       source: 'rule',
@@ -234,8 +306,8 @@ test('recap coverage honestly reports when most time is in unnamed blocks', () =
   ], today)
 
   assert.ok(recap.day.coverage.untitledPct >= 50)
-  assert.ok(recap.day.coverage.coverageNote && /unnamed blocks/.test(recap.day.coverage.coverageNote))
-  assert.match(recap.day.headline, /unnamed blocks|partial/)
+  assert.ok(recap.day.coverage.coverageNote && /unnamed|generic context/.test(recap.day.coverage.coverageNote))
+  assert.match(recap.day.headline, /unlabeled|partial/)
 })
 
 test('weekly recap surfaces rhythm chapter with peak day and quiet days', () => {
@@ -314,4 +386,110 @@ test('workstream list keeps dominant unnamed work visible when it belongs in the
 
   const labels = recap.day.topWorkstreams.map((item) => item.label)
   assert.deepEqual(labels, ['Client A', 'Unnamed work blocks', 'Client B'])
+})
+
+test('daily recap de-prioritizes generic X feed loops when a clearer execution thread exists', () => {
+  const today = '2026-04-19'
+  const base = new Date(`${today}T09:00:00`).getTime()
+  const ambientX = makePage('X (Twitter)', 'x.com', 'https://x.com/home', 4 * 3600)
+  const executionDoc = makeDocumentRef('src/renderer/views/Insights.tsx', 90 * 60)
+
+  const recap = buildRecapSummaries([
+    makeDay(today, {
+      totalSeconds: 6 * 3600,
+      focusSeconds: 2 * 3600,
+      blocks: [
+        makeBlock('X (Twitter)', base, 4 * 3600, {
+          dominantCategory: 'browsing',
+          topApps: [makeApp('Arc', 'browsing', 4 * 3600, true)],
+          websites: [makeWebsite('x.com', 4 * 3600, 'X (Twitter)')],
+          pageRefs: [ambientX],
+          artifacts: [ambientX],
+          switchCount: 8,
+        }),
+        makeBlock('Daylens', base + 4 * 3600_000 + 60_000, 90 * 60, {
+          dominantCategory: 'development',
+          topApps: [makeApp('Code', 'development', 90 * 60)],
+          documentRefs: [executionDoc],
+          artifacts: [executionDoc],
+          switchCount: 2,
+        }),
+      ],
+    }),
+  ], today)
+
+  assert.doesNotMatch(recap.day.headline, /Today leaned on X \(Twitter\)/)
+  assert.match(recap.day.headline, /mixed context|Insights\.tsx|Execution work/i)
+  const focusChapter = recap.day.chapters.find((chapter) => chapter.id === 'focus')
+  assert.ok(focusChapter)
+  assert.doesNotMatch(focusChapter!.body, /Deepest stretch: .*X \(Twitter\)/)
+  const artifactChapter = recap.day.chapters.find((chapter) => chapter.id === 'artifacts')
+  assert.ok(artifactChapter)
+  assert.match(artifactChapter!.body, /Insights\.tsx/)
+  assert.doesNotMatch(artifactChapter!.body, /X \(Twitter\)/)
+})
+
+test('daily recap avoids workflow app-pair labels and low-signal social or entertainment artifacts', () => {
+  const today = '2026-04-19'
+  const base = new Date(`${today}T09:00:00`).getTime()
+
+  const recap = buildRecapSummaries([
+    makeDay(today, {
+      totalSeconds: 5 * 3600,
+      focusSeconds: 90 * 60,
+      blocks: [
+        makeBlock('X (Twitter)', base, 2 * 3600, {
+          dominantCategory: 'browsing',
+          topApps: [
+            makeApp('Dia', 'browsing', 2 * 3600, true),
+            makeApp('Warp', 'development', 20 * 60),
+          ],
+          websites: [
+            makeWebsite('x.com', 70 * 60, 'X (Twitter)'),
+            makeWebsite('localhost', 20 * 60, 'Daylens — Searchable work history for your laptop'),
+          ],
+          pageRefs: [
+            makePage('X (Twitter)', 'x.com', 'https://x.com/home', 70 * 60),
+            makePage('Daylens — Searchable work history for your laptop', 'localhost', 'http://localhost:3000/daylens', 20 * 60),
+            makePage('Garry Tan on X: "Something something" / X', 'x.com', 'https://x.com/post/1', 10 * 60),
+          ],
+          artifacts: [
+            makePage('X (Twitter)', 'x.com', 'https://x.com/home', 70 * 60),
+            makePage('Daylens — Searchable work history for your laptop', 'localhost', 'http://localhost:3000/daylens', 20 * 60),
+            makePage('Garry Tan on X: "Something something" / X', 'x.com', 'https://x.com/post/1', 10 * 60),
+          ],
+          workflowRefs: [makeWorkflow('Dia + Warp')],
+          switchCount: 5,
+        }),
+        makeBlock('Loading…', base + 2 * 3600_000 + 60_000, 75 * 60, {
+          dominantCategory: 'browsing',
+          topApps: [
+            makeApp('Dia', 'browsing', 55 * 60, true),
+            makeApp('Warp', 'development', 20 * 60),
+          ],
+          websites: [
+            makeWebsite('app.raindrop.io', 30 * 60, 'Loading…'),
+            makeWebsite('ww1.goojara.to', 20 * 60, 'Watch Inception (2010)'),
+          ],
+          pageRefs: [
+            makePage('Loading…', 'app.raindrop.io', 'https://app.raindrop.io/my/0', 30 * 60),
+            makePage('Watch Inception (2010)', 'ww1.goojara.to', 'https://ww1.goojara.to/mKZNZ7', 20 * 60),
+          ],
+          artifacts: [
+            makePage('Loading…', 'app.raindrop.io', 'https://app.raindrop.io/my/0', 30 * 60),
+            makePage('Watch Inception (2010)', 'ww1.goojara.to', 'https://ww1.goojara.to/mKZNZ7', 20 * 60),
+          ],
+          workflowRefs: [makeWorkflow('Dia + Warp')],
+          switchCount: 4,
+        }),
+      ],
+    }),
+  ], today)
+
+  assert.doesNotMatch(recap.day.headline, /Dia \+ Warp|Loading|X \(Twitter\)/)
+  assert.match(recap.day.headline, /Daylens|Research|context/i)
+  const artifactChapter = recap.day.chapters.find((chapter) => chapter.id === 'artifacts')
+  assert.ok(artifactChapter)
+  assert.match(artifactChapter!.body, /Daylens/)
+  assert.doesNotMatch(artifactChapter!.body, /Watch Inception|Garry Tan on X|X \(Twitter\)|Loading/)
 })

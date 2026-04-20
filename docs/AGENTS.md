@@ -212,7 +212,7 @@ AI contributors should update the canonical docs as part of the same change when
 
 When updating docs:
 
-- keep `README.md`, `docs/ABOUT.md`, `docs/AGENTS.md`, `docs/CLAUDE.md`, `docs/IDEAS.md`, and `docs/ISSUES.md` aligned
+- keep `README.md`, `docs/ABOUT.md`, `docs/AGENTS.md`, `docs/CLAUDE.md`, `docs/PRD.md`, `docs/SRS.md`, `docs/IDEAS.md`, and `docs/ISSUES.md` aligned when those docs are in scope
 - treat documentation updates as part of the job, not optional cleanup the user has to keep asking for
 - mark shipped-sounding status carefully
 - use language like `upon review`, `ready for review`, `implemented pending verification`, or `needs user validation` unless the user explicitly confirms the work is done
