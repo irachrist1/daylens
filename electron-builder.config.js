@@ -18,6 +18,8 @@ const mac = {
   gatekeeperAssess: false,
 }
 
+const macAfterSign = './scripts/mac-afterSign.js'
+
 const linux = {
   target: [
     {
@@ -93,6 +95,7 @@ module.exports = {
     },
   ],
   mac,
+  afterSign: macAfterSign,
   win,
   linux,
   deb: {
