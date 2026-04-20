@@ -177,7 +177,7 @@ export function SnapshotContent({
                 <div key={block.id} className="rounded-xl bg-surface-low px-4 py-3">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="text-sm font-semibold text-on-surface">
+                      <p className="break-words text-sm font-semibold text-on-surface">
                         {block.label}
                       </p>
                       <p className="mt-1 text-xs text-on-surface-variant">
@@ -228,13 +228,13 @@ export function SnapshotContent({
               <div className="space-y-3">
                 {topWorkstreams.slice(0, 6).map((item: SnapshotShape, index: number) => (
                   <div key={`${item.label}-${index}`} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">{item.label}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-on-surface">{item.label}</p>
                       <p className="text-[0.6875rem] text-on-surface-variant">
                         {item.blockCount} blocks
                       </p>
                     </div>
-                    <p className="text-sm font-medium text-on-surface">
+                    <p className="shrink-0 text-sm font-medium text-on-surface">
                       {formatDuration(item.seconds || 0)}
                     </p>
                   </div>
@@ -249,13 +249,13 @@ export function SnapshotContent({
               <div className="space-y-3">
                 {entities.slice(0, 6).map((entity: SnapshotShape, index: number) => (
                   <div key={`${entity.kind}-${entity.id}-${index}`} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">{entity.label}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-on-surface">{entity.label}</p>
                       <p className="text-[0.6875rem] text-on-surface-variant">
                         {entity.kind}
                       </p>
                     </div>
-                    <p className="text-sm font-medium text-on-surface">
+                    <p className="shrink-0 text-sm font-medium text-on-surface">
                       {formatDuration(entity.secondsToday || 0)}
                     </p>
                   </div>
@@ -313,22 +313,22 @@ export function SnapshotContent({
           </div>
           <div className="space-y-3">
             {topApps.map((app: SnapshotShape) => (
-              <div key={app.appKey} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div key={app.appKey} className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
                   <AppIcon
                     bundleID={app.bundleID || app.appKey}
                     displayName={app.displayName}
                     category={app.category}
                     iconBase64={app.iconBase64}
                   />
-                  <div>
-                    <p className="text-sm font-medium">{app.displayName}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{app.displayName}</p>
                     <p className="text-[0.6875rem] text-on-surface-variant">
                       {CATEGORY_LABELS[app.category] || app.category}
                     </p>
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <p className="text-sm font-medium">{formatDuration(app.totalSeconds)}</p>
                   <p className="text-[0.6875rem] text-on-surface-variant">
                     {app.sessionCount} sessions

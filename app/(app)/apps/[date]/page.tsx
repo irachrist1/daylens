@@ -31,7 +31,7 @@ export default async function AppsPage({
 
   if (!snapshot) {
     return (
-      <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
+      <div className="mx-auto max-w-4xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
         <Link href="/dashboard" className="text-sm text-primary hover:underline">
           &larr; Timeline
         </Link>
@@ -48,7 +48,7 @@ export default async function AppsPage({
   const topDomains = (snapshot.topDomains || []).slice(0, 10);
 
   return (
-    <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
+    <div className="mx-auto max-w-4xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
       <Link href="/dashboard" className="text-sm text-primary hover:underline">
         &larr; Timeline
       </Link>
@@ -107,23 +107,23 @@ export default async function AppsPage({
             }) => (
               <div
                 key={app.appKey}
-                className="flex items-center justify-between"
+                className="flex items-center justify-between gap-4"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <AppIcon
                     bundleID={app.bundleID || app.appKey}
                     displayName={app.displayName}
                     category={app.category}
                     iconBase64={app.iconBase64}
                   />
-                  <div>
-                    <p className="text-sm font-medium">{app.displayName}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{app.displayName}</p>
                     <p className="text-[0.6875rem] text-on-surface-variant">
                       {CATEGORY_LABELS[app.category] || app.category}
                     </p>
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <p className="text-sm font-medium">
                     {formatDuration(app.totalSeconds)}
                   </p>

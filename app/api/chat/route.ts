@@ -85,10 +85,27 @@ export async function POST(request: NextRequest) {
     const isNoData =
       raw.includes("No activity data");
 
+    const isBillingError =
+      raw.includes("credit balance is too low") ||
+      raw.includes("billing") ||
+      raw.includes("purchase credits") ||
+      raw.includes("insufficient credits");
+
+    const isUsageLimit =
+      raw.includes("rate_limit") ||
+      raw.includes("usage limit") ||
+      raw.includes("overloaded_error");
+
     let userMessage: string;
     if (isKeyError) {
       userMessage =
         "Your API key isn't set up yet. Open Daylens on your computer, go to Settings, and save your Anthropic API key.";
+    } else if (isBillingError) {
+      userMessage =
+        "Your Anthropic API key is linked, but the provider account does not have enough credits right now. Top up that key or switch providers in Daylens on your computer.";
+    } else if (isUsageLimit) {
+      userMessage =
+        "The AI provider is rate-limiting this workspace right now. Try again in a few minutes.";
     } else if (isNotDeployed) {
       userMessage =
         "The AI service is being updated. Please try again in a few minutes.";

@@ -26,7 +26,6 @@ import type {
 import {
   remoteSyncPayloadValidator,
   syncFailureSummaryValidator,
-  syncedDaySummaryValidator,
   workspaceLivePresenceValidator,
 } from "./snapshotValidator";
 
@@ -48,13 +47,296 @@ type SyncedDaySummaryDoc = Doc<"synced_day_summaries">;
 type SyncedWorkBlockDoc = Doc<"synced_work_blocks">;
 type SyncedEntityDoc = Doc<"synced_entities">;
 type SyncedArtifactDoc = Doc<"synced_artifacts">;
-type WorkspacePresenceDoc = Doc<"workspace_live_presence">;
-
 function blockDurationSeconds(block: Pick<WorkBlockSummary, "startAt" | "endAt">) {
   const duration = Date.parse(block.endAt) - Date.parse(block.startAt);
   return Number.isFinite(duration) && duration > 0
     ? Math.round(duration / 1_000)
     : 0;
+}
+
+function formatDuration(seconds: number) {
+  const wholeSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function normalizeWhitespace(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikeRawPath(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value);
+  return normalized.includes("/") || normalized.includes("\\");
+}
+
+function looksLikeUnknownLabel(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  return (
+    !normalized ||
+    /^unknown-\d+$/.test(normalized) ||
+    /^[a-z]$/.test(normalized) ||
+    /^pid-\d+$/.test(normalized)
+  );
+}
+
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => (part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : part))
+    .join(" ");
+}
+
+const APP_DISPLAY_NAMES: Record<string, string> = {
+  safari: "Safari",
+  chrome: "Chrome",
+  firefox: "Firefox",
+  arc: "Arc",
+  dia: "Dia",
+  codex: "Codex",
+  cursor: "Cursor",
+  warp: "Warp",
+  stable: "Warp",
+  terminal: "Terminal",
+  iterm: "iTerm",
+  iterm2: "iTerm",
+  finder: "Finder",
+  claude: "Claude",
+  chatgpt: "ChatGPT",
+  slack: "Slack",
+  figma: "Figma",
+  linear: "Linear",
+  notion: "Notion",
+  daylens: "Daylens",
+  discord: "Discord",
+  spotify: "Spotify",
+  teams: "Teams",
+  outlook: "Outlook",
+  obsidian: "Obsidian",
+  xcode: "Xcode",
+  github: "GitHub",
+  youtube: "YouTube",
+};
+
+function humanizeAppKey(appKey: string): {
+  key: string;
+  label: string;
+  meaningful: boolean;
+} {
+  const trimmed = normalizeWhitespace(appKey);
+  if (!trimmed) {
+    return { key: "", label: "", meaningful: false };
+  }
+
+  let base = trimmed.replace(/\\/g, "/");
+  if (base.includes("/")) {
+    base = base.split("/").filter(Boolean).pop() ?? base;
+  }
+
+  if (base.includes(".") && !base.includes(" ")) {
+    base = base.split(".").filter(Boolean).pop() ?? base;
+  }
+
+  base = base
+    .replace(/\.exe$/i, "")
+    .replace(/\.app$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+
+  const normalized = base.toLowerCase();
+  if (looksLikeUnknownLabel(normalized)) {
+    return { key: "", label: "", meaningful: false };
+  }
+
+  const label = APP_DISPLAY_NAMES[normalized] ?? titleCaseWords(base);
+  return {
+    key: label,
+    label,
+    meaningful: label.length > 1,
+  };
+}
+
+function sanitizeTopApps(
+  topApps: WorkBlockSummary["topApps"],
+): WorkBlockSummary["topApps"] {
+  const apps = new Map<string, WorkBlockSummary["topApps"][number]>();
+
+  for (const app of topApps) {
+    const normalized = humanizeAppKey(app.appKey);
+    if (!normalized.meaningful) continue;
+
+    const existing = apps.get(normalized.key);
+    if (existing) {
+      existing.seconds += app.seconds;
+    } else {
+      apps.set(normalized.key, {
+        appKey: normalized.label,
+        seconds: app.seconds,
+      });
+    }
+  }
+
+  return [...apps.values()]
+    .sort((left, right) => right.seconds - left.seconds)
+    .slice(0, 3);
+}
+
+function sanitizeBlockLabel(
+  label: string,
+  topApps: WorkBlockSummary["topApps"],
+): string {
+  const normalized = normalizeWhitespace(label);
+  if (
+    normalized &&
+    !looksLikeRawPath(normalized) &&
+    !looksLikeUnknownLabel(normalized)
+  ) {
+    return normalized;
+  }
+
+  if (topApps.length > 0) {
+    return topApps.slice(0, 2).map((app) => app.appKey).join(" + ");
+  }
+
+  return "Work block";
+}
+
+function sanitizeWorkBlock(block: WorkBlockSummary): WorkBlockSummary {
+  const topApps = sanitizeTopApps(block.topApps);
+
+  return {
+    ...block,
+    label: sanitizeBlockLabel(block.label, topApps),
+    topApps,
+    topPages: block.topPages
+      .map((page) => ({
+        domain: normalizeWhitespace(page.domain).toLowerCase(),
+        label: normalizeWhitespace(page.domain).toLowerCase(),
+        seconds: page.seconds,
+      }))
+      .filter((page) => page.domain.length > 0)
+      .slice(0, 3),
+  };
+}
+
+function buildWorkstreamRollupsFromBlocks(blocks: WorkBlockSummary[]): WorkstreamRollup[] {
+  const workstreams = new Map<string, WorkstreamRollup>();
+
+  for (const block of blocks) {
+    const label = normalizeWhitespace(block.label) || "Work block";
+    const existing = workstreams.get(label) ?? {
+      label,
+      seconds: 0,
+      blockCount: 0,
+      isUntitled: label === "Work block",
+    };
+    existing.seconds += blockDurationSeconds(block);
+    existing.blockCount += 1;
+    workstreams.set(label, existing);
+  }
+
+  return [...workstreams.values()]
+    .sort((left, right) => right.seconds - left.seconds)
+    .slice(0, 8);
+}
+
+function buildSafeRecap(
+  summary: SyncedDaySummary,
+  workBlocks: WorkBlockSummary[],
+  topWorkstreams: WorkstreamRollup[],
+  artifacts: ArtifactRollup[],
+): DaySnapshotV2["recap"] {
+  if (workBlocks.length === 0) {
+    return DEFAULT_RECAP;
+  }
+
+  const mainWorkstream = topWorkstreams[0]?.label ?? "the visible work";
+  const headline = `Tracked ${formatDuration(summary.focusSeconds)} across ${workBlocks.length} synced work blocks. Main thread: ${mainWorkstream}.`;
+
+  return {
+    day: {
+      headline,
+      chapters: [
+        {
+          id: "headline",
+          eyebrow: "Timeline",
+          title: "What the synced day shows",
+          body: headline,
+        },
+        {
+          id: "focus",
+          eyebrow: "Focus",
+          title: "Focus score",
+          body: `Focus score was ${summary.focusScoreV2?.score ?? summary.focusScore}/100. The remote view keeps only privacy-safe labels and evidence.`,
+        },
+        {
+          id: "artifacts",
+          eyebrow: "Evidence",
+          title: "Approved synced evidence",
+          body: artifacts.length > 0
+            ? `${artifacts.length} synced artifact${artifacts.length === 1 ? "" : "s"} were available for this day.`
+            : "No synced artifacts were available for this day.",
+        },
+      ],
+      metrics: [
+        {
+          label: "Focus time",
+          value: formatDuration(summary.focusSeconds),
+          detail: `${workBlocks.length} synced work blocks`,
+        },
+        {
+          label: "Focus score",
+          value: `${summary.focusScoreV2?.score ?? summary.focusScore}/100`,
+          detail: topWorkstreams[0]?.label ?? "No named workstream yet",
+        },
+      ],
+      changeSummary: summary.coverage.coverageNote ?? "",
+      promptChips: [
+        "What was I working on most today?",
+        "Summarize the visible work blocks for this day.",
+      ],
+      hasData: true,
+    },
+    week: null,
+    month: null,
+  };
+}
+
+function recapLooksHealthy(recap: DaySnapshotV2["recap"] | null | undefined) {
+  const day = recap?.day;
+  if (!day || !day.hasData) return false;
+  if (normalizeWhitespace(day.headline).length < 12) return false;
+  return day.chapters.some(
+    (chapter) =>
+      normalizeWhitespace(chapter.eyebrow).length > 1 &&
+      normalizeWhitespace(chapter.title).length > 3 &&
+      normalizeWhitespace(chapter.body).length > 12,
+  );
+}
+
+function sanitizePayloadForStorage(payload: RemoteSyncPayload): RemoteSyncPayload {
+  const workBlocks = payload.workBlocks.map(sanitizeWorkBlock);
+  const topWorkstreams = buildWorkstreamRollupsFromBlocks(workBlocks);
+  const latestWorkBlock = [...workBlocks]
+    .sort((left, right) => right.endAt.localeCompare(left.endAt))
+    .at(0);
+
+  return {
+    ...payload,
+    workBlocks,
+    daySummary: {
+      ...payload.daySummary,
+      recap: buildSafeRecap(payload.daySummary, workBlocks, topWorkstreams, payload.artifacts),
+      topWorkstreams,
+      latestWorkBlockId: latestWorkBlock?.id ?? null,
+      workBlockCount: workBlocks.length,
+      entityCount: payload.entities.length,
+      artifactCount: payload.artifacts.length,
+      privacyFiltered: payload.daySummary.privacyFiltered,
+    },
+  };
 }
 
 function mergeFocusScoreV2(summaries: SyncedDaySummary[]): FocusScoreV2Snapshot | null {
@@ -87,27 +369,6 @@ function mergeFocusScoreV2(summaries: SyncedDaySummary[]): FocusScoreV2Snapshot 
     artifactProgress: weighted.artifactProgress / totalWeight,
     switchPenalty: weighted.switchPenalty / totalWeight,
   };
-}
-
-function mergeWorkstreams(summaries: SyncedDaySummary[]): WorkstreamRollup[] {
-  const workstreams = new Map<string, WorkstreamRollup>();
-
-  for (const summary of summaries) {
-    for (const workstream of summary.topWorkstreams) {
-      const existing = workstreams.get(workstream.label);
-      if (existing) {
-        existing.seconds += workstream.seconds;
-        existing.blockCount += workstream.blockCount;
-        existing.isUntitled = existing.isUntitled || workstream.isUntitled;
-      } else {
-        workstreams.set(workstream.label, { ...workstream });
-      }
-    }
-  }
-
-  return [...workstreams.values()]
-    .sort((left, right) => right.seconds - left.seconds)
-    .slice(0, 8);
 }
 
 function mergeWorkBlocks(blockDocs: SyncedWorkBlockDoc[]): WorkBlockSummary[] {
@@ -148,24 +409,42 @@ function mergeArtifacts(artifactDocs: SyncedArtifactDoc[]): ArtifactRollup[] {
 }
 
 function buildAppSummaries(blocks: WorkBlockSummary[]): AppSummary[] {
-  const apps = new Map<string, AppSummary>();
+  const apps = new Map<string, AppSummary & {
+    categoryWeights: Map<string, number>;
+  }>();
 
   for (const block of blocks) {
     for (const app of block.topApps) {
-      const existing = apps.get(app.appKey) ?? {
-        appKey: app.appKey,
-        displayName: app.appKey,
-        category: "uncategorized",
+      const normalized = humanizeAppKey(app.appKey);
+      if (!normalized.meaningful) continue;
+
+      const existing = apps.get(normalized.key) ?? {
+        appKey: normalized.key,
+        displayName: normalized.label,
+        category: block.dominantCategory,
         totalSeconds: 0,
         sessionCount: 0,
+        categoryWeights: new Map<string, number>(),
       };
       existing.totalSeconds += app.seconds;
       existing.sessionCount += 1;
-      apps.set(app.appKey, existing);
+      existing.categoryWeights.set(
+        block.dominantCategory,
+        (existing.categoryWeights.get(block.dominantCategory) ?? 0) + app.seconds,
+      );
+      apps.set(normalized.key, existing);
     }
   }
 
   return [...apps.values()]
+    .map(({ categoryWeights, ...app }) => {
+      const dominantCategory = [...categoryWeights.entries()]
+        .sort((left, right) => right[1] - left[1])[0]?.[0];
+      return {
+        ...app,
+        category: (dominantCategory ?? app.category) as AppSummary["category"],
+      };
+    })
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 12);
 }
@@ -232,9 +511,20 @@ function mergeCoverage(summaries: SyncedDaySummary[]): RecapCoverage {
   };
 }
 
-function mergeRecap(summaries: SyncedDaySummary[]): DaySnapshotV2["recap"] {
+function mergeRecap(
+  summaries: SyncedDaySummary[],
+  workBlocks: WorkBlockSummary[],
+  topWorkstreams: WorkstreamRollup[],
+  artifacts: ArtifactRollup[],
+): DaySnapshotV2["recap"] {
   const latest = [...summaries].sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))[0];
-  return latest?.recap ?? DEFAULT_RECAP;
+  if (latest && recapLooksHealthy(latest.recap)) {
+    return latest.recap;
+  }
+  if (!latest) {
+    return DEFAULT_RECAP;
+  }
+  return buildSafeRecap(latest, workBlocks, topWorkstreams, artifacts);
 }
 
 function maxSyncedAt(
@@ -285,9 +575,10 @@ export async function loadRemoteDayForWorkspace(
   }
 
   const summaries = summaryDocs.map((doc) => doc.summary);
-  const workBlocks = mergeWorkBlocks(blockDocs);
+  const workBlocks = mergeWorkBlocks(blockDocs).map(sanitizeWorkBlock);
   const entities = mergeEntities(entityDocs);
   const artifacts = mergeArtifacts(artifactDocs);
+  const topWorkstreams = buildWorkstreamRollupsFromBlocks(workBlocks);
   const appSummaries = buildAppSummaries(workBlocks);
   const categoryTotals = buildCategoryTotals(workBlocks);
   const topDomains = buildTopDomains(workBlocks);
@@ -329,9 +620,9 @@ export async function loadRemoteDayForWorkspace(
     focusSessions: [],
     focusScoreV2,
     workBlocks,
-    recap: mergeRecap(summaries),
+    recap: mergeRecap(summaries, workBlocks, topWorkstreams, artifacts),
     coverage: mergeCoverage(summaries),
-    topWorkstreams: mergeWorkstreams(summaries),
+    topWorkstreams,
     standoutArtifacts: artifacts,
     entities,
     privacyFiltered: summaries.some((summary) => summary.privacyFiltered),
@@ -446,7 +737,8 @@ export const syncDay = internalMutation({
   handler: async (ctx, args) => {
     const startedAt = Date.now();
     const syncedAt = Date.now();
-    const { workspaceId, deviceId, payload } = args;
+    const { workspaceId, deviceId } = args;
+    const payload = sanitizePayloadForStorage(args.payload);
 
     const existingSummary = await ctx.db
       .query("synced_day_summaries")

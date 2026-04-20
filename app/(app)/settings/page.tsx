@@ -105,7 +105,7 @@ export default async function SettingsPage() {
     : null;
 
   return (
-    <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
+    <div className="mx-auto max-w-3xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
       <h1 className="text-2xl font-bold">Settings</h1>
 
       {topIssue ? (
@@ -128,6 +128,9 @@ export default async function SettingsPage() {
               : ""}
             {workspaceHealth.lastSuccessfulSyncAt
               ? ` · last durable sync ${formatRelativeTime(workspaceHealth.lastSuccessfulSyncAt)}`
+              : ""}
+            {workspaceHealth.health === "failed" && workspaceHealth.latestFailure?.reason
+              ? ` · latest failure ${workspaceHealth.latestFailure.reason}`
               : ""}
           </div>
         ) : workspaceStatusIssue ? (

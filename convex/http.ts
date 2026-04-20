@@ -166,6 +166,36 @@ function isValidRemoteSyncPayload(payload: unknown): payload is RemoteSyncPayloa
   );
 }
 
+function normalizeLegacyRemoteSyncPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  const daySummary =
+    candidate.daySummary && typeof candidate.daySummary === "object"
+      ? { ...(candidate.daySummary as Record<string, unknown>) }
+      : null;
+
+  if (!daySummary) {
+    return payload;
+  }
+
+  if (
+    typeof daySummary.privacyFiltered !== "boolean" &&
+    typeof daySummary.hiddenByPreferences === "boolean"
+  ) {
+    daySummary.privacyFiltered = daySummary.hiddenByPreferences;
+  }
+
+  delete daySummary.hiddenByPreferences;
+
+  return {
+    ...candidate,
+    daySummary,
+  };
+}
+
 async function recordSyncFailure(
   ctx: HttpCtx,
   args: {
@@ -281,18 +311,19 @@ http.route({
       return jsonResponse({ error: "Missing device" }, 400);
     }
 
-    const body = await req.json();
+    const rawBody = await req.json();
+    const body = normalizeLegacyRemoteSyncPayload(rawBody);
     if (!isValidRemoteSyncPayload(body)) {
       await recordSyncFailure(ctx, {
         workspaceId,
         deviceId: sessionDeviceId,
-        localDate: typeof (body as { localDate?: unknown })?.localDate === "string"
-          ? ((body as { localDate: string }).localDate)
+        localDate: typeof (rawBody as { localDate?: unknown })?.localDate === "string"
+          ? ((rawBody as { localDate: string }).localDate)
           : null,
         reason: "invalid_payload",
         detail: "Invalid remote sync payload",
-        contractVersion: typeof (body as { contractVersion?: unknown })?.contractVersion === "string"
-          ? ((body as { contractVersion: string }).contractVersion)
+        contractVersion: typeof (rawBody as { contractVersion?: unknown })?.contractVersion === "string"
+          ? ((rawBody as { contractVersion: string }).contractVersion)
           : null,
       });
       return jsonResponse({ error: "Invalid remote sync payload" }, 400);

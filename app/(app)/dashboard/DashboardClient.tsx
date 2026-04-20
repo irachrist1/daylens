@@ -338,7 +338,7 @@ export function DashboardClient() {
 
   if (!selectedDate || data === undefined) {
     return (
-      <div className="px-4 sm:px-6 py-6 sm:py-8 max-w-2xl mx-auto">
+      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
         <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
         <div className="rounded-2xl glass-card p-4 sm:p-6 animate-pulse h-40" />
       </div>
@@ -367,7 +367,7 @@ export function DashboardClient() {
 
   if (!snapshot) {
     return (
-      <div className="px-4 sm:px-6 py-6 sm:py-8 max-w-2xl mx-auto space-y-4">
+      <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 sm:py-8">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">
@@ -428,7 +428,7 @@ export function DashboardClient() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
+    <div className="mx-auto max-w-5xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
       <SyncBanner status={workspaceStatus} />
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -486,9 +486,9 @@ export function DashboardClient() {
         </button>
       </div>
 
-      <div className="flex items-center gap-4 sm:gap-6 rounded-2xl glass-card p-4 sm:p-6">
+      <div className="flex items-center gap-4 rounded-2xl glass-card p-4 sm:gap-6 sm:p-6">
         <ScoreRing score={readFocusScore(snapshot)} size={100} />
-        <div className="flex-1 space-y-3">
+        <div className="min-w-0 flex-1 space-y-3">
           <div>
             <span className="text-[0.6875rem] font-semibold tracking-wide uppercase text-on-surface-variant">
               Focus Time
@@ -519,7 +519,7 @@ export function DashboardClient() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg font-semibold">Daily Recap</h2>
-              <p className="mt-1 text-sm leading-relaxed text-on-surface/90">
+              <p className="mt-1 break-words text-sm leading-relaxed text-on-surface/90">
                 {snapshot.recap.day.headline}
               </p>
             </div>
@@ -553,18 +553,18 @@ export function DashboardClient() {
             {snapshot.workBlocks!.slice(0, 8).map((block) => (
               <div key={block.id} className="rounded-xl bg-surface-low px-4 py-3">
                 <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-on-surface">{block.label}</p>
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-semibold text-on-surface">{block.label}</p>
                     <p className="mt-1 text-[0.6875rem] text-on-surface-variant">
                       {formatDuration(blockDurationSeconds(block))} · {block.switchCount} switches
                     </p>
                   </div>
-                  <span className="rounded-full bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary">
+                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[0.6875rem] font-medium text-primary">
                     {formatDuration(block.focusSeconds)} focus
                   </span>
                 </div>
                 {(block.topApps.length || block.topPages.length) > 0 && (
-                  <div className="mt-3 space-y-1 text-[0.6875rem] text-on-surface-variant">
+                  <div className="mt-3 space-y-1 break-words text-[0.6875rem] text-on-surface-variant">
                     {block.topApps.length > 0 && (
                       <p>Apps: {block.topApps.map((app) => app.appKey).join(", ")}</p>
                     )}
@@ -588,14 +588,14 @@ export function DashboardClient() {
               <h2 className="text-lg font-semibold">Top Workstreams</h2>
               <div className="space-y-3">
                 {snapshot.topWorkstreams!.slice(0, 5).map((item) => (
-                  <div key={item.label} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">{item.label}</p>
+                  <div key={item.label} className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-on-surface">{item.label}</p>
                       <p className="text-[0.6875rem] text-on-surface-variant">
                         {item.blockCount} blocks
                       </p>
                     </div>
-                    <p className="text-sm font-medium text-on-surface">
+                    <p className="shrink-0 text-sm font-medium text-on-surface">
                       {formatDuration(item.seconds)}
                     </p>
                   </div>
@@ -609,12 +609,12 @@ export function DashboardClient() {
               <h2 className="text-lg font-semibold">Entities</h2>
               <div className="space-y-3">
                 {snapshot.entities!.slice(0, 5).map((entity) => (
-                  <div key={`${entity.kind}-${entity.id}`} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-on-surface">{entity.label}</p>
+                  <div key={`${entity.kind}-${entity.id}`} className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-on-surface">{entity.label}</p>
                       <p className="text-[0.6875rem] text-on-surface-variant">{entity.kind}</p>
                     </div>
-                    <p className="text-sm font-medium text-on-surface">
+                    <p className="shrink-0 text-sm font-medium text-on-surface">
                       {formatDuration(entity.secondsToday)}
                     </p>
                   </div>
@@ -645,22 +645,22 @@ export function DashboardClient() {
           </div>
           <div className="space-y-3">
             {topApps.map((app) => (
-              <div key={app.appKey} className="group flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div key={app.appKey} className="group flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-3">
                   <AppIcon
                     bundleID={app.bundleID || app.appKey}
                     displayName={app.displayName}
                     category={app.category}
                     iconBase64={app.iconBase64}
                   />
-                  <div>
-                    <p className="text-sm font-medium">{app.displayName}</p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{app.displayName}</p>
                     <p className="text-[0.6875rem] text-on-surface-variant">
                       {CATEGORY_LABELS[app.category] || app.category}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <button
                     type="button"
                     onClick={() => hideApp(app.appKey)}

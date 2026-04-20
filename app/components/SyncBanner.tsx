@@ -40,6 +40,7 @@ export function SyncBanner({ status }: { status?: SyncBannerStatus | null }) {
         Sync failed{status.latestFailure?.reason ? `: ${status.latestFailure.reason}` : ""}.
         {status.lastHeartbeatAt ? ` Heartbeat is still arriving ${formatRelativeTime(status.lastHeartbeatAt)}.` : ""}
         {status.lastSuccessfulSyncAt ? ` Last durable sync was ${formatRelativeTime(status.lastSuccessfulSyncAt)}.` : ""}
+        {!status.lastHeartbeatAt ? " No recent live signal has arrived." : ""}
       </div>
     );
   }

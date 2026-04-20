@@ -330,7 +330,7 @@ export function GlobalChat({
 
   return (
     <div
-      className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]"
+      className="grid gap-4 xl:grid-cols-[22rem_minmax(0,1fr)] lg:grid-cols-[20rem_minmax(0,1fr)]"
       style={{ height: "calc(100dvh - 8rem)" }}
     >
       <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
@@ -420,7 +420,7 @@ export function GlobalChat({
               </div>
             </div>
 
-            <p className="text-sm leading-relaxed text-on-surface/90">
+            <p className="break-words text-sm leading-relaxed text-on-surface/90">
               {activeRecap.headline}
             </p>
 
@@ -437,9 +437,9 @@ export function GlobalChat({
                     <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
                       {metric.label}
                     </p>
-                    <p className="mt-1 text-sm font-semibold text-on-surface">
-                      {metric.value}
-                    </p>
+                  <p className="mt-1 break-words text-sm font-semibold text-on-surface">
+                    {metric.value}
+                  </p>
                     <p className="mt-1 text-xs text-on-surface-variant">
                       {metric.detail}
                     </p>
@@ -454,10 +454,10 @@ export function GlobalChat({
                   <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
                     {chapter.eyebrow}
                   </p>
-                  <p className="mt-1 text-sm font-semibold text-on-surface">
+                  <p className="mt-1 break-words text-sm font-semibold text-on-surface">
                     {chapter.title}
                   </p>
-                  <p className="mt-1 text-xs leading-relaxed text-on-surface/85">
+                  <p className="mt-1 break-words text-xs leading-relaxed text-on-surface/85">
                     {chapter.body}
                   </p>
                 </div>
@@ -472,7 +472,7 @@ export function GlobalChat({
                 <div className="space-y-2">
                   {snapshotRecap.standoutArtifacts.slice(0, 3).map((artifact) => (
                     <div key={artifact.id} className="rounded-xl bg-surface-low px-3 py-2.5">
-                      <p className="text-sm font-medium text-on-surface">
+                      <p className="line-clamp-2 break-words text-sm font-medium text-on-surface">
                         {artifact.title}
                       </p>
                       <p className="mt-1 text-xs text-on-surface-variant">
@@ -502,7 +502,19 @@ export function GlobalChat({
               </div>
             ) : null}
           </section>
-        ) : null}
+        ) : (
+          <section className="rounded-2xl glass-card p-4 space-y-2">
+            <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
+              Recap
+            </p>
+            <p className="text-sm text-on-surface">
+              No clean synced recap is available for this day yet.
+            </p>
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              Daylens will show recap beats here once the synced day contains enough privacy-safe evidence.
+            </p>
+          </section>
+        )}
 
         <section className="rounded-2xl glass-card p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
@@ -529,7 +541,7 @@ export function GlobalChat({
                 <div key={artifact.workspaceArtifactId} className="rounded-xl bg-surface-low px-3 py-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-medium text-on-surface">
+                      <p className="line-clamp-2 break-words text-sm font-medium text-on-surface">
                         {artifact.title}
                       </p>
                       <p className="mt-1 text-xs text-on-surface-variant">
@@ -593,7 +605,7 @@ export function GlobalChat({
                         : "bg-surface-low text-on-surface hover:bg-surface-high"
                     }`}
                   >
-                    <p className="text-sm font-medium">{thread.title}</p>
+                    <p className="line-clamp-2 break-words text-sm font-medium">{thread.title}</p>
                     <p className="mt-1 text-xs text-on-surface-variant">
                       {thread.source} · {formatRelativeTime(thread.updatedAt)}
                     </p>
@@ -605,7 +617,7 @@ export function GlobalChat({
         </section>
       </aside>
 
-      <div className="flex min-h-0 flex-col rounded-2xl glass-card px-4 py-4 sm:px-5">
+      <div className="flex min-h-0 min-w-0 flex-col rounded-2xl glass-card px-4 py-4 sm:px-5">
         <div className="mb-4 flex items-center justify-between gap-3 rounded-xl bg-surface-low px-3 py-2.5 text-sm text-on-surface">
           <div className="min-w-0">
             <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-on-surface-variant">
@@ -663,7 +675,7 @@ export function GlobalChat({
                     : "glass-card text-on-surface"
                 }`}
               >
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                   {message.content}
                 </p>
               </div>
