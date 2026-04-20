@@ -14,7 +14,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": ["src/shared/*"],
+      "@daylens/remote-contract": ["packages/remote-contract/index.ts"]
     }
   },
   "include": ["src", "forge.config.ts", "vite.*.config.ts"]
