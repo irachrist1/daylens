@@ -8,6 +8,7 @@ import {
 } from "@/app/lib/format";
 import Link from "next/link";
 import { SnapshotContent } from "@/app/components/SnapshotContent";
+import { apiPath } from "@/app/lib/basePath";
 
 interface SnapshotDoc {
   _id: string;
@@ -57,7 +58,7 @@ export function HistoryClient() {
   useEffect(() => {
     let cancelled = false;
 
-    void fetch("/api/snapshots")
+    void fetch(apiPath("/api/snapshots"))
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (cancelled) return;

@@ -1,8 +1,10 @@
 "use client";
 
+import { apiPath } from "@/app/lib/basePath";
+
 export function DownloadButton() {
   async function handleDownload() {
-    const res = await fetch("/api/snapshots?full=1");
+    const res = await fetch(apiPath("/api/snapshots?full=1"));
     const data = await res.json();
 
     const blob = new Blob([JSON.stringify(data.snapshots, null, 2)], {

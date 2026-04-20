@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { apiPath } from "@/app/lib/basePath";
 
 export default function RecoverPage() {
   const [mnemonic, setMnemonic] = useState("");
@@ -21,13 +22,13 @@ export default function RecoverPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/recover", {
+      const res = await fetch(apiPath("/api/recover"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mnemonic: mnemonic.trim() }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as { error?: string }));
 
       if (!res.ok) {
         setError(data.error || "Recovery failed");
@@ -62,7 +63,7 @@ export default function RecoverPage() {
             Restore your account.
           </h1>
 
-          <p style={{ fontSize: "0.9375rem", fontWeight: 300, lineHeight: 1.65, color: "rgba(252,249,248,0.4)", margin: "0 0 2.5rem" }}>
+          <p style={{ fontSize: "0.9375rem", fontWeight: 300, lineHeight: 1.65, color: "var(--lp-ink-muted)", margin: "0 0 2.5rem" }}>
             Enter your 12-word recovery phrase to regain access to your web companion.
           </p>
 
@@ -71,7 +72,7 @@ export default function RecoverPage() {
               <label
                 htmlFor="mnemonic"
                 className="text-label"
-                style={{ color: "rgba(252,249,248,0.3)", display: "block", marginBottom: "0.75rem" }}
+                style={{ color: "var(--lp-ink-muted)", display: "block", marginBottom: "0.75rem" }}
               >
                 Recovery phrase
               </label>
@@ -88,7 +89,7 @@ export default function RecoverPage() {
 
               <p
                 className="lp-word-count"
-                style={{ color: isComplete ? "var(--lp-accent)" : "rgba(252,249,248,0.25)" }}
+                style={{ color: isComplete ? "var(--lp-accent)" : "var(--lp-ink-faint)" }}
               >
                 {wordCount} / 12 words{isComplete ? " ✓" : ""}
               </p>

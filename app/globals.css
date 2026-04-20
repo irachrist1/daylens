@@ -2163,18 +2163,19 @@ body {
   display: inline-flex; align-items: center; gap: 0.5rem;
   padding: 0.875rem 1.75rem;
   border-radius: 12px;
-  color: #ffffff;
-  border: 1px solid rgba(255,255,255,0.25);
-  background: rgba(255,255,255,0.08);
+  color: rgba(10,22,40,0.82);
+  border: 1px solid rgba(10,22,40,0.12);
+  background: rgba(255,255,255,0.82);
   font-size: 0.875rem; font-weight: 500; letter-spacing: -0.01em;
   text-decoration: none;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
   transition: all 0.45s var(--ease-td);
   white-space: nowrap;
 }
 .lp-btn-ghost-light:hover {
-  color: #ffffff; border-color: rgba(255,255,255,0.45); background: rgba(255,255,255,0.14);
+  color: var(--lp-bone);
+  border-color: rgba(10,22,40,0.18);
+  background: rgba(255,255,255,0.96);
 }
 
 .lp-btn-ghost-dark {

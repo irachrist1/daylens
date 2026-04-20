@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Id } from "../../../convex/_generated/dataModel";
+import { apiPath } from "@/app/lib/basePath";
 
 export function DisconnectButton({ deviceId }: { deviceId: Id<"devices"> }) {
   const router = useRouter();
@@ -9,7 +10,7 @@ export function DisconnectButton({ deviceId }: { deviceId: Id<"devices"> }) {
   async function handleDisconnect() {
     if (!confirm("Disconnect this device?")) return;
 
-    await fetch("/api/devices/disconnect", {
+    await fetch(apiPath("/api/devices/disconnect"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ deviceId }),

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiPath } from "@/app/lib/basePath";
 
 interface Prefs {
   hiddenApps: string[];
@@ -19,7 +20,7 @@ async function sha256hex(text: string): Promise<string> {
 }
 
 async function callApi(body: Record<string, unknown>) {
-  return fetch("/api/preferences", {
+  return fetch(apiPath("/api/preferences"), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -42,7 +43,7 @@ export function PrivacySection() {
   const [modeError, setModeError] = useState("");
 
   useEffect(() => {
-    void fetch("/api/preferences")
+    void fetch(apiPath("/api/preferences"))
       .then((r) => (r.ok ? r.json() : null))
       .then((data: Prefs | null) => {
         setPrefs(data);

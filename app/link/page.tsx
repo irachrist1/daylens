@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import posthog from "posthog-js";
 import { MarketingCursor } from "../components/MarketingEffects";
+import { apiPath } from "@/app/lib/basePath";
 
 type BarcodeDetectorCtor = new (options: {
   formats: string[];
@@ -21,6 +22,7 @@ function LinkPageContent() {
   const [showManualEntry, setShowManualEntry] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const tokenInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -109,6 +111,18 @@ function LinkPageContent() {
     };
   }, [scanning]);
 
+  useEffect(() => {
+    if (!showManualEntry) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      tokenInputRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [showManualEntry]);
+
   function stopScanner() {
     if (animationRef.current !== null) {
       window.cancelAnimationFrame(animationRef.current);
@@ -116,6 +130,12 @@ function LinkPageContent() {
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+  }
+
+  function openManualEntry() {
+    setScannerError("");
+    setScanning(false);
+    setShowManualEntry(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -137,13 +157,13 @@ function LinkPageContent() {
     setScannerError("");
 
     try {
-      const res = await fetch("/api/link", {
+      const res = await fetch(apiPath("/api/link"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: normalizedToken }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as { error?: string }));
 
       if (!res.ok) {
         setError(data.error || "Failed to link");
@@ -183,58 +203,24 @@ function LinkPageContent() {
               Link your web companion.
             </h1>
 
-            <p style={{ fontSize: "0.9375rem", fontWeight: 300, lineHeight: 1.65, color: "rgba(252,249,248,0.45)", margin: "0 0 2.5rem" }}>
+            <p style={{ fontSize: "0.9375rem", fontWeight: 300, lineHeight: 1.65, color: "var(--lp-ink-muted)", margin: "0 0 2.5rem" }}>
               Connect your desktop app once. Access your data from any device.
             </p>
 
-            {/* QR scan button */}
-            <button
-              type="button"
-              onClick={() => {
-                setScannerError("");
-                setScanning((current) => !current);
-              }}
-              className={scanning ? "lp-btn-ghost-light" : "lp-btn-primary"}
-              style={{ width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: "0.625rem" }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7V5a2 2 0 012-2h2" />
-                <path d="M17 3h2a2 2 0 012 2v2" />
-                <path d="M21 17v2a2 2 0 01-2 2h-2" />
-                <path d="M7 21H5a2 2 0 01-2-2v-2" />
-                <rect x="7" y="7" width="4" height="4" rx="0.5" />
-                <rect x="13" y="7" width="4" height="4" rx="0.5" />
-                <rect x="7" y="13" width="4" height="4" rx="0.5" />
-                <line x1="13" y1="13" x2="13" y2="13" strokeWidth="3" />
-              </svg>
-              {scanning ? "Stop Camera" : "Scan QR Code"}
-            </button>
-
-            {scanning && (
-              <div className="lp-scanner-wrapper" style={{ marginTop: "1rem" }}>
-                <video ref={videoRef} className="lp-scanner-video" muted playsInline />
-                <div className="lp-scanner-corners" />
-              </div>
-            )}
-
-            {scannerError && <p className="lp-error-msg">{scannerError}</p>}
-
-            {/* OR divider */}
-            <div className="lp-or-divider">
-              <div className="lp-or-line" />
-              <span className="lp-or-label">or</span>
-              <div className="lp-or-line" />
-            </div>
-
-            {/* Manual token entry */}
             {!showManualEntry ? (
               <button
                 type="button"
-                onClick={() => setShowManualEntry(true)}
-                className="lp-btn-ghost-light"
-                style={{ width: "100%", justifyContent: "center", display: "flex" }}
+                onClick={openManualEntry}
+                className="lp-btn-primary"
+                style={{ width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: "0.625rem" }}
               >
-                Enter link token manually
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z" />
+                  <path d="M8 8h8" />
+                  <path d="M8 12h8" />
+                  <path d="M8 16h5" />
+                </svg>
+                Enter Link Code
               </button>
             ) : (
               <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
@@ -242,11 +228,12 @@ function LinkPageContent() {
                   <label
                     htmlFor="link-token"
                     className="text-label"
-                    style={{ color: "rgba(252,249,248,0.35)", display: "block", marginBottom: "0.625rem" }}
+                    style={{ color: "var(--lp-ink-muted)", display: "block", marginBottom: "0.625rem" }}
                   >
                     Link token from your desktop app
                   </label>
                   <input
+                    ref={tokenInputRef}
                     id="link-token"
                     type="text"
                     value={token}
@@ -254,7 +241,10 @@ function LinkPageContent() {
                     placeholder="Paste the 32-character code"
                     maxLength={32}
                     className="lp-input lp-input--mono"
-                    autoFocus
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                   />
                   <p className="lp-hint-text">Found in Settings → Create workspace / Workspace actions on your desktop</p>
                 </div>
@@ -280,6 +270,35 @@ function LinkPageContent() {
               </form>
             )}
 
+            {/* OR divider */}
+            <div className="lp-or-divider">
+              <div className="lp-or-line" />
+              <span className="lp-or-label">or</span>
+              <div className="lp-or-line" />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setScannerError("");
+                setShowManualEntry(false);
+                setScanning((current) => !current);
+              }}
+              className="lp-btn-ghost-light"
+              style={{ width: "100%", justifyContent: "center", display: "flex" }}
+            >
+              {scanning ? "Stop Camera" : "Scan QR Code Instead"}
+            </button>
+
+            {scanning && (
+              <div className="lp-scanner-wrapper" style={{ marginTop: "1rem" }}>
+                <video ref={videoRef} className="lp-scanner-video" muted playsInline />
+                <div className="lp-scanner-corners" />
+              </div>
+            )}
+
+            {scannerError && <p className="lp-error-msg">{scannerError}</p>}
+
             {error && <p className="lp-error-msg">{error}</p>}
 
             {/* Footer links */}
@@ -299,11 +318,11 @@ function LinkPageContent() {
         <div className="lp-connect-panel">
           <div className="lp-connect-panel-inner">
 
-            <p className="text-label" style={{ color: "rgba(252,249,248,0.3)", marginBottom: "2.5rem" }}>
+            <p className="text-label" style={{ color: "var(--lp-ink-faint)", marginBottom: "2.5rem" }}>
               How to connect
             </p>
 
-            <h2 className="text-headline" style={{ color: "rgba(252,249,248,0.85)", margin: "0 0 2rem", lineHeight: 1.3 }}>
+            <h2 className="text-headline" style={{ color: "var(--lp-bone)", margin: "0 0 2rem", lineHeight: 1.3 }}>
               Three steps.<br />No account needed.
             </h2>
 
@@ -317,12 +336,12 @@ function LinkPageContent() {
                 {
                   n: "02",
                   title: 'Create a workspace, then "Create browser link"',
-                  desc: "Daylens will generate a QR code and link token for browser access.",
+                  desc: "Daylens will generate a link token for browser access. The QR code is optional.",
                 },
                 {
                   n: "03",
-                  title: "Scan or paste below",
-                  desc: "Point your camera at the QR code, or paste the token manually.",
+                  title: "Paste the token below",
+                  desc: "Manual entry is the default. Camera scanning is there if you actually want it.",
                 },
               ].map((step) => (
                 <div key={step.n} className="lp-connect-step">
@@ -335,7 +354,7 @@ function LinkPageContent() {
               ))}
             </div>
 
-            <p style={{ fontSize: "0.75rem", fontWeight: 300, color: "rgba(252,249,248,0.2)", lineHeight: 1.65, marginTop: "2.5rem" }}>
+            <p style={{ fontSize: "0.75rem", fontWeight: 300, color: "var(--lp-ink-faint)", lineHeight: 1.65, marginTop: "2.5rem" }}>
               Your data stays on your device. Browser access follows the workspace you explicitly create and link.
             </p>
 

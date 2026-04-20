@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "@/app/lib/chat";
+import { apiPath } from "@/app/lib/basePath";
 
 export function GlobalChat({
   initialMessages,
@@ -36,7 +37,7 @@ export function GlobalChat({
     }
 
     let cancelled = false;
-    void fetch(`/api/snapshots?date=${date}`)
+    void fetch(apiPath(`/api/snapshots?date=${date}`))
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (cancelled) return;
@@ -67,7 +68,7 @@ export function GlobalChat({
     }
 
     const timeout = window.setTimeout(() => {
-      void fetch("/api/chat/save", {
+      void fetch(apiPath("/api/chat/save"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages }),
@@ -93,7 +94,7 @@ export function GlobalChat({
     setLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch(apiPath("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: nextMessages, date }),

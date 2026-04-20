@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Implemented pending verification: client-side API requests now respect the `/daylens` base path, restoring browser link and recovery flows and the authenticated dashboard/history/settings/chat fetches that were accidentally posting to the site root
+- Implemented pending verification: the link and recovery pages now use readable light-theme text, prioritize manual code entry over QR scanning, and redirect accidental `/Daylens/...` visits to the supported lowercase `/daylens/...` routes
+
 ## v0.2.4 - 2026-04-19
 
 ### Added

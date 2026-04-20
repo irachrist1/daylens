@@ -2,6 +2,22 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   basePath: "/daylens",
+  async redirects() {
+    return [
+      {
+        source: "/Daylens",
+        destination: "/daylens",
+        permanent: true,
+        basePath: false,
+      },
+      {
+        source: "/Daylens/:path*",
+        destination: "/daylens/:path*",
+        permanent: true,
+        basePath: false,
+      },
+    ];
+  },
   async headers() {
     return [
       {

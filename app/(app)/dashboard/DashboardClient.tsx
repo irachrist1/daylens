@@ -12,6 +12,7 @@ import {
 import { AppIcon } from "@/app/components/AppIcon";
 import { TopSitesList, type TopDomainItem } from "@/app/components/TopSitesList";
 import Link from "next/link";
+import { apiPath } from "@/app/lib/basePath";
 
 interface AppSummary {
   appKey: string;
@@ -132,7 +133,7 @@ export function DashboardClient() {
   const [hiddenDomains, setHiddenDomains] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    void fetch("/api/preferences")
+    void fetch(apiPath("/api/preferences"))
       .then(async (r) => {
         if (!r.ok) {
           const body = await r.json().catch(() => ({})) as { error?: string };
@@ -152,7 +153,7 @@ export function DashboardClient() {
 
   function hideApp(appKey: string) {
     setHiddenApps((prev) => new Set([...prev, appKey]));
-    void fetch("/api/preferences", {
+    void fetch(apiPath("/api/preferences"), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "hideApp", appKey }),
@@ -173,7 +174,7 @@ export function DashboardClient() {
   function hideCurrentDomain(domain: string) {
     const normalized = normalizeDomain(domain);
     setHiddenDomains((prev) => new Set([...prev, normalized]));
-    void fetch("/api/preferences", {
+    void fetch(apiPath("/api/preferences"), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "hideDomain", domain: normalized }),
@@ -194,7 +195,7 @@ export function DashboardClient() {
   useEffect(() => {
     let cancelled = false;
 
-    void fetch("/api/snapshots")
+    void fetch(apiPath("/api/snapshots"))
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (cancelled) return;
@@ -243,7 +244,7 @@ export function DashboardClient() {
     let cancelled = false;
     setData(undefined);
 
-    void fetch(`/api/snapshots?date=${selectedDate}`)
+    void fetch(apiPath(`/api/snapshots?date=${selectedDate}`))
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (cancelled) return;
