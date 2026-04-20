@@ -9,6 +9,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "typecheck": "tsc --noEmit",
+    "contract:check": "node scripts/check-remote-contract.mjs",
     "test:weekly-brief": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts",
     "test:ai-chat": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts ./tests/followUpChat.test.ts ./tests/appIdentityBranding.test.ts ./tests/onboardingFirstRun.test.ts ./tests/blockCleanup.test.ts ./tests/anthropicPromptCaching.test.ts ./tests/aiThreadSchema.test.ts ./tests/databaseBootstrap.test.ts ./tests/cliLaunch.test.ts ./tests/userData.test.ts ./tests/platformExpectations.test.ts",
     "test:entity-prompts": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/routerHardPromptBenchmark.ts",
