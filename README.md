@@ -16,9 +16,9 @@ This repository is historically named `daylens-windows`, but the Electron deskto
 
 ## Install
 
-Direct downloads for v1.0.28 (click = download starts immediately):
+Direct downloads for v1.0.29 (click = download starts immediately):
 
-- **[macOS (Apple Silicon) — Daylens-1.0.28-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.28/Daylens-1.0.28-arm64.dmg)**
+- **[macOS (Apple Silicon) — Daylens-1.0.29-arm64.dmg](https://github.com/irachrist1/daylens/releases/download/v1.0.29/Daylens-1.0.29-arm64.dmg)**
 - **[Windows — Daylens-1.0.27-Setup.exe](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27-Setup.exe)**
 - **[Linux AppImage — Daylens-1.0.27.AppImage](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.AppImage)**  •  [.deb](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.deb)  •  [.rpm](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.rpm)  •  [.tar.gz](https://github.com/irachrist1/daylens/releases/download/v1.0.27/Daylens-1.0.27.tar.gz)
 
@@ -28,7 +28,7 @@ Prefer a package manager on macOS (zero prompts, zero clicks):
 brew install --cask irachrist1/daylens/daylens
 ```
 
-After manual install on macOS, double-click `/Applications/Daylens.app`. You'll see **"Daylens cannot be opened because Apple cannot check it for malicious software"** — this is the standard unsigned-app prompt, not the old "damaged" error. Fix once: **System Settings → Privacy & Security → Open Anyway**.
+After downloading the macOS DMG, drag Daylens into Applications, then double-click it. The first launch shows a one-time "Daylens Not Opened" prompt (the standard macOS prompt for any app not distributed through the App Store — the same prompt you'll see on ChatGPT's Codex app). Open **System Settings → Privacy & Security**, scroll to Security, and click **Open Anyway**. One-time only. The in-DMG `Start Here.txt` walks through the same steps with pictures.
 
 Full per-platform notes, troubleshooting, and build-from-source instructions live in [docs/INSTALL.md](docs/INSTALL.md).
 
