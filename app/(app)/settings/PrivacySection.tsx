@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { apiPath } from "@/app/lib/basePath";
+import { StatusNotice } from "@/app/components/StatusNotice";
+import { getRemoteIssueCopy } from "@/app/lib/remoteUi";
 
 interface Prefs {
   hiddenApps: string[];
@@ -29,6 +31,8 @@ async function callApi(body: Record<string, unknown>) {
 
 export function PrivacySection() {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState(false);
 
   // PIN unlock form
@@ -44,14 +48,27 @@ export function PrivacySection() {
 
   useEffect(() => {
     void fetch(apiPath("/api/preferences"))
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({} as { error?: string }));
+          throw new Error(body.error || `Unable to load privacy preferences (${r.status})`);
+        }
+        return r.json();
+      })
       .then((data: Prefs | null) => {
         setPrefs(data);
+        setLoadError(null);
         if (data && window.location.hash === "#privacy") {
           document.getElementById("privacy")?.scrollIntoView({ behavior: "smooth" });
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setLoadError(message);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   async function restore(action: "showApp" | "showDomain", key: string) {
@@ -144,7 +161,29 @@ export function PrivacySection() {
     setModeError("");
   }
 
-  if (!prefs) return null;
+  if (loading) {
+    return (
+      <section id="privacy" className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Privacy</h2>
+        <p className="text-sm text-on-surface-variant">Loading privacy controls…</p>
+      </section>
+    );
+  }
+
+  if (!prefs) {
+    const issueCopy = getRemoteIssueCopy(loadError, {
+      title: "Privacy controls are unavailable",
+      detail:
+        "Daylens Web could not load your hidden apps and site preferences right now.",
+    });
+
+    return (
+      <section id="privacy" className="rounded-2xl glass-card p-4 sm:p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Privacy</h2>
+        <StatusNotice title={issueCopy.title} detail={issueCopy.detail} tone={issueCopy.tone} />
+      </section>
+    );
+  }
 
   const totalHidden = prefs.hiddenApps.length + prefs.hiddenDomains.length;
   const hasPivacyPin = Boolean(prefs.privacyPinHash);

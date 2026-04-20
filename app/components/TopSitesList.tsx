@@ -4,8 +4,8 @@ import { useState } from "react";
 import { CATEGORY_LABELS, formatDuration } from "@/app/lib/format";
 
 export interface TopPageItem {
-  url: string;
-  title?: string | null;
+  domain: string;
+  label?: string | null;
   seconds: number;
 }
 
@@ -16,35 +16,12 @@ export interface TopDomainItem {
   topPages?: TopPageItem[];
 }
 
-function isSafeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
 function pageLabel(page: TopPageItem) {
-  if (page.title?.trim()) {
-    return page.title.trim();
-  }
-
-  try {
-    const url = new URL(page.url);
-    return `${url.hostname}${url.pathname === "/" ? "" : url.pathname}`;
-  } catch {
-    return page.url;
-  }
+  return page.label?.trim() || page.domain;
 }
 
 function pageMeta(page: TopPageItem) {
-  try {
-    const url = new URL(page.url);
-    return `${url.hostname}${url.pathname === "/" ? "" : url.pathname}`;
-  } catch {
-    return page.url;
-  }
+  return page.domain;
 }
 
 export function TopSitesList({
@@ -139,44 +116,22 @@ export function TopSitesList({
             {hasPages && isExpanded ? (
               <div className="space-y-2 rounded-xl bg-surface-high/40 p-3">
                 {domain.topPages!.map((page) => (
-                  isSafeUrl(page.url) ? (
-                    <a
-                      key={`${domain.domain}-${page.url}`}
-                      href={page.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5 hover:bg-surface-high/60"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-on-surface">
-                          {pageLabel(page)}
-                        </p>
-                        <p className="truncate text-[0.6875rem] text-on-surface-variant">
-                          {pageMeta(page)}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-[0.6875rem] font-medium text-on-surface-variant">
-                        {formatDuration(page.seconds)}
-                      </span>
-                    </a>
-                  ) : (
-                    <div
-                      key={`${domain.domain}-${page.url}`}
-                      className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-on-surface">
-                          {pageLabel(page)}
-                        </p>
-                        <p className="truncate text-[0.6875rem] text-on-surface-variant">
-                          {pageMeta(page)}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-[0.6875rem] font-medium text-on-surface-variant">
-                        {formatDuration(page.seconds)}
-                      </span>
+                  <div
+                    key={`${domain.domain}-${page.domain}-${pageLabel(page)}`}
+                    className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-on-surface">
+                        {pageLabel(page)}
+                      </p>
+                      <p className="truncate text-[0.6875rem] text-on-surface-variant">
+                        {pageMeta(page)}
+                      </p>
                     </div>
-                  )
+                    <span className="shrink-0 text-[0.6875rem] font-medium text-on-surface-variant">
+                      {formatDuration(page.seconds)}
+                    </span>
+                  </div>
                 ))}
               </div>
             ) : null}

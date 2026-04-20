@@ -11,6 +11,7 @@ import {
 } from "@/app/lib/format";
 import { AppIcon } from "@/app/components/AppIcon";
 import { TopSitesList, type TopDomainItem } from "@/app/components/TopSitesList";
+import { SyncBanner } from "@/app/components/SyncBanner";
 import Link from "next/link";
 import { apiPath } from "@/app/lib/basePath";
 
@@ -29,7 +30,7 @@ interface Snapshot {
   focusScore: number;
   focusSeconds: number;
   isPartialDay?: boolean;
-  hiddenByPreferences?: boolean;
+  privacyFiltered?: boolean;
   appSummaries: AppSummary[];
   categoryTotals: { category: string; totalSeconds: number }[];
   topDomains: TopDomainItem[];
@@ -49,7 +50,7 @@ interface Snapshot {
     focusSeconds: number;
     switchCount: number;
     topApps: Array<{ appKey: string; seconds: number }>;
-    topPages: Array<{ domain: string; title: string | null; seconds: number }>;
+    topPages: Array<{ domain: string; label: string | null; seconds: number }>;
   }>;
   recap?: {
     day?: {
@@ -82,6 +83,21 @@ interface SnapshotSummaryDoc {
     focusSeconds: number;
     appSummaries: { appKey: string }[];
     workBlocks?: { id: string }[];
+  } | null;
+}
+
+interface WorkspaceStatus {
+  health: "pending_first_sync" | "healthy" | "stale" | "failed";
+  lastHeartbeatAt?: number | null;
+  lastSuccessfulSyncAt?: number | null;
+  latestPresence?: {
+    state: string;
+    heartbeatAt: number;
+    currentBlockLabel?: string | null;
+  } | null;
+  latestFailure?: {
+    reason: string;
+    detail?: string | null;
   } | null;
 }
 
@@ -128,6 +144,7 @@ export function DashboardClient() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [data, setData] = useState<SnapshotDoc | null | undefined>(undefined);
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
   const [isInitialLatestFallback, setIsInitialLatestFallback] = useState(false);
   const [hiddenApps, setHiddenApps] = useState<Set<string>>(new Set());
   const [hiddenDomains, setHiddenDomains] = useState<Set<string>>(new Set());
@@ -233,6 +250,25 @@ export function DashboardClient() {
   }, [today]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    void fetch(apiPath("/api/workspace-status"))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled) return;
+        setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorkspaceStatus(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedDate) {
       return;
     }
@@ -260,12 +296,15 @@ export function DashboardClient() {
     };
   }, [selectedDate]);
 
-  // Poll for fresh data every 60s
   useEffect(() => {
     if (!selectedDate) return;
 
     const poll = () => {
-      void fetch(`/api/snapshots?date=${selectedDate}`)
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+
+      void fetch(apiPath(`/api/snapshots?date=${selectedDate}`))
         .then((res) => (res.ok ? res.json() : null))
         .then((json) => {
           if (json?.snapshot) {
@@ -280,9 +319,20 @@ export function DashboardClient() {
           }
         })
         .catch(() => {});
+
+      void fetch(apiPath("/api/workspace-status"))
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
+        })
+        .catch(() => {});
     };
 
-    const interval = window.setInterval(poll, 60_000);
+    poll();
+    const interval = window.setInterval(
+      poll,
+      selectedDate === today ? 15_000 : 30_000,
+    );
     return () => window.clearInterval(interval);
   }, [selectedDate, today]);
 
@@ -379,6 +429,7 @@ export function DashboardClient() {
 
   return (
     <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
+      <SyncBanner status={workspaceStatus} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">
@@ -455,9 +506,9 @@ export function DashboardClient() {
               In progress
             </span>
           )}
-          {snapshot.hiddenByPreferences && (
+          {snapshot.privacyFiltered && (
             <span className="inline-block rounded bg-warning/10 px-2 py-0.5 text-[0.6875rem] font-medium text-warning">
-              Some apps and sites are hidden
+              Some synced evidence is privacy-limited
             </span>
           )}
         </div>
@@ -519,7 +570,7 @@ export function DashboardClient() {
                     )}
                     {block.topPages.length > 0 && (
                       <p>
-                        Pages: {block.topPages.map((page) => page.title || page.domain).join(", ")}
+                        Pages: {block.topPages.map((page) => page.label || page.domain).join(", ")}
                       </p>
                     )}
                   </div>

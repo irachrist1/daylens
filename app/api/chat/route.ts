@@ -10,6 +10,10 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
+  const threadId =
+    typeof body.threadId === "string" && body.threadId.trim()
+      ? body.threadId.trim()
+      : undefined;
 
   // Support both formats: { messages: [...] } from GlobalChat, or { question, date }
   let question: string | undefined;
@@ -36,7 +40,7 @@ export async function POST(request: NextRequest) {
   const client = getConvexClient(session.token);
 
   if (!date) {
-    date = await client.query(api.snapshots.latestDate, {});
+    date = await client.query(api.remoteSync.latestTimelineDate, {});
   }
 
   if (!date) {
@@ -53,6 +57,7 @@ export async function POST(request: NextRequest) {
     const result = await client.action(api.ai.askQuestion, {
       question,
       date,
+      threadId,
     });
 
     return NextResponse.json(result);

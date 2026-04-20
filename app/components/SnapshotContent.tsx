@@ -108,9 +108,9 @@ export function SnapshotContent({
               In progress
             </span>
           )}
-          {snapshot.hiddenByPreferences && (
+          {snapshot.privacyFiltered && (
             <span className="inline-block rounded bg-warning/10 px-2 py-0.5 text-[0.6875rem] font-medium text-warning">
-              Some apps and sites are hidden
+              Some synced evidence is privacy-limited
             </span>
           )}
         </div>
@@ -207,7 +207,7 @@ export function SnapshotContent({
                         <p>
                           Pages:{" "}
                           {block.topPages
-                            .map((page: SnapshotShape) => page.title || page.domain)
+                            .map((page: SnapshotShape) => page.label || page.domain)
                             .join(", ")}
                         </p>
                       ) : null}

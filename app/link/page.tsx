@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import posthog from "posthog-js";
 import { MarketingCursor } from "../components/MarketingEffects";
-import { apiPath } from "@/app/lib/basePath";
+import { apiPath, appPath } from "@/app/lib/basePath";
 
 type BarcodeDetectorCtor = new (options: {
   formats: string[];
@@ -172,7 +172,7 @@ function LinkPageContent() {
       }
 
       posthog.capture("link_pairing_completed");
-      router.push("/dashboard");
+      router.push(appPath("/dashboard"));
     } catch {
       setError("Connection failed. Please try again.");
       setLoading(false);

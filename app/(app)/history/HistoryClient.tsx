@@ -5,10 +5,13 @@ import {
   formatDate,
   formatDuration,
   formatFullDate,
+  formatRelativeTime,
 } from "@/app/lib/format";
 import Link from "next/link";
 import { SnapshotContent } from "@/app/components/SnapshotContent";
 import { apiPath } from "@/app/lib/basePath";
+import { StatusNotice } from "@/app/components/StatusNotice";
+import { getRemoteIssueCopy, readErrorMessage } from "@/app/lib/remoteUi";
 
 interface SnapshotDoc {
   _id: string;
@@ -54,14 +57,22 @@ export function HistoryClient() {
   const [yesterday] = useState(getYesterday);
   const [snapshots, setSnapshots] = useState<SnapshotDoc[] | undefined>(undefined);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     void fetch(apiPath("/api/snapshots"))
-      .then((res) => (res.ok ? res.json() : null))
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({} as { error?: string }));
+          throw new Error(body.error || `Unable to load synced days (${res.status})`);
+        }
+        return res.json();
+      })
       .then((json) => {
         if (cancelled) return;
+        setLoadError(null);
 
         const list = Array.isArray(json?.summaries)
           ? [...json.summaries].sort((a, b) => b.localDate.localeCompare(a.localDate))
@@ -74,8 +85,9 @@ export function HistoryClient() {
             null
         );
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
+        setLoadError(readErrorMessage(error));
         setSnapshots([]);
         setSelectedDate(null);
       });
@@ -99,14 +111,33 @@ export function HistoryClient() {
   }
 
   if (snapshots.length === 0) {
+    const issueCopy = loadError
+      ? getRemoteIssueCopy(loadError, {
+          title: "History is temporarily unavailable",
+          detail:
+            "This browser is linked, but Daylens Web could not load synced history right now.",
+        })
+      : null;
+
     return (
       <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
         <h1 className="text-2xl font-bold">History</h1>
         <div className="rounded-2xl glass-card p-4 sm:p-6 text-center">
-          <p className="text-on-surface-variant">No synced days yet.</p>
-          <p className="mt-2 text-sm text-on-surface-variant/60">
-            Daylens will sync automatically when it&apos;s running on your computer.
-          </p>
+          {issueCopy ? (
+            <StatusNotice
+              title={issueCopy.title}
+              detail={issueCopy.detail}
+              tone={issueCopy.tone}
+              className="text-left"
+            />
+          ) : (
+            <>
+              <p className="text-on-surface-variant">This browser is linked, but no synced days are available yet.</p>
+              <p className="mt-2 text-sm text-on-surface-variant/60">
+                Keep Daylens open on your computer and the first synced day will appear here automatically.
+              </p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -146,6 +177,14 @@ export function HistoryClient() {
           </div>
         ) : null}
       </div>
+
+      {selectedSnapshot?.syncedAt ? (
+        <StatusNotice
+          title="Showing the last synced version of this day"
+          detail={`Updated ${formatRelativeTime(selectedSnapshot.syncedAt)}.`}
+          tone={Date.now() - selectedSnapshot.syncedAt > 2 * 60 * 60 * 1000 ? "warning" : "neutral"}
+        />
+      ) : null}
 
       {selectedDate ? (
         <div className="flex items-center justify-between rounded-2xl glass-card p-3">

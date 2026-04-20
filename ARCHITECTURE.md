@@ -1,304 +1,194 @@
-# Daylens Web — Architecture
+# Daylens Web — Implementation Snapshot
 
-> The web companion for Daylens. A read-only dashboard that displays activity data synced from the desktop app (macOS, Windows, or Linux).
+This document describes the current `daylens-web` implementation snapshot.
 
-## How the System Works
+It is not the planning source of truth for the remote companion. Product and architecture decisions now live in the unified `daylens` repo:
+
+- `docs/PRD.md`
+- `docs/SRS.md`
+- `docs/ISSUES.md`
+
+If this file and those planning docs disagree, the planning docs win.
+
+## What `daylens-web` Is
+
+`daylens-web` is the web companion for Daylens. It is not a standalone tracker and it is not a browser-first SaaS dashboard.
+
+Today it contains three responsibilities:
+
+- the linked web experience
+- the public marketing/docs site
+- the Convex backend used by browser linking, snapshot storage, and web AI
+
+The desktop app in the `daylens` repo remains the capture engine and the local source of truth.
+
+## Product Mapping
+
+The approved product model is still:
+
+- `Timeline`
+- `Apps`
+- `AI`
+- `Settings`
+
+The linked-app chrome now exposes those exact top-level labels. Some underlying route paths are still legacy implementation details (`/dashboard`, `/history`, `/chat`, `/recap`), but they are mapped back to the approved product model:
+
+- `Timeline` = live/home plus history
+- `Apps` = secondary explanation
+- `AI` = chat plus recap plus reports/artifacts
+- `Settings` = linking, sync health, privacy, provider setup, export/delete/disconnect
+
+## Repo Responsibilities
 
 Daylens currently spans a unified desktop repo plus a small set of companion or archival repos:
 
-| Repo | Purpose | Tech |
-|------|---------|------|
-| `daylens` | Unified cross-platform desktop app (macOS + Windows + Linux) | Electron / React / Vite / TypeScript |
-| `daylens-web` | Web dashboard, marketing/docs site, and Convex backend | Next.js / Convex |
-| `daylens-linux` | Public MIT transition repo; points contributors back to `daylens` | — |
-| `daylens-swiftUI` | Legacy macOS SwiftUI prototype (archived, non-shipping) | Swift / SwiftUI |
+| Repo | Responsibility |
+|------|----------------|
+| `daylens` | canonical product contract, desktop capture, SQLite persistence, sync export, local AI orchestration |
+| `daylens-web` | linked web UI, marketing/docs routes, Convex backend, web session/auth flow |
+| `daylens-linux` | public transition repo pointing contributors back to `daylens` |
+| `daylens-swiftUI` | legacy archived prototype |
 
-**The web app cannot work alone.** It only displays data that the desktop app collects and syncs.
+## Current End-To-End Flow
 
----
+### 1. Workspace Creation And Linking
 
-## Status vs. `daylens` desktop
+Desktop creates or recovers a workspace, stores the session locally, and creates browser link codes through Convex-backed HTTP endpoints.
 
-This doc describes the web companion only. The desktop app's current implementation
-status, platform validation state, and open gaps live in the unified repo's
-`docs/ISSUES.md`. When this doc and that one disagree, `docs/ISSUES.md` wins for
-desktop behavior and this one wins for web behavior.
+Web redeems a link code through a Next.js route, receives a session token, and stores it in the `daylens_session` cookie.
 
----
+### 2. Current Sync Flow
 
-## Data Flow
+The current launch-foundation sync path is contract-driven and limited to the approved cloud boundary:
 
-```
-┌──────────────────────────────────┐
-│ Desktop App (macOS/Windows/Linux)│
-│                                  │
-│  1. Tracks app/browser usage     │
-│  2. Stores data locally (SQLite) │
-│  3. Every 5 min: syncs to Convex │
-└──────────┬───────────────────────┘
-           │  POST /uploadSnapshot
-           │  Authorization: Bearer <session JWT>
-           ▼
-┌──────────────────────────────────┐
-│  Convex Backend (cloud)          │
-│                                  │
-│  • Validates JWT session token   │
-│  • Stores day_snapshots          │
-│  • Manages workspaces & devices  │
-│  • Issues session tokens         │
-└──────────┬───────────────────────┘
-           │  Convex queries
-           ▼
-┌──────────────────────────────────┐
-│  Web Dashboard (Next.js)         │
-│                                  │
-│  • Reads snapshots from Convex   │
-│  • Renders date-driven scores,   │
-│    top apps, top sites, and AI   │
-│  • Read-only — never writes data │
-└──────────────────────────────────┘
-```
+- `daylens` and `daylens-web` share a versioned `packages/remote-contract`
+- desktop emits `/remote/heartbeat` roughly every 15 seconds with `workspace_live_presence`
+- desktop emits `/remote/syncDay` on startup, on a periodic current-day cadence, and on tracking-driven dirty-day flushes
+- desktop now keeps heartbeat freshness separate from durable day-sync success/failure, so a fresh heartbeat does not clear a failed current-day sync
+- desktop remote payload shaping now strips raw window titles, raw page titles, raw page URLs, and raw block artifact refs before upload
+- the shared remote privacy indicator is now `privacyFiltered`, which truthfully covers both local preference filtering and boundary-required redaction instead of implying user preferences alone
+- Convex records `sync_runs`, `sync_failures`, `synced_day_summaries`, `synced_work_blocks`, `synced_entities`, and `synced_artifacts`
+- desktop Settings now derive truthful sync state (`local_only | linked | pending_first_sync | healthy | stale | failed`) from live runtime state instead of assuming linked means healthy
 
----
+Important current limitation:
 
-## Authentication Flow
+- local validation cannot prove deployed parity by itself; staging smoke and live Convex codegen still depend on real deployment credentials
 
-### 1. First-time setup (desktop → Convex)
+### 3. Current Web Read Path
 
-```
-Desktop App                          Convex Backend
-    │                                     │
-    │  1. Generate BIP39 mnemonic         │
-    │  2. Derive workspace ID             │
-    │  3. SHA256 → recoveryKeyHash        │
-    │                                     │
-    │── POST /createWorkspace ───────────►│
-    │   { recoveryKeyHash, deviceId }     │
-    │                                     │
-    │◄── { workspaceId, sessionToken } ───│
-    │                                     │
-    │  4. Store sessionToken in keychain  │
-    │  5. Generate link code (32 hex)     │
-    │  6. SHA256 → tokenHash              │
-    │                                     │
-    │── POST /createLinkCode ────────────►│
-    │   Authorization: Bearer <JWT>       │
-    │   { tokenHash, displayCode }        │
-    │                                     │
-    │  7. Show QR code + link token to    │
-    │     the user                        │
-```
+The current browser experience reads from the new truth tables and renders:
 
-### 2. Linking a browser (web → Convex)
+- linked-session state
+- Timeline/home + history shells backed by `convex/remoteSync.ts`
+- `app/api/snapshots` compatibility payloads that are rebuilt from synced day summaries, work blocks, entities, and artifacts
+- `app/api/workspace-status` sync health and live presence state for the Timeline banner, with heartbeat freshness shown separately from durable sync success/failure
+- a row-based web AI thread/message path grounded on synced Timeline context for web-originated AI flows
+- deterministic report/export artifact generation plus row-based artifact reads inside the AI surface through `convex/webAiArtifacts.ts` and `app/api/ai-artifacts/*`
+- `/recap` as an AI-entry redirect back into `/chat`, so recap now resolves into the AI surface instead of a separate web shell
 
-```
-Web Browser                          Next.js API          Convex
-    │                                    │                   │
-    │  User scans QR / pastes token      │                   │
-    │                                    │                   │
-    │── POST /api/link ─────────────────►│                   │
-    │   { token: "abc123..." }           │                   │
-    │                                    │── redeemAndIssue──►│
-    │                                    │   { token, ... }   │
-    │                                    │                    │
-    │                                    │◄── { JWT } ────────│
-    │                                    │                    │
-    │◄── Set-Cookie: daylens_session ────│                    │
-    │                                    │                    │
-    │  Redirect to /dashboard            │                    │
-```
+Important current limitation:
 
-### 3. Session tokens (ES256 JWT)
+- Timeline UI still rides on legacy route structure and snapshot-shaped adapters during the migration back to a native proof-first remote surface
+- desktop still does not upload shared cloud AI thread/message continuity rows, so true desktop-to-web thread continuation remains pending
 
-- **Algorithm**: ES256 (ECDSA with P-256 curve)
-- **Private key**: Stored as Convex environment variable `DAYLENS_SESSION_JWT_PRIVATE_JWK`
-- **Public key**: Hardcoded in `convex/sessionPublicJwks.ts` — Convex uses this to verify JWTs
-- **Claims**: `workspaceId`, `deviceId`, `sessionKind` ("desktop" or "web"), `exp`
-- **Lifetime**: Desktop sessions = 365 days, Web sessions = 30 days
+## Current Convex Data Model
 
----
+The current schema includes:
+
+- `workspaces`
+- `devices`
+- `link_codes`
+- `workspace_live_presence`
+- `sync_runs`
+- `sync_failures`
+- `synced_day_summaries`
+- `synced_work_blocks`
+- `synced_entities`
+- `synced_artifacts`
+- `web_ai_threads`
+- `web_ai_messages`
+- `web_ai_artifacts`
+- `day_snapshots`
+- `encrypted_keys`
+- `workspace_preferences`
+- `http_rate_limits`
+
+Important current status:
+
+- Snapshot v2 remains the compatibility payload returned to the web UI, but it is now rebuilt from the synced truth tables for the primary Timeline read path
+- `day_snapshots` remains a legacy compatibility/fallback path
+- `web_chats` is no longer part of the active persistence model; web AI now uses row-based thread/message/artifact tables
+
+## Current Major Gaps
+
+These are the main reasons `daylens-web` is not yet a finished remote companion:
+
+- staging parity still needs a real deployed smoke environment and release credentials
+- local Convex codegen still requires a configured `CONVEX_DEPLOYMENT`
+- the Timeline UI still uses legacy route internals and compatibility payload adapters
+- web AI is still materially thinner than desktop AI for provider-backed orchestration, focus-session workflows, and background-job handling
+- there is not yet a full remote-native proof surface for search, review flows, and richer artifact continuation
 
 ## Key Files
 
-### Convex Backend (`convex/`)
+### Convex Backend
 
 | File | Purpose |
 |------|---------|
-| `schema.ts` | Database schema — workspaces, devices, link_codes, day_snapshots, encrypted_keys, web_chats |
-| `http.ts` | HTTP endpoints — `/uploadSnapshot`, `/createWorkspace`, `/recoverWorkspace`, `/createLinkCode`, `/storeApiKey` |
-| `snapshotValidator.ts` | Convex validator for the synced `DaySnapshot` contract |
-| `sessionTokens.ts` | JWT issuance (signs with ES256 private key) |
-| `sessionPublicJwks.ts` | Public key for JWT verification (ES256) |
-| `linkCodes.ts` | Link code creation + redemption logic |
-| `snapshots.ts` | Snapshot storage + queries |
-| `devices.ts` | Device registration + sync tracking |
-| `workspaces.ts` | Workspace creation + recovery |
-| `ai.ts` | AI chat action (calls Claude API with activity context) |
-| `packages/snapshot-schema/snapshot.ts` | Shared snapshot contract used by upload, storage, and rendering |
+| `convex/schema.ts` | current Convex tables |
+| `convex/http.ts` | HTTP endpoints such as workspace creation, recovery, link-code creation, remote heartbeat/day sync, snapshot upload fallback, and encrypted-key storage |
+| `convex/remoteSync.ts` | synced truth-table writes plus Timeline/status reads |
+| `convex/snapshots.ts` | snapshot storage, merging, and query helpers |
+| `convex/ai.ts` | current web AI action grounded on synced Timeline context |
+| `convex/webAiArtifacts.ts` | deterministic web report/export generation plus row-based artifact persistence |
+| `convex/webAiThreads.ts` | row-based web AI thread/message persistence |
+| `convex/linkCodes.ts` | link-code creation and redemption |
+| `convex/sessionTokens.ts` | session token issuance |
 
-### Next.js Frontend (`app/`)
+### Next.js Frontend
 
 | File | Purpose |
 |------|---------|
-| `page.tsx` | Landing page — QR scanner, token paste, connect flow |
-| `(app)/dashboard/DashboardClient.tsx` | Main dashboard (client component) — selected-date navigation, focus scores, recap headline, work blocks, and supporting app/site evidence |
-| `(app)/history/HistoryClient.tsx` | History browser (client component) — synced-day list plus selected-day detail with recap/work-block-aware snapshot rendering |
-| `(app)/chat/page.tsx` | AI chat page — renders GlobalChat |
-| `(app)/recap/RecapClient.tsx` | Dedicated recap route for synced day/week/month recap payloads plus workstream/entity/artifact rollups |
-| `(app)/apps/[date]/page.tsx` | Day detail — app usage, categories, top sites, AI summary |
-| `(app)/settings/page.tsx` | Settings — AI API key, disconnect |
-| `api/chat/route.ts` | POST endpoint — AI chat (accepts both `{messages}` and `{question,date}` formats) |
-| `api/link/route.ts` | POST endpoint — redeems link token, sets session cookie |
-| `api/recover/route.ts` | POST endpoint — recovers workspace from mnemonic |
-| `api/snapshots/route.ts` | GET endpoint — fetch snapshots by date or list all |
-| `middleware.ts` | Auth guard — checks `daylens_session` cookie on protected routes |
-| `lib/session.ts` | Cookie helpers — set/get/clear session |
-| `lib/convex.ts` | Server-side Convex client |
-| `components/GlobalChat.tsx` | Chat UI — message bubbles, auto-scroll, debounced save, and selected-date context |
-| `components/AppIcon.tsx` | App icon renderer — prefers embedded `iconBase64` payloads from snapshots |
-| `components/TopSitesList.tsx` | Shared expandable top-sites accordion with per-page drilldown |
-| `components/SyncBanner.tsx` | Banner showing sync status |
-| `recover/page.tsx` | Recovery page — enter mnemonic to restore access |
+| `app/link/page.tsx` | browser-link entry flow |
+| `app/recover/page.tsx` | workspace recovery flow |
+| `app/(app)/layout.tsx` | current linked-app layout and navigation shell |
+| `app/(app)/dashboard/*` | current live/home-style shell that should converge into Timeline |
+| `app/(app)/history/*` | current historical browsing shell that should converge into Timeline |
+| `app/(app)/apps/page.tsx` | Apps top-level redirect into the latest synced day |
+| `app/(app)/chat/*` | current AI surface |
+| `app/(app)/recap/page.tsx` | AI-entry redirect that resolves recap requests back into `/chat` |
+| `app/(app)/settings/*` | settings surface |
+| `app/api/ai-threads/route.ts` | authenticated thread-list endpoint for the AI surface |
+| `app/api/ai-artifacts/*` | authenticated artifact list/generation/download endpoints for the AI surface |
+| `app/api/chat/route.ts` | web AI route |
+| `app/api/link/route.ts` | token redemption and session cookie |
+| `app/api/snapshots/route.ts` | Timeline compatibility endpoint rebuilt from synced truth tables |
+| `app/api/workspace-status/route.ts` | linked workspace sync health/live-presence endpoint |
 
-### Environment Variables
+## Deployment And Ownership
 
-| Variable | Where | Purpose |
-|----------|-------|---------|
-| `CONVEX_DEPLOYMENT` | `.env.local` | Convex deployment name (e.g., `dev:decisive-aardvark-847`) |
-| `NEXT_PUBLIC_CONVEX_URL` | `.env.local` | Convex cloud URL for client queries |
-| `DAYLENS_SESSION_JWT_PRIVATE_JWK` | Convex env | ES256 private key (JWK format) for signing session JWTs |
+Current reality:
 
----
+- `daylens` and `daylens-web` are separate repos
+- `daylens-web` deploys Next.js and Convex separately
+- production issues can happen if the frontend expects Convex functions that are not deployed yet
 
-## Database Schema
+Approved direction from the planning docs:
 
-> Snapshot schema v1 is documented below and is what the web renders today.
-> Snapshot v2 is in design. See `.intent/web.md` in the unified `daylens` repo
-> for the proposed contract, and update this doc when v2 lands.
+- a shared versioned contract package owns snapshot schemas, sync-state enums, session claims, and shared AI thread/message types
+- frontend and backend must pin the same approved contract version before production promotion
+- CI validates a generated Convex public-function manifest against frontend usage
+- staging must deploy frontend and backend together and run smoke tests for link, Timeline, AI, and Settings before production promotion
+- this repo now carries `scripts/check-remote-contract.mjs`, `scripts/check-convex-manifest.mjs`, `scripts/smoke-staging.mjs`, and `.github/workflows/remote-parity.yml` to enforce that parity
 
-```
-workspaces
-  _id: Id
-  createdAt: number
-  recoveryKeyHash: string          ← SHA256 of derived workspace ID
+## Approved Direction To Build Toward
 
-devices
-  _id: Id
-  workspaceId: Id<workspaces>
-  deviceId: string                 ← UUID generated on each device
-  platform: "macos" | "windows" | "linux" | "web"
-  displayName: string
-  lastSyncAt: number
-  index: by_workspace
+The remote companion plan is now frozen around these constraints:
 
-link_codes
-  _id: Id
-  workspaceId: Id<workspaces>
-  tokenHash: string                ← SHA256 of the 32-char hex token
-  displayCode: string              ← First 8 chars (shown for visual ID)
-  expiresAt: number                ← 5-minute TTL
-  failedAttempts: number
-  index: by_display_code, by_workspace
+- top-level web navigation stays `Timeline`, `Apps`, `AI`, and `Settings`
+- launch synced evidence is limited to live presence, sync runs/failures, day summaries, work blocks, entities, and artifacts
+- raw capture tables, full file paths, and broad URL/title exhaust are out of the standard cloud sync boundary
+- cross-surface AI continuity must use one logical workspace thread model with row-based cloud persistence
+- `web_chats` is removed from the active web persistence path
 
-day_snapshots
-  _id: Id
-  workspaceId: Id<workspaces>
-  deviceId: string
-  localDate: string                ← "2026-03-21"
-  snapshot: DaySnapshot v1 or v2   ← Validated snapshot payload (legacy app/site data plus v2 work blocks, recap, entities, and focus-score breakdown when available)
-  syncedAt: number
-  index: by_workspace_date
-
-encrypted_keys
-  _id: Id
-  workspaceId: Id<workspaces>
-  encryptedAnthropicKey: string    ← User's Claude API key for web AI
-
-web_chats
-  _id: Id
-  workspaceId: Id<workspaces>
-  messages: any
-  updatedAt: number
-  index: by_workspace
-```
-
-Linux platform support requires the Snapshot v1 validator to be widened; see
-`.intent/web.md` Phase 1 in the unified `daylens` repo. Linux is architecturally
-supported today but will still be rejected by the current Convex validator until
-that phase ships.
-
----
-
-## Deployment
-
-### Web App (this repo)
-- **Platform**: Vercel (Next.js requires a Node.js runtime — cannot use GitHub Pages)
-- **Deploy**: `vercel --prod` or push to `main` with Vercel GitHub integration
-- **Convex**: Already deployed at `decisive-aardvark-847.convex.cloud`
-
-### Marketing Site
-- **Platform**: Vercel (served from this Next.js repo alongside the dashboard/docs routes)
-- **Source**: `daylens-web` repo → `app/` routes and shared marketing components
-- **URL**: `https://getdaylens.vercel.app` (also `daylens-eight.vercel.app`)
-- **Deploy**: `vercel --prod`
-
----
-
-## Security
-
-### Headers (next.config.ts)
-- `Content-Security-Policy` — restricts scripts, styles, connections to self + Convex
-- `X-Frame-Options: DENY` — prevents clickjacking
-- `X-Content-Type-Options: nosniff` — prevents MIME sniffing
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy` — camera self-only, no mic/geo
-
-### Authentication Security
-- **Middleware**: JWT signatures are cryptographically verified using `jwtVerify` with the ES256 public key (not just decoded)
-- **Session cookies**: `HttpOnly; Secure; SameSite=Strict` — never accessible to JavaScript, never sent cross-site
-- **Internal queries**: `workspaces.get` is `internalQuery` — `recoveryKeyHash` is never exposed to clients
-- **Link codes**: SHA256-hashed before storage, 5-minute TTL, max 5 failed attempts, deleted on redemption
-
-### Known Limitations (tracked for follow-up)
-- No rate limiting on `/recoverWorkspace` endpoint
-- Snapshot payload accepted as `v.any()` with no size validation
-
----
-
-## Important Concepts
-
-### Link Token vs Recovery Phrase
-
-| | Link Token | Recovery Phrase |
-|---|---|---|
-| **Format** | 32-character hex string | 12 BIP39 English words |
-| **Purpose** | One-time code to connect a browser | Permanent backup to restore workspace |
-| **Lifetime** | 5 minutes | Forever |
-| **Security** | Hashed before sending to server | Never sent to server |
-| **Where shown** | Desktop app Settings → Web Companion | Desktop app Settings → Web Companion |
-
-### Workspace Identity
-- A "workspace" is the unit of identity — one per user
-- Created from a BIP39 mnemonic: `mnemonic → normalize → "daylens-workspace-v1:" + mnemonic → SHA256 → base32 → "ws_" + first 26 chars`
-- The `recoveryKeyHash` stored on the server is `SHA256(workspaceId)` — the server never sees the mnemonic or workspace ID directly
-
----
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Start Convex dev server (in one terminal)
-npx convex dev
-
-# Start Next.js dev server (in another terminal)
-npm run dev
-
-# Open http://localhost:3000
-```
-
-To test the full flow, you need a desktop app running and syncing data. See the
-unified `daylens` repo and its `docs/ISSUES.md` for the current cross-platform
-desktop source of truth.
+This file should stay descriptive of the implementation snapshot. Strategy and future-state decisions belong in the planning docs, not here.

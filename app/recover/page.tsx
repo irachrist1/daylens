@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiPath } from "@/app/lib/basePath";
+import { apiPath, appPath } from "@/app/lib/basePath";
 
 export default function RecoverPage() {
   const [mnemonic, setMnemonic] = useState("");
@@ -36,7 +36,7 @@ export default function RecoverPage() {
         return;
       }
 
-      router.push("/dashboard");
+      router.push(appPath("/dashboard"));
     } catch {
       setError("Connection failed. Please try again.");
       setLoading(false);

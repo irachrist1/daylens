@@ -11,7 +11,6 @@ const PUBLIC_API_PATHS = [
   "/api/recover",
   "/api/logout",
   "/api/chat",
-  "/api/chat/save",
   "/api/download/mac",
   "/api/download/windows",
   "/api/download/linux",

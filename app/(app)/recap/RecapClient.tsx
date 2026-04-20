@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatDate, formatDuration, formatFullDate } from "@/app/lib/format";
+import { apiPath } from "@/app/lib/basePath";
+import { StatusNotice } from "@/app/components/StatusNotice";
+import { getRemoteIssueCopy, readErrorMessage } from "@/app/lib/remoteUi";
 
 interface SnapshotDoc {
   localDate: string;
@@ -64,19 +67,28 @@ export function RecapClient({ initialDate }: { initialDate?: string }) {
   const [selectedDate, setSelectedDate] = useState<string>(initialDate || today);
   const [data, setData] = useState<SnapshotDoc | null | undefined>(undefined);
   const [activePeriod, setActivePeriod] = useState<RecapPeriod>("day");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setData(undefined);
 
-    void fetch(`/api/snapshots?date=${selectedDate}`)
-      .then((res) => (res.ok ? res.json() : null))
+    void fetch(apiPath(`/api/snapshots?date=${selectedDate}`))
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({} as { error?: string }));
+          throw new Error(body.error || `Unable to load recap for ${selectedDate} (${res.status})`);
+        }
+        return res.json();
+      })
       .then((json) => {
         if (cancelled) return;
+        setLoadError(null);
         setData(json?.snapshot ?? null);
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
+        setLoadError(readErrorMessage(error));
         setData(null);
       });
 
@@ -101,6 +113,13 @@ export function RecapClient({ initialDate }: { initialDate?: string }) {
       : activePeriod === "week"
         ? recap?.week
         : recap?.month;
+  const issueCopy = loadError
+    ? getRemoteIssueCopy(loadError, {
+        title: "Recap is temporarily unavailable",
+        detail:
+          "This browser is linked, but Daylens Web could not load recap data right now.",
+      })
+    : null;
 
   return (
     <div className="mx-auto max-w-4xl px-4 sm:px-6 py-4 sm:py-8 space-y-4 sm:space-y-6">
@@ -150,7 +169,16 @@ export function RecapClient({ initialDate }: { initialDate?: string }) {
 
       {!snapshot || !recap ? (
         <div className="rounded-2xl glass-card p-6 text-center text-on-surface-variant">
-          No synced recap is available for this day yet.
+          {issueCopy ? (
+            <StatusNotice
+              title={issueCopy.title}
+              detail={issueCopy.detail}
+              tone={issueCopy.tone}
+              className="text-left"
+            />
+          ) : (
+            "No synced recap is available for this day yet."
+          )}
         </div>
       ) : (
         <>

@@ -15,7 +15,7 @@ export default async function FocusPage({
   if (!session) redirect("/");
 
   const client = getConvexClient(session.token);
-  const snapshotDoc = await client.query(api.snapshots.getByDate, {
+  const snapshotDoc = await client.query(api.remoteSync.getTimelineDay, {
     localDate: date,
   });
 

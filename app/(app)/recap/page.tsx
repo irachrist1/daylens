@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/app/lib/session";
-import { RecapClient } from "./RecapClient";
 
 export default async function RecapPage({
   searchParams,
@@ -19,5 +18,5 @@ export default async function RecapPage({
         ? dateParam[0]
         : undefined;
 
-  return <RecapClient initialDate={date} />;
+  redirect(date ? `/chat?date=${date}` : "/chat");
 }

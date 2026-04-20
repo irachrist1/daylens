@@ -23,7 +23,7 @@ export default async function AppsPage({
   if (!session) redirect("/");
 
   const client = getConvexClient(session.token);
-  const snapshotDoc = await client.query(api.snapshots.getByDate, {
+  const snapshotDoc = await client.query(api.remoteSync.getTimelineDay, {
     localDate: date,
   });
 
@@ -32,8 +32,8 @@ export default async function AppsPage({
   if (!snapshot) {
     return (
       <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
-        <Link href="/history" className="text-sm text-primary hover:underline">
-          &larr; History
+        <Link href="/dashboard" className="text-sm text-primary hover:underline">
+          &larr; Timeline
         </Link>
         <h1 className="text-2xl font-bold">{formatFullDate(date)}</h1>
         <div className="rounded-2xl glass-card p-8 text-center">
@@ -49,8 +49,8 @@ export default async function AppsPage({
 
   return (
     <div className="px-4 sm:px-6 py-4 sm:py-8 max-w-2xl mx-auto space-y-4 sm:space-y-6">
-      <Link href="/history" className="text-sm text-primary hover:underline">
-        &larr; History
+      <Link href="/dashboard" className="text-sm text-primary hover:underline">
+        &larr; Timeline
       </Link>
       <h1 className="text-2xl font-bold">{formatFullDate(date)}</h1>
 

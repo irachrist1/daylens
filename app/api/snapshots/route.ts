@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const client = getConvexClient(session.token);
 
   if (date) {
-    const snapshot = await client.query(api.snapshots.getByDate, {
+    const snapshot = await client.query(api.remoteSync.getTimelineDay, {
       localDate: date,
     });
     return NextResponse.json({ snapshot });
@@ -27,6 +27,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ snapshots });
   }
 
-  const summaries = await client.query(api.snapshots.listSummaries, {});
+  const summaries = await client.query(api.remoteSync.listTimelineSummaries, {});
   return NextResponse.json({ summaries });
 }

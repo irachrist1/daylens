@@ -14,13 +14,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </Link>
         <nav className="flex items-center gap-6">
           <Link href="/dashboard" className="text-sm text-on-surface-variant hover:text-on-surface transition-colors">
-            Dashboard
+            Timeline
           </Link>
-          <Link href="/history" className="text-sm text-on-surface-variant hover:text-on-surface transition-colors">
-            History
+          <Link href="/apps" className="text-sm text-on-surface-variant hover:text-on-surface transition-colors">
+            Apps
           </Link>
           <Link href="/chat" className="text-sm text-on-surface-variant hover:text-on-surface transition-colors">
-            AI Chat
+            AI
           </Link>
           <Link href="/settings" className="text-sm text-on-surface-variant hover:text-on-surface transition-colors">
             Settings
@@ -36,9 +36,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Mobile bottom nav */}
       <nav className="fixed bottom-0 inset-x-0 md:hidden glass border-t border-outline-variant/15 z-50">
         <div className="flex justify-around py-1.5 px-1">
-          <NavItem href="/dashboard" icon="chart" label="Home" />
-          <NavItem href="/history" icon="clock" label="History" />
-          <NavItem href="/chat" icon="chat" label="Chat" />
+          <NavItem href="/dashboard" icon="chart" label="Timeline" />
+          <NavItem href="/apps" icon="clock" label="Apps" />
+          <NavItem href="/chat" icon="chat" label="AI" />
           <NavItem href="/settings" icon="gear" label="Settings" />
         </div>
       </nav>

@@ -15,6 +15,10 @@ export function withBasePath(path: string): string {
   return `${BASE_PATH}${normalizedPath}`;
 }
 
+export function appPath(path: string): string {
+  return withBasePath(path);
+}
+
 export function apiPath(path: string): string {
   return withBasePath(path);
 }
