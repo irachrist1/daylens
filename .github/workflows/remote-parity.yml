@@ -1,0 +1,62 @@
+name: Remote Parity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      smoke_base_url:
+        description: "Optional staging base URL for smoke tests"
+        required: false
+      smoke_session_cookie:
+        description: "Optional session cookie for authenticated staging smoke tests"
+        required: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out daylens-web
+        uses: actions/checkout@v5
+
+      - name: Check out sibling daylens contract
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository_owner }}/daylens
+          path: ../daylens
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Convex API types
+        run: npm run convex:codegen
+
+      - name: Validate remote contract
+        run: npm run contract:check
+
+      - name: Validate Convex manifest
+        run: npm run manifest:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Staging smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_base_url != '' && inputs.smoke_session_cookie != '' }}
+        env:
+          SMOKE_BASE_URL: ${{ inputs.smoke_base_url }}
+          SMOKE_SESSION_COOKIE: ${{ inputs.smoke_session_cookie }}
+        run: npm run smoke:staging

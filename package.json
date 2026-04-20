@@ -4,9 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "typecheck": "tsc --noEmit",
     "build": "next build",
     "start": "next start",
-    "sync:changelog-page": "node scripts/generate-changelog-page-data.mjs"
+    "sync:changelog-page": "node scripts/generate-changelog-page-data.mjs",
+    "convex:codegen": "npx convex codegen",
+    "contract:check": "node scripts/check-remote-contract.mjs",
+    "manifest:check": "node scripts/check-convex-manifest.mjs",
+    "smoke:staging": "node scripts/smoke-staging.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

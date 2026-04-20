@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@daylens/remote-contract": ["./packages/remote-contract/index.ts"]
     }
   },
   "include": [
