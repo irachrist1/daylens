@@ -102,6 +102,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$SIGNING_MODE" = "adhoc" ]; then
+            # Job-level env declares CSC_LINK / APPLE_* as empty strings when
+            # the corresponding secrets are missing. electron-builder then
+            # treats those empty strings as file paths and exits with
+            # "<cwd> not a file". Unset every signing-related variable so
+            # electron-builder takes the no-identity path and our afterSign
+            # hook can re-sign the bundle ad-hoc.
+            unset CSC_LINK CSC_KEY_PASSWORD
+            unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
           npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
