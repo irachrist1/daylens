@@ -134,8 +134,11 @@
   }
 }
 
-html, body {
-  overflow-x: hidden;
+html {
+  overflow-x: clip;
+}
+body {
+  overflow-x: clip;
 }
 
 body {
@@ -431,31 +434,42 @@ body {
   border-color: var(--ui-border-strong);
 }
 
+/* ShadCN-style underline tab bar */
 .daylens-segmented {
   display: inline-flex;
   align-items: center;
-  gap: 0.2rem;
-  padding: 0.2rem;
-  border-radius: 999px;
-  background: var(--ui-panel-muted);
-  border: 1px solid var(--ui-border);
+  gap: 0;
+  border-bottom: 1.5px solid var(--ui-border);
 }
 
 .daylens-segmented button {
-  min-height: 2rem;
-  padding: 0 0.85rem;
+  min-height: 2.1rem;
+  padding: 0 0.95rem;
   border: 0;
-  border-radius: 999px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1.5px;
   background: transparent;
   color: var(--color-on-surface-variant);
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+  letter-spacing: -0.01em;
+}
+
+.daylens-segmented button:hover {
+  color: var(--color-on-surface);
 }
 
 .daylens-segmented .is-active {
-  background: linear-gradient(135deg, rgba(124, 185, 245, 0.92), rgba(74, 143, 230, 0.88));
-  color: #041425;
+  color: var(--color-on-surface);
+  border-bottom-color: var(--color-primary);
+  font-weight: 700;
+}
+
+.daylens-segmented button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 .sync-row {
@@ -1607,6 +1621,104 @@ body {
 /* Score ring animation */
 @keyframes score-fill {
   from { stroke-dashoffset: 283; }
+}
+
+/* ── Font weight consistency ─────────────────────────────────────────────── */
+body { font-weight: 400; }
+
+.timeline-row__title { font-weight: 700; }
+.timeline-row__support,
+.timeline-row__meta { font-weight: 400; }
+.timeline-row__rail strong { font-weight: 700; }
+.timeline-row__rail span { font-weight: 400; }
+
+.timeline-strip__item { font-weight: 400; }
+.timeline-strip__item strong { font-weight: 700; }
+
+.timeline-mini-row__body > p { font-weight: 600; }
+.timeline-mini-row__body > span { font-weight: 400; }
+.timeline-metric-row__label > span:last-child { font-weight: 500; }
+
+.timeline-inspector__header > h2 { font-weight: 700; }
+.timeline-kicker { font-weight: 700; }
+
+/* Gap row between blocks */
+.timeline-gap-row__body { font-weight: 500; }
+
+/* App rows */
+.apps-list__item-copy > p { font-weight: 600; }
+.apps-list__item-copy > span { font-weight: 400; }
+.apps-detail__hero h2 { font-weight: 700; }
+
+/* Key artifacts with favicon */
+.apps-artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.apps-artifact-row__favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.apps-artifact-row__favicon-fallback {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--color-on-surface-variant);
+  opacity: 0.55;
+}
+
+.apps-artifact-row__copy { min-width: 0; }
+.apps-artifact-row__copy p { margin: 0; font-weight: 600; color: var(--color-on-surface); }
+.apps-artifact-row__copy span { display: block; font-size: 0.72rem; color: var(--color-on-surface-variant); }
+
+/* AI tabs — use same underline style as daylens-segmented */
+.ai-hero__switches {
+  display: inline-flex;
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1.5px solid var(--ui-border);
+  align-self: flex-start;
+}
+
+.ai-toggle {
+  min-height: 2.1rem;
+  padding: 0 0.95rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1.5px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-on-surface-variant);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+  letter-spacing: -0.01em;
+}
+
+.ai-toggle:hover:not(:disabled) {
+  color: var(--color-on-surface);
+}
+
+.ai-toggle--active {
+  color: var(--color-on-surface) !important;
+  background: transparent !important;
+  border-bottom-color: var(--color-primary) !important;
+  font-weight: 700;
+}
+
+.ai-toggle:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 /* ── Dashboard shell ──────────────────────────────────────────────────────── */

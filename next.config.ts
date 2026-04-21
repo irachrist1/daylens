@@ -45,7 +45,7 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob:",
+              "img-src 'self' data: blob: https://www.google.com https://t2.gstatic.com",
               "font-src 'self'",
               "connect-src 'self' https://*.convex.cloud https://*.convex.site",
               "frame-ancestors 'none'",

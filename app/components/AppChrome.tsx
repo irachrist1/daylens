@@ -38,10 +38,10 @@ function IconApps() {
 
 function IconAI() {
   return (
-    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 2c-.8 2-3 3-3 5.5a3 3 0 0 0 6 0C11 5 8.8 4 8 2z" />
-      <path d="M6.5 13.5h3" />
-      <path d="M8 13v2" />
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
+      <path d="M9 1.5 10.5 7.5 16.5 9 10.5 10.5 9 16.5 7.5 10.5 1.5 9 7.5 7.5Z" fillOpacity="0.92" />
+      <circle cx="14.5" cy="3" r="1.1" fillOpacity="0.5" />
+      <circle cx="14" cy="14" r="0.8" fillOpacity="0.4" />
     </svg>
   );
 }

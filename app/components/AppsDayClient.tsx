@@ -3,6 +3,30 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+function GlobeIcon() {
+  return (
+    <svg className="apps-artifact-row__favicon-fallback" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+      <circle cx="7" cy="7" r="5.5" />
+      <path d="M7 1.5C7 1.5 5 4 5 7s2 5.5 2 5.5M7 1.5C7 1.5 9 4 9 7s-2 5.5-2 5.5M1.5 7h11" />
+    </svg>
+  );
+}
+
+function DomainFavicon({ domain }: { domain: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <GlobeIcon />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      className="apps-artifact-row__favicon"
+      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`}
+      alt=""
+      aria-hidden="true"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 import type { DaySnapshotV2 } from "../../packages/remote-contract";
 import { AppIcon } from "@/app/components/AppIcon";
 import { apiPath } from "@/app/lib/basePath";
@@ -338,8 +362,13 @@ export function AppsDayClient() {
                     <div className="apps-section__list">
                       {selectedDetail.relatedSites.map((site) => (
                         <div key={`${site.domain}:${site.label}`} className="apps-evidence">
-                          <p>{site.label}</p>
-                          <span>{site.domain}</span>
+                          <div className="apps-artifact-row">
+                            <DomainFavicon domain={site.domain} />
+                            <div className="apps-artifact-row__copy">
+                              <p>{site.label}</p>
+                              <span>{site.domain}</span>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>

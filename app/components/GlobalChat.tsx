@@ -171,7 +171,7 @@ function RecapPanel({
           <p className="timeline-kicker">AI</p>
           <h1>{groundedLabel}</h1>
           <p className="ai-hero__summary">
-            {activeRecap?.headline ?? "No clean recap is ready for this range yet."}
+            {activeRecap?.headline ?? `No ${activePeriod} recap ready yet — but you can still ask questions below.`}
           </p>
         </div>
         <div className="ai-hero__switches">
@@ -181,7 +181,6 @@ function RecapPanel({
               type="button"
               onClick={() => onSelectPeriod(period)}
               className={`ai-toggle ${activePeriod === period ? "ai-toggle--active" : ""}`}
-              disabled={!availablePeriods[period]}
             >
               {periodLabel(period)}
             </button>
