@@ -4,6 +4,7 @@ import {
   SESSION_COOKIE,
   verifySessionToken,
 } from "@/app/lib/sessionConfig";
+import { stripBasePath, withBasePath } from "@/app/lib/basePath";
 
 const PUBLIC_PATHS = ["/", "/link", "/recover", "/docs", "/roadmap", "/changelog"];
 const PUBLIC_API_PATHS = [
@@ -16,8 +17,12 @@ const PUBLIC_API_PATHS = [
   "/api/download/linux",
 ];
 
+function redirectToLink(request: NextRequest) {
+  return NextResponse.redirect(new URL(withBasePath("/link"), request.url));
+}
+
 export async function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const pathname = stripBasePath(request.nextUrl.pathname);
 
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(path + "/"))) {
     return NextResponse.next();
@@ -33,9 +38,7 @@ export async function middleware(request: NextRequest) {
 
   const session = request.cookies.get(SESSION_COOKIE)?.value;
   if (!session) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/link";
-    return NextResponse.redirect(url);
+    return redirectToLink(request);
   }
 
   try {
@@ -47,14 +50,10 @@ export async function middleware(request: NextRequest) {
       payload.sessionKind !== "web" ||
       payload.exp * 1000 <= Date.now()
     ) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/link";
-      return NextResponse.redirect(url);
+      return redirectToLink(request);
     }
   } catch {
-    const url = request.nextUrl.clone();
-    url.pathname = "/link";
-    return NextResponse.redirect(url);
+    return redirectToLink(request);
   }
 
   return NextResponse.next();
