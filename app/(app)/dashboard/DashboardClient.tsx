@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { SyncBanner } from "@/app/components/SyncBanner";
 import { TimelineSurface } from "@/app/components/TimelineSurface";
 import { apiPath } from "@/app/lib/basePath";
-import { formatDate } from "@/app/lib/format";
 import {
   buildSurfaceHref,
   formatRangeLabel,
@@ -45,6 +43,22 @@ interface WorkspaceStatus {
   } | null;
 }
 
+function ChevronLeft() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 2.5 4.5 7 9 11.5" />
+    </svg>
+  );
+}
+
+function ChevronRight() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 2.5 9.5 7 5 11.5" />
+    </svg>
+  );
+}
+
 export function DashboardClient() {
   const router = useRouter();
   const pathname = usePathname();
@@ -76,14 +90,10 @@ export function DashboardClient() {
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setAvailableDates([]);
-        }
+        if (!cancelled) setAvailableDates([]);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [dateParam, pathname, range, router, today]);
 
   useEffect(() => {
@@ -91,17 +101,13 @@ export function DashboardClient() {
     void fetch(apiPath("/api/workspace-status"))
       .then((response) => (response.ok ? response.json() : null))
       .then((json) => {
-        if (!cancelled) {
-          setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
-        }
+        if (!cancelled) setWorkspaceStatus((json?.status as WorkspaceStatus | undefined) ?? null);
       })
       .catch(() => {
         if (!cancelled) setWorkspaceStatus(null);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -109,12 +115,13 @@ export function DashboardClient() {
     let cancelled = false;
     setSnapshots(undefined);
 
-    const request = range === "day"
-      ? apiPath(`/api/snapshots?date=${selectedDate}`)
-      : (() => {
-          const { from, to } = getRangeBounds(selectedDate, range);
-          return apiPath(`/api/snapshots?from=${from}&to=${to}`);
-        })();
+    const request =
+      range === "day"
+        ? apiPath(`/api/snapshots?date=${selectedDate}`)
+        : (() => {
+            const { from, to } = getRangeBounds(selectedDate, range);
+            return apiPath(`/api/snapshots?from=${from}&to=${to}`);
+          })();
 
     void fetch(request)
       .then((response) => (response.ok ? response.json() : null))
@@ -130,9 +137,7 @@ export function DashboardClient() {
         if (!cancelled) setSnapshots([]);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [range, selectedDate]);
 
   const validSnapshots = useMemo(
@@ -154,11 +159,55 @@ export function DashboardClient() {
     router.replace(buildSurfaceHref(pathname, nextDate, nextRange));
   }
 
+  const showSyncWarning =
+    workspaceStatus !== null &&
+    (workspaceStatus.health === "failed" || workspaceStatus.health === "pending_first_sync");
+
+  const topbar = (
+    <div className="timeline-topbar">
+      <div className="timeline-topbar__date">
+        <button
+          type="button"
+          onClick={() => navigate(shiftRangeAnchor(selectedDate, range, -1))}
+          disabled={!canGoPrev}
+          aria-label="Previous"
+          className="timeline-topbar__arrow"
+        >
+          <ChevronLeft />
+        </button>
+        <span>{selectedDate === today && range === "day" ? "Today" : formatRangeLabel(selectedDate, range)}</span>
+        <button
+          type="button"
+          onClick={() => navigate(shiftRangeAnchor(selectedDate, range, 1))}
+          disabled={!canGoNext}
+          aria-label="Next"
+          className="timeline-topbar__arrow"
+        >
+          <ChevronRight />
+        </button>
+      </div>
+
+      <div className="daylens-segmented">
+        {(["day", "week", "month"] as SurfaceRange[]).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={option === range ? "is-active" : ""}
+            onClick={() => navigate(selectedDate, option)}
+          >
+            {option[0].toUpperCase() + option.slice(1)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   if (snapshots === undefined) {
     return (
-      <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="timeline-shell-outer">
         <div className="timeline-page-shell">
-          <div className="timeline-empty timeline-empty--loading">
+          {topbar}
+          <div className="timeline-empty">
             <h2>Loading timeline</h2>
             <p>Rebuilding the proof surface for this range.</p>
           </div>
@@ -169,19 +218,10 @@ export function DashboardClient() {
 
   if (validSnapshots.length === 0) {
     return (
-      <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="timeline-shell-outer">
         <div className="timeline-page-shell">
-          <div className="timeline-topbar">
-            <div className="timeline-topbar__date">
-              <button type="button" onClick={() => navigate(shiftRangeAnchor(selectedDate, range, -1))} disabled={!canGoPrev}>
-                Previous
-              </button>
-              <span>{formatRangeLabel(selectedDate, range)}</span>
-              <button type="button" onClick={() => navigate(shiftRangeAnchor(selectedDate, range, 1))} disabled={!canGoNext}>
-                Next
-              </button>
-            </div>
-          </div>
+          {topbar}
+          {showSyncWarning && <SyncBanner status={workspaceStatus} />}
           <div className="timeline-empty">
             <h2>No synced activity for this range</h2>
             <p>Keep Daylens running on your computer and let the next sync land here.</p>
@@ -192,57 +232,10 @@ export function DashboardClient() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+    <div className="timeline-shell-outer">
       <div className="timeline-page-shell">
-        <div className="timeline-topbar">
-          <div className="timeline-topbar__date">
-            <button type="button" onClick={() => navigate(shiftRangeAnchor(selectedDate, range, -1))} disabled={!canGoPrev}>
-              Previous
-            </button>
-            <span>{selectedDate === today && range === "day" ? "Today" : formatRangeLabel(selectedDate, range)}</span>
-            <button type="button" onClick={() => navigate(shiftRangeAnchor(selectedDate, range, 1))} disabled={!canGoNext}>
-              Next
-            </button>
-          </div>
-
-          <div className="timeline-topbar__controls">
-            <div className="daylens-segmented">
-              {(["day", "week", "month"] as SurfaceRange[]).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  className={option === range ? "is-active" : ""}
-                  onClick={() => navigate(selectedDate, option)}
-                >
-                  {option[0].toUpperCase() + option.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            <div className="timeline-topbar__actions">
-              {selectedDate !== today || range !== "day" ? (
-                <button type="button" className="daylens-secondary-button" onClick={() => navigate(today, "day")}>
-                  Today
-                </button>
-              ) : null}
-              <Link href={buildSurfaceHref("/apps", selectedDate, range)} className="daylens-secondary-button">
-                Apps
-              </Link>
-              <Link href={buildSurfaceHref("/chat", selectedDate, range)} className="daylens-secondary-button">
-                Ask AI
-              </Link>
-            </div>
-          </div>
-        </div>
-
-        <div className="timeline-subhead">
-          <div>
-            <h1>Timeline</h1>
-            <p>{range === "day" ? formatDate(selectedDate) : formatRangeLabel(selectedDate, range)}</p>
-          </div>
-          <SyncBanner status={workspaceStatus} />
-        </div>
-
+        {topbar}
+        {showSyncWarning && <SyncBanner status={workspaceStatus} />}
         <TimelineSurface
           snapshots={validSnapshots.map((snapshot) => ({
             localDate: snapshot.localDate,

@@ -38,8 +38,24 @@ function metricLabel(category: string): string {
 function InlineMetric({ value, label, live = false }: { value: string; label: string; live?: boolean }) {
   return (
     <span className={`timeline-strip__item ${live ? "timeline-strip__item--live" : ""}`}>
+      {live && <span className="timeline-strip__live-dot" aria-hidden="true" />}
       <strong>{value}</strong> {label}
     </span>
+  );
+}
+
+const MIN_GAP_SECONDS = 5 * 60;
+
+function GapRow({ gapStartAt, gapEndAt }: { gapStartAt: string; gapEndAt: string }) {
+  const gapSeconds = Math.round((Date.parse(gapEndAt) - Date.parse(gapStartAt)) / 1000);
+  return (
+    <div className="timeline-gap-row">
+      <div className="timeline-gap-row__rail">
+        <span>{formatClockTime(gapStartAt)}</span>
+        <span>{formatDuration(gapSeconds)}</span>
+      </div>
+      <div className="timeline-gap-row__body">Untracked gap</div>
+    </div>
   );
 }
 
@@ -59,6 +75,8 @@ function SummaryInspector({
   const categoryTotals = [...(snapshot.categoryTotals ?? [])]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 4);
+  const totalTracked = trackedSeconds(snapshot);
+  const focusPct = totalTracked > 0 ? Math.round((snapshot.focusSeconds / totalTracked) * 100) : 0;
 
   return (
     <div className="timeline-inspector" data-timeline-keep-selection="true">
@@ -70,11 +88,11 @@ function SummaryInspector({
       <div className="timeline-inspector__stats">
         <div className="timeline-inspector__stat">
           <span>Tracked</span>
-          <strong>{formatDuration(trackedSeconds(snapshot))}</strong>
+          <strong>{formatDuration(totalTracked)}</strong>
         </div>
         <div className="timeline-inspector__stat">
           <span>Focus</span>
-          <strong>{formatDuration(snapshot.focusSeconds)}</strong>
+          <strong>{focusPct}%</strong>
         </div>
       </div>
 
@@ -102,7 +120,7 @@ function SummaryInspector({
 
       {categoryTotals.length > 0 ? (
         <section className="timeline-inspector__section">
-          <p className="timeline-kicker">Where the time went</p>
+          <p className="timeline-kicker">Where the day went</p>
           <div className="timeline-inspector__list">
             {categoryTotals.map((item) => (
               <div key={item.category} className="timeline-metric-row">
@@ -422,21 +440,38 @@ export function TimelineSurface({
               ) : null}
 
               <div className="timeline-day-group__rows">
-                {day.snapshot.workBlocks.map((block) => {
-                  const compositeId = `${day.localDate}:${block.id}`;
-                  return (
-                    <TimelineRow
-                      key={compositeId}
-                      block={{ ...block, id: compositeId }}
-                      snapshot={day.snapshot}
-                      isSelected={selectedBlock?.id === compositeId}
-                      onSelect={() => {
-                        setSelectedDayDate(day.localDate);
-                        setSelectedBlockId((current) => (current === compositeId ? null : compositeId));
-                      }}
-                    />
-                  );
-                })}
+                {[...day.snapshot.workBlocks]
+                  .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt))
+                  .flatMap((block, idx, sorted) => {
+                    const compositeId = `${day.localDate}:${block.id}`;
+                    const prev = idx > 0 ? sorted[idx - 1] : null;
+                    const gap = prev
+                      ? Math.round((Date.parse(block.startAt) - Date.parse(prev.endAt)) / 1000)
+                      : 0;
+                    const rows = [];
+                    if (prev && gap >= MIN_GAP_SECONDS) {
+                      rows.push(
+                        <GapRow
+                          key={`gap-${compositeId}`}
+                          gapStartAt={prev.endAt}
+                          gapEndAt={block.startAt}
+                        />,
+                      );
+                    }
+                    rows.push(
+                      <TimelineRow
+                        key={compositeId}
+                        block={{ ...block, id: compositeId }}
+                        snapshot={day.snapshot}
+                        isSelected={selectedBlock?.id === compositeId}
+                        onSelect={() => {
+                          setSelectedDayDate(day.localDate);
+                          setSelectedBlockId((current) => (current === compositeId ? null : compositeId));
+                        }}
+                      />,
+                    );
+                    return rows;
+                  })}
               </div>
             </section>
           ))}
