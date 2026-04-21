@@ -123,8 +123,8 @@ function buildSurfaceError(code: ChatErrorCode | null, message: string): Surface
     default:
       return {
         code,
-        title: "AI reply unavailable",
-        message,
+        title: message || "AI reply unavailable",
+        message: "",
       };
   }
 }

@@ -346,9 +346,9 @@ export function AppsDayClient() {
                 {selectedDetail.headlineLabels.length > 0 ? (
                   <section className="apps-section">
                     <p className="timeline-kicker">Helping with</p>
-                    <div className="apps-section__list">
+                    <div className="apps-section__list apps-section__list--inline">
                       {selectedDetail.headlineLabels.map((label) => (
-                        <div key={label} className="apps-evidence">
+                        <div key={label} className="apps-inline-row">
                           <p>{label}</p>
                         </div>
                       ))}

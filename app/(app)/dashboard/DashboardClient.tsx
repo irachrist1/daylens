@@ -223,8 +223,8 @@ export function DashboardClient() {
           {topbar}
           {showSyncWarning && <SyncBanner status={workspaceStatus} />}
           <div className="timeline-empty">
-            <h2>No synced activity for this range</h2>
-            <p>Keep Daylens running on your computer and let the next sync land here.</p>
+            <h2>No data for this range</h2>
+            <p>Only days synced from your desktop app appear here. Switch to <strong>Day</strong> view to see today&apos;s activity.</p>
           </div>
         </div>
       </div>
