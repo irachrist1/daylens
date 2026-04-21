@@ -15,6 +15,7 @@ import {
 import { apiPath } from "@/app/lib/basePath";
 import { StatusNotice } from "@/app/components/StatusNotice";
 import { getRemoteIssueCopy, readErrorMessage } from "@/app/lib/remoteUi";
+import { appPath } from "@/app/lib/basePath";
 
 type Device = {
   _id: Id<"devices">;
@@ -58,7 +59,7 @@ async function querySafely<T>(run: () => Promise<T>): Promise<SettingsQueryResul
 
 export default async function SettingsPage() {
   const session = await getSession();
-  if (!session) redirect("/");
+  if (!session) redirect(appPath("/"));
 
   const client = getConvexClient(session.token);
 

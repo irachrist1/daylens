@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/app/lib/session";
+import { appPath } from "@/app/lib/basePath";
 
 export default async function RecapPage({
   searchParams,
@@ -7,7 +8,7 @@ export default async function RecapPage({
   searchParams: Promise<{ date?: string | string[] }>;
 }) {
   const session = await getSession();
-  if (!session) redirect("/");
+  if (!session) redirect(appPath("/"));
 
   const resolvedSearchParams = await searchParams;
   const dateParam = resolvedSearchParams?.date;
@@ -18,5 +19,5 @@ export default async function RecapPage({
         ? dateParam[0]
         : undefined;
 
-  redirect(date ? `/chat?date=${date}` : "/chat");
+  redirect(date ? appPath(`/chat?date=${date}`) : appPath("/chat"));
 }

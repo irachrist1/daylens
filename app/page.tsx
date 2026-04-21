@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { LandingClient } from "./components/LandingClient";
 import { EasterEggs } from "./components/EasterEggs";
+import { appPath } from "@/app/lib/basePath";
 
 export const metadata: Metadata = {
   title: "Daylens — Searchable work history for your laptop",
@@ -38,7 +39,7 @@ export default async function LandingPage({
   const params = await searchParams;
   // If a ?token= param arrives on the root (from old QR codes), forward to /link
   if (params.token && /^[0-9a-f]{32}$/i.test(params.token)) {
-    redirect(`/link?token=${params.token}`);
+    redirect(appPath(`/link?token=${params.token}`));
   }
   return (
     <>

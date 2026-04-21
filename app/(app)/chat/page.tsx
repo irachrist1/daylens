@@ -5,6 +5,7 @@ import { getSession } from "@/app/lib/session";
 import { api } from "../../../convex/_generated/api";
 import type { ChatMessage } from "@/app/lib/chat";
 import type { WorkspaceAIMessage } from "../../../packages/remote-contract";
+import { appPath } from "@/app/lib/basePath";
 
 export default async function ChatPage({
   searchParams,
@@ -13,7 +14,7 @@ export default async function ChatPage({
 }) {
   const session = await getSession();
   if (!session) {
-    redirect("/");
+    redirect(appPath("/"));
   }
 
   const client = getConvexClient(session.token);

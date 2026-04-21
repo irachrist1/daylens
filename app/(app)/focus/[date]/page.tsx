@@ -4,6 +4,7 @@ import { api } from "../../../../convex/_generated/api";
 import { redirect } from "next/navigation";
 import { formatDuration, formatFullDate } from "@/app/lib/format";
 import Link from "next/link";
+import { appPath } from "@/app/lib/basePath";
 
 export default async function FocusPage({
   params,
@@ -12,7 +13,7 @@ export default async function FocusPage({
 }) {
   const { date } = await params;
   const session = await getSession();
-  if (!session) redirect("/");
+  if (!session) redirect(appPath("/"));
 
   const client = getConvexClient(session.token);
   const snapshotDoc = await client.query(api.remoteSync.getTimelineDay, {
