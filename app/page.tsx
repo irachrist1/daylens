@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { LandingClient } from "./components/LandingClient";
-import { EasterEggs } from "./components/EasterEggs";
-import { appPath } from "@/app/lib/basePath";
+import { appPath, assetPath } from "@/app/lib/basePath";
 
 export const metadata: Metadata = {
   title: "Daylens — Searchable work history for your laptop",
@@ -15,7 +14,7 @@ export const metadata: Metadata = {
     url: "/daylens",
     images: [
       {
-        url: "/daylens/screenshots/screenshot-hero-timeline-dark.png",
+        url: assetPath("/screenshots/screenshot-hero-timeline-dark.png"),
         width: 1200,
         height: 800,
         alt: "Daylens timeline showing reconstructed work sessions and evidence",
@@ -27,7 +26,7 @@ export const metadata: Metadata = {
     title: "Daylens — Searchable work history for your laptop",
     description:
       "Local-first work history for macOS, Windows, and Linux, built for grounded questions and editor-ready context.",
-    images: ["/daylens/screenshots/screenshot-hero-timeline-dark.png"],
+    images: [assetPath("/screenshots/screenshot-hero-timeline-dark.png")],
   },
 };
 
@@ -45,7 +44,6 @@ export default async function LandingPage({
     <>
       {/* hey, you're looking at the source. we respect that. here's a secret: the app is even more interesting. → daylens.app */}
       <LandingClient />
-      <EasterEggs />
     </>
   );
 }

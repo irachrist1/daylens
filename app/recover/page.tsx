@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiPath, appPath } from "@/app/lib/basePath";
+import { apiPath, appPath, assetPath } from "@/app/lib/basePath";
 
 export default function RecoverPage() {
   const [mnemonic, setMnemonic] = useState("");
@@ -49,7 +49,7 @@ export default function RecoverPage() {
         <div className="lp-recover-inner">
 
           <Link href="/" className="lp-recover-logo">
-            <img src="/daylens/app-icon.png" alt="Daylens" width={28} height={28} style={{ borderRadius: 7 }} />
+            <img src={assetPath("/app-icon.png")} alt="Daylens" width={28} height={28} style={{ borderRadius: 7 }} />
             Daylens
           </Link>
 

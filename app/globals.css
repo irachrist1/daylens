@@ -8534,7 +8534,7 @@ html {
   align-content: stretch;
   min-height: clamp(48rem, 100vh, 66rem);
   min-height: clamp(48rem, 100svh, 66rem);
-  padding-top: clamp(6.5rem, 10vh, 8.5rem);
+  padding-top: clamp(8.5rem, 13vh, 10.75rem);
   padding-bottom: clamp(1.5rem, 3vh, 2.5rem);
 }
 
@@ -8557,6 +8557,7 @@ html {
   align-content: stretch;
   min-height: clamp(34rem, 88vh, 50rem);
   min-height: clamp(34rem, 88svh, 50rem);
+  padding-bottom: 0;
 }
 
 .dlx-panel--dark .dlx-panel__bg {
@@ -8585,8 +8586,9 @@ html {
   display: grid;
   justify-items: center;
   text-align: center;
-  align-content: center;
+  align-content: start;
   gap: clamp(0.9rem, 2vh, 1.2rem);
+  padding-top: clamp(2.25rem, 6vh, 4.5rem);
 }
 
 .dlx-panel__head {
@@ -8657,89 +8659,27 @@ html {
   margin-top: clamp(0.7rem, 1.6vh, 1rem);
 }
 
-.dlx-hero__links {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.7rem 1.1rem;
-}
-
-.dlx-hero__link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--dlx-accent-strong);
-  font-size: 0.9rem;
-  font-weight: 600;
-  text-decoration: none;
-  transition: color 0.2s ease, gap 0.2s ease;
-}
-
-.dlx-hero__link:hover {
-  color: var(--dlx-text);
-  gap: 0.5rem;
-}
-
 .dlx-hero-proof {
   width: min(100%, 70rem);
   margin-top: clamp(0.8rem, 2vh, 1.25rem);
-  display: grid;
-  gap: 1rem;
-}
-
-.dlx-hero-proof__highlights {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0.7rem;
-}
-
-.dlx-hero-proof__highlight {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  min-height: 2.5rem;
-  padding: 0.7rem 0.95rem;
-  border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.76);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--dlx-text);
-}
-
-.dlx-hero-proof__highlight::before {
-  content: "";
-  width: 0.42rem;
-  height: 0.42rem;
-  border-radius: 999px;
-  background: var(--dlx-accent);
-  box-shadow: 0 0 0 5px rgba(44, 92, 255, 0.1);
 }
 
 .dlx-hero-proof__frame {
-  overflow: hidden;
-  aspect-ratio: 16 / 10;
-  border-radius: 1.6rem;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: linear-gradient(180deg, #0d1230 0%, #07091a 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 18px 44px rgba(8, 19, 38, 0.12),
-    0 50px 100px rgba(8, 19, 38, 0.16);
+  overflow: visible;
+  aspect-ratio: auto;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .dlx-hero-proof__image {
   display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
   object-position: center top;
+  border-radius: 1.6rem;
 }
 
 /* ===== BUTTONS ===== */
@@ -9379,6 +9319,7 @@ html {
 .dlx-panel__foot {
   align-self: end;
   width: 100%;
+  margin-top: 0;
 }
 
 /* ===== ANIMATIONS ===== */
@@ -9434,11 +9375,13 @@ html {
   }
 
   .dlx-panel--hero {
-    padding-top: 6rem;
+    padding-top: 7.5rem;
   }
 
   .dlx-panel__inner--hero {
+    align-content: start;
     gap: 0.85rem;
+    padding-top: 1.5rem;
   }
 
   .dlx-panel + .dlx-panel {
@@ -9447,15 +9390,6 @@ html {
 
   .dlx-h1 { font-size: clamp(2.4rem, 11vw, 3.4rem); }
   .dlx-h2 { font-size: clamp(1.85rem, 9vw, 2.4rem); }
-
-  .dlx-hero-proof__highlights {
-    gap: 0.55rem;
-  }
-
-  .dlx-hero-proof__highlight {
-    font-size: 0.78rem;
-    padding: 0.62rem 0.8rem;
-  }
 
   .dlx-hero-proof__frame {
     display: none;
@@ -9474,23 +9408,12 @@ html {
   .dlx-shell { padding-inline: 1rem; }
   .dlx-tool-track { animation-duration: 22s; }
 
-  .dlx-hero__actions,
-  .dlx-hero__links {
+  .dlx-hero__actions {
     width: 100%;
   }
 
   .dlx-btn {
     width: 100%;
-  }
-
-  .dlx-hero__link {
-    justify-content: center;
-    width: 100%;
-  }
-
-  .dlx-hero-proof__highlights {
-    display: grid;
-    grid-template-columns: 1fr;
   }
 }
 

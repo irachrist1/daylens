@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import posthog from "posthog-js";
 import { MarketingCursor } from "../components/MarketingEffects";
-import { apiPath, appPath } from "@/app/lib/basePath";
+import { apiPath, appPath, assetPath } from "@/app/lib/basePath";
 
 type BarcodeDetectorCtor = new (options: {
   formats: string[];
@@ -189,7 +189,7 @@ function LinkPageContent() {
           <div className="lp-connect-form-inner">
 
             <Link href="/" className="lp-connect-logo">
-              <img src="/daylens/app-icon.png" alt="Daylens" width={28} height={28} style={{ borderRadius: 7 }} />
+              <img src={assetPath("/app-icon.png")} alt="Daylens" width={28} height={28} style={{ borderRadius: 7 }} />
               Daylens
             </Link>
 

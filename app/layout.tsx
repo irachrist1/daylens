@@ -3,6 +3,7 @@ import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ServiceWorker } from "./components/ServiceWorker";
 import { PHProvider } from "./providers";
+import { assetPath } from "./lib/basePath";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -26,16 +27,16 @@ export const metadata: Metadata = {
   title: "Daylens",
   description:
     "Cross-platform work history for your laptop. Local-first activity tracking for grounded timeline recall, AI queries, and editor-ready context.",
-  manifest: "/daylens/manifest.json",
+  manifest: assetPath("/manifest.json"),
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Daylens",
   },
   icons: {
-    icon: [{ url: "/daylens/app-icon.png", type: "image/png" }],
-    apple: [{ url: "/daylens/app-icon.png", type: "image/png" }],
-    shortcut: "/daylens/app-icon.png",
+    icon: [{ url: assetPath("/app-icon.png"), type: "image/png" }],
+    apple: [{ url: assetPath("/app-icon.png"), type: "image/png" }],
+    shortcut: assetPath("/app-icon.png"),
   },
 };
 

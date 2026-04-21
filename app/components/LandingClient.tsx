@@ -5,6 +5,7 @@ import posthog from "posthog-js";
 import { type ReactNode, useRef } from "react";
 import { MarketingFooter, MarketingInnerNav } from "./MarketingChrome";
 import { usePanelStacking } from "./MarketingEffects";
+import { assetPath } from "../lib/basePath";
 import {
   LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
@@ -19,26 +20,20 @@ type ToolChipRecord = {
 };
 
 const toolChips: ToolChipRecord[] = [
-  { label: "VS Code", src: "/daylens/brands/vscode.ico", rounded: true },
-  { label: "Claude Code", src: "/daylens/brands/claude-app.png", rounded: true },
-  { label: "ChatGPT", src: "/daylens/brands/chatgpt.png", rounded: true },
-  { label: "Dia", src: "/daylens/brands/dia.png", rounded: true },
-  { label: "Arc", src: "/daylens/brands/arc.svg" },
-  { label: "Chrome", src: "/daylens/brands/chrome.svg" },
-  { label: "Spotify", src: "/daylens/brands/spotify.svg" },
-  { label: "Figma", src: "/daylens/brands/figma.svg" },
-  { label: "Slack", src: "/daylens/brands/slack.png", rounded: true },
-  { label: "Notion", src: "/daylens/brands/notion.svg" },
-  { label: "Linear", src: "/daylens/brands/linear.svg" },
+  { label: "VS Code", src: assetPath("/brands/vscode.ico"), rounded: true },
+  { label: "Claude Code", src: assetPath("/brands/claude-app.png"), rounded: true },
+  { label: "ChatGPT", src: assetPath("/brands/chatgpt.png"), rounded: true },
+  { label: "Dia", src: assetPath("/brands/dia.png"), rounded: true },
+  { label: "Arc", src: assetPath("/brands/arc.svg") },
+  { label: "Chrome", src: assetPath("/brands/chrome.svg") },
+  { label: "Spotify", src: assetPath("/brands/spotify.svg") },
+  { label: "Figma", src: assetPath("/brands/figma.svg") },
+  { label: "Slack", src: assetPath("/brands/slack.png"), rounded: true },
+  { label: "Notion", src: assetPath("/brands/notion.svg") },
+  { label: "Linear", src: assetPath("/brands/linear.svg") },
 ];
 
 const marqueeTools = [...toolChips, ...toolChips];
-
-const heroHighlights = [
-  "Local-first by default",
-  "One portable SQLite file",
-  "No screenshots or keystroke logging",
-];
 
 const faqItems = [
   {
@@ -296,36 +291,11 @@ export function LandingClient() {
               />
             </div>
 
-            <div className="dlx-hero__links">
-              <Link href="/docs" className="dlx-hero__link">
-                Read the docs <ArrowIcon />
-              </Link>
-              <Link href={LINUX_STATUS_HREF} className="dlx-hero__link">
-                Linux status <ArrowIcon />
-              </Link>
-              <a
-                href={UNIFIED_DESKTOP_REPO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="dlx-hero__link"
-              >
-                View on GitHub <ArrowIcon />
-              </a>
-            </div>
-
             <div className="dlx-hero-proof">
-              <ul className="dlx-hero-proof__highlights" aria-label="Proof points">
-                {heroHighlights.map((item) => (
-                  <li key={item} className="dlx-hero-proof__highlight">
-                    {item}
-                  </li>
-                ))}
-              </ul>
-
               <div className="dlx-hero-proof__frame">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/daylens/landing/daylens-desktop-dark.png"
+                  src={assetPath("/landing/daylens-desktop-dark.png")}
                   alt="Daylens desktop timeline with reconstructed work sessions and a daily summary"
                   className="dlx-hero-proof__image"
                   loading="eager"
@@ -333,6 +303,7 @@ export function LandingClient() {
                 />
               </div>
             </div>
+
           </div>
 
           <div className="dlx-tools-mini" aria-label="Tools Daylens watches">

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { assetPath } from "../lib/basePath";
 import {
   LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
@@ -39,7 +40,7 @@ export function MarketingInnerNav({
       <Link href="/" className="dl-nav-brand">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/daylens/app-icon.png"
+          src={assetPath("/app-icon.png")}
           alt=""
           width={28}
           height={28}
@@ -83,7 +84,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
         <div className="dl-foot__inner">
           <div className="dl-foot__brand">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/daylens/app-icon.png" alt="" width={18} height={18} className="dl-foot__icon" />
+            <img src={assetPath("/app-icon.png")} alt="" width={18} height={18} className="dl-foot__icon" />
             <span>Daylens</span>
           </div>
           <nav className="dl-foot__links" aria-label="Footer">
@@ -111,7 +112,7 @@ export function MarketingFooter({ variant = "full" }: { variant?: "full" | "mini
             <div className="lp-footer-logo">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/daylens/app-icon.png"
+                src={assetPath("/app-icon.png")}
                 alt="Daylens"
                 width={22}
                 height={22}

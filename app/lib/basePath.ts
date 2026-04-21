@@ -41,3 +41,7 @@ export function appPath(path: string): string {
 export function apiPath(path: string): string {
   return withBasePath(path);
 }
+
+export function assetPath(path: string): string {
+  return withBasePath(path);
+}
