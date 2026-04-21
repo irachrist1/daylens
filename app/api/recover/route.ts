@@ -5,10 +5,52 @@ import { api } from "../../../convex/_generated/api";
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 
-function hashMnemonic(mnemonic: string): string {
-  const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
-  const input = "daylens-workspace-v1:" + normalized;
+function sha256Hex(input: string): string {
   return createHash("sha256").update(input).digest("hex");
+}
+
+function normalizeMnemonic(mnemonic: string): string {
+  return mnemonic.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function base32Encode(data: Buffer): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let result = "";
+  let bits = 0;
+  let buffer = 0;
+
+  for (const byte of data) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      result += alphabet[(buffer >> bits) & 0x1f];
+    }
+  }
+
+  if (bits > 0) {
+    result += alphabet[(buffer << (5 - bits)) & 0x1f];
+  }
+
+  return result;
+}
+
+function deriveWorkspaceId(mnemonic: string): string {
+  const normalized = normalizeMnemonic(mnemonic);
+  const input = "daylens-workspace-v1:" + normalized;
+  const hash = createHash("sha256").update(input).digest();
+  return `ws_${base32Encode(hash).slice(0, 26).toLowerCase()}`;
+}
+
+function getRecoveryKeyHashes(mnemonic: string): string[] {
+  const normalized = normalizeMnemonic(mnemonic);
+  const workspaceId = deriveWorkspaceId(normalized);
+  const desktopCompatibleHash = sha256Hex(workspaceId);
+  const legacyMnemonicHash = sha256Hex(`daylens-workspace-v1:${normalized}`);
+
+  return desktopCompatibleHash === legacyMnemonicHash
+    ? [desktopCompatibleHash]
+    : [desktopCompatibleHash, legacyMnemonicHash];
 }
 
 export async function POST(request: NextRequest) {
@@ -29,27 +71,29 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const recoveryKeyHash = hashMnemonic(mnemonic);
   const client = getConvexClient();
+  const deviceId = `web-${randomUUID()}`;
+  const displayName = "Recovered Web Browser";
 
-  const result = await client.action(api.workspaces.recoverAndIssueSession, {
-    recoveryKeyHash,
-    deviceId: `web-${randomUUID()}`,
-    displayName: "Recovered Web Browser",
-  });
+  for (const recoveryKeyHash of getRecoveryKeyHashes(mnemonic)) {
+    const result = await client.action(api.workspaces.recoverAndIssueSession, {
+      recoveryKeyHash,
+      deviceId,
+      displayName,
+    });
 
-  if (!result.success) {
-    return NextResponse.json(
-      { error: result.error || "No workspace found for this recovery phrase" },
-      { status: 404 }
-    );
+    if (result.success) {
+      const response = NextResponse.json({ success: true });
+      response.headers.set(
+        "Set-Cookie",
+        setSessionCookie(result.token)
+      );
+      return response;
+    }
   }
 
-  const response = NextResponse.json({ success: true });
-  response.headers.set(
-    "Set-Cookie",
-    setSessionCookie(result.token)
+  return NextResponse.json(
+    { error: "No workspace found for this recovery phrase" },
+    { status: 404 }
   );
-
-  return response;
 }
