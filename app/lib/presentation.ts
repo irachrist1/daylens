@@ -37,6 +37,134 @@ export type DerivedAppDetail = {
   relatedSites: VisiblePageEvidence[];
 };
 
+function mergeUniqueTopPages(
+  pages: Array<{ domain: string; label?: string | null; seconds: number }>,
+) {
+  const byKey = new Map<string, { domain: string; label: string | null; seconds: number }>();
+  for (const page of pages) {
+    const domain = shortDomainLabel(page.domain);
+    const label = formatVisibleEvidenceLabel(page.label, page.domain);
+    if (!domain || !label) continue;
+    const key = `${domain}:${label}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.seconds += page.seconds;
+    } else {
+      byKey.set(key, { domain, label, seconds: page.seconds });
+    }
+  }
+  return [...byKey.values()].sort((left, right) => right.seconds - left.seconds).slice(0, 6);
+}
+
+export function mergeDaySnapshots(snapshots: DaySnapshotV2[], anchorDate: string): DaySnapshotV2 {
+  const ordered = [...snapshots].sort((left, right) => left.date.localeCompare(right.date));
+  const latest = ordered[ordered.length - 1] ?? snapshots[0];
+
+  const appMap = new Map<string, AppSummary>();
+  const categoryMap = new Map<string, number>();
+  const domainMap = new Map<string, TopDomain>();
+  const blockMap = new Map<string, WorkBlockSummary>();
+  const workstreamMap = new Map<string, { label: string; seconds: number; blockCount: number; isUntitled: boolean }>();
+  const entityMap = new Map<string, { id: string; label: string; kind: "client" | "project" | "repo" | "topic"; secondsToday: number; blockCount: number }>();
+  const artifactMap = new Map<string, DaySnapshotV2["standoutArtifacts"][number]>();
+
+  let focusSeconds = 0;
+  let weightedFocusScore = 0;
+  let totalFocusWeight = 0;
+
+  for (const snapshot of ordered) {
+    focusSeconds += snapshot.focusSeconds;
+    const weight = Math.max(snapshot.focusSeconds, 1);
+    totalFocusWeight += weight;
+    weightedFocusScore += snapshot.focusScore * weight;
+
+    for (const app of snapshot.appSummaries) {
+      const existing = appMap.get(app.appKey);
+      if (existing) {
+        existing.totalSeconds += app.totalSeconds;
+        existing.sessionCount += app.sessionCount;
+        if (!existing.iconBase64 && app.iconBase64) existing.iconBase64 = app.iconBase64;
+      } else {
+        appMap.set(app.appKey, { ...app });
+      }
+    }
+
+    for (const category of snapshot.categoryTotals) {
+      categoryMap.set(category.category, (categoryMap.get(category.category) ?? 0) + category.totalSeconds);
+    }
+
+    for (const domain of snapshot.topDomains) {
+      const normalizedDomain = shortDomainLabel(domain.domain);
+      if (!normalizedDomain) continue;
+      const existing = domainMap.get(normalizedDomain);
+      const topPages = mergeUniqueTopPages(domain.topPages ?? []);
+      if (existing) {
+        existing.seconds += domain.seconds;
+        existing.topPages = mergeUniqueTopPages([...(existing.topPages ?? []), ...topPages]);
+      } else {
+        domainMap.set(normalizedDomain, {
+          ...domain,
+          domain: normalizedDomain,
+          topPages,
+        });
+      }
+    }
+
+    for (const block of snapshot.workBlocks ?? []) {
+      const key = `${snapshot.date}:${block.id}`;
+      blockMap.set(key, { ...block, id: key });
+      const readable = readableBlockLabel(block);
+      const existingWorkstream = workstreamMap.get(readable);
+      const duration = Math.max(0, (Date.parse(block.endAt) - Date.parse(block.startAt)) / 1000);
+      if (existingWorkstream) {
+        existingWorkstream.seconds += duration;
+        existingWorkstream.blockCount += 1;
+      } else {
+        workstreamMap.set(readable, {
+          label: readable,
+          seconds: duration,
+          blockCount: 1,
+          isUntitled: readable === "Unlabeled work block" || readable === "Work block",
+        });
+      }
+    }
+
+    for (const entity of snapshot.entities ?? []) {
+      const existing = entityMap.get(entity.id);
+      if (existing) {
+        existing.secondsToday += entity.secondsToday;
+        existing.blockCount += entity.blockCount;
+      } else {
+        entityMap.set(entity.id, { ...entity });
+      }
+    }
+
+    for (const artifact of snapshot.standoutArtifacts ?? []) {
+      const existing = artifactMap.get(artifact.id);
+      if (!existing || artifact.generatedAt > existing.generatedAt) {
+        artifactMap.set(artifact.id, artifact);
+      }
+    }
+  }
+
+  return {
+    ...latest,
+    date: anchorDate,
+    focusSeconds,
+    focusScore: totalFocusWeight > 0 ? Math.round(weightedFocusScore / totalFocusWeight) : latest.focusScore,
+    appSummaries: [...appMap.values()].sort((left, right) => right.totalSeconds - left.totalSeconds),
+    categoryTotals: [...categoryMap.entries()]
+      .map(([category, totalSeconds]) => ({ category: category as AppSummary["category"], totalSeconds }))
+      .sort((left, right) => right.totalSeconds - left.totalSeconds),
+    topDomains: [...domainMap.values()].sort((left, right) => right.seconds - left.seconds),
+    workBlocks: [...blockMap.values()].sort((left, right) => left.startAt.localeCompare(right.startAt)),
+    topWorkstreams: [...workstreamMap.values()].sort((left, right) => right.seconds - left.seconds).slice(0, 8),
+    entities: [...entityMap.values()].sort((left, right) => right.secondsToday - left.secondsToday).slice(0, 12),
+    standoutArtifacts: [...artifactMap.values()].sort((left, right) => right.generatedAt.localeCompare(left.generatedAt)).slice(0, 12),
+    privacyFiltered: ordered.some((snapshot) => snapshot.privacyFiltered),
+  };
+}
+
 const PATHLIKE_RE =
   /(^[a-z]:[\\/])|(^\/(users|home|var|tmp|private|system|applications)\b)|(^~\/)|([\\/][^\\/\s]+[\\/])/i;
 

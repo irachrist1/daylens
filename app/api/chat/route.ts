@@ -13,6 +13,8 @@ type ChatErrorCode =
   | "service_updating"
   | "unknown";
 
+type ChatRange = "day" | "week" | "month";
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) {
@@ -31,6 +33,7 @@ export async function POST(request: NextRequest) {
   // Support both formats: { messages: [...] } from GlobalChat, or { question, date }
   let question: string | undefined;
   let date: string | undefined;
+  let range: ChatRange | undefined;
 
   if (Array.isArray(body.messages)) {
     const lastUserMsg = [...body.messages]
@@ -38,9 +41,11 @@ export async function POST(request: NextRequest) {
       .find((m: { role: string; content?: string }) => m.role === "user");
     question = lastUserMsg?.content;
     date = body.date;
+    range = body.range === "week" || body.range === "month" ? body.range : "day";
   } else {
     question = body.question;
     date = body.date;
+    range = body.range === "week" || body.range === "month" ? body.range : "day";
   }
 
   if (!question) {
@@ -71,6 +76,7 @@ export async function POST(request: NextRequest) {
     const result = await client.action(api.ai.askQuestion, {
       question,
       date,
+      range,
       threadId,
     });
 

@@ -664,6 +664,27 @@ export async function loadRemoteSummariesForWorkspace(
     }));
 }
 
+export async function loadRemoteRangeForWorkspace(
+  ctx: QueryCtx,
+  workspaceId: Id<"workspaces">,
+  startDate: string,
+  endDate: string,
+) {
+  const docs = await ctx.db
+    .query("synced_day_summaries")
+    .withIndex("by_workspace_date", (q) => q.eq("workspaceId", workspaceId))
+    .take(500);
+
+  const dates = [...new Set(
+    docs
+      .map((doc) => doc.localDate)
+      .filter((localDate) => localDate >= startDate && localDate <= endDate),
+  )].sort((left, right) => right.localeCompare(left));
+
+  const merged = await Promise.all(dates.map((date) => loadRemoteDayForWorkspace(ctx, workspaceId, date)));
+  return merged.filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+}
+
 async function pruneMissingByKey(
   ctx: MutationCtx,
   docs: Array<{ _id: Id<any> } & Record<string, unknown>>,
@@ -898,6 +919,17 @@ export const latestTimelineDate = query({
   },
 });
 
+export const getTimelineRange = query({
+  args: {
+    startDate: v.string(),
+    endDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await requireSessionIdentity(ctx);
+    return loadRemoteRangeForWorkspace(ctx, identity.workspaceId, args.startDate, args.endDate);
+  },
+});
+
 export const getWorkspaceStatus = query({
   args: {},
   handler: async (ctx) => {
@@ -967,5 +999,16 @@ export const getTimelineDayForWorkspace = internalQuery({
   },
   handler: async (ctx, args) => {
     return loadRemoteDayForWorkspace(ctx, args.workspaceId, args.localDate);
+  },
+});
+
+export const getTimelineRangeForWorkspace = internalQuery({
+  args: {
+    workspaceId: v.id("workspaces"),
+    startDate: v.string(),
+    endDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return loadRemoteRangeForWorkspace(ctx, args.workspaceId, args.startDate, args.endDate);
   },
 });

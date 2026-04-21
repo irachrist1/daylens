@@ -7,6 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { decrypt } from "./keys";
 import {
   SYSTEM_PROMPT,
+  buildRangeContext,
   buildDayContext,
   questionPrompt,
 } from "../packages/prompt-builder/index";
@@ -20,21 +21,78 @@ type AskQuestionResult = {
   model?: string;
 };
 
+type AskRange = "day" | "week" | "month";
+
+function toDateKey(date: Date) {
+  return date.toLocaleDateString("en-CA");
+}
+
+function getRangeBounds(localDate: string, range: AskRange) {
+  const next = new Date(`${localDate}T12:00:00`);
+  if (range === "week") {
+    const day = next.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    next.setDate(next.getDate() + diff);
+    const startDate = toDateKey(next);
+    next.setDate(next.getDate() + 6);
+    return { startDate, endDate: toDateKey(next) };
+  }
+
+  if (range === "month") {
+    next.setDate(1);
+    const startDate = toDateKey(next);
+    next.setMonth(next.getMonth() + 1, 0);
+    return { startDate, endDate: toDateKey(next) };
+  }
+
+  return { startDate: localDate, endDate: localDate };
+}
+
+function rangeLabel(localDate: string, range: AskRange) {
+  const date = new Date(`${localDate}T12:00:00`);
+  if (range === "week") {
+    const { startDate, endDate } = getRangeBounds(localDate, range);
+    return `the week of ${startDate} through ${endDate}`;
+  }
+  if (range === "month") {
+    return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
 export const askQuestion = action({
   args: {
     question: v.string(),
     date: v.string(),
+    range: v.optional(v.union(v.literal("day"), v.literal("week"), v.literal("month"))),
     threadId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<AskQuestionResult> => {
     const identity = await requireSessionIdentity(ctx);
-    const snapshotDoc = await ctx.runQuery(internal.remoteSync.getTimelineDayForWorkspace, {
-      workspaceId: identity.workspaceId,
-      localDate: args.date,
-    });
+    const range = args.range ?? "day";
+    const { startDate, endDate } = getRangeBounds(args.date, range);
+    const snapshotDocs = range === "day"
+      ? [await ctx.runQuery(internal.remoteSync.getTimelineDayForWorkspace, {
+          workspaceId: identity.workspaceId,
+          localDate: args.date,
+        })]
+      : await ctx.runQuery(internal.remoteSync.getTimelineRangeForWorkspace, {
+          workspaceId: identity.workspaceId,
+          startDate,
+          endDate,
+        });
 
-    if (!snapshotDoc?.snapshot) {
-      return { response: "No activity data found for this date." };
+    const snapshots = snapshotDocs
+      .filter((doc): doc is NonNullable<typeof doc> => Boolean(doc?.snapshot))
+      .map((doc) => doc.snapshot);
+
+    if (snapshots.length === 0) {
+      throw new Error("No activity data found for this date.");
     }
 
     // Load API key: try user's encrypted key first, fall back to server key
@@ -60,14 +118,13 @@ export const askQuestion = action({
     }
 
     if (!anthropicKey) {
-      return {
-        response:
-          "No API key configured. Add your Anthropic API key in Daylens settings in your desktop app.",
-      };
+      throw new Error("API key missing for Anthropic.");
     }
 
     // Build prompt using the shared prompt builder
-    const activityContext = buildDayContext(snapshotDoc.snapshot);
+    const activityContext = range === "day"
+      ? buildDayContext(snapshots[0])
+      : buildRangeContext(rangeLabel(args.date, range), snapshots);
     const userPrompt = questionPrompt(args.question, activityContext);
 
     // Call Anthropic API

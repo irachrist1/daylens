@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { ChatMessage } from "@/app/lib/chat";
 import { apiPath, withBasePath } from "@/app/lib/basePath";
 import { formatRelativeTime } from "@/app/lib/format";
+import { buildSurfaceHref, formatLongRangeLabel, type SurfaceRange } from "@/app/lib/range";
 import { sanitizeRecapSummary, type SanitizedRecap } from "@/app/lib/presentation";
 import type {
   ArtifactRollup,
@@ -66,10 +67,11 @@ function artifactKindLabel(kind: WorkspaceAIArtifact["kind"]) {
   }
 }
 
-function buildThreadHref(threadId: string, date?: string) {
+function buildThreadHref(threadId: string, date?: string, range: SurfaceRange = "day") {
   const params = new URLSearchParams();
   params.set("thread", threadId);
   if (date) params.set("date", date);
+  if (range !== "day") params.set("range", range);
   return withBasePath(`/chat?${params.toString()}`);
 }
 
@@ -103,7 +105,7 @@ function buildSurfaceError(code: ChatErrorCode | null, message: string): Surface
     case "no_data":
       return {
         code,
-        title: "No synced evidence for this date",
+        title: "No synced evidence for this range",
         message,
       };
     case "service_updating":
@@ -169,7 +171,7 @@ function RecapPanel({
           <p className="timeline-kicker">AI</p>
           <h1>{groundedLabel}</h1>
           <p className="ai-hero__summary">
-            {activeRecap?.headline ?? "No clean synced recap is available for this day yet. Daylens will show one here once the privacy-safe day summary is strong enough to trust."}
+            {activeRecap?.headline ?? "No clean recap is ready for this range yet."}
           </p>
         </div>
         <div className="ai-hero__switches">
@@ -234,11 +236,13 @@ export function GlobalChat({
   initialMessages,
   initialThreadId,
   date,
+  range = "day",
   initialPrompt,
 }: {
   initialMessages: ChatMessage[];
   initialThreadId?: string | null;
   date?: string;
+  range?: SurfaceRange;
   initialPrompt?: string;
 }) {
   const router = useRouter();
@@ -272,6 +276,10 @@ export function GlobalChat({
     month: Boolean(recapByPeriod.month),
   };
   const promptChips = recapByPeriod.day?.promptChips ?? [];
+
+  useEffect(() => {
+    setActiveRecapPeriod(range);
+  }, [range]);
 
   async function refreshThreads() {
     const response = await fetch(apiPath("/api/ai-threads"));
@@ -390,7 +398,7 @@ export function GlobalChat({
       const response = await fetch(apiPath("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, date, threadId }),
+        body: JSON.stringify({ messages: nextMessages, date, range, threadId }),
       });
       const data = await response.json();
 
@@ -504,7 +512,9 @@ export function GlobalChat({
     }
   }
 
-  const groundedLabel = date ? `Grounded on ${date}` : "Grounded on your latest synced day";
+  const groundedLabel = date
+    ? `Grounded on ${formatLongRangeLabel(date, range)}`
+    : "Grounded on your latest synced day";
 
   return (
     <div className="ai-layout">
@@ -537,7 +547,7 @@ export function GlobalChat({
                 setInput("");
                 setSurfaceError(null);
                 inputRef.current?.focus();
-                router.push(withBasePath(date ? `/chat?date=${date}` : "/chat"));
+                router.push(buildSurfaceHref("/chat", date ?? new Date().toLocaleDateString("en-CA"), range));
               }}
               className="daylens-secondary-button"
             >
@@ -557,7 +567,7 @@ export function GlobalChat({
           <div className="ai-chat__messages">
             {messages.length === 0 ? (
               <div className="ai-empty-state">
-                <p>Ask about your workday, dig into one block, or generate a report from synced evidence.</p>
+                <p>Ask about the proof, one block, or a report.</p>
                 {promptChips.length > 0 ? (
                   <div className="ai-prompt-row">
                     {promptChips.map((chip) => (
@@ -604,7 +614,7 @@ export function GlobalChat({
                   void sendMessage(input);
                 }
               }}
-              placeholder="Ask about your day, request a recap, or generate a report..."
+              placeholder={range === "day" ? "Ask about this day or make a report..." : `Ask about this ${range} or make a report...`}
               className="ai-composer__input"
               disabled={loading || artifactLoading !== null}
               rows={1}
@@ -674,25 +684,6 @@ export function GlobalChat({
           )}
         </section>
 
-        {(snapshotRecap?.standoutArtifacts.length ?? 0) > 0 ? (
-          <section className="ai-side__section">
-            <div className="ai-side__header">
-              <div>
-                <p className="timeline-kicker">Synced evidence</p>
-                <h3>Standout artifacts</h3>
-              </div>
-            </div>
-            <div className="ai-side__list">
-              {snapshotRecap?.standoutArtifacts.slice(0, 3).map((artifact) => (
-                <div key={artifact.id} className="ai-side__card">
-                  <p>{artifact.title}</p>
-                  <span>{artifact.kind}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
         <section className="ai-side__section">
           <div className="ai-side__header">
             <div>
@@ -711,7 +702,7 @@ export function GlobalChat({
                   <button
                     key={thread.workspaceThreadId}
                     type="button"
-                    onClick={() => router.push(buildThreadHref(thread.workspaceThreadId, date))}
+                    onClick={() => router.push(buildThreadHref(thread.workspaceThreadId, date, range))}
                     className={`ai-thread-card ${active ? "ai-thread-card--active" : ""}`}
                   >
                     <p>{thread.title}</p>

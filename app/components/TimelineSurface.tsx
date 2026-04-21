@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DaySnapshotV2, WorkBlockSummary } from "../../packages/remote-contract";
 import { AppIcon } from "@/app/components/AppIcon";
 import { CATEGORY_COLORS, CATEGORY_LABELS, formatDuration } from "@/app/lib/format";
+import { formatLongRangeLabel, type SurfaceRange } from "@/app/lib/range";
 import {
   appSummaryLookup,
+  mergeDaySnapshots,
   readableBlockLabel,
   sanitizeRecapSummary,
   shortDomainLabel,
@@ -19,11 +21,7 @@ import {
 } from "@/app/lib/presentation";
 
 function formatClockTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function blockDurationSeconds(block: WorkBlockSummary): number {
@@ -37,15 +35,7 @@ function metricLabel(category: string): string {
   return CATEGORY_LABELS[category] ?? category;
 }
 
-function InlineMetric({
-  value,
-  label,
-  live = false,
-}: {
-  value: string;
-  label: string;
-  live?: boolean;
-}) {
+function InlineMetric({ value, label, live = false }: { value: string; label: string; live?: boolean }) {
   return (
     <span className={`timeline-strip__item ${live ? "timeline-strip__item--live" : ""}`}>
       <strong>{value}</strong> {label}
@@ -53,15 +43,19 @@ function InlineMetric({
   );
 }
 
-function DaySummaryInspector({
+function SummaryInspector({
   snapshot,
-  date,
+  title,
+  kicker,
+  actionHref,
 }: {
   snapshot: DaySnapshotV2;
-  date: string;
+  title: string;
+  kicker: string;
+  actionHref?: string;
 }) {
   const recap = sanitizeRecapSummary(snapshot.recap?.day);
-  const mainBlocks = (snapshot.workBlocks ?? []).slice(0, 3);
+  const mainBlocks = (snapshot.workBlocks ?? []).slice(0, 4);
   const categoryTotals = [...(snapshot.categoryTotals ?? [])]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 4);
@@ -69,8 +63,8 @@ function DaySummaryInspector({
   return (
     <div className="timeline-inspector" data-timeline-keep-selection="true">
       <div className="timeline-inspector__header">
-        <p className="timeline-kicker">Day summary</p>
-        <h2>{new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`))}</h2>
+        <p className="timeline-kicker">{kicker}</p>
+        <h2>{title}</h2>
       </div>
 
       <div className="timeline-inspector__stats">
@@ -108,7 +102,7 @@ function DaySummaryInspector({
 
       {categoryTotals.length > 0 ? (
         <section className="timeline-inspector__section">
-          <p className="timeline-kicker">Where the day went</p>
+          <p className="timeline-kicker">Where the time went</p>
           <div className="timeline-inspector__list">
             {categoryTotals.map((item) => (
               <div key={item.category} className="timeline-metric-row">
@@ -133,9 +127,11 @@ function DaySummaryInspector({
           {snapshot.coverage?.coverageNote ? (
             <p className="timeline-note timeline-note--muted">{snapshot.coverage.coverageNote}</p>
           ) : null}
-          <Link href={`/chat?date=${date}`} className="timeline-inline-link">
-            Ask AI about this day
-          </Link>
+          {actionHref ? (
+            <Link href={actionHref} className="timeline-inline-link">
+              Ask AI
+            </Link>
+          ) : null}
         </section>
       ) : null}
     </div>
@@ -208,7 +204,7 @@ function BlockInspector({
 
       {visiblePages.length > 0 ? (
         <section className="timeline-inspector__section">
-          <p className="timeline-kicker">Relevant evidence</p>
+          <p className="timeline-kicker">Evidence</p>
           <div className="timeline-inspector__list">
             {visiblePages.map((page) => (
               <div key={`${block.id}:${page.domain}:${page.label}`} className="timeline-evidence-row">
@@ -269,7 +265,7 @@ function TimelineRow({
               <p className="timeline-row__title">{readableBlockLabel(block)}</p>
               {supportingLine ? <p className="timeline-row__support">{supportingLine}</p> : null}
             </div>
-            <span className="timeline-pill" style={{ color: accent, backgroundColor: `${accent}1c` }}>
+            <span className="timeline-pill" style={{ color: accent, backgroundColor: `${accent}18` }}>
               {metricLabel(block.dominantCategory)}
             </span>
           </div>
@@ -315,18 +311,39 @@ function TimelineRow({
 }
 
 export function TimelineSurface({
-  snapshot,
-  date,
+  snapshots,
+  anchorDate,
+  range,
   liveLabel,
 }: {
-  snapshot: DaySnapshotV2;
-  date: string;
+  snapshots: Array<{ localDate: string; snapshot: DaySnapshotV2 }>;
+  anchorDate: string;
+  range: SurfaceRange;
   liveLabel?: string | null;
 }) {
   const shellRef = useRef<HTMLElement | null>(null);
+  const orderedDays = useMemo(
+    () => [...snapshots].sort((left, right) => right.localDate.localeCompare(left.localDate)),
+    [snapshots],
+  );
+  const mergedSnapshot = useMemo(
+    () => mergeDaySnapshots(orderedDays.map((day) => day.snapshot), anchorDate),
+    [anchorDate, orderedDays],
+  );
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const selectedBlock = snapshot.workBlocks?.find((block) => block.id === selectedBlockId) ?? null;
-  const recap = sanitizeRecapSummary(snapshot.recap?.day);
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(orderedDays[0]?.localDate ?? null);
+
+  useEffect(() => {
+    setSelectedDayDate(orderedDays[0]?.localDate ?? null);
+    setSelectedBlockId(null);
+  }, [orderedDays, range, anchorDate]);
+
+  const selectedDay =
+    orderedDays.find((day) => day.localDate === selectedDayDate) ??
+    orderedDays[0] ??
+    null;
+  const selectedBlock =
+    mergedSnapshot.workBlocks.find((block) => block.id === selectedBlockId) ?? null;
 
   useEffect(() => {
     if (!selectedBlockId) return;
@@ -334,7 +351,6 @@ export function TimelineSurface({
     function handlePointerDown(event: PointerEvent) {
       const target = event.target;
       if (!(target instanceof Node)) return;
-
       const shell = shellRef.current;
       if (!shell) return;
 
@@ -356,52 +372,96 @@ export function TimelineSurface({
     };
   }, [selectedBlockId]);
 
+  if (orderedDays.length === 0) {
+    return (
+      <section className="timeline-shell">
+        <div className="timeline-empty">
+          <h2>No tracked activity yet</h2>
+          <p>The proof feed will appear here once Daylens has synced activity for this range.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const askAiHref =
+    range === "day"
+      ? `/chat?date=${anchorDate}`
+      : `/chat?date=${anchorDate}&range=${range}`;
+
   return (
     <section className="timeline-shell" ref={shellRef}>
       <div className="timeline-strip">
-        <InlineMetric value={formatDuration(trackedSeconds(snapshot))} label="tracked" />
-        <InlineMetric value={formatDuration(snapshot.focusSeconds)} label="focused" />
-        <InlineMetric value={`${snapshot.workBlocks?.length ?? 0}`} label={`block${snapshot.workBlocks?.length === 1 ? "" : "s"}`} />
-        <InlineMetric value={`${visibleAppCount(snapshot)}`} label={`app${visibleAppCount(snapshot) === 1 ? "" : "s"}`} />
-        <InlineMetric value={`${visibleSiteCount(snapshot)}`} label={`site${visibleSiteCount(snapshot) === 1 ? "" : "s"}`} />
+        <InlineMetric value={formatDuration(trackedSeconds(mergedSnapshot))} label="tracked" />
+        <InlineMetric value={formatDuration(mergedSnapshot.focusSeconds)} label="focused" />
+        <InlineMetric value={`${mergedSnapshot.workBlocks.length}`} label={`block${mergedSnapshot.workBlocks.length === 1 ? "" : "s"}`} />
+        <InlineMetric value={`${visibleAppCount(mergedSnapshot)}`} label={`app${visibleAppCount(mergedSnapshot) === 1 ? "" : "s"}`} />
+        <InlineMetric value={`${visibleSiteCount(mergedSnapshot)}`} label={`site${visibleSiteCount(mergedSnapshot) === 1 ? "" : "s"}`} />
         {liveLabel ? <InlineMetric value={liveLabel} label="live now" live /> : null}
       </div>
 
-      {(snapshot.workBlocks?.length ?? 0) === 0 ? (
-        <div className="timeline-empty">
-          <h2>No tracked activity for this day</h2>
-          <p>Once synced foreground activity exists for this date, the chronological proof feed will appear here automatically.</p>
-        </div>
-      ) : (
-        <div className="timeline-grid">
-          <div className="timeline-feed">
-            {snapshot.workBlocks.map((block) => (
-              <TimelineRow
-                key={block.id}
-                block={block}
-                snapshot={snapshot}
-                isSelected={selectedBlock?.id === block.id}
-                onSelect={() => setSelectedBlockId((current) => (current === block.id ? null : block.id))}
-              />
-            ))}
-          </div>
+      <div className="timeline-grid">
+        <div className="timeline-feed">
+          {orderedDays.map((day) => (
+            <section key={day.localDate} className={`timeline-day-group ${selectedDay?.localDate === day.localDate ? "timeline-day-group--active" : ""}`}>
+              {range !== "day" ? (
+                <button
+                  type="button"
+                  className="timeline-day-group__header"
+                  onClick={() => {
+                    setSelectedDayDate(day.localDate);
+                    setSelectedBlockId(null);
+                  }}
+                  data-timeline-keep-selection="true"
+                >
+                  <div>
+                    <p className="timeline-day-group__title">{formatLongRangeLabel(day.localDate, "day")}</p>
+                    <span>{formatDuration(trackedSeconds(day.snapshot))} tracked · {day.snapshot.workBlocks.length} blocks</span>
+                  </div>
+                  <strong>{formatDuration(day.snapshot.focusSeconds)}</strong>
+                </button>
+              ) : null}
 
-          <div className="timeline-rail">
-            {selectedBlock ? (
-              <BlockInspector block={selectedBlock} snapshot={snapshot} />
-            ) : (
-              <DaySummaryInspector snapshot={snapshot} date={date} />
-            )}
-            {!selectedBlock && recap && recap.chapters.length > 0 ? (
-              <div className="timeline-rail-note">
-                <p className="timeline-kicker">Recap beat</p>
-                <p>{recap.chapters[0]?.title}</p>
-                <span>{recap.chapters[0]?.body}</span>
+              <div className="timeline-day-group__rows">
+                {day.snapshot.workBlocks.map((block) => {
+                  const compositeId = `${day.localDate}:${block.id}`;
+                  return (
+                    <TimelineRow
+                      key={compositeId}
+                      block={{ ...block, id: compositeId }}
+                      snapshot={day.snapshot}
+                      isSelected={selectedBlock?.id === compositeId}
+                      onSelect={() => {
+                        setSelectedDayDate(day.localDate);
+                        setSelectedBlockId((current) => (current === compositeId ? null : compositeId));
+                      }}
+                    />
+                  );
+                })}
               </div>
-            ) : null}
-          </div>
+            </section>
+          ))}
         </div>
-      )}
+
+        <div className="timeline-rail">
+          {selectedBlock ? (
+            <BlockInspector block={selectedBlock} snapshot={mergedSnapshot} />
+          ) : selectedDay ? (
+            <SummaryInspector
+              snapshot={selectedDay.snapshot}
+              title={formatLongRangeLabel(selectedDay.localDate, "day")}
+              kicker={range === "day" ? "Day summary" : "Selected day"}
+              actionHref={askAiHref}
+            />
+          ) : (
+            <SummaryInspector
+              snapshot={mergedSnapshot}
+              title={formatLongRangeLabel(anchorDate, range)}
+              kicker="Range summary"
+              actionHref={askAiHref}
+            />
+          )}
+        </div>
+      </div>
     </section>
   );
 }

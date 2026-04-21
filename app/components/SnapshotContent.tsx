@@ -26,5 +26,11 @@ export function SnapshotContent({ snapshot, date }: SnapshotContentProps) {
     );
   }
 
-  return <TimelineSurface snapshot={snapshot as unknown as DaySnapshotV2} date={date} />;
+  return (
+    <TimelineSurface
+      snapshots={[{ localDate: date, snapshot: snapshot as unknown as DaySnapshotV2 }]}
+      anchorDate={date}
+      range="day"
+    />
+  );
 }

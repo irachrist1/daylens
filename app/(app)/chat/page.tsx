@@ -9,7 +9,7 @@ import type { WorkspaceAIMessage } from "../../../packages/remote-contract";
 export default async function ChatPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string | string[]; prompt?: string | string[]; thread?: string | string[] }>;
+  searchParams: Promise<{ date?: string | string[]; prompt?: string | string[]; thread?: string | string[]; range?: string | string[] }>;
 }) {
   const session = await getSession();
   if (!session) {
@@ -21,6 +21,7 @@ export default async function ChatPage({
   const dateParam = resolvedSearchParams?.date;
   const promptParam = resolvedSearchParams?.prompt;
   const threadParam = resolvedSearchParams?.thread;
+  const rangeParam = resolvedSearchParams?.range;
   const date =
     typeof dateParam === "string"
       ? dateParam
@@ -38,6 +39,12 @@ export default async function ChatPage({
       ? threadParam
       : Array.isArray(threadParam)
         ? threadParam[0]
+        : undefined;
+  const range =
+    typeof rangeParam === "string"
+      ? rangeParam
+      : Array.isArray(rangeParam)
+        ? rangeParam[0]
         : undefined;
 
   const threadPayload = selectedThreadId
@@ -58,6 +65,7 @@ export default async function ChatPage({
         initialMessages={initialMessages}
         initialThreadId={threadPayload.thread?.workspaceThreadId ?? null}
         date={date}
+        range={range === "week" || range === "month" ? range : "day"}
         initialPrompt={prompt}
       />
     </div>

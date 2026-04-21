@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Poller } from "@/app/components/Poller";
 
 type NavDef = {
@@ -66,14 +67,25 @@ function isActivePath(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function NavItem({ item, pathname, compact = false }: { item: NavDef; pathname: string; compact?: boolean }) {
+function NavItem({
+  item,
+  pathname,
+  compact = false,
+  collapsed = false,
+}: {
+  item: NavDef;
+  pathname: string;
+  compact?: boolean;
+  collapsed?: boolean;
+}) {
   const active = isActivePath(pathname, item.href);
 
   return (
     <Link
       href={item.href}
-      className={`daylens-nav-item ${active ? "daylens-nav-item--active" : ""} ${compact ? "daylens-nav-item--compact" : ""}`}
+      className={`daylens-nav-item ${active ? "daylens-nav-item--active" : ""} ${compact ? "daylens-nav-item--compact" : ""} ${collapsed ? "daylens-nav-item--collapsed" : ""}`}
       aria-current={active ? "page" : undefined}
+      title={collapsed ? item.label : undefined}
     >
       <span className="daylens-nav-item__icon">{item.icon}</span>
       <span className="daylens-nav-item__label">{item.label}</span>
@@ -83,22 +95,53 @@ function NavItem({ item, pathname, compact = false }: { item: NavDef; pathname: 
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("daylens-web:sidebar-collapsed");
+    if (stored === "1") {
+      setCollapsed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("daylens-web:sidebar-collapsed", collapsed ? "1" : "0");
+  }, [collapsed]);
 
   return (
-    <div className="daylens-shell">
+    <div className={`daylens-shell ${collapsed ? "daylens-shell--collapsed" : ""}`}>
       <div className="glass-bg" aria-hidden="true" />
       <aside className="daylens-sidebar">
-        <Link href="/dashboard" className="daylens-brand">
-          <Image src="/app-icon.png" alt="Daylens" width={30} height={30} style={{ borderRadius: 8 }} />
-          <span>Daylens</span>
-        </Link>
-        <nav className="daylens-sidebar__nav">
-          {PRIMARY_NAV.map((item) => (
-            <NavItem key={item.href} item={item} pathname={pathname} />
-          ))}
-        </nav>
-        <div className="daylens-sidebar__footer">
-          <NavItem item={{ href: "/settings", label: "Settings", icon: <IconSettings /> }} pathname={pathname} />
+        <div className="daylens-sidebar__frame">
+          <div className="daylens-sidebar__header">
+            <Link href="/dashboard" className="daylens-brand" title="Daylens">
+              <Image src="/app-icon.png" alt="Daylens" width={30} height={30} style={{ borderRadius: 8 }} />
+              <span>Daylens</span>
+            </Link>
+            <button
+              type="button"
+              className="daylens-sidebar__toggle"
+              onClick={() => setCollapsed((current) => !current)}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                {collapsed ? <path d="m6 3.5 4.5 4.5L6 12.5" /> : <path d="M10 3.5 5.5 8 10 12.5" />}
+              </svg>
+            </button>
+          </div>
+          <nav className="daylens-sidebar__nav">
+            {PRIMARY_NAV.map((item) => (
+              <NavItem key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
+            ))}
+          </nav>
+          <div className="daylens-sidebar__footer">
+            <NavItem
+              item={{ href: "/settings", label: "Settings", icon: <IconSettings /> }}
+              pathname={pathname}
+              collapsed={collapsed}
+            />
+          </div>
         </div>
       </aside>
 

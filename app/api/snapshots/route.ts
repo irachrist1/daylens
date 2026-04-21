@@ -11,6 +11,8 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const date = searchParams.get("date");
+  const from = searchParams.get("from");
+  const to = searchParams.get("to");
   const full = searchParams.get("full");
 
   const client = getConvexClient(session.token);
@@ -20,6 +22,14 @@ export async function GET(request: NextRequest) {
       localDate: date,
     });
     return NextResponse.json({ snapshot });
+  }
+
+  if (from && to) {
+    const snapshots = await client.query(api.remoteSync.getTimelineRange, {
+      startDate: from,
+      endDate: to,
+    });
+    return NextResponse.json({ snapshots });
   }
 
   if (full === "1") {

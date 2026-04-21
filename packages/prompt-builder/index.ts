@@ -223,6 +223,101 @@ export function buildDayContext(snapshot: DaySnapshot): string {
   return context;
 }
 
+export function buildRangeContext(
+  label: string,
+  snapshots: DaySnapshot[],
+): string {
+  if (snapshots.length === 0) {
+    return `## Activity Data for ${label}\n\nNo synced activity data was available for this range.\n`;
+  }
+
+  const ordered = [...snapshots].sort((left, right) => left.date.localeCompare(right.date));
+  const totalSeconds = ordered.reduce(
+    (sum, snapshot) => sum + snapshot.categoryTotals.reduce((inner, category) => inner + category.totalSeconds, 0),
+    0,
+  );
+  const totalFocusSeconds = ordered.reduce((sum, snapshot) => sum + snapshot.focusSeconds, 0);
+  const totalBlocks = ordered.reduce(
+    (sum, snapshot) => sum + (isSnapshotV2(snapshot) ? snapshot.workBlocks.length : 0),
+    0,
+  );
+
+  const topApps = new Map<string, number>();
+  const topDomains = new Map<string, number>();
+  const topCategories = new Map<string, number>();
+
+  for (const snapshot of ordered) {
+    for (const app of snapshot.appSummaries) {
+      topApps.set(app.displayName, (topApps.get(app.displayName) ?? 0) + app.totalSeconds);
+    }
+    for (const domain of snapshot.topDomains) {
+      topDomains.set(domain.domain, (topDomains.get(domain.domain) ?? 0) + domain.seconds);
+    }
+    for (const category of snapshot.categoryTotals) {
+      const label = CATEGORY_LABELS[category.category] || category.category;
+      topCategories.set(label, (topCategories.get(label) ?? 0) + category.totalSeconds);
+    }
+  }
+
+  let context = `## Activity Data for ${label}\n\n`;
+  context += "### Overview\n";
+  context += `- Total active time: ${formatDuration(totalSeconds)}\n`;
+  context += `- Focus time: ${formatDuration(totalFocusSeconds)}\n`;
+  context += `- Synced days included: ${ordered.length}\n`;
+  context += `- Work blocks included: ${totalBlocks}\n\n`;
+
+  if (topCategories.size > 0) {
+    context += "### Category Breakdown\n";
+    [...topCategories.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 6)
+      .forEach(([category, seconds], index) => {
+        context += `${index + 1}. ${category} — ${formatDuration(seconds)}\n`;
+      });
+    context += "\n";
+  }
+
+  if (topApps.size > 0) {
+    context += "### Top Apps\n";
+    [...topApps.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 8)
+      .forEach(([app, seconds], index) => {
+        context += `${index + 1}. ${app} — ${formatDuration(seconds)}\n`;
+      });
+    context += "\n";
+  }
+
+  if (topDomains.size > 0) {
+    context += "### Top Websites\n";
+    [...topDomains.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 8)
+      .forEach(([domain, seconds], index) => {
+        context += `${index + 1}. ${domain} — ${formatDuration(seconds)}\n`;
+      });
+    context += "\n";
+  }
+
+  context += "### Day By Day\n";
+  ordered.forEach((snapshot) => {
+    const dateLabel = new Date(`${snapshot.date}T12:00:00`).toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    if (isSnapshotV2(snapshot)) {
+      const headline = snapshot.recap.day.hasData ? snapshot.recap.day.headline : "No clean recap was available.";
+      context += `- ${dateLabel}: ${formatDuration(snapshot.focusSeconds)} focus across ${snapshot.workBlocks.length} blocks. ${headline}\n`;
+    } else {
+      context += `- ${dateLabel}: ${formatDuration(snapshot.focusSeconds)} focus.\n`;
+    }
+  });
+  context += "\n";
+
+  return context;
+}
+
 // ─── Prompt templates (matching macOS exactly) ──────────────────────
 
 export function dailySummaryPrompt(activityContext: string): string {
