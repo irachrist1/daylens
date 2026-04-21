@@ -1,4 +1,4 @@
-export const BASE_PATH = "/daylens";
+export const BASE_PATH = process.env.NODE_ENV === "production" ? "/daylens" : "";
 
 function normalizePath(path: string): string {
   if (!path.startsWith("/")) {
@@ -9,6 +9,9 @@ function normalizePath(path: string): string {
 
 export function withBasePath(path: string): string {
   const normalizedPath = normalizePath(path);
+  if (!BASE_PATH) {
+    return normalizedPath;
+  }
   if (normalizedPath === BASE_PATH || normalizedPath.startsWith(`${BASE_PATH}/`)) {
     return normalizedPath;
   }
@@ -17,6 +20,9 @@ export function withBasePath(path: string): string {
 
 export function stripBasePath(path: string): string {
   const normalizedPath = normalizePath(path);
+  if (!BASE_PATH) {
+    return normalizedPath;
+  }
   if (normalizedPath === BASE_PATH) {
     return "/";
   }

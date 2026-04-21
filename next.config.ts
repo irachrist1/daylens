@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
+const basePath = process.env.NODE_ENV === "production" ? "/daylens" : "";
+
 const nextConfig: NextConfig = {
-  basePath: "/daylens",
+  basePath,
+  skipTrailingSlashRedirect: true,
   async redirects() {
     return [
       {
@@ -45,7 +48,7 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https://www.google.com https://t2.gstatic.com",
+              "img-src 'self' data: blob: https://www.google.com https://*.gstatic.com https://*.googleusercontent.com",
               "font-src 'self'",
               "connect-src 'self' https://*.convex.cloud https://*.convex.site",
               "frame-ancestors 'none'",

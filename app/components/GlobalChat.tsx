@@ -153,7 +153,6 @@ function RecapPanel({
   promptChips,
   onPromptClick,
   groundedLabel,
-  availablePeriods,
 }: {
   activeRecap: SanitizedRecap | null;
   activePeriod: RecapPeriod;
@@ -162,7 +161,6 @@ function RecapPanel({
   promptChips: string[];
   onPromptClick: (prompt: string) => void;
   groundedLabel: string;
-  availablePeriods: Record<RecapPeriod, boolean>;
 }) {
   return (
     <section className="ai-hero glass-card">
@@ -269,11 +267,6 @@ export function GlobalChat({
     [snapshotRecap],
   );
   const activeRecap = recapByPeriod[activeRecapPeriod];
-  const availablePeriods: Record<RecapPeriod, boolean> = {
-    day: Boolean(recapByPeriod.day),
-    week: Boolean(recapByPeriod.week),
-    month: Boolean(recapByPeriod.month),
-  };
   const promptChips = recapByPeriod.day?.promptChips ?? [];
 
   useEffect(() => {
@@ -364,18 +357,6 @@ export function GlobalChat({
       cancelled = true;
     };
   }, [date]);
-
-  useEffect(() => {
-    if (activeRecapPeriod !== "day" && !recapByPeriod[activeRecapPeriod]) {
-      if (recapByPeriod.day) {
-        setActiveRecapPeriod("day");
-      } else if (recapByPeriod.week) {
-        setActiveRecapPeriod("week");
-      } else if (recapByPeriod.month) {
-        setActiveRecapPeriod("month");
-      }
-    }
-  }, [activeRecapPeriod, recapByPeriod]);
 
   async function sendMessage(content: string) {
     if (!content.trim() || loading) return;
@@ -529,7 +510,6 @@ export function GlobalChat({
             inputRef.current?.focus();
           }}
           groundedLabel={groundedLabel}
-          availablePeriods={availablePeriods}
         />
 
         <section className="ai-chat glass-card">
