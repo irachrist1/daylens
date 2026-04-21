@@ -27,7 +27,9 @@ export function stripBasePath(path: string): string {
 }
 
 export function appPath(path: string): string {
-  return withBasePath(path);
+  // For Next.js app navigation helpers such as Link, router.push, and redirect.
+  // Next applies `basePath` automatically for these internal routes.
+  return normalizePath(path);
 }
 
 export function apiPath(path: string): string {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ChatMessage } from "@/app/lib/chat";
-import { apiPath, withBasePath } from "@/app/lib/basePath";
+import { apiPath, appPath } from "@/app/lib/basePath";
 import { formatRelativeTime } from "@/app/lib/format";
 import { buildSurfaceHref, formatLongRangeLabel, type SurfaceRange } from "@/app/lib/range";
 import { sanitizeRecapSummary, type SanitizedRecap } from "@/app/lib/presentation";
@@ -72,7 +72,7 @@ function buildThreadHref(threadId: string, date?: string, range: SurfaceRange = 
   params.set("thread", threadId);
   if (date) params.set("date", date);
   if (range !== "day") params.set("range", range);
-  return withBasePath(`/chat?${params.toString()}`);
+  return appPath(`/chat?${params.toString()}`);
 }
 
 function friendlyError(fallback: string, error: unknown): string {
