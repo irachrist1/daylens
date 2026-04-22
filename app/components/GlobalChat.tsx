@@ -567,11 +567,15 @@ export function GlobalChat({
     const input = inputRef.current;
     if (!input) return;
 
-    input.style.height = "0px";
+    input.style.height = "auto";
     const lineHeight = Number.parseFloat(window.getComputedStyle(input).lineHeight) || 22;
-    const maxHeight = lineHeight * MAX_COMPOSER_LINES;
+    const paddingTop = Number.parseFloat(window.getComputedStyle(input).paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(window.getComputedStyle(input).paddingBottom) || 0;
+    const verticalPadding = paddingTop + paddingBottom;
+    const minHeight = lineHeight + verticalPadding;
+    const maxHeight = lineHeight * MAX_COMPOSER_LINES + verticalPadding;
     const nextHeight = Math.min(input.scrollHeight, maxHeight);
-    input.style.height = `${Math.max(nextHeight, lineHeight)}px`;
+    input.style.height = `${Math.max(nextHeight, minHeight)}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [input]);
 

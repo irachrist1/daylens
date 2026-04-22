@@ -10799,16 +10799,18 @@ body:has(.daylens-shell) .glass-bg::after {
 }
 .daylens-shell .ai-composer-bar__input {
   flex: 1;
-  min-height: 22px;
+  min-height: 30px;
   max-height: 140px;
-  padding: 0 2px;
+  padding: 4px 2px;
   border: 0;
   background: transparent;
   color: #1f2633;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.45;
   resize: none;
   outline: none;
+  box-sizing: border-box;
+  display: block;
 }
 .daylens-shell .ai-composer-bar__input::placeholder {
   color: rgba(31, 38, 51, 0.40);
