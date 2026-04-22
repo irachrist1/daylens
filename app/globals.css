@@ -10655,3 +10655,430 @@ body:has(.daylens-shell) .glass-bg::after {
 .daylens-shell .ai-layout {
   display: none;
 }
+
+/* =========================================================================
+   SETTINGS PAGE (desktop-match)
+   ========================================================================= */
+
+.daylens-shell .settings-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px 40px 40px;
+  display: grid;
+  gap: 20px;
+  box-sizing: border-box;
+  width: 100%;
+}
+.daylens-shell .settings-shell__title {
+  font-size: 30px;
+  font-weight: 780;
+  letter-spacing: -0.03em;
+  color: #1f2633;
+  margin: 0;
+  line-height: 1.05;
+}
+.daylens-shell .settings-card {
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  padding: 22px;
+  display: grid;
+  gap: 20px;
+}
+.daylens-shell .settings-card h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 750;
+  color: #1f2633;
+  letter-spacing: -0.01em;
+}
+.daylens-shell .settings-card > .settings-card__header p,
+.daylens-shell .settings-card p {
+  margin: 6px 0 0;
+  color: rgba(31, 38, 51, 0.55);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.daylens-shell .settings-card h2 + p {
+  margin-top: 6px;
+}
+.daylens-shell .settings-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(17, 24, 39, 0.06);
+}
+.daylens-shell .settings-card > .settings-card__header + .settings-row {
+  border-top: 0;
+  padding-top: 4px;
+}
+.daylens-shell .settings-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+.daylens-shell .settings-row__copy {
+  min-width: 0;
+}
+.daylens-shell .settings-row__title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #1f2633;
+}
+.daylens-shell .settings-row__detail {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: rgba(31, 38, 51, 0.55);
+  line-height: 1.55;
+}
+.daylens-shell .settings-row__detail strong {
+  color: #1f2633;
+  font-weight: 700;
+}
+.daylens-shell .settings-row__actions,
+.daylens-shell .settings-row__form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.daylens-shell .settings-row__form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+.daylens-shell .settings-input {
+  flex: 1;
+  min-width: 220px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  background: #ffffff;
+  color: #1f2633;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+.daylens-shell .settings-input:focus {
+  border-color: #4d8eff;
+  box-shadow: 0 0 0 3px rgba(77, 142, 255, 0.16);
+}
+.daylens-shell .settings-button {
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: #ffffff;
+  color: #1f2633;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms, color 140ms;
+}
+.daylens-shell .settings-button:hover:not(:disabled) {
+  background: #f3f4f6;
+  border-color: rgba(17, 24, 39, 0.18);
+}
+.daylens-shell .settings-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.daylens-shell .settings-button--primary {
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+  border: 0;
+}
+.daylens-shell .settings-button--primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #9bb8ff, #3a7dff);
+  color: #ffffff;
+}
+.daylens-shell .settings-button--danger {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.24);
+}
+.daylens-shell .settings-button--danger:hover:not(:disabled) {
+  background: rgba(185, 28, 28, 0.08);
+  border-color: rgba(185, 28, 28, 0.32);
+}
+
+.daylens-shell .settings-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.daylens-shell .settings-model-card {
+  position: relative;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  transition: border-color 140ms, background 140ms, box-shadow 140ms;
+}
+.daylens-shell .settings-model-card:hover {
+  border-color: rgba(17, 24, 39, 0.18);
+  background: #fafafa;
+}
+.daylens-shell .settings-model-card.is-active {
+  border-color: #4d8eff;
+  background: #f3f7ff;
+  box-shadow: 0 0 0 1px rgba(77, 142, 255, 0.35) inset;
+}
+.daylens-shell .settings-model-card__label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #1f2633;
+}
+.daylens-shell .settings-model-card__hint {
+  font-size: 12px;
+  color: rgba(31, 38, 51, 0.55);
+  line-height: 1.5;
+}
+.daylens-shell .settings-model-card__check {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  color: #4d8eff;
+  font-weight: 800;
+  font-size: 13px;
+}
+.daylens-shell .settings-save-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #0f766e;
+  font-weight: 600;
+}
+
+/* Keep the older glass-card / rounded-2xl sections from the settings page
+   looking consistent with the new settings-card style */
+.daylens-shell .settings-shell .glass-card,
+.daylens-shell .settings-shell section.rounded-2xl {
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  border-radius: 18px;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.daylens-shell .settings-shell section h2 {
+  color: #1f2633;
+}
+
+/* =========================================================================
+   MOBILE RESPONSIVENESS — below 720px tune padding, stack grids, enable
+   the bottom nav + top brand, hide the permanent sidebar.
+   ========================================================================= */
+
+@media (max-width: 960px) {
+  .daylens-shell .daylens-sidebar {
+    display: none;
+  }
+  .daylens-shell .daylens-shell__content {
+    padding-left: 0 !important;
+  }
+  .daylens-shell .daylens-mobile-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px 8px;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: #ffffff;
+    border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+  }
+  .daylens-shell .daylens-mobile-top .daylens-brand--mobile {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: #1f2633;
+  }
+  .daylens-shell .daylens-mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    background: rgba(255, 255, 255, 0.96);
+    border-top: 1px solid rgba(17, 24, 39, 0.08);
+    backdrop-filter: saturate(1.2);
+    -webkit-backdrop-filter: saturate(1.2);
+  }
+  .daylens-shell .daylens-nav-item--compact {
+    padding: 8px 4px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    flex-direction: column;
+    gap: 2px;
+    color: rgba(31, 38, 51, 0.65);
+    font-weight: 500;
+  }
+  .daylens-shell .daylens-nav-item--compact .daylens-nav-item__icon {
+    width: 20px;
+    height: 20px;
+  }
+  .daylens-shell .daylens-nav-item--compact .daylens-nav-item__label {
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .daylens-shell .daylens-nav-item--compact.daylens-nav-item--active {
+    background: #f3f4f6;
+    border-color: rgba(17, 24, 39, 0.08);
+    color: #1f2633;
+  }
+  .daylens-shell .daylens-main {
+    padding-bottom: 72px;
+  }
+}
+
+@media (max-width: 720px) {
+  .daylens-shell .timeline-shell-outer {
+    padding: 14px 14px 24px;
+  }
+  .daylens-shell .timeline-topbar {
+    gap: 10px;
+  }
+  .daylens-shell .timeline-topbar__date span {
+    padding: 6px 14px;
+    font-size: 12.5px;
+  }
+  .daylens-shell .timeline-strip {
+    gap: 2px 14px;
+    font-size: 12.5px;
+  }
+  .daylens-shell .timeline-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .daylens-shell .timeline-row {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .daylens-shell .timeline-row__card-inner {
+    padding: 12px 14px 12px 16px;
+  }
+  .daylens-shell .timeline-row__title {
+    font-size: 14px;
+  }
+  .daylens-shell .timeline-gap-row {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .daylens-shell .timeline-inspector {
+    padding: 18px;
+    top: 12px;
+  }
+
+  .daylens-shell .ai-shell {
+    padding: 16px 14px 12px;
+  }
+  .daylens-shell .ai-shell__header {
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .daylens-shell .ai-shell__heading h1 {
+    font-size: 24px;
+  }
+  .daylens-shell .ai-shell__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .daylens-shell .ai-recap__header {
+    padding: 18px 16px 10px;
+  }
+  .daylens-shell .ai-recap__headline {
+    padding: 0 16px 14px;
+    font-size: 13.5px;
+  }
+  .daylens-shell .ai-recap__toggle {
+    align-self: flex-start;
+  }
+  .daylens-shell .ai-recap__title {
+    font-size: 20px;
+  }
+  .daylens-shell .ai-recap-chapter {
+    grid-template-columns: 36px minmax(0, 1fr);
+    padding: 14px 16px;
+    gap: 10px;
+  }
+  .daylens-shell .ai-recap__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 14px 16px;
+  }
+  .daylens-shell .ai-recap__prompts {
+    padding: 14px 16px 18px;
+  }
+  .daylens-shell .ai-generate-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 14px 16px;
+  }
+  .daylens-shell .ai-generate-card__cta {
+    width: 100%;
+    text-align: center;
+  }
+  .daylens-shell .ai-user-bubble {
+    max-width: 92%;
+  }
+  .daylens-shell .ai-composer-bar {
+    margin-top: 10px;
+    bottom: 8px;
+  }
+
+  .daylens-shell .settings-shell {
+    padding: 16px 14px 40px;
+  }
+  .daylens-shell .settings-shell__title {
+    font-size: 24px;
+  }
+  .daylens-shell .settings-card {
+    padding: 16px;
+    gap: 14px;
+  }
+  .daylens-shell .settings-row__form {
+    flex-direction: column;
+  }
+  .daylens-shell .settings-input {
+    width: 100%;
+    min-width: 0;
+  }
+  .daylens-shell .settings-row__form-actions,
+  .daylens-shell .settings-row__actions {
+    width: 100%;
+  }
+  .daylens-shell .settings-row__form-actions .settings-button,
+  .daylens-shell .settings-row__actions .settings-button {
+    flex: 1;
+  }
+  .daylens-shell .settings-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .daylens-shell .timeline-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .daylens-shell .timeline-row__rail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding-top: 2px;
+  }
+  .daylens-shell .timeline-gap-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .daylens-shell .timeline-gap-row__rail {
+    display: flex;
+    gap: 8px;
+  }
+}

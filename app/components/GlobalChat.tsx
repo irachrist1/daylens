@@ -378,10 +378,25 @@ export function GlobalChat({
     setSurfaceError(null);
 
     try {
+      const userApiKey =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("daylens-web:anthropic-api-key") || undefined
+          : undefined;
+      const model =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("daylens-web:anthropic-model") || undefined
+          : undefined;
       const response = await fetch(apiPath("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, date, range, threadId }),
+        body: JSON.stringify({
+          messages: nextMessages,
+          date,
+          range,
+          threadId,
+          userApiKey,
+          model,
+        }),
       });
       const data = await response.json();
 

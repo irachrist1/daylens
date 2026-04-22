@@ -71,6 +71,8 @@ export const askQuestion = action({
     date: v.string(),
     range: v.optional(v.union(v.literal("day"), v.literal("week"), v.literal("month"))),
     threadId: v.optional(v.string()),
+    userApiKey: v.optional(v.string()),
+    model: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<AskQuestionResult> => {
     const identity = await requireSessionIdentity(ctx);
@@ -95,22 +97,31 @@ export const askQuestion = action({
       throw new Error("No activity data found for this date.");
     }
 
-    // Load API key: try user's encrypted key first, fall back to server key
+    // Resolution order for the Anthropic API key:
+    // 1. Key supplied by the web client (BYO key stored in-browser)
+    // 2. Key encrypted in Convex (set by the desktop app)
+    // 3. Server-wide ANTHROPIC_API_KEY env
     let anthropicKey: string | undefined;
 
-    try {
-      const keyDocs = await ctx.runQuery(internal.encryptedKeys.getByWorkspace, {
-        workspaceId: identity.workspaceId,
-      });
+    if (args.userApiKey && args.userApiKey.trim()) {
+      anthropicKey = args.userApiKey.trim();
+    }
 
-      if (keyDocs) {
-        anthropicKey = decrypt(
-          keyDocs.encryptedAnthropicKey,
-          identity.workspaceId
-        );
+    if (!anthropicKey) {
+      try {
+        const keyDocs = await ctx.runQuery(internal.encryptedKeys.getByWorkspace, {
+          workspaceId: identity.workspaceId,
+        });
+
+        if (keyDocs) {
+          anthropicKey = decrypt(
+            keyDocs.encryptedAnthropicKey,
+            identity.workspaceId
+          );
+        }
+      } catch {
+        // Decryption failed — fall through to server key
       }
-    } catch {
-      // Decryption failed — fall through to server key
     }
 
     if (!anthropicKey) {
@@ -129,7 +140,7 @@ export const askQuestion = action({
 
     // Call Anthropic API
     const client = new Anthropic({ apiKey: anthropicKey });
-    const model = "claude-sonnet-4-6";
+    const model = args.model?.trim() || "claude-sonnet-4-6";
     const message = await client.messages.create({
       model,
       max_tokens: 1024,

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { DisconnectButton } from "./DisconnectButton";
 import { DownloadButton } from "./DownloadButton";
 import { PrivacySection } from "./PrivacySection";
+import { AIProviderSection } from "./AIProviderSection";
 import {
   LINUX_STATUS_HREF,
   WINDOWS_DOWNLOAD_HREF,
@@ -106,8 +107,8 @@ export default async function SettingsPage() {
     : null;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 px-4 py-4 sm:px-6 sm:py-8 sm:space-y-6">
-      <h1 className="text-2xl font-bold">Settings</h1>
+    <div className="settings-shell">
+      <h1 className="settings-shell__title">Settings</h1>
 
       {topIssue ? (
         <StatusNotice title={topIssue.title} detail={topIssue.detail} tone={topIssue.tone} />
@@ -171,6 +172,9 @@ export default async function SettingsPage() {
           </div>
         )}
       </section>
+
+      {/* AI Provider */}
+      <AIProviderSection />
 
       {/* Privacy */}
       <PrivacySection />
