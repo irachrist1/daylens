@@ -5,7 +5,7 @@ Marketing site and optional browser-access surfaces for Daylens.
 This repo is not the product source of truth. The unified cross-platform product,
 launch status, and canonical docs now live in:
 
-- [daylens-windows](https://github.com/irachrist1/daylens-windows)
+- [daylens](https://github.com/irachrist1/daylens)
 
 ## What lives here
 

@@ -356,7 +356,7 @@ export default function DocsPage() {
                     },
                     {
                       q: "Where is the source of truth?",
-                      a: "The unified desktop source of truth currently lives in the daylens-windows repository, which now carries the cross-platform product and release docs.",
+                      a: "The unified desktop source of truth currently lives in the daylens repository, which carries the cross-platform product and release docs.",
                     },
                   ].map(({ q, a }) => (
                     <details key={q} className="lp-docs-faq-item">

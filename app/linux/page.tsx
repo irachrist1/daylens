@@ -64,8 +64,8 @@ export default function LinuxStatusPage() {
             </h2>
             <div className="lp-docs-bullets" style={{ marginBottom: "1.25rem" }}>
               <p className="lp-docs-body" style={{ margin: 0 }}>
-                The unified source of truth is the Electron desktop repo, historically named
-                <code style={{ marginLeft: 6, marginRight: 6 }}>daylens-windows</code>, for macOS,
+                The unified source of truth is the Electron desktop repo
+                <code style={{ marginLeft: 6, marginRight: 6 }}>daylens</code>, for macOS,
                 Windows, and Linux work.
               </p>
               <p className="lp-docs-body" style={{ margin: 0 }}>
