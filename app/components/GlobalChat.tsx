@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "@/app/lib/chat";
 import { apiPath, appPath } from "@/app/lib/basePath";
 import { formatRelativeTime } from "@/app/lib/format";
@@ -41,6 +43,12 @@ type SnapshotRecapPayload = {
   coverageNote: string | null;
   standoutArtifacts: ArtifactRollup[];
 };
+
+type ThreadGroupKey = "today" | "yesterday" | "older";
+
+const MODEL_STORAGE = "daylens-web:anthropic-model";
+const AUTO_SCROLL_THRESHOLD_PX = 96;
+const MAX_COMPOSER_LINES = 6;
 
 function exportLabel(kind: ExportKind) {
   switch (kind) {
@@ -92,6 +100,148 @@ function formatFullDateLabel(dateStr?: string): string {
     month: "long",
     day: "numeric",
   }).format(base);
+}
+
+function threadGroupLabel(group: ThreadGroupKey) {
+  if (group === "today") return "Today";
+  if (group === "yesterday") return "Yesterday";
+  return "Older";
+}
+
+function getThreadGroup(updatedAt: number): ThreadGroupKey {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+
+  if (updatedAt >= startOfToday) return "today";
+  if (updatedAt >= startOfYesterday) return "yesterday";
+  return "older";
+}
+
+function groupThreads(threads: WorkspaceAIThread[]) {
+  const buckets: Record<ThreadGroupKey, WorkspaceAIThread[]> = {
+    today: [],
+    yesterday: [],
+    older: [],
+  };
+
+  for (const thread of threads) {
+    buckets[getThreadGroup(thread.updatedAt)].push(thread);
+  }
+
+  return (["today", "yesterday", "older"] as ThreadGroupKey[])
+    .map((group) => ({
+      id: group,
+      label: threadGroupLabel(group),
+      threads: buckets[group],
+    }))
+    .filter((group) => group.threads.length > 0);
+}
+
+function messageKey(message: ChatMessage, index: number) {
+  return `${message.role}-${message.timestamp ?? "untimed"}-${index}`;
+}
+
+async function copyText(value: string) {
+  await navigator.clipboard.writeText(value);
+}
+
+function CopyChip({
+  value,
+  idleLabel = "Copy",
+  copiedLabel = "Copied",
+  className,
+}: {
+  value: string;
+  idleLabel?: string;
+  copiedLabel?: string;
+  className: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={async () => {
+        try {
+          await copyText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1400);
+        } catch {
+          setCopied(false);
+        }
+      }}
+    >
+      {copied ? copiedLabel : idleLabel}
+    </button>
+  );
+}
+
+function AssistantMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      skipHtml
+      allowedElements={[
+        "h1",
+        "h2",
+        "h3",
+        "p",
+        "ul",
+        "ol",
+        "li",
+        "strong",
+        "em",
+        "code",
+        "pre",
+        "a",
+        "blockquote",
+        "hr",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+      ]}
+      components={{
+        pre({ children }) {
+          const child = Array.isArray(children) ? children[0] : children;
+          if (!isValidElement(child)) {
+            return <pre className="ai-code-block__pre">{children}</pre>;
+          }
+
+          const childProps = child.props as { children?: unknown; className?: unknown };
+          const rawChildren = childProps.children;
+          const value = String(rawChildren).replace(/\n$/, "");
+          const className =
+            typeof childProps.className === "string" ? childProps.className : undefined;
+
+          return (
+            <div className="ai-code-block">
+              <CopyChip value={value} className="ai-code-block__copy" />
+              <pre className="ai-code-block__pre">
+                <code className={className}>{value}</code>
+              </pre>
+            </div>
+          );
+        },
+        code({ className, children }) {
+          return <code className={className ? `ai-inline-code ${className}` : "ai-inline-code"}>{children}</code>;
+        },
+        a({ href, children }) {
+          return (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          );
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 function RecapPanel({
@@ -197,12 +347,30 @@ function RecapPanel({
   );
 }
 
-function AssistantMessage({ content }: { content: string }) {
+function AssistantMessage({
+  content,
+  isLastAssistant,
+  onRegenerate,
+}: {
+  content: string;
+  isLastAssistant: boolean;
+  onRegenerate?: () => void;
+}) {
   return (
     <div className="ai-turn ai-turn--assistant">
       <div className="ai-turn__avatar">D</div>
       <div className="ai-turn__body">
-        <p className="ai-turn__text">{content}</p>
+        <div className="ai-turn__controls">
+          <CopyChip value={content} className="ai-message-action" />
+          {isLastAssistant && onRegenerate ? (
+            <button type="button" className="ai-message-action" onClick={onRegenerate}>
+              Regenerate
+            </button>
+          ) : null}
+        </div>
+        <div className="ai-turn__text">
+          <AssistantMarkdown content={content} />
+        </div>
       </div>
     </div>
   );
@@ -250,11 +418,23 @@ export function GlobalChat({
   const [artifactLoading, setArtifactLoading] = useState<ExportKind | null>(null);
   const [surfaceError, setSurfaceError] = useState<SurfaceErrorState | null>(null);
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  const [archivingThreadId, setArchivingThreadId] = useState<string | null>(null);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const groupedThreads = useMemo(() => groupThreads(threads), [threads]);
 
   const currentThread =
     threads.find((candidate) => candidate.workspaceThreadId === threadId) ?? null;
+  const lastAssistantIndex = useMemo(
+    () => messages.reduce((last, message, index) => (message.role === "assistant" ? index : last), -1),
+    [messages],
+  );
+  const lastUserMessage = useMemo(
+    () => [...messages].reverse().find((message) => message.role === "user") ?? null,
+    [messages],
+  );
 
   const rawRecapByPeriod = useMemo(
     () => ({
@@ -295,8 +475,22 @@ export function GlobalChat({
   }
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, loading]);
+    const body = bodyRef.current;
+    if (!body) return;
+
+    const handleScroll = () => {
+      const nearBottom =
+        body.scrollHeight - body.scrollTop - body.clientHeight < AUTO_SCROLL_THRESHOLD_PX;
+      setStickToBottom(nearBottom);
+      if (nearBottom) {
+        setShowJumpToLatest(false);
+      }
+    };
+
+    handleScroll();
+    body.addEventListener("scroll", handleScroll);
+    return () => body.removeEventListener("scroll", handleScroll);
+  }, []);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -308,6 +502,8 @@ export function GlobalChat({
   useEffect(() => {
     setMessages(initialMessages);
     setThreadId(initialThreadId ?? null);
+    setStickToBottom(true);
+    setShowJumpToLatest(false);
   }, [initialMessages, initialThreadId]);
 
   useEffect(() => {
@@ -367,6 +563,55 @@ export function GlobalChat({
     };
   }, [date]);
 
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+
+    input.style.height = "0px";
+    const lineHeight = Number.parseFloat(window.getComputedStyle(input).lineHeight) || 22;
+    const maxHeight = lineHeight * MAX_COMPOSER_LINES;
+    const nextHeight = Math.min(input.scrollHeight, maxHeight);
+    input.style.height = `${Math.max(nextHeight, lineHeight)}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [input]);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+
+    if (stickToBottom) {
+      requestAnimationFrame(() => {
+        body.scrollTo({ top: body.scrollHeight, behavior: messages.length > 0 ? "smooth" : "auto" });
+      });
+      return;
+    }
+
+    if (messages.length > 0 || loading || artifactLoading) {
+      setShowJumpToLatest(true);
+    }
+  }, [artifactLoading, loading, messages, stickToBottom]);
+
+  useEffect(() => {
+    const handleHotkey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (
+        activeElement?.tagName === "TEXTAREA" ||
+        activeElement?.tagName === "INPUT" ||
+        activeElement?.isContentEditable
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      inputRef.current?.focus();
+    };
+
+    window.addEventListener("keydown", handleHotkey);
+    return () => window.removeEventListener("keydown", handleHotkey);
+  }, []);
+
   async function sendMessage(content: string) {
     if (!content.trim() || loading) return;
 
@@ -382,11 +627,13 @@ export function GlobalChat({
     setInput("");
     setLoading(true);
     setSurfaceError(null);
+    setStickToBottom(true);
+    setShowJumpToLatest(false);
 
     try {
       const model =
         typeof window !== "undefined"
-          ? window.localStorage.getItem("daylens-web:anthropic-model") || undefined
+          ? window.localStorage.getItem(MODEL_STORAGE) || undefined
           : undefined;
       const response = await fetch(apiPath("/api/chat"), {
         method: "POST",
@@ -447,6 +694,54 @@ export function GlobalChat({
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function archiveThread(target: WorkspaceAIThread) {
+    if (archivingThreadId) return;
+
+    setArchivingThreadId(target.workspaceThreadId);
+    setSurfaceError(null);
+
+    try {
+      const response = await fetch(
+        apiPath(`/api/ai-threads?threadId=${encodeURIComponent(target.workspaceThreadId)}`),
+        { method: "DELETE" },
+      );
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === "string"
+            ? data.error
+            : "Couldn't archive that chat right now.",
+        );
+      }
+
+      await refreshThreads();
+      setThreadPickerOpen(false);
+
+      if (target.workspaceThreadId === threadId) {
+        setThreadId(null);
+        setMessages([]);
+        setSurfaceError(null);
+        router.push(
+          buildSurfaceHref(
+            "/chat",
+            date ?? new Date().toLocaleDateString("en-CA"),
+            range,
+          ),
+        );
+      }
+    } catch (error) {
+      setSurfaceError(
+        buildSurfaceError(
+          null,
+          friendlyError("Daylens couldn't archive that chat right now.", error),
+        ),
+      );
+    } finally {
+      setArchivingThreadId(null);
     }
   }
 
@@ -542,23 +837,46 @@ export function GlobalChat({
               </button>
               {threadPickerOpen ? (
                 <div className="ai-shell__chats-menu" role="listbox">
-                  {threads.map((thread) => (
-                    <button
-                      key={thread.workspaceThreadId}
-                      type="button"
-                      role="option"
-                      aria-selected={thread.workspaceThreadId === threadId}
-                      className={thread.workspaceThreadId === threadId ? "is-active" : ""}
-                      onClick={() => {
-                        setThreadPickerOpen(false);
-                        router.push(
-                          appPath(`/chat?thread=${encodeURIComponent(thread.workspaceThreadId)}`),
-                        );
-                      }}
-                    >
-                      <strong>{thread.title}</strong>
-                      <span>{formatRelativeTime(thread.updatedAt)}</span>
-                    </button>
+                  {groupedThreads.map((group) => (
+                    <div key={group.id} className="ai-thread-group">
+                      <p className="ai-thread-group__label">{group.label}</p>
+                      <div className="ai-thread-group__items">
+                        {group.threads.map((thread) => (
+                          <div
+                            key={thread.workspaceThreadId}
+                            className={`ai-thread-row ${
+                              thread.workspaceThreadId === threadId ? "is-active" : ""
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={thread.workspaceThreadId === threadId}
+                              className="ai-thread-row__select"
+                              onClick={() => {
+                                setThreadPickerOpen(false);
+                                router.push(
+                                  appPath(`/chat?thread=${encodeURIComponent(thread.workspaceThreadId)}`),
+                                );
+                              }}
+                            >
+                              <strong>{thread.title}</strong>
+                              <span>{formatRelativeTime(thread.updatedAt)}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="ai-thread-row__archive"
+                              disabled={archivingThreadId === thread.workspaceThreadId}
+                              onClick={() => void archiveThread(thread)}
+                              aria-label={`Archive ${thread.title}`}
+                              title="Archive chat"
+                            >
+                              {archivingThreadId === thread.workspaceThreadId ? "…" : "Delete"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               ) : null}
@@ -587,7 +905,7 @@ export function GlobalChat({
         </div>
       </header>
 
-      <div className="ai-shell__body">
+      <div className="ai-shell__body" ref={bodyRef}>
         {messages.length === 0 ? (
           <RecapPanel
             activeRecap={activeRecap}
@@ -616,13 +934,19 @@ export function GlobalChat({
             {messages.map((message, index) =>
               message.role === "user" ? (
                 <UserMessage
-                  key={`user-${message.timestamp ?? index}-${index}`}
+                  key={messageKey(message, index)}
                   content={message.content}
                 />
               ) : (
                 <AssistantMessage
-                  key={`assistant-${message.timestamp ?? index}-${index}`}
+                  key={messageKey(message, index)}
                   content={message.content}
+                  isLastAssistant={index === lastAssistantIndex}
+                  onRegenerate={
+                    index === lastAssistantIndex && lastUserMessage
+                      ? () => void sendMessage(lastUserMessage.content)
+                      : undefined
+                  }
                 />
               ),
             )}
@@ -633,7 +957,6 @@ export function GlobalChat({
                 <div className="ai-loading-dot" />
               </div>
             ) : null}
-            <div ref={endRef} />
           </div>
         ) : null}
 
@@ -685,6 +1008,22 @@ export function GlobalChat({
           </div>
         ) : null}
       </div>
+
+      {showJumpToLatest ? (
+        <button
+          type="button"
+          className="ai-jump-pill"
+          onClick={() => {
+            const body = bodyRef.current;
+            if (!body) return;
+            body.scrollTo({ top: body.scrollHeight, behavior: "smooth" });
+            setStickToBottom(true);
+            setShowJumpToLatest(false);
+          }}
+        >
+          Jump to latest
+        </button>
+      ) : null}
 
       <form
         onSubmit={(event) => {

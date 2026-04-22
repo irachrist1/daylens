@@ -10145,18 +10145,19 @@ body:has(.daylens-shell) .glass-bg::after {
 .daylens-shell .ai-shell {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: calc(100vh - 1px);
   min-height: calc(100vh - 1px);
-  max-width: 960px;
+  max-width: 920px;
   margin: 0 auto;
   width: 100%;
-  padding: 32px 40px 20px;
+  padding: 24px 32px 16px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 @media (max-width: 720px) {
   .daylens-shell .ai-shell {
-    padding: 20px 16px 16px;
+    padding: 16px 14px 12px;
   }
 }
 
@@ -10165,7 +10166,8 @@ body:has(.daylens-shell) .glass-bg::after {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
 }
 .daylens-shell .ai-shell__heading h1 {
   font-size: 30px;
@@ -10176,14 +10178,14 @@ body:has(.daylens-shell) .glass-bg::after {
   line-height: 1.05;
 }
 .daylens-shell .ai-shell__heading p {
-  font-size: 13.5px;
+  font-size: 13px;
   color: #5c6474;
-  margin: 6px 0 0;
+  margin: 4px 0 0;
 }
 .daylens-shell .ai-shell__heading .ai-shell__thread {
   font-size: 12.5px;
   color: rgba(31, 38, 51, 0.48);
-  margin-top: 8px;
+  margin-top: 6px;
 }
 .daylens-shell .ai-shell__thread span {
   color: #5c6474;
@@ -10217,54 +10219,110 @@ body:has(.daylens-shell) .glass-bg::after {
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  width: 280px;
+  width: 304px;
   max-height: 360px;
   overflow-y: auto;
   background: #ffffff;
   border: 1px solid rgba(17, 24, 39, 0.10);
-  border-radius: 10px;
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
-  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 22px 44px rgba(15, 23, 42, 0.10);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+.daylens-shell .ai-thread-group {
+  display: grid;
+  gap: 4px;
+}
+.daylens-shell .ai-thread-group__label {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(31, 38, 51, 0.42);
+}
+.daylens-shell .ai-thread-group__items {
   display: grid;
   gap: 2px;
 }
-.daylens-shell .ai-shell__chats-menu button {
+.daylens-shell .ai-thread-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 10px;
+}
+.daylens-shell .ai-thread-row:hover,
+.daylens-shell .ai-thread-row.is-active {
+  background: #f3f4f6;
+}
+.daylens-shell .ai-thread-row__select {
   text-align: left;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
   border: 0;
   background: transparent;
   color: #1f2633;
   cursor: pointer;
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  min-width: 0;
 }
-.daylens-shell .ai-shell__chats-menu button:hover,
-.daylens-shell .ai-shell__chats-menu button.is-active {
-  background: #f3f4f6;
-}
-.daylens-shell .ai-shell__chats-menu button strong {
-  font-size: 12.5px;
+.daylens-shell .ai-thread-row__select strong {
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.daylens-shell .ai-shell__chats-menu button span {
-  font-size: 11px;
+.daylens-shell .ai-thread-row__select span {
+  font-size: 10.5px;
   color: rgba(31, 38, 51, 0.48);
+}
+.daylens-shell .ai-thread-row__archive {
+  opacity: 0;
+  pointer-events: none;
+  min-width: 54px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: rgba(185, 28, 28, 0.88);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 140ms, background 140ms;
+}
+.daylens-shell .ai-thread-row:hover .ai-thread-row__archive,
+.daylens-shell .ai-thread-row.is-active .ai-thread-row__archive,
+.daylens-shell .ai-thread-row__archive:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.daylens-shell .ai-thread-row__archive:hover:not(:disabled) {
+  background: rgba(185, 28, 28, 0.08);
+}
+.daylens-shell .ai-thread-row__archive:disabled {
+  opacity: 1;
+  pointer-events: none;
 }
 
 .daylens-shell .ai-shell__body {
   flex: 1;
   display: grid;
-  gap: 18px;
+  gap: 12px;
   min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  padding-bottom: 12px;
 }
 
 /* ── Work recap hero card ─────────────────────────────────────────────────── */
 .daylens-shell .ai-recap {
-  border-radius: 18px;
+  border-radius: 16px;
   border: 1px solid rgba(17, 24, 39, 0.10);
   background: #f5f7fb;
   overflow: hidden;
@@ -10273,8 +10331,8 @@ body:has(.daylens-shell) .glass-bg::after {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 22px 22px 12px;
+  gap: 12px;
+  padding: 18px 18px 10px;
   flex-wrap: wrap;
 }
 .daylens-shell .ai-recap__heading {
@@ -10286,7 +10344,7 @@ body:has(.daylens-shell) .glass-bg::after {
   letter-spacing: 0.10em;
   text-transform: uppercase;
   color: rgba(31, 38, 51, 0.50);
-  margin: 0 0 8px;
+  margin: 0 0 6px;
 }
 .daylens-shell .ai-recap__title {
   font-size: 24px;
@@ -10299,12 +10357,12 @@ body:has(.daylens-shell) .glass-bg::after {
 .daylens-shell .ai-recap__subtitle {
   font-size: 13px;
   color: rgba(31, 38, 51, 0.50);
-  margin: 6px 0 0;
+  margin: 4px 0 0;
 }
 .daylens-shell .ai-recap__headline {
-  padding: 4px 22px 16px;
+  padding: 2px 18px 12px;
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.52;
   color: #33425a;
   margin: 0;
   max-width: 720px;
@@ -10338,8 +10396,8 @@ body:has(.daylens-shell) .glass-bg::after {
 }
 
 .daylens-shell .ai-coverage-note {
-  margin: 0 22px 12px;
-  padding: 10px 12px;
+  margin: 0 18px 10px;
+  padding: 9px 11px;
   border-radius: 10px;
   background: rgba(251, 191, 36, 0.14);
   color: #7c4a03;
@@ -10357,7 +10415,7 @@ body:has(.daylens-shell) .glass-bg::after {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
   gap: 14px;
-  padding: 16px 22px;
+  padding: 14px 18px;
   border-bottom: 1px solid rgba(17, 24, 39, 0.06);
 }
 .daylens-shell .ai-recap-chapter:last-child {
@@ -10407,14 +10465,14 @@ body:has(.daylens-shell) .glass-bg::after {
   font-weight: 740;
   letter-spacing: -0.01em;
   color: #1f2633;
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   line-height: 1.35;
 }
 .daylens-shell .ai-recap-chapter__copy {
   font-size: 13px;
-  line-height: 1.65;
+  line-height: 1.5;
   color: #33425a;
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   max-width: 660px;
 }
 
@@ -10422,16 +10480,16 @@ body:has(.daylens-shell) .glass-bg::after {
 .daylens-shell .ai-recap__metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  padding: 18px 22px;
+  gap: 10px;
+  padding: 14px 18px;
   background: #ffffff;
   border-top: 1px solid rgba(17, 24, 39, 0.06);
 }
 .daylens-shell .ai-recap-metric {
-  border-radius: 14px;
+  border-radius: 12px;
   background: #f5f7fb;
-  padding: 14px;
-  min-height: 96px;
+  padding: 12px;
+  min-height: 0;
 }
 .daylens-shell .ai-recap-metric__label {
   display: block;
@@ -10447,32 +10505,32 @@ body:has(.daylens-shell) .glass-bg::after {
   font-weight: 760;
   letter-spacing: -0.03em;
   color: #1f2633;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 .daylens-shell .ai-recap-metric__detail {
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.45;
   color: rgba(31, 38, 51, 0.55);
-  margin: 6px 0 0;
+  margin: 4px 0 0;
 }
 
 /* Prompt chip row inside recap */
 .daylens-shell .ai-recap__prompts {
-  padding: 16px 22px 22px;
+  padding: 12px 18px 16px;
   background: #f5f7fb;
 }
 .daylens-shell .ai-recap__chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 .daylens-shell .ai-recap-chip {
-  padding: 7px 13px;
+  padding: 6px 11px;
   border-radius: 999px;
   border: 1px solid rgba(17, 24, 39, 0.10);
   background: #ffffff;
   color: #1f2633;
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
   transition: background 140ms, border-color 140ms;
 }
@@ -10487,8 +10545,8 @@ body:has(.daylens-shell) .glass-bg::after {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px;
-  border-radius: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
   border: 1px solid rgba(17, 24, 39, 0.10);
   background: #ffffff;
 }
@@ -10496,7 +10554,7 @@ body:has(.daylens-shell) .glass-bg::after {
   margin: 0;
   font-size: 13px;
   color: #33425a;
-  line-height: 1.55;
+  line-height: 1.45;
   max-width: 520px;
 }
 .daylens-shell .ai-generate-card__cta {
@@ -10517,68 +10575,194 @@ body:has(.daylens-shell) .glass-bg::after {
 
 /* ── Ask Daylens suggestions ──────────────────────────────────────────────── */
 .daylens-shell .ai-suggestions {
-  padding: 4px 2px 8px;
+  padding: 0 0 6px;
 }
 .daylens-shell .ai-suggestions .ai-recap__kicker {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 /* ── Thread feed ──────────────────────────────────────────────────────────── */
 .daylens-shell .ai-thread-feed {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 4px 0 24px;
+  gap: 14px;
+  padding: 2px 0 8px;
 }
 .daylens-shell .ai-turn {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
 }
 .daylens-shell .ai-turn--user {
   justify-content: flex-end;
 }
 .daylens-shell .ai-turn__avatar {
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  color: #33425a;
+  background: rgba(15, 23, 42, 0.05);
+  color: rgba(51, 66, 90, 0.72);
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 10px;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 .daylens-shell .ai-turn__body {
   flex: 1;
   min-width: 0;
 }
 .daylens-shell .ai-turn__text {
-  margin: 0;
-  font-size: 13.5px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.5;
   color: #1f2633;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+.daylens-shell .ai-turn__text > :first-child {
+  margin-top: 0;
+}
+.daylens-shell .ai-turn__text > :last-child {
+  margin-bottom: 0;
+}
+.daylens-shell .ai-turn__text p,
+.daylens-shell .ai-turn__text ul,
+.daylens-shell .ai-turn__text ol,
+.daylens-shell .ai-turn__text blockquote,
+.daylens-shell .ai-turn__text hr,
+.daylens-shell .ai-turn__text table {
+  margin: 0 0 0.65em;
+}
+.daylens-shell .ai-turn__text h1,
+.daylens-shell .ai-turn__text h2,
+.daylens-shell .ai-turn__text h3 {
+  margin: 0 0 0.42em;
+  color: #1f2633;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.daylens-shell .ai-turn__text h1 {
+  font-size: 1.22rem;
+}
+.daylens-shell .ai-turn__text h2 {
+  font-size: 1.08rem;
+}
+.daylens-shell .ai-turn__text h3 {
+  font-size: 0.98rem;
+}
+.daylens-shell .ai-turn__text ul,
+.daylens-shell .ai-turn__text ol {
+  padding-left: 1.2rem;
+}
+.daylens-shell .ai-turn__text li + li {
+  margin-top: 0.24em;
+}
+.daylens-shell .ai-turn__text blockquote {
+  padding-left: 12px;
+  border-left: 2px solid rgba(77, 142, 255, 0.32);
+  color: #445066;
+}
+.daylens-shell .ai-turn__text a {
+  color: #2563eb;
+  text-decoration-color: rgba(37, 99, 235, 0.32);
+  text-underline-offset: 2px;
+}
+.daylens-shell .ai-turn__text hr {
+  border: 0;
+  border-top: 1px solid rgba(17, 24, 39, 0.10);
+}
+.daylens-shell .ai-turn__text table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.daylens-shell .ai-turn__text th,
+.daylens-shell .ai-turn__text td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+}
+.daylens-shell .ai-turn__text th {
+  font-weight: 700;
+  color: #1f2633;
+}
+.daylens-shell .ai-turn__controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 6px;
+  opacity: 0;
+  transition: opacity 140ms;
+}
+.daylens-shell .ai-turn:hover .ai-turn__controls,
+.daylens-shell .ai-turn:focus-within .ai-turn__controls {
+  opacity: 1;
+}
+.daylens-shell .ai-message-action {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: #ffffff;
+  color: rgba(31, 38, 51, 0.62);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms, color 140ms;
+}
+.daylens-shell .ai-message-action:hover {
+  background: #f5f7fb;
+  color: #1f2633;
+  border-color: rgba(17, 24, 39, 0.14);
+}
+.daylens-shell .ai-inline-code {
+  display: inline-block;
+  padding: 0.12rem 0.42rem;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #1f2633;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+.daylens-shell .ai-code-block {
+  position: relative;
+  margin: 0 0 0.75em;
+}
+.daylens-shell .ai-code-block__copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+}
+.daylens-shell .ai-code-block__pre {
+  margin: 0;
+  overflow-x: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: #f5f7fb;
+  padding: 14px;
+  color: #172033;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.daylens-shell .ai-code-block__pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 .daylens-shell .ai-user-bubble {
   max-width: min(80%, 560px);
-  padding: 10px 14px;
+  padding: 9px 13px;
   border-radius: 18px;
   background: rgba(135, 176, 255, 0.22);
   color: #1f2633;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.48;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 /* ── Error banner ─────────────────────────────────────────────────────────── */
 .daylens-shell .ai-shell__notice {
-  padding: 12px 14px;
+  padding: 11px 13px;
   border-radius: 12px;
   background: rgba(248, 113, 113, 0.08);
   border: 1px solid rgba(248, 113, 113, 0.25);
@@ -10589,38 +10773,40 @@ body:has(.daylens-shell) .glass-bg::after {
   font-size: 13px;
   font-weight: 700;
   color: #7f1d1d;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 .daylens-shell .ai-shell__notice p {
   margin: 0;
   font-size: 12.5px;
   color: rgba(31, 38, 51, 0.65);
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 /* ── Composer bar (sticky-ish at bottom of shell) ────────────────────────── */
 .daylens-shell .ai-composer-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 999px;
+  border-radius: 18px;
   border: 1px solid rgba(17, 24, 39, 0.10);
   background: #ffffff;
-  margin-top: 16px;
+  margin-top: 10px;
   position: sticky;
-  bottom: 16px;
+  bottom: 12px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+  flex-shrink: 0;
 }
 .daylens-shell .ai-composer-bar__input {
   flex: 1;
-  min-height: 26px;
+  min-height: 22px;
   max-height: 140px;
-  padding: 4px 8px;
+  padding: 0 2px;
   border: 0;
   background: transparent;
   color: #1f2633;
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.5;
   resize: none;
   outline: none;
 }
@@ -10628,27 +10814,41 @@ body:has(.daylens-shell) .glass-bg::after {
   color: rgba(31, 38, 51, 0.40);
 }
 .daylens-shell .ai-composer-bar__send {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   border-radius: 999px;
-  border: 1px solid rgba(17, 24, 39, 0.10);
-  background: #ffffff;
-  color: #5c6474;
+  border: 0;
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 140ms, color 140ms, border-color 140ms;
+  transition: transform 140ms, box-shadow 140ms, opacity 140ms;
 }
 .daylens-shell .ai-composer-bar__send:hover:not(:disabled) {
-  background: #f3f4f6;
-  color: #1f2633;
-  border-color: rgba(17, 24, 39, 0.18);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(77, 142, 255, 0.24);
 }
 .daylens-shell .ai-composer-bar__send:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.daylens-shell .ai-jump-pill {
+  position: sticky;
+  bottom: 72px;
+  margin: 0 auto 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255, 255, 255, 0.96);
+  color: #1f2633;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  z-index: 1;
 }
 
 /* Hide the old two-column AI layout when the new shell is active (safety) */
@@ -10748,6 +10948,13 @@ body:has(.daylens-shell) .glass-bg::after {
   gap: 8px;
   flex-wrap: wrap;
   align-items: stretch;
+}
+.daylens-shell .settings-error {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #b91c1c;
 }
 .daylens-shell .settings-input {
   flex: 1;
@@ -10977,13 +11184,13 @@ body:has(.daylens-shell) .glass-bg::after {
   }
 
   .daylens-shell .ai-shell {
-    padding: 16px 14px 12px;
+    padding: 14px 12px 10px;
   }
   .daylens-shell .ai-shell__header {
     flex-wrap: wrap;
     align-items: stretch;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
   .daylens-shell .ai-shell__heading h1 {
     font-size: 24px;
@@ -10993,10 +11200,10 @@ body:has(.daylens-shell) .glass-bg::after {
     justify-content: flex-end;
   }
   .daylens-shell .ai-recap__header {
-    padding: 18px 16px 10px;
+    padding: 16px 14px 9px;
   }
   .daylens-shell .ai-recap__headline {
-    padding: 0 16px 14px;
+    padding: 0 14px 12px;
     font-size: 13.5px;
   }
   .daylens-shell .ai-recap__toggle {
@@ -11007,15 +11214,15 @@ body:has(.daylens-shell) .glass-bg::after {
   }
   .daylens-shell .ai-recap-chapter {
     grid-template-columns: 36px minmax(0, 1fr);
-    padding: 14px 16px;
+    padding: 12px 14px;
     gap: 10px;
   }
   .daylens-shell .ai-recap__metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    padding: 14px 16px;
+    padding: 12px 14px;
   }
   .daylens-shell .ai-recap__prompts {
-    padding: 14px 16px 18px;
+    padding: 12px 14px 15px;
   }
   .daylens-shell .ai-generate-card {
     flex-direction: column;
@@ -11030,8 +11237,18 @@ body:has(.daylens-shell) .glass-bg::after {
     max-width: 92%;
   }
   .daylens-shell .ai-composer-bar {
-    margin-top: 10px;
+    margin-top: 8px;
     bottom: 8px;
+  }
+  .daylens-shell .ai-thread-row__archive {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .daylens-shell .ai-turn__controls {
+    opacity: 1;
+  }
+  .daylens-shell .ai-jump-pill {
+    bottom: 68px;
   }
 
   .daylens-shell .settings-shell {
