@@ -38,7 +38,7 @@ export async function redirectToLatestMatchingAsset(
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "daylens-web",
       },
-      cache: "no-store",
+      next: { revalidate: 30 },
     });
 
     if (!res.ok) {
