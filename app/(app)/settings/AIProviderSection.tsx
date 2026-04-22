@@ -151,7 +151,7 @@ export function AIProviderSection() {
           ) : null}
         </div>
 
-        {editing || !hasKey ? (
+        {editing ? (
           <div className="settings-row__form">
             <input
               type="password"
@@ -159,7 +159,10 @@ export function AIProviderSection() {
               spellCheck={false}
               placeholder="sk-ant-…"
               value={draftKey}
-              onChange={(event) => setDraftKey(event.target.value)}
+              onChange={(event) => {
+                setDraftKey(event.target.value);
+                setSaveError(null);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
@@ -178,43 +181,57 @@ export function AIProviderSection() {
               >
                 {saving ? "Saving…" : "Save key"}
               </button>
-              {hasKey ? (
-                <button
-                  type="button"
-                  className="settings-button"
-                  onClick={() => {
-                    setEditing(false);
-                    setDraftKey("");
-                    setSaveError(null);
-                  }}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-              ) : null}
+              <button
+                type="button"
+                className="settings-button"
+                onClick={() => {
+                  setEditing(false);
+                  setDraftKey("");
+                  setSaveError(null);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
             </div>
             {saveError ? <p className="settings-error">{saveError}</p> : null}
           </div>
         ) : (
           <div className="settings-row__actions">
-            <button
-              type="button"
-              className="settings-button"
-              onClick={() => {
-                setEditing(true);
-                setDraftKey("");
-                setSaveError(null);
-              }}
-            >
-              Replace
-            </button>
-            <button
-              type="button"
-              className="settings-button settings-button--danger"
-              onClick={() => void clearKey()}
-            >
-              Remove
-            </button>
+            {hasKey ? (
+              <>
+                <button
+                  type="button"
+                  className="settings-button"
+                  onClick={() => {
+                    setEditing(true);
+                    setDraftKey("");
+                    setSaveError(null);
+                  }}
+                >
+                  Replace
+                </button>
+                <button
+                  type="button"
+                  className="settings-button settings-button--danger"
+                  onClick={() => void clearKey()}
+                >
+                  Remove
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="settings-button settings-button--primary"
+                onClick={() => {
+                  setEditing(true);
+                  setDraftKey("");
+                  setSaveError(null);
+                }}
+              >
+                Add key
+              </button>
+            )}
           </div>
         )}
       </div>

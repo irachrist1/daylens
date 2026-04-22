@@ -1,5 +1,6 @@
 import {
   internalMutation,
+  mutation,
   query,
   type MutationCtx,
 } from "./_generated/server";
@@ -196,6 +197,38 @@ export const listThreads = query({
     return docs
       .filter((doc) => !doc.archived)
       .map((doc) => doc.thread);
+  },
+});
+
+export const archiveThread = mutation({
+  args: {
+    workspaceThreadId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await requireSessionIdentity(ctx);
+    const threadDoc = await ctx.db
+      .query("web_ai_threads")
+      .withIndex("by_workspace_thread", (q) =>
+        q.eq("workspaceId", identity.workspaceId).eq("workspaceThreadId", args.workspaceThreadId)
+      )
+      .unique();
+
+    if (!threadDoc) {
+      return { ok: false };
+    }
+
+    const updatedAt = Date.now();
+    await ctx.db.patch(threadDoc._id, {
+      updatedAt,
+      archived: true,
+      thread: {
+        ...threadDoc.thread,
+        updatedAt,
+        archived: true,
+      },
+    });
+
+    return { ok: true };
   },
 });
 
