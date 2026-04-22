@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -115,7 +114,6 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         <div className="daylens-sidebar__frame">
           <div className="daylens-sidebar__header">
             <Link href="/dashboard" className="daylens-brand" title="Daylens">
-              <Image src="/app-icon.png" alt="Daylens" width={30} height={30} style={{ borderRadius: 8 }} />
               <span>Daylens</span>
             </Link>
             <button
@@ -147,7 +145,6 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
 
       <div className="daylens-mobile-top md:hidden">
         <Link href="/dashboard" className="daylens-brand daylens-brand--mobile">
-          <Image src="/app-icon.png" alt="Daylens" width={28} height={28} style={{ borderRadius: 8 }} />
           <span>Daylens</span>
         </Link>
       </div>

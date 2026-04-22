@@ -42,22 +42,22 @@ export function formatFullDate(dateStr: string): string {
   }).format(date);
 }
 
-/** Category display colors */
+/** Category display colors — matches desktop app exactly */
 export const CATEGORY_COLORS: Record<string, string> = {
-  development: "#60a5fa",
-  communication: "#f472b6",
-  research: "#a78bfa",
-  writing: "#34d399",
+  development: "#5b8cff",
+  communication: "#f97316",
+  research: "#7c5cff",
+  writing: "#a855f7",
   aiTools: "#c084fc",
-  design: "#fb923c",
-  browsing: "#38bdf8",
-  meetings: "#fbbf24",
-  entertainment: "#f87171",
-  email: "#a3e635",
-  productivity: "#2dd4bf",
-  social: "#e879f9",
-  system: "#6b7280",
-  uncategorized: "#475569",
+  design: "#ec4899",
+  browsing: "#fb923c",
+  meetings: "#14b8a6",
+  entertainment: "#f59e0b",
+  email: "#38bdf8",
+  productivity: "#6366f1",
+  social: "#f43f5e",
+  system: "#94a3b8",
+  uncategorized: "#94a3b8",
 };
 
 /** Category display labels */
@@ -66,7 +66,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   communication: "Communication",
   research: "Research",
   writing: "Writing",
-  aiTools: "AI Tools",
+  aiTools: "AI tools",
   design: "Design",
   browsing: "Browsing",
   meetings: "Meetings",

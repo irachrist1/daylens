@@ -9428,3 +9428,712 @@ html {
   .dlx-btn, .dlx-faq__chev { transition: none; }
   html { scroll-behavior: auto; }
 }
+
+/* =========================================================================
+   DESKTOP-MATCH THEME — scoped to .daylens-shell
+   Makes /app routes render identically to the Electron desktop app.
+   Light surfaces, flat borders, system font, amber browsing pill.
+   ========================================================================= */
+
+.daylens-shell,
+.daylens-shell * {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+
+.daylens-shell {
+  --t-surface: #ffffff;
+  --t-surface-lowest: #ffffff;
+  --t-surface-low: #fafafa;
+  --t-surface-high: #f3f4f6;
+  --t-surface-highest: #e5e7eb;
+  --t-surface-bright: #cfd4de;
+
+  --t-primary: #0f63db;
+  --t-primary-container: #dce8ff;
+  --t-on-primary: #ffffff;
+
+  --t-on-surface: #1f2633;
+  --t-on-surface-variant: #5c6474;
+  --t-outline-variant: rgba(17, 24, 39, 0.12);
+  --t-surface-tint: #0f63db;
+
+  --background: #ffffff;
+  --foreground: #1f2633;
+
+  --ui-panel: #ffffff;
+  --ui-panel-muted: #ffffff;
+  --ui-panel-elevated: #ffffff;
+  --ui-border: rgba(17, 24, 39, 0.09);
+  --ui-border-strong: rgba(17, 24, 39, 0.18);
+  --ui-shadow: rgba(15, 23, 42, 0);
+  --ui-hover: rgba(15, 23, 42, 0.04);
+  --ui-sidebar-bg: #ffffff;
+  --ui-sidebar-border: rgba(17, 24, 39, 0.08);
+  --ui-sidebar-active: rgba(15, 23, 42, 0.05);
+  --ui-input-bg: #ffffff;
+  --ui-shell-divider: rgba(17, 24, 39, 0.08);
+
+  color-scheme: light;
+  background: #ffffff;
+  color: #1f2633;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Kill the gradient blobs behind the app shell */
+.daylens-shell ~ .glass-bg,
+.daylens-shell .glass-bg {
+  background: #ffffff;
+}
+.daylens-shell ~ .glass-bg::before,
+.daylens-shell ~ .glass-bg::after,
+.daylens-shell .glass-bg::before,
+.daylens-shell .glass-bg::after {
+  display: none;
+}
+
+body:has(.daylens-shell) {
+  background: #ffffff;
+  color: #1f2633;
+}
+body:has(.daylens-shell) .glass-bg {
+  background: #ffffff;
+}
+body:has(.daylens-shell) .glass-bg::before,
+body:has(.daylens-shell) .glass-bg::after {
+  display: none;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.daylens-shell .daylens-sidebar {
+  background: #ffffff;
+  border-right: 1px solid rgba(17, 24, 39, 0.08);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 22px 14px;
+  width: 190px;
+}
+
+@media (min-width: 960px) {
+  .daylens-shell .daylens-shell__content {
+    padding-left: 190px;
+  }
+  .daylens-shell--collapsed .daylens-sidebar {
+    width: 72px;
+  }
+  .daylens-shell--collapsed .daylens-shell__content {
+    padding-left: 72px;
+  }
+}
+
+.daylens-shell .daylens-brand {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #1f2633;
+  gap: 10px;
+  padding-left: 2px;
+}
+
+.daylens-shell .daylens-brand--mobile {
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  box-shadow: none;
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.daylens-shell .daylens-sidebar__toggle {
+  color: rgba(31, 38, 51, 0.55);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+}
+.daylens-shell .daylens-sidebar__toggle:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: #1f2633;
+}
+
+.daylens-shell .daylens-sidebar__nav {
+  margin-top: 10px;
+  gap: 3px;
+}
+
+.daylens-shell .daylens-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: rgba(31, 38, 51, 0.78);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  border: 1px solid transparent;
+  transition: background 180ms, color 180ms, border-color 180ms;
+}
+.daylens-shell .daylens-nav-item:hover {
+  background: rgba(31, 38, 51, 0.05);
+  color: #1f2633;
+  border-color: transparent;
+}
+.daylens-shell .daylens-nav-item--active {
+  background: #f3f4f6;
+  border-color: rgba(17, 24, 39, 0.08);
+  color: #1f2633;
+  font-weight: 600;
+}
+.daylens-shell .daylens-nav-item__icon {
+  width: 18px;
+  height: 18px;
+}
+.daylens-shell .daylens-nav-item__label {
+  font-size: 13px;
+  font-weight: inherit;
+  letter-spacing: -0.01em;
+}
+
+.daylens-shell .daylens-mobile-nav {
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid rgba(17, 24, 39, 0.08);
+  backdrop-filter: saturate(1.2);
+  -webkit-backdrop-filter: saturate(1.2);
+}
+
+/* ── Main content padding ────────────────────────────────────────────────── */
+.daylens-shell .timeline-shell-outer {
+  padding: 20px 32px 32px;
+}
+@media (max-width: 720px) {
+  .daylens-shell .timeline-shell-outer {
+    padding: 16px 16px 24px;
+  }
+}
+.daylens-shell .timeline-page-shell {
+  gap: 14px;
+}
+
+/* ── Topbar: chevron + Today pill + segmented Day/Week ───────────────────── */
+.daylens-shell .timeline-topbar {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+  align-items: center;
+}
+.daylens-shell .timeline-topbar__date {
+  gap: 4px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.daylens-shell .timeline-topbar__date span {
+  min-width: 0;
+  padding: 7px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2633;
+}
+.daylens-shell .timeline-topbar__arrow {
+  width: 32px;
+  height: 32px;
+  color: rgba(31, 38, 51, 0.55);
+  border-radius: 999px;
+}
+.daylens-shell .timeline-topbar__arrow:hover:not(:disabled) {
+  background: rgba(31, 38, 51, 0.05);
+  color: #1f2633;
+}
+
+/* Day / Week segmented */
+.daylens-shell .daylens-segmented {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f3f4f6;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+}
+.daylens-shell .daylens-segmented button {
+  min-height: 0;
+  padding: 5px 16px;
+  border: 0;
+  margin: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(31, 38, 51, 0.65);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  transition: background 140ms, color 140ms;
+}
+.daylens-shell .daylens-segmented button:hover:not(:disabled) {
+  color: #1f2633;
+}
+.daylens-shell .daylens-segmented .is-active {
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+  border: 0;
+}
+
+/* Sync status row — desktop doesn't show it when healthy */
+.daylens-shell .sync-inline-status {
+  display: none;
+}
+
+/* ── Summary strip (5h 56m tracked · 2h 9m focused · ...) ───────────────── */
+.daylens-shell .timeline-strip {
+  gap: 4px 18px;
+  padding: 0;
+}
+.daylens-shell .timeline-strip__item {
+  color: rgba(31, 38, 51, 0.55);
+  font-size: 13px;
+  font-weight: 400;
+}
+.daylens-shell .timeline-strip__item strong {
+  color: #1f2633;
+  font-weight: 600;
+}
+.daylens-shell .timeline-strip__item--live {
+  color: #b45309;
+}
+.daylens-shell .timeline-strip__live-dot {
+  background: #b45309;
+  box-shadow: none;
+}
+
+/* ── Timeline grid ───────────────────────────────────────────────────────── */
+.daylens-shell .timeline-grid {
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 24px;
+}
+@media (max-width: 1080px) {
+  .daylens-shell .timeline-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.daylens-shell .timeline-feed {
+  gap: 14px;
+}
+.daylens-shell .timeline-day-group__rows {
+  gap: 14px;
+}
+
+/* ── Timeline row ────────────────────────────────────────────────────────── */
+.daylens-shell .timeline-row {
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 16px;
+  background: transparent;
+}
+.daylens-shell .timeline-row__rail {
+  padding-top: 6px;
+  gap: 2px;
+}
+.daylens-shell .timeline-row__rail strong {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f2633;
+}
+.daylens-shell .timeline-row__rail span {
+  font-size: 11px;
+  color: rgba(31, 38, 51, 0.48);
+}
+
+.daylens-shell .timeline-row__card {
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  box-shadow: none;
+  overflow: hidden;
+  transition: border-color 120ms, background 120ms;
+}
+.daylens-shell .timeline-row__card::before {
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--timeline-accent);
+}
+.daylens-shell .timeline-row__card-inner {
+  padding: 14px 16px 14px 18px;
+  gap: 6px;
+}
+.daylens-shell .timeline-row__header {
+  gap: 10px;
+}
+.daylens-shell .timeline-row__title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #1f2633;
+}
+.daylens-shell .timeline-row__support {
+  font-size: 12.5px;
+  color: rgba(31, 38, 51, 0.55);
+  font-weight: 400;
+}
+.daylens-shell .timeline-row__meta {
+  font-size: 12px;
+  color: rgba(31, 38, 51, 0.48);
+  gap: 10px;
+  margin-top: 2px;
+}
+.daylens-shell .timeline-row__meta span {
+  color: rgba(31, 38, 51, 0.48);
+  font-weight: 400;
+}
+.daylens-shell .timeline-row__evidence {
+  gap: 8px;
+  margin-top: 4px;
+}
+.daylens-shell .timeline-row__icons {
+  gap: 6px;
+}
+.daylens-shell .timeline-row--selected .timeline-row__card {
+  border-color: color-mix(in srgb, var(--timeline-accent) 45%, rgba(17, 24, 39, 0.10));
+  background: #fafafa;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+.daylens-shell .timeline-row:hover .timeline-row__card {
+  transform: none;
+  border-color: color-mix(in srgb, var(--timeline-accent) 30%, rgba(17, 24, 39, 0.12));
+  background: #ffffff;
+}
+
+/* ── Pills + chips ───────────────────────────────────────────────────────── */
+.daylens-shell .timeline-pill {
+  min-height: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 0;
+  line-height: 1.4;
+}
+.daylens-shell .timeline-chip {
+  min-height: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  background: #f3f4f6;
+  color: rgba(31, 38, 51, 0.6);
+  border: 0;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: default;
+}
+.daylens-shell .timeline-chip-list {
+  gap: 6px;
+}
+
+/* ── Gap row (Untracked gap) ─────────────────────────────────────────────── */
+.daylens-shell .timeline-gap-row {
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 16px;
+  opacity: 0.75;
+}
+.daylens-shell .timeline-gap-row__rail span {
+  color: rgba(31, 38, 51, 0.48);
+  font-size: 11px;
+}
+.daylens-shell .timeline-gap-row__body {
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 0;
+  color: rgba(31, 38, 51, 0.48);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* ── Right-rail inspector ────────────────────────────────────────────────── */
+.daylens-shell .timeline-inspector {
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  padding: 22px;
+  box-shadow: none;
+  gap: 18px;
+  top: 16px;
+}
+.daylens-shell .timeline-kicker {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  color: rgba(31, 38, 51, 0.45);
+  margin-bottom: 10px;
+}
+.daylens-shell .timeline-inspector__header {
+  display: grid;
+  gap: 4px;
+}
+.daylens-shell .timeline-inspector__header .timeline-kicker {
+  color: rgba(31, 38, 51, 0.45);
+  font-size: 10.5px;
+  margin-bottom: 4px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+.daylens-shell .timeline-inspector__header h2 {
+  font-size: 18px;
+  font-weight: 750;
+  color: #1f2633;
+  margin: 0;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.daylens-shell .timeline-inspector__header p {
+  font-size: 12.5px;
+  color: rgba(31, 38, 51, 0.45);
+  margin: 0;
+}
+
+.daylens-shell .timeline-inspector__stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.daylens-shell .timeline-inspector__stat {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #fafafa;
+  border: 0;
+}
+.daylens-shell .timeline-inspector__stat > span {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(31, 38, 51, 0.48);
+}
+.daylens-shell .timeline-inspector__stat > strong {
+  font-size: 19px;
+  font-weight: 760;
+  color: #1f2633;
+  margin-top: 4px;
+  display: block;
+  letter-spacing: -0.01em;
+}
+
+.daylens-shell .timeline-inspector__section + .timeline-inspector__section {
+  border-top: 0;
+  padding-top: 0;
+}
+.daylens-shell .timeline-inspector__list {
+  gap: 10px;
+}
+.daylens-shell .timeline-mini-row__body p,
+.daylens-shell .timeline-app-row__copy p,
+.daylens-shell .timeline-evidence-row p {
+  color: #1f2633;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.daylens-shell .timeline-mini-row__body span,
+.daylens-shell .timeline-app-row__copy span,
+.daylens-shell .timeline-evidence-row span {
+  color: rgba(31, 38, 51, 0.48);
+  font-size: 11.5px;
+}
+.daylens-shell .timeline-mini-row__dot,
+.daylens-shell .timeline-metric-row__swatch {
+  width: 8px;
+  height: 8px;
+}
+.daylens-shell .timeline-inspector__stat strong,
+.daylens-shell .timeline-metric-row strong,
+.daylens-shell .timeline-app-row strong,
+.daylens-shell .timeline-evidence-row strong {
+  color: #1f2633;
+  font-size: 12px;
+  font-weight: 600;
+}
+.daylens-shell .timeline-metric-row__label > span:last-child {
+  color: rgba(31, 38, 51, 0.65);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.daylens-shell .timeline-note {
+  color: #33425a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.daylens-shell .timeline-note--muted {
+  color: rgba(31, 38, 51, 0.48);
+}
+.daylens-shell .timeline-inline-link {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f63db;
+}
+
+/* ── Empty + sync banners ────────────────────────────────────────────────── */
+.daylens-shell .timeline-empty,
+.daylens-shell .apps-empty {
+  padding: 48px 24px;
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  box-shadow: none;
+}
+.daylens-shell .timeline-empty h2,
+.daylens-shell .apps-empty h2 {
+  font-size: 18px;
+  font-weight: 750;
+  color: #1f2633;
+}
+.daylens-shell .timeline-empty p,
+.daylens-shell .apps-empty p {
+  color: rgba(31, 38, 51, 0.55);
+  font-size: 13.5px;
+}
+.daylens-shell .sync-banner {
+  font-size: 13px;
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.12);
+  color: #7c4a03;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  padding: 10px 14px;
+}
+
+/* ── Apps view + AI view share the same flat light surfaces ─────────────── */
+.daylens-shell .apps-list,
+.daylens-shell .apps-detail,
+.daylens-shell .ai-side,
+.daylens-shell .ai-hero,
+.daylens-shell .ai-chat {
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  box-shadow: none;
+}
+.daylens-shell .apps-summary-panel,
+.daylens-shell .ai-metric-card,
+.daylens-shell .ai-chapter-card,
+.daylens-shell .ai-side__card {
+  background: #fafafa;
+  border: 0;
+  border-radius: 14px;
+}
+.daylens-shell .apps-list__item--active,
+.daylens-shell .ai-thread-card--active {
+  background: #f3f4f6;
+  border-color: rgba(17, 24, 39, 0.10);
+}
+.daylens-shell .apps-list__item:hover,
+.daylens-shell .ai-thread-card:hover {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(17, 24, 39, 0.08);
+}
+.daylens-shell .apps-header__copy h1,
+.daylens-shell .apps-detail__hero h2,
+.daylens-shell .apps-summary-panel h2,
+.daylens-shell .ai-hero h1,
+.daylens-shell .ai-chat__header h2,
+.daylens-shell .ai-side__header h3 {
+  color: #1f2633;
+}
+.daylens-shell .apps-header__copy p,
+.daylens-shell .apps-detail__hero p,
+.daylens-shell .apps-summary-panel p,
+.daylens-shell .ai-hero__summary {
+  color: rgba(31, 38, 51, 0.55);
+}
+.daylens-shell .apps-list__item-copy p,
+.daylens-shell .apps-row__copy p {
+  color: #1f2633;
+}
+.daylens-shell .apps-list__item-copy span,
+.daylens-shell .apps-row__copy span,
+.daylens-shell .apps-evidence span {
+  color: rgba(31, 38, 51, 0.48);
+}
+.daylens-shell .apps-list__item strong,
+.daylens-shell .timeline-inspector__stat strong {
+  color: #1f2633;
+}
+
+/* AI chat bubbles, composer */
+.daylens-shell .ai-message--assistant {
+  background: #f7f8fa;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  color: #1f2633;
+}
+.daylens-shell .ai-message--user {
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+  border: 0;
+}
+.daylens-shell .ai-coverage-note {
+  background: rgba(251, 191, 36, 0.12);
+  color: #7c4a03;
+}
+.daylens-shell .ai-composer {
+  border-top: 1px solid rgba(17, 24, 39, 0.08);
+}
+.daylens-shell .ai-composer__input {
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  color: #1f2633;
+  border-radius: 12px;
+}
+.daylens-shell .ai-composer__input::placeholder {
+  color: rgba(31, 38, 51, 0.40);
+}
+.daylens-shell .ai-composer__send {
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+  border-radius: 12px;
+}
+
+/* Underline tab bar (ShadCN-style) on AI hero */
+.daylens-shell .ai-hero__switches,
+.daylens-shell .daylens-segmented:not(.timeline-topbar__date > *) {
+  /* leave daylens-segmented pill styling as defined above */
+}
+.daylens-shell .ai-toggle {
+  color: rgba(31, 38, 51, 0.55);
+}
+.daylens-shell .ai-toggle:hover {
+  color: #1f2633;
+}
+.daylens-shell .ai-toggle--active {
+  color: #1f2633;
+  border-bottom-color: #0f63db;
+}
+
+/* Secondary buttons in the topbar (Chats / New chat / Generate summary) */
+.daylens-shell .daylens-secondary-button {
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  color: #1f2633;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 8px;
+  min-height: 32px;
+  padding: 0 14px;
+}
+.daylens-shell .daylens-secondary-button:hover {
+  background: #f3f4f6;
+  border-color: rgba(17, 24, 39, 0.18);
+}
+
+/* Thin, calm scrollbars inside the shell */
+.daylens-shell ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.daylens-shell ::-webkit-scrollbar-thumb {
+  background: rgba(17, 24, 39, 0.16);
+  border-radius: 3px;
+}
+.daylens-shell ::-webkit-scrollbar-thumb:hover {
+  background: rgba(31, 38, 51, 0.32);
+}

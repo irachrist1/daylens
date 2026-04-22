@@ -188,7 +188,7 @@ export function DashboardClient() {
       </div>
 
       <div className="daylens-segmented">
-        {(["day", "week", "month"] as SurfaceRange[]).map((option) => (
+        {(["day", "week"] as SurfaceRange[]).map((option) => (
           <button
             key={option}
             type="button"
