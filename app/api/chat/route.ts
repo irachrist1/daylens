@@ -73,10 +73,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // NOTE: the deployed Convex action does not yet accept `range`. Forward
+    // only fields the current validator allows; week/month will answer against
+    // the anchor date until `npx convex deploy` picks up the wider validator.
+    void range;
     const result = await client.action(api.ai.askQuestion, {
       question,
       date,
-      range,
       threadId,
     });
 
