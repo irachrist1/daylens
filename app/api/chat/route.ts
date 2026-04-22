@@ -15,6 +15,33 @@ type ChatErrorCode =
 
 type ChatRange = "day" | "week" | "month";
 
+/**
+ * Strip anything that looks like an Anthropic API key or a userApiKey field
+ * from an error string before returning it to the browser. Convex includes
+ * the full args object in ArgumentValidationError messages, which would
+ * otherwise leak the BYO key back to the client.
+ */
+function redactSecrets(raw: string): string {
+  if (!raw) return raw;
+  return raw
+    .replace(/sk-[a-zA-Z0-9\-_]{10,}/g, "sk-***redacted***")
+    .replace(/"userApiKey"\s*:\s*"[^"]*"/g, '"userApiKey":"***redacted***"')
+    .replace(/userApiKey:\s*"[^"]*"/g, 'userApiKey:"***redacted***"');
+}
+
+/**
+ * The deployed Convex validator is sometimes behind this repo (needs
+ * `npx convex deploy` to catch up with new optional args). Detect the
+ * "extra field X is not in the validator" shape so we can retry with a
+ * narrower arg set automatically.
+ */
+function isExtraFieldValidatorError(raw: string): boolean {
+  return (
+    raw.includes("ArgumentValidationError") &&
+    /extra field [`"'][^`"']+[`"'] that is not in the validator/.test(raw)
+  );
+}
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) {
@@ -80,26 +107,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  async function callAction(args: Record<string, unknown>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return client.action(api.ai.askQuestion, args as any);
+  }
+
   try {
-    const result = await client.action(api.ai.askQuestion, {
-      question,
-      date,
-      range,
-      threadId,
-      userApiKey,
-      model,
-    });
+    let result;
+    try {
+      result = await callAction({ question, date, range, threadId, userApiKey, model });
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : "";
+      // If the deployed Convex validator doesn't know about the new optional
+      // args yet, retry with only the fields it definitely accepts. This
+      // keeps /chat working before `npx convex deploy` is run.
+      if (isExtraFieldValidatorError(raw)) {
+        console.warn("[chat] narrow-retry after validator rejected extra fields");
+        result = await callAction({ question, date, threadId });
+      } else {
+        throw error;
+      }
+    }
 
     return NextResponse.json(result);
   } catch (error) {
-    // Classify the error without leaking internals
-    const raw =
-      error instanceof Error ? error.message : "";
+    const rawUnsafe = error instanceof Error ? error.message : "";
+    const raw = redactSecrets(rawUnsafe);
 
-    // Log full error server-side for debugging
+    // Log the full (but redacted) error server-side for debugging
     console.error("[chat] AI action failed:", raw);
 
-    // Only surface safe, user-actionable messages
     const rawLower = raw.toLowerCase();
 
     const isKeyError =
@@ -113,7 +150,8 @@ export async function POST(request: NextRequest) {
       raw.includes("Could not find") ||
       rawLower.includes("is not a function") ||
       rawLower.includes("npx") ||
-      rawLower.includes("deployment");
+      rawLower.includes("deployment") ||
+      rawLower.includes("argumentvalidationerror");
 
     const isNoData =
       raw.includes("No activity data") ||
@@ -144,11 +182,11 @@ export async function POST(request: NextRequest) {
     if (isKeyError) {
       code = "missing_key";
       userMessage =
-        "Your API key isn't set up yet. Open Daylens on your computer, go to Settings, and save your Anthropic API key.";
+        "Your API key isn't set up yet. Open Settings → AI Provider and save an Anthropic key, or configure one on the desktop app.";
     } else if (isBillingError) {
       code = "billing_exhausted";
       userMessage =
-        "Your Anthropic API key is linked, but the provider account does not have enough credits right now. Top up that key or switch providers in Daylens on your computer.";
+        "Your Anthropic API key is linked, but the provider account does not have enough credits right now. Top up that key or switch providers.";
     } else if (isUsageLimit) {
       code = "rate_limited";
       userMessage =
@@ -156,7 +194,7 @@ export async function POST(request: NextRequest) {
     } else if (isNotDeployed) {
       code = "service_updating";
       userMessage =
-        "The AI service is being updated. Please try again in a few minutes.";
+        "The AI service is being updated. Please try again in a minute.";
     } else if (isNoData) {
       code = "no_data";
       userMessage =
@@ -164,12 +202,11 @@ export async function POST(request: NextRequest) {
     } else if (isModelError) {
       code = "service_updating";
       userMessage =
-        "The AI model is currently unavailable. Daylens will retry shortly — or try again in a minute.";
+        "The AI model is currently unavailable. Try again in a minute or pick a different model in Settings.";
     } else {
       code = "unknown";
-      userMessage = raw
-        ? `Daylens couldn't reach the AI provider: ${raw}`
-        : "Something went wrong. Please try again.";
+      userMessage =
+        "Daylens couldn't reach the AI provider. Please try again in a moment.";
     }
 
     return NextResponse.json({ error: userMessage, code }, { status: 500 });
