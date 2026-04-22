@@ -66,12 +66,14 @@ export const store = internalAction({
   args: {
     workspaceId: v.id("workspaces"),
     anthropicKey: v.string(),
+    updatedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const encrypted = encrypt(args.anthropicKey, args.workspaceId);
     await ctx.runMutation(internal.keysMutations.upsertEncryptedKey, {
       workspaceId: args.workspaceId,
       encryptedAnthropicKey: encrypted,
+      updatedAt: args.updatedAt ?? Date.now(),
     });
     return { success: true };
   },

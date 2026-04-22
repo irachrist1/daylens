@@ -23,6 +23,7 @@ type ChatErrorCode =
   | "missing_key"
   | "billing_exhausted"
   | "rate_limited"
+  | "model_not_allowed"
   | "service_updating"
   | "unknown";
 type SurfaceErrorState = {
@@ -69,6 +70,8 @@ function buildSurfaceError(code: ChatErrorCode | null, message: string): Surface
       return { code, title: "AI setup needs attention", message };
     case "no_data":
       return { code, title: "No synced evidence for this range", message };
+    case "model_not_allowed":
+      return { code, title: "Model unavailable", message };
     case "service_updating":
       return { code, title: "AI service updating", message };
     case "not_authenticated":
@@ -297,6 +300,9 @@ export function GlobalChat({
 
   useEffect(() => {
     inputRef.current?.focus();
+    // Legacy: early builds stored the Anthropic key in localStorage. Purge any
+    // leftover so the key never sits at rest in the browser after this fix.
+    window.localStorage.removeItem("daylens-web:anthropic-api-key");
   }, []);
 
   useEffect(() => {
@@ -378,10 +384,6 @@ export function GlobalChat({
     setSurfaceError(null);
 
     try {
-      const userApiKey =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("daylens-web:anthropic-api-key") || undefined
-          : undefined;
       const model =
         typeof window !== "undefined"
           ? window.localStorage.getItem("daylens-web:anthropic-model") || undefined
@@ -394,7 +396,6 @@ export function GlobalChat({
           date,
           range,
           threadId,
-          userApiKey,
           model,
         }),
       });

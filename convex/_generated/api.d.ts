@@ -16,6 +16,7 @@ import type * as http from "../http.js";
 import type * as httpRateLimits from "../httpRateLimits.js";
 import type * as keys from "../keys.js";
 import type * as keysMutations from "../keysMutations.js";
+import type * as keysPublic from "../keysPublic.js";
 import type * as linkCodes from "../linkCodes.js";
 import type * as preferences from "../preferences.js";
 import type * as remoteSync from "../remoteSync.js";
@@ -44,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   httpRateLimits: typeof httpRateLimits;
   keys: typeof keys;
   keysMutations: typeof keysMutations;
+  keysPublic: typeof keysPublic;
   linkCodes: typeof linkCodes;
   preferences: typeof preferences;
   remoteSync: typeof remoteSync;

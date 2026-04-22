@@ -56,6 +56,7 @@ export default defineSchema({
   encrypted_keys: defineTable({
     workspaceId: v.id("workspaces"),
     encryptedAnthropicKey: v.string(),
+    updatedAt: v.optional(v.number()),
   }).index("by_workspace", ["workspaceId"]),
   workspace_live_presence: defineTable({
     workspaceId: v.id("workspaces"),
