@@ -23,11 +23,22 @@ export const platformValidator = v.union(
   v.literal("linux")
 );
 
-export const topPageValidator = v.object({
-  domain: v.string(),
-  label: v.optional(v.union(v.string(), v.null())),
-  seconds: v.number(),
-});
+// Accepts both the current {domain,label} shape and the legacy {url,title}
+// shape because one stale seed row in day_snapshots still uses the legacy
+// form and Convex push validates every row. Once that row is deleted via
+// the Convex dashboard this can be tightened back to the first branch.
+export const topPageValidator = v.union(
+  v.object({
+    domain: v.string(),
+    label: v.optional(v.union(v.string(), v.null())),
+    seconds: v.number(),
+  }),
+  v.object({
+    url: v.string(),
+    title: v.optional(v.union(v.string(), v.null())),
+    seconds: v.number(),
+  }),
+);
 
 export const focusSessionValidator = v.object({
   sourceId: v.string(),

@@ -102,6 +102,7 @@ Preconditions: logged into the web app with a linked workspace; at least one syn
 
 ## 7. Follow‑ups not in this PR
 
+- **Delete the one stale seed row and tighten `topPageValidator`.** One leftover row in `day_snapshots` (id `j574wa5drmgsrzyg4zcej8hgx983cz99`, deviceId `verify-desktop-d508dc71-…`) holds the legacy `topPages: {url, title}` shape. Convex's push validator sees it, but user code (`ctx.db.query().collect()`) and even `npx convex data` silently filter it out, so no CLI‑mutation path can delete it. Fix: `npx convex dashboard`, table `day_snapshots`, find that ID, delete it. Then reduce `convex/snapshotValidator.ts:topPageValidator` back to the single `{domain,label,seconds}` branch and `npx convex deploy`. Also fix the upstream E2E script at `daylens/scripts/validate-remote-e2e.mjs` so it stops writing legacy shapes into prod.
 - Prompt‑injection hardening around `### Work Blocks` user‑influenced strings (#9).
 - Thread‑atomicity — reserve thread id before calling Anthropic (#12).
 - Extend `scripts/check-convex-manifest.mjs` to fail CI when the repo's validator shape differs from the deployed one.
