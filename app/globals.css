@@ -10137,3 +10137,521 @@ body:has(.daylens-shell) .glass-bg::after {
 .daylens-shell ::-webkit-scrollbar-thumb:hover {
   background: rgba(31, 38, 51, 0.32);
 }
+
+/* =========================================================================
+   AI VIEW — single-column layout that matches the desktop Insights screen
+   ========================================================================= */
+
+.daylens-shell .ai-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: calc(100vh - 1px);
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 32px 40px 20px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+  .daylens-shell .ai-shell {
+    padding: 20px 16px 16px;
+  }
+}
+
+.daylens-shell .ai-shell__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.daylens-shell .ai-shell__heading h1 {
+  font-size: 30px;
+  font-weight: 780;
+  letter-spacing: -0.03em;
+  color: #1f2633;
+  margin: 0;
+  line-height: 1.05;
+}
+.daylens-shell .ai-shell__heading p {
+  font-size: 13.5px;
+  color: #5c6474;
+  margin: 6px 0 0;
+}
+.daylens-shell .ai-shell__heading .ai-shell__thread {
+  font-size: 12.5px;
+  color: rgba(31, 38, 51, 0.48);
+  margin-top: 8px;
+}
+.daylens-shell .ai-shell__thread span {
+  color: #5c6474;
+}
+.daylens-shell .ai-shell__actions {
+  display: flex;
+  gap: 8px;
+  position: relative;
+}
+.daylens-shell .ai-header-button {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: #ffffff;
+  color: #5c6474;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms, color 140ms;
+}
+.daylens-shell .ai-header-button:hover {
+  background: #f3f4f6;
+  color: #1f2633;
+  border-color: rgba(17, 24, 39, 0.18);
+}
+.daylens-shell .ai-shell__chats {
+  position: relative;
+}
+.daylens-shell .ai-shell__chats-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 280px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  border-radius: 10px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+}
+.daylens-shell .ai-shell__chats-menu button {
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: #1f2633;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+.daylens-shell .ai-shell__chats-menu button:hover,
+.daylens-shell .ai-shell__chats-menu button.is-active {
+  background: #f3f4f6;
+}
+.daylens-shell .ai-shell__chats-menu button strong {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.daylens-shell .ai-shell__chats-menu button span {
+  font-size: 11px;
+  color: rgba(31, 38, 51, 0.48);
+}
+
+.daylens-shell .ai-shell__body {
+  flex: 1;
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+/* ── Work recap hero card ─────────────────────────────────────────────────── */
+.daylens-shell .ai-recap {
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #f5f7fb;
+  overflow: hidden;
+}
+.daylens-shell .ai-recap__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 22px 12px;
+  flex-wrap: wrap;
+}
+.daylens-shell .ai-recap__heading {
+  min-width: 0;
+}
+.daylens-shell .ai-recap__kicker {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(31, 38, 51, 0.50);
+  margin: 0 0 8px;
+}
+.daylens-shell .ai-recap__title {
+  font-size: 24px;
+  font-weight: 780;
+  letter-spacing: -0.03em;
+  color: #1f2633;
+  margin: 0;
+  line-height: 1.15;
+}
+.daylens-shell .ai-recap__subtitle {
+  font-size: 13px;
+  color: rgba(31, 38, 51, 0.50);
+  margin: 6px 0 0;
+}
+.daylens-shell .ai-recap__headline {
+  padding: 4px 22px 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #33425a;
+  margin: 0;
+  max-width: 720px;
+}
+.daylens-shell .ai-recap__toggle {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  flex-shrink: 0;
+}
+.daylens-shell .ai-recap__toggle button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: rgba(31, 38, 51, 0.60);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, color 140ms;
+}
+.daylens-shell .ai-recap__toggle button:hover:not(.is-active) {
+  color: #1f2633;
+}
+.daylens-shell .ai-recap__toggle .is-active {
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+}
+
+.daylens-shell .ai-coverage-note {
+  margin: 0 22px 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.14);
+  color: #7c4a03;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Numbered chapters */
+.daylens-shell .ai-recap__chapters {
+  background: #ffffff;
+  border-top: 1px solid rgba(17, 24, 39, 0.06);
+  border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+}
+.daylens-shell .ai-recap-chapter {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 14px;
+  padding: 16px 22px;
+  border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+}
+.daylens-shell .ai-recap-chapter:last-child {
+  border-bottom: 0;
+}
+.daylens-shell .ai-recap-chapter__index {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 2px;
+}
+.daylens-shell .ai-recap-chapter__index span {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  background: #ffffff;
+  color: #1f2633;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.daylens-shell .ai-recap-chapter__line {
+  flex: 1;
+  width: 1px;
+  margin-top: 8px;
+  min-height: 24px;
+  background: rgba(17, 24, 39, 0.10);
+}
+.daylens-shell .ai-recap-chapter__body {
+  min-width: 0;
+}
+.daylens-shell .ai-recap-chapter__eyebrow {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(31, 38, 51, 0.48);
+  margin: 0;
+}
+.daylens-shell .ai-recap-chapter__title {
+  font-size: 15px;
+  font-weight: 740;
+  letter-spacing: -0.01em;
+  color: #1f2633;
+  margin: 6px 0 0;
+  line-height: 1.35;
+}
+.daylens-shell .ai-recap-chapter__copy {
+  font-size: 13px;
+  line-height: 1.65;
+  color: #33425a;
+  margin: 8px 0 0;
+  max-width: 660px;
+}
+
+/* Metrics row */
+.daylens-shell .ai-recap__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  padding: 18px 22px;
+  background: #ffffff;
+  border-top: 1px solid rgba(17, 24, 39, 0.06);
+}
+.daylens-shell .ai-recap-metric {
+  border-radius: 14px;
+  background: #f5f7fb;
+  padding: 14px;
+  min-height: 96px;
+}
+.daylens-shell .ai-recap-metric__label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(31, 38, 51, 0.48);
+}
+.daylens-shell .ai-recap-metric__value {
+  display: block;
+  font-size: 22px;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  color: #1f2633;
+  margin-top: 10px;
+}
+.daylens-shell .ai-recap-metric__detail {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: rgba(31, 38, 51, 0.55);
+  margin: 6px 0 0;
+}
+
+/* Prompt chip row inside recap */
+.daylens-shell .ai-recap__prompts {
+  padding: 16px 22px 22px;
+  background: #f5f7fb;
+}
+.daylens-shell .ai-recap__chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.daylens-shell .ai-recap-chip {
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  color: #1f2633;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms;
+}
+.daylens-shell .ai-recap-chip:hover {
+  background: #f3f4f6;
+  border-color: rgba(17, 24, 39, 0.18);
+}
+
+/* ── Generate summary card ────────────────────────────────────────────────── */
+.daylens-shell .ai-generate-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+}
+.daylens-shell .ai-generate-card p {
+  margin: 0;
+  font-size: 13px;
+  color: #33425a;
+  line-height: 1.55;
+  max-width: 520px;
+}
+.daylens-shell .ai-generate-card__cta {
+  flex-shrink: 0;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 0;
+  background: linear-gradient(135deg, #adc6ff, #4d8eff);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.daylens-shell .ai-generate-card__cta:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ── Ask Daylens suggestions ──────────────────────────────────────────────── */
+.daylens-shell .ai-suggestions {
+  padding: 4px 2px 8px;
+}
+.daylens-shell .ai-suggestions .ai-recap__kicker {
+  margin-bottom: 10px;
+}
+
+/* ── Thread feed ──────────────────────────────────────────────────────────── */
+.daylens-shell .ai-thread-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 0 24px;
+}
+.daylens-shell .ai-turn {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.daylens-shell .ai-turn--user {
+  justify-content: flex-end;
+}
+.daylens-shell .ai-turn__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #33425a;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.daylens-shell .ai-turn__body {
+  flex: 1;
+  min-width: 0;
+}
+.daylens-shell .ai-turn__text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: #1f2633;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.daylens-shell .ai-user-bubble {
+  max-width: min(80%, 560px);
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: rgba(135, 176, 255, 0.22);
+  color: #1f2633;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Error banner ─────────────────────────────────────────────────────────── */
+.daylens-shell .ai-shell__notice {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  color: #33425a;
+}
+.daylens-shell .ai-shell__notice strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #7f1d1d;
+  margin-bottom: 4px;
+}
+.daylens-shell .ai-shell__notice p {
+  margin: 0;
+  font-size: 12.5px;
+  color: rgba(31, 38, 51, 0.65);
+  line-height: 1.55;
+}
+
+/* ── Composer bar (sticky-ish at bottom of shell) ────────────────────────── */
+.daylens-shell .ai-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  margin-top: 16px;
+  position: sticky;
+  bottom: 16px;
+}
+.daylens-shell .ai-composer-bar__input {
+  flex: 1;
+  min-height: 26px;
+  max-height: 140px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: #1f2633;
+  font-size: 13px;
+  line-height: 1.55;
+  resize: none;
+  outline: none;
+}
+.daylens-shell .ai-composer-bar__input::placeholder {
+  color: rgba(31, 38, 51, 0.40);
+}
+.daylens-shell .ai-composer-bar__send {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: #ffffff;
+  color: #5c6474;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 140ms, color 140ms, border-color 140ms;
+}
+.daylens-shell .ai-composer-bar__send:hover:not(:disabled) {
+  background: #f3f4f6;
+  color: #1f2633;
+  border-color: rgba(17, 24, 39, 0.18);
+}
+.daylens-shell .ai-composer-bar__send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Hide the old two-column AI layout when the new shell is active (safety) */
+.daylens-shell .ai-layout {
+  display: none;
+}

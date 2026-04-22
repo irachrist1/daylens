@@ -52,29 +52,6 @@ function exportLabel(kind: ExportKind) {
   }
 }
 
-function artifactKindLabel(kind: WorkspaceAIArtifact["kind"]) {
-  switch (kind) {
-    case "csv":
-      return "CSV";
-    case "html_chart":
-      return "HTML";
-    case "json_table":
-      return "JSON";
-    case "report":
-      return "Report";
-    default:
-      return "Markdown";
-  }
-}
-
-function buildThreadHref(threadId: string, date?: string, range: SurfaceRange = "day") {
-  const params = new URLSearchParams();
-  params.set("thread", threadId);
-  if (date) params.set("date", date);
-  if (range !== "day") params.set("range", range);
-  return appPath(`/chat?${params.toString()}`);
-}
-
 function friendlyError(fallback: string, error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return `${fallback} ${error.message.trim()}`;
@@ -85,47 +62,19 @@ function friendlyError(fallback: string, error: unknown): string {
 function buildSurfaceError(code: ChatErrorCode | null, message: string): SurfaceErrorState {
   switch (code) {
     case "billing_exhausted":
-      return {
-        code,
-        title: "Provider credits exhausted",
-        message,
-      };
+      return { code, title: "Provider credits exhausted", message };
     case "rate_limited":
-      return {
-        code,
-        title: "Provider temporarily busy",
-        message,
-      };
+      return { code, title: "Provider temporarily busy", message };
     case "missing_key":
-      return {
-        code,
-        title: "AI setup needs attention",
-        message,
-      };
+      return { code, title: "AI setup needs attention", message };
     case "no_data":
-      return {
-        code,
-        title: "No synced evidence for this range",
-        message,
-      };
+      return { code, title: "No synced evidence for this range", message };
     case "service_updating":
-      return {
-        code,
-        title: "AI service updating",
-        message,
-      };
+      return { code, title: "AI service updating", message };
     case "not_authenticated":
-      return {
-        code,
-        title: "Session expired",
-        message,
-      };
+      return { code, title: "Session expired", message };
     default:
-      return {
-        code,
-        title: message || "AI reply unavailable",
-        message: "",
-      };
+      return { code, title: message || "AI reply unavailable", message: "" };
   }
 }
 
@@ -133,99 +82,143 @@ function periodLabel(period: RecapPeriod): string {
   return period === "day" ? "Daily" : period === "week" ? "Weekly" : "Monthly";
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
-  const user = message.role === "user";
-
-  return (
-    <div className={`flex ${user ? "justify-end" : "justify-start"}`}>
-      <div className={`ai-message ${user ? "ai-message--user" : "ai-message--assistant"}`}>
-        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
-      </div>
-    </div>
-  );
+function formatFullDateLabel(dateStr?: string): string {
+  const base = dateStr ? new Date(`${dateStr}T12:00:00`) : new Date();
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(base);
 }
 
 function RecapPanel({
   activeRecap,
+  activeRawRecap,
   activePeriod,
   onSelectPeriod,
   coverageNote,
-  promptChips,
   onPromptClick,
-  groundedLabel,
+  groundedTitle,
+  groundedSubtitle,
 }: {
   activeRecap: SanitizedRecap | null;
+  activeRawRecap: RecapSummaryLite | null;
   activePeriod: RecapPeriod;
   onSelectPeriod: (period: RecapPeriod) => void;
   coverageNote: string | null;
-  promptChips: string[];
   onPromptClick: (prompt: string) => void;
-  groundedLabel: string;
+  groundedTitle: string;
+  groundedSubtitle: string;
 }) {
+  const chapters = activeRecap?.chapters ?? [];
+  const metrics = activeRecap?.metrics ?? [];
+  const promptChips = activeRecap?.promptChips ?? [];
+  const hasData = Boolean(activeRawRecap?.hasData);
+
   return (
-    <section className="ai-hero glass-card">
-      <div className="ai-hero__header">
-        <div>
-          <p className="timeline-kicker">AI</p>
-          <h1>{groundedLabel}</h1>
-          <p className="ai-hero__summary">
-            {activeRecap?.headline ?? `No ${activePeriod} recap ready yet — but you can still ask questions below.`}
-          </p>
+    <section className="ai-recap">
+      <header className="ai-recap__header">
+        <div className="ai-recap__heading">
+          <p className="ai-recap__kicker">Work recap</p>
+          <h2 className="ai-recap__title">{groundedTitle}</h2>
+          <p className="ai-recap__subtitle">{groundedSubtitle}</p>
         </div>
-        <div className="ai-hero__switches">
+        <div className="ai-recap__toggle">
           {(["day", "week", "month"] as RecapPeriod[]).map((period) => (
             <button
               key={period}
               type="button"
               onClick={() => onSelectPeriod(period)}
-              className={`ai-toggle ${activePeriod === period ? "ai-toggle--active" : ""}`}
+              className={activePeriod === period ? "is-active" : ""}
             >
               {periodLabel(period)}
             </button>
           ))}
         </div>
-      </div>
+      </header>
+
+      {activeRecap?.headline ? (
+        <p className="ai-recap__headline">{activeRecap.headline}</p>
+      ) : null}
 
       {coverageNote ? <p className="ai-coverage-note">{coverageNote}</p> : null}
 
-      {activeRecap ? (
-        <>
-          {activeRecap.metrics.length > 0 ? (
-            <div className="ai-metric-grid">
-              {activeRecap.metrics.slice(0, 3).map((metric) => (
-                <div key={metric.label} className="ai-metric-card">
-                  <span>{metric.label}</span>
-                  <strong>{metric.value}</strong>
-                  <p>{metric.detail}</p>
-                </div>
-              ))}
+      {hasData && chapters.length > 0 ? (
+        <div className="ai-recap__chapters">
+          {chapters.map((chapter, index) => (
+            <div key={chapter.id} className="ai-recap-chapter">
+              <div className="ai-recap-chapter__index">
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                {index < chapters.length - 1 ? <div className="ai-recap-chapter__line" /> : null}
+              </div>
+              <div className="ai-recap-chapter__body">
+                <p className="ai-recap-chapter__eyebrow">{chapter.eyebrow}</p>
+                <h3 className="ai-recap-chapter__title">{chapter.title}</h3>
+                <p className="ai-recap-chapter__copy">{chapter.body}</p>
+              </div>
             </div>
-          ) : null}
-
-          {activeRecap.chapters.length > 0 ? (
-            <div className="ai-chapter-grid">
-              {activeRecap.chapters.slice(0, 2).map((chapter) => (
-                <article key={chapter.id} className="ai-chapter-card">
-                  <span>{chapter.eyebrow}</span>
-                  <h2>{chapter.title}</h2>
-                  <p>{chapter.body}</p>
-                </article>
-              ))}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-
-      {promptChips.length > 0 ? (
-        <div className="ai-prompt-row">
-          {promptChips.slice(0, 5).map((chip) => (
-            <button key={chip} type="button" className="timeline-chip" onClick={() => onPromptClick(chip)}>
-              {chip}
-            </button>
           ))}
         </div>
       ) : null}
+
+      {metrics.length > 0 ? (
+        <div className="ai-recap__metrics">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="ai-recap-metric">
+              <span className="ai-recap-metric__label">{metric.label}</span>
+              <strong className="ai-recap-metric__value">{metric.value}</strong>
+              <p className="ai-recap-metric__detail">{metric.detail}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {promptChips.length > 0 ? (
+        <div className="ai-recap__prompts">
+          <p className="ai-recap__kicker">Ask Daylens from here</p>
+          <div className="ai-recap__chip-row">
+            {promptChips.slice(0, 6).map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                className="ai-recap-chip"
+                onClick={() => onPromptClick(chip)}
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
+  );
+}
+
+function AssistantMessage({ content }: { content: string }) {
+  return (
+    <div className="ai-turn ai-turn--assistant">
+      <div className="ai-turn__avatar">D</div>
+      <div className="ai-turn__body">
+        <p className="ai-turn__text">{content}</p>
+      </div>
+    </div>
+  );
+}
+
+function UserMessage({ content }: { content: string }) {
+  return (
+    <div className="ai-turn ai-turn--user">
+      <div className="ai-user-bubble">{content}</div>
+    </div>
+  );
+}
+
+function IconSend() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 13 13 3" />
+      <path d="M5.5 3H13v7.5" />
+    </svg>
   );
 }
 
@@ -246,28 +239,38 @@ export function GlobalChat({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId ?? null);
   const [threads, setThreads] = useState<WorkspaceAIThread[]>([]);
-  const [artifacts, setArtifacts] = useState<WorkspaceAIArtifact[]>([]);
+  const [, setArtifacts] = useState<WorkspaceAIArtifact[]>([]);
   const [snapshotRecap, setSnapshotRecap] = useState<SnapshotRecapPayload | null>(null);
   const [activeRecapPeriod, setActiveRecapPeriod] = useState<RecapPeriod>("day");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [artifactLoading, setArtifactLoading] = useState<ExportKind | null>(null);
   const [surfaceError, setSurfaceError] = useState<SurfaceErrorState | null>(null);
+  const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const currentThread =
     threads.find((candidate) => candidate.workspaceThreadId === threadId) ?? null;
-  const recapByPeriod = useMemo(
+
+  const rawRecapByPeriod = useMemo(
     () => ({
-      day: sanitizeRecapSummary(snapshotRecap?.recap?.day ?? null),
-      week: sanitizeRecapSummary(snapshotRecap?.recap?.week ?? null),
-      month: sanitizeRecapSummary(snapshotRecap?.recap?.month ?? null),
+      day: snapshotRecap?.recap?.day ?? null,
+      week: snapshotRecap?.recap?.week ?? null,
+      month: snapshotRecap?.recap?.month ?? null,
     }),
     [snapshotRecap],
   );
+  const recapByPeriod = useMemo(
+    () => ({
+      day: sanitizeRecapSummary(rawRecapByPeriod.day),
+      week: sanitizeRecapSummary(rawRecapByPeriod.week),
+      month: sanitizeRecapSummary(rawRecapByPeriod.month),
+    }),
+    [rawRecapByPeriod],
+  );
   const activeRecap = recapByPeriod[activeRecapPeriod];
-  const promptChips = recapByPeriod.day?.promptChips ?? [];
+  const activeRawRecap = rawRecapByPeriod[activeRecapPeriod];
 
   useEffect(() => {
     setActiveRecapPeriod(range);
@@ -383,14 +386,12 @@ export function GlobalChat({
       const data = await response.json();
 
       if (!response.ok || typeof data.response !== "string") {
-        setSurfaceError(
-          buildSurfaceError(
-            typeof data.code === "string" ? (data.code as ChatErrorCode) : null,
-            typeof data.error === "string"
-              ? data.error
-              : "The provider did not return a usable response.",
-          ),
-        );
+        const code = typeof data.code === "string" ? (data.code as ChatErrorCode) : null;
+        const message =
+          typeof data.error === "string"
+            ? data.error
+            : "The provider did not return a usable response.";
+        setSurfaceError(buildSurfaceError(code, message));
         setLoading(false);
         return;
       }
@@ -492,79 +493,123 @@ export function GlobalChat({
     }
   }
 
-  const groundedLabel = date
-    ? `Grounded on ${formatLongRangeLabel(date, range)}`
-    : "Grounded on your latest synced day";
+  const groundedTitle = activeRecap?.headline ? "Daily recap" : "Ask about your day";
+  const dateLabel = formatFullDateLabel(date);
+  const groundedSubtitle = date ? formatLongRangeLabel(date, range) : dateLabel;
+  const activeThreadLabel =
+    currentThread && currentThread.title.trim() && currentThread.title !== "New chat"
+      ? currentThread.title
+      : null;
+  const headerDateLabel = dateLabel;
 
   return (
-    <div className="ai-layout">
-      <div className="ai-main">
-        <RecapPanel
-          activeRecap={activeRecap}
-          activePeriod={activeRecapPeriod}
-          onSelectPeriod={setActiveRecapPeriod}
-          coverageNote={snapshotRecap?.coverageNote ?? null}
-          promptChips={promptChips}
-          onPromptClick={(prompt) => {
-            setInput(prompt);
-            inputRef.current?.focus();
-          }}
-          groundedLabel={groundedLabel}
-        />
-
-        <section className="ai-chat glass-card">
-          <div className="ai-chat__header">
-            <div>
-              <p className="timeline-kicker">Current thread</p>
-              <h2>{currentThread?.title ?? "New chat"}</h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setThreadId(null);
-                setMessages([]);
-                setInput("");
-                setSurfaceError(null);
-                inputRef.current?.focus();
-                router.push(buildSurfaceHref("/chat", date ?? new Date().toLocaleDateString("en-CA"), range));
-              }}
-              className="daylens-secondary-button"
-            >
-              New thread
-            </button>
-          </div>
-
-          {surfaceError ? (
-            <div className="ai-chat__notice">
-              <div className="ai-chat__notice-copy">
-                <strong>{surfaceError.title}</strong>
-                <p>{surfaceError.message}</p>
-              </div>
+    <div className="ai-shell">
+      <header className="ai-shell__header">
+        <div className="ai-shell__heading">
+          <h1>AI</h1>
+          <p>{headerDateLabel}</p>
+          {activeThreadLabel ? (
+            <p className="ai-shell__thread">In <span>{activeThreadLabel}</span></p>
+          ) : null}
+        </div>
+        <div className="ai-shell__actions">
+          {threads.length > 0 ? (
+            <div className="ai-shell__chats">
+              <button
+                type="button"
+                className="ai-header-button"
+                onClick={() => setThreadPickerOpen((value) => !value)}
+                aria-haspopup="listbox"
+                aria-expanded={threadPickerOpen}
+              >
+                Chats
+              </button>
+              {threadPickerOpen ? (
+                <div className="ai-shell__chats-menu" role="listbox">
+                  {threads.map((thread) => (
+                    <button
+                      key={thread.workspaceThreadId}
+                      type="button"
+                      role="option"
+                      aria-selected={thread.workspaceThreadId === threadId}
+                      className={thread.workspaceThreadId === threadId ? "is-active" : ""}
+                      onClick={() => {
+                        setThreadPickerOpen(false);
+                        router.push(
+                          appPath(`/chat?thread=${encodeURIComponent(thread.workspaceThreadId)}`),
+                        );
+                      }}
+                    >
+                      <strong>{thread.title}</strong>
+                      <span>{formatRelativeTime(thread.updatedAt)}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
+          <button
+            type="button"
+            className="ai-header-button"
+            onClick={() => {
+              setThreadId(null);
+              setMessages([]);
+              setInput("");
+              setSurfaceError(null);
+              inputRef.current?.focus();
+              router.push(
+                buildSurfaceHref(
+                  "/chat",
+                  date ?? new Date().toLocaleDateString("en-CA"),
+                  range,
+                ),
+              );
+            }}
+          >
+            New chat
+          </button>
+        </div>
+      </header>
 
-          <div className="ai-chat__messages">
-            {messages.length === 0 ? (
-              <div className="ai-empty-state">
-                <p>Ask about the proof, one block, or a report.</p>
-                {promptChips.length > 0 ? (
-                  <div className="ai-prompt-row">
-                    {promptChips.map((chip) => (
-                      <button key={chip} type="button" className="timeline-chip" onClick={() => setInput(chip)}>
-                        {chip}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="ai-message-stack">
-                {messages.map((message, index) => (
-                  <MessageBubble key={`${message.role}-${message.timestamp ?? index}-${index}`} message={message} />
-                ))}
-              </div>
+      <div className="ai-shell__body">
+        {messages.length === 0 ? (
+          <RecapPanel
+            activeRecap={activeRecap}
+            activeRawRecap={activeRawRecap}
+            activePeriod={activeRecapPeriod}
+            onSelectPeriod={setActiveRecapPeriod}
+            coverageNote={snapshotRecap?.coverageNote ?? null}
+            onPromptClick={(prompt) => {
+              setInput(prompt);
+              inputRef.current?.focus();
+            }}
+            groundedTitle={groundedTitle}
+            groundedSubtitle={groundedSubtitle}
+          />
+        ) : null}
+
+        {surfaceError ? (
+          <div className="ai-shell__notice">
+            <strong>{surfaceError.title}</strong>
+            {surfaceError.message ? <p>{surfaceError.message}</p> : null}
+          </div>
+        ) : null}
+
+        {messages.length > 0 ? (
+          <div className="ai-thread-feed">
+            {messages.map((message, index) =>
+              message.role === "user" ? (
+                <UserMessage
+                  key={`user-${message.timestamp ?? index}-${index}`}
+                  content={message.content}
+                />
+              ) : (
+                <AssistantMessage
+                  key={`assistant-${message.timestamp ?? index}-${index}`}
+                  content={message.content}
+                />
+              ),
             )}
-
             {loading || artifactLoading ? (
               <div className="ai-loading-row">
                 <div className="ai-loading-dot" />
@@ -572,127 +617,90 @@ export function GlobalChat({
                 <div className="ai-loading-dot" />
               </div>
             ) : null}
-
             <div ref={endRef} />
           </div>
+        ) : null}
 
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendMessage(input);
-            }}
-            className="ai-composer"
-          >
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void sendMessage(input);
-                }
-              }}
-              placeholder={range === "day" ? "Ask about this day or make a report..." : `Ask about this ${range} or make a report...`}
-              className="ai-composer__input"
-              disabled={loading || artifactLoading !== null}
-              rows={1}
-            />
+        {messages.length === 0 ? (
+          <section className="ai-generate-card">
+            <p>
+              Generate a grounded briefing when you want a quick read on today,
+              or jump straight into one of the questions below.
+            </p>
             <button
-              type="submit"
-              disabled={loading || artifactLoading !== null || !input.trim()}
-              className="ai-composer__send"
+              type="button"
+              className="ai-generate-card__cta"
+              disabled={artifactLoading !== null || loading}
+              onClick={() => void generateArtifact("report")}
             >
-              Send
+              {artifactLoading === "report" ? "Working…" : "Generate summary"}
             </button>
-          </form>
-        </section>
-      </div>
+          </section>
+        ) : null}
 
-      <aside className="ai-side glass-card">
-        <section className="ai-side__section">
-          <div className="ai-side__header">
-            <div>
-              <p className="timeline-kicker">Exports</p>
-              <h3>Reports and files</h3>
-            </div>
-          </div>
-          <div className="ai-side__actions">
-            {(["report", "csv", "chart"] as ExportKind[]).map((kind) => (
-              <button
-                key={kind}
-                type="button"
-                onClick={() => void generateArtifact(kind)}
-                disabled={artifactLoading !== null || loading}
-                className="ai-side__action"
-              >
-                <span>{exportLabel(kind)}</span>
-                <strong>{artifactLoading === kind ? "Working..." : "Create"}</strong>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="ai-side__section">
-          <div className="ai-side__header">
-            <div>
-              <p className="timeline-kicker">Artifacts</p>
-              <h3>{threadId ? "Generated in this thread" : "Recent artifacts"}</h3>
-            </div>
-            <span>{artifacts.length}</span>
-          </div>
-          {artifacts.length === 0 ? (
-            <p className="ai-side__empty">Create a report, CSV export, or chart to keep it here.</p>
-          ) : (
-            <div className="ai-side__list">
-              {artifacts.map((artifact) => (
-                <div key={artifact.workspaceArtifactId} className="ai-side__card">
-                  <p>{artifact.title}</p>
-                  <span>{artifactKindLabel(artifact.kind)} · {formatRelativeTime(artifact.createdAt)}</span>
-                  <div className="ai-side__links">
-                    <a href={apiPath(`/api/ai-artifacts/${artifact.workspaceArtifactId}`)} target="_blank" rel="noreferrer">
-                      Open
-                    </a>
-                    <a href={apiPath(`/api/ai-artifacts/${artifact.workspaceArtifactId}?download=1`)}>
-                      Download
-                    </a>
-                  </div>
-                </div>
+        {messages.length === 0 ? (
+          <div className="ai-suggestions">
+            <p className="ai-recap__kicker">Ask Daylens</p>
+            <div className="ai-recap__chip-row">
+              {(activeRecap?.promptChips?.length
+                ? activeRecap.promptChips
+                : [
+                    "What did I actually get done today?",
+                    "Which files, docs, or pages did I touch today?",
+                    "Where did my focus break down today?",
+                    "Summarize today as a short report I could share",
+                    "Compare today with yesterday",
+                    "Start a 45 minute focus session for what I am doing now",
+                  ]
+              ).map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  className="ai-recap-chip"
+                  onClick={() => {
+                    setInput(chip);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {chip}
+                </button>
               ))}
             </div>
-          )}
-        </section>
-
-        <section className="ai-side__section">
-          <div className="ai-side__header">
-            <div>
-              <p className="timeline-kicker">Threads</p>
-              <h3>Saved chats</h3>
-            </div>
-            <span>{threads.length}</span>
           </div>
-          {threads.length === 0 ? (
-            <p className="ai-side__empty">No saved threads yet.</p>
-          ) : (
-            <div className="ai-side__list">
-              {threads.map((thread) => {
-                const active = thread.workspaceThreadId === threadId;
-                return (
-                  <button
-                    key={thread.workspaceThreadId}
-                    type="button"
-                    onClick={() => router.push(buildThreadHref(thread.workspaceThreadId, date, range))}
-                    className={`ai-thread-card ${active ? "ai-thread-card--active" : ""}`}
-                  >
-                    <p>{thread.title}</p>
-                    <span>{thread.source} · {formatRelativeTime(thread.updatedAt)}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      </aside>
+        ) : null}
+      </div>
+
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void sendMessage(input);
+        }}
+        className="ai-composer-bar"
+      >
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void sendMessage(input);
+            }
+          }}
+          placeholder="Ask about your day, or ask for a report, chart, table, or export…"
+          className="ai-composer-bar__input"
+          disabled={loading || artifactLoading !== null}
+          rows={1}
+        />
+        <button
+          type="submit"
+          disabled={loading || artifactLoading !== null || !input.trim()}
+          className="ai-composer-bar__send"
+          aria-label="Send"
+        >
+          <IconSend />
+        </button>
+      </form>
     </div>
   );
 }

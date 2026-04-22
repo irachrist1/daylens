@@ -90,31 +90,44 @@ export async function POST(request: NextRequest) {
     console.error("[chat] AI action failed:", raw);
 
     // Only surface safe, user-actionable messages
+    const rawLower = raw.toLowerCase();
+
     const isKeyError =
       raw.includes("API key") ||
-      raw.includes("authentication") ||
+      rawLower.includes("authentication") ||
       raw.includes("401") ||
       raw.includes("invalid_api_key") ||
       raw.includes("CONVEX_ENCRYPTION_SECRET");
 
     const isNotDeployed =
       raw.includes("Could not find") ||
-      raw.includes("is not a function") ||
-      raw.includes("npx");
+      rawLower.includes("is not a function") ||
+      rawLower.includes("npx") ||
+      rawLower.includes("deployment");
 
     const isNoData =
-      raw.includes("No activity data");
+      raw.includes("No activity data") ||
+      rawLower.includes("no snapshot");
 
     const isBillingError =
-      raw.includes("credit balance is too low") ||
-      raw.includes("billing") ||
-      raw.includes("purchase credits") ||
-      raw.includes("insufficient credits");
+      rawLower.includes("credit balance is too low") ||
+      rawLower.includes("billing") ||
+      rawLower.includes("purchase credits") ||
+      rawLower.includes("insufficient credits");
 
     const isUsageLimit =
-      raw.includes("rate_limit") ||
-      raw.includes("usage limit") ||
-      raw.includes("overloaded_error");
+      rawLower.includes("rate_limit") ||
+      rawLower.includes("rate-limit") ||
+      rawLower.includes("usage limit") ||
+      rawLower.includes("overloaded_error") ||
+      rawLower.includes("429");
+
+    const isModelError =
+      rawLower.includes("model") &&
+      (rawLower.includes("not_found") ||
+        rawLower.includes("does not exist") ||
+        rawLower.includes("invalid_request_error") ||
+        rawLower.includes("deprecated"));
 
     let userMessage: string;
     let code: ChatErrorCode;
@@ -138,10 +151,15 @@ export async function POST(request: NextRequest) {
       code = "no_data";
       userMessage =
         `No activity data found for ${date}. Make sure Daylens is running on your computer and synced that day.`;
+    } else if (isModelError) {
+      code = "service_updating";
+      userMessage =
+        "The AI model is currently unavailable. Daylens will retry shortly — or try again in a minute.";
     } else {
       code = "unknown";
-      userMessage =
-        "Something went wrong. Please try again.";
+      userMessage = raw
+        ? `Daylens couldn't reach the AI provider: ${raw}`
+        : "Something went wrong. Please try again.";
     }
 
     return NextResponse.json({ error: userMessage, code }, { status: 500 });

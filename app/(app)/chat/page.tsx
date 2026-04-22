@@ -61,14 +61,12 @@ export default async function ChatPage({
   }));
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col px-4 py-4 sm:px-6 sm:py-6">
-      <GlobalChat
-        initialMessages={initialMessages}
-        initialThreadId={threadPayload.thread?.workspaceThreadId ?? null}
-        date={date}
-        range={range === "week" || range === "month" ? range : "day"}
-        initialPrompt={prompt}
-      />
-    </div>
+    <GlobalChat
+      initialMessages={initialMessages}
+      initialThreadId={threadPayload.thread?.workspaceThreadId ?? null}
+      date={date}
+      range={range === "week" || range === "month" ? range : "day"}
+      initialPrompt={prompt}
+    />
   );
 }

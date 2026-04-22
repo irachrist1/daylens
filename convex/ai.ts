@@ -129,7 +129,7 @@ export const askQuestion = action({
 
     // Call Anthropic API
     const client = new Anthropic({ apiKey: anthropicKey });
-    const model = "claude-sonnet-4-20250514";
+    const model = "claude-sonnet-4-5";
     const message = await client.messages.create({
       model,
       max_tokens: 1024,
