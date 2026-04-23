@@ -15,6 +15,7 @@ const PUBLIC_API_PATHS = [
   "/api/download/mac",
   "/api/download/windows",
   "/api/download/linux",
+  "/api/update-feed",
 ];
 
 function redirectToLink(request: NextRequest) {
