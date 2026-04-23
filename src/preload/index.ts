@@ -34,7 +34,7 @@ import type {
 import { IPC } from '@shared/types'
 
 export interface UpdaterStatusInfo {
-  status: 'idle' | 'checking' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
   version: string | null
   progressPct: number | null
   errorMessage: string | null
@@ -44,6 +44,7 @@ export interface UpdaterStatusInfo {
   packageType?: string | null
   supported?: boolean
   supportMessage?: string | null
+  downloadUrl?: string | null
 }
 
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through

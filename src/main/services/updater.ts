@@ -1,11 +1,20 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, net } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { spawn, spawnSync } from 'node:child_process'
+import { createWriteStream, constants as fsConstants } from 'node:fs'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { capture, captureException } from './analytics'
 import { getLinuxPackageDiagnostics, type LinuxPackageType } from './linuxDesktop'
 
+const MANUAL_DOWNLOAD_URL = 'https://christian-tonny.dev/daylens'
+const RELEASE_OWNER = 'irachrist1'
+const RELEASE_REPO = 'daylens'
+
 export interface UpdaterState {
-  status: 'idle' | 'checking' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
   version: string | null
   progressPct: number | null
   errorMessage: string | null
@@ -15,6 +24,7 @@ export interface UpdaterState {
   packageType: LinuxPackageType
   supported: boolean
   supportMessage: string | null
+  downloadUrl: string | null
 }
 
 let _updateAvailable: string | null = null
@@ -34,11 +44,44 @@ let _state: UpdaterState = {
   packageType: null,
   supported: false,
   supportMessage: null,
+  downloadUrl: null,
 }
 
 export function isInstallingUpdate(): boolean { return _installingUpdate }
 export function registerUpdaterShutdown(fn: () => Promise<void>): void { _beforeInstall = fn }
 export function getUpdaterState(): UpdaterState { return { ..._state } }
+
+// Squirrel.Mac validates the downloaded bundle against the running app's
+// designated requirement before swapping it in. Ad-hoc signatures (no Apple
+// Developer ID) never satisfy that check (different cdhash, no Team ID
+// anchor), so electron-updater's quitAndInstall path always fails on this
+// build. We sidestep Squirrel entirely on ad-hoc Mac: download the ZIP from
+// the GitHub release direct, extract with ditto, then hand a detached swap
+// script the responsibility of replacing /Applications/Daylens.app once the
+// running process exits.
+let _macAdhocCache: boolean | null = null
+function isMacAdhocSigned(): boolean {
+  if (process.platform !== 'darwin' || !app.isPackaged) return false
+  if (_macAdhocCache !== null) return _macAdhocCache
+  try {
+    const appBundlePath = path.resolve(process.execPath, '..', '..', '..')
+    const result = spawnSync('/usr/bin/codesign', ['-dv', appBundlePath], {
+      encoding: 'utf8',
+    })
+    const combined = `${result.stdout ?? ''}${result.stderr ?? ''}`
+    _macAdhocCache = /Signature=adhoc/i.test(combined) || /TeamIdentifier=not set/i.test(combined)
+  } catch {
+    _macAdhocCache = true
+  }
+  return _macAdhocCache
+}
+
+function canUseElectronUpdaterInstall(): boolean {
+  // electron-updater (and Squirrel.Mac) cannot install onto an ad-hoc bundle.
+  // Returns false there so we route the install through performAdhocMacInstall.
+  if (process.platform === 'darwin') return !isMacAdhocSigned()
+  return true
+}
 
 function getAutoUpdateSupport(): { supported: boolean; message: string | null; packageType: LinuxPackageType } {
   if (!app.isPackaged) {
@@ -58,13 +101,16 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
   }
 
   if (process.platform === 'darwin') {
-    // electron-updater drives macOS updates through latest-mac.yml + ZIP
-    // (and optionally DMG) artifacts. Requires the packaged app to be
-    // signed for Squirrel to swap in the update on relaunch, but the
-    // download + download-progress + downloaded states still flow here.
+    if (isMacAdhocSigned()) {
+      return {
+        supported: true,
+        message: 'This Daylens build is ad-hoc signed (no Apple Developer ID), so updates download directly from GitHub and install in place via a swap helper instead of macOS Squirrel.',
+        packageType: null,
+      }
+    }
     return {
       supported: true,
-      message: 'Automatic updates are intended for signed Daylens release builds. Local ad-hoc packages can still surface update metadata, but they are not treated as end-to-end updater proof.',
+      message: 'Automatic updates are enabled for this Daylens build.',
       packageType: null,
     }
   }
@@ -206,6 +252,161 @@ function getReleaseMetadata(info: unknown): Pick<UpdaterState, 'releaseName' | '
   }
 }
 
+function downloadToFile(url: string, destPath: string, onProgress: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, redirect: 'follow' })
+    request.on('response', (response) => {
+      const status = response.statusCode ?? 0
+      if (status < 200 || status >= 300) {
+        reject(new Error(`Download failed (HTTP ${status}) — the release artifact may not be published yet.`))
+        return
+      }
+      const totalHeader = response.headers['content-length']
+      const total = Array.isArray(totalHeader) ? Number(totalHeader[0]) : Number(totalHeader)
+      let received = 0
+      const fileStream = createWriteStream(destPath)
+      let lastEmittedPct = -1
+      response.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        fileStream.write(chunk)
+        if (Number.isFinite(total) && total > 0) {
+          const pct = Math.min(99, Math.round((received / total) * 100))
+          if (pct !== lastEmittedPct) {
+            lastEmittedPct = pct
+            onProgress(pct)
+          }
+        }
+      })
+      response.on('end', () => {
+        fileStream.end(() => resolve())
+      })
+      response.on('error', (err) => {
+        fileStream.destroy()
+        reject(err)
+      })
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+async function downloadMacUpdateZip(version: string, onProgress: (pct: number) => void): Promise<string> {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+  const filename = `Daylens-${version}-${arch}.zip`
+  const url = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/download/v${version}/${filename}`
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-update-'))
+  const tmpFile = path.join(tmpDir, filename)
+  await downloadToFile(url, tmpFile, onProgress)
+  return tmpFile
+}
+
+async function scheduleAdhocMacSwap(zipPath: string): Promise<void> {
+  const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-extract-'))
+  const extract = spawnSync('/usr/bin/ditto', ['-x', '-k', zipPath, extractDir], { encoding: 'utf8' })
+  if (extract.status !== 0) {
+    throw new Error(`ditto failed to extract update: ${(extract.stderr || extract.stdout || '').trim() || `exit ${extract.status}`}`)
+  }
+
+  const entries = await fs.readdir(extractDir)
+  const appName = entries.find((name) => name.endsWith('.app'))
+  if (!appName) throw new Error('Update archive did not contain a .app bundle')
+  const stagedApp = path.join(extractDir, appName)
+
+  const targetApp = path.resolve(process.execPath, '..', '..', '..')
+  try {
+    await fs.access(path.dirname(targetApp), fsConstants.W_OK)
+  } catch {
+    throw new Error(`Daylens cannot write to ${path.dirname(targetApp)} — move the app to /Applications and try again, or download the update manually.`)
+  }
+
+  const swapId = `${Date.now()}-${process.pid}`
+  const scriptPath = path.join(os.tmpdir(), `daylens-swap-${swapId}.sh`)
+  const logPath = path.join(os.tmpdir(), `daylens-swap-${swapId}.log`)
+  const ppid = process.pid
+  const zipParent = path.dirname(zipPath)
+
+  // Detached helper: poll until the parent process has exited, atomically swap
+  // the bundle at the original path (so dock icons / launchd refs survive),
+  // re-sign ad-hoc + clear quarantine xattr so Gatekeeper accepts the moved
+  // bundle, then relaunch.
+  const script = `#!/bin/bash
+set -u
+exec >>"${logPath}" 2>&1
+echo "[swap] start $(date)"
+for i in $(seq 1 200); do
+  if ! kill -0 ${ppid} 2>/dev/null; then break; fi
+  sleep 0.15
+done
+sleep 0.5
+if [ -d "${targetApp}" ]; then
+  rm -rf "${targetApp}"
+fi
+mv "${stagedApp}" "${targetApp}" || { echo "[swap] mv failed"; exit 1; }
+/usr/bin/codesign --force --deep --sign - "${targetApp}" || true
+/usr/bin/xattr -cr "${targetApp}" || true
+/usr/bin/open -n "${targetApp}"
+rm -rf "${extractDir}" "${zipParent}" 2>/dev/null || true
+rm -- "$0" 2>/dev/null || true
+echo "[swap] done $(date)"
+`
+  await fs.writeFile(scriptPath, script, { mode: 0o755 })
+
+  const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' })
+  child.unref()
+}
+
+async function performAdhocMacInstall(): Promise<boolean> {
+  if (_installingUpdate) return false
+  if (!_state.version) return false
+
+  const version = _state.version
+  capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+    surface: 'updater',
+    trigger: 'manual',
+    version,
+  })
+
+  try {
+    setUpdaterState({ status: 'downloading', progressPct: 0, errorMessage: null, downloadUrl: null })
+    const zipPath = await downloadMacUpdateZip(version, (pct) => {
+      setUpdaterState({ status: 'downloading', progressPct: pct })
+    })
+
+    setUpdaterState({ status: 'installing', progressPct: 100, errorMessage: null })
+    capture(ANALYTICS_EVENT.UPDATE_INSTALL_STARTED, {
+      surface: 'updater',
+      trigger: 'manual',
+      version,
+    })
+
+    if (_beforeInstall) await _beforeInstall()
+
+    await scheduleAdhocMacSwap(zipPath)
+    _installingUpdate = true
+
+    setTimeout(() => app.quit(), 250)
+    return true
+  } catch (err) {
+    _installingUpdate = false
+    const baseMessage = err instanceof Error ? err.message : 'Daylens could not finish the in-place install.'
+    capture(ANALYTICS_EVENT.UPDATE_ERROR, {
+      failure_kind: classifyFailureKind(err),
+      result: 'error',
+      surface: 'updater',
+    })
+    captureException(err, {
+      tags: { process_type: 'main', reason: 'adhoc_mac_install_failed' },
+    })
+    setUpdaterState({
+      status: 'error',
+      errorMessage: `${baseMessage} You can also download the update manually from ${MANUAL_DOWNLOAD_URL}.`,
+      progressPct: null,
+      downloadUrl: MANUAL_DOWNLOAD_URL,
+    })
+    return false
+  }
+}
+
 export function initUpdater(win: BrowserWindow): void {
   _statusWindow = win
   const support = getAutoUpdateSupport()
@@ -244,6 +445,7 @@ export function initUpdater(win: BrowserWindow): void {
         packageType: support.packageType,
         supported: support.supported,
         supportMessage: support.message,
+        downloadUrl: null,
       })
       capture(ANALYTICS_EVENT.UPDATE_CHECK_COMPLETED, {
         result: 'not_supported',
@@ -264,6 +466,15 @@ export function initUpdater(win: BrowserWindow): void {
 
   ipcMain.handle('update:install', async () => {
     if (!supportsAutoUpdates()) return false
+
+    // Ad-hoc Mac: run our own download + bundle swap. Available state is the
+    // gate here because we never advance to 'downloaded' (we deliberately keep
+    // electron-updater out of the install path on this build).
+    if (process.platform === 'darwin' && isMacAdhocSigned()) {
+      if (_state.status !== 'available' || _installingUpdate) return false
+      return performAdhocMacInstall()
+    }
+
     if (_state.status !== 'downloaded' || _installingUpdate) return false
 
     capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
@@ -315,8 +526,9 @@ export function initUpdater(win: BrowserWindow): void {
 
   if (!supportsAutoUpdates()) return
 
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = process.platform !== 'linux'
+  const electronUpdaterInstall = canUseElectronUpdaterInstall()
+  autoUpdater.autoDownload = electronUpdaterInstall
+  autoUpdater.autoInstallOnAppQuit = electronUpdaterInstall && process.platform !== 'linux'
 
   autoUpdater.on('checking-for-update', () => {
     setUpdaterState({
@@ -339,11 +551,23 @@ export function initUpdater(win: BrowserWindow): void {
       version: info.version,
       surface: 'updater',
     })
+    if (!electronUpdaterInstall) {
+      setUpdaterState({
+        status: 'available',
+        version: info.version,
+        progressPct: null,
+        errorMessage: null,
+        downloadUrl: MANUAL_DOWNLOAD_URL,
+        ...getReleaseMetadata(info),
+      })
+      return
+    }
     setUpdaterState({
       status: 'downloading',
       version: info.version,
       progressPct: 0,
       errorMessage: null,
+      downloadUrl: null,
       ...getReleaseMetadata(info),
     })
   })
@@ -388,6 +612,7 @@ export function initUpdater(win: BrowserWindow): void {
       packageType: support.packageType,
       supported: support.supported,
       supportMessage: support.message,
+      downloadUrl: null,
     })
   })
 
@@ -417,6 +642,7 @@ export function initUpdater(win: BrowserWindow): void {
       releaseName: null,
       releaseNotesText: null,
       releaseDate: null,
+      downloadUrl: null,
     })
   })
 
