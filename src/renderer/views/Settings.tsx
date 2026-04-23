@@ -339,6 +339,8 @@ function updateStatusLabel(status: UpdaterStatusInfo | null, version: string | n
   switch (status.status) {
     case 'checking':
       return 'Checking for updates…'
+    case 'available':
+      return `Daylens ${status.version ?? 'update'} is available — install to download and swap in the new build.`
     case 'downloading':
       return typeof status.progressPct === 'number'
         ? `Downloading ${status.version ?? 'update'} — ${status.progressPct}%`
@@ -426,6 +428,7 @@ function UpdatesSection() {
   }
 
   const isDownloaded = status?.status === 'downloaded'
+  const isAvailableManual = status?.status === 'available' && !!status.downloadUrl
   const isBusy = checking || status?.status === 'checking' || status?.status === 'downloading' || status?.status === 'installing'
   const installCopy = getInstallUpdateExpectation(platform)
 
@@ -466,6 +469,53 @@ function UpdatesSection() {
                 >
                   Restart to install
                 </button>
+              )}
+              {isAvailableManual && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      track(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+                        surface: 'settings',
+                        trigger: 'settings',
+                        version: status?.version ?? undefined,
+                      })
+                      void ipc.updater.install()
+                    }}
+                    style={{
+                      height: 32,
+                      padding: '0 14px',
+                      borderRadius: 8,
+                      border: 'none',
+                      background: 'var(--gradient-primary)',
+                      color: 'var(--color-primary-contrast)',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Install update
+                  </button>
+                  {status?.downloadUrl && (
+                    <button
+                      type="button"
+                      onClick={() => { ipc.shell.openExternal(status.downloadUrl as string) }}
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        borderRadius: 8,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface-high)',
+                        color: 'var(--color-text-primary)',
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Download manually
+                    </button>
+                  )}
+                </>
               )}
               <button
                 type="button"

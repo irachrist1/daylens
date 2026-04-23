@@ -22,6 +22,92 @@ export default function UpdateBanner() {
     return null
   }
 
+  if (update.status === 'available') {
+    return (
+      <div
+        style={{
+          padding: '10px 18px',
+          background: 'linear-gradient(180deg, rgba(173,198,255,0.16), rgba(173,198,255,0.08))',
+          borderBottom: '1px solid rgba(173,198,255,0.24)',
+          color: 'var(--color-text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 14,
+          flexWrap: 'wrap',
+          WebkitAppRegion: 'no-drag',
+        } as React.CSSProperties}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: 'var(--color-primary)',
+            boxShadow: '0 0 0 6px rgba(173,198,255,0.12)',
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}>
+          Daylens {update.version ?? ''} is available
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+          Click install — Daylens will download, swap in the new build, and relaunch automatically.
+        </span>
+        {highlights[0] && (
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+            Includes: {highlights[0]}
+          </span>
+        )}
+        <button
+          onClick={() => {
+            track(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+              surface: 'banner',
+              trigger: 'banner',
+              version: update.version ?? undefined,
+            })
+            void ipc.updater.install()
+          }}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 999,
+            border: 'none',
+            background: 'var(--gradient-primary)',
+            color: 'var(--color-primary-contrast)',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            letterSpacing: '-0.01em',
+            boxShadow: '0 10px 22px rgba(15,99,219,0.18)',
+          }}
+        >
+          Install update
+        </button>
+        {update.downloadUrl && (
+          <button
+            onClick={() => ipc.shell.openExternal(update.downloadUrl as string)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 999,
+              border: '1px solid rgba(173,198,255,0.4)',
+              background: 'transparent',
+              color: 'var(--color-text-secondary)',
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              letterSpacing: '-0.01em',
+            }}
+          >
+            Download manually
+          </button>
+        )}
+      </div>
+    )
+  }
+
   if (update.status === 'downloading') {
     return (
       <div
