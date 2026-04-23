@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.30 - 2026-04-23
+
+### Fixed
+- macOS updates now avoid the broken Squirrel.Mac install path on ad-hoc signed builds by downloading the release ZIP directly, swapping the app bundle in place, and relaunching
+- Release notes now strip HTML tags cleanly so GitHub-rendered changelog text no longer leaks raw markup into the update banner
+
 ## v1.0.29 - 2026-04-20
 
 ### Changed
