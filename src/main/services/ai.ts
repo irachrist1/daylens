@@ -2433,7 +2433,7 @@ async function generateSuggestedFollowUps(
   const preferredProviderOverride = await hasApiKey('anthropic') ? 'anthropic' as const : null
   const { systemPrompt, userPrompt } = buildFollowUpSuggestionPrompts(userQuestion, answerText, state, fallback)
 
-  try {
+  const runOnce = async (): Promise<FollowUpSuggestion[]> => {
     const { text } = await withTimeout(
       executeTextAIJob(
         {
@@ -2449,7 +2449,16 @@ async function generateSuggestedFollowUps(
       6_000,
       'Follow-up suggestion generation timed out',
     )
-    return parseFollowUpSuggestions(text, fallback).slice(0, 4)
+    return parseFollowUpSuggestions(text, fallback)
+  }
+
+  try {
+    let results = await runOnce()
+    // Retry once if every result is deterministic — model output had no named-entity suggestions
+    if (results.every((s) => s.source === 'deterministic')) {
+      results = await runOnce()
+    }
+    return results.slice(0, 4)
   } catch (error) {
     capture(ANALYTICS_EVENT.AI_FOLLOWUP_SUGGESTIONS_FALLBACK, {
       failure_kind: classifyFailureKind(error),
