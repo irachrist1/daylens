@@ -10,6 +10,7 @@ import {
 import { capture, updateAnalyticsPreference } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
+import { getMcpServerConfig, startMcpServer, stopMcpServer } from '../services/mcpServer'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -42,6 +43,14 @@ export function registerSettingsHandlers(): void {
     }
     if ('aiProvider' in partial || 'anthropicModel' in partial || 'openaiModel' in partial || 'googleModel' in partial) {
       invalidateProjectionScope('insights', 'ai_settings_changed')
+    }
+
+    if ('mcpServerEnabled' in partial) {
+      if (partial.mcpServerEnabled) {
+        startMcpServer()
+      } else {
+        stopMcpServer()
+      }
     }
 
     if (changedKeys.length > 0) {
@@ -81,4 +90,6 @@ export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.VALIDATE_API_KEY, async (_e, payload: { provider: AIProvider; key: string }) => {
     return validateProviderConnection(payload.provider, payload.key)
   })
+
+  ipcMain.handle(IPC.MCP.GET_CONFIG, () => getMcpServerConfig())
 }

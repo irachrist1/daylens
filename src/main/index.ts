@@ -56,6 +56,7 @@ import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
+import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { initDb, closeDb } from './services/database'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
@@ -428,6 +429,7 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
 }
 
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
+  stopMcpServer()
   stopTracking()
   stopBrowserTracking()
   stopSync()
@@ -735,6 +737,10 @@ app.whenReady()
 
     initDb()
     startProcessMonitor()
+
+    if (getSettings().mcpServerEnabled) {
+      startMcpServer()
+    }
 
     registerDbHandlers()
     registerDebugHandlers()

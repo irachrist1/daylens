@@ -1,7 +1,7 @@
 {
   "name": "daylens-windows",
   "productName": "Daylens",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "description": "Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.",
   "main": ".vite/build/main.js",
   "scripts": {
@@ -13,6 +13,7 @@
     "test:weekly-brief": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts",
     "test:ai-chat": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/weeklyBrief.test.ts ./tests/followUpChat.test.ts ./tests/appIdentityBranding.test.ts ./tests/onboardingFirstRun.test.ts ./tests/blockCleanup.test.ts ./tests/anthropicPromptCaching.test.ts ./tests/aiThreadSchema.test.ts ./tests/databaseBootstrap.test.ts ./tests/cliLaunch.test.ts ./tests/userData.test.ts ./tests/platformExpectations.test.ts",
     "test:entity-prompts": "cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/routerHardPromptBenchmark.ts",
+    "test:toolcalls": "cross-env RUN_TOOL_CALL_TESTS=1 ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/aiToolUse.test.ts",
     "build:main": "cross-env STANDALONE_BUILD=1 vite build --config vite.main.config.ts",
     "build:preload": "cross-env STANDALONE_BUILD=1 vite build --config vite.preload.config.ts",
     "build:renderer": "cross-env STANDALONE_BUILD=1 vite build --config vite.renderer.config.ts",
@@ -25,6 +26,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
     "@google/genai": "^1.47.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@paymoapp/active-window": "^2.1.4",
     "@sentry/electron": "^7.11.0",
     "better-sqlite3": "^12.8.0",

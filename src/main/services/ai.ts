@@ -62,7 +62,7 @@ import {
 } from './artifacts'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
-import { getSettings, hasApiKey } from './settings'
+import { getApiKey, getSettings, hasApiKey } from './settings'
 import { computeEnhancedFocusScore, computeFocusScoreV2 } from '../lib/focusScore'
 import { getCurrentSession } from './tracking'
 import type {
@@ -101,6 +101,7 @@ import {
   type ResolvedProviderConfig,
 } from './aiOrchestration'
 import { buildAnthropicPromptInput } from './anthropicPromptCaching'
+import { anthropicTools, openaiTools, executeTool, type ToolName } from './aiTools'
 import {
   backgroundRelabelDispositionForBlock,
   fallbackNarrativeForBlock,
@@ -989,6 +990,204 @@ async function sendWithGoogle(
     text,
     usage: null,
   }
+}
+
+const MAX_TOOL_CALLS = 5
+const MAX_TOOL_RESULT_TOKENS = 8000
+// 1 token ≈ 4 chars — rough budget for tool result JSON payloads
+const MAX_TOOL_RESULT_CHARS = MAX_TOOL_RESULT_TOKENS * 4
+
+function estimateChars(messages: { role?: string; content?: unknown }[]): number {
+  return messages.reduce((n, m) => n + JSON.stringify(m.content ?? '').length, 0)
+}
+
+function truncateOldestToolResults(
+  messages: Anthropic.MessageParam[],
+  systemPromptChars: number,
+): Anthropic.MessageParam[] {
+  // Drop the oldest tool_result user messages until we're under budget.
+  const budget = MAX_TOOL_RESULT_CHARS - systemPromptChars
+  let chars = messages.reduce((n, m) => n + JSON.stringify(m.content).length, 0)
+  if (chars <= budget) return messages
+  const out = [...messages]
+  for (let i = 0; i < out.length && chars > budget; i++) {
+    const msg = out[i]
+    if (msg.role !== 'user') continue
+    const content = Array.isArray(msg.content) ? msg.content : null
+    if (!content) continue
+    const truncated = content.map((block) => {
+      if (block.type !== 'tool_result') return block
+      const resultStr = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+      chars -= resultStr.length
+      return { ...block, content: '[truncated to fit token budget]' }
+    })
+    out[i] = { ...msg, content: truncated }
+  }
+  return out
+}
+
+async function runAnthropicToolLoop(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+  db: ReturnType<typeof getDb>,
+  onDelta: (delta: string) => void | Promise<void>,
+): Promise<string> {
+  const client = new Anthropic({ apiKey })
+  const messages: Anthropic.MessageParam[] = [
+    ...prior.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    { role: 'user' as const, content: userMessage },
+  ]
+  const systemChars = systemPrompt.length
+
+  let toolCallCount = 0
+
+  while (true) {
+    const trimmed = truncateOldestToolResults(messages, systemChars)
+    const response = await client.messages.create({
+      model,
+      max_tokens: 1024,
+      system: systemPrompt,
+      tools: anthropicTools,
+      messages: trimmed,
+    })
+
+    const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+    const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+
+    if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+      const finalText = textBlocks.map((b) => b.text).join('')
+      await emitTextDeltas(finalText, onDelta)
+      return finalText
+    }
+
+    // Add assistant turn with all blocks
+    messages.push({ role: 'assistant', content: response.content })
+
+    // Every tool_use block needs a matching tool_result — Anthropic API requires it.
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+    for (const tb of toolUseBlocks) {
+      let result: unknown
+      if (toolCallCount < MAX_TOOL_CALLS) {
+        toolCallCount++
+        try {
+          result = executeTool(tb.name as ToolName, tb.input as Record<string, unknown>, db)
+        } catch (err) {
+          result = { error: String(err) }
+        }
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`[ai:tool] ${tb.name}(${JSON.stringify(tb.input)}) → ${JSON.stringify(result).slice(0, 120)}`)
+        }
+      } else {
+        result = { error: 'Tool call cap reached. Please synthesize from available data.' }
+      }
+      toolResults.push({ type: 'tool_result', tool_use_id: tb.id, content: JSON.stringify(result) })
+    }
+    messages.push({ role: 'user', content: toolResults })
+
+    if (toolCallCount >= MAX_TOOL_CALLS) {
+      // Force a final answer without tools
+      const finalResponse = await client.messages.create({
+        model,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: truncateOldestToolResults(messages, systemChars),
+      })
+      const finalText = finalResponse.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('')
+      await emitTextDeltas(finalText, onDelta)
+      return finalText
+    }
+  }
+}
+
+async function runOpenAIToolLoop(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+  db: ReturnType<typeof getDb>,
+  onDelta: (delta: string) => void | Promise<void>,
+): Promise<string> {
+  const client = new OpenAI({ apiKey })
+
+  type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...prior.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    { role: 'user' as const, content: userMessage },
+  ]
+
+  let toolCallCount = 0
+
+  while (true) {
+    // Truncate tool results if over budget
+    const totalChars = estimateChars(messages)
+    if (totalChars > MAX_TOOL_RESULT_CHARS) {
+      for (let i = 0; i < messages.length; i++) {
+        if (messages[i].role === 'tool') {
+          ;(messages[i] as OpenAI.Chat.Completions.ChatCompletionToolMessageParam).content =
+            '[truncated to fit token budget]'
+          break
+        }
+      }
+    }
+
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 1024,
+      tools: openaiTools,
+      messages,
+    })
+
+    const choice = response.choices[0]
+    if (!choice) break
+
+    const msg = choice.message
+    messages.push(msg)
+
+    const toolCalls = msg.tool_calls ?? []
+    if (toolCalls.length === 0 || choice.finish_reason === 'stop') {
+      const finalText = msg.content ?? ''
+      await emitTextDeltas(finalText, onDelta)
+      return finalText
+    }
+
+    for (const tc of toolCalls) {
+      if (toolCallCount >= MAX_TOOL_CALLS) break
+      if (tc.type !== 'function') continue
+      toolCallCount++
+      let result: unknown
+      try {
+        const args = JSON.parse(tc.function.arguments) as Record<string, unknown>
+        result = executeTool(tc.function.name as ToolName, args, db)
+      } catch (err) {
+        result = { error: String(err) }
+      }
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[ai:tool] ${tc.function.name}(${tc.function.arguments.slice(0, 80)}) → ${JSON.stringify(result).slice(0, 120)}`)
+      }
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) })
+    }
+
+    if (toolCallCount >= MAX_TOOL_CALLS) {
+      // Force final answer without tools
+      const finalResponse = await client.chat.completions.create({
+        model,
+        max_tokens: 1024,
+        messages,
+      })
+      const finalText = finalResponse.choices[0]?.message.content ?? ''
+      await emitTextDeltas(finalText, onDelta)
+      return finalText
+    }
+  }
+  return ''
 }
 
 async function runCLIProvider(
@@ -3904,74 +4103,103 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     console.log(`[ai:chat] router miss → falling back to LLM`)
   }
 
-  const dayContext = buildDayContext()
-  const allTimeContext = buildAllTimeContext()
-  const specificTimeContext = buildSpecificTimeContext(userMessage)
-  const now = new Date()
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  const attributionDayCtx = buildAttributionDayContext(todayStr)
-  const attributionEntityCtx = buildAttributedEntityContext(userMessage)
   const settings = getSettings()
   const { userName } = settings
+  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  const chatModel = modelForProvider(chatProvider, 'quality', settings)
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
-  const preferredProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  const preferredConfig = {
-    provider: preferredProvider,
-    model: modelForProvider(preferredProvider, settings),
-  }
-  const systemPrompt =
-    persona + ' You have access to tracked local activity data — app sessions, website visits, attributed work sessions, and recurring workflows.\n\n' +
-    'Your job is to synthesize, not recite. The user can already see raw totals in the UI. They come to you to understand what the day actually looked like and what was getting done.\n\n' +
-    'How to think:\n' +
-    '- Work sessions are the primary data unit. They can carry attributed client/project context, confidence scores, app roles, and evidence trails. Use them when answering grounded questions about named workstreams.\n' +
-    '- For attributed entity questions, use attributed work_sessions first. Report attributed hours first, then ambiguous time separately. Never silently include ambiguous time in attributed totals.\n' +
-    '- Not every repo, class, research topic, or internal initiative has a first-class attribution record yet. When structured attribution is missing, ground the answer in blocks, artifacts, window titles, and websites instead of pretending the entity is fully attributed.\n' +
-    '- Read the work-block structure for additional context. Blocks group related activity with labels, apps, and websites.\n' +
-    '- Grounding contract: only mention a file, doc, page, repo, or project name if it appears verbatim in the evidence below (block labels, artifact titles, window titles, websites, or attributed work_sessions).\n' +
-    '- If the evidence only shows an app or domain, keep the answer at that level. Do not invent repo names, filenames, meeting titles, or document titles.\n' +
-    '- Connect apps to intent carefully: Chrome + docs.google.com + a specific title can indicate a document; Cursor + GitHub can indicate code work; Slack + a long block can indicate a conversation thread.\n' +
-    '- Notice patterns: recurring workflows show habitual projects or rituals. Time-of-day shape shows when the user focuses vs. communicates.\n' +
-    '- Prefer the specific over the generic. "Drafted the Q2 planning doc in Google Docs around 10-11am, then switched to Slack for 30m" beats "You spent 2h in Chrome."\n' +
-    '- When the evidence is ambiguous, say "looks like" or "probably" rather than inventing specifics. Don\'t hallucinate project names or document titles that aren\'t in the evidence.\n' +
-    '- You DO have access to all-time tracked data (see "Lifetime tracked data" below) and recent daily history, not just today. Never tell the user "I only have today\'s data" — that is false. If you\'ve already given a lifetime/weekly/yesterday answer earlier in this conversation, treat it as ground truth and use it for follow-ups (e.g. "how many days is that" → the tracking window stated above).\n\n' +
-    'How to write:\n' +
-    '- Conversational, grounded, slightly social — a thoughtful friend who reviewed your day, not a dashboard.\n' +
-    '- Lead with the story of the day (what the user was doing and when), then surface totals only if the user asked or if a number matters.\n' +
-    '- Keep it short. 2-5 sentences for most questions. Use bullet points only when listing distinct blocks or suggestions.\n' +
-    '- Reference block time ranges and labels when they add specificity: "between 9:30 and 11:00 you were in a research block on arxiv and Claude".\n' +
-    '- Never say "the user" — address them directly ("you").\n' +
-    '- Always speak as Daylens, never as a raw model/provider persona.\n' +
-    `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
-    '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
-    '- For recommendations, keep them concrete and tied to observed patterns — not generic productivity advice.\n\n' +
-    (allTimeContext ? `Lifetime tracked data:\n${allTimeContext}\n\n` : '') +
-    (dayContext
-      ? `Today's tracked data:\n${dayContext}`
-      : 'No activity has been recorded yet today. If the user asks about stats for today specifically, say tracking needs more time — but lifetime data above may still apply.') +
-    (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
-    (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
-    (attributionEntityCtx ? `\n\nClient/project attribution context (JSON):\n${attributionEntityCtx}` : '')
 
-  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  const chatModel = modelForProvider(chatProvider, 'quality', settings)
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[ai:chat] LLM call → provider=${chatProvider} model=${chatModel}`)
+  let assistantText: string
+
+  if (chatProvider === 'anthropic' || chatProvider === 'openai') {
+    const now = new Date()
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const systemPrompt =
+      persona + ' You have tools to query the user\'s local activity database — app sessions, website visits, timeline blocks, and artifacts. Use them to answer recall questions.\n\n' +
+      `Today is ${todayStr}.\n\n` +
+      'When a question needs specific data (a day, an app, a time range, a project), call the appropriate tool first. ' +
+      'You can call multiple tools to piece together a complete answer.\n' +
+      'Synthesize tool results into a conversational answer — do not recite raw data. Tell the story.\n' +
+      'Grounding rule: only mention a file, doc, repo, or project name if it appears verbatim in tool results.\n' +
+      'Keep it short. 2-5 sentences for most questions. Never say "the user" — address them directly.\n' +
+      'Always speak as Daylens.\n' +
+      `If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[ai:chat] tool-use path → provider=${chatProvider} model=${chatModel}`)
+    }
+
+    const resolvedApiKey = (await getApiKey(chatProvider)) ?? ''
+
+    assistantText = chatProvider === 'anthropic'
+      ? await runAnthropicToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
+      : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
+  } else {
+    // Legacy static-context path — Google and CLI providers
+    const now = new Date()
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const dayContext = buildDayContext()
+    const allTimeContext = buildAllTimeContext()
+    const specificTimeContext = buildSpecificTimeContext(userMessage)
+    const attributionDayCtx = buildAttributionDayContext(todayStr)
+    const attributionEntityCtx = buildAttributedEntityContext(userMessage)
+    const preferredConfig = {
+      provider: chatProvider,
+      model: chatModel,
+    }
+    const systemPrompt =
+      persona + ' You have access to tracked local activity data — app sessions, website visits, attributed work sessions, and recurring workflows.\n\n' +
+      'Your job is to synthesize, not recite. The user can already see raw totals in the UI. They come to you to understand what the day actually looked like and what was getting done.\n\n' +
+      'How to think:\n' +
+      '- Work sessions are the primary data unit. They can carry attributed client/project context, confidence scores, app roles, and evidence trails. Use them when answering grounded questions about named workstreams.\n' +
+      '- For attributed entity questions, use attributed work_sessions first. Report attributed hours first, then ambiguous time separately. Never silently include ambiguous time in attributed totals.\n' +
+      '- Not every repo, class, research topic, or internal initiative has a first-class attribution record yet. When structured attribution is missing, ground the answer in blocks, artifacts, window titles, and websites instead of pretending the entity is fully attributed.\n' +
+      '- Read the work-block structure for additional context. Blocks group related activity with labels, apps, and websites.\n' +
+      '- Grounding contract: only mention a file, doc, page, repo, or project name if it appears verbatim in the evidence below (block labels, artifact titles, window titles, websites, or attributed work_sessions).\n' +
+      '- If the evidence only shows an app or domain, keep the answer at that level. Do not invent repo names, filenames, meeting titles, or document titles.\n' +
+      '- Connect apps to intent carefully: Chrome + docs.google.com + a specific title can indicate a document; Cursor + GitHub can indicate code work; Slack + a long block can indicate a conversation thread.\n' +
+      '- Notice patterns: recurring workflows show habitual projects or rituals. Time-of-day shape shows when the user focuses vs. communicates.\n' +
+      '- Prefer the specific over the generic. "Drafted the Q2 planning doc in Google Docs around 10-11am, then switched to Slack for 30m" beats "You spent 2h in Chrome."\n' +
+      '- When the evidence is ambiguous, say "looks like" or "probably" rather than inventing specifics. Don\'t hallucinate project names or document titles that aren\'t in the evidence.\n' +
+      '- You DO have access to all-time tracked data (see "Lifetime tracked data" below) and recent daily history, not just today. Never tell the user "I only have today\'s data" — that is false. If you\'ve already given a lifetime/weekly/yesterday answer earlier in this conversation, treat it as ground truth and use it for follow-ups (e.g. "how many days is that" → the tracking window stated above).\n\n' +
+      'How to write:\n' +
+      '- Conversational, grounded, slightly social — a thoughtful friend who reviewed your day, not a dashboard.\n' +
+      '- Lead with the story of the day (what the user was doing and when), then surface totals only if the user asked or if a number matters.\n' +
+      '- Keep it short. 2-5 sentences for most questions. Use bullet points only when listing distinct blocks or suggestions.\n' +
+      '- Reference block time ranges and labels when they add specificity: "between 9:30 and 11:00 you were in a research block on arxiv and Claude".\n' +
+      '- Never say "the user" — address them directly ("you").\n' +
+      '- Always speak as Daylens, never as a raw model/provider persona.\n' +
+      `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
+      '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
+      '- For recommendations, keep them concrete and tied to observed patterns — not generic productivity advice.\n\n' +
+      (allTimeContext ? `Lifetime tracked data:\n${allTimeContext}\n\n` : '') +
+      (dayContext
+        ? `Today's tracked data:\n${dayContext}`
+        : 'No activity has been recorded yet today. If the user asks about stats for today specifically, say tracking needs more time — but lifetime data above may still apply.') +
+      (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
+      (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
+      (attributionEntityCtx ? `\n\nClient/project attribution context (JSON):\n${attributionEntityCtx}` : '')
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[ai:chat] static-context path → provider=${chatProvider} model=${chatModel}`)
+    }
+    const { text } = await executeTextAIJob(
+      {
+        jobType: 'chat_answer',
+        screen: 'ai_chat',
+        triggerSource: 'user',
+        systemPrompt,
+        userMessage: effectiveUserMessage,
+        prior,
+      },
+      sendWithProvider,
+      { onDelta: (delta) => stream.push(delta) },
+    )
+    await stream.streamText(text)
+    assistantText = text
   }
-  const { text: assistantText } = await executeTextAIJob(
-    {
-      jobType: 'chat_answer',
-      screen: 'ai_chat',
-      triggerSource: 'user',
-      systemPrompt,
-      userMessage: effectiveUserMessage,
-      prior,
-    },
-    sendWithProvider,
-    { onDelta: (delta) => stream.push(delta) },
-  )
-  await stream.streamText(assistantText)
 
   // Don't save an empty assistant response — it would corrupt future prior
   // history and cause the AI to receive empty content blocks.

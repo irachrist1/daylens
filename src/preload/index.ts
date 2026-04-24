@@ -33,6 +33,7 @@ import type {
   WorkspaceResult,
 } from '@shared/types'
 import { IPC } from '@shared/types'
+import type { McpServerConfig } from '../main/services/mcpServer'
 
 export interface UpdaterStatusInfo {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
@@ -214,6 +215,9 @@ const api = {
   },
   distractionAlerter: {
     setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
+  },
+  mcp: {
+    getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
   },
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>
