@@ -64,11 +64,10 @@ export interface FocusSession {
 }
 
 export interface FocusScoreV2Snapshot {
-  score: number;
-  coherence: number;
-  deepWorkDensity: number;
-  artifactProgress: number;
-  switchPenalty: number;
+  deepWorkPct: number | null;
+  longestStreakSeconds: number;
+  switchCount: number;
+  deepWorkSessionCount: number;
 }
 
 export interface WorkBlockSummary {
@@ -323,7 +322,7 @@ export function isSnapshotV2(snapshot: DaySnapshot): snapshot is DaySnapshotV2 {
 
 export function readSnapshotFocusScore(snapshot: DaySnapshot): number {
   return snapshot.schemaVersion === 2
-    ? snapshot.focusScoreV2.score
+    ? snapshot.focusScoreV2.deepWorkPct ?? 0
     : snapshot.focusScore;
 }
 

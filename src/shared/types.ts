@@ -78,11 +78,10 @@ export interface WorkIntentSummary {
 }
 
 export interface FocusScoreBreakdown {
-  coherence: number          // [0,1] — weighted mean block duration vs 45 min target
-  deepWork: number           // [0,1] — seconds in ≥25 min blocks / total active seconds
-  artifactProgress: number   // [0,1] — log2(1 + unique_artifacts) / log2(1 + 16)
-  switchPenalty: number      // [0,1] — min(1, switches_per_hour / 20); higher is worse
-  score: number              // [0,100] — final composite focus score
+  deepWorkPct: number | null
+  longestStreakSeconds: number
+  switchCount: number
+  deepWorkSessionCount: number
 }
 
 export interface WorkContextAppSummary {

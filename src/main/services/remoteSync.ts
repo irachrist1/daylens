@@ -102,7 +102,7 @@ function buildSafeRecap(
     id: 'focus',
     eyebrow: 'Focus',
     title: 'Focus score',
-    body: `Focus score was ${snapshot.focusScoreV2.score}/100 with ${workBlocks.length} visible work blocks in the remote proof surface.`,
+      body: `Deep work was ${snapshot.focusScoreV2.deepWorkPct ?? 'not enough data'}${snapshot.focusScoreV2.deepWorkPct === null ? '' : '%'} with ${workBlocks.length} visible work blocks in the remote proof surface.`,
   })
 
   if (artifacts.length > 0) {
@@ -126,7 +126,7 @@ function buildSafeRecap(
         },
         {
           label: 'Focus score',
-          value: `${snapshot.focusScoreV2.score}/100`,
+          value: snapshot.focusScoreV2.deepWorkPct === null ? 'Not enough data' : `${snapshot.focusScoreV2.deepWorkPct}%`,
           detail: `${artifacts.length} approved artifact${artifacts.length === 1 ? '' : 's'}`,
         },
       ],

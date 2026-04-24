@@ -21,11 +21,10 @@ function makeSnapshot(): DaySnapshotV2 {
     aiSummary: null,
     focusSessions: [],
     focusScoreV2: {
-      score: 72,
-      coherence: 0.7,
-      deepWorkDensity: 0.6,
-      artifactProgress: 0.4,
-      switchPenalty: 0.2,
+      deepWorkPct: 72,
+      longestStreakSeconds: 3_600,
+      switchCount: 4,
+      deepWorkSessionCount: 2,
     },
     workBlocks: [
       {

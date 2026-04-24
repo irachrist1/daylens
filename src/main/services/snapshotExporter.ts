@@ -405,57 +405,24 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshotV2
   const hours = totalTrackedSeconds / 3600
   const switchesPerHour = hours > 0 ? switches / hours : 0
 
-  // Focus score V2 — evidence-grounded composite of coherence, deep-work
-  // density, artifact progress, and context-switching penalty. We derive
-  // blocks from the timeline payload so the score reflects real work
-  // boundaries rather than raw focused-app ratios.
-  let blocksForScore: { durationSeconds: number; activeSeconds: number }[] = []
+  // Focus score V2 is the honest percentage of active time spent in 25+ minute
+  // same-category focused streaks.
   let timelinePayload: DayTimelinePayload | null = null
-  let uniqueArtifactCount: number | undefined
-  let uniqueWindowTitleCount: number | undefined
   try {
     timelinePayload = getTimelineDayPayload(db, dateStr)
-    blocksForScore = timelinePayload.blocks.map((block) => {
-      const span = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
-      const active = block.sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-      return {
-        durationSeconds: span,
-        activeSeconds: Math.min(active, span) || active || span,
-      }
-    })
-    const artifactIds = new Set<string>()
-    for (const block of timelinePayload.blocks) {
-      for (const artifact of block.topArtifacts ?? []) artifactIds.add(artifact.id)
-      for (const page of block.pageRefs ?? []) {
-        if (page.url) artifactIds.add(`page:${page.url}`)
-      }
-      for (const doc of block.documentRefs ?? []) {
-        if (doc.path) artifactIds.add(`doc:${doc.path}`)
-      }
-    }
-    uniqueArtifactCount = artifactIds.size > 0 ? artifactIds.size : undefined
-    if (uniqueArtifactCount === undefined) {
-      const titles = new Set<string>()
-      for (const session of rawSessions) {
-        const title = session.windowTitle?.trim()
-        if (title) titles.add(title.toLowerCase())
-      }
-      uniqueWindowTitleCount = titles.size
-    }
   } catch {
-    // If block reconstruction fails, fall back to a single pseudo-block so
-    // the score still bounds itself rather than silently zeroing out.
-    blocksForScore = totalTrackedSeconds > 0
-      ? [{ durationSeconds: totalTrackedSeconds, activeSeconds: totalTrackedSeconds }]
-      : []
+    timelinePayload = null
   }
 
   const focusBreakdown = computeFocusScoreV2({
-    blocks: blocksForScore,
+    sessions: rawSessions.map((session) => ({
+      startTime: session.startTime,
+      endTime: session.endTime,
+      durationSeconds: session.durationSeconds,
+      category: session.category,
+      isFocused: session.isFocused,
+    })),
     totalActiveSeconds: totalTrackedSeconds,
-    switchesPerHour,
-    uniqueArtifactCount,
-    uniqueWindowTitleCount,
   })
   const focusScore = computeFocusScore({
     focusedSeconds: focusSeconds,
@@ -535,11 +502,10 @@ export function exportSnapshot(dateStr: string, deviceId: string): DaySnapshotV2
     aiSummary: null,
     focusSessions,
     focusScoreV2: {
-      score: focusBreakdown.score,
-      coherence: focusBreakdown.coherence,
-      deepWorkDensity: focusBreakdown.deepWork,
-      artifactProgress: focusBreakdown.artifactProgress,
-      switchPenalty: focusBreakdown.switchPenalty,
+      deepWorkPct: focusBreakdown.deepWorkPct,
+      longestStreakSeconds: focusBreakdown.longestStreakSeconds,
+      switchCount: focusBreakdown.switchCount,
+      deepWorkSessionCount: focusBreakdown.deepWorkSessionCount,
     },
     workBlocks: summarizeWorkBlocks(safeTimelinePayload.blocks),
     recap,
