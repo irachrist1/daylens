@@ -44,6 +44,24 @@ export function normalizeReleaseVersion(tagName?: string | null): string | null 
   return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(trimmed) ? trimmed : null;
 }
 
+function compareReleaseVersionsDesc(left?: string | null, right?: string | null): number {
+  const a = normalizeReleaseVersion(left);
+  const b = normalizeReleaseVersion(right);
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+
+  const parse = (value: string) => value.split(/[.-]/).map((part) => Number(part));
+  const leftParts = parse(a);
+  const rightParts = parse(b);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (rightParts[i] ?? 0) - (leftParts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 export async function fetchPublishedReleases(): Promise<ReleaseRecord[]> {
   const res = await fetch(RELEASES_API_URL, {
     headers: githubHeaders("application/vnd.github+json"),
@@ -62,7 +80,13 @@ export async function fetchPublishedReleases(): Promise<ReleaseRecord[]> {
     throw new Error("GitHub releases lookup returned an invalid payload.");
   }
 
-  return payload.filter((release) => !release.draft && !release.prerelease);
+  return payload
+    .filter((release) => !release.draft && !release.prerelease)
+    .sort((left, right) => {
+      const versionOrder = compareReleaseVersionsDesc(left.tag_name, right.tag_name);
+      if (versionOrder !== 0) return versionOrder;
+      return (Date.parse(right.published_at ?? "") || 0) - (Date.parse(left.published_at ?? "") || 0);
+    });
 }
 
 export function findLatestMatchingReleaseAsset(

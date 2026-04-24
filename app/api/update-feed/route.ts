@@ -4,9 +4,31 @@ import {
   findLatestMatchingReleaseAsset,
 } from "../download/_releaseAsset";
 
+const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
+
+function publicOrigin(request: NextRequest): string {
+  const configured =
+    process.env.DAYLENS_PUBLIC_BASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+    "";
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      return configured.replace(/\/$/, "");
+    }
+  }
+  if (process.env.NODE_ENV === "production") return CANONICAL_PUBLIC_ORIGIN;
+
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const host = forwardedHost || request.headers.get("host") || request.nextUrl.host;
+  const proto = request.headers.get("x-forwarded-proto") || request.nextUrl.protocol.replace(":", "") || "https";
+  return `${proto}://${host}`;
+}
+
 function withBasePath(request: NextRequest, pathname: string, search?: URLSearchParams): string {
   const basePath = request.nextUrl.basePath || "";
-  const url = new URL(`${basePath}${pathname}`, request.url);
+  const url = new URL(`${basePath}${pathname}`, publicOrigin(request));
   if (search) {
     url.search = search.toString();
   }
