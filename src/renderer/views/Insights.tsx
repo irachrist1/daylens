@@ -2509,7 +2509,7 @@ export default function Insights() {
                     title={artifactPreview.record.title}
                     srcDoc={artifactPreview.content ?? ''}
                     sandbox=""
-                    style={{ width: '100%', height: 260, border: '1px solid var(--color-border-ghost)', borderRadius: 6, background: 'white' }}
+                    style={{ width: '100%', height: 260, border: 'none', borderRadius: 6, background: 'white' }}
                   />
                 ) : (
                   <pre style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-primary)' }}>
