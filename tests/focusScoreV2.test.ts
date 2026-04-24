@@ -22,14 +22,25 @@ test('computeFocusScoreV2 returns null when there is not enough active data', ()
   assert.equal(breakdown.deepWorkSessionCount, 0)
 })
 
-test('computeFocusScoreV2 gives a single 25 minute focused session 100 percent', () => {
+test('computeFocusScoreV2 returns null for a single 25 minute focused session under the 30 minute minimum', () => {
   const breakdown = computeFocusScoreV2({
     sessions: [session(0, 25, 'development')],
     totalActiveSeconds: 25 * 60,
   })
 
-  assert.equal(breakdown.deepWorkPct, 100)
+  assert.equal(breakdown.deepWorkPct, null)
   assert.equal(breakdown.longestStreakSeconds, 25 * 60)
+  assert.equal(breakdown.deepWorkSessionCount, 1)
+})
+
+test('computeFocusScoreV2 gives one 30 minute focused session 100 percent', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [session(0, 30, 'development')],
+    totalActiveSeconds: 30 * 60,
+  })
+
+  assert.equal(breakdown.deepWorkPct, 100)
+  assert.equal(breakdown.longestStreakSeconds, 30 * 60)
   assert.equal(breakdown.deepWorkSessionCount, 1)
 })
 

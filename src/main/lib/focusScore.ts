@@ -158,7 +158,7 @@ export function computeFocusScoreV2(input: FocusScoreV2Input): FocusScoreBreakdo
   }
 
   closeStreak()
-  const hasEnoughData = totalActiveSeconds >= MIN_SCORE_ACTIVE_SECONDS || deepWorkSessionCount > 0
+  const hasEnoughData = totalActiveSeconds >= MIN_SCORE_ACTIVE_SECONDS
 
   return {
     deepWorkPct: hasEnoughData
