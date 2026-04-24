@@ -6,12 +6,18 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
+import {
+  buildRemoteUpdateFeedUrl,
+  compareReleaseVersions,
+  isRemoteUpdateDescriptor,
+  normalizeRemoteUpdaterError,
+  type RemoteUpdateDescriptor,
+} from '@shared/updaterReleaseFeed'
 import { capture, captureException } from './analytics'
 import { getLinuxPackageDiagnostics, type LinuxPackageType } from './linuxDesktop'
 
 const MANUAL_DOWNLOAD_URL = 'https://christian-tonny.dev/daylens'
-const RELEASE_OWNER = 'irachrist1'
-const RELEASE_REPO = 'daylens'
+const REMOTE_UPDATE_FEED_URL = process.env.DAYLENS_UPDATE_FEED_URL?.trim() || 'https://christian-tonny.dev/daylens/api/update-feed'
 
 export interface UpdaterState {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
@@ -33,6 +39,7 @@ export function getUpdateAvailable(): string | null { return _updateAvailable }
 let _installingUpdate = false
 let _statusWindow: BrowserWindow | null = null
 let _beforeInstall: (() => Promise<void>) | null = null
+let _pendingRemoteUpdate: RemoteUpdateDescriptor | null = null
 let _state: UpdaterState = {
   status: 'idle',
   version: null,
@@ -95,7 +102,7 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
   if (process.platform === 'win32') {
     return {
       supported: true,
-      message: 'Packaged Windows installs can download updates in place. Unsigned installers may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
+      message: 'Packaged Windows installs can check for updates in app and install a newer build in place when you choose it. Unsigned installers may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
       packageType: null,
     }
   }
@@ -104,13 +111,13 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
     if (isMacAdhocSigned()) {
       return {
         supported: true,
-        message: 'This Daylens build is ad-hoc signed (no Apple Developer ID), so updates download directly from GitHub and install in place via a swap helper instead of macOS Squirrel.',
+        message: 'This Daylens build is ad-hoc signed (no Apple Developer ID), so Daylens downloads the update and swaps the app bundle in place with its own helper instead of macOS Squirrel. Fresh downloads can still trigger Gatekeeper until Daylens ships with Developer ID signing and notarization.',
         packageType: null,
       }
     }
     return {
       supported: true,
-      message: 'Automatic updates are enabled for this Daylens build.',
+      message: 'Automatic update checks are enabled for this Daylens build. Daylens installs a new version only when you choose it.',
       packageType: null,
     }
   }
@@ -169,7 +176,15 @@ function supportsAutoUpdates(): boolean {
   return getAutoUpdateSupport().supported
 }
 
+function usesRemoteUpdateFeed(): boolean {
+  return process.platform === 'darwin' || process.platform === 'win32'
+}
+
 function normalizeUpdaterErrorMessage(message: string): string {
+  if (usesRemoteUpdateFeed()) {
+    return normalizeRemoteUpdaterError(message)
+  }
+
   if (process.platform === 'win32') {
     if (/latest\.yml/i.test(message) && /(404|Cannot find)/i.test(message)) {
       return 'This Windows release was published without updater metadata, so in-app updates are unavailable for this build. Download the latest Windows installer from the Daylens site instead.'
@@ -252,6 +267,142 @@ function getReleaseMetadata(info: unknown): Pick<UpdaterState, 'releaseName' | '
   }
 }
 
+function resetNoUpdateState(support: ReturnType<typeof getAutoUpdateSupport>): void {
+  _pendingRemoteUpdate = null
+  _updateAvailable = null
+  setUpdaterState({
+    status: 'not-available',
+    version: app.getVersion(),
+    progressPct: null,
+    errorMessage: null,
+    releaseName: null,
+    releaseNotesText: null,
+    releaseDate: null,
+    packageType: support.packageType,
+    supported: support.supported,
+    supportMessage: support.message,
+    downloadUrl: null,
+  })
+}
+
+async function fetchRemoteUpdateDescriptor(): Promise<RemoteUpdateDescriptor> {
+  const url = buildRemoteUpdateFeedUrl(REMOTE_UPDATE_FEED_URL, process.platform, process.arch)
+  const response = await net.fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'daylens-desktop-updater',
+    },
+  })
+
+  if (!response.ok) {
+    const body = (await response.text()).trim()
+    throw new Error(`Update feed request failed (HTTP ${response.status})${body ? `: ${body}` : ''}`)
+  }
+
+  const payload = await response.json()
+  if (!isRemoteUpdateDescriptor(payload)) {
+    throw new Error('Update feed returned an invalid payload.')
+  }
+  return payload
+}
+
+async function checkRemoteFeed(trigger: 'manual' | 'background', support: ReturnType<typeof getAutoUpdateSupport>): Promise<UpdaterState> {
+  const previousState = getUpdaterState()
+  const previousPendingRemoteUpdate = _pendingRemoteUpdate
+  const previousUpdateAvailable = _updateAvailable
+
+  setUpdaterState({
+    status: 'checking',
+    errorMessage: null,
+    progressPct: null,
+  })
+
+  try {
+    const remoteUpdate = await fetchRemoteUpdateDescriptor()
+    if (compareReleaseVersions(remoteUpdate.version, app.getVersion()) <= 0) {
+      capture(ANALYTICS_EVENT.UPDATE_CHECK_COMPLETED, {
+        result: 'not_available',
+        status: 'not_available',
+        surface: 'updater',
+        trigger,
+      })
+      resetNoUpdateState(support)
+      return getUpdaterState()
+    }
+
+    _pendingRemoteUpdate = remoteUpdate
+    _updateAvailable = remoteUpdate.version
+
+    capture(ANALYTICS_EVENT.UPDATE_AVAILABLE, {
+      result: 'available',
+      status: 'available',
+      version: remoteUpdate.version,
+    })
+    capture(ANALYTICS_EVENT.UPDATE_CHECK_COMPLETED, {
+      result: 'available',
+      status: 'available',
+      version: remoteUpdate.version,
+      surface: 'updater',
+      trigger,
+    })
+
+    setUpdaterState({
+      status: 'available',
+      version: remoteUpdate.version,
+      progressPct: null,
+      errorMessage: null,
+      releaseName: remoteUpdate.releaseName,
+      releaseNotesText: remoteUpdate.releaseNotesText,
+      releaseDate: remoteUpdate.releaseDate,
+      downloadUrl: remoteUpdate.manualUrl ?? MANUAL_DOWNLOAD_URL,
+    })
+    return getUpdaterState()
+  } catch (err) {
+    _pendingRemoteUpdate = null
+    _updateAvailable = null
+
+    capture(ANALYTICS_EVENT.UPDATE_ERROR, {
+      failure_kind: classifyFailureKind(err),
+      result: 'error',
+      surface: 'updater',
+    })
+    capture(ANALYTICS_EVENT.UPDATE_CHECK_COMPLETED, {
+      failure_kind: classifyFailureKind(err),
+      result: 'error',
+      status: 'error',
+      surface: 'updater',
+      trigger,
+    })
+    captureException(err, {
+      tags: {
+        process_type: 'main',
+        reason: 'remote_update_check_failed',
+      },
+    })
+
+    if (trigger === 'background') {
+      _pendingRemoteUpdate = previousPendingRemoteUpdate
+      _updateAvailable = previousUpdateAvailable
+      _state = previousState
+      emitState()
+      return getUpdaterState()
+    }
+
+    const message = err instanceof Error ? err.message : 'Daylens could not check the public update feed.'
+    setUpdaterState({
+      status: 'error',
+      errorMessage: normalizeUpdaterErrorMessage(message),
+      progressPct: null,
+      releaseName: null,
+      releaseNotesText: null,
+      releaseDate: null,
+      downloadUrl: MANUAL_DOWNLOAD_URL,
+    })
+    return getUpdaterState()
+  }
+}
+
 function downloadToFile(url: string, destPath: string, onProgress: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, redirect: 'follow' })
@@ -290,12 +441,12 @@ function downloadToFile(url: string, destPath: string, onProgress: (pct: number)
   })
 }
 
-async function downloadMacUpdateZip(version: string, onProgress: (pct: number) => void): Promise<string> {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-  const filename = `Daylens-${version}-${arch}.zip`
-  const url = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/download/v${version}/${filename}`
+async function downloadRemoteInstaller(onProgress: (pct: number) => void): Promise<string> {
+  if (!_pendingRemoteUpdate) throw new Error('Daylens does not have a pending update to install.')
+  const url = _pendingRemoteUpdate.installUrl
+  const fileName = _pendingRemoteUpdate.installFileName || `daylens-update-${_pendingRemoteUpdate.version}`
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-update-'))
-  const tmpFile = path.join(tmpDir, filename)
+  const tmpFile = path.join(tmpDir, fileName)
   await downloadToFile(url, tmpFile, onProgress)
   return tmpFile
 }
@@ -356,10 +507,9 @@ echo "[swap] done $(date)"
 }
 
 async function performAdhocMacInstall(): Promise<boolean> {
-  if (_installingUpdate) return false
-  if (!_state.version) return false
+  if (_installingUpdate || !_pendingRemoteUpdate) return false
 
-  const version = _state.version
+  const version = _pendingRemoteUpdate.version
   capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
     surface: 'updater',
     trigger: 'manual',
@@ -368,7 +518,7 @@ async function performAdhocMacInstall(): Promise<boolean> {
 
   try {
     setUpdaterState({ status: 'downloading', progressPct: 0, errorMessage: null, downloadUrl: null })
-    const zipPath = await downloadMacUpdateZip(version, (pct) => {
+    const zipPath = await downloadRemoteInstaller((pct) => {
       setUpdaterState({ status: 'downloading', progressPct: pct })
     })
 
@@ -402,6 +552,103 @@ async function performAdhocMacInstall(): Promise<boolean> {
       errorMessage: `${baseMessage} You can also download the update manually from ${MANUAL_DOWNLOAD_URL}.`,
       progressPct: null,
       downloadUrl: MANUAL_DOWNLOAD_URL,
+    })
+    return false
+  }
+}
+
+function escapePowerShellSingleQuoted(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+async function scheduleWindowsInstaller(installerPath: string): Promise<void> {
+  const installId = `${Date.now()}-${process.pid}`
+  const scriptPath = path.join(os.tmpdir(), `daylens-update-${installId}.ps1`)
+  const logPath = path.join(os.tmpdir(), `daylens-update-${installId}.log`)
+  const parentPid = process.pid
+  const currentExe = escapePowerShellSingleQuoted(process.execPath)
+  const escapedInstallerPath = escapePowerShellSingleQuoted(installerPath)
+  const escapedLogPath = escapePowerShellSingleQuoted(logPath)
+
+  const script = `
+$ErrorActionPreference = 'Stop'
+$parentPid = ${parentPid}
+$installerPath = '${escapedInstallerPath}'
+$appExe = '${currentExe}'
+$logPath = '${escapedLogPath}'
+try {
+  Start-Transcript -Path $logPath -Append | Out-Null
+} catch {}
+while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {
+  Start-Sleep -Milliseconds 250
+}
+Start-Sleep -Milliseconds 500
+$proc = Start-Process -FilePath $installerPath -ArgumentList '/S' -PassThru -Wait
+if ($proc.ExitCode -ne 0) {
+  throw "Installer exited with code $($proc.ExitCode)."
+}
+Start-Sleep -Seconds 1
+if (Test-Path $appExe) {
+  Start-Process -FilePath $appExe | Out-Null
+}
+Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+`
+
+  await fs.writeFile(scriptPath, script, 'utf8')
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+}
+
+async function performWindowsInstall(): Promise<boolean> {
+  if (_installingUpdate || !_pendingRemoteUpdate) return false
+
+  const version = _pendingRemoteUpdate.version
+  capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+    surface: 'updater',
+    trigger: 'manual',
+    version,
+  })
+
+  try {
+    setUpdaterState({ status: 'downloading', progressPct: 0, errorMessage: null, downloadUrl: null })
+    const installerPath = await downloadRemoteInstaller((pct) => {
+      setUpdaterState({ status: 'downloading', progressPct: pct })
+    })
+
+    setUpdaterState({ status: 'installing', progressPct: 100, errorMessage: null })
+    capture(ANALYTICS_EVENT.UPDATE_INSTALL_STARTED, {
+      surface: 'updater',
+      trigger: 'manual',
+      version,
+    })
+
+    if (_beforeInstall) await _beforeInstall()
+
+    await scheduleWindowsInstaller(installerPath)
+    _installingUpdate = true
+    setTimeout(() => app.quit(), 250)
+    return true
+  } catch (err) {
+    _installingUpdate = false
+    const baseMessage = err instanceof Error ? err.message : 'Daylens could not finish the Windows update install.'
+    capture(ANALYTICS_EVENT.UPDATE_ERROR, {
+      failure_kind: classifyFailureKind(err),
+      result: 'error',
+      surface: 'updater',
+    })
+    captureException(err, {
+      tags: { process_type: 'main', reason: 'windows_install_failed' },
+    })
+    setUpdaterState({
+      status: 'error',
+      errorMessage: `${normalizeUpdaterErrorMessage(baseMessage)} You can also download the update manually from ${MANUAL_DOWNLOAD_URL}.`,
+      progressPct: null,
+      downloadUrl: _pendingRemoteUpdate?.manualUrl ?? MANUAL_DOWNLOAD_URL,
     })
     return false
   }
@@ -456,6 +703,10 @@ export function initUpdater(win: BrowserWindow): void {
       return getUpdaterState()
     }
 
+    if (usesRemoteUpdateFeed()) {
+      return checkRemoteFeed('manual', support)
+    }
+
     try {
       await autoUpdater.checkForUpdates()
     } catch {
@@ -467,12 +718,14 @@ export function initUpdater(win: BrowserWindow): void {
   ipcMain.handle('update:install', async () => {
     if (!supportsAutoUpdates()) return false
 
-    // Ad-hoc Mac: run our own download + bundle swap. Available state is the
-    // gate here because we never advance to 'downloaded' (we deliberately keep
-    // electron-updater out of the install path on this build).
-    if (process.platform === 'darwin' && isMacAdhocSigned()) {
+    if (process.platform === 'darwin') {
       if (_state.status !== 'available' || _installingUpdate) return false
       return performAdhocMacInstall()
+    }
+
+    if (process.platform === 'win32') {
+      if (_state.status !== 'available' || _installingUpdate) return false
+      return performWindowsInstall()
     }
 
     if (_state.status !== 'downloaded' || _installingUpdate) return false
@@ -525,6 +778,14 @@ export function initUpdater(win: BrowserWindow): void {
   })
 
   if (!supportsAutoUpdates()) return
+
+  if (usesRemoteUpdateFeed()) {
+    setTimeout(() => {
+      console.log('[updater] checking public update feed…')
+      void checkRemoteFeed('background', support)
+    }, 10_000)
+    return
+  }
 
   const electronUpdaterInstall = canUseElectronUpdaterInstall()
   autoUpdater.autoDownload = electronUpdaterInstall

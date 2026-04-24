@@ -340,7 +340,7 @@ function updateStatusLabel(status: UpdaterStatusInfo | null, version: string | n
     case 'checking':
       return 'Checking for updates…'
     case 'available':
-      return `Daylens ${status.version ?? 'update'} is available — install to download and swap in the new build.`
+      return `Daylens ${status.version ?? 'update'} is available — install when you want Daylens to download and replace the app.`
     case 'downloading':
       return typeof status.progressPct === 'number'
         ? `Downloading ${status.version ?? 'update'} — ${status.progressPct}%`
@@ -348,7 +348,7 @@ function updateStatusLabel(status: UpdaterStatusInfo | null, version: string | n
     case 'downloaded':
       return `${status.version ?? 'Update'} ready to install. Restart to finish.`
     case 'installing':
-      return `Installing ${status.version ?? 'update'}…`
+      return `Installing ${status.version ?? 'update'} and relaunching…`
     case 'not-available':
       return version ? `You're on the latest version (${version}).` : 'No updates available.'
     case 'error':
@@ -435,7 +435,7 @@ function UpdatesSection() {
   return (
     <SettingsSection
       title="Updates"
-      description="Check for new builds. Installs on next restart."
+      description="Daylens checks for new builds and lets you choose when to install them."
     >
       <div>
         <SettingsRow

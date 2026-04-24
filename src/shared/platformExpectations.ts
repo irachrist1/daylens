@@ -51,12 +51,12 @@ export function getInstallUpdateExpectation(platform: NodeJS.Platform | null | u
     case 'darwin':
       return {
         title: 'Install and updates',
-        body: 'Install from the DMG by moving Daylens into Applications. Built-in updates are intended for signed release builds, so local ad-hoc packages are not treated as end-to-end updater proof.',
+        body: 'Install from the DMG by moving Daylens into Applications. Daylens can then download and replace a newer build in place, but fresh downloads still inherit Gatekeeper prompts until Developer ID signing and notarization are in place.',
       }
     case 'win32':
       return {
         title: 'Install and updates',
-        body: 'Install with the Windows Setup .exe. Packaged installs can download updates in place, but unsigned releases may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
+        body: 'Install with the Windows Setup .exe. Daylens can then download and replace a newer build in place, but unsigned releases may still trigger SmartScreen until Daylens ships with a trusted code-signing certificate and reputation.',
       }
     case 'linux':
       return {
