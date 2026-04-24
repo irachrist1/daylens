@@ -53,7 +53,7 @@ export default function UpdateBanner() {
           Daylens {update.version ?? ''} is available
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          Click install — Daylens will download, swap in the new build, and relaunch automatically.
+          Click install — Daylens will download the new build, replace the app in place, and relaunch automatically.
         </span>
         {highlights[0] && (
           <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
@@ -197,7 +197,7 @@ export default function UpdateBanner() {
           Installing Daylens {update.version ?? ''}
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          The app will close and finish the update automatically.
+          The app will close, finish the update, and relaunch automatically.
         </span>
       </div>
     )
