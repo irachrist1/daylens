@@ -116,7 +116,7 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.DELETE_THREAD, (_e, payload: { threadId: number }) => {
-    deleteThread(payload.threadId)
+    return deleteThread(payload.threadId)
   })
 
   // ─── Artifacts ────────────────────────────────────────────────────────────

@@ -329,6 +329,13 @@ function emitThreadEvent(event: AnalyticsEventName, threadId: number): void {
 export function createThread(title?: string | null): ThreadRowLite {
   const db = getDb()
   const now = Date.now()
+  if (title == null) {
+    const existingDraft = listThreadsLite({ includeArchived: false, limit: 1000 })
+      .find((row) => row.messageCount === 0)
+    if (existingDraft) {
+      return existingDraft
+    }
+  }
   const finalTitle = normalizeThreadTitle(title, DEFAULT_THREAD_TITLE)
   const metadataJson = JSON.stringify({
     workspaceThreadId: createWorkspaceThreadId(),
@@ -365,11 +372,14 @@ export function archiveThread(threadId: number, archived: boolean): void {
   emitThreadEvent(ANALYTICS_EVENT.AI_THREAD_ARCHIVED, threadId)
 }
 
-export function deleteThread(threadId: number): void {
+export async function deleteThread(threadId: number): Promise<void> {
   const db = getDb()
+  const artifacts = listArtifactsByThread(threadId)
+  for (const artifact of artifacts) {
+    await deleteArtifact(artifact.id)
+  }
   // Also remove the ai_messages rows referencing this thread (no FK, do it explicitly).
   db.prepare(`DELETE FROM ai_messages WHERE thread_id = ?`).run(threadId)
-  // Artifacts cascade via FK on delete.
   db.prepare(`DELETE FROM ai_threads WHERE id = ?`).run(threadId)
   emitThreadEvent(ANALYTICS_EVENT.AI_THREAD_DELETED, threadId)
 }
