@@ -823,6 +823,18 @@ function starterPrompts(today: DayTimelinePayload | null): string[] {
   ]
 }
 
+function relativeTime(ms: number): string {
+  const diff = Date.now() - ms
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 function formatSearchTimestamp(ms: number): string {
   return new Date(ms).toLocaleString(undefined, {
     month: 'short',
@@ -928,6 +940,10 @@ export default function Insights() {
   const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null)
+  const [hoveredThreadId, setHoveredThreadId] = useState<number | null>(null)
+  const [threadDeleteConfirm, setThreadDeleteConfirm] = useState<number | null>(null)
+  const [threadPickerFocusIdx, setThreadPickerFocusIdx] = useState(0)
+  const threadPickerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingRef = useRef(false)
@@ -1444,26 +1460,19 @@ export default function Insights() {
     })
   }
 
-  async function handleDeleteThread(thread: AIThreadSummary) {
+  async function handleDeleteThreadConfirmed(thread: AIThreadSummary) {
     const pickerWasOpen = threadPickerOpen
-    const confirmed = window.confirm(
-      `Delete "${thread.title}"? This removes the chat, messages, and attached artifacts from this device.`,
-    )
-    if (!confirmed) return
-
+    setThreadDeleteConfirm(null)
     try {
       await ipc.ai.deleteThread(thread.id)
-
       const refreshed = await ipc.ai.listThreads({ includeArchived: false })
       setThreads(refreshed)
       restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
-
       const nextActiveId = thread.id === activeThreadId
         ? refreshed[0]?.id ?? null
         : activeThreadId !== null && !refreshed.some((entry) => entry.id === activeThreadId)
           ? refreshed[0]?.id ?? null
           : activeThreadId
-
       if (nextActiveId == null) {
         setActiveThreadId(null)
         resetThreadComposerState()
@@ -1471,7 +1480,6 @@ export default function Insights() {
         setThreadPickerOpen(false)
         return
       }
-
       if (nextActiveId !== activeThreadId || thread.id === activeThreadId) {
         await loadThread(nextActiveId, { keepPickerOpen: pickerWasOpen })
         restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
@@ -1626,7 +1634,11 @@ export default function Insights() {
               {threads.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setThreadPickerOpen((value) => !value)}
+                  onClick={() => {
+                    setThreadPickerOpen((v) => !v)
+                    setThreadDeleteConfirm(null)
+                    setThreadPickerFocusIdx(0)
+                  }}
                   style={{
                     padding: '7px 12px',
                     borderRadius: 8,
@@ -1661,88 +1673,149 @@ export default function Insights() {
                 New chat
               </button>
               {threadPickerOpen && threads.length > 0 && (
-                <div
-                  role="listbox"
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 6px)',
-                    right: 0,
-                    zIndex: 20,
-                    width: 280,
-                    maxHeight: 360,
-                    overflowY: 'auto',
-                    background: 'var(--color-surface)',
-                    border: '1px solid var(--color-border-ghost)',
-                    borderRadius: 10,
-                    boxShadow: 'var(--color-shadow-floating)',
-                    padding: 6,
-                  }}
-                >
-                  {threads.map((thread) => (
-                    <div
-                      key={thread.id}
-                      role="option"
-                      aria-selected={thread.id === activeThreadId}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'stretch',
-                        gap: 6,
-                        marginBottom: 4,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => { void loadThread(thread.id) }}
+                <>
+                  {/* Backdrop — click outside to dismiss */}
+                  <div
+                    style={{ position: 'fixed', inset: 0, zIndex: 19 }}
+                    onClick={() => {
+                      setThreadPickerOpen(false)
+                      setThreadDeleteConfirm(null)
+                    }}
+                  />
+                  <div
+                    ref={threadPickerRef}
+                    role="listbox"
+                    tabIndex={-1}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setThreadPickerOpen(false)
+                        setThreadDeleteConfirm(null)
+                        return
+                      }
+                      if (event.key === 'ArrowDown') {
+                        event.preventDefault()
+                        setThreadPickerFocusIdx((i) => Math.min(i + 1, threads.length - 1))
+                        return
+                      }
+                      if (event.key === 'ArrowUp') {
+                        event.preventDefault()
+                        setThreadPickerFocusIdx((i) => Math.max(i - 1, 0))
+                        return
+                      }
+                      if (event.key === 'Enter') {
+                        const t = threads[threadPickerFocusIdx]
+                        if (t) void loadThread(t.id)
+                        return
+                      }
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 6px)',
+                      right: 0,
+                      zIndex: 20,
+                      width: 320,
+                      maxHeight: 380,
+                      overflowY: 'auto',
+                      background: 'var(--color-surface)',
+                      border: '1px solid var(--color-border-ghost)',
+                      borderRadius: 10,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.14)',
+                      padding: 6,
+                    }}
+                  >
+                    {threads.map((thread, idx) => (
+                      <div
+                        key={thread.id}
+                        role="option"
+                        aria-selected={thread.id === activeThreadId}
                         style={{
-                          display: 'block',
-                          flex: 1,
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '8px 10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
                           borderRadius: 6,
-                          border: 'none',
-                          background: thread.id === activeThreadId ? 'var(--color-surface-muted)' : 'transparent',
-                          color: 'var(--color-text-primary)',
-                          fontSize: 12.5,
-                          cursor: 'pointer',
+                          background: idx === threadPickerFocusIdx
+                            ? 'var(--color-surface-high)'
+                            : thread.id === activeThreadId
+                              ? 'var(--color-surface-muted)'
+                              : 'transparent',
+                          marginBottom: 2,
                         }}
+                        onMouseEnter={() => {
+                          setHoveredThreadId(thread.id)
+                          setThreadPickerFocusIdx(idx)
+                        }}
+                        onMouseLeave={() => setHoveredThreadId(null)}
                       >
-                        <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.title}</div>
-                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                            {thread.messageCount} msg{thread.messageCount === 1 ? '' : 's'}
+                        <button
+                          type="button"
+                          onClick={() => { void loadThread(thread.id) }}
+                          style={{
+                            display: 'block',
+                            flex: 1,
+                            minWidth: 0,
+                            textAlign: 'left',
+                            padding: '9px 10px',
+                            border: 'none',
+                            background: 'transparent',
+                            color: 'var(--color-text-primary)',
+                            fontSize: 12.5,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ fontWeight: 680, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {thread.title}
                           </div>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { void handleDeleteThread(thread) }}
-                        aria-label={`Delete ${thread.title}`}
-                        title={`Delete ${thread.title}`}
-                        style={{
-                          width: 30,
-                          flexShrink: 0,
-                          border: 'none',
-                          borderRadius: 6,
-                          background: 'transparent',
-                          color: 'var(--color-text-tertiary)',
-                          cursor: 'pointer',
-                          display: 'grid',
-                          placeItems: 'center',
-                          transition: 'color 120ms ease, background 120ms ease',
-                        }}
-                        onMouseEnter={(event) => {
-                          event.currentTarget.style.color = '#dc2626'
-                          event.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)'
-                        }}
-                        onMouseLeave={(event) => {
-                          event.currentTarget.style.color = 'var(--color-text-tertiary)'
-                          event.currentTarget.style.background = 'transparent'
-                        }}
-                      >
-                        <Trash2 size={15} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                            {relativeTime(thread.lastMessageAt)}
+                          </div>
+                        </button>
+                        {threadDeleteConfirm === thread.id ? (
+                          <button
+                            type="button"
+                            onClick={() => { void handleDeleteThreadConfirmed(thread) }}
+                            style={{
+                              flexShrink: 0,
+                              padding: '4px 8px',
+                              marginRight: 4,
+                              border: 'none',
+                              borderRadius: 4,
+                              background: 'rgba(239,68,68,0.12)',
+                              color: '#ef4444',
+                              fontSize: 11.5,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Delete?
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setThreadDeleteConfirm(thread.id)}
+                            aria-label={`Delete ${thread.title}`}
+                            style={{
+                              width: 28,
+                              flexShrink: 0,
+                              marginRight: 4,
+                              border: 'none',
+                              borderRadius: 5,
+                              background: 'transparent',
+                              color: 'var(--color-text-tertiary)',
+                              cursor: 'pointer',
+                              display: 'grid',
+                              placeItems: 'center',
+                              padding: 4,
+                              opacity: hoveredThreadId === thread.id ? 1 : 0,
+                              transition: 'opacity 100ms ease',
+                            }}
+                          >
+                            <Trash2 size={13} strokeWidth={1.9} aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>
