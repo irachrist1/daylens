@@ -40,6 +40,81 @@ const SURFACE_FILTERS: RoadmapSurface[] = [
 
 const ROADMAP_ITEMS: RoadmapItem[] = [
   {
+    title: "Full-text search across your entire history",
+    status: "Shipped",
+    surface: "Cross-platform",
+    updated: "2026-04-24",
+    summary:
+      "Type any word into the AI view's search box and instantly see every app session, work block, browser page, and AI artifact where it appeared — with highlighted excerpts and timestamps. No AI, no cloud, pure local SQLite FTS5.",
+    tags: ["Search", "Recall", "FTS5"],
+    truthNow: [
+      "FTS5 virtual tables index app_sessions, timeline_blocks, website_visits, and ai_artifacts on first launch.",
+      "Insert, update, and delete triggers keep the index in sync with no manual maintenance.",
+      "Results are ranked by recency and include highlighted excerpt snippets with the matched term marked.",
+      "The search input lives at the top of the AI view with a 150ms debounce; clicking a result navigates to the relevant day or opens the artifact.",
+    ],
+    nextProof: [
+      "Index size and query speed on very large histories (3+ years) have not been stress-tested in production.",
+      "Block and artifact result counts are low for new users until more history accumulates.",
+    ],
+  },
+  {
+    title: "Onboarding name capture and goals wiring",
+    status: "Shipped",
+    surface: "Cross-platform",
+    updated: "2026-04-24",
+    summary:
+      "Set your name once in onboarding or Settings and the AI uses it every time. Picking 'less distractions' or 'deep work' during onboarding now shapes what context the AI includes in every chat response.",
+    tags: ["Onboarding", "Personalization", "AI context"],
+    truthNow: [
+      "Display name persists in Settings and appears in the AI persona line.",
+      "The 'less-distraction' goal prepends a live distraction summary (minutes + top domains today) to every AI response.",
+      "The 'deep-work' goal prepends deep-work percentage, session count, and longest streak to every AI response.",
+      "The 'understand-habits' and 'ai-insights' goals are collected but do not yet change AI behavior — noted honestly in the app.",
+    ],
+    nextProof: [
+      "The two wired goals improve grounding but the AI still uses pre-aggregated stats, not live query results.",
+      "Goal behavior is only visible after enough tracking data exists for the day.",
+    ],
+  },
+  {
+    title: "Honest focus score",
+    status: "Shipped",
+    surface: "Cross-platform",
+    updated: "2026-04-24",
+    summary:
+      "The old four-term weighted formula returned ~20 even on idle days. The new score is a single honest percentage: time spent in continuous 25-minute deep-work sessions divided by total active time. Returns 'Not enough data' when the day is too short to measure.",
+    tags: ["Focus score", "Deep work", "Honesty"],
+    truthNow: [
+      "deepWorkPct replaces the old coherence/switchPenalty/artifactProgress/deepWorkDensity formula.",
+      "A deep-work session is any 25+ minute continuous stretch within a focused app category without a category switch.",
+      "Supporting numbers (longest streak, switch count, session count) are shown below the main percentage.",
+      "Returns null — displayed as 'Not enough data' — when total active time is under 30 minutes.",
+    ],
+    nextProof: [
+      "Category classification quality on the new schema still needs broader real-user validation.",
+      "The 25-minute threshold is a reasonable default but may need tuning based on user feedback.",
+    ],
+  },
+  {
+    title: "AI tool-use recall layer",
+    status: "Active work",
+    surface: "Cross-platform",
+    updated: "2026-04-24",
+    summary:
+      "The next step for Recall is letting the AI call structured tools against your local SQLite instead of relying on pre-aggregated context. A kill-gate spike is underway to confirm frontier models can reliably choose the right tool and parameters before any integration code is written.",
+    tags: ["AI", "Tool use", "Recall", "SQLite"],
+    truthNow: [
+      "The FTS5 search layer (Task A) provides the raw query infrastructure the tools will call.",
+      "Tool schemas (searchSessions, getDaySummary, getAppUsage, searchArtifacts, getWeekSummary) are being designed.",
+      "A spike tests whether current models score ≥12/15 on representative recall questions before integration begins.",
+    ],
+    nextProof: [
+      "The kill gate must pass before any production integration code is written.",
+      "If tool-use scores <12/15, the fallback is expanded static context rather than forcing tool calls.",
+    ],
+  },
+  {
     title: "Unified cross-platform desktop source of truth",
     status: "Shipped",
     surface: "Cross-platform",
@@ -252,20 +327,21 @@ const ROADMAP_ITEMS: RoadmapItem[] = [
     ],
   },
   {
-    title: "Editor-facing handoff and MCP-style integrations",
+    title: "MCP server for coding tools and agents",
     status: "Future ideas",
     surface: "Cross-platform",
-    updated: "Direction only",
+    updated: "2026-04-24",
     summary:
-      "Daylens is being shaped so editors, agents, and coding tools can consume grounded work-history context without turning that direction into fake current product scope.",
-    tags: ["MCP", "Editors", "Agents"],
+      "An opt-in local MCP server would let Claude Code, Cursor, and similar tools query your Daylens history directly via tool calls. Gated on genuine community interest — if fewer than 5 developers ask follow-up questions after a public probe, the slot goes to accessibility-API metadata enrichment instead.",
+    tags: ["MCP", "Editors", "Agents", "stdio"],
     truthNow: [
-      "The direction is real and shows up in the product contract and public positioning.",
-      "It depends on the local-first evidence layer staying trustworthy first.",
+      "The FTS5 search layer and AI tool schemas (Task A and Task C) provide the underlying query surface the MCP server would expose.",
+      "The product contract for a read-only stdio MCP server is drafted and ready to implement once the gate passes.",
+      "No network surface, no auth — stdio between local processes only.",
     ],
     nextProof: [
-      "Turn the handoff into a clear product surface instead of only a direction.",
-      "Avoid marketing polished integrations before the handoff is genuinely usable.",
+      "Community probe must produce ≥5 developers with genuine follow-up questions, not polite emoji.",
+      "AI tool-use recall (Task C/D) must ship first so the MCP server reuses proven schemas rather than inventing its own.",
     ],
   },
   {
