@@ -62,8 +62,8 @@ function setupDb(): Database.Database {
 // Schema tests — no API calls, always run
 // ---------------------------------------------------------------------------
 
-test('anthropicTools has 6 entries with required fields', () => {
-  assert.equal(anthropicTools.length, 6)
+test('anthropicTools has all entries with required fields', () => {
+  assert.equal(anthropicTools.length, 7)
   for (const tool of anthropicTools) {
     assert.ok(tool.name, 'tool has name')
     assert.ok(tool.description, 'tool has description')
@@ -121,6 +121,20 @@ test('executeTool: getAttributionContext returns unknown for missing entity', ()
   const db = setupDb()
   const result = executeTool('getAttributionContext', { entityName: 'NonexistentClient99' }, db) as { entityType: string }
   assert.equal(result.entityType, 'unknown')
+  db.close()
+})
+
+test('executeTool: searchFileMentions reports filename evidence as inferred', () => {
+  const db = setupDb()
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const result = executeTool('searchFileMentions', { startDate: dateStr, endDate: dateStr }, db) as {
+    mentions: Array<{ filename: string; inferred: boolean }>
+    note: string
+  }
+
+  assert.ok(result.mentions.some((mention) => mention.filename.endsWith('ai.ts') && mention.inferred))
+  assert.match(result.note, /inferred from window title strings/)
   db.close()
 })
 
