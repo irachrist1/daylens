@@ -574,6 +574,8 @@ export default function Settings() {
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
+  const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string> } | null>(null)
+  const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
 
   useEffect(() => {
     void (async () => {
@@ -633,11 +635,20 @@ export default function Settings() {
     void ipc.settings.hasApiKey(settings.aiProvider).then((access) => setHasApiKey(access))
   }, [cliTools, settings?.aiProvider])
 
+  useEffect(() => {
+    if (!settings?.mcpServerEnabled) return
+    void ipc.mcp.getConfig().then((cfg) => setMcpConfig(cfg))
+  }, [settings?.mcpServerEnabled])
+
   async function persist(partial: Partial<AppSettings>) {
     if (!settings) return
     const next = { ...settings, ...partial }
     setSettings(next)
     await ipc.settings.set(partial)
+    if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
+      const cfg = await ipc.mcp.getConfig()
+      setMcpConfig(cfg)
+    }
   }
 
   async function refreshAIAccess() {
@@ -1332,6 +1343,93 @@ export default function Settings() {
         </SettingsSection>
 
         <UpdatesSection />
+
+        <SettingsSection
+          title="MCP Server"
+          description="Expose your Daylens work history to AI coding tools and agents via the Model Context Protocol."
+        >
+          <div>
+            <SettingsRow
+              first
+              title="Enable MCP server"
+              description="Lets Claude Desktop, Cursor, or Claude Code query your local activity data. Off by default."
+              control={
+                <Toggle
+                  checked={settings.mcpServerEnabled ?? false}
+                  onChange={(value) => void persist({ mcpServerEnabled: value })}
+                />
+              }
+            />
+            {(settings.mcpServerEnabled ?? false) && mcpConfig && (
+              <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginBottom: 8, lineHeight: 1.55 }}>
+                  Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>~/Library/Application Support/Claude/claude_desktop_config.json</code>):
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <pre style={{
+                    fontSize: 11.5,
+                    lineHeight: 1.6,
+                    background: 'var(--color-surface-low)',
+                    border: '1px solid var(--color-border-ghost)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    overflowX: 'auto',
+                    margin: 0,
+                    color: 'var(--color-text-primary)',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                  }}>
+                    {JSON.stringify({
+                      mcpServers: {
+                        daylens: {
+                          command: mcpConfig.command,
+                          args: mcpConfig.args,
+                          env: mcpConfig.env,
+                        },
+                      },
+                    }, null, 2)}
+                  </pre>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const snippet = JSON.stringify({
+                        mcpServers: {
+                          daylens: {
+                            command: mcpConfig.command,
+                            args: mcpConfig.args,
+                            env: mcpConfig.env,
+                          },
+                        },
+                      }, null, 2)
+                      void navigator.clipboard.writeText(snippet).then(() => {
+                        setMcpSnippetCopied(true)
+                        setTimeout(() => setMcpSnippetCopied(false), 2000)
+                      })
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: 8,
+                      right: 8,
+                      height: 26,
+                      padding: '0 10px',
+                      borderRadius: 6,
+                      border: '1px solid var(--color-border-ghost)',
+                      background: 'var(--color-surface-high)',
+                      color: 'var(--color-text-secondary)',
+                      fontSize: 11.5,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {mcpSnippetCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.55 }}>
+                  After updating the config, restart your MCP client for the changes to take effect.
+                </div>
+              </div>
+            )}
+          </div>
+        </SettingsSection>
 
         <SettingsSection
           title="Privacy"

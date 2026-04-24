@@ -822,6 +822,7 @@ export interface AppSettings {
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
+  mcpServerEnabled?: boolean
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1138,5 +1139,8 @@ export const IPC = {
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',
     OPEN_PATH: 'shell:open-path',
+  },
+  MCP: {
+    GET_CONFIG: 'mcp:get-config',
   },
 } as const

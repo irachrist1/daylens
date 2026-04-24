@@ -49,6 +49,7 @@ const DEFAULTS: AppSettings = {
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: false,
+  mcpServerEnabled: false,
 }
 
 export function getSettings(): AppSettings {
@@ -89,6 +90,7 @@ export function getSettings(): AppSettings {
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
+    mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
   }
 }
 
