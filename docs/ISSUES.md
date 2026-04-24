@@ -31,6 +31,7 @@ This file is the implementation-status ledger. Items below are separated into co
 
 - Desktop Settings already exposes workspace linking, browser link creation, recovery words, sync-state display, provider routing, prompt caching, redaction toggles, category overrides, and Linux diagnostics (`src/renderer/views/Settings.tsx:824-999`, `src/renderer/views/Settings.tsx:1000-1334`).
 - Sync status is derived from durable sync outcome plus heartbeat freshness. A newer durable failure still wins over a fresh heartbeat (`src/main/services/syncState.ts:5-24`, `tests/syncStatus.test.ts`).
+- Desktop macOS/Windows update checks use the public Daylens update feed instead of anonymous GitHub release discovery, and legacy GitHub updater failures are normalized to concise manual-download guidance instead of raw response headers (`src/main/services/updater.ts:288-403`, `src/shared/updaterReleaseFeed.ts:66-94`, `tests/updaterReleaseFeed.test.ts`).
 
 ### Remote Foundation
 
@@ -49,6 +50,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Focus-session start/stop/review flows from AI messages in normal usage (`src/renderer/views/Insights.tsx:1229-1282`).
 - Linked remote freshness, stale-state UX, and session-repair behavior under real multi-device use (`src/main/services/syncUploader.ts:232-284`).
 - Packaged runtime validation across macOS, Windows, and Linux.
+- End-to-end updater recovery from older GitHub-feed builds after the next packaged release is published and installed.
 
 ## Still Partial Or Open
 
@@ -88,6 +90,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 ## Real Runtime Or User Verification Still Needed
 
 - Windows packaged runtime validation on a real machine.
+- Windows/macOS in-app update validation from an older installed build to the newly published public-feed build.
 - Linux packaged runtime validation on real desktops, including X11 and Wayland/XWayland scenarios.
 - End-to-end linked workspace creation, browser linking, heartbeat/day-sync freshness, and stale/failure recovery in normal use.
 - Desktop provider-backed AI chat, report generation, and focus-session action flows with real credentials.
