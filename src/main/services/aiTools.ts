@@ -14,6 +14,7 @@ import {
   findClientByName,
   findProjectByName,
 } from '../core/query/attributionResolvers'
+import { searchFileMentions as execSearchFileMentions, type SearchFileMentionsResult } from '../lib/windowTitleFilenames'
 
 // ---------------------------------------------------------------------------
 // TypeScript parameter interfaces
@@ -296,6 +297,23 @@ export const anthropicTools: AnthropicTool[] = [
       required: ['entityName'],
     },
   },
+
+  {
+    name: 'searchFileMentions',
+    description:
+      'Extract filename-like tokens from window title strings in the tracked sessions. ' +
+      'Use this when the user asks which files, documents, or code files they had open. ' +
+      'Results are INFERRED from title strings — not from file-system events — so ' +
+      'always surface the note field to the user so they understand the evidence level.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startDate: { ...DATE_PARAM, description: 'Restrict to sessions starting on or after this date.' },
+        endDate: { ...DATE_PARAM, description: 'Restrict to sessions starting on or before this date.' },
+      },
+      required: [],
+    },
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -340,6 +358,14 @@ export type ToolName =
   | 'searchArtifacts'
   | 'getWeekSummary'
   | 'getAttributionContext'
+  | 'searchFileMentions'
+
+export interface SearchFileMentionsParams {
+  startDate?: string
+  endDate?: string
+}
+
+export type { SearchFileMentionsResult }
 
 // ---------------------------------------------------------------------------
 // Executor — main-process only; bridges tool params to real DB queries
@@ -575,6 +601,7 @@ export type ToolParams =
   | { name: 'searchArtifacts'; params: SearchArtifactsParams }
   | { name: 'getWeekSummary'; params: GetWeekSummaryParams }
   | { name: 'getAttributionContext'; params: GetAttributionContextParams }
+  | { name: 'searchFileMentions'; params: SearchFileMentionsParams }
 
 export function executeTool(
   name: ToolName,
@@ -588,5 +615,6 @@ export function executeTool(
     case 'searchArtifacts': return execSearchArtifacts(params as unknown as SearchArtifactsParams, db)
     case 'getWeekSummary': return execGetWeekSummary(params as unknown as GetWeekSummaryParams, db)
     case 'getAttributionContext': return execGetAttributionContext(params as unknown as GetAttributionContextParams, db)
+    case 'searchFileMentions': return execSearchFileMentions(db, params as unknown as SearchFileMentionsParams)
   }
 }
