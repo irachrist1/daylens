@@ -2,81 +2,89 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { computeFocusScoreV2 } from '../src/main/lib/focusScore.ts'
 
-test('computeFocusScoreV2 returns bounded zero-ish score for empty input', () => {
-  const breakdown = computeFocusScoreV2({
-    blocks: [],
-    totalActiveSeconds: 0,
-    switchesPerHour: 0,
-  })
-  assert.equal(breakdown.coherence, 0)
-  assert.equal(breakdown.deepWork, 0)
-  assert.equal(breakdown.artifactProgress, 0)
-  assert.equal(breakdown.switchPenalty, 0)
-  // With no evidence and no switches the (1 - switchPenalty) term still
-  // contributes 0.20, so thin data never silently produces a misleading
-  // high score but also never NaNs out.
-  assert.ok(breakdown.score >= 0 && breakdown.score <= 100)
-  assert.equal(breakdown.score, 20)
+function session(startMin: number, durationMin: number, category = 'development') {
+  const startTime = startMin * 60_000
+  return {
+    startTime,
+    endTime: startTime + durationMin * 60_000,
+    durationSeconds: durationMin * 60,
+    category,
+    isFocused: ['development', 'design', 'writing', 'research'].includes(category),
+  }
+}
+
+test('computeFocusScoreV2 returns null when there is not enough active data', () => {
+  const breakdown = computeFocusScoreV2({ sessions: [], totalActiveSeconds: 0 })
+
+  assert.equal(breakdown.deepWorkPct, null)
+  assert.equal(breakdown.longestStreakSeconds, 0)
+  assert.equal(breakdown.switchCount, 0)
+  assert.equal(breakdown.deepWorkSessionCount, 0)
 })
 
-test('computeFocusScoreV2 rewards coherent deep-work blocks with artifact evidence', () => {
+test('computeFocusScoreV2 gives a single 25 minute focused session 100 percent', () => {
   const breakdown = computeFocusScoreV2({
-    blocks: [
-      { durationSeconds: 45 * 60, activeSeconds: 45 * 60 },
-      { durationSeconds: 60 * 60, activeSeconds: 60 * 60 },
+    sessions: [session(0, 25, 'development')],
+    totalActiveSeconds: 25 * 60,
+  })
+
+  assert.equal(breakdown.deepWorkPct, 100)
+  assert.equal(breakdown.longestStreakSeconds, 25 * 60)
+  assert.equal(breakdown.deepWorkSessionCount, 1)
+})
+
+test('computeFocusScoreV2 reports null score below 30 minutes without deep work', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [session(0, 20, 'development')],
+    totalActiveSeconds: 20 * 60,
+  })
+
+  assert.equal(breakdown.deepWorkPct, null)
+  assert.equal(breakdown.longestStreakSeconds, 0)
+})
+
+test('computeFocusScoreV2 breaks a streak on interruption', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [
+      session(0, 20, 'development'),
+      session(20, 5, 'communication'),
+      session(25, 20, 'development'),
     ],
-    totalActiveSeconds: 105 * 60,
-    switchesPerHour: 4,
-    uniqueArtifactCount: 8,
-  })
-  assert.ok(breakdown.coherence >= 0.9, `coherence was ${breakdown.coherence}`)
-  assert.equal(breakdown.deepWork, 1)
-  assert.ok(breakdown.artifactProgress > 0.6)
-  assert.ok(breakdown.switchPenalty < 0.3)
-  assert.ok(breakdown.score >= 80, `score was ${breakdown.score}`)
-})
-
-test('computeFocusScoreV2 penalizes rapid context switching even with long blocks', () => {
-  const calm = computeFocusScoreV2({
-    blocks: [{ durationSeconds: 45 * 60, activeSeconds: 45 * 60 }],
     totalActiveSeconds: 45 * 60,
-    switchesPerHour: 0,
-    uniqueArtifactCount: 4,
   })
-  const chaotic = computeFocusScoreV2({
-    blocks: [{ durationSeconds: 45 * 60, activeSeconds: 45 * 60 }],
-    totalActiveSeconds: 45 * 60,
-    switchesPerHour: 40,
-    uniqueArtifactCount: 4,
-  })
-  assert.ok(chaotic.score < calm.score)
-  assert.equal(chaotic.switchPenalty, 1)
+
+  assert.equal(breakdown.deepWorkPct, 0)
+  assert.equal(breakdown.longestStreakSeconds, 0)
+  assert.equal(breakdown.deepWorkSessionCount, 0)
+  assert.equal(breakdown.switchCount, 2)
 })
 
-test('computeFocusScoreV2 falls back to window-title diversity when artifacts are missing', () => {
-  const noSignal = computeFocusScoreV2({
-    blocks: [{ durationSeconds: 30 * 60, activeSeconds: 30 * 60 }],
-    totalActiveSeconds: 30 * 60,
-    switchesPerHour: 2,
+test('computeFocusScoreV2 breaks a streak on focused category change', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [
+      session(0, 20, 'development'),
+      session(20, 20, 'design'),
+    ],
+    totalActiveSeconds: 40 * 60,
   })
-  const titleSignal = computeFocusScoreV2({
-    blocks: [{ durationSeconds: 30 * 60, activeSeconds: 30 * 60 }],
-    totalActiveSeconds: 30 * 60,
-    switchesPerHour: 2,
-    uniqueWindowTitleCount: 8,
-  })
-  assert.equal(noSignal.artifactProgress, 0)
-  assert.ok(titleSignal.artifactProgress > 0.7)
-  assert.ok(titleSignal.score > noSignal.score)
+
+  assert.equal(breakdown.deepWorkPct, 0)
+  assert.equal(breakdown.longestStreakSeconds, 0)
+  assert.equal(breakdown.switchCount, 1)
 })
 
-test('computeFocusScoreV2 clamps artifact_progress and handles huge counts', () => {
-  const huge = computeFocusScoreV2({
-    blocks: [{ durationSeconds: 60 * 60, activeSeconds: 60 * 60 }],
+test('computeFocusScoreV2 merges continuous same-category sessions', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [
+      session(0, 15, 'development'),
+      session(15, 15, 'development'),
+      session(30, 30, 'communication'),
+    ],
     totalActiveSeconds: 60 * 60,
-    switchesPerHour: 0,
-    uniqueArtifactCount: 100_000,
   })
-  assert.equal(huge.artifactProgress, 1)
-  assert.ok(huge.score <= 100)
+
+  assert.equal(breakdown.deepWorkPct, 50)
+  assert.equal(breakdown.longestStreakSeconds, 30 * 60)
+  assert.equal(breakdown.deepWorkSessionCount, 1)
+  assert.equal(breakdown.switchCount, 1)
 })

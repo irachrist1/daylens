@@ -69,109 +69,103 @@ export function isCategoryFocused(category: AppCategory | string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Focus score V2 — evidence-grounded heuristic.
-//
-// focus_score = clamp01(
-//   0.35 * session_coherence
-//   + 0.25 * deep_work_density
-//   + 0.20 * artifact_progress
-//   + 0.20 * (1 - switch_penalty_normalized)
-// ) * 100
-//
-// Inputs are intentionally scope-agnostic (day, focus session, week window).
-// Call sites pass pre-computed block durations and either a real artifact
-// count or a window-title-diversity fallback so the score never secretly
-// zero-stuffs itself when a signal is missing.
+// Focus score V2 — honest deep-work percentage.
 // ---------------------------------------------------------------------------
 
-export interface FocusScoreV2Block {
+export interface FocusScoreV2Session {
+  startTime?: number
+  endTime?: number | null
   durationSeconds: number
-  activeSeconds?: number
+  category: AppCategory | string
+  isFocused?: boolean
 }
 
 export interface FocusScoreV2Input {
-  blocks: FocusScoreV2Block[]
-  totalActiveSeconds: number
-  switchesPerHour: number
-  uniqueArtifactCount?: number
-  uniqueWindowTitleCount?: number
+  sessions: FocusScoreV2Session[]
+  totalActiveSeconds?: number
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  if (value < 0) return 0
-  if (value > 1) return 1
-  return value
-}
-
-const COHERENCE_TARGET_MINUTES = 45
 const DEEP_WORK_BLOCK_THRESHOLD_SEC = 25 * 60
-const ARTIFACT_SATURATION = 16
-const SWITCH_RATE_SATURATION = 20
-const TITLE_FALLBACK_SATURATION = 10
+const MIN_SCORE_ACTIVE_SECONDS = 30 * 60
+const CONTINUOUS_GAP_TOLERANCE_MS = 60_000
 
-function computeCoherence(blocks: FocusScoreV2Block[]): number {
-  if (blocks.length === 0) return 0
-  let weightedSum = 0
-  let weightTotal = 0
-  for (const block of blocks) {
-    const durationSec = Math.max(0, block.durationSeconds)
-    const weight = Math.max(0, block.activeSeconds ?? durationSec)
-    if (weight <= 0) continue
-    weightedSum += (durationSec / 60) * weight
-    weightTotal += weight
+function sessionDurationSeconds(session: FocusScoreV2Session): number {
+  if (typeof session.startTime === 'number' && typeof session.endTime === 'number' && session.endTime > session.startTime) {
+    return Math.max(0, Math.round((session.endTime - session.startTime) / 1000))
   }
-  if (weightTotal <= 0) return 0
-  const meanMinutes = weightedSum / weightTotal
-  return clamp01(meanMinutes / COHERENCE_TARGET_MINUTES)
-}
-
-function computeDeepWorkDensity(blocks: FocusScoreV2Block[], totalActiveSeconds: number): number {
-  if (totalActiveSeconds <= 0) return 0
-  let deepSeconds = 0
-  for (const block of blocks) {
-    if (block.durationSeconds >= DEEP_WORK_BLOCK_THRESHOLD_SEC) {
-      deepSeconds += Math.max(0, block.activeSeconds ?? block.durationSeconds)
-    }
-  }
-  return clamp01(deepSeconds / totalActiveSeconds)
-}
-
-function computeArtifactProgress(input: FocusScoreV2Input): number {
-  if (typeof input.uniqueArtifactCount === 'number' && input.uniqueArtifactCount >= 0) {
-    const n = Math.max(0, input.uniqueArtifactCount)
-    return clamp01(Math.log2(1 + n) / Math.log2(1 + ARTIFACT_SATURATION))
-  }
-  if (typeof input.uniqueWindowTitleCount === 'number' && input.uniqueWindowTitleCount >= 0) {
-    // Graceful fallback when no artifact extraction has run for the scope yet.
-    return clamp01(input.uniqueWindowTitleCount / TITLE_FALLBACK_SATURATION)
-  }
-  return 0
-}
-
-function computeSwitchPenalty(switchesPerHour: number): number {
-  if (!Number.isFinite(switchesPerHour) || switchesPerHour <= 0) return 0
-  return Math.min(1, switchesPerHour / SWITCH_RATE_SATURATION)
+  return Math.max(0, session.durationSeconds)
 }
 
 export function computeFocusScoreV2(input: FocusScoreV2Input): FocusScoreBreakdown {
-  const coherence = computeCoherence(input.blocks)
-  const deepWork = computeDeepWorkDensity(input.blocks, input.totalActiveSeconds)
-  const artifactProgress = computeArtifactProgress(input)
-  const switchPenalty = computeSwitchPenalty(input.switchesPerHour)
+  const sessions = [...input.sessions]
+    .filter((session) => sessionDurationSeconds(session) > 0)
+    .sort((left, right) => (left.startTime ?? 0) - (right.startTime ?? 0))
 
-  const composite = clamp01(
-    0.35 * coherence
-    + 0.25 * deepWork
-    + 0.20 * artifactProgress
-    + 0.20 * (1 - switchPenalty),
+  const totalActiveSeconds = Math.max(
+    0,
+    input.totalActiveSeconds ?? sessions.reduce((sum, session) => sum + sessionDurationSeconds(session), 0),
   )
 
+  let switchCount = 0
+  for (let i = 1; i < sessions.length; i++) {
+    if (sessions[i].category !== sessions[i - 1].category) {
+      switchCount++
+    }
+  }
+
+  let deepWorkSeconds = 0
+  let longestStreakSeconds = 0
+  let deepWorkSessionCount = 0
+  let streakCategory: string | null = null
+  let streakSeconds = 0
+  let streakEndTime: number | null = null
+
+  function closeStreak() {
+    if (streakSeconds >= DEEP_WORK_BLOCK_THRESHOLD_SEC) {
+      deepWorkSeconds += streakSeconds
+      deepWorkSessionCount++
+      longestStreakSeconds = Math.max(longestStreakSeconds, streakSeconds)
+    }
+    streakCategory = null
+    streakSeconds = 0
+    streakEndTime = null
+  }
+
+  for (const session of sessions) {
+    const durationSeconds = sessionDurationSeconds(session)
+    const focused = session.isFocused ?? isCategoryFocused(session.category)
+    const category = String(session.category)
+    const startTime = session.startTime ?? null
+    const endTime = typeof session.endTime === 'number'
+      ? session.endTime
+      : startTime !== null
+        ? startTime + durationSeconds * 1000
+        : null
+
+    const gapBreaksStreak = startTime !== null && streakEndTime !== null
+      ? startTime - streakEndTime > CONTINUOUS_GAP_TOLERANCE_MS
+      : false
+
+    if (!focused || streakCategory !== category || gapBreaksStreak) {
+      closeStreak()
+    }
+
+    if (focused) {
+      streakCategory = category
+      streakSeconds += durationSeconds
+      streakEndTime = endTime
+    }
+  }
+
+  closeStreak()
+  const hasEnoughData = totalActiveSeconds >= MIN_SCORE_ACTIVE_SECONDS || deepWorkSessionCount > 0
+
   return {
-    coherence,
-    deepWork,
-    artifactProgress,
-    switchPenalty,
-    score: Math.round(composite * 100),
+    deepWorkPct: hasEnoughData
+      ? Math.round((deepWorkSeconds / totalActiveSeconds) * 100)
+      : null,
+    longestStreakSeconds,
+    switchCount,
+    deepWorkSessionCount,
   }
 }
