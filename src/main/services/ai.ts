@@ -3931,6 +3931,45 @@ export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   scheduleOvernightCleanup(currentLocalDateString())
 }
 
+async function routerProsePass(
+  question: string,
+  structuredData: string,
+  onDelta: (delta: string) => void,
+): Promise<string> {
+  const systemPrompt =
+    `Rewrite this structured data as one to three natural sentences for a user asking "${question}". ` +
+    'Do not use bullet points, numbers, or tables. ' +
+    'Mention specific names and numbers that appear in the data. ' +
+    'Do not invent anything not in the data. ' +
+    'Keep it conversational, not robotic. ' +
+    'Open by naming the evidence type (e.g. "From your app sessions...", "From your tracked data...", "Based on your window titles..."). ' +
+    'Never claim the user was editing, writing, or paying attention — only that an app or window was open.'
+
+  try {
+    const { text } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'chat_answer',
+          screen: 'ai_chat',
+          triggerSource: 'user',
+          systemPrompt,
+          userMessage: structuredData,
+        },
+        sendWithProvider,
+        { onDelta },
+      ),
+      3_000,
+      'prose-pass timeout',
+    )
+    if (text.trim()) return text.trim()
+  } catch {
+    // Fall through to template
+  }
+
+  const firstLine = structuredData.split('\n').find((line) => line.trim()) ?? structuredData
+  return `From your tracked data: ${firstLine.replace(/^[-•*]\s*/, '')}`
+}
+
 export async function sendMessage(payload: AIChatSendRequest, options: SendMessageOptions = {}): Promise<AIChatTurnResult> {
   const userMessage = payload.message
   const db = getDb()
@@ -4089,10 +4128,11 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
         evidenceKey: null,
       },
     )
-    const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, routed.answer, answerKind, conversationState)
-    await stream.streamText(routed.answer)
+    const proseAnswer = await routerProsePass(effectiveUserMessage, routed.answer, (delta) => stream.push(delta))
+    await stream.streamText(proseAnswer)
+    const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, proseAnswer, answerKind, conversationState)
     return persistChatTurn(db, conversationId, userMessage, {
-      assistantText: routed.answer,
+      assistantText: proseAnswer,
       answerKind,
       sourceKind: 'deterministic',
       resolvedTemporalContext,
