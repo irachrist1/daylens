@@ -1,6 +1,7 @@
 import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { ensureAIThreadSchema } from './aiThreadSchema'
+import type Database from 'better-sqlite3'
 
 /**
  * Versioned migration system for Daylens.
@@ -28,6 +29,279 @@ function getTableSql(table: string): string | null {
     .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
     .get(table) as { sql: string | null } | undefined
   return row?.sql ?? null
+}
+
+export function ensureSearchSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS app_sessions_fts_content AS
+    SELECT
+      id AS rowid,
+      app_name,
+      window_title
+    FROM app_sessions;
+
+    CREATE VIEW IF NOT EXISTS timeline_blocks_fts_content AS
+    SELECT
+      timeline_blocks.rowid AS rowid,
+      timeline_blocks.label_current AS label_current,
+      COALESCE((
+        SELECT group_concat(label, ' ')
+        FROM (
+          SELECT label
+          FROM timeline_block_labels
+          WHERE block_id = timeline_blocks.id
+          ORDER BY created_at ASC, id ASC
+        )
+      ), '') AS merged_labels
+    FROM timeline_blocks;
+
+    CREATE VIEW IF NOT EXISTS website_visits_fts_content AS
+    SELECT
+      id AS rowid,
+      url,
+      page_title
+    FROM website_visits;
+
+    CREATE VIEW IF NOT EXISTS ai_artifacts_fts_content AS
+    SELECT
+      id AS rowid,
+      title,
+      CASE
+        WHEN inline_content IS NOT NULL AND length(inline_content) < 32768 THEN inline_content
+        ELSE NULL
+      END AS inline_content
+    FROM ai_artifacts;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS app_sessions_fts USING fts5(
+      app_name,
+      window_title,
+      content='app_sessions_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS timeline_blocks_fts USING fts5(
+      label_current,
+      merged_labels,
+      content='timeline_blocks_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS website_visits_fts USING fts5(
+      url,
+      page_title,
+      content='website_visits_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS ai_artifacts_fts USING fts5(
+      title,
+      inline_content,
+      content='ai_artifacts_fts_content',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS app_sessions_fts_ai
+    AFTER INSERT ON app_sessions BEGIN
+      INSERT INTO app_sessions_fts(rowid, app_name, window_title)
+      VALUES (new.id, new.app_name, new.window_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS app_sessions_fts_bd
+    BEFORE DELETE ON app_sessions BEGIN
+      INSERT INTO app_sessions_fts(app_sessions_fts, rowid, app_name, window_title)
+      VALUES ('delete', old.id, old.app_name, old.window_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS app_sessions_fts_bu
+    BEFORE UPDATE OF app_name, window_title ON app_sessions BEGIN
+      INSERT INTO app_sessions_fts(app_sessions_fts, rowid, app_name, window_title)
+      VALUES ('delete', old.id, old.app_name, old.window_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS app_sessions_fts_au
+    AFTER UPDATE OF app_name, window_title ON app_sessions BEGIN
+      INSERT INTO app_sessions_fts(rowid, app_name, window_title)
+      VALUES (new.id, new.app_name, new.window_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_blocks_fts_ai
+    AFTER INSERT ON timeline_blocks BEGIN
+      INSERT INTO timeline_blocks_fts(rowid, label_current, merged_labels)
+      SELECT rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = new.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_blocks_fts_bd
+    BEFORE DELETE ON timeline_blocks BEGIN
+      INSERT INTO timeline_blocks_fts(timeline_blocks_fts, rowid, label_current, merged_labels)
+      SELECT 'delete', rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = old.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_blocks_fts_bu
+    BEFORE UPDATE OF label_current ON timeline_blocks BEGIN
+      INSERT INTO timeline_blocks_fts(timeline_blocks_fts, rowid, label_current, merged_labels)
+      SELECT 'delete', rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = old.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_blocks_fts_au
+    AFTER UPDATE OF label_current ON timeline_blocks BEGIN
+      INSERT INTO timeline_blocks_fts(rowid, label_current, merged_labels)
+      SELECT rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = new.rowid;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_block_labels_fts_ai
+    AFTER INSERT ON timeline_block_labels BEGIN
+      INSERT INTO timeline_blocks_fts(timeline_blocks_fts, rowid, label_current, merged_labels)
+      SELECT
+        'delete',
+        timeline_blocks.rowid,
+        timeline_blocks.label_current,
+        COALESCE((
+          SELECT group_concat(label, ' ')
+          FROM (
+            SELECT label
+            FROM timeline_block_labels
+            WHERE block_id = new.block_id AND id != new.id
+            ORDER BY created_at ASC, id ASC
+          )
+        ), '')
+      FROM timeline_blocks
+      WHERE timeline_blocks.id = new.block_id;
+
+      INSERT INTO timeline_blocks_fts(rowid, label_current, merged_labels)
+      SELECT rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = (SELECT rowid FROM timeline_blocks WHERE id = new.block_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_block_labels_fts_bd
+    BEFORE DELETE ON timeline_block_labels BEGIN
+      INSERT INTO timeline_blocks_fts(timeline_blocks_fts, rowid, label_current, merged_labels)
+      SELECT 'delete', rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = (SELECT rowid FROM timeline_blocks WHERE id = old.block_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_block_labels_fts_ad
+    AFTER DELETE ON timeline_block_labels BEGIN
+      INSERT INTO timeline_blocks_fts(rowid, label_current, merged_labels)
+      SELECT rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = (SELECT rowid FROM timeline_blocks WHERE id = old.block_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_block_labels_fts_bu
+    BEFORE UPDATE OF label ON timeline_block_labels BEGIN
+      INSERT INTO timeline_blocks_fts(timeline_blocks_fts, rowid, label_current, merged_labels)
+      SELECT 'delete', rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = (SELECT rowid FROM timeline_blocks WHERE id = old.block_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS timeline_block_labels_fts_au
+    AFTER UPDATE OF label ON timeline_block_labels BEGIN
+      INSERT INTO timeline_blocks_fts(rowid, label_current, merged_labels)
+      SELECT rowid, label_current, merged_labels
+      FROM timeline_blocks_fts_content
+      WHERE rowid = (SELECT rowid FROM timeline_blocks WHERE id = new.block_id);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS website_visits_fts_ai
+    AFTER INSERT ON website_visits BEGIN
+      INSERT INTO website_visits_fts(rowid, url, page_title)
+      VALUES (new.id, new.url, new.page_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS website_visits_fts_bd
+    BEFORE DELETE ON website_visits BEGIN
+      INSERT INTO website_visits_fts(website_visits_fts, rowid, url, page_title)
+      VALUES ('delete', old.id, old.url, old.page_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS website_visits_fts_bu
+    BEFORE UPDATE OF url, page_title ON website_visits BEGIN
+      INSERT INTO website_visits_fts(website_visits_fts, rowid, url, page_title)
+      VALUES ('delete', old.id, old.url, old.page_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS website_visits_fts_au
+    AFTER UPDATE OF url, page_title ON website_visits BEGIN
+      INSERT INTO website_visits_fts(rowid, url, page_title)
+      VALUES (new.id, new.url, new.page_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS ai_artifacts_fts_ai
+    AFTER INSERT ON ai_artifacts BEGIN
+      INSERT INTO ai_artifacts_fts(rowid, title, inline_content)
+      VALUES (
+        new.id,
+        new.title,
+        CASE
+          WHEN new.inline_content IS NOT NULL AND length(new.inline_content) < 32768 THEN new.inline_content
+          ELSE NULL
+        END
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS ai_artifacts_fts_bd
+    BEFORE DELETE ON ai_artifacts BEGIN
+      INSERT INTO ai_artifacts_fts(ai_artifacts_fts, rowid, title, inline_content)
+      VALUES (
+        'delete',
+        old.id,
+        old.title,
+        CASE
+          WHEN old.inline_content IS NOT NULL AND length(old.inline_content) < 32768 THEN old.inline_content
+          ELSE NULL
+        END
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS ai_artifacts_fts_bu
+    BEFORE UPDATE OF title, inline_content ON ai_artifacts BEGIN
+      INSERT INTO ai_artifacts_fts(ai_artifacts_fts, rowid, title, inline_content)
+      VALUES (
+        'delete',
+        old.id,
+        old.title,
+        CASE
+          WHEN old.inline_content IS NOT NULL AND length(old.inline_content) < 32768 THEN old.inline_content
+          ELSE NULL
+        END
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS ai_artifacts_fts_au
+    AFTER UPDATE OF title, inline_content ON ai_artifacts BEGIN
+      INSERT INTO ai_artifacts_fts(rowid, title, inline_content)
+      VALUES (
+        new.id,
+        new.title,
+        CASE
+          WHEN new.inline_content IS NOT NULL AND length(new.inline_content) < 32768 THEN new.inline_content
+          ELSE NULL
+        END
+      );
+    END;
+  `)
+
+  db.exec(`
+    INSERT INTO app_sessions_fts(app_sessions_fts) VALUES ('rebuild');
+    INSERT INTO timeline_blocks_fts(timeline_blocks_fts) VALUES ('rebuild');
+    INSERT INTO website_visits_fts(website_visits_fts) VALUES ('rebuild');
+    INSERT INTO ai_artifacts_fts(ai_artifacts_fts) VALUES ('rebuild');
+  `)
 }
 
 function ensureAppSessionIdentityColumns(): void {
@@ -1146,6 +1420,13 @@ const migrations: Migration[] = [
     description: 'Repair ai thread schema drift on older local databases',
     up: () => {
       ensureAIThreadSchema(getDb())
+    },
+  },
+  {
+    version: 21,
+    description: 'Add FTS5 search indexes for sessions, blocks, browser visits, and AI artifacts',
+    up: () => {
+      ensureSearchSchema(getDb())
     },
   },
 ]

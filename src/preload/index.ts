@@ -48,6 +48,54 @@ export interface UpdaterStatusInfo {
   downloadUrl?: string | null
 }
 
+export interface SearchOptions {
+  startDate?: string
+  endDate?: string
+  limit?: number
+}
+
+export type DaylensSearchResult =
+  | {
+      type: 'session'
+      id: number
+      appName: string
+      windowTitle: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'block'
+      id: string
+      label: string
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'browser'
+      id: number
+      domain: string
+      pageTitle: string | null
+      url: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'artifact'
+      id: number
+      title: string
+      filePath: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
 const api = {
   // Window controls — used by the custom TitleBar (needed on Windows frameless)
@@ -111,6 +159,18 @@ const api = {
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
     exportArtifact: (artifactId: number): Promise<{ ok: boolean; path?: string; error?: string; canceled?: boolean }> =>
       ipcRenderer.invoke(IPC.AI.EXPORT_ARTIFACT, { artifactId }),
+  },
+  search: {
+    all: (query: string, opts?: SearchOptions): Promise<DaylensSearchResult[]> =>
+      ipcRenderer.invoke('search:all', { query, opts }),
+    sessions: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>
+      ipcRenderer.invoke('search:sessions', { query, opts }),
+    blocks: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'block' }>[]> =>
+      ipcRenderer.invoke('search:blocks', { query, opts }),
+    browser: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'browser' }>[]> =>
+      ipcRenderer.invoke('search:browser', { query, opts }),
+    artifacts: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'artifact' }>[]> =>
+      ipcRenderer.invoke('search:artifacts', { query, opts }),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),

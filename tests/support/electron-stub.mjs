@@ -40,6 +40,18 @@ export const BrowserWindow = {
   },
 }
 
+export const dialog = {
+  async showSaveDialog() {
+    return { canceled: true, filePath: null }
+  },
+}
+
+export const shell = {
+  async openPath() {
+    return ''
+  },
+}
+
 export class Notification {
   show() {}
 }
