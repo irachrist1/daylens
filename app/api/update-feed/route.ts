@@ -5,6 +5,7 @@ import {
 } from "../download/_releaseAsset";
 
 const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
+const PRODUCTION_BASE_PATH = "/daylens";
 
 function publicOrigin(request: NextRequest): string {
   const configured =
@@ -27,7 +28,9 @@ function publicOrigin(request: NextRequest): string {
 }
 
 function withBasePath(request: NextRequest, pathname: string, search?: URLSearchParams): string {
-  const basePath = request.nextUrl.basePath || "";
+  const basePath =
+    request.nextUrl.basePath ||
+    (process.env.NODE_ENV === "production" ? PRODUCTION_BASE_PATH : "");
   const url = new URL(`${basePath}${pathname}`, publicOrigin(request));
   if (search) {
     url.search = search.toString();
