@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseFollowUpSuggestions, buildFollowUpSuggestionPrompts } from '../src/main/lib/followUpSuggestions.ts'
+import {
+  buildDeterministicFollowUpCandidates,
+  buildFollowUpSuggestionPrompts,
+  parseFollowUpSuggestions,
+} from '../src/main/lib/followUpSuggestions.ts'
 import type { FollowUpSuggestion } from '../src/shared/types.ts'
 
 const fallback: FollowUpSuggestion[] = [
@@ -69,4 +73,14 @@ test('system prompt forbids entity-free suggestions', () => {
     systemPrompt.includes('Tell me more') ||
     systemPrompt.includes('entity-free'),
   )
+})
+
+test('deterministic fallback suggestions name an answer entity', () => {
+  const result = buildDeterministicFollowUpCandidates(
+    'deterministic_stats',
+    null,
+    'From your app sessions today, Cursor accounted for 2h 10m.',
+  )
+  assert.ok(result.length >= 2)
+  assert.ok(result.every((suggestion) => suggestion.text.includes('Cursor')))
 })

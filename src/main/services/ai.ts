@@ -2427,7 +2427,7 @@ async function generateSuggestedFollowUps(
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
 ): Promise<FollowUpSuggestion[]> {
-  const fallback = buildDeterministicFollowUpCandidates(answerKind, state)
+  const fallback = buildDeterministicFollowUpCandidates(answerKind, state, answerText)
   if (fallback.length < 2 || answerKind === 'error') return fallback.slice(0, 4)
 
   const preferredProviderOverride = await hasApiKey('anthropic') ? 'anthropic' as const : null
@@ -3940,6 +3940,33 @@ export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   scheduleOvernightCleanup(currentLocalDateString())
 }
 
+function answerNamesEvidenceType(text: string): boolean {
+  return /^(from your|based on|direct from|ai synthesis over|outside what daylens tracks)/i.test(text.trim())
+}
+
+function answerLooksOutsideTrackedScope(text: string): boolean {
+  const lower = text.slice(0, 500).toLowerCase()
+  return lower.includes("doesn't capture") ||
+    lower.includes('does not capture') ||
+    lower.includes("can't capture") ||
+    lower.includes('cannot capture') ||
+    lower.includes('outside what daylens tracks') ||
+    lower.includes('not something daylens tracks')
+}
+
+function ensureEvidenceLead(text: string, fallbackEvidence = 'From your tracked data'): string {
+  const trimmed = text
+    .trim()
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, '')
+    .replace(/\s*\n+\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+  if (!trimmed || answerNamesEvidenceType(trimmed)) return trimmed
+  const evidence = answerLooksOutsideTrackedScope(trimmed)
+    ? 'Outside what Daylens tracks'
+    : fallbackEvidence
+  return `${evidence}: ${trimmed}`
+}
+
 async function routerProsePass(
   question: string,
   structuredData: string,
@@ -3970,7 +3997,7 @@ async function routerProsePass(
       3_000,
       'prose-pass timeout',
     )
-    if (text.trim()) return text.trim()
+    if (text.trim()) return ensureEvidenceLead(text)
   } catch {
     // Fall through to template
   }
@@ -4078,7 +4105,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       if (process.env.NODE_ENV === 'development') {
         console.log(`[ai:chat] weekly brief → provider=${chatProvider} model=${chatModel} mode=${resolvedWeeklyContext.responseMode} key=${pack.evidenceKey}`)
       }
-      const { text: assistantText } = await executeTextAIJob(
+      const { text } = await executeTextAIJob(
         {
           jobType: 'chat_answer',
           screen: 'ai_chat',
@@ -4090,6 +4117,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
         sendWithProvider,
         { onDelta: (delta) => stream.push(delta) },
       )
+      const assistantText = ensureEvidenceLead(text, 'From your tracked weekly evidence')
       await stream.streamText(assistantText)
       if (!assistantText.trim()) {
         throw new Error('The AI returned an empty response. Please try again.')
@@ -4194,6 +4222,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     assistantText = chatProvider === 'anthropic'
       ? await runAnthropicToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
       : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
+    assistantText = ensureEvidenceLead(assistantText)
   } else {
     // Legacy static-context path — Google and CLI providers
     const now = new Date()
@@ -4262,8 +4291,8 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       sendWithProvider,
       { onDelta: (delta) => stream.push(delta) },
     )
-    await stream.streamText(text)
-    assistantText = text
+    assistantText = ensureEvidenceLead(text)
+    await stream.streamText(assistantText)
   }
 
   // Don't save an empty assistant response — it would corrupt future prior

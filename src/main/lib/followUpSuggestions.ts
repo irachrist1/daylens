@@ -14,6 +14,16 @@ function titleCaseTopic(topic: string | null): string | null {
     .join(' ')
 }
 
+const ENTITY_STOP_WORDS = new Set([
+  'ai',
+  'based',
+  'daylens',
+  'direct',
+  'from',
+  'tracked',
+  'your',
+])
+
 function normalizeSuggestion(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
@@ -74,11 +84,41 @@ function candidate(text: string, affordance: FollowUpAffordance): FollowUpSugges
   return { text, source: 'deterministic', affordance }
 }
 
+function answerEntity(answerText: string | null | undefined): string | null {
+  if (!answerText) return null
+  const filename = answerText.match(/\b[\w.-]+\.\w{1,8}\b/)?.[0]
+  if (filename) return filename
+
+  const matches = answerText.match(/\b[A-Z][A-Za-z0-9][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9][A-Za-z0-9_-]*){0,2}\b/g) ?? []
+  for (const match of matches) {
+    const normalized = match.trim()
+    if (normalized.length < 3) continue
+    if (ENTITY_STOP_WORDS.has(normalized.toLowerCase())) continue
+    return normalized
+  }
+  return null
+}
+
+function scopedCandidates(entity: string, state: AIConversationState | null): FollowUpSuggestion[] {
+  const compareTarget = state?.dateRange?.label?.toLowerCase().includes('last week')
+    ? 'this week'
+    : 'yesterday'
+  return [
+    candidate(`What drove ${entity}?`, 'deepen'),
+    candidate(`Which windows mention ${entity}?`, 'narrow'),
+    candidate(`What overlapped with ${entity}?`, 'expand'),
+    candidate(`Compare ${entity} with ${compareTarget}`, 'compare'),
+  ]
+}
+
 export function buildDeterministicFollowUpCandidates(
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
+  answerText?: string | null,
 ): FollowUpSuggestion[] {
-  const topic = titleCaseTopic(state?.topic ?? null)
+  const topic = titleCaseTopic(state?.topic ?? null) ?? answerEntity(answerText)
+  if (topic) return dedupeSuggestions(scopedCandidates(topic, state)).slice(0, 4)
+
   const rangeLabel = state?.dateRange?.label?.toLowerCase().includes('last week') ? 'last week' : 'this week'
   const suggestions: FollowUpSuggestion[] = []
 
@@ -129,7 +169,7 @@ export function buildDeterministicFollowUpCandidates(
       break
   }
 
-  return dedupeSuggestions(suggestions).slice(0, 6)
+  return dedupeSuggestions(suggestions).filter((suggestion) => hasNamedEntity(suggestion.text)).slice(0, 6)
 }
 
 export function buildFollowUpSuggestionPrompts(
