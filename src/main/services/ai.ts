@@ -21,7 +21,6 @@ import {
   getActiveFocusSession,
   getAppSummariesForRange,
   getDistractionCountForSession,
-  getPeakHours,
   getSessionsForRange,
   getWebsiteSummariesForRange,
   listPendingWorkContextCleanupDates,
@@ -64,7 +63,7 @@ import {
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getSettings, hasApiKey } from './settings'
-import { computeEnhancedFocusScore } from '../lib/focusScore'
+import { computeEnhancedFocusScore, computeFocusScoreV2 } from '../lib/focusScore'
 import { getCurrentSession } from './tracking'
 import type {
   AIArtifactKind,
@@ -1920,21 +1919,17 @@ function buildDayContext(): string {
       sessions: todaySessions,
       websiteSummaries: websites,
     })
-    const peakHours = getPeakHours(db, todayTo - 14 * 86_400_000, todayTo) ?? undefined
-
     const totalSec = summaries.reduce((s, a) => s + a.totalSeconds, 0)
     const focusSec = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-    const switchesPerHour = totalSec > 0 ? countSwitches(todaySessions) / (totalSec / 3600) : 0
-    const focusScore = computeEnhancedFocusScore({
-      focusedSeconds: focusSec,
-      totalSeconds: totalSec,
-      switchesPerHour,
+    const focusBreakdown = computeFocusScoreV2({
       sessions: todaySessions.map((session) => ({
+        startTime: session.startTime,
+        endTime: session.endTime,
         durationSeconds: session.durationSeconds,
+        category: session.category,
         isFocused: session.isFocused,
       })),
-      peakHours,
-      currentHour: now.getHours(),
+      totalActiveSeconds: totalSec,
     })
 
     // User identity & goals
@@ -1942,6 +1937,29 @@ function buildDayContext(): string {
     const goalsStr = settings.userGoals?.length
       ? settings.userGoals.join(', ')
       : 'not specified'
+    const selectedGoals = new Set(settings.userGoals ?? [])
+
+    const goalContextLines: string[] = []
+    if (selectedGoals.has('less-distraction')) {
+      const distractionDomains = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
+      const distractionSites = websites
+        .filter((site) => distractionDomains.includes(site.domain.toLowerCase()))
+      const distractionSeconds = distractionSites.reduce((sum, site) => sum + site.totalSeconds, 0)
+      const topDistractionDomains = distractionSites
+        .slice(0, 3)
+        .map((site) => site.domain)
+      goalContextLines.push(
+        `Distraction today: ${Math.round(distractionSeconds / 60)} minutes across [${topDistractionDomains.join(', ') || 'none'}]`,
+      )
+    }
+    if (selectedGoals.has('deep-work')) {
+      const deepWorkMinutes = focusBreakdown.deepWorkPct === null
+        ? 0
+        : Math.round((focusBreakdown.deepWorkPct / 100) * totalSec / 60)
+      goalContextLines.push(
+        `Deep work today: ${deepWorkMinutes} minutes across ${focusBreakdown.deepWorkSessionCount} sessions. Longest streak: ${Math.round(focusBreakdown.longestStreakSeconds / 60)} minutes.`,
+      )
+    }
 
     // Focus sessions
     const focusSessions = getRecentFocusSessions(db, 10).filter((s) => {
@@ -1963,6 +1981,7 @@ function buildDayContext(): string {
       return [
         `User: ${userName}`,
         `Goals: ${goalsStr}`,
+        ...goalContextLines,
         `Current time: ${timeStr}, ${dayStr}`,
         '',
         'No activity recorded yet today.',
@@ -2028,6 +2047,7 @@ function buildDayContext(): string {
     return [
       `User: ${userName}`,
       `Goals: ${goalsStr}`,
+      ...goalContextLines,
       `Current time: ${timeStr}, ${dayStr}`,
       '',
       todayFocusSessionCount > 0
@@ -2039,7 +2059,7 @@ function buildDayContext(): string {
       '',
       'Today (totals):',
       `- Total tracked time: ${formatDuration(totalSec)}`,
-      `- Focus score: ${focusScore} (${formatDuration(focusSec)} in focused apps)`,
+      `- Focus score: ${focusBreakdown.deepWorkPct === null ? 'Not enough data' : `${focusBreakdown.deepWorkPct}% deep work`} (${formatDuration(focusSec)} in focused apps)`,
       `- Evidence summary: ${todayEvidence.evidenceText}`,
       `- Top categories: ${topCategoryList || 'none yet'}`,
       `- Top apps: ${topApps || 'none yet'}`,
