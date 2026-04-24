@@ -201,6 +201,7 @@ jobs:
 
       - name: Upload Linux diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: linux-release-diagnostics-${{ steps.meta.outputs.version }}
