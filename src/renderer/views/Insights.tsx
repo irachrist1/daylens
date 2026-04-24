@@ -143,6 +143,25 @@ function MarkdownMessage({ content }: { content: string }) {
   )
 }
 
+type AIAnswerKind = 'weekly_brief' | 'weekly_literal_list' | 'deterministic_stats' | 'day_summary_style' | 'generated_report' | 'freeform_chat' | 'error'
+
+function disclosureLabel(answerKind: AIAnswerKind | null | undefined, content: string): string {
+  if (!answerKind || answerKind === 'error') return ''
+  if (answerKind === 'deterministic_stats') return 'Direct from your tracked data'
+  const lower = content.slice(0, 160).toLowerCase()
+  if (
+    lower.startsWith("daylens doesn't") ||
+    lower.startsWith("daylens can't") ||
+    lower.startsWith("daylens does not") ||
+    lower.startsWith("daylens cannot") ||
+    lower.includes("doesn't capture") ||
+    lower.includes("does not capture") ||
+    lower.includes("not something daylens tracks") ||
+    lower.includes("outside what daylens tracks")
+  ) return 'Outside what Daylens tracks'
+  return 'AI synthesis over your evidence'
+}
+
 function RecapMetricCard({
   label,
   value,
@@ -2024,6 +2043,14 @@ export default function Insights() {
                                 </div>
                               )}
                               <MarkdownMessage content={message.content} />
+                              {message.state === 'complete' && (() => {
+                                const label = disclosureLabel(message.answerKind, message.content)
+                                return label ? (
+                                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 8 }}>
+                                    {label}
+                                  </div>
+                                ) : null
+                              })()}
                               {(message.actions?.length ?? 0) > 0 && (
                                 <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
                                   {message.actions?.map((action) => {
