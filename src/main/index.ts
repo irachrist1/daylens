@@ -54,6 +54,7 @@ import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
+import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { initDb, closeDb } from './services/database'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
@@ -578,6 +579,11 @@ function createWindow(): BrowserWindow {
   })
 
   win.webContents.on('render-process-gone', (_, details) => {
+    if ((details.reason as string) === 'clean-exit' || (details.reason as string) === 'normal') {
+      console.log('[renderer] process exited cleanly:', details.reason, details.exitCode)
+      return
+    }
+
     console.error('[renderer] process gone:', details.reason, details.exitCode)
     capture(ANALYTICS_EVENT.RENDERER_PROCESS_GONE, {
       process_type: 'renderer',
@@ -735,6 +741,7 @@ app.whenReady()
     registerFocusHandlers()
     registerAIHandlers()
     registerSettingsHandlers()
+    registerSearchHandlers()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
 

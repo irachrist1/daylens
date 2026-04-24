@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, classifyAIOutputIntent, trackedTimeBucket } from '@shared/analytics'
 import type {
   AIArtifactRecord,
@@ -20,6 +21,7 @@ import { AI_PROVIDER_META, getSelectedModel } from '../lib/aiProvider'
 import { buildRecapSummaries, recapDateWindow, type RecapChapter, type RecapPeriod, type RecapSummary } from '../lib/recap'
 import ConnectAI from '../components/ConnectAI'
 import { inferWorkIntent } from '../../shared/workIntent'
+import type { DaylensSearchResult } from '../../preload/index'
 
 type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
@@ -802,6 +804,77 @@ function starterPrompts(today: DayTimelinePayload | null): string[] {
   ]
 }
 
+function formatSearchTimestamp(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function searchResultIcon(type: DaylensSearchResult['type']): string {
+  switch (type) {
+    case 'session':
+      return 'App'
+    case 'block':
+      return 'Block'
+    case 'browser':
+      return 'Web'
+    case 'artifact':
+      return 'File'
+  }
+}
+
+function searchResultTitle(result: DaylensSearchResult): string {
+  switch (result.type) {
+    case 'session':
+      return result.windowTitle || result.appName
+    case 'block':
+      return result.label
+    case 'browser':
+      return result.pageTitle || result.url || result.domain
+    case 'artifact':
+      return result.title
+  }
+}
+
+function searchResultSubtitle(result: DaylensSearchResult): string {
+  switch (result.type) {
+    case 'session':
+      return result.appName
+    case 'block':
+      return 'Timeline block'
+    case 'browser':
+      return result.domain
+    case 'artifact':
+      return result.filePath ? 'Generated artifact' : 'AI artifact'
+  }
+}
+
+function HighlightedExcerpt({ text }: { text: string }) {
+  const parts = text.split(/(\[\[mark\]\]|\[\[\/mark\]\])/g)
+  let highlighted = false
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part === '[[mark]]') {
+          highlighted = true
+          return null
+        }
+        if (part === '[[/mark]]') {
+          highlighted = false
+          return null
+        }
+        if (!part) return null
+        return highlighted
+          ? <mark key={index} style={{ background: 'rgba(79, 219, 200, 0.18)', color: 'var(--color-text-primary)', borderRadius: 4, padding: '0 2px' }}>{part}</mark>
+          : <span key={index}>{part}</span>
+      })}
+    </>
+  )
+}
+
 function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] {
   return history.map((message, index) => ({
     ...message,
@@ -829,6 +902,10 @@ export default function Insights() {
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [artifacts, setArtifacts] = useState<AIArtifactRecord[]>([])
   const [artifactPreview, setArtifactPreview] = useState<{ record: AIArtifactRecord; content: string | null } | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<DaylensSearchResult[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -962,6 +1039,40 @@ export default function Insights() {
       )))
     })
   }, [])
+
+  useEffect(() => {
+    const query = searchQuery.trim()
+    if (!query) {
+      setSearchResults([])
+      setSearchLoading(false)
+      setSearchError(null)
+      return
+    }
+
+    let cancelled = false
+    setSearchLoading(true)
+    setSearchError(null)
+    const timer = window.setTimeout(() => {
+      ipc.search.all(query, { limit: 30 })
+        .then((results) => {
+          if (!cancelled) setSearchResults(results)
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setSearchResults([])
+            setSearchError(error instanceof Error ? error.message : String(error))
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearchLoading(false)
+        })
+    }, 150)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [searchQuery])
 
   useEffect(() => {
     return () => {
@@ -1280,6 +1391,96 @@ export default function Insights() {
     }
   }
 
+  async function loadThread(threadId: number, options?: { keepPickerOpen?: boolean }) {
+    if (!options?.keepPickerOpen) {
+      setThreadPickerOpen(false)
+    }
+    setActiveThreadId(threadId)
+    setArtifactPreview(null)
+    try {
+      const detail = await ipc.ai.getThread(threadId)
+      setMessages(threadMessagesFromHistory(detail.messages))
+      historyHydratedRef.current = true
+    } catch {
+      // best-effort; keep the current UI if the lookup fails
+    }
+  }
+
+  function resetThreadComposerState() {
+    setMessages([])
+    setArtifacts([])
+    setArtifactPreview(null)
+    setActionFeedback({})
+    setMessageActionState({})
+    setFocusReviewDrafts({})
+    suggestionImpressionsRef.current = {}
+    historyHydratedRef.current = true
+  }
+
+  function restoreThreadPickerAfterUpdate(shouldRestore: boolean) {
+    if (!shouldRestore) return
+    window.requestAnimationFrame(() => {
+      setThreadPickerOpen(true)
+    })
+  }
+
+  async function handleDeleteThread(thread: AIThreadSummary) {
+    const pickerWasOpen = threadPickerOpen
+    const confirmed = window.confirm(
+      `Delete "${thread.title}"? This removes the chat, messages, and attached artifacts from this device.`,
+    )
+    if (!confirmed) return
+
+    try {
+      await ipc.ai.deleteThread(thread.id)
+
+      const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+      setThreads(refreshed)
+      restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
+
+      const nextActiveId = thread.id === activeThreadId
+        ? refreshed[0]?.id ?? null
+        : activeThreadId !== null && !refreshed.some((entry) => entry.id === activeThreadId)
+          ? refreshed[0]?.id ?? null
+          : activeThreadId
+
+      if (nextActiveId == null) {
+        setActiveThreadId(null)
+        resetThreadComposerState()
+        historyHydratedRef.current = false
+        setThreadPickerOpen(false)
+        return
+      }
+
+      if (nextActiveId !== activeThreadId || thread.id === activeThreadId) {
+        await loadThread(nextActiveId, { keepPickerOpen: pickerWasOpen })
+        restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
+      }
+    } catch (error) {
+      console.error('[ai] failed to delete thread', error)
+    }
+  }
+
+  async function handleNewChat() {
+    const activeThreadIsDraft = Boolean(activeThread && activeThread.messageCount === 0)
+    if (activeThreadIsDraft) {
+      setThreadPickerOpen(false)
+      return
+    }
+
+    const reusableDraft = threads.find((thread) => thread.messageCount === 0)
+    if (reusableDraft) {
+      await loadThread(reusableDraft.id)
+      return
+    }
+
+    const thread = await ipc.ai.createThread(null)
+    setActiveThreadId(thread.id)
+    setThreads((prev) => [thread, ...prev.filter((t) => t.id !== thread.id)])
+    resetThreadComposerState()
+    setThreadPickerOpen(false)
+  }
+
   const defaultSummary = summaryText(today)
   const defaultChips = starterPrompts(today)
   const focusChips = activeFocusSession
@@ -1316,6 +1517,18 @@ export default function Insights() {
       trigger: 'suggested',
     }))
     void handleSend(prompt, { trigger: 'suggested' })
+  }
+
+  function handleSearchResultClick(result: DaylensSearchResult) {
+    if (result.type === 'artifact') {
+      void ipc.ai.openArtifact(result.id)
+      return
+    }
+    if (result.type === 'browser' && result.url) {
+      ipc.shell.openExternal(result.url)
+      return
+    }
+    window.location.hash = `/timeline?view=day&date=${encodeURIComponent(result.date)}`
   }
 
   async function handleGenerateHeroSummary() {
@@ -1413,19 +1626,7 @@ export default function Insights() {
               )}
               <button
                 type="button"
-                onClick={async () => {
-                  const thread = await ipc.ai.createThread(null)
-                  setActiveThreadId(thread.id)
-                  setThreads((prev) => [thread, ...prev.filter((t) => t.id !== thread.id)])
-                  setMessages([])
-                  setArtifacts([])
-                  setArtifactPreview(null)
-                  setActionFeedback({})
-                  setMessageActionState({})
-                  setFocusReviewDrafts({})
-                  suggestionImpressionsRef.current = {}
-                  historyHydratedRef.current = true
-                }}
+                onClick={() => { void handleNewChat() }}
                 style={{
                   padding: '7px 12px',
                   borderRadius: 8,
@@ -1458,38 +1659,184 @@ export default function Insights() {
                   }}
                 >
                   {threads.map((thread) => (
-                    <button
-                      type="button"
+                    <div
                       key={thread.id}
                       role="option"
                       aria-selected={thread.id === activeThreadId}
-                      onClick={async () => {
-                        setThreadPickerOpen(false)
-                        setActiveThreadId(thread.id)
-                        setArtifactPreview(null)
-                        try {
-                          const detail = await ipc.ai.getThread(thread.id)
-                          setMessages(threadMessagesFromHistory(detail.messages))
-                          historyHydratedRef.current = true
-                        } catch { /* best-effort */ }
-                      }}
                       style={{
-                        display: 'block',
-                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'stretch',
+                        gap: 6,
+                        marginBottom: 4,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => { void loadThread(thread.id) }}
+                        style={{
+                          display: 'block',
+                          flex: 1,
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: thread.id === activeThreadId ? 'var(--color-surface-muted)' : 'transparent',
+                          color: 'var(--color-text-primary)',
+                          fontSize: 12.5,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.title}</div>
+                          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                            {thread.messageCount} msg{thread.messageCount === 1 ? '' : 's'}
+                          </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void handleDeleteThread(thread) }}
+                        aria-label={`Delete ${thread.title}`}
+                        title={`Delete ${thread.title}`}
+                        style={{
+                          width: 30,
+                          flexShrink: 0,
+                          border: 'none',
+                          borderRadius: 6,
+                          background: 'transparent',
+                          color: 'var(--color-text-tertiary)',
+                          cursor: 'pointer',
+                          display: 'grid',
+                          placeItems: 'center',
+                          transition: 'color 120ms ease, background 120ms ease',
+                        }}
+                        onMouseEnter={(event) => {
+                          event.currentTarget.style.color = '#dc2626'
+                          event.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)'
+                        }}
+                        onMouseLeave={(event) => {
+                          event.currentTarget.style.color = 'var(--color-text-tertiary)'
+                          event.currentTarget.style.background = 'transparent'
+                        }}
+                      >
+                        <Trash2 size={15} strokeWidth={1.9} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{
+            borderRadius: 18,
+            border: '1px solid var(--color-border-ghost)',
+            background: 'var(--color-surface)',
+            padding: '14px 16px',
+            marginBottom: 20,
+          }}>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                borderRadius: 12,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-low)',
+                padding: '10px 12px',
+              }}>
+                <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                  Search
+                </span>
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Find sessions, blocks, pages, and artifacts..."
+                  aria-label="Search local Daylens history"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    border: 'none',
+                    background: 'transparent',
+                    outline: 'none',
+                    color: 'var(--color-text-primary)',
+                    fontSize: 13.5,
+                  }}
+                />
+                {searchLoading && (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Searching…</span>
+                )}
+              </div>
+
+              {searchError && (
+                <div style={{ fontSize: 12.5, color: '#f87171', lineHeight: 1.5 }}>
+                  Search failed: {searchError}
+                </div>
+              )}
+
+              {searchQuery.trim() && !searchLoading && !searchError && searchResults.length === 0 && (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                  No local matches yet.
+                </div>
+              )}
+
+              {searchResults.length > 0 && (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {searchResults.map((result) => (
+                    <button
+                      key={`${result.type}:${result.id}:${result.startTime}`}
+                      type="button"
+                      onClick={() => handleSearchResultClick(result)}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '46px minmax(0, 1fr) auto',
+                        alignItems: 'start',
+                        gap: 12,
                         textAlign: 'left',
-                        padding: '8px 10px',
-                        borderRadius: 6,
-                        border: 'none',
-                        background: thread.id === activeThreadId ? 'var(--color-surface-muted)' : 'transparent',
-                        color: 'var(--color-text-primary)',
-                        fontSize: 12.5,
+                        border: '1px solid var(--color-border-ghost)',
+                        borderRadius: 12,
+                        background: 'transparent',
+                        padding: '10px 12px',
                         cursor: 'pointer',
                       }}
                     >
-                      <div style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.title}</div>
-                      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                        {thread.messageCount} msg{thread.messageCount === 1 ? '' : 's'}
-                      </div>
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minHeight: 24,
+                        borderRadius: 999,
+                        background: 'var(--color-surface-high)',
+                        color: 'var(--color-text-secondary)',
+                        fontSize: 10.5,
+                        fontWeight: 800,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                      }}>
+                        {searchResultIcon(result.type)}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{
+                          display: 'block',
+                          fontSize: 13,
+                          fontWeight: 720,
+                          color: 'var(--color-text-primary)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {searchResultTitle(result)}
+                        </span>
+                        <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+                          {searchResultSubtitle(result)}
+                        </span>
+                        <span style={{ display: 'block', fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55, marginTop: 6 }}>
+                          <HighlightedExcerpt text={result.excerpt} />
+                        </span>
+                      </span>
+                      <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', paddingTop: 2 }}>
+                        {formatSearchTimestamp(result.startTime)}
+                      </span>
                     </button>
                   ))}
                 </div>

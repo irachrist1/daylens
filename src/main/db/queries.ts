@@ -237,6 +237,98 @@ function parseJsonObject<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+export interface SearchOptions {
+  startDate?: string
+  endDate?: string
+  limit?: number
+}
+
+export interface SessionSearchResult {
+  type: 'session'
+  id: number
+  appName: string
+  windowTitle: string | null
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+}
+
+export interface BlockSearchResult {
+  type: 'block'
+  id: string
+  label: string
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+}
+
+export interface BrowserSearchResult {
+  type: 'browser'
+  id: number
+  domain: string
+  pageTitle: string | null
+  url: string | null
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+}
+
+export interface ArtifactSearchResult {
+  type: 'artifact'
+  id: number
+  title: string
+  filePath: string | null
+  startTime: number
+  endTime: number
+  date: string
+  excerpt: string
+}
+
+export type SearchResult =
+  | SessionSearchResult
+  | BlockSearchResult
+  | BrowserSearchResult
+  | ArtifactSearchResult
+
+const SEARCH_LIMIT_MAX = 100
+const SEARCH_LIMIT_DEFAULT = 25
+const SEARCH_HIGHLIGHT_START = '[[mark]]'
+const SEARCH_HIGHLIGHT_END = '[[/mark]]'
+
+function normalizedSearchLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit ?? NaN)) return SEARCH_LIMIT_DEFAULT
+  return Math.max(1, Math.min(SEARCH_LIMIT_MAX, Math.floor(limit as number)))
+}
+
+function parseDateBound(date: string | undefined, edge: 'start' | 'end'): number | null {
+  if (!date) return null
+  const trimmed = date.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null
+  const [start, end] = localDayBounds(trimmed)
+  return edge === 'start' ? start : end
+}
+
+function searchBounds(opts: SearchOptions): { fromMs: number; toMs: number; limit: number } {
+  return {
+    fromMs: parseDateBound(opts.startDate, 'start') ?? 0,
+    toMs: parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
+    limit: normalizedSearchLimit(opts.limit),
+  }
+}
+
+function toFtsQuery(query: string): string {
+  const tokens = query
+    .trim()
+    .match(/"[^"]+"|\S+/g)
+    ?.map((token) => token.replace(/^"|"$/g, '').replace(/"/g, '""').trim())
+    .filter(Boolean) ?? []
+
+  return tokens.map((token) => `"${token}"`).join(' AND ')
+}
+
 function mapAIThreadMessage(
   row: {
     id: number
@@ -510,6 +602,205 @@ export function getSessionsForRange(
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
   ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
+}
+
+export function searchSessions(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): SessionSearchResult[] {
+  const ftsQuery = toFtsQuery(query)
+  if (!ftsQuery) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+
+  const rows = db.prepare(`
+    SELECT
+      app_sessions.id,
+      app_sessions.bundle_id,
+      app_sessions.app_name,
+      app_sessions.window_title,
+      app_sessions.start_time,
+      COALESCE(app_sessions.end_time, app_sessions.start_time + app_sessions.duration_sec * 1000) AS end_time,
+      snippet(app_sessions_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM app_sessions_fts
+    JOIN app_sessions ON app_sessions.id = app_sessions_fts.rowid
+    WHERE app_sessions_fts MATCH ?
+      AND app_sessions.start_time >= ?
+      AND app_sessions.start_time < ?
+    ORDER BY app_sessions.start_time DESC
+    LIMIT ?
+  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+    id: number
+    bundle_id: string
+    app_name: string
+    window_title: string | null
+    start_time: number
+    end_time: number
+    excerpt: string | null
+  }[]
+
+  return rows.map((row) => ({
+    type: 'session',
+    id: row.id,
+    appName: resolveDisplayName(row.bundle_id, row.app_name),
+    windowTitle: row.window_title,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    date: toLocalDateKey(row.start_time),
+    excerpt: row.excerpt ?? row.window_title ?? row.app_name,
+  }))
+}
+
+export function searchBlocks(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): BlockSearchResult[] {
+  const ftsQuery = toFtsQuery(query)
+  if (!ftsQuery) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+
+  const rows = db.prepare(`
+    SELECT
+      timeline_blocks.id,
+      timeline_blocks.label_current,
+      timeline_blocks.start_time,
+      timeline_blocks.end_time,
+      timeline_blocks.date,
+      snippet(timeline_blocks_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM timeline_blocks_fts
+    JOIN timeline_blocks ON timeline_blocks.rowid = timeline_blocks_fts.rowid
+    WHERE timeline_blocks_fts MATCH ?
+      AND timeline_blocks.start_time >= ?
+      AND timeline_blocks.start_time < ?
+      AND timeline_blocks.invalidated_at IS NULL
+    ORDER BY timeline_blocks.start_time DESC
+    LIMIT ?
+  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+    id: string
+    label_current: string
+    start_time: number
+    end_time: number
+    date: string
+    excerpt: string | null
+  }[]
+
+  return rows.map((row) => ({
+    type: 'block',
+    id: row.id,
+    label: row.label_current,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    date: row.date,
+    excerpt: row.excerpt ?? row.label_current,
+  }))
+}
+
+export function searchBrowser(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): BrowserSearchResult[] {
+  const ftsQuery = toFtsQuery(query)
+  if (!ftsQuery) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+
+  const rows = db.prepare(`
+    SELECT
+      website_visits.id,
+      website_visits.domain,
+      website_visits.page_title,
+      website_visits.url,
+      website_visits.visit_time,
+      website_visits.duration_sec,
+      snippet(website_visits_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM website_visits_fts
+    JOIN website_visits ON website_visits.id = website_visits_fts.rowid
+    WHERE website_visits_fts MATCH ?
+      AND website_visits.visit_time >= ?
+      AND website_visits.visit_time < ?
+    ORDER BY website_visits.visit_time DESC
+    LIMIT ?
+  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+    id: number
+    domain: string
+    page_title: string | null
+    url: string | null
+    visit_time: number
+    duration_sec: number
+    excerpt: string | null
+  }[]
+
+  return rows.map((row) => ({
+    type: 'browser',
+    id: row.id,
+    domain: row.domain,
+    pageTitle: row.page_title,
+    url: row.url,
+    startTime: row.visit_time,
+    endTime: row.visit_time + Math.max(0, row.duration_sec) * 1000,
+    date: toLocalDateKey(row.visit_time),
+    excerpt: row.excerpt ?? row.page_title ?? row.url ?? row.domain,
+  }))
+}
+
+export function searchArtifacts(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): ArtifactSearchResult[] {
+  const ftsQuery = toFtsQuery(query)
+  if (!ftsQuery) return []
+  const { fromMs, toMs, limit } = searchBounds(opts)
+
+  const rows = db.prepare(`
+    SELECT
+      ai_artifacts.id,
+      ai_artifacts.title,
+      ai_artifacts.file_path,
+      ai_artifacts.created_at,
+      snippet(ai_artifacts_fts, -1, ?, ?, '...', 18) AS excerpt
+    FROM ai_artifacts_fts
+    JOIN ai_artifacts ON ai_artifacts.id = ai_artifacts_fts.rowid
+    WHERE ai_artifacts_fts MATCH ?
+      AND ai_artifacts.created_at >= ?
+      AND ai_artifacts.created_at < ?
+    ORDER BY ai_artifacts.created_at DESC
+    LIMIT ?
+  `).all(SEARCH_HIGHLIGHT_START, SEARCH_HIGHLIGHT_END, ftsQuery, fromMs, toMs, limit) as {
+    id: number
+    title: string
+    file_path: string | null
+    created_at: number
+    excerpt: string | null
+  }[]
+
+  return rows.map((row) => ({
+    type: 'artifact',
+    id: row.id,
+    title: row.title,
+    filePath: row.file_path,
+    startTime: row.created_at,
+    endTime: row.created_at,
+    date: toLocalDateKey(row.created_at),
+    excerpt: row.excerpt ?? row.title,
+  }))
+}
+
+export function searchAll(
+  db: Database.Database,
+  query: string,
+  opts: SearchOptions = {},
+): SearchResult[] {
+  const limit = normalizedSearchLimit(opts.limit)
+  return [
+    ...searchSessions(db, query, { ...opts, limit }),
+    ...searchBlocks(db, query, { ...opts, limit }),
+    ...searchBrowser(db, query, { ...opts, limit }),
+    ...searchArtifacts(db, query, { ...opts, limit }),
+  ]
+    .sort((left, right) => right.startTime - left.startTime)
+    .slice(0, limit)
 }
 
 export function getHourlyBreakdown(
