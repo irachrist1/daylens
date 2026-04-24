@@ -18,17 +18,43 @@ function normalizeSuggestion(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
 
+const GENERIC_REJECT_PHRASES = [
+  'tell me more',
+  'anything else',
+  'go on',
+  'continue',
+  'what stood out most',
+  'can you be more specific',
+  'what evidence supports that',
+  'be more specific',
+  'say more',
+  'expand on that',
+  'more details',
+  'keep going',
+  'what else',
+  'is there anything else',
+  'tell me about it',
+  'go ahead',
+]
+
 function validSuggestion(text: string): boolean {
   const normalized = normalizeSuggestion(text)
   if (!normalized) return false
   if (normalized.split(/\s+/).length > 8) return false
   const lower = normalized.toLowerCase()
-  return ![
-    'tell me more',
-    'anything else',
-    'go on',
-    'continue',
-  ].includes(lower)
+  return !GENERIC_REJECT_PHRASES.includes(lower)
+}
+
+// Model-generated suggestions must name a specific app, file, page, or entity.
+// Accepts suggestions that contain a mid-sentence capitalized word (proper noun)
+// or a filename-like token (e.g. "index.ts", "Cursor", "Notion").
+function hasNamedEntity(text: string): boolean {
+  const words = text.trim().split(/\s+/)
+  if (words.length < 2) return false
+  return (
+    words.slice(1).some((w) => /^[A-Z][a-z]/.test(w)) ||
+    /\b\w+\.\w{1,6}\b/.test(text)
+  )
 }
 
 function dedupeSuggestions(items: FollowUpSuggestion[]): FollowUpSuggestion[] {
@@ -117,9 +143,10 @@ export function buildFollowUpSuggestionPrompts(
     'Return strict JSON with a single key "suggestions".',
     '"suggestions" must be an array of 3 or 4 short follow-up questions.',
     'Each suggestion must be at most 8 words.',
-    'Use concrete nouns and avoid generic filler like "Tell me more".',
+    'IMPORTANT: every suggestion must name a specific app, file, page, or entity that appeared in the answer.',
+    'For example: "How much time in Cursor?" or "Which Notion pages appeared?".',
+    'Never write entity-free suggestions like "Tell me more", "What stood out?", "Go deeper", or "What evidence supports that?".',
     'Stay inside the current topic and time scope unless comparison is explicitly useful.',
-    'Prefer suggestions that would help the user refine or deepen the answer immediately.',
   ].join(' ')
 
   const userPrompt = JSON.stringify({
@@ -145,7 +172,9 @@ export function parseFollowUpSuggestions(
       ? parsed.suggestions.filter((value): value is string => typeof value === 'string')
       : []
     const rewritten = dedupeSuggestions(
-      suggestions.map((text) => ({ text, source: 'model' as const })),
+      suggestions
+        .filter((text) => hasNamedEntity(text))
+        .map((text) => ({ text, source: 'model' as const })),
     )
     if (rewritten.length >= 2) return rewritten.slice(0, 4)
   } catch {
