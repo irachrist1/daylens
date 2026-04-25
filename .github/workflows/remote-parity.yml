@@ -40,7 +40,12 @@ jobs:
         run: npm ci
 
       - name: Generate Convex API types
-        run: npm run convex:codegen
+        run: |
+          if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
+            npm run convex:codegen
+          else
+            echo "Skipping Convex codegen; CONVEX_DEPLOYMENT is not available in this CI context."
+          fi
 
       - name: Validate remote contract
         env:
