@@ -144,13 +144,25 @@ export const workBlockSummaryValidator = v.object({
   artifactIds: v.array(v.string()),
 });
 
-export const focusScoreV2Validator = v.object({
+export const currentFocusScoreV2Validator = v.object({
+  deepWorkPct: v.union(v.number(), v.null()),
+  longestStreakSeconds: v.number(),
+  switchCount: v.number(),
+  deepWorkSessionCount: v.number(),
+});
+
+export const legacyFocusScoreV2Validator = v.object({
   score: v.number(),
   coherence: v.number(),
   deepWorkDensity: v.number(),
   artifactProgress: v.number(),
   switchPenalty: v.number(),
 });
+
+export const focusScoreV2Validator = v.union(
+  currentFocusScoreV2Validator,
+  legacyFocusScoreV2Validator,
+);
 
 export const recapCoverageValidator = v.object({
   attributedPct: v.number(),

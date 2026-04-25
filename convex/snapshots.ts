@@ -34,6 +34,38 @@ const FOCUSED_CATEGORIES = new Set([
 type SnapshotDoc = Doc<"day_snapshots">;
 type DeviceDoc = Doc<"devices">;
 type WorkspacePreferencesDoc = Doc<"workspace_preferences"> | null;
+
+function focusScorePct(value: unknown, fallback: number): number {
+  if (!value || typeof value !== "object") return fallback;
+  const candidate = value as {
+    deepWorkPct?: unknown;
+    score?: unknown;
+  };
+
+  if (typeof candidate.deepWorkPct === "number") return candidate.deepWorkPct;
+  if (candidate.deepWorkPct === null) return fallback;
+  if (typeof candidate.score === "number") return candidate.score;
+  return fallback;
+}
+
+function longestStreakSeconds(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { longestStreakSeconds?: unknown }).longestStreakSeconds === "number"
+    ? (value as { longestStreakSeconds: number }).longestStreakSeconds
+    : 0;
+}
+
+function switchCount(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { switchCount?: unknown }).switchCount === "number"
+    ? (value as { switchCount: number }).switchCount
+    : 0;
+}
+
+function deepWorkSessionCount(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { deepWorkSessionCount?: unknown }).deepWorkSessionCount === "number"
+    ? (value as { deepWorkSessionCount: number }).deepWorkSessionCount
+    : 0;
+}
+
 type LegacyFocusSession = {
   appKey: string;
   startAt: string;
@@ -158,33 +190,16 @@ function normalizeSnapshot(snapshot: unknown): DaySnapshot | null {
       candidate.focusScoreV2 &&
       typeof candidate.focusScoreV2 === "object"
         ? {
-            score:
-              typeof (candidate.focusScoreV2 as { score?: unknown }).score === "number"
-                ? ((candidate.focusScoreV2 as { score: number }).score)
-                : base.focusScore,
-            coherence:
-              typeof (candidate.focusScoreV2 as { coherence?: unknown }).coherence === "number"
-                ? ((candidate.focusScoreV2 as { coherence: number }).coherence)
-                : 0,
-            deepWorkDensity:
-              typeof (candidate.focusScoreV2 as { deepWorkDensity?: unknown }).deepWorkDensity === "number"
-                ? ((candidate.focusScoreV2 as { deepWorkDensity: number }).deepWorkDensity)
-                : 0,
-            artifactProgress:
-              typeof (candidate.focusScoreV2 as { artifactProgress?: unknown }).artifactProgress === "number"
-                ? ((candidate.focusScoreV2 as { artifactProgress: number }).artifactProgress)
-                : 0,
-            switchPenalty:
-              typeof (candidate.focusScoreV2 as { switchPenalty?: unknown }).switchPenalty === "number"
-                ? ((candidate.focusScoreV2 as { switchPenalty: number }).switchPenalty)
-                : 0,
+            deepWorkPct: focusScorePct(candidate.focusScoreV2, base.focusScore),
+            longestStreakSeconds: longestStreakSeconds(candidate.focusScoreV2),
+            switchCount: switchCount(candidate.focusScoreV2),
+            deepWorkSessionCount: deepWorkSessionCount(candidate.focusScoreV2),
           }
         : {
-            score: base.focusScore,
-            coherence: 0,
-            deepWorkDensity: 0,
-            artifactProgress: 0,
-            switchPenalty: 0,
+            deepWorkPct: base.focusScore,
+            longestStreakSeconds: 0,
+            switchCount: 0,
+            deepWorkSessionCount: 0,
           },
     workBlocks: Array.isArray(candidate.workBlocks)
       ? (candidate.workBlocks as DaySnapshotV2["workBlocks"])
@@ -315,10 +330,10 @@ function mergeFocusScoreV2(
   mergedAppSummaries: AppSummary[]
 ): DaySnapshotV2["focusScoreV2"] {
   const weighted = {
-    coherence: 0,
-    deepWorkDensity: 0,
-    artifactProgress: 0,
-    switchPenalty: 0,
+    deepWorkPct: 0,
+    longestStreakSeconds: 0,
+    switchCount: 0,
+    deepWorkSessionCount: 0,
   };
   let totalWeight = 0;
 
@@ -328,46 +343,24 @@ function mergeFocusScoreV2(
       snapshot.appSummaries.reduce((sum, app) => sum + app.totalSeconds, 0)
     );
     totalWeight += weight;
-    weighted.coherence += snapshot.focusScoreV2.coherence * weight;
-    weighted.deepWorkDensity += snapshot.focusScoreV2.deepWorkDensity * weight;
-    weighted.artifactProgress += snapshot.focusScoreV2.artifactProgress * weight;
-    weighted.switchPenalty += snapshot.focusScoreV2.switchPenalty * weight;
+    weighted.deepWorkPct += focusScorePct(snapshot.focusScoreV2, snapshot.focusScore) * weight;
+    weighted.longestStreakSeconds = Math.max(weighted.longestStreakSeconds, longestStreakSeconds(snapshot.focusScoreV2));
+    weighted.switchCount += switchCount(snapshot.focusScoreV2);
+    weighted.deepWorkSessionCount += deepWorkSessionCount(snapshot.focusScoreV2);
   }
-
-  const coherence = totalWeight > 0 ? weighted.coherence / totalWeight : 0;
-  const deepWorkDensity =
-    totalWeight > 0 ? weighted.deepWorkDensity / totalWeight : 0;
-  const artifactProgress =
-    totalWeight > 0 ? weighted.artifactProgress / totalWeight : 0;
-  const switchPenalty =
-    totalWeight > 0 ? weighted.switchPenalty / totalWeight : 0;
 
   const totalTrackedSeconds = mergedAppSummaries.reduce(
     (sum, app) => sum + app.totalSeconds,
     0
   );
-  const score =
-    totalTrackedSeconds <= 0
-      ? 0
-      : Math.round(
-          Math.max(
-            0,
-            Math.min(
-              1,
-              0.35 * coherence +
-                0.25 * deepWorkDensity +
-                0.2 * artifactProgress +
-                0.2 * (1 - switchPenalty)
-            )
-          ) * 100
-        );
 
   return {
-    score,
-    coherence,
-    deepWorkDensity,
-    artifactProgress,
-    switchPenalty,
+    deepWorkPct: totalTrackedSeconds <= 0 || totalWeight <= 0
+      ? null
+      : Math.round(weighted.deepWorkPct / totalWeight),
+    longestStreakSeconds: weighted.longestStreakSeconds,
+    switchCount: weighted.switchCount,
+    deepWorkSessionCount: weighted.deepWorkSessionCount,
   };
 }
 
@@ -810,7 +803,7 @@ export const listSummaries = query({
         schemaVersion: doc.snapshot.schemaVersion,
         focusScore:
           doc.snapshot.schemaVersion === 2
-            ? doc.snapshot.focusScoreV2.score
+            ? focusScorePct(doc.snapshot.focusScoreV2, doc.snapshot.focusScore)
             : doc.snapshot.focusScore,
         focusSeconds: doc.snapshot.focusSeconds,
         appSummaries: doc.snapshot.appSummaries.map((app) => ({

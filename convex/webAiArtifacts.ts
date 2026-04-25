@@ -193,7 +193,7 @@ function buildReportMarkdown(snapshot: DaySnapshotV2, localDate: string): string
     "",
     "## At a glance",
     `- Focus time: ${formatDuration(snapshot.focusSeconds)}`,
-    `- Focus score: ${snapshot.focusScoreV2.score}/100`,
+    `- Focus score: ${snapshot.focusScoreV2.deepWorkPct ?? snapshot.focusScore}/100`,
     `- Work blocks: ${snapshot.workBlocks.length}`,
     `- Top workstream: ${topWorkstreams[0]?.label ?? "No named workstream yet"}`,
     "",

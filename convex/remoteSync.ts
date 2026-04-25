@@ -47,6 +47,53 @@ type SyncedDaySummaryDoc = Doc<"synced_day_summaries">;
 type SyncedWorkBlockDoc = Doc<"synced_work_blocks">;
 type SyncedEntityDoc = Doc<"synced_entities">;
 type SyncedArtifactDoc = Doc<"synced_artifacts">;
+type MaybeLegacySyncedDaySummary = Omit<SyncedDaySummary, "focusScoreV2"> & {
+  focusScoreV2: unknown;
+};
+type MaybeLegacyRemoteSyncPayload = Omit<RemoteSyncPayload, "daySummary"> & {
+  daySummary: MaybeLegacySyncedDaySummary;
+};
+
+function focusScorePct(value: unknown, fallback: number): number {
+  if (!value || typeof value !== "object") return fallback;
+  const candidate = value as {
+    deepWorkPct?: unknown;
+    score?: unknown;
+  };
+
+  if (typeof candidate.deepWorkPct === "number") return candidate.deepWorkPct;
+  if (candidate.deepWorkPct === null) return fallback;
+  if (typeof candidate.score === "number") return candidate.score;
+  return fallback;
+}
+
+function longestStreakSeconds(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { longestStreakSeconds?: unknown }).longestStreakSeconds === "number"
+    ? (value as { longestStreakSeconds: number }).longestStreakSeconds
+    : 0;
+}
+
+function switchCount(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { switchCount?: unknown }).switchCount === "number"
+    ? (value as { switchCount: number }).switchCount
+    : 0;
+}
+
+function deepWorkSessionCount(value: unknown): number {
+  return value && typeof value === "object" && typeof (value as { deepWorkSessionCount?: unknown }).deepWorkSessionCount === "number"
+    ? (value as { deepWorkSessionCount: number }).deepWorkSessionCount
+    : 0;
+}
+
+function normalizeFocusScoreV2(value: unknown, fallback: number): FocusScoreV2Snapshot {
+  return {
+    deepWorkPct: focusScorePct(value, fallback),
+    longestStreakSeconds: longestStreakSeconds(value),
+    switchCount: switchCount(value),
+    deepWorkSessionCount: deepWorkSessionCount(value),
+  };
+}
+
 function blockDurationSeconds(block: Pick<WorkBlockSummary, "startAt" | "endAt">) {
   const duration = Date.parse(block.endAt) - Date.parse(block.startAt);
   return Number.isFinite(duration) && duration > 0
@@ -243,7 +290,7 @@ function buildWorkstreamRollupsFromBlocks(blocks: WorkBlockSummary[]): Workstrea
 }
 
 function buildSafeRecap(
-  summary: SyncedDaySummary,
+  summary: MaybeLegacySyncedDaySummary,
   workBlocks: WorkBlockSummary[],
   topWorkstreams: WorkstreamRollup[],
   artifacts: ArtifactRollup[],
@@ -269,7 +316,7 @@ function buildSafeRecap(
           id: "focus",
           eyebrow: "Focus",
           title: "Focus score",
-          body: `Focus score was ${summary.focusScoreV2?.score ?? summary.focusScore}/100. The remote view keeps only privacy-safe labels and evidence.`,
+          body: `Focus score was ${focusScorePct(summary.focusScoreV2, summary.focusScore)}/100. The remote view keeps only privacy-safe labels and evidence.`,
         },
         {
           id: "artifacts",
@@ -288,7 +335,7 @@ function buildSafeRecap(
         },
         {
           label: "Focus score",
-          value: `${summary.focusScoreV2?.score ?? summary.focusScore}/100`,
+          value: `${focusScorePct(summary.focusScoreV2, summary.focusScore)}/100`,
           detail: topWorkstreams[0]?.label ?? "No named workstream yet",
         },
       ],
@@ -316,18 +363,22 @@ function recapLooksHealthy(recap: DaySnapshotV2["recap"] | null | undefined) {
   );
 }
 
-function sanitizePayloadForStorage(payload: RemoteSyncPayload): RemoteSyncPayload {
+function sanitizePayloadForStorage(payload: MaybeLegacyRemoteSyncPayload): RemoteSyncPayload {
   const workBlocks = payload.workBlocks.map(sanitizeWorkBlock);
   const topWorkstreams = buildWorkstreamRollupsFromBlocks(workBlocks);
   const latestWorkBlock = [...workBlocks]
     .sort((left, right) => right.endAt.localeCompare(left.endAt))
     .at(0);
+  const normalizedFocusScoreV2 = payload.daySummary.focusScoreV2 === null
+    ? null
+    : normalizeFocusScoreV2(payload.daySummary.focusScoreV2, payload.daySummary.focusScore);
 
   return {
     ...payload,
     workBlocks,
     daySummary: {
       ...payload.daySummary,
+      focusScoreV2: normalizedFocusScoreV2,
       recap: buildSafeRecap(payload.daySummary, workBlocks, topWorkstreams, payload.artifacts),
       topWorkstreams,
       latestWorkBlockId: latestWorkBlock?.id ?? null,
@@ -339,13 +390,12 @@ function sanitizePayloadForStorage(payload: RemoteSyncPayload): RemoteSyncPayloa
   };
 }
 
-function mergeFocusScoreV2(summaries: SyncedDaySummary[]): FocusScoreV2Snapshot | null {
+function mergeFocusScoreV2(summaries: MaybeLegacySyncedDaySummary[]): FocusScoreV2Snapshot | null {
   const weighted = {
-    score: 0,
-    coherence: 0,
-    deepWorkDensity: 0,
-    artifactProgress: 0,
-    switchPenalty: 0,
+    deepWorkPct: 0,
+    longestStreakSeconds: 0,
+    switchCount: 0,
+    deepWorkSessionCount: 0,
   };
   let totalWeight = 0;
 
@@ -353,21 +403,19 @@ function mergeFocusScoreV2(summaries: SyncedDaySummary[]): FocusScoreV2Snapshot 
     if (!summary.focusScoreV2) continue;
     const weight = Math.max(summary.focusSeconds, 1);
     totalWeight += weight;
-    weighted.score += summary.focusScoreV2.score * weight;
-    weighted.coherence += summary.focusScoreV2.coherence * weight;
-    weighted.deepWorkDensity += summary.focusScoreV2.deepWorkDensity * weight;
-    weighted.artifactProgress += summary.focusScoreV2.artifactProgress * weight;
-    weighted.switchPenalty += summary.focusScoreV2.switchPenalty * weight;
+    weighted.deepWorkPct += focusScorePct(summary.focusScoreV2, summary.focusScore) * weight;
+    weighted.longestStreakSeconds = Math.max(weighted.longestStreakSeconds, longestStreakSeconds(summary.focusScoreV2));
+    weighted.switchCount += switchCount(summary.focusScoreV2);
+    weighted.deepWorkSessionCount += deepWorkSessionCount(summary.focusScoreV2);
   }
 
   if (totalWeight === 0) return null;
 
   return {
-    score: Math.round(weighted.score / totalWeight),
-    coherence: weighted.coherence / totalWeight,
-    deepWorkDensity: weighted.deepWorkDensity / totalWeight,
-    artifactProgress: weighted.artifactProgress / totalWeight,
-    switchPenalty: weighted.switchPenalty / totalWeight,
+    deepWorkPct: Math.round(weighted.deepWorkPct / totalWeight),
+    longestStreakSeconds: weighted.longestStreakSeconds,
+    switchCount: weighted.switchCount,
+    deepWorkSessionCount: weighted.deepWorkSessionCount,
   };
 }
 
@@ -499,7 +547,7 @@ function buildTopDomains(blocks: WorkBlockSummary[]): TopDomain[] {
     .slice(0, 10);
 }
 
-function mergeCoverage(summaries: SyncedDaySummary[]): RecapCoverage {
+function mergeCoverage(summaries: MaybeLegacySyncedDaySummary[]): RecapCoverage {
   const latest = [...summaries].sort((left, right) => right.generatedAt.localeCompare(left.generatedAt))[0];
   return latest?.coverage ?? {
     attributedPct: 0,
@@ -512,7 +560,7 @@ function mergeCoverage(summaries: SyncedDaySummary[]): RecapCoverage {
 }
 
 function mergeRecap(
-  summaries: SyncedDaySummary[],
+  summaries: MaybeLegacySyncedDaySummary[],
   workBlocks: WorkBlockSummary[],
   topWorkstreams: WorkstreamRollup[],
   artifacts: ArtifactRollup[],
@@ -589,11 +637,10 @@ export async function loadRemoteDayForWorkspace(
     : 0;
   const focusSeconds = summaries.reduce((sum, summary) => sum + summary.focusSeconds, 0);
   const focusScoreV2 = mergeFocusScoreV2(summaries) ?? {
-    score: focusScore,
-    coherence: 0,
-    deepWorkDensity: 0,
-    artifactProgress: 0,
-    switchPenalty: 0,
+    deepWorkPct: focusScore,
+    longestStreakSeconds: 0,
+    switchCount: 0,
+    deepWorkSessionCount: 0,
   };
 
   const snapshot: DaySnapshotV2 = {
@@ -656,7 +703,7 @@ export async function loadRemoteSummariesForWorkspace(
       syncedAt: doc.syncedAt,
       snapshot: {
         schemaVersion: doc.snapshot.schemaVersion,
-        focusScore: doc.snapshot.focusScoreV2.score,
+        focusScore: focusScorePct(doc.snapshot.focusScoreV2, doc.snapshot.focusScore),
         focusSeconds: doc.snapshot.focusSeconds,
         appSummaries: doc.snapshot.appSummaries.map((app) => ({ appKey: app.appKey })),
         workBlocks: doc.snapshot.workBlocks.map((block) => ({ id: block.id })),

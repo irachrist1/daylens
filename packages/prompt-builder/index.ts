@@ -113,10 +113,10 @@ export function buildDayContext(snapshot: DaySnapshot): string {
     context += "\n";
 
     context += "### Focus Score V2\n";
-    context += `- Coherence: ${formatPct(snapshot.focusScoreV2.coherence)}\n`;
-    context += `- Deep work density: ${formatPct(snapshot.focusScoreV2.deepWorkDensity)}\n`;
-    context += `- Artifact progress: ${formatPct(snapshot.focusScoreV2.artifactProgress)}\n`;
-    context += `- Switch penalty: ${formatPct(snapshot.focusScoreV2.switchPenalty)}\n\n`;
+    context += `- Deep work: ${snapshot.focusScoreV2.deepWorkPct === null ? "Not enough data" : `${snapshot.focusScoreV2.deepWorkPct}%`}\n`;
+    context += `- Longest streak: ${formatDuration(snapshot.focusScoreV2.longestStreakSeconds)}\n`;
+    context += `- Switches: ${snapshot.focusScoreV2.switchCount}\n`;
+    context += `- Deep work sessions: ${snapshot.focusScoreV2.deepWorkSessionCount}\n\n`;
 
     if (snapshot.topWorkstreams.length > 0) {
       context += "### Top Workstreams\n";
@@ -356,8 +356,4 @@ function durationBetween(startAt: string, endAt: string): number {
   const durationMs = Date.parse(endAt) - Date.parse(startAt);
   if (!Number.isFinite(durationMs) || durationMs <= 0) return 0;
   return Math.round(durationMs / 1000);
-}
-
-function formatPct(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }

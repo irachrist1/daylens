@@ -21,7 +21,7 @@ interface SnapshotDoc {
     focusScore: number;
     focusSeconds: number;
     appSummaries: { appKey: string }[];
-    focusScoreV2?: { score: number };
+    focusScoreV2?: { deepWorkPct: number | null };
     workBlocks?: { id: string }[];
   } | null;
 }
@@ -49,7 +49,7 @@ function dateLabel(localDate: string, today: string, yesterday: string): string 
 }
 
 function readFocusScore(snapshot: SnapshotDoc["snapshot"]): number {
-  return snapshot?.focusScoreV2?.score ?? snapshot?.focusScore ?? 0;
+  return snapshot?.focusScoreV2?.deepWorkPct ?? snapshot?.focusScore ?? 0;
 }
 
 export function HistoryClient() {
