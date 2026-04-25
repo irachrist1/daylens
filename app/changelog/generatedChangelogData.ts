@@ -208,9 +208,9 @@ export const generatedChangelogData = {
           "id": "mac-1.0.32",
           "version": "1.0.32",
           "date": "2026-04-25",
-          "title": "Windows startup no longer fails with a",
+          "title": "Windows Startup Crash Fixed",
           "intro": [
-            "macOS app v1.0.32 centers on windows startup no longer fails with a.",
+            "Daylens v1.0.32 fixes the packaged native-module layout that caused the Windows startup JavaScript error.",
             "Windows startup no longer fails with a main-process JavaScript error when better-sqlite3 resolves through app.asar.unpacked; packaged builds now repair and verify the native module layout before release.",
             "Windows release builds now run the same full build:all path as macOS and Linux, including the bundled MCP server."
           ],
@@ -487,9 +487,9 @@ export const generatedChangelogData = {
           "id": "windows-1.0.32",
           "version": "1.0.32",
           "date": "2026-04-25",
-          "title": "Windows startup no longer fails with a",
+          "title": "Windows Startup Crash Fixed",
           "intro": [
-            "Windows app v1.0.32 centers on windows startup no longer fails with a.",
+            "Daylens v1.0.32 fixes the packaged native-module layout that caused the Windows startup JavaScript error.",
             "Windows startup no longer fails with a main-process JavaScript error when better-sqlite3 resolves through app.asar.unpacked; packaged builds now repair and verify the native module layout before release.",
             "Windows release builds now run the same full build:all path as macOS and Linux, including the bundled MCP server."
           ],
@@ -766,9 +766,9 @@ export const generatedChangelogData = {
           "id": "linux-1.0.32",
           "version": "1.0.32",
           "date": "2026-04-25",
-          "title": "Windows startup no longer fails with a",
+          "title": "Windows Startup Crash Fixed",
           "intro": [
-            "Linux app v1.0.32 centers on windows startup no longer fails with a.",
+            "Daylens v1.0.32 fixes the packaged native-module layout that caused the Windows startup JavaScript error.",
             "Windows startup no longer fails with a main-process JavaScript error when better-sqlite3 resolves through app.asar.unpacked; packaged builds now repair and verify the native module layout before release.",
             "Windows release builds now run the same full build:all path as macOS and Linux, including the bundled MCP server."
           ],
