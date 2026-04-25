@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository_owner }}/daylens
-          path: ../daylens
+          path: daylens-contract
 
       - name: Set up Node
         uses: actions/setup-node@v5
@@ -43,6 +43,8 @@ jobs:
         run: npm run convex:codegen
 
       - name: Validate remote contract
+        env:
+          DAYLENS_CONTRACT_REPO: daylens-contract
         run: npm run contract:check
 
       - name: Validate Convex manifest

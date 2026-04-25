@@ -42,7 +42,7 @@ function readContractState(repoRoot) {
 
 export function checkRemoteContract({
   repoRoot = process.cwd(),
-  siblingRepo = "../daylens",
+  siblingRepo = process.env.DAYLENS_CONTRACT_REPO || "../daylens",
 } = {}) {
   const local = readContractState(repoRoot);
 
