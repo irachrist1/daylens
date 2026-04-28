@@ -15,13 +15,17 @@ function titleCaseTopic(topic: string | null): string | null {
 }
 
 const ENTITY_STOP_WORDS = new Set([
-  'ai',
-  'based',
-  'daylens',
-  'direct',
-  'from',
-  'tracked',
-  'your',
+  'a', 'an', 'the', 'this', 'that', 'these', 'those',
+  'it', 'its', 'my', 'your', 'our', 'his', 'her', 'their',
+  'i', 'we', 'he', 'she', 'they', 'you', 'me', 'us', 'him',
+  'hi', 'hey', 'hello', 'sup', 'ok', 'okay', 'yes', 'no', 'sure',
+  'can', 'could', 'would', 'will', 'should', 'may', 'might',
+  'what', 'which', 'where', 'when', 'how', 'why', 'who',
+  'all', 'any', 'some', 'more', 'most', 'many', 'much', 'few',
+  'new', 'old', 'good', 'great', 'best', 'just', 'now', 'here', 'there',
+  'also', 'then', 'let', 'use', 'ask', 'help', 'want', 'need',
+  'ai', 'based', 'daylens', 'direct', 'from', 'tracked',
+  'e.g', 'i.e', 'etc', 'vs', 'ex',
 ])
 
 function normalizeSuggestion(text: string): string {
@@ -86,14 +90,18 @@ function candidate(text: string, affordance: FollowUpAffordance): FollowUpSugges
 
 function answerEntity(answerText: string | null | undefined): string | null {
   if (!answerText) return null
-  const filename = answerText.match(/\b[\w.-]+\.\w{1,8}\b/)?.[0]
-  if (filename) return filename
+  // Require ≥2 chars on both sides of the dot to avoid matching abbreviations
+  // like "e.g" or "i.e" that look like filename tokens.
+  const filename = answerText.match(/\b\w{2,}\.\w{2,8}\b/)?.[0]
+  if (filename && !ENTITY_STOP_WORDS.has(filename.toLowerCase())) return filename
 
   const matches = answerText.match(/\b[A-Z][A-Za-z0-9][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9][A-Za-z0-9_-]*){0,2}\b/g) ?? []
   for (const match of matches) {
     const normalized = match.trim()
-    if (normalized.length < 3) continue
+    if (normalized.length < 4) continue
     if (ENTITY_STOP_WORDS.has(normalized.toLowerCase())) continue
+    // Reject multi-word matches where any word is a stop word (e.g. "Hey Tonny")
+    if (normalized.includes(' ') && normalized.split(' ').some((w) => ENTITY_STOP_WORDS.has(w.toLowerCase()))) continue
     return normalized
   }
   return null
@@ -111,12 +119,29 @@ function scopedCandidates(entity: string, state: AIConversationState | null): Fo
   ]
 }
 
+// Minimal stop-word list for router-set topics (state.topic).
+// Narrower than ENTITY_STOP_WORDS because the router sets topics deliberately —
+// we only want to reject obvious grammar words, not product terms like "AI".
+const TOPIC_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'this', 'that', 'these', 'those',
+  'it', 'my', 'your', 'our', 'his', 'her', 'their',
+  'i', 'we', 'he', 'she', 'they', 'you',
+  'hi', 'hey', 'hello', 'ok', 'okay', 'yes', 'no', 'sure',
+])
+
 export function buildDeterministicFollowUpCandidates(
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
   answerText?: string | null,
 ): FollowUpSuggestion[] {
-  const topic = titleCaseTopic(state?.topic ?? null) ?? answerEntity(answerText)
+  const rawTopic = state?.topic?.trim() ?? null
+  const validatedTopic = (
+    rawTopic
+    && rawTopic.length >= 2
+    && !TOPIC_STOP_WORDS.has(rawTopic.toLowerCase())
+    && !(rawTopic.includes(' ') && rawTopic.split(' ').some((w) => TOPIC_STOP_WORDS.has(w.toLowerCase())))
+  ) ? rawTopic : null
+  const topic = titleCaseTopic(validatedTopic) ?? answerEntity(answerText)
   if (topic) return dedupeSuggestions(scopedCandidates(topic, state)).slice(0, 4)
 
   const rangeLabel = state?.dateRange?.label?.toLowerCase().includes('last week') ? 'last week' : 'this week'
@@ -178,16 +203,34 @@ export function buildFollowUpSuggestionPrompts(
   state: AIConversationState | null,
   candidates: FollowUpSuggestion[],
 ): { systemPrompt: string; userPrompt: string } {
-  const systemPrompt = [
-    'You write Google-style recommended next questions for Daylens.',
-    'Return strict JSON with a single key "suggestions".',
-    '"suggestions" must be an array of 3 or 4 short follow-up questions.',
-    'Each suggestion must be at most 8 words.',
-    'IMPORTANT: every suggestion must name a specific app, file, page, or entity that appeared in the answer.',
-    'For example: "How much time in Cursor?" or "Which Notion pages appeared?".',
-    'Never write entity-free suggestions like "Tell me more", "What stood out?", "Go deeper", or "What evidence supports that?".',
-    'Stay inside the current topic and time scope unless comparison is explicitly useful.',
-  ].join(' ')
+  const systemPrompt = `You generate follow-up question chips for Daylens, a local screen-time and productivity tracker.
+
+OUTPUT FORMAT
+Return only valid JSON: { "suggestions": ["...", "...", "..."] }
+No markdown, no explanation.
+
+RULES
+1. Return 3–4 suggestions, or [] if the answer is a greeting or contains no productivity data.
+2. Each suggestion must be ≤8 words.
+3. Every suggestion must reference a specific named entity that appears in the answer — an app (Cursor, Chrome, Notion), a file, a page title, a person, a project, or a domain. Do not invent names; pull them from the answer text.
+4. Vary the question type across suggestions: one about time/duration, one about specific content (windows, pages, files), one about comparison or trend, one about cause or breakdown.
+5. Ground each suggestion in what the answer actually said. Do not ask about something the answer did not mention.
+6. Forbidden phrases (never use): "Tell me more", "What stood out", "Go deeper", "What else", "Can you explain", "What evidence", "Say more", "Expand on", "Be more specific", "Continue".
+7. Forbidden patterns: fragment suggestions like "What drove The?" or "Which windows mention Hey?" — these indicate a stop-word leaked into the entity slot. If you cannot name a real entity, return [].
+
+GOOD EXAMPLES
+"How much time in Cursor today?"
+"Which Notion pages appeared most?"
+"Compare Slack with yesterday"
+"What drove Chrome usage this week?"
+"Show Coursera time by day"
+"Which files opened in VS Code?"
+
+BAD EXAMPLES (never produce these)
+"What drove The?" — stop word in entity slot
+"Which windows mention Hey Tonny?" — proper name extracted from greeting
+"Tell me more about that" — generic filler
+"What else happened?" — vague`
 
   const userPrompt = JSON.stringify({
     userQuestion,
@@ -208,9 +251,10 @@ export function parseFollowUpSuggestions(
 
   try {
     const parsed = JSON.parse(normalized) as { suggestions?: unknown }
-    const suggestions = Array.isArray(parsed.suggestions)
-      ? parsed.suggestions.filter((value): value is string => typeof value === 'string')
-      : []
+    if (!Array.isArray(parsed.suggestions)) return dedupeSuggestions(fallback).slice(0, 4)
+    // Model explicitly returned empty — no good suggestions for this response.
+    if (parsed.suggestions.length === 0) return []
+    const suggestions = parsed.suggestions.filter((value): value is string => typeof value === 'string')
     const rewritten = dedupeSuggestions(
       suggestions
         .filter((text) => hasNamedEntity(text))

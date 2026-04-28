@@ -398,6 +398,15 @@ export interface AIChatSendRequest {
   threadId?: number | null
 }
 
+export interface AIDailyReportPreparationResult {
+  date: string
+  threadId: number | null
+  artifactId: number | null
+  prepared: boolean
+  status: 'ready' | 'no_activity' | 'failed'
+  error?: string | null
+}
+
 // ─── Threads & artifacts (AI surface) ────────────────────────────────────────
 export interface AIThreadSummary {
   id: number
@@ -793,6 +802,7 @@ export interface SyncStatus {
 export interface AppSettings {
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   analyticsOptIn: boolean       // false = no telemetry (default)
+  shareAIFeedbackExamples: boolean // true = upload redacted rated AI examples
   launchOnLogin: boolean
   theme: AppTheme
   onboardingComplete: boolean
@@ -818,6 +828,7 @@ export interface AppSettings {
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
   allowThirdPartyWebsiteIconFallback?: boolean
+  aiReportPersonalizationEnabled?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
@@ -1074,6 +1085,7 @@ export const IPC = {
     GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
     GET_WEEK_REVIEW: 'ai:get-week-review',
     GET_APP_NARRATIVE: 'ai:get-app-narrative',
+    PREPARE_DAILY_REPORT: 'ai:prepare-daily-report',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',

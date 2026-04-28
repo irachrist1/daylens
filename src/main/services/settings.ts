@@ -20,6 +20,7 @@ async function getStore() {
 
 const DEFAULTS: AppSettings = {
   analyticsOptIn: false,
+  shareAIFeedbackExamples: true,
   launchOnLogin: true,
   theme: 'system',
   onboardingComplete: false,
@@ -45,6 +46,7 @@ const DEFAULTS: AppSettings = {
   aiRedactFilePaths: false,
   aiRedactEmails: false,
   allowThirdPartyWebsiteIconFallback: true,
+  aiReportPersonalizationEnabled: false,
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
@@ -61,6 +63,7 @@ export function getSettings(): AppSettings {
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
     analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
+    shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', true) as boolean),
     launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
     onboardingComplete,
@@ -86,6 +89,7 @@ export function getSettings(): AppSettings {
     aiRedactFilePaths: (_store.get('aiRedactFilePaths', false) as boolean),
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
     allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', true) as boolean),
+    aiReportPersonalizationEnabled: (_store.get('aiReportPersonalizationEnabled', false) as boolean),
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),

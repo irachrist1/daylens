@@ -8,6 +8,7 @@ import type {
   AIChatStreamEvent,
   AIMessageFeedbackUpdate,
   AIChatTurnResult,
+  AIDailyReportPreparationResult,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadSummary,
@@ -136,6 +137,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart }),
     getAppNarrative: (canonicalAppId: string, days?: number): Promise<AISurfaceSummary | null> =>
       ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days }),
+    prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
+      ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),

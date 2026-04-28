@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.33 - 2026-04-28
+
+### Fixed
+- **Follow-up suggestions no longer show garbage entities.** Router-set topics (e.g. `"The"`, `"Hey Tonny"`) are now validated against a grammar-word stop list before reaching `scopedCandidates`, eliminating suggestions like `"What drove The?"`. A separate, narrower stop list is used for router topics so legitimate short terms like `"AI"` are not incorrectly rejected.
+- **`e.g` no longer extracted as a named entity.** The filename-detection regex in `answerEntity` now requires ≥2 characters on both sides of the dot, preventing abbreviations like `e.g`, `i.e`, and `etc` from matching. Added those tokens to `ENTITY_STOP_WORDS` as a secondary guard.
+- **Files tab now reliably shows generated artifacts.** The `listArtifacts` refresh in `handleSend` previously used a stale closure for the thread ID on new threads; it now resolves the ID from the freshly-fetched thread list. The artifact `useEffect` dependency was changed from `messages.length` (which does not change on turn completion) to a dedicated `artifactsVersion` counter that increments after every successful turn.
+- **Generated files auto-switch view to Files tab.** When a turn produces artifacts the AI view automatically switches to the Files tab so generated files are immediately visible without a manual tab click.
+- **Thinking… no longer re-appears after streaming content starts.** A `streamedContentIdsRef` set tracks which message IDs have received at least one non-empty streaming chunk; once a message has streamed content it never reverts to the Thinking… indicator regardless of React batching or snapshot ordering.
+- **Thread titles no longer stuck as greeting text.** `deriveTitleFromMessage` now returns `"New chat"` for single-word greeting messages (`"hi"`, `"hey"`, `"ok"`, etc.) instead of echoing the greeting as the thread title. The first substantive follow-up message renames the thread synchronously before `listThreads` is called on the renderer side.
+- **Empty AI responses no longer corrupt conversation history.** `sanitizeConversationHistory` now strips user+assistant pairs where the assistant content is empty before sending history to the provider; a dangling empty assistant message previously caused some providers to return a blank response on the next turn.
+- **Haiku follow-up prompt rewritten for Perplexity-quality output.** The system prompt now enforces entity-grounding (names pulled only from the answer text), varied question types (time / content / comparison / cause), explicit forbidden-phrase list, concrete good/bad examples, and an explicit `[]` return for greetings or no-data responses.
+
 ## v1.0.32 - 2026-04-25
 
 ### Fixed

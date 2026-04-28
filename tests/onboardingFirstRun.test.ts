@@ -9,6 +9,7 @@ function buildSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   const onboardingState = overrides.onboardingState ?? createDefaultOnboardingState(false)
   return {
     analyticsOptIn: false,
+    shareAIFeedbackExamples: true,
     launchOnLogin: true,
     theme: 'system',
     onboardingComplete: false,
@@ -33,6 +34,8 @@ function buildSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     aiSpendSoftLimitUsd: 10,
     aiRedactFilePaths: false,
     aiRedactEmails: false,
+    allowThirdPartyWebsiteIconFallback: true,
+    aiReportPersonalizationEnabled: false,
     dailySummaryEnabled: true,
     morningNudgeEnabled: true,
     distractionAlertThresholdMinutes: 10,

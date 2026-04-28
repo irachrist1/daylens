@@ -1433,7 +1433,7 @@ export default function Settings() {
 
         <SettingsSection
           title="Privacy"
-          description="History stays local. Telemetry never includes titles, paths, URLs, or prompt text."
+          description="History stays local unless you explicitly enable sync or feedback sharing controls here."
         >
           <div>
             <SettingsRow
@@ -1441,6 +1441,11 @@ export default function Settings() {
               title="Analytics"
               description="Anonymous product telemetry."
               control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
+            />
+            <SettingsRow
+              title="Share AI feedback examples"
+              description="Sends redacted excerpts when you rate an AI answer. Turn off any time."
+              control={<Toggle checked={settings.shareAIFeedbackExamples} onChange={(value) => void persist({ shareAIFeedbackExamples: value })} />}
             />
             <SettingsRow
               title="Local data"

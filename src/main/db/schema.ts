@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   content         TEXT    NOT NULL,
   created_at      INTEGER NOT NULL,
   metadata_json   TEXT    NOT NULL DEFAULT '{}',
-  thread_id       INTEGER
+  thread_id       INTEGER,
+  rating          TEXT CHECK(rating IN ('up', 'down') OR rating IS NULL),
+  rating_updated_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_conv ON ai_messages (conversation_id, created_at);

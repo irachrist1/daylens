@@ -1,6 +1,7 @@
 const DEFAULT_SETTINGS = Object.freeze({
   allowThirdPartyWebsiteIconFallback: true,
   analyticsOptIn: false,
+  shareAIFeedbackExamples: true,
   onboardingComplete: false,
   onboardingState: {
     trackingPermissionState: 'missing',

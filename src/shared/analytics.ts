@@ -184,6 +184,7 @@ export const AI_SETTING_KEYS = [
 
 export const PRIVACY_SETTING_KEYS = [
   'analyticsOptIn',
+  'shareAIFeedbackExamples',
   'allowThirdPartyWebsiteIconFallback',
 ] as const
 
