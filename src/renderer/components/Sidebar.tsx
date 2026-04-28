@@ -30,9 +30,7 @@ function IconApps() {
 function IconAI() {
   return (
     <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 2c-.8 2-3 3-3 5.5a3 3 0 0 0 6 0C11 5 8.8 4 8 2z" />
-      <path d="M6.5 13.5h3" />
-      <path d="M8 13v2" />
+      <path d="M8 1.5 L8.8 6.2 L13.5 8 L8.8 9.8 L8 14.5 L7.2 9.8 L2.5 8 L7.2 6.2 Z" />
     </svg>
   )
 }

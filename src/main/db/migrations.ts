@@ -1,6 +1,6 @@
 import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
-import { ensureAIThreadSchema } from './aiThreadSchema'
+import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
 import type Database from 'better-sqlite3'
 
 /**
@@ -1427,6 +1427,13 @@ const migrations: Migration[] = [
     description: 'Add FTS5 search indexes for sessions, blocks, browser visits, and AI artifacts',
     up: () => {
       ensureSearchSchema(getDb())
+    },
+  },
+  {
+    version: 22,
+    description: 'Add queryable AI message feedback ratings',
+    up: () => {
+      ensureAIMessageFeedbackSchema(getDb())
     },
   },
 ]

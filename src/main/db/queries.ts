@@ -336,9 +336,17 @@ function mapAIThreadMessage(
     content: string
     createdAt: number
     metadataJson: string | null
+    rating?: 'up' | 'down' | null
+    ratingUpdatedAt?: number | null
   },
 ): AIThreadMessage {
   const metadata = parseJsonObject<AIThreadMessageMetadata>(row.metadataJson, {})
+  const rating = row.rating === 'up' || row.rating === 'down'
+    ? row.rating
+    : metadata.rating ?? null
+  const ratingUpdatedAt = typeof row.ratingUpdatedAt === 'number'
+    ? row.ratingUpdatedAt
+    : metadata.ratingUpdatedAt ?? null
   return {
     id: row.id,
     role: row.role,
@@ -352,8 +360,8 @@ function mapAIThreadMessage(
     providerError: metadata.providerError ?? false,
     actions: metadata.actions ?? [],
     artifacts: metadata.artifacts ?? [],
-    rating: metadata.rating ?? null,
-    ratingUpdatedAt: metadata.ratingUpdatedAt ?? null,
+    rating,
+    ratingUpdatedAt,
   }
 }
 
@@ -1210,7 +1218,16 @@ export function appendConversationMessage(
   const metadata = options?.metadata ?? null
   const threadId = options?.threadId ?? null
   const result = db.prepare(
-    `INSERT INTO ai_messages (conversation_id, role, content, created_at, metadata_json, thread_id) VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO ai_messages (
+      conversation_id,
+      role,
+      content,
+      created_at,
+      metadata_json,
+      thread_id,
+      rating,
+      rating_updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     conversationId,
     role,
@@ -1218,6 +1235,8 @@ export function appendConversationMessage(
     createdAt,
     JSON.stringify(metadata ?? {}),
     threadId,
+    metadata?.rating ?? null,
+    metadata?.ratingUpdatedAt ?? null,
   )
 
   return {
@@ -1244,7 +1263,14 @@ export function getConversationMessages(
 ): AIThreadMessage[] {
   return db
     .prepare(
-      `SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+      `SELECT
+         id,
+         role,
+         content,
+         created_at AS createdAt,
+         metadata_json AS metadataJson,
+         rating,
+         rating_updated_at AS ratingUpdatedAt
        FROM ai_messages
        WHERE conversation_id = ?
        ORDER BY created_at ASC, id ASC`
@@ -1256,6 +1282,8 @@ export function getConversationMessages(
       content: string
       createdAt: number
       metadataJson: string | null
+      rating: 'up' | 'down' | null
+      ratingUpdatedAt: number | null
     })) as AIThreadMessage[]
 }
 
@@ -1265,7 +1293,14 @@ export function getThreadMessages(
 ): AIThreadMessage[] {
   return db
     .prepare(
-      `SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+      `SELECT
+         id,
+         role,
+         content,
+         created_at AS createdAt,
+         metadata_json AS metadataJson,
+         rating,
+         rating_updated_at AS ratingUpdatedAt
        FROM ai_messages
        WHERE thread_id = ?
        ORDER BY created_at ASC, id ASC`
@@ -1277,6 +1312,8 @@ export function getThreadMessages(
       content: string
       createdAt: number
       metadataJson: string | null
+      rating: 'up' | 'down' | null
+      ratingUpdatedAt: number | null
     })) as AIThreadMessage[]
 }
 
@@ -1286,7 +1323,14 @@ export function updateAIMessageFeedback(
   rating: AIThreadMessageMetadata['rating'],
 ): AIThreadMessage | null {
   const row = db.prepare(`
-    SELECT id, role, content, created_at AS createdAt, metadata_json AS metadataJson
+    SELECT
+      id,
+      role,
+      content,
+      created_at AS createdAt,
+      metadata_json AS metadataJson,
+      rating,
+      rating_updated_at AS ratingUpdatedAt
     FROM ai_messages
     WHERE id = ?
     LIMIT 1
@@ -1296,6 +1340,8 @@ export function updateAIMessageFeedback(
     content: string
     createdAt: number
     metadataJson: string | null
+    rating: 'up' | 'down' | null
+    ratingUpdatedAt: number | null
   } | undefined
 
   if (!row) return null
@@ -1309,13 +1355,22 @@ export function updateAIMessageFeedback(
 
   db.prepare(`
     UPDATE ai_messages
-    SET metadata_json = ?
+    SET metadata_json = ?,
+        rating = ?,
+        rating_updated_at = ?
     WHERE id = ?
-  `).run(JSON.stringify(nextMetadata), messageId)
+  `).run(
+    JSON.stringify(nextMetadata),
+    nextMetadata.rating ?? null,
+    nextMetadata.ratingUpdatedAt ?? null,
+    messageId,
+  )
 
   return mapAIThreadMessage({
     ...row,
     metadataJson: JSON.stringify(nextMetadata),
+    rating: nextMetadata.rating ?? null,
+    ratingUpdatedAt: nextMetadata.ratingUpdatedAt ?? null,
   })
 }
 

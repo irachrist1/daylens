@@ -1,11 +1,13 @@
 import { ipcMain } from 'electron'
 import { updateAIMessageFeedback } from '../db/queries'
 import { getDb } from '../services/database'
+import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
 import {
   clearAIHistory,
   detectCLITools,
   getAppNarrative,
   generateDaySummary,
+  prepareDailyReport,
   generateWorkBlockInsight,
   getAIHistory,
   getThreadHistory,
@@ -52,7 +54,12 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.SET_MESSAGE_FEEDBACK, (_e, payload: { messageId: number; rating: 'up' | 'down' | null }) => {
-    return updateAIMessageFeedback(getDb(), payload.messageId, payload.rating)
+    const db = getDb()
+    const updated = updateAIMessageFeedback(db, payload.messageId, payload.rating)
+    if (updated && payload.rating) {
+      void uploadRatedAIMessageFeedback(db, payload.messageId, payload.rating)
+    }
+    return updated
   })
 
   ipcMain.handle(IPC.AI.GENERATE_DAY_SUMMARY, async (_e, date: string) => {
@@ -65,6 +72,10 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (_e, payload: { canonicalAppId: string; days?: number }) => {
     return getAppNarrative(payload.canonicalAppId, payload.days ?? 7)
+  })
+
+  ipcMain.handle(IPC.AI.PREPARE_DAILY_REPORT, async (_e, payload?: { date?: string | null }) => {
+    return prepareDailyReport(payload?.date ?? undefined)
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {

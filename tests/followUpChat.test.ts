@@ -8,6 +8,7 @@ import {
   getConversationMessages,
   getConversationState,
   getOrCreateConversation,
+  updateAIMessageFeedback,
   upsertConversationState,
 } from '../src/main/db/queries.ts'
 import { resolveFollowUp } from '../src/main/lib/followUpResolver.ts'
@@ -203,5 +204,44 @@ test('conversation state persists alongside structured AI messages', () => {
   clearConversation(db, conversationId)
   assert.equal(getConversationMessages(db, conversationId).length, 0)
   assert.equal(getConversationState(db, conversationId), null)
+  db.close()
+})
+
+test('message feedback is stored in queryable columns and returned from history', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+
+  const conversationId = getOrCreateConversation(db)
+  const assistant = appendConversationMessage(db, conversationId, 'assistant', 'You spent 2h on Daylens.')
+
+  const rated = updateAIMessageFeedback(db, assistant.id, 'down')
+  assert.equal(rated?.rating, 'down')
+  assert.equal(typeof rated?.ratingUpdatedAt, 'number')
+
+  const row = db.prepare(`
+    SELECT rating, rating_updated_at AS ratingUpdatedAt, metadata_json AS metadataJson
+    FROM ai_messages
+    WHERE id = ?
+  `).get(assistant.id) as { rating: string | null; ratingUpdatedAt: number | null; metadataJson: string }
+  assert.equal(row.rating, 'down')
+  assert.equal(typeof row.ratingUpdatedAt, 'number')
+  assert.match(row.metadataJson, /"rating":"down"/)
+
+  const [historyMessage] = getConversationMessages(db, conversationId)
+  assert.equal(historyMessage.rating, 'down')
+  assert.equal(typeof historyMessage.ratingUpdatedAt, 'number')
+
+  const cleared = updateAIMessageFeedback(db, assistant.id, null)
+  assert.equal(cleared?.rating, null)
+  assert.equal(cleared?.ratingUpdatedAt, null)
+
+  const clearedRow = db.prepare(`
+    SELECT rating, rating_updated_at AS ratingUpdatedAt
+    FROM ai_messages
+    WHERE id = ?
+  `).get(assistant.id) as { rating: string | null; ratingUpdatedAt: number | null }
+  assert.equal(clearedRow.rating, null)
+  assert.equal(clearedRow.ratingUpdatedAt, null)
+
   db.close()
 })

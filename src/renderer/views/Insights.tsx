@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, classifyAIOutputIntent, trackedTimeBucket } from '@shared/analytics'
 import type {
@@ -131,6 +132,68 @@ function MarkdownBlock({ text, blockKey }: { text: string; blockKey: number }): 
   )
 }
 
+function isMarkdownTable(text: string): boolean {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+  return lines.length >= 2 && lines.some((l) => /^\|?[\s|:]*-{2,}[\s|:-]*$/.test(l) && l.includes('|'))
+}
+
+function MarkdownTable({ text }: { text: string }) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+  const sepIdx = lines.findIndex((l) => /^\|?[\s|:]*-{2,}[\s|:-]*$/.test(l) && l.includes('|'))
+  if (sepIdx < 1) return <p style={{ fontSize: 13, lineHeight: 1.6 }}>{text}</p>
+
+  const parseRow = (row: string): string[] =>
+    row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim())
+
+  const headers = parseRow(lines[sepIdx - 1])
+  const dataRows = lines.slice(sepIdx + 1).map(parseRow)
+
+  return (
+    <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--color-border-ghost)' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+        <thead>
+          <tr>
+            {headers.map((h, i) => (
+              <th key={i} style={{
+                padding: '8px 12px',
+                textAlign: 'left',
+                fontWeight: 700,
+                fontSize: 11,
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                color: 'var(--color-text-tertiary)',
+                borderBottom: '1px solid var(--color-border-ghost)',
+                whiteSpace: 'nowrap',
+                background: 'var(--color-surface-low)',
+              }}>
+                {inlineNodes(h)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {dataRows.map((row, ri) => (
+            <tr key={ri} style={{ borderBottom: ri < dataRows.length - 1 ? '1px solid var(--color-border-ghost)' : 'none' }}>
+              {row.map((cell, ci) => (
+                <td key={ci} style={{
+                  padding: '8px 12px',
+                  fontSize: 12.5,
+                  lineHeight: 1.5,
+                  color: ci === 0 ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  fontWeight: ci === 0 ? 580 : 400,
+                  verticalAlign: 'top',
+                }}>
+                  {inlineNodes(cell)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function MarkdownMessage({ content }: { content: string }) {
   const blocks = content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean)
   if (blocks.length === 0) {
@@ -138,7 +201,11 @@ function MarkdownMessage({ content }: { content: string }) {
   }
   return (
     <div className="flex flex-col gap-2.5">
-      {blocks.map((block, index) => <MarkdownBlock key={index} text={block} blockKey={index} />)}
+      {blocks.map((block, index) =>
+        isMarkdownTable(block)
+          ? <MarkdownTable key={index} text={block} />
+          : <MarkdownBlock key={index} text={block} blockKey={index} />
+      )}
     </div>
   )
 }
@@ -300,16 +367,6 @@ function RecapTrend({
       background: 'var(--color-recap-panel)',
       padding: '14px 14px 12px',
     }}>
-      <div style={{
-        fontSize: 10.5,
-        fontWeight: 800,
-        letterSpacing: '0.10em',
-        textTransform: 'uppercase',
-        color: 'var(--color-text-tertiary)',
-        marginBottom: 12,
-      }}>
-        Day By Day
-      </div>
       <div style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${points.length}, minmax(0, 1fr))`,
@@ -484,21 +541,8 @@ function RecapPanel({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{
-              fontSize: 10.5,
-              fontWeight: 800,
-              letterSpacing: '0.10em',
-              textTransform: 'uppercase',
-              color: 'var(--color-recap-kicker)',
-              marginBottom: 10,
-            }}>
-              Work recap
-            </div>
-            <div style={{ fontSize: 28, fontWeight: 780, letterSpacing: '-0.04em', color: 'var(--color-recap-title)' }}>
+            <div style={{ fontSize: 22, fontWeight: 780, letterSpacing: '-0.03em', color: 'var(--color-recap-title)' }}>
               {active.title}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--color-recap-kicker)', marginTop: 6 }}>
-              {active.subtitle}
             </div>
           </div>
           <div style={{
@@ -698,6 +742,31 @@ function IconSend() {
   )
 }
 
+function IconSparkle({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path d="M10 1.5c0 0 .9 4.8 2.5 6.5C14.2 9.7 18.5 10 18.5 10s-4.3.3-6 2c-1.6 1.7-2.5 6.5-2.5 6.5s-.9-4.8-2.5-6.5C6 10.3 1.5 10 1.5 10S6 9.7 7.5 8C9 6.3 10 1.5 10 1.5Z" />
+    </svg>
+  )
+}
+
+function IconCompose() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 2.5L13.5 5L5.5 13H3v-2.5L11 2.5Z" />
+      <path d="M9.5 4l2.5 2.5" />
+    </svg>
+  )
+}
+
+function IconChevronDown() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 4l4 4 4-4" />
+    </svg>
+  )
+}
+
 function IconActionButton({
   label,
   feedbackLabel,
@@ -804,23 +873,45 @@ function summaryText(today: DayTimelinePayload | null): string {
   return parts.filter(Boolean).join(' ')
 }
 
-function starterPrompts(today: DayTimelinePayload | null): string[] {
-  if (!today || today.totalSeconds === 0) {
-    return [
-      'What kinds of questions will you be able to answer once I have more history?',
-      'How should I use Daylens if I am not tracking clients?',
-      'What should I pay attention to the first few days of tracking?',
-      'How can I ask for a report or table later?',
-    ]
-  }
 
-  return [
-    'What did I actually get done today?',
-    'Which files, docs, or pages did I touch today?',
-    'Where did my focus break down today?',
-    'Summarize today as a short report I could share',
-    'Compare today with yesterday',
-  ]
+function artifactAccentColor(artifact: AIArtifactRecord): string {
+  switch (artifact.kind) {
+    case 'csv':
+    case 'json_table':
+      return '#16a34a'
+    case 'html_chart':
+      return '#7c3aed'
+    case 'report':
+      return '#2563eb'
+    case 'markdown':
+    default:
+      return '#0891b2'
+  }
+}
+
+function IconArtifactFile({ kind }: { kind: AIArtifactRecord['kind'] }) {
+  if (kind === 'csv' || kind === 'json_table') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="1" width="12" height="14" rx="2" />
+        <path d="M5 6h6M5 9h6M5 12h4" />
+      </svg>
+    )
+  }
+  if (kind === 'html_chart') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12 L5 8 L8 10 L11 5 L14 7" />
+        <rect x="1" y="1" width="14" height="14" rx="2" />
+      </svg>
+    )
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="1" width="12" height="14" rx="2" />
+      <path d="M5 5h6M5 8h6M5 11h4" />
+    </svg>
+  )
 }
 
 function relativeTime(ms: number): string {
@@ -915,6 +1006,7 @@ function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] 
 }
 
 export default function Insights() {
+  const location = useLocation()
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -923,7 +1015,6 @@ export default function Insights() {
   const [messageActionState, setMessageActionState] = useState<Record<string, { busy: boolean; error: string | null; successLabel: string | null }>>({})
   const [focusReviewDrafts, setFocusReviewDrafts] = useState<Record<string, string>>({})
   const [heroSummary, setHeroSummary] = useState('')
-  const [heroQuestions, setHeroQuestions] = useState<string[]>([])
   const [heroSummaryLoading, setHeroSummaryLoading] = useState(false)
   const [heroSummarySignature, setHeroSummarySignature] = useState<string | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -932,25 +1023,30 @@ export default function Insights() {
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [artifacts, setArtifacts] = useState<AIArtifactRecord[]>([])
+  const [artifactsVersion, setArtifactsVersion] = useState(0)
   const [artifactPreview, setArtifactPreview] = useState<{ record: AIArtifactRecord; content: string | null } | null>(null)
+  const [aiView, setAiView] = useState<'chat' | 'files'>('chat')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<DaylensSearchResult[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
-  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null)
   const [hoveredThreadId, setHoveredThreadId] = useState<number | null>(null)
   const [threadDeleteConfirm, setThreadDeleteConfirm] = useState<number | null>(null)
   const [threadPickerFocusIdx, setThreadPickerFocusIdx] = useState(0)
   const threadPickerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const routedReportKeyRef = useRef<string | null>(null)
   const loadingRef = useRef(false)
   const historyHydratedRef = useRef(false)
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
+  // Track message IDs that have received at least one non-empty streaming chunk.
+  // Prevents Thinking… from re-appearing if React re-renders with a stale snapshot.
+  const streamedContentIdsRef = useRef<Set<string | number>>(new Set())
   loadingRef.current = loading
   const currentDate = todayString()
 
@@ -1064,10 +1160,11 @@ export default function Insights() {
       if (!cancelled) setArtifacts(rows)
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
-  }, [activeThreadId, messages.length])
+  }, [activeThreadId, artifactsVersion])
 
   useEffect(() => {
     return ipc.ai.onStream((event) => {
+      if (event.snapshot) streamedContentIdsRef.current.add(`assistant:${event.requestId}`)
       setMessages((current) => current.map((message) => (
         message.id === `assistant:${event.requestId}`
           ? { ...message, content: event.snapshot }
@@ -1269,6 +1366,7 @@ export default function Insights() {
         clientRequestId: requestId,
         threadId: activeThreadId,
       }) as AIChatTurnResult
+      let resolvedThreadId: number | null = activeThreadId
       try {
         const refreshed = await ipc.ai.listThreads({ includeArchived: false })
         setThreads(refreshed)
@@ -1277,13 +1375,22 @@ export default function Insights() {
           // passed; refresh the list and adopt the newest row as the current
           // thread so follow-up turns stay linked.
           const newest = refreshed[0]
-          if (newest) setActiveThreadId(newest.id)
+          if (newest) {
+            setActiveThreadId(newest.id)
+            resolvedThreadId = newest.id
+          }
         }
       } catch { /* best-effort */ }
       setMessages((current) => current.map((message) => {
         if (message.id !== assistantId) return message
         return { ...response.assistantMessage, state: 'complete' }
       }))
+      // Increment artifactsVersion so the useEffect re-fetches from the DB.
+      // Do this regardless of whether artifacts were produced — the effect is cheap.
+      setArtifactsVersion((v) => v + 1)
+      if (resolvedThreadId != null && response.assistantMessage.artifacts && response.assistantMessage.artifacts.length > 0) {
+        setAiView('files')
+      }
       track(ANALYTICS_EVENT.AI_QUERY_ANSWERED, analyticsContext({
         answer_kind: response.assistantMessage.answerKind ?? null,
         query_kind: queryKind,
@@ -1509,18 +1616,28 @@ export default function Insights() {
     setThreadPickerOpen(false)
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const threadId = Number(params.get('threadId'))
+    const artifactId = Number(params.get('artifactId'))
+    if (!Number.isFinite(threadId) || threadId <= 0) return
+
+    const routeKey = `${threadId}:${Number.isFinite(artifactId) && artifactId > 0 ? artifactId : 'none'}`
+    if (routedReportKeyRef.current === routeKey) return
+    routedReportKeyRef.current = routeKey
+
+    void (async () => {
+      const refreshed = await ipc.ai.listThreads({ includeArchived: false }).catch(() => null)
+      if (refreshed) setThreads(refreshed)
+      await loadThread(threadId)
+      if (Number.isFinite(artifactId) && artifactId > 0) {
+        const loaded = await ipc.ai.getArtifact(artifactId).catch(() => null)
+        if (loaded) setArtifactPreview({ record: loaded.record, content: loaded.content })
+      }
+    })()
+  }, [location.search])
+
   const defaultSummary = summaryText(today)
-  const defaultChips = starterPrompts(today)
-  const focusChips = activeFocusSession
-    ? [
-        'Stop my current focus session',
-        'Review my last focus session',
-      ]
-    : [
-        'Start a 45 minute focus session for what I am doing now',
-        'Help me set up a focus session for this work',
-      ]
-  const promptChips = Array.from(new Set([...(heroQuestions.length > 0 ? heroQuestions : defaultChips), ...focusChips])).slice(0, 6)
   const daySummarySignature = today
     ? JSON.stringify({
         date: today.date,
@@ -1562,7 +1679,6 @@ export default function Insights() {
   async function handleGenerateHeroSummary() {
     if (!today || !hasApiKey || today.totalSeconds === 0) {
       setHeroSummary(defaultSummary)
-      setHeroQuestions([])
       setHeroSummarySignature(null)
       setHeroSummaryLoading(false)
       return
@@ -1573,7 +1689,6 @@ export default function Insights() {
     try {
       const result = await ipc.ai.generateDaySummary(today.date)
       setHeroSummary(result.summary.trim() || defaultSummary)
-      setHeroQuestions(result.questionSuggestions.length > 0 ? result.questionSuggestions : [])
       setHeroSummarySignature(daySummarySignature)
       track(ANALYTICS_EVENT.AI_SUMMARY_GENERATED, analyticsContext({
         answer_kind: 'day_summary_style',
@@ -1581,7 +1696,6 @@ export default function Insights() {
       }))
     } catch {
       setHeroSummary(defaultSummary)
-      setHeroQuestions([])
       setHeroSummarySignature(daySummarySignature)
     } finally {
       setHeroSummaryLoading(false)
@@ -1590,7 +1704,6 @@ export default function Insights() {
 
   useEffect(() => {
     setHeroSummary('')
-    setHeroQuestions([])
     setHeroSummaryLoading(false)
     setHeroSummarySignature(null)
   }, [hasApiKey, todayDateKey])
@@ -1616,21 +1729,116 @@ export default function Insights() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ padding: '32px 40px 20px', maxWidth: 960, margin: '0 auto', width: '100%', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ order: 2, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 24 }}>
-            <div>
-              <h1 style={{ fontSize: 30, fontWeight: 780, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)' }}>
-                AI
-              </h1>
-              <p style={{ fontSize: 13.5, color: 'var(--color-text-secondary)', margin: '6px 0 0' }}>
-                {todayLabel}
-              </p>
-              {activeThreadLabel && (
-                <p style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
-                  In <span style={{ color: 'var(--color-text-secondary)' }}>{activeThreadLabel}</span>
-                </p>
+          {/* Files view — shown when aiView === 'files' */}
+          {aiView === 'files' && (
+            <div style={{ order: 10 }}>
+              {artifacts.length === 0 ? (
+                <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 13.5 }}>
+                  No generated files yet. Ask Daylens for a report, CSV export, or chart.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {artifacts.map((artifact) => (
+                    <div
+                      key={artifact.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: '12px 14px',
+                        borderRadius: 12,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface)',
+                      }}
+                    >
+                      <div style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 9,
+                        background: `${artifactAccentColor(artifact)}18`,
+                        border: `1px solid ${artifactAccentColor(artifact)}30`,
+                        color: artifactAccentColor(artifact),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <IconArtifactFile kind={artifact.kind} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {artifact.title}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                          {artifact.kind.replace('_', ' ')} · {Math.max(1, Math.round(artifact.byteSize / 1024))} KB
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const loaded = await ipc.ai.getArtifact(artifact.id)
+                            if (loaded) setArtifactPreview({ record: loaded.record, content: loaded.content })
+                          }}
+                          style={{ padding: '5px 10px', fontSize: 11.5, fontWeight: 600, borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
+                        >Preview</button>
+                        <button
+                          type="button"
+                          onClick={() => void ipc.ai.openArtifact(artifact.id)}
+                          style={{ padding: '5px 10px', fontSize: 11.5, fontWeight: 600, borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
+                        >Open</button>
+                        <button
+                          type="button"
+                          onClick={() => void ipc.ai.exportArtifact(artifact.id)}
+                          style={{ padding: '5px 10px', fontSize: 11.5, fontWeight: 600, borderRadius: 7, border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
+                        >Export</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {artifactPreview && (
+                <div style={{ marginTop: 16, border: '1px solid var(--color-border-ghost)', borderRadius: 12, background: 'var(--color-surface)', padding: 14, maxHeight: 380, overflow: 'auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{artifactPreview.record.title}</div>
+                    <button type="button" onClick={() => setArtifactPreview(null)} style={{ fontSize: 11, fontWeight: 700, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}>Close</button>
+                  </div>
+                  {artifactPreview.record.kind === 'html_chart' ? (
+                    <iframe title={artifactPreview.record.title} srcDoc={artifactPreview.content ?? ''} sandbox="" style={{ width: '100%', height: 280, border: 'none', borderRadius: 8, background: 'white' }} />
+                  ) : (
+                    <pre style={{ margin: 0, fontSize: 11.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-primary)' }}>
+                      {artifactPreview.content ?? '(file not available on disk)'}
+                    </pre>
+                  )}
+                </div>
               )}
             </div>
-            <div style={{ position: 'relative', display: 'flex', gap: 8 }}>
+          )}
+          <div style={{ order: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 32,
+                height: 32,
+                borderRadius: 9,
+                background: 'var(--gradient-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--color-primary-contrast)',
+                flexShrink: 0,
+              }}>
+                <IconSparkle size={15} />
+              </div>
+              <div>
+                <h1 style={{ fontSize: 15, fontWeight: 720, letterSpacing: '-0.01em', margin: 0, color: 'var(--color-text-primary)', lineHeight: 1.3 }}>
+                  {activeThreadLabel ?? 'Ask Daylens'}
+                </h1>
+                <p style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', margin: '2px 0 0', lineHeight: 1 }}>
+                  {todayLabel}
+                </p>
+              </div>
+            </div>
+            <div style={{ position: 'relative', display: 'flex', gap: 6, alignItems: 'center' }}>
               {threads.length > 0 && (
                 <button
                   type="button"
@@ -1640,37 +1848,82 @@ export default function Insights() {
                     setThreadPickerFocusIdx(0)
                   }}
                   style={{
-                    padding: '7px 12px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '6px 10px',
                     borderRadius: 8,
                     border: '1px solid var(--color-border-ghost)',
-                    background: 'var(--color-surface)',
+                    background: threadPickerOpen ? 'var(--color-surface-high)' : 'var(--color-surface)',
                     color: 'var(--color-text-secondary)',
                     fontSize: 12,
-                    fontWeight: 700,
+                    fontWeight: 600,
                     cursor: 'pointer',
                   }}
-                  title={activeThreadLabel ?? 'Browse recent chats'}
+                  title="Browse recent chats"
                   aria-haspopup="listbox"
                   aria-expanded={threadPickerOpen}
                 >
-                  Chats
+                  History
+                  <IconChevronDown />
                 </button>
               )}
               <button
                 type="button"
+                onClick={() => setAiView((v) => v === 'files' ? 'chat' : 'files')}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: aiView === 'files' ? 'var(--color-accent-dim)' : 'var(--color-surface)',
+                  color: aiView === 'files' ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+                title="Generated files"
+              >
+                Files
+                {artifacts.length > 0 && (
+                  <span style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    background: aiView === 'files' ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
+                    color: 'var(--color-primary-contrast)',
+                    borderRadius: 999,
+                    minWidth: 16,
+                    height: 16,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '0 4px',
+                  }}>
+                    {artifacts.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => { void handleNewChat() }}
                 style={{
-                  padding: '7px 12px',
+                  width: 30,
+                  height: 30,
+                  padding: 0,
                   borderRadius: 8,
                   border: '1px solid var(--color-border-ghost)',
                   background: 'var(--color-surface)',
                   color: 'var(--color-text-secondary)',
-                  fontSize: 12,
-                  fontWeight: 700,
                   cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
+                title="New chat"
               >
-                New chat
+                <IconCompose />
               </button>
               {threadPickerOpen && threads.length > 0 && (
                 <>
@@ -1820,7 +2073,7 @@ export default function Insights() {
             </div>
           </div>
 
-          <div style={{ order: 1, marginBottom: 20 }}>
+          {aiView === 'chat' && <div style={{ order: 1, marginBottom: 20 }}>
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={{
                 display: 'flex',
@@ -1924,9 +2177,9 @@ export default function Insights() {
                 </div>
               )}
             </div>
-          </div>
+          </div>}
 
-          {messages.length === 0 && (
+          {messages.length === 0 && aiView === 'chat' && (
             <div style={{ order: 3 }}>
               <RecapPanel
                 recap={recapSummaries}
@@ -1938,7 +2191,7 @@ export default function Insights() {
             </div>
           )}
 
-          {!hasApiKey && (
+          {!hasApiKey && aiView === 'chat' && (
             <div style={{ order: 4, marginBottom: 20 }}>
               <ConnectAI
                 variant="hero"
@@ -1954,7 +2207,7 @@ export default function Insights() {
             </div>
           )}
 
-          {hasApiKey && (
+          {(hasApiKey || messages.length > 0) && aiView === 'chat' && (
             <div style={{ order: 5, display: 'grid', gap: 20 }}>
               {messages.length === 0 && (
                 <>
@@ -2005,42 +2258,11 @@ export default function Insights() {
                     </div>
                   </div>
 
-                  <div>
-                    <div style={{
-                      fontSize: 10.5,
-                      fontWeight: 800,
-                      letterSpacing: '0.10em',
-                      textTransform: 'uppercase',
-                      color: 'var(--color-text-tertiary)',
-                      marginBottom: 10,
-                    }}>
-                      Ask Daylens
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {promptChips.map((chip) => (
-                        <button
-                          key={chip}
-                          onClick={() => handlePromptChipClick(chip, heroQuestions.length > 0 && heroQuestions.includes(chip) ? 'summary_card' : 'default_chip')}
-                          style={{
-                            padding: '8px 14px',
-                            borderRadius: 999,
-                            border: '1px solid var(--color-border-ghost)',
-                            background: 'transparent',
-                            color: 'var(--color-text-secondary)',
-                            cursor: 'pointer',
-                            fontSize: 12.5,
-                          }}
-                        >
-                          {chip}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </>
               )}
 
               {messages.length > 0 && (
-                <div style={{ display: 'grid', gap: 16 }}>
+                <div style={{ display: 'grid', gap: 24 }}>
                   {messages.map((message, index) => (
                     message.role === 'user' ? (
                       <div key={message.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -2060,28 +2282,8 @@ export default function Insights() {
                       <div
                         key={message.id}
                         style={{ display: 'flex', gap: 10, alignItems: 'start' }}
-                        onMouseEnter={() => setHoveredMessageId(message.id != null ? String(message.id) : null)}
-                        onMouseLeave={() => setHoveredMessageId(null)}
                       >
-                        <div style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: 6,
-                          border: '1px solid var(--color-border-ghost)',
-                          background: 'transparent',
-                          color: 'var(--color-text-tertiary)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 10,
-                          fontWeight: 800,
-                          flexShrink: 0,
-                          marginTop: 2,
-                          opacity: hoveredMessageId === String(message.id) ? 1 : 0,
-                          transition: 'opacity 120ms ease',
-                        }}>
-                          D
-                        </div>
+                        <div style={{ width: 22, flexShrink: 0 }} />
                         <div style={{
                           flex: 1,
                           maxWidth: 680,
@@ -2094,15 +2296,8 @@ export default function Insights() {
                           } : {}),
                         }}>
                           {message.state === 'pending' ? (
-                            message.content.trim()
-                              ? (
-                                  <>
-                                    <MarkdownMessage content={message.content} />
-                                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                                      Thinking…
-                                    </div>
-                                  </>
-                                )
+                            (message.content.trim() || streamedContentIdsRef.current.has(message.id))
+                              ? <MarkdownMessage content={message.content} />
                               : (
                                   <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
                                     Thinking…
@@ -2263,59 +2458,43 @@ export default function Insights() {
                               {(message.artifacts?.length ?? 0) > 0 && (
                                 <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
                                   {message.artifacts?.map((artifact) => (
-                                    <div
+                                    <button
                                       key={`${message.id}:${artifact.id}`}
+                                      type="button"
+                                      onClick={() => void ipc.shell.openPath(artifact.path)}
                                       style={{
-                                        borderRadius: 12,
-                                        border: '1px solid var(--color-border-ghost)',
-                                        background: 'var(--color-surface-low)',
-                                        padding: 12,
                                         display: 'flex',
                                         alignItems: 'center',
-                                        justifyContent: 'space-between',
-                                        gap: 12,
-                                        flexWrap: 'wrap',
+                                        gap: 10,
+                                        padding: '10px 12px',
+                                        borderRadius: 10,
+                                        border: '1px solid var(--color-border-ghost)',
+                                        background: 'var(--color-surface)',
+                                        cursor: 'pointer',
+                                        textAlign: 'left',
+                                        width: '100%',
                                       }}
                                     >
-                                      <div style={{ minWidth: 0, flex: 1 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                                            {artifact.title}
-                                          </span>
-                                          <span style={{
-                                            borderRadius: 999,
-                                            padding: '3px 8px',
-                                            background: 'var(--color-surface)',
-                                            color: 'var(--color-text-secondary)',
-                                            fontSize: 11,
-                                            fontWeight: 700,
-                                          }}>
-                                            {artifactFormatLabel(artifact)}
-                                          </span>
-                                        </div>
-                                        {artifact.subtitle && (
-                                          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
-                                            {artifact.subtitle}
+                                      {(() => {
+                                        const color = artifact.format === 'csv' ? '#16a34a' : artifact.format === 'html' ? '#7c3aed' : artifact.format === 'json' ? '#f59e0b' : '#2563eb'
+                                        return (
+                                          <div style={{ width: 34, height: 34, borderRadius: 8, background: `${color}15`, border: `1px solid ${color}28`, color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                            <IconArtifactFile kind={artifact.format === 'csv' ? 'csv' : artifact.format === 'html' ? 'html_chart' : 'markdown'} />
                                           </div>
-                                        )}
+                                        )
+                                      })()}
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          {artifact.title}
+                                        </div>
+                                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                                          {artifactFormatLabel(artifact)} · click to open
+                                        </div>
                                       </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => { void ipc.shell.openPath(artifact.path) }}
-                                        style={{
-                                          padding: '8px 12px',
-                                          borderRadius: 9,
-                                          border: '1px solid var(--color-border-ghost)',
-                                          background: 'var(--color-surface)',
-                                          color: 'var(--color-text-primary)',
-                                          fontSize: 12.5,
-                                          fontWeight: 700,
-                                          cursor: 'pointer',
-                                        }}
-                                      >
-                                        Open
-                                      </button>
-                                    </div>
+                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+                                        <path d="M2 12L12 2M7 2h5v5" />
+                                      </svg>
+                                    </button>
                                   ))}
                                 </div>
                               )}
@@ -2421,108 +2600,6 @@ export default function Insights() {
         </div>
       </div>
 
-      {artifacts.length > 0 && (
-        <div style={{
-          borderTop: '1px solid var(--color-border-ghost)',
-          background: 'var(--color-bg)',
-          padding: '10px 40px',
-        }}>
-          <div style={{ maxWidth: 960, margin: '0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-              Artifacts
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {artifacts.map((artifact) => (
-                <div
-                  key={artifact.id}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    border: '1px solid var(--color-border-ghost)',
-                    background: 'var(--color-surface)',
-                    minWidth: 160,
-                    maxWidth: 280,
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {artifact.title}
-                  </div>
-                  <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
-                    {artifact.kind.replace('_', ' ')} · {Math.max(1, Math.round(artifact.byteSize / 1024))} KB
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const loaded = await ipc.ai.getArtifact(artifact.id)
-                        if (loaded) setArtifactPreview({ record: loaded.record, content: loaded.content })
-                      }}
-                      style={{
-                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
-                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
-                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
-                      }}
-                    >Preview</button>
-                    <button
-                      type="button"
-                      onClick={() => void ipc.ai.openArtifact(artifact.id)}
-                      style={{
-                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
-                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
-                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
-                      }}
-                    >Open</button>
-                    <button
-                      type="button"
-                      onClick={() => void ipc.ai.exportArtifact(artifact.id)}
-                      style={{
-                        padding: '3px 8px', fontSize: 11, fontWeight: 700,
-                        borderRadius: 6, border: '1px solid var(--color-border-ghost)',
-                        background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer',
-                      }}
-                    >Export</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {artifactPreview && (
-              <div style={{
-                marginTop: 10,
-                border: '1px solid var(--color-border-ghost)',
-                borderRadius: 10,
-                background: 'var(--color-surface)',
-                padding: 12,
-                maxHeight: 320,
-                overflow: 'auto',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{artifactPreview.record.title}</div>
-                  <button
-                    type="button"
-                    onClick={() => setArtifactPreview(null)}
-                    style={{ fontSize: 11, fontWeight: 700, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}
-                  >Close</button>
-                </div>
-                {artifactPreview.record.kind === 'html_chart' ? (
-                  <iframe
-                    title={artifactPreview.record.title}
-                    srcDoc={artifactPreview.content ?? ''}
-                    sandbox=""
-                    style={{ width: '100%', height: 260, border: 'none', borderRadius: 6, background: 'white' }}
-                  />
-                ) : (
-                  <pre style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--color-text-primary)' }}>
-                    {artifactPreview.content ?? '(file not available on disk)'}
-                  </pre>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {hasApiKey && (
         <div style={{

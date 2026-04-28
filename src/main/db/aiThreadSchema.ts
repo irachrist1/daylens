@@ -1,8 +1,65 @@
 import type Database from 'better-sqlite3'
+import type { AIMessageRating } from '@shared/types'
 
 function hasColumn(db: Database.Database, table: string, column: string): boolean {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
   return rows.some((row) => row.name === column)
+}
+
+function normalizeRating(value: unknown): AIMessageRating | null {
+  return value === 'up' || value === 'down' ? value : null
+}
+
+function parseMetadata(raw: string | null): { rating?: unknown; ratingUpdatedAt?: unknown } {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export function ensureAIMessageFeedbackSchema(db: Database.Database): void {
+  if (!hasColumn(db, 'ai_messages', 'rating')) {
+    db.exec(`ALTER TABLE ai_messages ADD COLUMN rating TEXT CHECK(rating IN ('up', 'down') OR rating IS NULL)`)
+  }
+  if (!hasColumn(db, 'ai_messages', 'rating_updated_at')) {
+    db.exec(`ALTER TABLE ai_messages ADD COLUMN rating_updated_at INTEGER`)
+  }
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_messages_rating ON ai_messages (rating, rating_updated_at DESC)`)
+
+  const rows = db.prepare(`
+    SELECT id, metadata_json AS metadataJson
+    FROM ai_messages
+    WHERE rating IS NULL
+      AND metadata_json IS NOT NULL
+      AND metadata_json != '{}'
+  `).all() as { id: number; metadataJson: string | null }[]
+
+  if (rows.length === 0) return
+
+  const update = db.prepare(`
+    UPDATE ai_messages
+    SET rating = ?, rating_updated_at = ?
+    WHERE id = ?
+      AND rating IS NULL
+  `)
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const metadata = parseMetadata(row.metadataJson)
+      const rating = normalizeRating(metadata.rating)
+      if (!rating) continue
+      const updatedAt = typeof metadata.ratingUpdatedAt === 'number' && Number.isFinite(metadata.ratingUpdatedAt)
+        ? metadata.ratingUpdatedAt
+        : null
+      update.run(rating, updatedAt, row.id)
+    }
+  })
+
+  tx()
 }
 
 export function ensureAIThreadSchema(db: Database.Database): void {
@@ -36,11 +93,15 @@ export function ensureAIThreadSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ai_artifacts_message ON ai_artifacts (message_id);
   `)
 
+  if (!hasColumn(db, 'ai_messages', 'metadata_json')) {
+    db.exec(`ALTER TABLE ai_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`)
+  }
   if (!hasColumn(db, 'ai_messages', 'thread_id')) {
     db.exec(`ALTER TABLE ai_messages ADD COLUMN thread_id INTEGER`)
   }
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_messages_thread ON ai_messages (thread_id, created_at)`)
+  ensureAIMessageFeedbackSchema(db)
 
   const now = Date.now()
   const convs = db

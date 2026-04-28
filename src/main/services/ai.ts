@@ -57,6 +57,7 @@ import {
   createArtifact,
   createThread,
   getThread,
+  listArtifactsByThread,
   renameThread,
   touchThreadLastMessage,
 } from './artifacts'
@@ -76,6 +77,7 @@ import type {
   AIConversationDateRange,
   AIConversationSourceKind,
   AIConversationState,
+  AIDailyReportPreparationResult,
   AIEntityStateSnapshot,
   AIRoutingContextSnapshot,
   AIDaySummaryResult,
@@ -1379,9 +1381,24 @@ function localDateKeyForMs(ms: number): string {
 
 function detectRequestedOutputKinds(question: string): RequestedOutputKind[] {
   const normalized = question.toLowerCase()
+
+  // Explicit negation: user wants in-chat display only, no artifact files.
+  if (
+    /\bnot\s+(?:a\s+)?(?:file|download|artifact)\b/.test(normalized)
+    || /\bno\s+(?:file|download|artifact)\b/.test(normalized)
+    || /\bwithout\s+(?:a\s+)?(?:file|download|saving)\b/.test(normalized)
+    || /\bin(?:\s+the)?\s+chat\s+only\b/.test(normalized)
+    || /\bdon'?t\s+(?:save|create|make|generate)\s+(?:a\s+)?(?:file|download|artifact)\b/.test(normalized)
+  ) {
+    return []
+  }
+
   const kinds = new Set<RequestedOutputKind>()
 
-  if (/\bcsv\b|\btable\b|\bspreadsheet\b|\bline items\b/.test(normalized)) {
+  if (
+    /\bcsv\b|\bspreadsheet\b|\bline items\b/.test(normalized)
+    || (/\btable\b/.test(normalized) && /\bexport\b|\bdownload\b|\bsave\b/.test(normalized))
+  ) {
     kinds.add('table')
   }
   if (/\bchart\b|\bgraph\b|\bplot\b/.test(normalized)) {
@@ -1390,8 +1407,8 @@ function detectRequestedOutputKinds(question: string): RequestedOutputKind[] {
   if (
     /\breport\b/.test(normalized)
     || /short report i could share/.test(normalized)
-    || /something i can send/.test(normalized)
-    || /shareable/.test(normalized)
+    || (/something i can send/.test(normalized) && /\breport\b|\bexport\b/.test(normalized))
+    || (/\bshareable\b/.test(normalized) && /\breport\b|\bexport\b/.test(normalized))
   ) {
     kinds.add('report')
   }
@@ -2300,7 +2317,24 @@ function sanitizeConversationHistory(history: AIThreadMessage[]): { role: 'user'
   while (prior.length > 0 && prior[prior.length - 1].role === 'user') {
     prior.pop()
   }
-  return prior.map((message) => ({
+  // Strip user+assistant pairs where the assistant content is empty.
+  // Keeping empty assistant messages would corrupt the alternation pattern
+  // and cause some providers to return an empty response.
+  const sanitized: AIThreadMessage[] = []
+  let i = 0
+  while (i < prior.length) {
+    const msg = prior[i]
+    if (msg.role === 'user') {
+      const next = prior[i + 1]
+      if (next?.role === 'assistant' && !next.content.trim()) {
+        i += 2
+        continue
+      }
+    }
+    sanitized.push(msg)
+    i++
+  }
+  return sanitized.map((message) => ({
     role: message.role,
     content: message.content,
   }))
@@ -2501,13 +2535,13 @@ function buildAssistantMetadata(
   }
 }
 
-function persistChatTurn(
+async function persistChatTurn(
   db: ReturnType<typeof getDb>,
   conversationId: number,
   userMessage: string,
   envelope: AnswerEnvelope,
   threadId: number | null = null,
-): AIChatTurnResult {
+): Promise<AIChatTurnResult> {
   const userEntry = appendConversationMessage(db, conversationId, 'user', userMessage, { threadId })
   const assistantEntry = appendConversationMessage(
     db,
@@ -2534,7 +2568,7 @@ function persistChatTurn(
     queueWeakThreadTitleUpgrade(threadId, userMessage, envelope)
     // Also persist AIMessageArtifact entries into the durable ai_artifacts table.
     if (envelope.artifacts && envelope.artifacts.length > 0) {
-      void persistMessageArtifacts(threadId, assistantEntry.id, envelope.artifacts)
+      await persistMessageArtifacts(threadId, assistantEntry.id, envelope.artifacts)
     }
   }
   return {
@@ -2566,10 +2600,8 @@ function maybeRenameWeakThread(
 
 function queueWeakThreadTitleUpgrade(threadId: number, userMessage: string, envelope: AnswerEnvelope): void {
   const context = threadTitleContextFromEnvelope(envelope)
-  setTimeout(() => {
-    const currentTitle = getThread(threadId)?.title ?? null
-    maybeRenameWeakThread(threadId, currentTitle, userMessage, context)
-  }, 0)
+  const currentTitle = getThread(threadId)?.title ?? null
+  maybeRenameWeakThread(threadId, currentTitle, userMessage, context)
 }
 
 function mapMessageArtifactKind(
@@ -2995,10 +3027,89 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   }
 }
 
+function buildDayReportContentLens(
+  payload: DayTimelinePayload,
+  dayAttribution: ReturnType<typeof resolveDayContext>,
+): Record<string, unknown> {
+  const categorySeconds = new Map<string, number>()
+  const appSeconds = new Map<string, number>()
+  const artifactTitles = new Set<string>()
+  const pageTitles = new Set<string>()
+  const workflows = new Set<string>()
+  const clientSeconds = new Map<string, number>()
+  const projectSeconds = new Map<string, number>()
+
+  for (const block of payload.blocks) {
+    const durationSeconds = blockDurationSeconds(block)
+    categorySeconds.set(block.dominantCategory, (categorySeconds.get(block.dominantCategory) ?? 0) + durationSeconds)
+    for (const app of block.topApps.slice(0, 5)) {
+      appSeconds.set(app.appName, (appSeconds.get(app.appName) ?? 0) + app.totalSeconds)
+    }
+    for (const artifact of block.topArtifacts.slice(0, 4)) artifactTitles.add(artifact.displayTitle)
+    for (const page of block.pageRefs.slice(0, 4)) {
+      const title = page.pageTitle ?? page.displayTitle
+      if (title) pageTitles.add(title)
+    }
+    for (const workflow of block.workflowRefs.slice(0, 3)) workflows.add(workflow.label)
+  }
+
+  for (const session of dayAttribution.sessions) {
+    if (session.client?.name) {
+      clientSeconds.set(session.client.name, (clientSeconds.get(session.client.name) ?? 0) + Math.round(session.active_ms / 1000))
+    }
+    if (session.project?.name) {
+      projectSeconds.set(session.project.name, (projectSeconds.get(session.project.name) ?? 0) + Math.round(session.active_ms / 1000))
+    }
+  }
+
+  const ranked = (map: Map<string, number>, limit: number) => [...map.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, limit)
+    .map(([name, seconds]) => ({ name, duration: formatDuration(seconds) }))
+
+  const topCategories = ranked(categorySeconds, 4)
+  const hasNamedAttribution = clientSeconds.size > 0 || projectSeconds.size > 0
+  const primaryCategory = topCategories[0]?.name ?? null
+  const dayShape = hasNamedAttribution
+    ? 'client_or_project_delivery'
+    : primaryCategory === 'development'
+      ? 'development_or_technical_work'
+      : primaryCategory === 'writing'
+        ? 'writing_or_document_work'
+        : primaryCategory === 'communication'
+          ? 'communication_or_coordination'
+          : primaryCategory === 'research'
+            ? 'research_or_learning'
+            : 'mixed_work'
+
+  return {
+    dayShape,
+    instruction:
+      'Use this as a temporary lens for this report only. Do not store or imply a permanent user role from one day.',
+    topCategories,
+    topApps: ranked(appSeconds, 6),
+    namedClients: ranked(clientSeconds, 6),
+    namedProjects: ranked(projectSeconds, 6),
+    namedArtifacts: [...artifactTitles].slice(0, 10),
+    namedPages: [...pageTitles].slice(0, 10),
+    workflows: [...workflows].slice(0, 8),
+    confidenceNotes: [
+      hasNamedAttribution
+        ? 'Named client/project sections may be emphasized because structured attribution exists for today.'
+        : 'No strong structured client/project attribution exists for today; avoid consultant-specific framing unless the block evidence itself supports it.',
+      'If the day looks mixed, write the report around the content shifts instead of forcing one role.',
+    ],
+  }
+}
+
 function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
   const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
   if (payload.totalSeconds <= 0) return null
+  const settings = getSettings()
+  const personalizationEnabled = settings.aiReportPersonalizationEnabled === true
+  const dayAttribution = resolveDayContext(dateStr, getDb())
+  const contentLens = buildDayReportContentLens(payload, dayAttribution)
 
   const categoryRows = Array.from(payload.blocks.reduce<Map<string, number>>((map, block) => {
     const durationSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
@@ -3010,7 +3121,34 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
   return {
     title: `Day report ${dateStr}`,
     scopeLabel: dateStr,
-    assistantScaffold: buildDaySummaryScaffold(payload),
+    assistantScaffold: [
+      buildDaySummaryScaffold(payload),
+      '',
+      'Day report lens (JSON):',
+      JSON.stringify({
+        personalization: {
+          enabled: personalizationEnabled,
+          rule: personalizationEnabled
+            ? 'Use profile signals only as light emphasis after the evidence; never override what the day actually contains.'
+            : 'Personalization is off. Do not infer a durable user role or identity; adapt only to today\'s content.',
+        },
+        contentLens,
+        attribution: {
+          summary: dayAttribution.day_summary,
+          namedSessions: dayAttribution.sessions.slice(0, 12).map((session) => ({
+            start: session.start,
+            end: session.end,
+            active_ms: session.active_ms,
+            client: session.client?.name ?? null,
+            project: session.project?.name ?? null,
+            confidence: session.confidence,
+            apps: session.apps.slice(0, 4).map((app) => app.app_name),
+            evidence: session.evidence.slice(0, 4).map((item) => item.value),
+          })),
+          ambiguousSegments: dayAttribution.ambiguous_segments.slice(0, 6),
+        },
+      }, null, 2),
+    ].join('\n'),
     reportMarkdownScaffold: '',
     tableColumns: ['start', 'end', 'block', 'category', 'apps', 'artifacts', 'duration'],
     tableRows: payload.blocks.slice(0, 16).map((block) => ({
@@ -3407,7 +3545,12 @@ async function maybeGenerateRequestedOutput(params: {
     'Use only the facts in the scaffold below.',
     'Return strict JSON with keys "assistantResponse", "reportTitle", and "reportMarkdown".',
     '"assistantResponse" should be 1-3 short paragraphs for the in-app chat card.',
-    '"reportMarkdown" should be concise, grounded Markdown that can stand alone as a sendable report.',
+    '"reportMarkdown" should read like a thoughtful human reviewed the day with care: specific, calm, useful, and grounded.',
+    'Write in second person. Avoid motivational fluff, vanity-dashboard language, and generic productivity claims.',
+    'Lead with what the day was actually about, then support that read with concrete apps, blocks, artifacts, pages, clients, or projects from the scaffold.',
+    'Treat any day-shape or profile hint as a temporary lens for this report only. Content comes first; do not imply a permanent user role.',
+    'If structured client or project attribution exists, surface it naturally. If it does not, do not force consultant framing.',
+    'Use "looks like" or "suggests" where the evidence is interpretive or attribution is weak.',
     'If tables or charts are requested, assume CSV and HTML companion files will be generated from the deterministic rows provided.',
     'Do not invent extra files, numbers, titles, artifacts, or projects beyond the scaffold.',
   ].join(' ')
@@ -3978,7 +4121,7 @@ async function routerProsePass(
     'Mention specific names and numbers that appear in the data. ' +
     'Do not invent anything not in the data. ' +
     'Keep it conversational, not robotic. ' +
-    'Open by naming the evidence type (e.g. "From your app sessions...", "From your tracked data...", "Based on your window titles..."). ' +
+    'Weave evidence type naturally into the answer when it adds clarity — do not open with a boilerplate prefix like "From your app sessions...". ' +
     'Never claim the user was editing, writing, or paying attention — only that an app or window was open.'
 
   try {
@@ -4202,8 +4345,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       'You can call multiple tools to piece together a complete answer.\n' +
       'Synthesize tool results into a conversational answer — do not recite raw data. Tell the story.\n' +
       'Grounding rule: only mention a file, doc, repo, or project name if it appears verbatim in tool results.\n' +
-      'Evidence-type rule: every answer must open by naming the evidence type. ' +
-      'Examples: "From your window titles today...", "Based on the pages you visited...", "From your app sessions...". ' +
+      'Evidence-type rule: weave evidence type naturally into the answer when it adds clarity (e.g. "your window titles showed...", "based on your app sessions...") — do not open every answer with a boilerplate evidence prefix. ' +
       'Never write "you edited X" or "you worked on Y" — the data shows foreground time and window-title strings, not edits or intent. ' +
       'Use "you had X open" or "your window title read Y" instead.\n' +
       'Capture contract — what Daylens DOES capture: foreground app sessions (app name, bundle ID, window title, duration), website visits (URL, page title, estimated duration), idle/away/suspend state, focus sessions, reconstructed timeline blocks, AI artifacts Daylens itself generated.\n' +
@@ -4222,7 +4364,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     assistantText = chatProvider === 'anthropic'
       ? await runAnthropicToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
       : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
-    assistantText = ensureEvidenceLead(assistantText)
+    assistantText = assistantText.trim()
   } else {
     // Legacy static-context path — Google and CLI providers
     const now = new Date()
@@ -4261,8 +4403,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       `- If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(preferredConfig.provider)} (${preferredConfig.model}).\n` +
       '- If the data genuinely doesn\'t answer the question, say so plainly and offer what you can infer.\n' +
       '- For recommendations, keep them concrete and tied to observed patterns — not generic productivity advice.\n' +
-      '- Evidence-type rule: every answer must open by naming the evidence type. ' +
-      'Examples: "From your window titles today...", "Based on the pages you visited...", "From your app sessions this week...". ' +
+      '- Evidence-type rule: weave evidence type naturally into the answer when it adds clarity (e.g. "your window titles showed...", "based on your app sessions...") — do not open every answer with a boilerplate evidence prefix. ' +
       'Never write "you edited X" or "you worked on Y" — the data shows foreground time and window-title strings, not edits or intent. ' +
       'Use "you had X open" or "your window title read Y" instead.\n' +
       '- Capture contract — Daylens DOES capture: foreground app sessions (app name, bundle ID, window title, duration), website visits (URL, page title, estimated duration), idle/away/suspend state, focus sessions, reconstructed timeline blocks, AI artifacts it generated.\n' +
@@ -4291,7 +4432,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       sendWithProvider,
       { onDelta: (delta) => stream.push(delta) },
     )
-    assistantText = ensureEvidenceLead(text)
+    assistantText = text.trim()
     await stream.streamText(assistantText)
   }
 
@@ -4332,6 +4473,58 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     conversationState,
     suggestedFollowUps,
   }, threadId)
+}
+
+export async function prepareDailyReport(dateStr = currentLocalDateString()): Promise<AIDailyReportPreparationResult> {
+  try {
+    const bundle = buildDayReportBundle(dateStr)
+    if (!bundle) {
+      return {
+        date: dateStr,
+        threadId: null,
+        artifactId: null,
+        prepared: false,
+        status: 'no_activity',
+      }
+    }
+
+    const thread = createThread(`Day report ${dateStr}`)
+    await sendMessage({
+      message: dateStr === currentLocalDateString()
+        ? 'Draft a report for today.'
+        : `Draft a report for ${dateStr}.`,
+      threadId: thread.id,
+    })
+
+    let artifactId: number | null = null
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const reportArtifact = listArtifactsByThread(thread.id)
+        .find((artifact) => artifact.kind === 'report' || artifact.kind === 'markdown')
+      if (reportArtifact) {
+        artifactId = reportArtifact.id
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    return {
+      date: dateStr,
+      threadId: thread.id,
+      artifactId,
+      prepared: true,
+      status: 'ready',
+    }
+  } catch (error) {
+    console.warn(`[ai] failed to prepare daily report for ${dateStr}:`, error)
+    return {
+      date: dateStr,
+      threadId: null,
+      artifactId: null,
+      prepared: false,
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 export function getAIHistory(threadId?: number | null): AIThreadMessage[] {

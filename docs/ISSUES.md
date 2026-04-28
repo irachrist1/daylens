@@ -1,6 +1,6 @@
 # Issues
 
-Status captured from a code-first audit on 2026-04-23.
+Status last updated 2026-04-28 (v1.0.33 release). Prior audit: 2026-04-23.
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -24,9 +24,14 @@ This file is the implementation-status ledger. Items below are separated into co
 
 ### AI Surface
 
-- Desktop AI supports starter prompts, freeform chat, deterministic routing before LLM fallback, streaming, retry/copy/rating controls, focus-session actions, persistent local threads, and local artifacts (`src/main/services/ai.ts:3715-3993`, `src/main/services/artifacts.ts:24-170`, `src/main/services/artifacts.ts:261-408`, `src/renderer/views/Insights.tsx:787-804`, `src/renderer/views/Insights.tsx:957-965`, `src/renderer/views/Insights.tsx:1083-1372`, `src/renderer/views/Insights.tsx:1608-1715`).
+- Desktop AI supports starter prompts, freeform chat, deterministic routing before LLM fallback, streaming, retry/copy/rating controls, focus-session actions, persistent local threads, queryable message ratings, and local artifacts (`src/main/services/ai.ts:3715-3993`, `src/main/db/aiThreadSchema.ts:23-63`, `src/main/db/queries.ts:1320-1374`, `src/main/services/artifacts.ts:24-170`, `src/main/services/artifacts.ts:261-408`, `src/renderer/views/Insights.tsx:787-804`, `src/renderer/views/Insights.tsx:957-965`, `src/renderer/views/Insights.tsx:1083-1372`, `src/renderer/views/Insights.tsx:1608-1715`).
 - AI orchestration is centralized in the main process with per-job routing, provider fallback, prompt redaction, and usage telemetry (`src/main/services/aiOrchestration.ts:54-185`, `src/main/services/aiOrchestration.ts:245-474`).
 - The MCP server is bundled in this repo under `packages/mcp-server/` and exposed from Settings as an opt-in local stdio integration for MCP clients. It reuses the AI tool schemas and opens the local Daylens SQLite database read-only (`packages/mcp-server/src/index.ts:1-67`, `src/main/services/mcpServer.ts:19-57`, `src/renderer/views/Settings.tsx:1348-1428`).
+- Follow-up suggestion chips are validated through a two-stage filter: deterministic candidates use a grammar-word stop list to reject garbage router topics, and Haiku-generated candidates must name a real entity from the answer text (`src/main/lib/followUpSuggestions.ts`).
+- Conversation history is sanitized before being sent to the provider: user+assistant pairs where the assistant content is empty are stripped to prevent providers from returning empty responses on follow-up turns (`src/main/services/ai.ts:sanitizeConversationHistory`).
+- Files tab auto-refreshes after every completed turn using a dedicated `artifactsVersion` counter, and auto-switches to the Files view when a turn produces artifacts (`src/renderer/views/Insights.tsx:~1026,~1163`).
+- Thread titles no longer echo single-word greetings: `deriveTitleFromMessage` returns `"New chat"` for greeting messages and the first substantive message renames the thread synchronously before `listThreads` is called (`src/main/lib/threadTitles.ts`, `src/main/services/ai.ts:4152`).
+- Thinking… indicator is guarded against re-appearing once streaming content has started, using a message-ID ref set populated by the stream handler (`src/renderer/views/Insights.tsx:streamedContentIdsRef`).
 
 ### Settings And Sync Controls
 
@@ -46,8 +51,10 @@ This file is the implementation-status ledger. Items below are separated into co
 These features exist in code and, in several cases, have focused test coverage, but this audit did not re-prove them end-to-end in real runtime use.
 
 - Provider-backed chat quality and failure handling across supported desktop AI providers.
+- Default-on redacted AI feedback example sharing is implemented in desktop code and the paired `daylens-web` Convex backend, but live deployed ingest and admin export have not been verified (`src/main/services/aiFeedbackUpload.ts`, `/Users/tonny/Dev-Personal/daylens-web/convex/aiFeedback.ts`, `/Users/tonny/Dev-Personal/daylens-web/convex/http.ts`).
 - Week review and app narrative usefulness in live user conditions (`src/main/services/aiOrchestration.ts:91-108`, `src/renderer/views/Timeline.tsx:886-890`, `src/renderer/views/Apps.tsx:217-245`).
-- Report/export artifact generation and downstream open/share flows on packaged apps.
+- Report/export artifact generation and downstream open/share flows on packaged apps (Files tab refresh fix ships in v1.0.33 — still needs packaged validation).
+- Follow-up suggestion chip quality across varied response types and providers (Haiku prompt rewrite ships in v1.0.33 — needs live validation).
 - Focus-session start/stop/review flows from AI messages in normal usage (`src/renderer/views/Insights.tsx:1229-1282`).
 - Linked remote freshness, stale-state UX, and session-repair behavior under real multi-device use (`src/main/services/syncUploader.ts:232-284`).
 - Packaged runtime validation across macOS, Windows, and Linux.

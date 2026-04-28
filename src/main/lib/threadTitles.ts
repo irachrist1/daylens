@@ -17,6 +17,18 @@ const GENERIC_TITLES = new Set([
   'chat',
   'thread',
   'conversation',
+  'hi',
+  'hey',
+  'hello',
+  'sup',
+  'yo',
+  'ok',
+  'okay',
+  'sure',
+  'thanks',
+  'thank you',
+  'yes',
+  'no',
 ])
 
 const WEAK_TITLE_PREFIXES = [
@@ -182,6 +194,10 @@ export function isWeakThreadTitle(title: string | null | undefined): boolean {
 export function deriveTitleFromMessage(message: string, context?: ThreadTitleContext): string {
   const normalized = collapseWhitespace(message)
   if (!normalized) return DEFAULT_THREAD_TITLE
+
+  // Single-word greetings/fillers can't produce a meaningful title.
+  // Return the default so the next real message can rename the thread.
+  if (GENERIC_TITLES.has(normalized.toLowerCase())) return DEFAULT_THREAD_TITLE
 
   const intentTitle = intentTitleFromPrompt(normalized) ?? intentTitleFromContext(context)
   if (intentTitle) return trimTitle(titleCase(intentTitle))
