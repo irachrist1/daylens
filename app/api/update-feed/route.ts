@@ -6,6 +6,8 @@ import {
 
 const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
 const PRODUCTION_BASE_PATH = "/daylens";
+const MIN_SIGNED_WINDOWS_VERSION =
+  process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.35";
 
 function publicOrigin(request: NextRequest): string {
   const configured =
@@ -99,10 +101,11 @@ export async function GET(request: NextRequest) {
     const install = findLatestMatchingReleaseAsset(
       releases,
       (asset) => /Setup\.exe$/i.test(asset.name) || asset.name.toLowerCase().endsWith(".exe"),
+      { minVersion: MIN_SIGNED_WINDOWS_VERSION },
     );
     if (!install) {
       return NextResponse.json(
-        { error: "No published Windows update is available right now." },
+        { error: "No signed Windows update is available right now." },
         { status: 404 },
       );
     }

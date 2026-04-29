@@ -12,7 +12,11 @@ const http = httpRouter();
 const DESKTOP_PLATFORMS = new Set<Platform>(["macos", "windows", "linux"]);
 const CREATE_WORKSPACE_LIMIT = 50;
 const RECOVER_WORKSPACE_LIMIT = 10;
+const AI_FEEDBACK_LIMIT = 120;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const AI_FEEDBACK_MAX_BODY_CHARS = 12_000;
+const AI_FEEDBACK_MAX_USER_PROMPT_CHARS = 2_000;
+const AI_FEEDBACK_MAX_ASSISTANT_CHARS = 4_000;
 
 type RateLimitResult = {
   allowed: boolean;
@@ -21,6 +25,29 @@ type RateLimitResult = {
 
 type DeviceRecord = {
   platform: Platform | "web";
+};
+
+type AIFeedbackExamplePayload = {
+  eventType: "rated";
+  feedbackKey: string;
+  clientId: string;
+  appVersion: string;
+  platform: string;
+  rating: "up" | "down";
+  ratingUpdatedAt: number;
+  answerKind: string | null;
+  provider: string | null;
+  model: string | null;
+  conversationId: number;
+  threadId: number | null;
+  userMessageId: number | null;
+  assistantMessageId: number;
+  userPromptExcerpt: string | null;
+  assistantAnswerExcerpt: string;
+  userPromptTruncated: boolean;
+  assistantAnswerTruncated: boolean;
+  redacted: boolean;
+  createdAt: number;
 };
 
 type HttpCtx = {
@@ -69,6 +96,45 @@ function parseDesktopPlatform(value: unknown): Platform | null {
   return DESKTOP_PLATFORMS.has(value as Platform)
     ? (value as Platform)
     : null;
+}
+
+function optionalStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function optionalStringLength(value: string | null): number {
+  return value === null ? 0 : value.length;
+}
+
+function optionalNumberOrNull(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isValidAIFeedbackPayload(value: unknown): value is AIFeedbackExamplePayload {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.eventType !== "rated") return false;
+  if (candidate.rating !== "up" && candidate.rating !== "down") return false;
+  if (typeof candidate.feedbackKey !== "string" || candidate.feedbackKey.length < 8 || candidate.feedbackKey.length > 180) return false;
+  if (typeof candidate.clientId !== "string" || candidate.clientId.length < 8 || candidate.clientId.length > 120) return false;
+  if (typeof candidate.appVersion !== "string" || candidate.appVersion.length > 40) return false;
+  if (typeof candidate.platform !== "string" || candidate.platform.length > 30) return false;
+  if (typeof candidate.ratingUpdatedAt !== "number" || !Number.isFinite(candidate.ratingUpdatedAt)) return false;
+  if (!optionalStringOrNull(candidate.answerKind) || optionalStringLength(candidate.answerKind) > 80) return false;
+  if (!optionalStringOrNull(candidate.provider) || optionalStringLength(candidate.provider) > 80) return false;
+  if (!optionalStringOrNull(candidate.model) || optionalStringLength(candidate.model) > 120) return false;
+  if (typeof candidate.conversationId !== "number" || !Number.isFinite(candidate.conversationId)) return false;
+  if (!optionalNumberOrNull(candidate.threadId)) return false;
+  if (!optionalNumberOrNull(candidate.userMessageId)) return false;
+  if (typeof candidate.assistantMessageId !== "number" || !Number.isFinite(candidate.assistantMessageId)) return false;
+  if (!optionalStringOrNull(candidate.userPromptExcerpt)) return false;
+  if (optionalStringLength(candidate.userPromptExcerpt) > AI_FEEDBACK_MAX_USER_PROMPT_CHARS) return false;
+  if (typeof candidate.assistantAnswerExcerpt !== "string" || candidate.assistantAnswerExcerpt.length > AI_FEEDBACK_MAX_ASSISTANT_CHARS) return false;
+  if (typeof candidate.userPromptTruncated !== "boolean") return false;
+  if (typeof candidate.assistantAnswerTruncated !== "boolean") return false;
+  if (typeof candidate.redacted !== "boolean") return false;
+  if (typeof candidate.createdAt !== "number" || !Number.isFinite(candidate.createdAt)) return false;
+  return true;
 }
 
 function isValidSnapshot(snapshot: unknown): snapshot is DaySnapshot {
@@ -372,6 +438,54 @@ http.route({
       });
       return jsonResponse({ error: "Remote day sync failed" }, 500);
     }
+  }),
+});
+
+http.route({
+  path: "/feedback/ai-message",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const rawBody = await req.text();
+    if (rawBody.length > AI_FEEDBACK_MAX_BODY_CHARS) {
+      return jsonResponse({ error: "Payload too large" }, 413);
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return jsonResponse({ error: "Invalid JSON" }, 400);
+    }
+
+    if (!isValidAIFeedbackPayload(body)) {
+      return jsonResponse({ error: "Invalid AI feedback payload" }, 400);
+    }
+
+    const result = (await ctx.runMutation(
+      internal.httpRateLimits.checkAndIncrement,
+      {
+        namespace: "aiFeedback",
+        key: body.clientId,
+        limit: AI_FEEDBACK_LIMIT,
+        windowMs: RATE_LIMIT_WINDOW_MS,
+      }
+    )) as RateLimitResult;
+
+    if (!result.allowed) {
+      return jsonResponse(
+        {
+          error: "Too many requests. Please try again later.",
+          retryAfterMs: result.retryAfterMs,
+        },
+        429
+      );
+    }
+
+    await ctx.runMutation(internal.aiFeedback.storeExample, {
+      payload: body,
+    });
+
+    return jsonResponse({ success: true }, 200);
   }),
 });
 

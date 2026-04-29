@@ -173,6 +173,34 @@ export default defineSchema({
     .index("by_workspace_thread_created", ["workspaceId", "threadId", "createdAt"])
     .index("by_workspace_created", ["workspaceId", "createdAt"])
     .index("by_workspace_artifact", ["workspaceId", "artifactId"]),
+  ai_feedback_examples: defineTable({
+    eventType: v.literal("rated"),
+    feedbackKey: v.string(),
+    clientId: v.string(),
+    appVersion: v.string(),
+    platform: v.string(),
+    rating: v.union(v.literal("up"), v.literal("down")),
+    ratingUpdatedAt: v.number(),
+    answerKind: v.union(v.string(), v.null()),
+    provider: v.union(v.string(), v.null()),
+    model: v.union(v.string(), v.null()),
+    conversationId: v.number(),
+    threadId: v.union(v.number(), v.null()),
+    userMessageId: v.union(v.number(), v.null()),
+    assistantMessageId: v.number(),
+    userPromptExcerpt: v.union(v.string(), v.null()),
+    assistantAnswerExcerpt: v.string(),
+    userPromptTruncated: v.boolean(),
+    assistantAnswerTruncated: v.boolean(),
+    redacted: v.boolean(),
+    createdAt: v.number(),
+    receivedAt: v.number(),
+  })
+    .index("by_feedback_key", ["feedbackKey"])
+    .index("by_rating", ["rating", "createdAt"])
+    .index("by_created", ["createdAt"])
+    .index("by_app_version", ["appVersion", "createdAt"])
+    .index("by_client", ["clientId", "createdAt"]),
   workspace_preferences: defineTable({
     workspaceId: v.id("workspaces"),
     hiddenApps: v.array(v.string()),

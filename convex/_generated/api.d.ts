@@ -9,6 +9,7 @@
  */
 
 import type * as ai from "../ai.js";
+import type * as aiFeedback from "../aiFeedback.js";
 import type * as authHelpers from "../authHelpers.js";
 import type * as devices from "../devices.js";
 import type * as encryptedKeys from "../encryptedKeys.js";
@@ -38,6 +39,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ai: typeof ai;
+  aiFeedback: typeof aiFeedback;
   authHelpers: typeof authHelpers;
   devices: typeof devices;
   encryptedKeys: typeof encryptedKeys;
