@@ -30,8 +30,8 @@ test('does not route "what did I do today?"', () => {
   assert.equal(shouldUseRouter('What did I do today?'), false)
 })
 
-test('does not route "which files did I touch this morning?"', () => {
-  assert.equal(shouldUseRouter('Which files did I touch this morning?'), false)
+test('routes "which files did I touch this morning?" to local evidence lookup', () => {
+  assert.equal(shouldUseRouter('Which files did I touch this morning?'), true)
 })
 
 test('does not route "summarize my Monday"', () => {

@@ -10,6 +10,16 @@ const APP_NAME_ALIASES: Record<string, string> = {
   microsoftedge: 'Microsoft Edge',
   microsoftteams: 'Microsoft Teams',
   microsoftoutlook: 'Microsoft Outlook',
+  microsoftexcel: 'Microsoft Excel',
+  microsoftword: 'Microsoft Word',
+  microsoftpowerpoint: 'Microsoft PowerPoint',
+  excel: 'Microsoft Excel',
+  word: 'Microsoft Word',
+  powerpoint: 'Microsoft PowerPoint',
+  outlook: 'Microsoft Outlook',
+  teams: 'Microsoft Teams',
+  winword: 'Microsoft Word',
+  powerpnt: 'Microsoft PowerPoint',
   windowsterminal: 'Windows Terminal',
   powershell: 'PowerShell',
   pwsh: 'PowerShell',
@@ -25,6 +35,12 @@ const APP_NAME_ALIASES: Record<string, string> = {
   daylenswindows: 'Daylens',
   daylens: 'Daylens',
   comet: 'Comet',
+}
+
+export interface BrandedAppIconSpec {
+  label: string
+  background: string
+  foreground: string
 }
 
 function toTitleCase(value: string): string {
@@ -60,6 +76,16 @@ export function appInitials(rawName: string): string {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('')
+}
+
+export function brandedAppIconSpec(rawName: string, canonicalAppId?: string | null): BrandedAppIconSpec | null {
+  const key = normalizeAppNameKey(`${canonicalAppId ?? ''} ${formatDisplayAppName(rawName)} ${rawName}`)
+  if (key.includes('excel')) return { label: 'X', background: '#1f8f4d', foreground: '#ffffff' }
+  if (key.includes('word') || key.includes('winword')) return { label: 'W', background: '#2b579a', foreground: '#ffffff' }
+  if (key.includes('powerpoint') || key.includes('powerpnt')) return { label: 'P', background: '#c43e1c', foreground: '#ffffff' }
+  if (key.includes('outlook')) return { label: 'O', background: '#0f6cbd', foreground: '#ffffff' }
+  if (key.includes('teams')) return { label: 'T', background: '#5b5fc7', foreground: '#ffffff' }
+  return null
 }
 
 export function buildAppBundleLookup(

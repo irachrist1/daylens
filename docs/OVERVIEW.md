@@ -1,6 +1,6 @@
 # Daylens — User Journey Walkthrough
 
-Last audited: 2026-04-23. Traces what the code actually does at each step a user takes, from clicking Download to using the AI. Replaces the section-by-section audit.
+Last audited: 2026-04-29. Traces what the code actually does at each step a user takes, from clicking Download to using the AI. Replaces the section-by-section audit.
 
 Tags: `[proven]` visible in code, `[inferred]` reasonable read, `[unverified]` not provable without runtime. `[gap]` = code-proven missing behavior.
 
@@ -33,7 +33,7 @@ The Release itself was produced by `.github/workflows/release-macos.yml` when so
 | Update christian-tonny.dev/daylens page with new version | **Manual** — the static page isn't in this repo |
 | Windows / Linux releases | Separate workflows (`release-windows.yml`, `release-linux.yml`) triggered by their own tags |
 
-**Gotcha:** The website download page is static. If you ship a new version and don't touch the page, users clicking Download get whatever URL is hard-coded there. The in-app updater, though, always fetches directly from GitHub Releases — so it's self-healing. `[inferred]`
+**Gotcha:** The website download page and update-feed route live outside this repo. If you ship a new version and don't verify that web route, users may see stale download/update targets even when GitHub assets exist. The desktop app asks the public Daylens update feed for macOS/Windows updates, while Linux package updates still use GitHub updater metadata. `[proven in desktop code, web route requires live verification]`
 
 ---
 
@@ -249,13 +249,13 @@ When the user asks for a report/chart/CSV, files land in `userData/generated-rep
 
 ## Step 8 — User opens Settings and clicks "Check for updates"
 
-**What happens** `[proven]` — `src/main/services/updater.ts:430-465`
+**What happens** `[proven]` — `src/main/services/updater.ts`
 
 1. Renderer calls IPC `update:check`.
-2. Main calls `autoUpdater.checkForUpdates()` (electron-updater).
-3. electron-updater fetches `latest-mac.yml` (or `latest.yml` / `latest-linux.yml`) from the most recent GitHub Release.
-4. Compares the version there to `app.getVersion()`.
-5. Fires one of: `update-available`, `update-not-available`, `error`.
+2. On macOS and Windows, main calls the public Daylens update feed (`https://christian-tonny.dev/daylens/api/update-feed`) with `platform` and `arch`.
+3. The feed returns the version, release notes, install URL, manual URL, and release page URL. Daylens compares that version to `app.getVersion()`.
+4. If a newer macOS/Windows release exists, Daylens stores it as a pending remote update. The banner stays at unknown progress until measurable download progress exists.
+5. On Linux, Daylens still uses `autoUpdater.checkForUpdates()` against GitHub updater metadata (`latest-linux.yml`) for supported package types.
 
 ### The macOS ad-hoc twist `[proven]` — `updater.ts:62-84, 293-408`
 
@@ -265,7 +265,7 @@ The code detects this (`isMacAdhocSigned()`) and switches paths:
 
 1. Sets `autoUpdater.autoDownload = false` — state stops at `available`.
 2. User clicks Install → `performAdhocMacInstall()`:
-   - Downloads `Daylens-<version>-<arch>.zip` directly from `github.com/irachrist1/daylens/releases/download/v<version>/`.
+   - Downloads the ZIP URL returned by the public Daylens update feed.
    - Extracts with `ditto` to tmp.
    - Writes a detached bash script that: waits for the running process to exit → `rm -rf` the old `/Applications/Daylens.app` → `mv` the staged bundle into place → `codesign --force --deep --sign -` → strip quarantine `xattr` → `open -n` to relaunch.
    - Calls `app.quit()` 250ms later.
@@ -275,7 +275,7 @@ When Daylens is notarized, this whole branch goes away. `canUseElectronUpdaterIn
 
 ### Windows and Linux `[proven]`
 
-- **Windows**: standard Squirrel.Windows path. SmartScreen warns until the installer is code-signed with reputation. If `latest.yml` isn't published for a version, the UI says so explicitly — don't silently swallow the 404.
+- **Windows**: the public update feed returns the signed NSIS installer URL when a Windows release exists at or above the website's signed-release floor. Daylens downloads the installer, launches it silently after the app exits, then relaunches the app. Public Windows releases must be Authenticode-signed; SmartScreen can still warn on a new signed hash until reputation builds.
 - **Linux**: package-type aware. AppImage, DEB, and RPM are supported. Pacman detected but not published yet — updater returns `supported: false` with a clear message.
 
 ### The 10-second auto-check `[proven]`
@@ -310,7 +310,7 @@ While the user clicks around, these run continuously:
 | AI says "I only have today's data" | `buildAllTimeContext()` returned empty (no apps+sites) | `ai.ts:1857`; check `app_sessions` exists |
 | AI invents project names | Freeform path; grounding rule violated by the model | `ai.ts:3910-3918` (grounding clause), consider a stronger output-intent hit |
 | Focus score shows ~20 with no work | Low-switching term contributes at zero input | `focusScore.ts`, `tests/focusScoreV2.test.ts` |
-| "Check for updates" returns error on Win | `latest.yml` missing from the Release | release workflow output or GitHub Release assets |
+| "Check for updates" returns stale/no Windows update | Signed Windows asset missing from the public release/feed or website signed-version floor not deployed | release workflow output, GitHub Release assets, update-feed response |
 | Mac update downloads but doesn't install | Ad-hoc swap script failed silently | `/tmp/daylens-swap-*.log` |
 | Empty AI persona ("embedded in a…") | `userName` never captured — gap | `ai.ts:3895`; no UI writer exists |
 | Web timeline stale | Day sync failure; 60s interval | `syncUploader.ts`, `syncState.ts` |

@@ -19,6 +19,7 @@ import {
 import {
   fillDaySummaryQuestionSuggestions,
   normalizeDaySummaryQuestionSuggestion,
+  parseDaySummaryResultText,
 } from '../src/main/lib/daySummarySuggestions.ts'
 import type { AIConversationState, AIThreadMessage } from '../src/shared/types.ts'
 
@@ -174,6 +175,29 @@ test('day summary suggestions normalize valid user-voiced query chips', () => {
     normalizeDaySummaryQuestionSuggestion('Summarize today as a short report I could share'),
     'Summarize today as a short report I could share',
   )
+})
+
+test('day summary parser refuses to render malformed raw JSON as summary copy', () => {
+  const malformed = '{ "summary": "You spent the morning starting with "The Greatest World Record Of Our Time"", "questionSuggestions": [] }'
+  assert.equal(parseDaySummaryResultText(malformed, [
+    'What did I actually get done today?',
+    'Which files, docs, or pages did I touch today?',
+    'Where did my focus break down today?',
+  ]), null)
+})
+
+test('day summary parser accepts nested JSON string responses', () => {
+  const nested = JSON.stringify(JSON.stringify({
+    summary: 'Today centered on the ASYV board report and the supporting Teams coordination.',
+    questionSuggestions: ['Which files, docs, or pages did I touch today?'],
+  }))
+  const parsed = parseDaySummaryResultText(nested, [
+    'What did I actually get done today?',
+    'Where did my focus break down today?',
+  ])
+
+  assert.equal(parsed?.summary, 'Today centered on the ASYV board report and the supporting Teams coordination.')
+  assert.equal(parsed?.questionSuggestions[0], 'Which files, docs, or pages did I touch today?')
 })
 
 test('conversation state persists alongside structured AI messages', () => {

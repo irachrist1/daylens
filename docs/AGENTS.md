@@ -50,6 +50,26 @@ Always build in this order:
 
 If tracking or persistence is broken, stop and fix that before polishing secondary UI.
 
+## Agent Operating Discipline
+
+When the request is unclear, do not guess quietly. Ask a concise clarifying question, or use the available planning skills to sharpen the work:
+
+- use `grill-me` when the product/design direction needs stress-testing before implementation
+- use `grill-with-docs` when the plan needs to be reconciled with existing repo language, docs, or architecture decisions
+- use `to-prd` when the conversation should become an implementation-ready PRD or issue
+
+If the answer can be discovered by reading the codebase, inspect the code instead of asking the user. If the answer depends on product intent, validation scope, release risk, credentials, certificates, or a potentially destructive operation, ask before acting.
+
+Do not treat local green checks as shipped proof. Separate:
+
+- coded
+- typechecked/tested
+- dev-run
+- packaged
+- update-tested
+- provider-tested
+- real-machine validated on macOS, Windows, and Linux
+
 ## Cross-Platform Parity
 
 Daylens ships as one desktop product across macOS, Windows, and Linux.
@@ -57,9 +77,28 @@ Daylens ships as one desktop product across macOS, Windows, and Linux.
 Hard rules:
 
 - shared functionality should ship with cross-platform parity, not as a macOS-only idea that gets backfilled later
+- every feature in this codebase must be designed for macOS, Windows, and Linux by default
+- keyboard shortcuts, tray/menu behavior, launch-on-login, updater behavior, packaging, path handling, permissions, file opening, browser evidence, and diagnostics must all be checked for platform-specific assumptions
+- never use macOS behavior as the implicit definition of done for a shared feature
 - platform-native surfaces may differ in implementation, but should preserve parity of user value
 - if work is intentionally platform-specific, document the Windows and Linux expectation or mark parity pending in `docs/ISSUES.md`
 - do not mark a shared capability done if it only feels finished on one platform
+
+## In-App Update Contract
+
+The in-app update path is critical infrastructure. Do not break it.
+
+Any change touching releases, packaging, signing, app identity, artifact names, update feed URLs, download routes, installer targets, `latest*.yml`, release notes, version stamping, GitHub release workflows, or updater UI must preserve the ability for existing users to update from an older installed app to the next public build.
+
+Hard rules:
+
+- do not change `appId`, product identity, package identity, update provider shape, artifact names, or release tag conventions casually
+- do not remove or rename release assets that `electron-updater` expects without a migration path
+- do not publish unsigned public Windows installers; unsigned builds are internal preview artifacts only
+- do not claim update support is fixed unless an older installed build successfully finds, downloads, and applies the newer build, or the remaining validation gap is documented
+- if updater behavior cannot be validated in the current environment, mark it `implemented pending verification` in `docs/ISSUES.md`
+- user-visible update notes must be short, meaningful, and user-facing; do not show internal function names, commit dumps, regex details, stop-list implementation, or scoped candidate jargon in banners or release highlights
+- if a fix risks stranding existing users on an old version, stop and ask before merging or releasing
 
 ## Navigation Contract
 

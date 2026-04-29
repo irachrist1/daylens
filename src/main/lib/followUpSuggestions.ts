@@ -26,6 +26,12 @@ const ENTITY_STOP_WORDS = new Set([
   'also', 'then', 'let', 'use', 'ask', 'help', 'want', 'need',
   'ai', 'based', 'daylens', 'direct', 'from', 'tracked',
   'e.g', 'i.e', 'etc', 'vs', 'ex',
+  // Temporal words that appear capitalized at sentence start but are not entities
+  'today', 'yesterday', 'tomorrow',
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'morning', 'afternoon', 'evening', 'week', 'month', 'year',
+  // Structural words from router answer headers
+  'found', 'local', 'evidence', 'data',
 ])
 
 function normalizeSuggestion(text: string): string {
@@ -194,7 +200,7 @@ export function buildDeterministicFollowUpCandidates(
       break
   }
 
-  return dedupeSuggestions(suggestions).filter((suggestion) => hasNamedEntity(suggestion.text)).slice(0, 6)
+  return dedupeSuggestions(suggestions).slice(0, 6)
 }
 
 export function buildFollowUpSuggestionPrompts(

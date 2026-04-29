@@ -92,3 +92,14 @@ export function normalizeRemoteUpdaterError(message: string): string {
 
   return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact
 }
+
+export function downloadProgressPercent(receivedBytes: number, totalBytes: number | null | undefined): number | null {
+  if (!Number.isFinite(receivedBytes) || receivedBytes <= 0) return null
+  if (!Number.isFinite(totalBytes) || !totalBytes || totalBytes <= 0) return null
+  return Math.max(1, Math.min(99, Math.round((receivedBytes / totalBytes) * 100)))
+}
+
+export function boundedDownloadProgressPercent(percent: number | null | undefined): number | null {
+  if (!Number.isFinite(percent) || !percent || percent <= 0) return null
+  return Math.max(1, Math.min(99, Math.round(percent)))
+}

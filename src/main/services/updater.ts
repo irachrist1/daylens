@@ -7,8 +7,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import {
+  boundedDownloadProgressPercent,
   buildRemoteUpdateFeedUrl,
   compareReleaseVersions,
+  downloadProgressPercent,
   isRemoteUpdateDescriptor,
   normalizeRemoteUpdaterError,
   type RemoteUpdateDescriptor,
@@ -403,7 +405,7 @@ async function checkRemoteFeed(trigger: 'manual' | 'background', support: Return
   }
 }
 
-function downloadToFile(url: string, destPath: string, onProgress: (pct: number) => void): Promise<void> {
+function downloadToFile(url: string, destPath: string, onProgress: (pct: number | null) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, redirect: 'follow' })
     request.on('response', (response) => {
@@ -416,16 +418,14 @@ function downloadToFile(url: string, destPath: string, onProgress: (pct: number)
       const total = Array.isArray(totalHeader) ? Number(totalHeader[0]) : Number(totalHeader)
       let received = 0
       const fileStream = createWriteStream(destPath)
-      let lastEmittedPct = -1
+      let lastEmittedPct: number | null = null
       response.on('data', (chunk: Buffer) => {
         received += chunk.length
         fileStream.write(chunk)
-        if (Number.isFinite(total) && total > 0) {
-          const pct = Math.min(99, Math.round((received / total) * 100))
-          if (pct !== lastEmittedPct) {
-            lastEmittedPct = pct
-            onProgress(pct)
-          }
+        const pct = downloadProgressPercent(received, total)
+        if (pct !== lastEmittedPct) {
+          lastEmittedPct = pct
+          onProgress(pct)
         }
       })
       response.on('end', () => {
@@ -441,7 +441,7 @@ function downloadToFile(url: string, destPath: string, onProgress: (pct: number)
   })
 }
 
-async function downloadRemoteInstaller(onProgress: (pct: number) => void): Promise<string> {
+async function downloadRemoteInstaller(onProgress: (pct: number | null) => void): Promise<string> {
   if (!_pendingRemoteUpdate) throw new Error('Daylens does not have a pending update to install.')
   const url = _pendingRemoteUpdate.installUrl
   const fileName = _pendingRemoteUpdate.installFileName || `daylens-update-${_pendingRemoteUpdate.version}`
@@ -517,7 +517,7 @@ async function performAdhocMacInstall(): Promise<boolean> {
   })
 
   try {
-    setUpdaterState({ status: 'downloading', progressPct: 0, errorMessage: null, downloadUrl: null })
+    setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
     const zipPath = await downloadRemoteInstaller((pct) => {
       setUpdaterState({ status: 'downloading', progressPct: pct })
     })
@@ -615,7 +615,7 @@ async function performWindowsInstall(): Promise<boolean> {
   })
 
   try {
-    setUpdaterState({ status: 'downloading', progressPct: 0, errorMessage: null, downloadUrl: null })
+    setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
     const installerPath = await downloadRemoteInstaller((pct) => {
       setUpdaterState({ status: 'downloading', progressPct: pct })
     })
@@ -826,7 +826,7 @@ export function initUpdater(win: BrowserWindow): void {
     setUpdaterState({
       status: 'downloading',
       version: info.version,
-      progressPct: 0,
+      progressPct: null,
       errorMessage: null,
       downloadUrl: null,
       ...getReleaseMetadata(info),
@@ -836,7 +836,7 @@ export function initUpdater(win: BrowserWindow): void {
   autoUpdater.on('download-progress', (progress) => {
     setUpdaterState({
       status: 'downloading',
-      progressPct: Math.max(0, Math.min(100, Math.round(progress.percent))),
+      progressPct: boundedDownloadProgressPercent(progress.percent),
     })
   })
 
