@@ -232,6 +232,11 @@ svg text {
   background: var(--color-text-tertiary);
 }
 
+.timeline-summary-inspector::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* Card base */
 .card {
   background: var(--color-surface-card);

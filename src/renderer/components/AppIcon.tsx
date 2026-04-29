@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { appInitials } from '../lib/apps'
+import { appInitials, brandedAppIconSpec } from '../lib/apps'
 import { useResolvedIcon } from '../hooks/useResolvedIcon'
 
 export default function AppIcon({
@@ -68,6 +68,7 @@ export default function AppIcon({
   }
 
   // Derive a subtle background from the category color if provided
+  const branded = brandedAppIconSpec(appName, canonicalAppId)
   const fallbackBg = color && color !== 'var(--color-primary)'
     ? (() => {
         const hex = color.replace('#', '')
@@ -84,8 +85,8 @@ export default function AppIcon({
         width: size,
         height: size,
         borderRadius: rounded,
-        background: fallbackBg,
-        color,
+        background: branded?.background ?? fallbackBg,
+        color: branded?.foreground ?? color,
         fontSize,
         fontWeight: 700,
         display: 'flex',
@@ -94,7 +95,7 @@ export default function AppIcon({
         flexShrink: 0,
       }}
     >
-      {appInitials(appName)}
+      {branded?.label ?? appInitials(appName)}
     </div>
   )
 }

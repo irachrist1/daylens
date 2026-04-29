@@ -38,7 +38,7 @@ import {
   buildFollowUpSuggestionPrompts,
   parseFollowUpSuggestions,
 } from '../lib/followUpSuggestions'
-import { fillDaySummaryQuestionSuggestions } from '../lib/daySummarySuggestions'
+import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { buildAssistantEvidencePack } from '../core/query/assistantEvidence'
 import {
@@ -2340,13 +2340,6 @@ function sanitizeConversationHistory(history: AIThreadMessage[]): { role: 'user'
   }))
 }
 
-function fillQuestionSuggestions(
-  suggestions: string[],
-  fallback: string[],
-): string[] {
-  return fillDaySummaryQuestionSuggestions(suggestions, fallback)
-}
-
 function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime'>): number {
   return Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
 }
@@ -2379,28 +2372,28 @@ function leadSentenceForIntent(block: WorkContextBlock): string {
   switch (intent.role) {
     case 'execution':
       return intent.subject
-        ? `The clearest execution block was ${intent.subject} for ${duration}.`
-        : `The clearest block was execution work for ${duration}.`
+        ? `The clearest named block was ${intent.subject} for ${duration}.`
+        : `The clearest block lasted ${duration}, but the label is still broad.`
     case 'research':
       return intent.subject
-        ? `A large share of today went into research/context gathering around ${intent.subject} for ${duration}.`
-        : `A large share of today went into research/context gathering for ${duration}.`
+        ? `A large share of today was captured around ${intent.subject} for ${duration}.`
+        : `A large share of today was browsing or page context for ${duration}, but intent is not certain.`
     case 'review':
       return intent.subject
-        ? `A large share of today went into reviewing ${intent.subject} for ${duration}.`
-        : `A large share of today went into review work for ${duration}.`
+        ? `A large share of today touched ${intent.subject} for ${duration}.`
+        : `A large share of today looked like review for ${duration}, based on the available titles.`
     case 'communication':
       return intent.subject
-        ? `A large share of today went into communication around ${intent.subject} for ${duration}.`
-        : `A large share of today went into communication work for ${duration}.`
+        ? `A large share of today was communication around ${intent.subject} for ${duration}.`
+        : `A large share of today was communication for ${duration}.`
     case 'coordination':
       return intent.subject
-        ? `A large share of today went into coordination around ${intent.subject} for ${duration}.`
-        : `A large share of today went into coordination work for ${duration}.`
+        ? `A large share of today was coordination around ${intent.subject} for ${duration}.`
+        : `A large share of today was coordination for ${duration}.`
     case 'ambient':
       return intent.subject
-        ? `A meaningful chunk of today was ambient browsing on ${intent.subject} for ${duration}.`
-        : `A meaningful chunk of today was ambient browsing for ${duration}.`
+        ? `A meaningful chunk of today was browser or app context on ${intent.subject} for ${duration}.`
+        : `A meaningful chunk of today was browser or app context for ${duration}.`
     case 'ambiguous':
     default:
       return intent.subject
@@ -2419,11 +2412,11 @@ function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkC
   if (!supporting) return null
 
   if (primaryIntent.role === 'execution' && (supporting.intent.role === 'research' || supporting.intent.role === 'ambient')) {
-    return `${supporting.intent.summary} looked more like supporting context than the main deliverable.`
+    return `${supporting.intent.summary} was supporting context, based on the available titles.`
   }
 
   if ((primaryIntent.role === 'research' || primaryIntent.role === 'ambient') && supporting.intent.role === 'execution') {
-    return `The clearer delivery evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
+    return `The more concrete work evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
   }
 
   return null
@@ -2779,27 +2772,7 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
 }
 
 function parseDaySummaryResult(raw: string, fallbackQuestions: string[]): AIDaySummaryResult | null {
-  const normalized = escapeJsonBlock(raw)
-
-  try {
-    const parsed = JSON.parse(normalized) as Partial<AIDaySummaryResult>
-    if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) return null
-    return {
-      summary: parsed.summary.trim(),
-      questionSuggestions: fillQuestionSuggestions(
-        Array.isArray(parsed.questionSuggestions)
-          ? parsed.questionSuggestions.filter((question): question is string => typeof question === 'string')
-          : [],
-        fallbackQuestions,
-      ),
-    }
-  } catch {
-    if (!normalized) return null
-    return {
-      summary: normalized,
-      questionSuggestions: fillQuestionSuggestions([], fallbackQuestions),
-    }
-  }
+  return parseDaySummaryResultText(raw, fallbackQuestions)
 }
 
 function currentLocalDateString(): string {
@@ -4083,6 +4056,21 @@ export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   scheduleOvernightCleanup(currentLocalDateString())
 }
 
+const APP_VOCABULARY_HINT =
+  'App vocabulary (use this to interpret app names correctly): ' +
+  'Dia = AI-powered browser; Arc/Chrome/Safari/Firefox/Brave/Edge/Opera/Vivaldi = browsers; ' +
+  'Warp/Ghostty/iTerm2/Terminal/Alacritty/Kitty = terminals; ' +
+  'Cursor/VS Code/Xcode/Zed/Sublime = code editors; ' +
+  'Claude/ChatGPT/Codex/Perplexity/Copilot/Comet = AI tools; ' +
+  'Slack/Discord/Teams/Messages/WhatsApp/Telegram/Signal = team chat or messaging; ' +
+  'Notion/Obsidian/Bear/Craft/Word/Notes/Journal = notes and writing; ' +
+  'Figma/Sketch/Canva/Miro = design; ' +
+  'Linear/Jira/Asana/Todoist/TickTick/Trello = project and task management; ' +
+  'Spotify/Apple Music/VLC/Podcasts = media playback; ' +
+  'Zoom/Loom = video meetings; ' +
+  'Outlook/Spark/Apple Mail = email. ' +
+  'Key websites: x.com and twitter.com = X (social media); youtube.com = video platform; reddit.com = forum/discussion; instagram.com = social media; github.com = code hosting.'
+
 function answerNamesEvidenceType(text: string): boolean {
   return /^(from your|based on|direct from|ai synthesis over|outside what daylens tracks)/i.test(text.trim())
 }
@@ -4113,7 +4101,6 @@ function ensureEvidenceLead(text: string, fallbackEvidence = 'From your tracked 
 async function routerProsePass(
   question: string,
   structuredData: string,
-  onDelta: (delta: string) => void,
 ): Promise<string> {
   const systemPrompt =
     `Rewrite this structured data as one to three natural sentences for a user asking "${question}". ` +
@@ -4122,7 +4109,8 @@ async function routerProsePass(
     'Do not invent anything not in the data. ' +
     'Keep it conversational, not robotic. ' +
     'Weave evidence type naturally into the answer when it adds clarity — do not open with a boilerplate prefix like "From your app sessions...". ' +
-    'Never claim the user was editing, writing, or paying attention — only that an app or window was open.'
+    'Never claim the user was editing, writing, or paying attention — only that an app or window was open.\n' +
+    APP_VOCABULARY_HINT
 
   try {
     const { text } = await withTimeout(
@@ -4135,18 +4123,16 @@ async function routerProsePass(
           userMessage: structuredData,
         },
         sendWithProvider,
-        { onDelta },
       ),
-      3_000,
+      10_000,
       'prose-pass timeout',
     )
-    if (text.trim()) return ensureEvidenceLead(text)
+    if (text.trim()) return text.trim()
   } catch {
-    // Fall through to template
+    // Fall through to structured data — better to show full data than a truncated header
   }
 
-  const firstLine = structuredData.split('\n').find((line) => line.trim()) ?? structuredData
-  return `From your tracked data: ${firstLine.replace(/^[-•*]\s*/, '')}`
+  return structuredData.trim()
 }
 
 export async function sendMessage(payload: AIChatSendRequest, options: SendMessageOptions = {}): Promise<AIChatTurnResult> {
@@ -4192,6 +4178,19 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
+  }
+
+  if (/^\s*(hey|hi|hello|sup|yo|howdy|hiya|helo|test|testing)\s*[!.?]?\s*$/i.test(effectiveUserMessage)) {
+    const greetingText = 'Hey! What would you like to know about your day?'
+    await stream.streamText(greetingText)
+    return persistChatTurn(db, conversationId, userMessage, {
+      assistantText: greetingText,
+      answerKind: 'freeform_chat',
+      sourceKind: 'deterministic',
+      resolvedTemporalContext: null,
+      conversationState: null,
+      suggestedFollowUps: [],
+    }, threadId)
   }
 
   const focusIntent = maybeHandleFocusIntent(effectiveUserMessage)
@@ -4308,7 +4307,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
         evidenceKey: null,
       },
     )
-    const proseAnswer = await routerProsePass(effectiveUserMessage, routed.answer, (delta) => stream.push(delta))
+    const proseAnswer = await routerProsePass(effectiveUserMessage, routed.answer)
     await stream.streamText(proseAnswer)
     const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, proseAnswer, answerKind, conversationState)
     return persistChatTurn(db, conversationId, userMessage, {
@@ -4351,6 +4350,7 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       'Capture contract — what Daylens DOES capture: foreground app sessions (app name, bundle ID, window title, duration), website visits (URL, page title, estimated duration), idle/away/suspend state, focus sessions, reconstructed timeline blocks, AI artifacts Daylens itself generated.\n' +
       'Capture contract — what Daylens does NOT capture: file open/save/edit events, document contents, screen pixels, screenshots, keystrokes, clipboard, which browser tab is visible when the window title only names the browser, terminal commands (only the shell window-title string), call audio, email contents, message contents.\n' +
       'Refusal rule: if the user asks about anything in the NOT-captured list, say so plainly in one or two sentences, then offer the closest thing you actually can see. Never dump an unrelated aggregation to avoid saying "I do not have that".\n' +
+      APP_VOCABULARY_HINT + '\n' +
       'Keep it short. 2-5 sentences for most questions. Never say "the user" — address them directly.\n' +
       'Always speak as Daylens.\n' +
       `If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`

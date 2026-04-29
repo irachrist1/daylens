@@ -1,3 +1,5 @@
+import type { AIDaySummaryResult } from '@shared/types'
+
 const ASSISTANT_TO_USER_STARTERS = [
   /^(?:are|did|do|were|have|has)\s+you\b/i,
   /^(?:is|was)\s+this\b/i,
@@ -87,4 +89,49 @@ export function fillDaySummaryQuestionSuggestions(
   }
 
   return deduped
+}
+
+function escapeJsonBlock(raw: string): string {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  return fenced?.[1]?.trim() ?? raw.trim()
+}
+
+function parseMaybeNestedJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed || !/^[{[]/.test(trimmed)) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+export function parseDaySummaryResultText(
+  raw: string,
+  fallbackQuestions: string[],
+): AIDaySummaryResult | null {
+  const normalized = escapeJsonBlock(raw)
+  if (!normalized) return null
+
+  try {
+    const parsed = parseMaybeNestedJson(JSON.parse(normalized)) as Partial<AIDaySummaryResult>
+    if (!parsed || typeof parsed !== 'object') return null
+    if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) return null
+    return {
+      summary: parsed.summary.trim(),
+      questionSuggestions: fillDaySummaryQuestionSuggestions(
+        Array.isArray(parsed.questionSuggestions)
+          ? parsed.questionSuggestions.filter((question): question is string => typeof question === 'string')
+          : [],
+        fallbackQuestions,
+      ),
+    }
+  } catch {
+    if (/^\s*[{[]/.test(normalized) || /"summary"\s*:/.test(normalized)) return null
+    return {
+      summary: normalized,
+      questionSuggestions: fillDaySummaryQuestionSuggestions([], fallbackQuestions),
+    }
+  }
 }

@@ -645,7 +645,59 @@ function aggregateDayArtifacts(date: Date, db: Database.Database) {
   const artifacts = [...artifactTotals.values()]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
 
-  return { payload, blocks, artifacts }
+  const pages = new Map<string, { title: string; domain: string | null; totalSeconds: number }>()
+  const windowTitles = new Map<string, { title: string; appName: string; totalSeconds: number }>()
+  const apps = new Map<string, { appName: string; totalSeconds: number }>()
+
+  for (const block of blocks) {
+    for (const page of block.pageRefs) {
+      const title = (page.pageTitle ?? page.displayTitle).trim()
+      if (!title) continue
+      const key = `${page.domain}:${title}`.toLowerCase()
+      const existing = pages.get(key)
+      if (existing) {
+        existing.totalSeconds += page.totalSeconds
+      } else {
+        pages.set(key, { title, domain: page.domain, totalSeconds: page.totalSeconds })
+      }
+    }
+
+    for (const session of block.sessions) {
+      const title = session.windowTitle?.trim()
+      if (title && !/^(new tab|untitled|home|start page)$/i.test(title)) {
+        const key = `${session.bundleId}:${title}`.toLowerCase()
+        const existing = windowTitles.get(key)
+        if (existing) {
+          existing.totalSeconds += session.durationSeconds
+        } else {
+          windowTitles.set(key, { title, appName: session.appName, totalSeconds: session.durationSeconds })
+        }
+      }
+    }
+
+    for (const app of block.topApps) {
+      if (app.category === 'system') continue
+      const key = app.appName.toLowerCase()
+      const existing = apps.get(key)
+      if (existing) {
+        existing.totalSeconds += app.totalSeconds
+      } else {
+        apps.set(key, { appName: app.appName, totalSeconds: app.totalSeconds })
+      }
+    }
+  }
+
+  const bySeconds = <T extends { totalSeconds: number }>(items: Iterable<T>) =>
+    [...items].sort((left, right) => right.totalSeconds - left.totalSeconds)
+
+  return {
+    payload,
+    blocks,
+    artifacts,
+    pages: bySeconds(pages.values()),
+    windowTitles: bySeconds(windowTitles.values()),
+    apps: bySeconds(apps.values()),
+  }
 }
 
 function describeBlockDetail(block: ReturnType<typeof getTimelineDayPayload>['blocks'][number]): string {
@@ -695,16 +747,42 @@ function buildDayBlocksAnswer(date: Date, db: Database.Database, header?: string
 }
 
 function buildArtifactAnswer(date: Date, db: Database.Database): string | null {
-  const { artifacts } = aggregateDayArtifacts(date, db)
-  if (artifacts.length === 0) return null
+  const { payload, artifacts, pages, windowTitles, apps } = aggregateDayArtifacts(date, db)
+  if (payload.totalSeconds === 0) return null
+  if (artifacts.length === 0 && pages.length === 0 && windowTitles.length === 0 && apps.length === 0) return null
 
   const label = relativeDayLabel(date)
-  return [
-    `${label} you touched these artifacts:`,
-    ...artifacts.slice(0, 8).map((artifact, index) =>
+  const lines = [
+    artifacts.length > 0
+      ? `[${label} — file and doc evidence]`
+      : `[${label} — no clear file/doc names; page, window-title, and app evidence follows]`,
+  ]
+
+  if (artifacts.length > 0) {
+    lines.push(...artifacts.slice(0, 8).map((artifact, index) =>
       `${index + 1}. ${artifact.title}${artifact.subtitle ? ` — ${artifact.subtitle}` : ''} (${formatDuration(Math.round(artifact.totalSeconds))})`,
-    ),
-  ].join('\n')
+    ))
+  }
+
+  if (pages.length > 0) {
+    lines.push('Pages:')
+    lines.push(...pages.slice(0, 6).map((page) =>
+      `- ${page.title}${page.domain ? ` — ${page.domain}` : ''} (${formatDuration(Math.round(page.totalSeconds))})`,
+    ))
+  }
+
+  if (windowTitles.length > 0) {
+    lines.push('Window titles:')
+    lines.push(...windowTitles.slice(0, 6).map((item) =>
+      `- ${item.title} in ${item.appName} (${formatDuration(Math.round(item.totalSeconds))})`,
+    ))
+  }
+
+  if (apps.length > 0) {
+    lines.push(`Apps involved: ${apps.slice(0, 5).map((app) => `${app.appName} (${formatDuration(Math.round(app.totalSeconds))})`).join(', ')}.`)
+  }
+
+  return lines.join('\n')
 }
 
 function buildComparisonAnswer(date: Date, db: Database.Database): string | null {
@@ -2060,6 +2138,19 @@ const NUMERIC_ROUTE_PATTERNS: RegExp[] = [
  */
 export function shouldUseRouter(message: string): boolean {
   const lower = message.trim().toLowerCase()
+
+  if (
+    lower.includes('which files')
+    || lower.includes('what files')
+    || lower.includes('which docs')
+    || lower.includes('what docs')
+    || lower.includes('which pages')
+    || lower.includes('what pages')
+    || lower.includes('what did i touch')
+    || lower.includes('files, docs, or pages')
+  ) {
+    return true
+  }
 
   for (const prefix of SYNTHESIS_BLOCK_PREFIXES) {
     if (lower.startsWith(prefix)) return false

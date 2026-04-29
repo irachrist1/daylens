@@ -110,19 +110,25 @@ jobs:
       - name: Verify Authenticode signatures
         shell: pwsh
         run: |
-          $paths = @(
+          $requiredPaths = @(
             'dist-release\win-unpacked\Daylens.exe',
-            'dist-release\win-unpacked\resources\elevate.exe',
-            'dist-release\__uninstaller-nsis-daylens-windows.exe',
             'dist-release\Daylens-${{ steps.meta.outputs.version }}-Setup.exe'
           )
 
-          foreach ($path in $paths) {
+          foreach ($path in $requiredPaths) {
             if (-not (Test-Path $path)) {
               Write-Error "Expected signed file is missing: $path"
               exit 1
             }
+          }
 
+          $paths = @(Get-ChildItem -Path 'dist-release' -Recurse -Filter '*.exe' -File | Select-Object -ExpandProperty FullName)
+          if ($paths.Count -eq 0) {
+            Write-Error "No Windows executables found to verify."
+            exit 1
+          }
+
+          foreach ($path in $paths) {
             $signature = Get-AuthenticodeSignature -FilePath $path
             if ($signature.Status -ne 'Valid') {
               Write-Error "$path is not Authenticode-signed with a valid trusted signature. Status: $($signature.Status). Message: $($signature.StatusMessage)"

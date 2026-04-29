@@ -1,8 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  boundedDownloadProgressPercent,
   buildRemoteUpdateFeedUrl,
   compareReleaseVersions,
+  downloadProgressPercent,
   isRemoteUpdateDescriptor,
   normalizeRemoteUpdaterError,
 } from '../src/shared/updaterReleaseFeed.ts'
@@ -58,4 +60,21 @@ test('normalizeRemoteUpdaterError collapses noisy upstream failures into concise
     normalizeRemoteUpdaterError(`Unexpected updater failure ${'x'.repeat(500)}`).length <= 240,
     true,
   )
+})
+
+test('downloadProgressPercent stays unknown until byte progress is measurable', () => {
+  assert.equal(downloadProgressPercent(0, 100), null)
+  assert.equal(downloadProgressPercent(50, null), null)
+  assert.equal(downloadProgressPercent(50, 0), null)
+  assert.equal(downloadProgressPercent(1, 100), 1)
+  assert.equal(downloadProgressPercent(50, 100), 50)
+  assert.equal(downloadProgressPercent(100, 100), 99)
+})
+
+test('boundedDownloadProgressPercent avoids fake zero percent progress', () => {
+  assert.equal(boundedDownloadProgressPercent(null), null)
+  assert.equal(boundedDownloadProgressPercent(0), null)
+  assert.equal(boundedDownloadProgressPercent(0.4), 1)
+  assert.equal(boundedDownloadProgressPercent(42.2), 42)
+  assert.equal(boundedDownloadProgressPercent(100), 99)
 })

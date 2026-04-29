@@ -6,6 +6,7 @@ import {
   getLaunchOnLoginDescription,
   getQuickAccessExpectation,
 } from '@shared/platformExpectations'
+import { sanitizeSyncFailureMessage } from '@shared/syncMessages'
 import type {
   AIProvider,
   AIProviderMode,
@@ -800,6 +801,7 @@ export default function Settings() {
   const currentPlatform = trackingDiagnostics?.platform ?? null
   const quickAccessCopy = getQuickAccessExpectation(currentPlatform)
   const launchOnLoginDescription = getLaunchOnLoginDescription(currentPlatform)
+  const sanitizedSyncFailure = sanitizeSyncFailureMessage(syncStatus?.lastFailureMessage)
 
   return (
     <div style={{ padding: '30px 32px 48px', maxWidth: 1080 }}>
@@ -906,7 +908,7 @@ export default function Settings() {
               title="Workspace status"
               description={
                 syncStatus?.isLinked
-                  ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. State: ${syncStatus.state.replace(/_/g, ' ')}. Last heartbeat: ${formatSyncTimestamp(syncStatus.lastHeartbeatAt)}. Last durable sync: ${formatSyncTimestamp(syncStatus.lastSuccessfulSyncAt)}${syncStatus.lastFailureMessage ? ` · Last durable sync failure: ${syncStatus.lastFailureMessage}` : ''}`
+                  ? `Linked${syncStatus.workspaceId ? ` to ${syncStatus.workspaceId}` : ''}. State: ${syncStatus.state.replace(/_/g, ' ')}. Last heartbeat: ${formatSyncTimestamp(syncStatus.lastHeartbeatAt)}. Last durable sync: ${formatSyncTimestamp(syncStatus.lastSuccessfulSyncAt)}${sanitizedSyncFailure ? ` · ${sanitizedSyncFailure}` : ''}`
                   : 'This device is local-only.'
               }
               control={<StatusPill label={syncStatus?.isLinked ? syncStatus.state.replace(/_/g, ' ') : 'Local only'} tone={

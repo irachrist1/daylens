@@ -90,9 +90,11 @@ It then stamps `package.json` on the runner with that version. So the version in
 CHANGELOG.md → awk extraction → GitHub release body → electron-updater fetch → UpdateBanner "Includes:" line
 ```
 
-The `awk` script in the workflow grabs everything between `## v{VERSION} -` and the next `## v` line. That text becomes the GitHub release body. `electron-updater` fetches the release body and passes it as `releaseNotesText`. `extractReleaseHighlights()` in `src/renderer/lib/releaseNotes.ts` strips the markdown and returns the first 2 bullet points for the update banner.
+The `awk` script in the workflow grabs everything between `## v{VERSION} -` and the next `## v` line. That text becomes the GitHub release body. `electron-updater` fetches the release body and passes it as `releaseNotesText`. `extractReleaseHighlights()` in `src/renderer/lib/releaseNotes.ts` strips the markdown, ignores internal sections such as included commits/downloads/assets, and returns at most 2 short user-facing highlights for the update banner.
 
 **Consequence:** if you push the tag before updating CHANGELOG.md, the update banner will show nothing useful to users.
+
+Keep the changelog highlights written like product release notes, not implementation notes. Do not put function names, regex internals, commit dumps, stop-list mechanics, or scoped-candidate details in the visible highlights.
 
 ### GitHub release tag
 
@@ -104,7 +106,7 @@ After packaging, CI runs `node scripts/verify-packaged-natives.js dist-release`.
 
 ### Windows code signing
 
-Public Windows releases must be Authenticode-signed. `release-windows.yml` fails before packaging when `WIN_CERTIFICATE_FILE` or `WIN_CERTIFICATE_PASSWORD` is missing, then checks `Get-AuthenticodeSignature` for the unpacked app executable, NSIS helper, generated uninstaller, and setup installer before uploading release assets.
+Public Windows releases must be Authenticode-signed. `release-windows.yml` fails before packaging when `WIN_CERTIFICATE_FILE` or `WIN_CERTIFICATE_PASSWORD` is missing, then checks `Get-AuthenticodeSignature` for the setup installer and every generated `.exe` under `dist-release` before uploading release assets.
 
 Required GitHub Actions secrets:
 
@@ -113,6 +115,8 @@ Required GitHub Actions secrets:
 - `WIN_CERT_SUBJECT_NAME` — optional publisher subject hint
 
 Unsigned internal test builds belong in `preview-builds.yml`, not the public release workflow. A valid signature proves publisher identity and avoids the strongest unknown-publisher block, but Microsoft SmartScreen reputation can still warn for a new file hash until the signed app builds reputation.
+
+The public website update/download proxy must not serve old unsigned Windows installers. `daylens-web` gates Windows `.exe` assets with `DAYLENS_MIN_SIGNED_WINDOWS_VERSION` (defaulting to the first signed release train). After shipping a Windows signing fix, deploy the web proxy change before telling users to update, then confirm the Windows update feed either returns the new signed version or a 404 when no signed Windows asset exists.
 
 ---
 
@@ -200,6 +204,7 @@ For persistent notifications, enable GitHub email notifications for "Failed work
 [ ] npm run typecheck — zero errors
 [ ] npm run test:ai-chat — all pass
 [ ] Confirm Windows signing secrets exist before pushing v{VERSION}-win
+[ ] Deploy/verify the website update-feed gate if DAYLENS_MIN_SIGNED_WINDOWS_VERSION changed
 [ ] git add + commit + push to main
 [ ] git tag v{VERSION}-mac && git tag v{VERSION}-win
 [ ] git push origin v{VERSION}-mac v{VERSION}-win

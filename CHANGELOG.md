@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.35 - 2026-04-29
+
+### Fixed
+- **Updates show honest progress.** Downloads no longer sit at a fake 0%, and public Windows releases are blocked unless the installer is signed.
+- **AI answers use the evidence Daylens has.** Files/docs/pages questions now use local files, pages, window titles, apps, and timeline evidence instead of falling back to a generic no-filenames response.
+- **Daily summaries stay grounded.** Timeline summaries avoid malformed JSON, keep wording cautious when evidence is thin, and stop inventing intent from app or browser names alone.
+- **Settings hides raw sync errors.** Expired workspace links and server failures now show short recovery guidance instead of stack traces or request internals.
+- **Timeline and app icons are calmer.** The right inspector keeps its scrollbar hidden while remaining scrollable, and Microsoft 365 app icons render consistently across Timeline, Apps, and artifact views.
+
 ## v1.0.34 - 2026-04-29
 
 ### Added

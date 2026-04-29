@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeWebsiteTitleForDisplay, resolveCanonicalApp, websiteDisplayLabel } from '../src/main/lib/appIdentity.ts'
-import { formatDisplayAppName } from '../src/renderer/lib/apps.ts'
+import { brandedAppIconSpec, formatDisplayAppName } from '../src/renderer/lib/apps.ts'
 
 test('mac-specific app aliases resolve to the right canonical app identities', () => {
   assert.equal(resolveCanonicalApp('company.thebrowser.dia', 'Dia').displayName, 'Dia')
@@ -12,11 +12,31 @@ test('mac-specific app aliases resolve to the right canonical app identities', (
   assert.equal(resolveCanonicalApp('com.daylens.app.dev', 'Daylens').displayName, 'Daylens')
 })
 
+test('Microsoft 365 app aliases resolve consistently across raw names and executables', () => {
+  assert.equal(resolveCanonicalApp('excel.exe', 'EXCEL.EXE').displayName, 'Microsoft Excel')
+  assert.equal(resolveCanonicalApp('', 'Microsoft Word').displayName, 'Microsoft Word')
+  assert.equal(resolveCanonicalApp('powerpnt.exe', 'PowerPoint').displayName, 'Microsoft PowerPoint')
+  assert.equal(resolveCanonicalApp('', 'Microsoft Outlook').displayName, 'Microsoft Outlook')
+  assert.equal(resolveCanonicalApp('ms-teams.exe', 'Teams').displayName, 'Microsoft Teams')
+})
+
 test('renderer display aliases stay human on mac-focused app names', () => {
   assert.equal(formatDisplayAppName('ChatGPT Atlas'), 'ChatGPT')
   assert.equal(formatDisplayAppName('System Settings'), 'System Settings')
   assert.equal(formatDisplayAppName('TickTick'), 'TickTick')
   assert.equal(formatDisplayAppName('DaylensWindows'), 'Daylens')
+})
+
+test('renderer has branded Microsoft 365 fallback icon specs', () => {
+  assert.deepEqual(brandedAppIconSpec('Microsoft Excel', 'excel'), {
+    label: 'X',
+    background: '#1f8f4d',
+    foreground: '#ffffff',
+  })
+  assert.equal(brandedAppIconSpec('WINWORD.EXE')?.label, 'W')
+  assert.equal(brandedAppIconSpec('Microsoft PowerPoint')?.label, 'P')
+  assert.equal(brandedAppIconSpec('Microsoft Outlook')?.label, 'O')
+  assert.equal(brandedAppIconSpec('Microsoft Teams')?.label, 'T')
 })
 
 test('website labels normalize X and strip generic badge-count titles', () => {

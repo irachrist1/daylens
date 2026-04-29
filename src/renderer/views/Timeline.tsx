@@ -448,9 +448,14 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
   const [recapLoading, setRecapLoading] = useState(false)
 
   useEffect(() => {
-    if (payload.totalSeconds === 0) return
+    if (payload.totalSeconds === 0) {
+      setRecap(null)
+      setRecapLoading(false)
+      return
+    }
     const cached = daySummaryRecapCache.get(payload.date)
     if (cached) { setRecap(cached); return }
+    setRecap(null)
     setRecapLoading(true)
     ipc.ai.generateDaySummary(payload.date)
       .then((result) => {
@@ -476,13 +481,16 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
       top: 24,
       maxHeight: 'calc(100vh - 140px)',
       overflowY: 'auto',
+      scrollbarWidth: 'none',
+      msOverflowStyle: 'none',
+      overscrollBehavior: 'contain',
       borderRadius: 18,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',
       padding: 22,
       display: 'grid',
       gap: 18,
-    }}>
+    }} className="timeline-summary-inspector">
       <div>
         <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)', marginBottom: 6 }}>
           Day summary
@@ -619,11 +627,14 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
   const hasOverride = Boolean(block.label.override?.trim())
 
   return (
-    <div data-timeline-inspector="true" style={{
+    <div data-timeline-inspector="true" className="timeline-summary-inspector" style={{
       position: 'sticky',
       top: 24,
       maxHeight: 'calc(100vh - 140px)',
       overflowY: 'auto',
+      scrollbarWidth: 'none',
+      msOverflowStyle: 'none',
+      overscrollBehavior: 'contain',
       borderRadius: 18,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',

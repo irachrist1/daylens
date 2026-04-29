@@ -36,10 +36,24 @@ function LoadingFallback() {
   )
 }
 
+function devShortcutPlatform(settings: AppSettings | null): OnboardingState['platform'] {
+  if (settings?.onboardingState.platform) return settings.onboardingState.platform
+  const platform = navigator.platform.toLowerCase()
+  if (platform.includes('mac')) return 'macos'
+  if (platform.includes('win')) return 'windows'
+  return 'linux'
+}
+
+function isDevShortcut(e: KeyboardEvent, keyCode: string, platform: OnboardingState['platform']): boolean {
+  const primaryPressed = platform === 'macos' ? e.metaKey : e.ctrlKey
+  return e.code === keyCode && primaryPressed && e.shiftKey && e.altKey
+}
+
 // Inner component — inside HashRouter so useLocation() and useNavigate() work
 function AppContent({ settings }: { settings: AppSettings | null }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const platform = devShortcutPlatform(settings)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [wrappedOpen, setWrappedOpen] = useState(false)
   const [wrappedDay, setWrappedDay] = useState<DayTimelinePayload | null>(null)
@@ -72,15 +86,15 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     })
   }, [navigate])
 
-  // Dev escape hatch: Cmd+Shift+Option+O resets onboarding without touching tracked data
+  // Dev escape hatch: Cmd+Shift+Option+O / Ctrl+Shift+Alt+O resets onboarding without touching tracked data
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!e.metaKey || !e.shiftKey || !e.altKey || e.code !== 'KeyO') return
+      if (!isDevShortcut(e, 'KeyO', platform)) return
       const freshState: OnboardingState = {
         flowVersion: settings?.onboardingState.flowVersion ?? 3,
-        platform: settings?.onboardingState.platform ?? 'macos',
+        platform,
         stage: 'welcome',
-        trackingPermissionState: 'missing',
+        trackingPermissionState: platform === 'macos' ? 'missing' : 'granted',
         permissionRequestedAt: null,
         proofState: 'idle',
         personalizationState: 'pending',
@@ -96,12 +110,12 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [settings])
+  }, [platform, settings])
 
-  // Dev shortcut: Cmd+Shift+Option+W opens DayWrapped for yesterday
+  // Dev shortcut: Cmd+Shift+Option+W / Ctrl+Shift+Alt+W opens DayWrapped for yesterday
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!e.metaKey || !e.shiftKey || !e.altKey || e.code !== 'KeyW') return
+      if (!isDevShortcut(e, 'KeyW', platform)) return
       const yesterday = dateStringFromMs(Date.now() - 86_400_000)
       void ipc.db.getTimelineDay(yesterday).then((payload) => {
         setWrappedDay(payload)
@@ -112,7 +126,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [platform])
 
   // Track route changes
   useEffect(() => {
