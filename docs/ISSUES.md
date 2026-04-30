@@ -1,6 +1,6 @@
 # Issues
 
-Status last updated 2026-04-30 (v1.0.35 release candidate after the Timeline, Apps, AI, notification, and update-safety pass). Prior audit: 2026-04-29.
+Status last updated 2026-04-30 (post-v1.0.35 macOS/Linux publication after the Timeline, Apps, AI, notification, and update-safety pass). Prior audit: 2026-04-29.
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -55,7 +55,7 @@ This file is the implementation-status ledger. Items below are separated into co
 - Update banner highlights now ignore internal release-body sections and implementation jargon, returning at most two short user-facing highlights (`src/renderer/lib/releaseNotes.ts`, `tests/releaseNotes.test.ts`).
 - Daily summary and Morning Brief notification routes now include the target report date, show/focus a hidden app window before navigation, and open Day Wrapped for that date even when the local day payload is empty (`src/main/services/dailySummaryNavigation.ts`, `src/main/services/dailySummaryNotifier.ts`, `src/renderer/lib/dailySummaryNavigation.ts`, `src/renderer/App.tsx`, `tests/notificationNavigation.test.ts`).
 - The paired public update/download routes in `daylens-web` now refuse Windows `.exe` assets below the signed release floor; a live production check on 2026-04-30 returned `404` with "No signed Windows update is available right now" for `platform=win32&arch=x64` (`/Users/tonny/Dev-Personal/daylens-web/app/api/update-feed/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/windows/route.ts`, `/Users/tonny/Dev-Personal/daylens-web/app/api/download/_releaseAsset.ts`).
-- `package.json`, `package-lock.json`, and `CHANGELOG.md` are prepared for v1.0.35 so the already-published v1.0.34 release is not confused with this unreleased release candidate.
+- v1.0.35 is published for macOS and Linux with GitHub release assets and updater metadata. The release contains `Daylens-1.0.35-arm64.dmg`, `Daylens-1.0.35-arm64.zip`, `latest-mac.yml`, `Daylens-1.0.35.AppImage`, `Daylens-1.0.35.deb`, `Daylens-1.0.35.rpm`, `Daylens-1.0.35.tar.gz`, and `latest-linux.yml`. No Windows v1.0.35 installer was published because signing secrets were not visible locally and public Windows installers must be signed.
 
 ### Remote Foundation
 
@@ -76,7 +76,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Focus-session start/stop/review flows from AI messages in normal usage (`src/renderer/views/Insights.tsx:1229-1282`).
 - Linked remote freshness, stale-state UX, and session-repair behavior under real multi-device use (`src/main/services/syncUploader.ts:232-284`).
 - Packaged runtime validation across macOS, Windows, and Linux.
-- End-to-end updater recovery from older installed builds after the v1.0.35 packaged release is published and installed. The candidate code path avoids fake `0%` progress and uses the public feed, but this audit did not prove an older packaged macOS or Windows app successfully downloads, installs, and relaunches into the next build.
+- End-to-end updater recovery from older installed builds. The v1.0.35 macOS update feed now returns v1.0.35 and the candidate code path avoids fake `0%` progress, but this audit did not prove an older packaged macOS app successfully downloads, installs, and relaunches into the new build. Windows still has no signed v1.0.35 installer.
 
 ## Still Partial Or Open
 
@@ -106,7 +106,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 
 ### Validation Scope
 
-- This audit inspected code and tests. It did not re-run full packaged-app validation, real linked-workspace remote validation, or full provider-backed AI validation across platforms.
+- This audit inspected code and tests, ran local desktop build/test checks, verified CI macOS packaging, verified CI Linux release packaging and AppImage/DEB/RPM smoke tests, checked the live macOS update feed, and checked that the live Windows update feed safely returns 404 without a signed Windows asset. It did not run a real installed-app update, a real macOS app launch from the published DMG/ZIP, real Windows packaged validation, real linked-workspace remote validation, or full provider-backed AI validation across platforms.
 
 ## Tests That Support Current Behavior
 
@@ -126,7 +126,8 @@ These features exist in code and, in several cases, have focused test coverage, 
 - Windows packaged runtime validation on a real machine.
 - Windows Authenticode-signed release validation on a real machine after signing secrets are added.
 - Confirm the production Windows update feed returns a signed v1.0.35+ installer after Windows signing secrets are added and a signed Windows release is published.
-- Windows/macOS in-app update validation from an older installed build to the newly published public-feed build.
+- macOS in-app update validation from an older installed build to the newly published v1.0.35 public-feed build.
+- Windows in-app update validation after a signed v1.0.35+ Windows installer exists.
 - Linux packaged runtime validation on real desktops, including X11 and Wayland/XWayland scenarios.
 - End-to-end linked workspace creation, browser linking, heartbeat/day-sync freshness, and stale/failure recovery in normal use.
 - Desktop provider-backed AI chat, report generation, and focus-session action flows with real credentials.
