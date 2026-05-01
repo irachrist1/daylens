@@ -8,6 +8,7 @@ const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
 const PRODUCTION_BASE_PATH = "/daylens";
 const MIN_SIGNED_WINDOWS_VERSION =
   process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.35";
+const WINDOWS_STORE_URL = process.env.DAYLENS_WINDOWS_STORE_URL?.trim() || "";
 
 function publicOrigin(request: NextRequest): string {
   const configured =
@@ -105,7 +106,12 @@ export async function GET(request: NextRequest) {
     );
     if (!install) {
       return NextResponse.json(
-        { error: "No signed Windows update is available right now." },
+        {
+          error: WINDOWS_STORE_URL
+            ? "Windows updates are available through the Microsoft Store."
+            : "No signed Windows update is available right now.",
+          manualUrl: WINDOWS_STORE_URL || null,
+        },
         { status: 404 },
       );
     }
