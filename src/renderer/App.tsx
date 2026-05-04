@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DayWrapped from './components/DayWrapped'
+import CommandPalette from './components/CommandPalette'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
 import { dateStringFromMs, todayString } from './lib/format'
@@ -60,6 +61,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   const [wrappedDay, setWrappedDay] = useState<DayTimelinePayload | null>(null)
   const [wrappedThreadId, setWrappedThreadId] = useState<number | null>(null)
   const [wrappedArtifactId, setWrappedArtifactId] = useState<number | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   const openDailySummaryRoute = useCallback((route: string) => {
     void handleDailySummaryNavigation(route, {
@@ -75,10 +77,34 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     })
   }, [navigate])
 
-  // Route to the correct view when a notification is tapped
+  // Route to the correct view when a notification is tapped.
+  // Also drain any route the main process queued before this listener mounted —
+  // notification clicks can fire while the renderer is still booting.
   useEffect(() => {
-    return ipc.navigation.onNavigate(openDailySummaryRoute)
+    const unsubscribe = ipc.navigation.onNavigate(openDailySummaryRoute)
+    void ipc.navigation.consumePending().then((route) => {
+      if (route) openDailySummaryRoute(route)
+    }).catch(() => {})
+    return unsubscribe
   }, [openDailySummaryRoute])
+
+  // Global shortcut (Cmd/Ctrl+Alt+D) is registered in main and forwarded here.
+  useEffect(() => {
+    return ipc.palette.onToggle(() => setPaletteOpen((open) => !open))
+  }, [])
+
+  // In-app shortcut: Cmd+K (mac) / Ctrl+K (win/linux) toggles the palette.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const primaryPressed = platform === 'macos' ? e.metaKey : e.ctrlKey
+      if (e.code === 'KeyK' && primaryPressed && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        setPaletteOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [platform])
 
   // Dev escape hatch: Cmd+Shift+Option+O / Ctrl+Shift+Alt+O resets onboarding without touching tracked data
   useEffect(() => {
@@ -122,46 +148,19 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [platform])
 
-  // Dev shortcut: Cmd+Shift+Option+B / Ctrl+Shift+Alt+B shows a test notification.
+  // Dev shortcut: Cmd+Shift+Option+N / Ctrl+Shift+Alt+N fires a real
+  // main-process daily-summary notification (same code path as the morning/
+  // evening notifier). Used to verify display + click-through end-to-end.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!isDevShortcut(e, 'KeyB', platform)) return
-      const route = `/ai?date=${todayString()}&source=daily-summary`
-
-      const openRoute = () => {
-        window.focus()
-        openDailySummaryRoute(route)
-      }
-
-      if (!('Notification' in window)) {
-        openRoute()
-        return
-      }
-
-      const showNotification = () => {
-        const notification = new Notification('Day Wrapped test', {
-          body: 'Tap to open Day Wrapped for today.',
-        })
-        notification.onclick = () => {
-          notification.close()
-          openRoute()
-        }
-      }
-
-      if (Notification.permission === 'granted') {
-        showNotification()
-      } else if (Notification.permission === 'denied') {
-        openRoute()
-      } else {
-        void Notification.requestPermission().then((permission) => {
-          if (permission === 'granted') showNotification()
-          else openRoute()
-        })
-      }
+      if (!isDevShortcut(e, 'KeyN', platform)) return
+      void ipc.dev.fireTestDailyNotification().then((res) => {
+        if (!res.ok) console.warn('[notification-test] failed:', res.reason)
+      })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [openDailySummaryRoute, platform])
+  }, [platform])
 
   // Track route changes
   useEffect(() => {
@@ -185,6 +184,17 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   return (
     <>
       <UpdateBanner />
+      <CommandPalette
+        isOpen={paletteOpen}
+        platform={platform}
+        onClose={() => setPaletteOpen(false)}
+        onOpenWrapped={({ day, threadId, artifactId }) => {
+          setWrappedDay(day)
+          setWrappedThreadId(threadId)
+          setWrappedArtifactId(artifactId)
+          setWrappedOpen(true)
+        }}
+      />
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
       {wrappedOpen && wrappedDay && (
         <DayWrapped

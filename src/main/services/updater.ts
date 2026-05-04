@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, constants as fsConstants } from 'node:fs'
@@ -516,6 +516,8 @@ async function performAdhocMacInstall(): Promise<boolean> {
     version,
   })
 
+  if (!(await confirmInstallWithCleanupHint(version))) return false
+
   try {
     setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
     const zipPath = await downloadRemoteInstaller((pct) => {
@@ -554,6 +556,42 @@ async function performAdhocMacInstall(): Promise<boolean> {
       downloadUrl: MANUAL_DOWNLOAD_URL,
     })
     return false
+  }
+}
+
+// Pre-install nudge so users have one chance to clear old installers from
+// Downloads before the running app is replaced. Returns false when the user
+// cancels — callers must abort the install path on a false return.
+async function confirmInstallWithCleanupHint(version: string | null): Promise<boolean> {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return true
+
+  const parent = _statusWindow && !_statusWindow.isDestroyed() ? _statusWindow : undefined
+  const downloadsLabel = process.platform === 'darwin' ? 'Show Downloads' : 'Open Downloads'
+  const cleanupHint = process.platform === 'darwin'
+    ? 'Daylens replaces the running app in place. To keep things tidy, take a moment to remove older Daylens DMG or ZIP files from Downloads, and any older Daylens.app duplicates from /Applications.'
+    : 'Daylens replaces the running app in place. To keep things tidy, take a moment to remove older Daylens-Setup .exe installers from Downloads.'
+
+  while (true) {
+    const promptOptions: Electron.MessageBoxOptions = {
+      type: 'info',
+      title: 'Install Daylens update',
+      message: version ? `Install Daylens ${version}?` : 'Install the new Daylens build?',
+      detail: cleanupHint,
+      buttons: ['Install now', downloadsLabel, 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    }
+
+    const result = parent
+      ? await dialog.showMessageBox(parent, promptOptions)
+      : await dialog.showMessageBox(promptOptions)
+
+    if (result.response === 0) return true
+    if (result.response === 2) return false
+
+    try { await shell.openPath(app.getPath('downloads')) } catch { /* best effort */ }
+    // Loop back so the user can come back, clean up, then confirm.
   }
 }
 
@@ -613,6 +651,8 @@ async function performWindowsInstall(): Promise<boolean> {
     trigger: 'manual',
     version,
   })
+
+  if (!(await confirmInstallWithCleanupHint(version))) return false
 
   try {
     setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
@@ -735,6 +775,8 @@ export function initUpdater(win: BrowserWindow): void {
       trigger: 'manual',
       version: _state.version ?? app.getVersion(),
     })
+
+    if (!(await confirmInstallWithCleanupHint(_state.version ?? app.getVersion()))) return false
 
     try {
       setUpdaterState({ status: 'installing', errorMessage: null })

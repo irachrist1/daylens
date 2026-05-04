@@ -1,9 +1,17 @@
 # Changelog
 
-## Unreleased - week of 2026-05-01
+## v1.0.36 - 2026-05-04
+
+### Added
+- **Command palette and global shortcut.** Press `Cmd+Alt+D` (macOS) or `Ctrl+Alt+D` (Windows and Linux) anywhere on the system to open Daylens and toggle a Raycast-style command palette. Inside the app you can also press `Cmd+K` or `Ctrl+K`. The palette jumps between Timeline, Apps, AI, and Settings; opens today's or yesterday's Day Wrapped; starts or ends a focus session; searches your timeline sessions, work blocks, browser pages, and saved artifacts; and triggers update checks. Documented in [docs/SHORTCUTS.md](docs/SHORTCUTS.md).
+- **Pre-install cleanup nudge.** When you confirm a Daylens update on macOS or Windows, a native dialog now names the target version, explains that the running app is replaced in place, suggests removing older Daylens installers from Downloads (and older Daylens.app duplicates from /Applications on macOS), and offers an "Open Downloads" button so you can clean up before confirming.
 
 ### Changed
 - **A no-warning Windows install path is in progress.** Daylens now has a Microsoft Store packaging lane so a future Windows build can be Microsoft-signed during Store certification, avoiding SmartScreen warnings on first launch. The Store listing is not live yet — Windows users should keep using the existing signed installer guidance in [INSTALL.md](docs/INSTALL.md) until the Store entry is published. Status is tracked in [docs/ISSUES.md](docs/ISSUES.md).
+- **Honest focus-time language across AI answers.** Comparative day, day-blocks, weekly recap, and yesterday-recap router answers no longer surface a "focus score N/100" line. They describe focused-category time in plain prose only.
+
+### Fixed
+- **Daily notification click-through.** On macOS the dock icon used to dim when Daylens was hidden in tray, which sometimes ate notification clicks. Daylens now brings the app to the foreground first so a Day Wrapped or Morning Brief click reliably surfaces the window. If a notification is ever dismissed before you can click it, `Cmd+Alt+D` plus "Open today's / yesterday's Day Wrapped" gives you the same experience.
 
 ## v1.0.35 - 2026-04-30
 
