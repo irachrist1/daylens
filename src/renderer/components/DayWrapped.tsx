@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AppCategory, DayTimelinePayload } from '@shared/types'
+import type { AppCategory, DayTimelinePayload, DistractionCostPayload, WebsiteSummary } from '@shared/types'
 import { dateStringFromMs, dayBounds, formatTime, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
+import type { BrowserContext, FocusByPeriod, IdentityConfidence, WrappedQuality } from '../lib/wrappedFacts'
+import {
+  buildBrowserContext,
+  computeFocusByPeriod,
+  computeIdentityConfidence,
+  computeQuality,
+} from '../lib/wrappedFacts'
 
 // ─── Themes ─────────────────────────────────────────────────────────────────
 
@@ -49,6 +56,28 @@ const DEFAULT_THEME: SlideTheme = {
 const FOCUS_THEME: SlideTheme = {
   bg: 'linear-gradient(150deg,#030f0e 0%,#083830 55%,#0d5c50 100%)',
   accent: '#4fdbc8', glow: 'rgba(79,219,200,0.38)', hue: 'teal',
+}
+
+const DISTRACTION_COST_THEME: SlideTheme = {
+  bg: 'linear-gradient(150deg,#180808 0%,#5a0c0c 55%,#8c1a1a 100%)',
+  accent: '#f87171', glow: 'rgba(248,113,113,0.38)', hue: 'red',
+}
+
+const DISTRACTION_PEAK_THEME: SlideTheme = {
+  bg: 'linear-gradient(150deg,#140804 0%,#481806 55%,#7a2a06 100%)',
+  accent: '#fb923c', glow: 'rgba(251,146,60,0.38)', hue: 'orange',
+}
+
+const DISTRACTION_IMPROVING_THEME: SlideTheme = {
+  bg: 'linear-gradient(150deg,#031208 0%,#083820 55%,#0d5c32 100%)',
+  accent: '#6ee7b7', glow: 'rgba(110,231,183,0.38)', hue: 'green',
+}
+
+const DISTRACTION_WORSENING_THEME: SlideTheme = DISTRACTION_COST_THEME
+
+const DISTRACTION_FLAT_THEME: SlideTheme = {
+  bg: 'linear-gradient(150deg,#130e04 0%,#3d2206 55%,#6b3a06 100%)',
+  accent: '#ffb95f', glow: 'rgba(255,185,95,0.38)', hue: 'gold',
 }
 
 const SCATTERED_THEME: SlideTheme = {
@@ -123,9 +152,10 @@ const IDENTITY: Partial<Record<AppCategory, string>> = {
   productivity:  'Operator',
   meetings:      'Collaborator',
   email:         'Networker',
-  browsing:      'Researcher',
   entertainment: 'Decompressor',
   social:        'Networker',
+  // browsing is intentionally excluded — browser-heavy days need domain evidence
+  // before a meaningful identity can be claimed (e.g. YouTube ≠ research)
 }
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
@@ -172,13 +202,23 @@ interface WrappedData {
   appCount: number
   blockCount: number
   peakBlock: { label: string; durationSeconds: number; startTime: number; endTime: number; category: AppCategory } | null
-  topApp: { appName: string; durationSeconds: number; category: AppCategory } | null
+  topApp: { appName: string; durationSeconds: number; category: AppCategory; isBrowser: boolean } | null
   totalSwitches: number
   dominantCategory: AppCategory
   dominantCategoryPct: number
   blocks: WrappedBlock[]
   firstActivityTime: number | null
+  lastActivityTime: number | null
   dayStartMs: number
+  // Stage 1 additions
+  quality: WrappedQuality
+  switchesPerHour: number
+  topDomains: WebsiteSummary[]
+  identityConfidence: IdentityConfidence
+  browserContext: BrowserContext | null
+  // Stage 3 additions
+  categoryBreakdown: { category: AppCategory; seconds: number; pct: number }[]
+  focusByPeriod: FocusByPeriod
 }
 
 function deriveData(data: DayTimelinePayload): WrappedData {
@@ -197,11 +237,20 @@ function deriveData(data: DayTimelinePayload): WrappedData {
     category: peakRaw.dominantCategory,
   } : null
 
-  const appMap = new Map<string, { appName: string; durationSeconds: number; category: AppCategory }>()
+  // Build isBrowser flag from block topApps (more reliable than app name matching)
+  const browserFlags = new Map<string, boolean>()
+  for (const b of data.blocks) {
+    for (const a of b.topApps) {
+      browserFlags.set(a.appName, a.isBrowser)
+    }
+  }
+
+  const appMap = new Map<string, { appName: string; durationSeconds: number; category: AppCategory; isBrowser: boolean }>()
   for (const s of data.sessions) {
+    const isBrowser = browserFlags.get(s.appName) ?? (s.category === 'browsing')
     const entry = appMap.get(s.appName)
     if (entry) entry.durationSeconds += s.durationSeconds
-    else appMap.set(s.appName, { appName: s.appName, durationSeconds: s.durationSeconds, category: s.category })
+    else appMap.set(s.appName, { appName: s.appName, durationSeconds: s.durationSeconds, category: s.category, isBrowser })
   }
   const topApp = appMap.size > 0
     ? [...appMap.values()].reduce((a, b) => a.durationSeconds > b.durationSeconds ? a : b)
@@ -222,12 +271,33 @@ function deriveData(data: DayTimelinePayload): WrappedData {
   const totalCatSec = [...catSec.values()].reduce((a, b) => a + b, 0)
   const dominantCategoryPct = totalCatSec > 0 ? Math.round((domSec / totalCatSec) * 100) : 0
 
+  // Stage 3: category breakdown (sorted, top 6)
+  const categoryBreakdown = [...catSec.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([category, seconds]) => ({
+      category,
+      seconds: Math.round(seconds),
+      pct: totalCatSec > 0 ? Math.round((seconds / totalCatSec) * 100) : 0,
+    }))
+
   const blocks: WrappedBlock[] = sortedBlocks.map(b => ({
     durationSeconds: Math.round((b.endTime - b.startTime) / 1000),
     startTime: b.startTime,
     endTime: b.endTime,
     category: b.dominantCategory,
   }))
+
+  // Stage 3: focus by period (morning / afternoon / evening)
+  const focusByPeriod = computeFocusByPeriod(blocks)
+
+  // Stage 1 fields
+  const quality = computeQuality(data.totalSeconds)
+  const hoursTracked = data.totalSeconds / 3600
+  const switchesPerHour = hoursTracked > 0 ? Math.round(totalSwitches / hoursTracked) : 0
+  const topDomains = [...data.websites].sort((a, b) => b.totalSeconds - a.totalSeconds).slice(0, 5)
+  const browserContext = topApp?.isBrowser ? buildBrowserContext(topDomains) : (data.websites.length > 0 ? buildBrowserContext(topDomains) : null)
+  const identityConfidence = computeIdentityConfidence(quality, data.totalSeconds, dominantCategory, dominantCategoryPct, browserContext)
 
   return {
     totalSeconds: data.totalSeconds,
@@ -238,8 +308,20 @@ function deriveData(data: DayTimelinePayload): WrappedData {
     peakBlock, topApp, totalSwitches,
     dominantCategory, dominantCategoryPct,
     blocks,
-    firstActivityTime: sortedBlocks.length > 0 ? sortedBlocks[0].startTime : null,
+    firstActivityTime: sortedBlocks.length > 0
+      ? sortedBlocks[0].startTime
+      : data.sessions.length > 0 ? Math.min(...data.sessions.map(s => s.startTime)) : null,
+    lastActivityTime: sortedBlocks.length > 0
+      ? sortedBlocks[sortedBlocks.length - 1].endTime
+      : data.sessions.length > 0 ? Math.max(...data.sessions.map(s => s.startTime + s.durationSeconds * 1000)) : null,
     dayStartMs: dayFrom,
+    quality,
+    switchesPerHour,
+    topDomains,
+    identityConfidence,
+    browserContext,
+    categoryBreakdown,
+    focusByPeriod,
   }
 }
 
@@ -303,19 +385,24 @@ function humanComparison(seconds: number): string {
 }
 
 function generateTeaser(d: WrappedData): string {
+  if (d.quality === 'empty' || d.quality === 'tooEarly') return 'Not enough data yet for a full story.'
   const h = Math.floor(d.totalSeconds / 3600)
   if (d.focusPct > 70) {
-    return `You found your flow early and stayed there — ${h} hours of mostly clear signal.`
+    return `You found your flow and stayed there — ${h} hours of mostly clear signal.`
   }
   if (d.totalSwitches > 20) {
-    return `A scattered day — ${d.totalSwitches} context switches, but some interesting patterns in the noise.`
+    const rate = d.switchesPerHour
+    return `A scattered day — ${rate} context switch${rate !== 1 ? 'es' : ''} per hour, but some interesting patterns in the noise.`
   }
   if (d.peakBlock) {
     const start = formatTime(d.peakBlock.startTime)
     const end = formatTime(d.peakBlock.endTime)
     return `Your best stretch ran ${start} to ${end}. The rest of the day tells a different story.`
   }
-  return `${h} hours tracked, one dominant pattern. Your full AI breakdown is ready.`
+  if (d.browserContext && !d.browserContext.isWorkRelevant) {
+    return `${formatDurationShort(d.totalSeconds)} tracked. ${d.browserContext.interpretation}`
+  }
+  return `${h > 0 ? `${h}h` : formatDurationShort(d.totalSeconds)} tracked across ${d.blockCount} block${d.blockCount !== 1 ? 's' : ''}.`
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
@@ -370,6 +457,7 @@ function SlideScale({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
   const mins  = useCountUp(Math.floor((d.totalSeconds % 3600) / 60))
   const pct   = Math.min(100, Math.round((d.totalSeconds / (16 * 3600)) * 100))
   const first = d.firstActivityTime ? formatTime(d.firstActivityTime) : null
+  const last  = d.lastActivityTime  ? formatTime(d.lastActivityTime)  : null
 
   return (
     <SlideLeft>
@@ -401,8 +489,13 @@ function SlideScale({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
           {first && (
             <>
               <span style={{ opacity: 0.4 }}> · </span>
-              first active at{' '}
               <span style={{ color: 'rgba(255,255,255,0.72)', fontWeight: 600 }}>{first}</span>
+              {last && last !== first && (
+                <>
+                  {' – '}
+                  <span style={{ color: 'rgba(255,255,255,0.72)', fontWeight: 600 }}>{last}</span>
+                </>
+              )}
             </>
           )}
         </p>
@@ -420,6 +513,14 @@ function SlideFocus({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
   const maxDur = Math.max(...d.blocks.map(b => b.durationSeconds), 1)
   const pills  = d.blocks.slice(0, 24)
 
+  // Stage 3: focus timing copy
+  const peak = d.focusByPeriod.peakPeriod
+  const peakCopy = !noFocus && peak ? (
+    peak === 'morning' ? 'Focus was strongest in the morning.'
+    : peak === 'afternoon' ? 'Focus peaked in the afternoon.'
+    : 'Your clearest work came in the evening.'
+  ) : null
+
   return (
     <SlideLeft>
       {noFocus ? (
@@ -436,6 +537,7 @@ function SlideFocus({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
       {!noFocus && (
         <p style={{ fontSize: 18, fontWeight: 400, lineHeight: 1.5, color: 'rgba(255,255,255,0.5)', marginTop: 20 }}>
           {focusH > 0 ? `${focusH}h ` : ''}{focusM}m of deep focus.
+          {peakCopy && <span style={{ color: 'rgba(255,255,255,0.35)' }}> {peakCopy}</span>}
         </p>
       )}
       {pills.length > 0 && (
@@ -541,6 +643,8 @@ function SlideTopApp({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
   const m = useCountUp(Math.floor((totalSec % 3600) / 60))
   const name = d.topApp?.appName ?? '—'
   const fs = name.length > 18 ? 44 : name.length > 12 ? 56 : name.length > 7 ? 72 : 88
+  const isBrowserTop = d.topApp?.isBrowser ?? false
+  const ctx = isBrowserTop ? d.browserContext : null
 
   return (
     <SlideLeft>
@@ -555,9 +659,31 @@ function SlideTopApp({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
             </span>
             {' '}here today.
           </p>
-          <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.35)', marginTop: 10, fontStyle: 'italic' }}>
-            {humanComparison(totalSec)}
-          </p>
+          {ctx ? (
+            <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.45)', marginTop: 10, lineHeight: 1.55 }}>
+              {ctx.interpretation}
+            </p>
+          ) : (
+            <p style={{ fontSize: 16, color: 'rgba(255,255,255,0.35)', marginTop: 10, fontStyle: 'italic' }}>
+              {humanComparison(totalSec)}
+            </p>
+          )}
+          {ctx && d.topDomains.length > 1 && (
+            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {d.topDomains.slice(0, 3).map((site) => {
+                const dh = Math.floor(site.totalSeconds / 3600)
+                const dm = Math.floor((site.totalSeconds % 3600) / 60)
+                const dur = dh > 0 ? `${dh}h ${dm}m` : `${dm}m`
+                return (
+                  <p key={site.domain} style={{ fontSize: 13, color: 'rgba(255,255,255,0.38)', margin: 0, letterSpacing: '-0.01em' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.65)', fontWeight: 500 }}>{site.domain}</span>
+                    <span style={{ opacity: 0.5 }}> · </span>
+                    {dur}
+                  </p>
+                )
+              })}
+            </div>
+          )}
         </>
       )}
     </SlideLeft>
@@ -565,9 +691,10 @@ function SlideTopApp({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
 }
 
 function SlideContextSwitching({ d, theme }: { d: WrappedData; theme: SlideTheme }) {
-  const switches   = useCountUp(d.totalSwitches)
-  const isScattered = d.totalSwitches > 20
-  const isBalanced  = d.totalSwitches >= 5 && d.totalSwitches <= 20
+  const switches    = useCountUp(d.totalSwitches)
+  const perHour     = d.switchesPerHour
+  const isScattered = perHour > 12 || d.totalSwitches > 20
+  const isBalanced  = !isScattered && (perHour >= 4 || d.totalSwitches >= 5)
 
   const headline = isScattered
     ? <>You were<br />all over<br />the place.</>
@@ -587,6 +714,9 @@ function SlideContextSwitching({ d, theme }: { d: WrappedData; theme: SlideTheme
         <span style={{ color: theme.accent, fontWeight: 600 }}>{switches}</span>
         {' '}context switch{d.totalSwitches !== 1 ? 'es' : ''} across{' '}
         {d.blockCount} session{d.blockCount !== 1 ? 's' : ''}.
+        {perHour > 0 && (
+          <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {perHour}/hr</span>
+        )}
       </p>
       {visible.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 28, maxWidth: 340 }}>
@@ -610,11 +740,39 @@ function SlideContextSwitching({ d, theme }: { d: WrappedData; theme: SlideTheme
 
 function SlideCategoryIdentity({ d, theme, morning = false }: { d: WrappedData; theme: SlideTheme; morning?: boolean }) {
   const pct      = useCountUp(d.dominantCategoryPct, 1100)
-  const identity = IDENTITY[d.dominantCategory] ?? 'Maker'
+  const rawIdentity = IDENTITY[d.dominantCategory]
   const catLabel = d.dominantCategory === 'aiTools' ? 'AI tools' : d.dominantCategory
-  const fs       = identity.length <= 6 ? 144 : identity.length <= 8 ? 120 : identity.length <= 10 ? 96 : 76
+
+  // Confidence-aware identity label
+  const identity: string = (() => {
+    if (d.identityConfidence === 'none' || d.identityConfidence === 'low') {
+      // No strong identity — use a soft alternative
+      if (d.totalSeconds < 60 * 60) return 'Light day'
+      if (d.dominantCategoryPct < 30) return 'Mixed day'
+      if (d.dominantCategory === 'browsing') {
+        if (d.browserContext?.isWorkRelevant) return 'Browser-led'
+        return 'Mostly browsing'
+      }
+      return rawIdentity ?? 'Mixed day'
+    }
+    return rawIdentity ?? 'Maker'
+  })()
+
+  const fs = identity.length <= 6 ? 144 : identity.length <= 8 ? 120 : identity.length <= 10 ? 96 : identity.length <= 14 ? 76 : 56
 
   const GRAIN = `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.12'/%3E%3C/svg%3E")`
+
+  // Soft copy when confidence is low
+  const subCopy = d.identityConfidence === 'none' || d.identityConfidence === 'low' ? (
+    d.dominantCategory === 'browsing' && d.browserContext
+      ? d.browserContext.interpretation
+      : `Not enough signal to pin down a clear role for the day.`
+  ) : (
+    <>
+      <span style={{ color: theme.accent, fontWeight: 600 }}>{pct}%</span>
+      {morning ? ` of yesterday was ${catLabel}.` : ` of your day was ${catLabel}.`}
+    </>
+  )
 
   return (
     <SlideCenter>
@@ -622,16 +780,18 @@ function SlideCategoryIdentity({ d, theme, morning = false }: { d: WrappedData; 
       <div style={{ position: 'absolute', inset: 0, backgroundImage: GRAIN, backgroundSize: '256px 256px', opacity: 0.06, mixBlendMode: 'overlay' }} />
 
       <div style={{ position: 'relative', userSelect: 'none' }}>
-        <div style={{
-          position: 'absolute', top: '50%', left: '50%',
-          transform: 'translate(-50%, -50%)',
-          fontSize: fs * 2.2, fontWeight: 900,
-          color: theme.accent, opacity: 0.04,
-          letterSpacing: '-0.05em', whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-        }}>
-          {identity}
-        </div>
+        {(d.identityConfidence === 'high' || d.identityConfidence === 'medium') && (
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            fontSize: fs * 2.2, fontWeight: 900,
+            color: theme.accent, opacity: 0.04,
+            letterSpacing: '-0.05em', whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+          }}>
+            {identity}
+          </div>
+        )}
         <h1 style={{
           fontSize: fs, fontWeight: 900, lineHeight: 1,
           letterSpacing: '-0.04em', color: theme.accent,
@@ -644,8 +804,7 @@ function SlideCategoryIdentity({ d, theme, morning = false }: { d: WrappedData; 
       </div>
 
       <p style={{ fontSize: 18, fontWeight: 400, color: 'rgba(255,255,255,0.5)', position: 'relative' }}>
-        <span style={{ color: theme.accent, fontWeight: 600 }}>{pct}%</span>
-        {morning ? ` of yesterday was ${catLabel}.` : ` of your day was ${catLabel}.`}
+        {subCopy}
       </p>
     </SlideCenter>
   )
@@ -699,11 +858,72 @@ function SlideCTA({ d, onClose, onOpenReport, hasReport, aiTeaser }: {
   )
 }
 
+// ─── Empty and partial state slides ──────────────────────────────────────────
+
+function SlideEmpty({ onClose }: { onClose: () => void }) {
+  return (
+    <SlideLeft>
+      <h1 style={{ fontSize: 72, fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.025em', color: '#fff', margin: 0 }}>
+        Nothing tracked yet.
+      </h1>
+      <p style={{ fontSize: 18, color: 'rgba(255,255,255,0.45)', marginTop: 20, maxWidth: '36ch', lineHeight: 1.6 }}>
+        Daylens needs some activity before it can tell the story of your day.
+      </p>
+      <button
+        onClick={(e) => { e.stopPropagation(); onClose() }}
+        style={{
+          marginTop: 40, padding: '13px 28px', borderRadius: 10,
+          background: 'rgba(255,255,255,0.08)',
+          color: 'rgba(255,255,255,0.65)',
+          fontSize: 15, fontWeight: 500,
+          border: '1px solid rgba(255,255,255,0.14)',
+          cursor: 'pointer', pointerEvents: 'all',
+        }}
+      >
+        Dismiss
+      </button>
+    </SlideLeft>
+  )
+}
+
+function SlideTooEarly({ d, theme, onClose }: { d: WrappedData; theme: SlideTheme; onClose: () => void }) {
+  const dur = formatDurationShort(d.totalSeconds)
+  return (
+    <SlideLeft>
+      <h1 style={{ fontSize: 72, fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.025em', color: '#fff', margin: 0 }}>
+        Too early to tell.
+      </h1>
+      <p style={{ fontSize: 18, color: 'rgba(255,255,255,0.45)', marginTop: 20, maxWidth: '36ch', lineHeight: 1.6 }}>
+        Daylens has only tracked{' '}
+        <span style={{ color: theme.accent, fontWeight: 600 }}>{dur}</span>{' '}
+        so far. Check back after a real session.
+      </p>
+      <button
+        onClick={(e) => { e.stopPropagation(); onClose() }}
+        style={{
+          marginTop: 40, padding: '13px 28px', borderRadius: 10,
+          background: 'rgba(255,255,255,0.08)',
+          color: 'rgba(255,255,255,0.65)',
+          fontSize: 15, fontWeight: 500,
+          border: '1px solid rgba(255,255,255,0.14)',
+          cursor: 'pointer', pointerEvents: 'all',
+        }}
+      >
+        Dismiss
+      </button>
+    </SlideLeft>
+  )
+}
+
 function morningLead(d: WrappedData, aiTeaser: string | null): string {
   if (aiTeaser) return aiTeaser
+  if (d.quality === 'empty' || d.quality === 'tooEarly') return 'Not much was tracked yesterday, so the signal is thin. Start fresh today.'
   if (d.focusPct >= 65) return `Yesterday, ${d.focusPct}% of your tracked time stayed focused. That is a clean signal to protect today.`
   if (d.peakBlock && d.peakBlock.durationSeconds >= 45 * 60) {
     return `Your clearest stretch ran ${formatTime(d.peakBlock.startTime)} to ${formatTime(d.peakBlock.endTime)}. That window is worth defending.`
+  }
+  if (d.browserContext && !d.browserContext.isWorkRelevant) {
+    return `Yesterday leaned heavy on the browser. ${d.browserContext.interpretation} Start today with a clear thread.`
   }
   if (d.totalSeconds >= 5 * 3600) return `You tracked ${formatDurationShort(d.totalSeconds)} yesterday across ${d.blockCount} work session${d.blockCount !== 1 ? 's' : ''}.`
   if (d.topApp) return `${d.topApp.appName} carried the strongest signal yesterday. The full recap has the shape of the day.`
@@ -712,11 +932,12 @@ function morningLead(d: WrappedData, aiTeaser: string | null): string {
 
 function morningNudge(d: WrappedData, aiTeaser: string | null): string {
   if (aiTeaser && /today|protect|block|carry|keep/i.test(aiTeaser)) return aiTeaser
+  if (d.quality === 'empty' || d.quality === 'tooEarly') return 'Name the one thing you most want to finish today before anything else.'
   if (d.peakBlock && d.peakBlock.durationSeconds >= 45 * 60) {
     return `You hit flow around ${formatTime(d.peakBlock.startTime)} yesterday. Block that window today.`
   }
   if (d.focusPct >= 60) return 'Yesterday had a clean focus pattern. Give the first quiet hour of today a real boundary.'
-  if (d.totalSwitches > 20) return 'Yesterday was switch-heavy. Start today by naming the one thread that gets your best attention.'
+  if (d.switchesPerHour > 12) return 'Yesterday was switch-heavy. Start today by naming the one thread that gets your best attention.'
   return 'Start with the workstream that would make the rest of the day easier.'
 }
 
@@ -833,6 +1054,285 @@ function SlideMorningClose({
         >
           Dismiss
         </button>
+      </div>
+    </SlideLeft>
+  )
+}
+
+// ─── Distraction Cost ─────────────────────────────────────────────────────────
+
+function useDistractionCost(): DistractionCostPayload | null {
+  const [data, setData] = useState<DistractionCostPayload | null>(null)
+  useEffect(() => {
+    ipc.db.getDistractionCost().then(setData).catch(() => {})
+  }, [])
+  return data
+}
+
+function distractionComparisons(totalHours: number): string[] {
+  if (totalHours < 0.5) return []
+  const books = Math.round(totalHours / 2.5)
+  const courses = Math.round(totalHours / 8)
+  const sleep = Math.round(totalHours / 8)
+  const workdays = (totalHours / 8).toFixed(1)
+  const results: string[] = []
+  if (books >= 1) results.push(`${books} book${books !== 1 ? 's' : ''} you didn't read`)
+  if (courses >= 1) results.push(`${courses} course${courses !== 1 ? 's' : ''} left unstarted`)
+  if (sleep >= 1) results.push(`${sleep} night${sleep !== 1 ? 's' : ''} of full sleep`)
+  results.push(`${workdays} full workday${workdays === '1.0' ? '' : 's'} gone`)
+  return results.slice(0, 3)
+}
+
+function SlideDistractionCost({ cost, theme }: { cost: DistractionCostPayload; theme: SlideTheme }) {
+  const totalH = Math.floor(cost.totalDistractionSeconds / 3600)
+  const totalM = Math.floor((cost.totalDistractionSeconds % 3600) / 60)
+  const annualH = Math.floor(cost.annualExtrapolatedSeconds / 3600)
+  const wakingPct = Math.round((cost.totalDistractionSeconds / (30 * 16 * 3600)) * 100)
+  const animPct = useAnimatedFill(wakingPct)
+  const countH = useCountUp(totalH)
+  const countM = useCountUp(totalM)
+  const comparisons = distractionComparisons(cost.totalDistractionSeconds / 3600)
+
+  return (
+    <SlideLeft>
+      <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px', textTransform: 'uppercase' }}>
+        30-day distraction cost
+      </p>
+      <h1 style={{ fontSize: 96, fontWeight: 900, lineHeight: 1, letterSpacing: '-0.035em', color: '#fff', margin: 0 }}>
+        <span style={{ color: theme.accent }}>{countH}h {countM}m</span>
+      </h1>
+      <p style={{ fontSize: 20, fontWeight: 400, color: 'rgba(255,255,255,0.4)', margin: '8px 0 28px', letterSpacing: '-0.01em' }}>
+        lost to distractions.
+      </p>
+
+      <div style={{ width: '100%', marginBottom: 28 }}>
+        <GlowBar pct={animPct} accent={theme.accent} glow={theme.glow} />
+        <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.28)', marginTop: 6, letterSpacing: '0.04em' }}>
+          {wakingPct}% of waking hours across 30 days
+        </p>
+      </div>
+
+      {comparisons.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {comparisons.map((c, i) => (
+            <p key={i} style={{ fontSize: 15, color: 'rgba(255,255,255,0.5)', margin: 0, letterSpacing: '-0.01em' }}>
+              <span style={{ color: theme.accent, fontWeight: 600 }}>·</span> {c}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {annualH > 0 && (
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.22)', marginTop: 24, letterSpacing: '-0.01em' }}>
+          Extrapolated: ~{annualH}h this year
+        </p>
+      )}
+    </SlideLeft>
+  )
+}
+
+function SlideDistractionTrend({ cost, theme }: { cost: DistractionCostPayload; theme: SlideTheme }) {
+  const maxSec = Math.max(...cost.byMonth.map(m => m.totalSeconds), 1)
+
+  const headline =
+    cost.trendDirection === 'improving' ? "Getting better." :
+    cost.trendDirection === 'worsening' ? "Getting worse." :
+    "Holding steady."
+
+  const prevH = Math.floor(cost.previousPeriodSeconds / 3600)
+  const currH = Math.floor(cost.totalDistractionSeconds / 3600)
+  const diffH = Math.abs(currH - prevH)
+
+  const caption = cost.previousPeriodSeconds === 0 ? null :
+    cost.trendDirection === 'improving' ? `Down ${diffH}h from the previous 30 days.` :
+    cost.trendDirection === 'worsening' ? `Up ${diffH}h from the previous 30 days.` :
+    'About the same as the previous 30 days.'
+
+  return (
+    <SlideLeft>
+      <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px', textTransform: 'uppercase' }}>
+        Monthly trend
+      </p>
+      <h1 style={{ fontSize: 66, fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.025em', color: '#fff', margin: 0 }}>
+        {headline}
+      </h1>
+      {caption && (
+        <p style={{ fontSize: 17, color: 'rgba(255,255,255,0.4)', marginTop: 12, letterSpacing: '-0.01em' }}>
+          {caption}
+        </p>
+      )}
+
+      {cost.byMonth.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, marginTop: 36, height: 100 }}>
+          {cost.byMonth.map((m, i) => {
+            const rel = m.totalSeconds / maxSec
+            const barH = Math.max(4, Math.round(rel * 84))
+            const isLast = i === cost.byMonth.length - 1
+            const [, monthNum] = m.month.split('-')
+            const monthLabel = new Date(2000, parseInt(monthNum, 10) - 1, 1)
+              .toLocaleDateString('en-US', { month: 'short' })
+            return (
+              <div key={m.month} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flex: 1 }}>
+                <div style={{
+                  width: '100%', height: barH, borderRadius: 4,
+                  background: theme.accent,
+                  opacity: isLast ? 1 : 0.35,
+                  boxShadow: isLast ? `0 0 14px ${theme.glow}` : 'none',
+                  transition: `height 0.9s ${i * 0.08}s cubic-bezier(0.16,1,0.3,1)`,
+                }} />
+                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.04em', fontWeight: isLast ? 700 : 400 }}>
+                  {monthLabel}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </SlideLeft>
+  )
+}
+
+function SlideDistractionPeak({ cost, theme }: { cost: DistractionCostPayload; theme: SlideTheme }) {
+  const topDomains = cost.byDomain.slice(0, 4)
+  const maxDomainSec = Math.max(...topDomains.map(d => d.totalSeconds), 1)
+
+  const peakLabel = cost.peakHour !== null ? (() => {
+    const h = cost.peakHour
+    const start = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`
+    const end = (h + 1) === 12 ? '12pm' : (h + 1) > 12 ? `${h - 11}pm` : `${h + 1}am`
+    return `${start} – ${end}`
+  })() : null
+
+  const maxHourSec = Math.max(...cost.byHour.map(h => h.totalSeconds), 1)
+  const hourDots = Array.from({ length: 24 }, (_, i) => {
+    const entry = cost.byHour.find(h => h.hour === i)
+    const opacity = entry ? 0.15 + (entry.totalSeconds / maxHourSec) * 0.85 : 0.08
+    return { hour: i, opacity }
+  })
+
+  return (
+    <SlideLeft>
+      <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px', textTransform: 'uppercase' }}>
+        Peak distraction window
+      </p>
+
+      {peakLabel ? (
+        <>
+          <h1 style={{ fontSize: 72, fontWeight: 900, lineHeight: 1, letterSpacing: '-0.03em', color: theme.accent, margin: 0 }}>
+            {peakLabel}
+          </h1>
+          <p style={{ fontSize: 18, color: 'rgba(255,255,255,0.4)', margin: '8px 0 28px', letterSpacing: '-0.01em' }}>
+            your peak distraction hour
+          </p>
+        </>
+      ) : (
+        <h1 style={{ fontSize: 56, fontWeight: 800, lineHeight: 1.1, letterSpacing: '-0.025em', color: '#fff', margin: '0 0 28px' }}>
+          No clear peak yet.
+        </h1>
+      )}
+
+      {/* 24-hour heatmap */}
+      <div style={{ display: 'flex', gap: 3, marginBottom: 28, width: '100%' }}>
+        {hourDots.map(({ hour, opacity }) => (
+          <div
+            key={hour}
+            title={`${hour}:00`}
+            style={{
+              flex: 1, height: 8, borderRadius: 2,
+              background: theme.accent,
+              opacity,
+            }}
+          />
+        ))}
+      </div>
+
+      {topDomains.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+          {topDomains.map(d => {
+            const h = Math.floor(d.totalSeconds / 3600)
+            const m = Math.floor((d.totalSeconds % 3600) / 60)
+            const label = h > 0 ? `${h}h ${m}m` : `${m}m`
+            const barPct = Math.round((d.totalSeconds / maxDomainSec) * 100)
+            return (
+              <div key={d.domain} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                  <span style={{ color: 'rgba(255,255,255,0.65)', fontWeight: 500 }}>{d.domain}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.35)' }}>{label}</span>
+                </div>
+                <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${barPct}%`, height: '100%',
+                    background: theme.accent,
+                    borderRadius: 2,
+                    transition: 'width 1.1s cubic-bezier(0.16,1,0.3,1)',
+                  }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </SlideLeft>
+  )
+}
+
+// ─── Category mix slide ───────────────────────────────────────────────────────
+
+const CAT_DISPLAY_LABELS: Partial<Record<AppCategory, string>> = {
+  development:   'Development',
+  design:        'Design',
+  communication: 'Communication',
+  research:      'Research',
+  writing:       'Writing',
+  aiTools:       'AI tools',
+  productivity:  'Productivity',
+  meetings:      'Meetings',
+  email:         'Email',
+  browsing:      'Browsing',
+  entertainment: 'Entertainment',
+  social:        'Social',
+  system:        'System',
+  uncategorized: 'Uncategorized',
+}
+
+function SlideCategoryMix({ d }: { d: WrappedData }) {
+  const items = d.categoryBreakdown.slice(0, 5)
+  const maxSec = items[0]?.seconds ?? 1
+
+  return (
+    <SlideLeft>
+      <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 16px', textTransform: 'uppercase' }}>
+        Where time went
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+        {items.map((item) => {
+          const h = Math.floor(item.seconds / 3600)
+          const m = Math.floor((item.seconds % 3600) / 60)
+          const dur = h > 0 ? `${h}h ${m}m` : `${m}m`
+          const barPct = Math.round((item.seconds / maxSec) * 100)
+          const accent = CAT_THEME[item.category]?.accent ?? DEFAULT_THEME.accent
+          return (
+            <div key={item.category} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                <span style={{ color: 'rgba(255,255,255,0.75)', fontWeight: 500 }}>
+                  {CAT_DISPLAY_LABELS[item.category] ?? item.category}
+                </span>
+                <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13 }}>
+                  {dur}
+                  <span style={{ color: 'rgba(255,255,255,0.25)', marginLeft: 6 }}>{item.pct}%</span>
+                </span>
+              </div>
+              <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${barPct}%`, height: '100%',
+                  background: accent,
+                  borderRadius: 2,
+                  transition: 'width 1.1s cubic-bezier(0.16,1,0.3,1)',
+                }} />
+              </div>
+            </div>
+          )
+        })}
       </div>
     </SlideLeft>
   )
@@ -1052,8 +1552,20 @@ export default function DayWrapped({
   }, [data.date, isMorning])
 
   const weekSummary = useWeekData(!isMorning && isExtended, data.date)
+  const distractionCost = useDistractionCost()
+  const hasDistractionData = !isMorning && distractionCost !== null && distractionCost.totalDistractionSeconds > 0
 
-  const SLIDE_COUNT = isMorning ? (showMorningNudge ? 4 : 3) : (isExtended && weekSummary ? 10 : 7)
+  const distractionSlides = hasDistractionData ? 3 : 0
+  const weekSlides = !isMorning && isExtended && weekSummary ? 3 : 0
+
+  // Quality gates: empty/tooEarly get a short slide set; partial gets 4 slides
+  // Full quality: 8 slides (Scale, Focus, Peak, TopApp, CategoryMix, Switching, Identity, CTA)
+  const SLIDE_COUNT = isMorning
+    ? (showMorningNudge ? 4 : 3)
+    : d.quality === 'empty' ? 1
+    : d.quality === 'tooEarly' ? 1
+    : d.quality === 'partial' ? 4
+    : 8 + distractionSlides + weekSlides
 
   const [slideIndex, setSlideIndex] = useState(0)
   const [direction, setDirection] = useState<'forward' | 'back'>('forward')
@@ -1091,25 +1603,41 @@ export default function DayWrapped({
         ? [MORNING_THEMES[0], MORNING_THEMES[1], MORNING_THEMES[2], MORNING_THEMES[3]]
         : [MORNING_THEMES[0], MORNING_THEMES[1], MORNING_THEMES[3]]
     }
-    const sevenSlideThemes = [
-      DEFAULT_THEME,
-      FOCUS_THEME,
-      d.peakBlock ? catTheme(d.peakBlock.category)    : DEFAULT_THEME,
-      d.topApp    ? catTheme(d.topApp.category)        : DEFAULT_THEME,
-      d.totalSwitches > 20 ? SCATTERED_THEME           : STEADY_THEME,
-      identityCatTheme(d.dominantCategory),
-      DEFAULT_THEME,
-    ]
-    if (isExtended && weekSummary) {
+    if (d.quality === 'empty' || d.quality === 'tooEarly') {
+      return [DEFAULT_THEME]
+    }
+    if (d.quality === 'partial') {
       return [
-        ...sevenSlideThemes,
-        CAT_THEME.productivity ?? DEFAULT_THEME,
-        CAT_THEME.meetings     ?? DEFAULT_THEME,
+        DEFAULT_THEME,
+        FOCUS_THEME,
+        d.topApp ? catTheme(d.topApp.category) : DEFAULT_THEME,
         DEFAULT_THEME,
       ]
     }
-    return sevenSlideThemes
-  }, [d, isExtended, isMorning, showMorningNudge, weekSummary])
+    const coreSlideThemes: SlideTheme[] = [
+      DEFAULT_THEME,                                                              // 0: Scale
+      FOCUS_THEME,                                                                // 1: Focus
+      d.peakBlock ? catTheme(d.peakBlock.category)    : DEFAULT_THEME,           // 2: Peak block
+      d.topApp    ? catTheme(d.topApp.category)        : DEFAULT_THEME,           // 3: Top app/domains
+      DEFAULT_THEME,                                                              // 4: Category mix
+      d.switchesPerHour > 12 || d.totalSwitches > 20 ? SCATTERED_THEME : STEADY_THEME, // 5: Context switching
+      identityCatTheme(d.dominantCategory),                                      // 6: Identity
+      DEFAULT_THEME,                                                              // 7: CTA
+    ]
+    const distractionThemes: SlideTheme[] = hasDistractionData ? [
+      DISTRACTION_COST_THEME,
+      distractionCost?.trendDirection === 'improving' ? DISTRACTION_IMPROVING_THEME :
+      distractionCost?.trendDirection === 'worsening' ? DISTRACTION_WORSENING_THEME :
+      DISTRACTION_FLAT_THEME,
+      DISTRACTION_PEAK_THEME,
+    ] : []
+    const weekThemes: SlideTheme[] = isExtended && weekSummary ? [
+      CAT_THEME.productivity ?? DEFAULT_THEME,
+      CAT_THEME.meetings     ?? DEFAULT_THEME,
+      DEFAULT_THEME,
+    ] : []
+    return [...coreSlideThemes, ...distractionThemes, ...weekThemes]
+  }, [d, distractionCost, hasDistractionData, isExtended, isMorning, showMorningNudge, weekSummary])
 
   const slideThemes = useMemo(
     () => dedupeAdjacentThemes(baseThemes).map((entry) => rotateGradientForDate(entry, data.date)),
@@ -1192,22 +1720,47 @@ export default function DayWrapped({
               <SlideMorningClose hasReport={hasReport} aiTeaser={aiTeaser} onClose={onClose} onOpenReport={onOpenReport} />
             )}
           </>
+        ) : d.quality === 'empty' ? (
+          // Empty state: nothing tracked
+          <SlideEmpty onClose={onClose} />
+        ) : d.quality === 'tooEarly' ? (
+          // Too early: under 5 minutes tracked
+          <SlideTooEarly d={d} theme={theme} onClose={onClose} />
+        ) : d.quality === 'partial' ? (
+          // Partial state: 5–45 min tracked — show 4 slides with soft copy
+          <>
+            {slideIndex === 0 && <SlideScale d={d} theme={theme} />}
+            {slideIndex === 1 && <SlideFocus d={d} theme={theme} />}
+            {slideIndex === 2 && <SlideTopApp d={d} theme={theme} />}
+            {slideIndex === 3 && <SlideCTA d={d} onClose={onClose} onOpenReport={onOpenReport} hasReport={hasReport} aiTeaser={aiTeaser} />}
+          </>
         ) : (
+          // Full state: 45+ min tracked — 8-slide carousel + optional distraction + week
           <>
             {slideIndex === 0 && <SlideScale d={d} theme={theme} />}
             {slideIndex === 1 && <SlideFocus d={d} theme={theme} />}
             {slideIndex === 2 && <SlidePeakBlock d={d} theme={theme} />}
             {slideIndex === 3 && <SlideTopApp d={d} theme={theme} />}
-            {slideIndex === 4 && <SlideContextSwitching d={d} theme={theme} />}
-            {slideIndex === 5 && <SlideCategoryIdentity d={d} theme={theme} />}
-            {slideIndex === 6 && <SlideCTA d={d} onClose={onClose} onOpenReport={onOpenReport} hasReport={hasReport} aiTeaser={aiTeaser} />}
-            {slideIndex === 7 && weekSummary && (
+            {slideIndex === 4 && <SlideCategoryMix d={d} />}
+            {slideIndex === 5 && <SlideContextSwitching d={d} theme={theme} />}
+            {slideIndex === 6 && <SlideCategoryIdentity d={d} theme={theme} />}
+            {slideIndex === 7 && <SlideCTA d={d} onClose={onClose} onOpenReport={onOpenReport} hasReport={hasReport} aiTeaser={aiTeaser} />}
+            {hasDistractionData && distractionCost && slideIndex === 8 && (
+              <SlideDistractionCost cost={distractionCost} theme={theme} />
+            )}
+            {hasDistractionData && distractionCost && slideIndex === 9 && (
+              <SlideDistractionTrend cost={distractionCost} theme={theme} />
+            )}
+            {hasDistractionData && distractionCost && slideIndex === 10 && (
+              <SlideDistractionPeak cost={distractionCost} theme={theme} />
+            )}
+            {weekSummary && slideIndex === 8 + distractionSlides && (
               <SlideWeekChart week={weekSummary.thisWeek} theme={theme} />
             )}
-            {slideIndex === 8 && weekSummary && (
+            {weekSummary && slideIndex === 9 + distractionSlides && (
               <SlidePersonalRecord week={weekSummary.thisWeek} />
             )}
-            {slideIndex === 9 && weekSummary && (
+            {weekSummary && slideIndex === 10 + distractionSlides && (
               <SlideWeekComparison thisWeek={weekSummary.thisWeek} lastWeek={weekSummary.lastWeek} theme={theme} />
             )}
           </>
