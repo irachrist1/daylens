@@ -4,7 +4,7 @@ import { BrowserWindow, Notification, app, nativeImage } from 'electron'
 import { getSessionsForRange } from '../db/queries'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { getDb } from './database'
-import { getSettings } from './settings'
+import { getSettings, hasApiKey } from './settings'
 import { prepareDailyReport } from './ai'
 import {
   buildDailyReportRoute,
@@ -16,6 +16,14 @@ interface DailyNotifierState {
   lastDailySummaryDate?: string
   lastMorningNudgeDate?: string
 }
+
+// Minimum tracked seconds before Wrapped has enough signal to be worth notifying.
+// Matches the 'partial' threshold from the renderer quality model.
+const NOTIFY_MIN_SECONDS = 45 * 60
+
+// How long to wait for AI report preparation before firing the notification
+// without it. Wrapped opens instantly with deterministic content regardless.
+const AI_REPORT_TIMEOUT_MS = 12_000
 
 let notifierTimer: ReturnType<typeof setInterval> | null = null
 let dailySummaryPreparing = false
@@ -92,13 +100,49 @@ function notifyWithNavigation(title: string, body: string, route: string, option
   setTimeout(() => { liveNotifications.delete(notification) }, 30 * 60 * 1000)
 }
 
-function hasTrackedActivityOn(date: string): boolean {
+// Returns true only when the day has enough tracked time for a meaningful Wrapped.
+// A session count check is too weak — any accidental app open would pass it.
+function hasEnoughActivityOn(date: string): boolean {
+  const [fromMs, toMs] = localDayBounds(date)
+  const sessions = getSessionsForRange(getDb(), fromMs, toMs)
+  const totalSeconds = sessions.reduce((sum, s) => sum + s.durationSeconds, 0)
+  return totalSeconds >= NOTIFY_MIN_SECONDS
+}
+
+function hasAnyActivityOn(date: string): boolean {
   const [fromMs, toMs] = localDayBounds(date)
   return getSessionsForRange(getDb(), fromMs, toMs).length > 0
 }
 
 function hasReachedLocalTime(now: Date, hour: number, minute = 0): boolean {
   return now.getHours() > hour || (now.getHours() === hour && now.getMinutes() >= minute)
+}
+
+// Tries to prep an AI report but resolves null if AI is unavailable or too slow.
+// Wrapped is never blocked on this — it opens instantly with deterministic content.
+async function tryPrepareAIReport(dateStr: string): Promise<{ route: string } | null> {
+  const settings = getSettings()
+  const provider = settings.aiProvider ?? 'anthropic'
+
+  let aiAvailable = false
+  try {
+    aiAvailable = await hasApiKey(provider)
+  } catch {
+    aiAvailable = false
+  }
+
+  if (!aiAvailable) return null
+
+  try {
+    const result = await Promise.race([
+      prepareDailyReport(dateStr),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), AI_REPORT_TIMEOUT_MS)),
+    ])
+    if (!result || result.status !== 'ready') return null
+    return { route: buildDailyReportRoute(result) }
+  } catch {
+    return null
+  }
 }
 
 async function checkDailySummary(): Promise<void> {
@@ -111,13 +155,13 @@ async function checkDailySummary(): Promise<void> {
   const state = readState()
   if (state.lastDailySummaryDate === today) return
   if (!hasReachedLocalTime(now, 18)) return
-  if (!hasTrackedActivityOn(today)) return
+  if (!hasEnoughActivityOn(today)) return
 
   dailySummaryPreparing = true
   try {
-    const report = await prepareDailyReport(today)
-    if (report.status !== 'ready') return
-    notifyWithNavigation('Daylens', 'Your day report is ready.', buildDailyReportRoute(report))
+    const ai = await tryPrepareAIReport(today)
+    const route = ai?.route ?? `/wrapped?date=${today}&source=daily-summary`
+    notifyWithNavigation('Daylens', 'Your day is ready.', route)
     writeState({ ...state, lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
@@ -135,17 +179,17 @@ async function checkMorningNudge(): Promise<void> {
   const state = readState()
   if (state.lastMorningNudgeDate === today) return
   if (!hasReachedLocalTime(now, 9) || now.getHours() >= 12) return
-  if (hasTrackedActivityOn(today)) return
-  if (!hasTrackedActivityOn(yesterday)) return
+  if (hasAnyActivityOn(today)) return
+  if (!hasEnoughActivityOn(yesterday)) return
 
   dailySummaryPreparing = true
   try {
-    const report = await prepareDailyReport(yesterday)
-    if (report.status !== 'ready') return
+    const ai = await tryPrepareAIReport(yesterday)
+    const route = ai?.route ?? `/wrapped?date=${yesterday}&source=daily-summary`
     notifyWithNavigation(
-      'Morning Brief is ready',
-      "Open yesterday's recap and carry the best signal into today.",
-      buildDailyReportRoute(report),
+      'Yesterday\'s recap is ready',
+      "Carry the best signal from yesterday into today.",
+      route,
       { actionText: 'Open' },
     )
     writeState({ ...state, lastMorningNudgeDate: today })
@@ -167,20 +211,18 @@ export async function fireTestDailyNotification(): Promise<{ ok: boolean; reason
   const targetDate = isMorning ? yesterday : today
 
   try {
-    const report = await prepareDailyReport(targetDate)
-    const route = report.status === 'ready'
-      ? buildDailyReportRoute(report)
-      : `/ai?date=${targetDate}&source=daily-summary`
+    const ai = await tryPrepareAIReport(targetDate)
+    const route = ai?.route ?? `/wrapped?date=${targetDate}&source=daily-summary`
 
     if (isMorning) {
       notifyWithNavigation(
-        'Morning Brief is ready',
-        "Open yesterday's recap and carry the best signal into today.",
+        'Yesterday\'s recap is ready',
+        "Carry the best signal from yesterday into today.",
         route,
         { actionText: 'Open' },
       )
     } else {
-      notifyWithNavigation('Daylens', 'Your day report is ready.', route)
+      notifyWithNavigation('Daylens', 'Your day is ready.', route)
     }
     return { ok: true }
   } catch (err) {

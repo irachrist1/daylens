@@ -9,7 +9,7 @@ import DayWrapped from './components/DayWrapped'
 import CommandPalette from './components/CommandPalette'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
-import { dateStringFromMs, todayString } from './lib/format'
+import { todayString } from './lib/format'
 import { handleDailySummaryNavigation } from './lib/dailySummaryNavigation'
 import Onboarding from './views/Onboarding'
 import FeedbackModal from './components/FeedbackModal'
@@ -132,12 +132,11 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [platform, settings])
 
-  // Dev shortcut: Cmd+Shift+Option+W / Ctrl+Shift+Alt+W opens DayWrapped for yesterday
+  // Dev shortcut: Cmd+Shift+Option+W / Ctrl+Shift+Alt+W opens DayWrapped for today
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!isDevShortcut(e, 'KeyW', platform)) return
-      const yesterday = dateStringFromMs(Date.now() - 86_400_000)
-      void ipc.db.getTimelineDay(yesterday).then((payload) => {
+      void ipc.db.getTimelineDay(todayString()).then((payload) => {
         setWrappedDay(payload)
         setWrappedThreadId(null)
         setWrappedArtifactId(null)

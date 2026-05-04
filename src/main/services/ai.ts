@@ -95,6 +95,7 @@ import type {
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
+import { DISTRACTION_DOMAINS } from '@shared/types'
 import {
   executeTextAIJob,
   modelForProvider,
@@ -2084,7 +2085,6 @@ function buildAllTimeContext(): string {
     const focusSeconds = apps.filter((a) => a.isFocused).reduce((sum, app) => sum + app.totalSeconds, 0)
     const focusPct = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
 
-    const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
     const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
     const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
 

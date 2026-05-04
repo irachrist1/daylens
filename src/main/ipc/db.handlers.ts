@@ -25,7 +25,7 @@ import { runAttributionForRange } from '../services/attribution'
 import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
-import { getBlockDetailPayload } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload } from '../services/workBlocks'
 import { scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
@@ -282,6 +282,10 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')
+  })
+
+  ipcMain.handle(IPC.DB.GET_DISTRACTION_COST, () => {
+    return getDistractionCostPayload(getDb())
   })
 
   // Returns the current in-flight session (not yet flushed to DB) so the renderer

@@ -22,6 +22,7 @@ import type {
   BrowserLinkResult,
   BreakRecommendation,
   DayTimelinePayload,
+  DistractionCostPayload,
   FocusReflectionSavePayload,
   FocusSession,
   FocusStartPayload,
@@ -108,6 +109,7 @@ const api = {
   },
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
+    getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getCategoryOverrides: (): Promise<Record<string, AppCategory>> => ipcRenderer.invoke(IPC.DB.GET_CATEGORY_OVERRIDES),
     setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
