@@ -7,3 +7,10 @@ dist-release/
 *.log
 .DS_Store
 private/
+
+# AI agent working files — ephemeral planning docs, not part of the source record
+PLAN.md
+CONTEXT.md
+PROMPTS.md
+.agents/
+skills-lock.json

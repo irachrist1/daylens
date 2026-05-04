@@ -19,12 +19,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          # Blacksmith M4 Apple Silicon — native arm64, faster than GitHub-hosted Intel macos-latest.
+          # Requires the Blacksmith GitHub App: https://github.com/apps/blacksmith
+          - os: blacksmith-6vcpu-macos-latest
             platform: mac
             artifact_name: daylens-preview-macos
             artifact_paths: |
               dist-release/*.dmg
               dist-release/*.zip
+          # Windows stays on GitHub-hosted runners — Blacksmith Windows is in public beta and the
+          # NSIS signing toolchain is sensitive to runner environment changes.
           - os: windows-latest
             platform: win
             artifact_name: daylens-preview-windows
@@ -32,7 +36,8 @@ jobs:
               dist-release/*.exe
               dist-release/*.blockmap
               dist-release/latest*.yml
-          - os: ubuntu-latest
+          # Blacksmith Ubuntu 24.04 — faster builds, Docker supported for RPM smoke tests.
+          - os: blacksmith-4vcpu-ubuntu-2404
             platform: linux
             artifact_name: daylens-preview-linux
             artifact_paths: |

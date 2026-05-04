@@ -19,7 +19,9 @@ permissions:
 jobs:
   build-linux:
     timeout-minutes: 120
-    runs-on: ubuntu-latest
+    # Blacksmith Ubuntu 24.04 runner — faster builds, Docker supported.
+    # Requires the Blacksmith GitHub App installed on this repo: https://github.com/apps/blacksmith
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Derive version from tag
