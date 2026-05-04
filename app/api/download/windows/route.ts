@@ -2,12 +2,12 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { proxyLatestMatchingAsset } from "../_releaseAsset";
 
-// The Windows release workflow requires a signed Authenticode certificate and is triggered
-// separately from the main macOS release (push a `v{VERSION}-win` tag). This floor prevents
-// the download endpoint from serving pre-signing-era unsigned builds. Lower it here when an
-// older signed build needs to be the public fallback.
-const MIN_SIGNED_WINDOWS_VERSION =
-  process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.33";
+// Floor version for Windows downloads. The Windows release workflow builds unsigned
+// installers when no Authenticode certificate secrets are configured (SmartScreen warns
+// on first launch, same as all unsigned apps). Raise this floor whenever a new Windows
+// build is published. Override at runtime via DAYLENS_MIN_SIGNED_WINDOWS_VERSION.
+const MIN_WINDOWS_VERSION =
+  process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.36";
 const WINDOWS_STORE_URL = process.env.DAYLENS_WINDOWS_STORE_URL?.trim() || "";
 
 export async function GET(request: NextRequest) {
@@ -18,6 +18,6 @@ export async function GET(request: NextRequest) {
   const version = request.nextUrl.searchParams.get("version");
   return proxyLatestMatchingAsset(
     (asset) => /Setup\.exe$/i.test(asset.name) || asset.name.endsWith(".exe"),
-    { version, minVersion: MIN_SIGNED_WINDOWS_VERSION },
+    { version, minVersion: MIN_WINDOWS_VERSION },
   );
 }
