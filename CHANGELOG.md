@@ -4,6 +4,7 @@
 
 ### Changed
 - **Silent Windows updates.** Daylens on Windows now downloads new releases quietly in the background and applies them the next time you quit the app — no manual install step, no second SmartScreen prompt for already-installed users. macOS continues to use its existing in-place update path. See [INSTALL.md](docs/INSTALL.md) for the current install and update flow.
+- **Windows code-signing is now optional.** The Windows release workflow auto-detects signing credentials from repository secrets. When `WIN_CERTIFICATE_FILE`, `WIN_CERTIFICATE_PASSWORD`, and `WIN_CERT_SUBJECT_NAME` are configured, builds are signed and signatures are verified before publishing. When they are not configured, the workflow logs a warning and publishes an unsigned installer instead of failing. This restores Windows downloads after the previous policy blocked every release without a certificate. Unsigned installers show a SmartScreen *"Windows protected your PC"* prompt on first launch — see [INSTALL.md](docs/INSTALL.md#about-the-smartscreen-warning) for what to expect. Maintainers can enable automatic signing for future builds by adding the three secrets, with no further workflow changes; setup steps are in [docs/WINDOWS_SIGNING.md](docs/WINDOWS_SIGNING.md).
 
 ## v1.0.36 - 2026-05-04
 
