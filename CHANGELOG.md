@@ -4,6 +4,7 @@
 
 ### Added
 - **Command palette and global shortcut.** Press `Cmd+Alt+D` (macOS) or `Ctrl+Alt+D` (Windows and Linux) anywhere on the system to open Daylens and toggle a Raycast-style command palette. Inside the app you can also press `Cmd+K` or `Ctrl+K`. The palette jumps between Timeline, Apps, AI, and Settings; opens today's or yesterday's Day Wrapped; starts or ends a focus session; searches your timeline sessions, work blocks, browser pages, and saved artifacts; and triggers update checks. Documented in [docs/SHORTCUTS.md](docs/SHORTCUTS.md).
+- **Browser pages now show up in your timeline.** Daylens captures the active tab from Arc, Brave, Chrome, Chromium, Comet, Dia, Edge, Firefox, Opera, Safari, and Vivaldi while you work, then surfaces the pages you visited alongside file and window-title evidence in each session, work block, and AI answer. The result: timeline blocks, app details, and recap narratives know what you actually read on the web, not just which browser was open.
 - **Pre-install cleanup nudge.** When you confirm a Daylens update on macOS or Windows, a native dialog now names the target version, explains that the running app is replaced in place, suggests removing older Daylens installers from Downloads (and older Daylens.app duplicates from /Applications on macOS), and offers an "Open Downloads" button so you can clean up before confirming.
 
 ### Changed
