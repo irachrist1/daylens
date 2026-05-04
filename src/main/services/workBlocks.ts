@@ -10,6 +10,10 @@ import {
   getWebsiteVisitsForRange,
   getWebsiteSummariesForRange,
   getWorkContextInsightForRange,
+  getDistractionByMonth,
+  getDistractionByHour,
+  getDistractionByDomain,
+  getDaysTracked,
 } from '../db/queries'
 import type {
   AppDetailPayload,
@@ -19,6 +23,7 @@ import type {
   ArtifactRef,
   BlockConfidence,
   DayTimelinePayload,
+  DistractionCostPayload,
   DocumentRef,
   HistoryDayPayload,
   LiveSession,
@@ -30,7 +35,7 @@ import type {
   WorkContextAppSummary,
   WorkContextBlock,
 } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
+import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { localDayBounds } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import {
@@ -2442,5 +2447,58 @@ export function getAppDetailPayload(
     timeOfDayDistribution,
     computedAt: profile.computedAt,
     rangeKey,
+  }
+}
+
+export function getDistractionCostPayload(
+  db: Database.Database,
+  domains: string[] = DISTRACTION_DOMAINS,
+): DistractionCostPayload {
+  const now = Date.now()
+  const ms30d = 30 * 24 * 60 * 60 * 1000
+  const ms60d = 60 * 24 * 60 * 60 * 1000
+  const ms6mo = 182 * 24 * 60 * 60 * 1000
+
+  const from30d = now - ms30d
+  const from60d = now - ms60d
+  const from6mo = now - ms6mo
+
+  const daysTracked = getDaysTracked(db, from30d)
+  const byDomain = getDistractionByDomain(db, domains, from30d)
+  const byHour = getDistractionByHour(db, domains, from30d)
+  const byMonth = getDistractionByMonth(db, domains, from6mo)
+
+  const totalDistractionSeconds = byDomain.reduce((s, d) => s + d.totalSeconds, 0)
+
+  const annualExtrapolatedSeconds = daysTracked > 0
+    ? Math.round((totalDistractionSeconds / daysTracked) * 365)
+    : 0
+
+  const peakHour = byHour.length > 0
+    ? byHour.reduce((best, h) => h.totalSeconds > best.totalSeconds ? h : best).hour
+    : null
+
+  // Trend: compare last 30 days vs previous 30 days
+  const prevDomain = getDistractionByDomain(db, domains, from60d)
+  const prevTotal = prevDomain.reduce((s, d) => s + d.totalSeconds, 0) - totalDistractionSeconds
+  const previousPeriodSeconds = Math.max(0, prevTotal)
+
+  let trendDirection: DistractionCostPayload['trendDirection'] = 'flat'
+  if (previousPeriodSeconds > 0) {
+    const changePct = (totalDistractionSeconds - previousPeriodSeconds) / previousPeriodSeconds
+    if (changePct < -0.1) trendDirection = 'improving'
+    else if (changePct > 0.1) trendDirection = 'worsening'
+  }
+
+  return {
+    daysTracked,
+    totalDistractionSeconds,
+    annualExtrapolatedSeconds,
+    byMonth,
+    byHour,
+    byDomain,
+    peakHour,
+    trendDirection,
+    previousPeriodSeconds,
   }
 }

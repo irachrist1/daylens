@@ -2146,3 +2146,71 @@ export function listPendingWorkContextCleanupDates(
 
   return rows.map((row) => row.date)
 }
+
+export function getDistractionByMonth(
+  db: Database.Database,
+  domains: string[],
+  fromMs: number,
+): { month: string; totalSeconds: number }[] {
+  if (domains.length === 0) return []
+  const placeholders = domains.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT strftime('%Y-%m', datetime(visit_time / 1000, 'unixepoch', 'localtime')) AS month,
+           SUM(duration_sec) AS total_sec
+    FROM website_visits
+    WHERE domain IN (${placeholders})
+      AND visit_time >= ?
+    GROUP BY month
+    ORDER BY month ASC
+  `).all(...domains, fromMs) as { month: string; total_sec: number }[]
+  return rows.map(r => ({ month: r.month, totalSeconds: r.total_sec }))
+}
+
+export function getDistractionByHour(
+  db: Database.Database,
+  domains: string[],
+  fromMs: number,
+): { hour: number; totalSeconds: number }[] {
+  if (domains.length === 0) return []
+  const placeholders = domains.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT CAST(strftime('%H', datetime(visit_time / 1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+           SUM(duration_sec) AS total_sec
+    FROM website_visits
+    WHERE domain IN (${placeholders})
+      AND visit_time >= ?
+    GROUP BY hour
+    ORDER BY hour ASC
+  `).all(...domains, fromMs) as { hour: number; total_sec: number }[]
+  return rows.map(r => ({ hour: r.hour, totalSeconds: r.total_sec }))
+}
+
+export function getDistractionByDomain(
+  db: Database.Database,
+  domains: string[],
+  fromMs: number,
+): { domain: string; totalSeconds: number }[] {
+  if (domains.length === 0) return []
+  const placeholders = domains.map(() => '?').join(', ')
+  const rows = db.prepare(`
+    SELECT domain, SUM(duration_sec) AS total_sec
+    FROM website_visits
+    WHERE domain IN (${placeholders})
+      AND visit_time >= ?
+    GROUP BY domain
+    ORDER BY total_sec DESC
+  `).all(...domains, fromMs) as { domain: string; total_sec: number }[]
+  return rows.map(r => ({ domain: r.domain, totalSeconds: r.total_sec }))
+}
+
+export function getDaysTracked(
+  db: Database.Database,
+  fromMs: number,
+): number {
+  const row = db.prepare(`
+    SELECT COUNT(DISTINCT date(datetime(start_time / 1000, 'unixepoch', 'localtime'))) AS day_count
+    FROM app_sessions
+    WHERE start_time >= ?
+  `).get(fromMs) as { day_count: number }
+  return row?.day_count ?? 0
+}

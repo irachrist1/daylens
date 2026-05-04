@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
+import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
 import {
   buildClientInvoiceNarrativeForRange,
@@ -1823,11 +1823,6 @@ export async function routeInsightsQuestion(
       ? Math.max(1, Math.round((toMs - firstSession) / (24 * 60 * 60 * 1000)))
       : Math.max(1, Math.round((toMs - fromMs) / (24 * 60 * 60 * 1000)))
 
-    const DISTRACTION_DOMAINS = [
-      'youtube.com', 'x.com', 'twitter.com', 'instagram.com',
-      'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com',
-    ]
-
     // If specific sites or apps are named in the question, surface only those
     const mentionedSites = allTimeSites.filter((site) => {
       const base = site.domain.toLowerCase().replace(/\.com$|\.org$|\.net$|\.io$/, '')
@@ -1927,7 +1922,6 @@ export async function routeInsightsQuestion(
       const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
       const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
       const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
-      const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
       const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
       const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
 
@@ -2073,7 +2067,6 @@ export async function routeInsightsQuestion(
     const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
     const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
     const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
-    const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
     const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
     const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
 

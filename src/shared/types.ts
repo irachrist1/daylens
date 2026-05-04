@@ -620,6 +620,23 @@ export interface WeeklySummary {
   }[]
 }
 
+export const DISTRACTION_DOMAINS = [
+  'youtube.com', 'x.com', 'twitter.com', 'instagram.com',
+  'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com',
+]
+
+export interface DistractionCostPayload {
+  daysTracked: number
+  totalDistractionSeconds: number
+  annualExtrapolatedSeconds: number
+  byMonth: { month: string; totalSeconds: number }[]
+  byHour: { hour: number; totalSeconds: number }[]
+  byDomain: { domain: string; totalSeconds: number }[]
+  peakHour: number | null
+  trendDirection: 'improving' | 'worsening' | 'flat'
+  previousPeriodSeconds: number
+}
+
 export interface AppCharacter {
   character:
     | 'deep_focus'
@@ -1064,6 +1081,7 @@ export const IPC = {
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
     SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
     CLEAR_BLOCK_LABEL_OVERRIDE: 'db:clear-block-label-override',
+    GET_DISTRACTION_COST: 'db:get-distraction-cost',
   },
   DEBUG: {
     GET_INFO: 'debug:get-info',
