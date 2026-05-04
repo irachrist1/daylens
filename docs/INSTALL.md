@@ -70,9 +70,22 @@ Daylens currently ships arm64 builds only. Intel Macs are not supported by the p
 
 1. Download the current Windows installer from the link above
 2. Run it. It installs per-user (no admin prompt) and launches automatically.
-3. If Windows shows a blue *"Windows protected your PC"* banner, stop and verify the installer came from the official Daylens release link above. Older Windows builds were unsigned, which triggers the strongest SmartScreen warning. New public Windows releases are expected to be Authenticode-signed; a signed but brand-new build can still show a reputation warning until Microsoft has seen enough trusted installs.
+3. If Windows shows a blue *"Windows protected your PC"* banner, click **More info**, then **Run anyway** to launch the installer. Verify the file came from the official Daylens release link above before proceeding.
 
 To uninstall: **Settings → Apps → Daylens → Uninstall**.
+
+### About the SmartScreen warning
+
+Daylens releases publish whether or not Authenticode signing credentials are configured in CI. This keeps Windows downloads available even when a code-signing certificate is unavailable, instead of serving a 404 to every Windows user.
+
+What this means for you:
+
+- **Unsigned builds** show the strongest SmartScreen prompt (*"Windows protected your PC"*) on first launch. After you click **More info → Run anyway** once, future launches of the installed app open without the warning.
+- **Signed builds** (when a certificate is configured) install without the prompt, or show a brief reputation warning that disappears after Microsoft has seen enough trusted downloads.
+
+You can tell which you have by right-clicking the installer → **Properties → Digital Signatures**. A signed installer lists *"Daylens"* (or the certificate subject) as the signer; an unsigned installer has no Digital Signatures tab.
+
+Auto-updates work the same way for both: once Daylens is installed, new versions download in the background and apply on next quit, regardless of signing status. See [docs/WINDOWS_SIGNING.md](WINDOWS_SIGNING.md) if you maintain a fork and want to enable signing.
 
 ---
 
