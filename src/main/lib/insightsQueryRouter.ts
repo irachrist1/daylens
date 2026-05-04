@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3'
 import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
-import { computeFocusScore } from '../lib/focusScore'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
 import {
   buildClientInvoiceNarrativeForRange,
@@ -257,20 +256,11 @@ function buildFocusScoreAnswer(apps: AppUsageSummary[], sessions: AppSession[], 
   const totalSeconds = Math.max(evidence.totalSeconds, apps.reduce((sum, app) => sum + app.totalSeconds, 0))
   const focusSeconds = evidence.focusedSeconds
   const switchesPerHour = totalSeconds > 0 ? Math.max(0, sessions.length - 1) / Math.max(totalSeconds / 3600, 0.25) : 0
-  const score = computeFocusScore({
-    focusedSeconds: focusSeconds,
-    totalSeconds,
-    switchesPerHour,
-    sessions: sessions.map((session) => ({
-      durationSeconds: session.durationSeconds,
-      isFocused: isFocusedSession(session),
-    })),
-  })
   const longestStretch = longestFocusedStretch(sessions)
 
   return [
-    `Focus score: ${score}/100.`,
-    longestStretch > 0 ? `Longest focused stretch was ${formatDuration(longestStretch)}.` : null,
+    longestStretch > 0 ? `Longest uninterrupted focused-category stretch was ${formatDuration(longestStretch)}.` : 'I do not see a sustained focused work stretch in that period.',
+    focusSeconds > 0 ? `Tracked time in focused work categories was ${formatDuration(focusSeconds)}.` : null,
     sessions.length > 1 ? `Context switching ran at about ${Math.round(switchesPerHour)}/hour.` : null,
     `Strongest evidence: ${formatSignalList(evidence.signals, 3)}.`,
   ].filter(Boolean).join(' ')
@@ -589,7 +579,7 @@ function peakFocusWindowAnswer(date: Date, db: Database.Database): string | null
   const [, dayEnd] = dayBounds(date)
   const peakHours = getPeakHours(db, dayEnd - 14 * 86_400_000, dayEnd)
   if (!peakHours) return "I need at least a few days of tracked activity before I can estimate your peak focus window."
-  return `Peak focus window: ${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakStart, 0, 0, 0).getTime())}-${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakEnd, 0, 0, 0).getTime())} (${peakHours.focusPct}% focus).`
+  return `Best-supported focus window: ${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakStart, 0, 0, 0).getTime())}-${formatTime(new Date(date.getFullYear(), date.getMonth(), date.getDate(), peakHours.peakEnd, 0, 0, 0).getTime())}, based on recent focused-category work.`
 }
 
 function rankedTimeAllocationAnswer(apps: AppUsageSummary[]): string | null {
@@ -730,7 +720,7 @@ function buildDayBlocksAnswer(date: Date, db: Database.Database, header?: string
 
   const label = header ?? relativeDayLabel(date)
   const lines: string[] = [
-    `${label}: ${formatDuration(payload.totalSeconds)} tracked, focus ${payload.focusPct}%.`,
+    `${label}: ${formatDuration(payload.totalSeconds)} tracked across ${blocks.length} work block${blocks.length === 1 ? '' : 's'}.`,
   ]
 
   if (blocks.length > 0) {
@@ -804,7 +794,6 @@ function buildComparisonAnswer(date: Date, db: Database.Database): string | null
 
   return [
     `Today vs yesterday: ${formatDuration(today.payload.totalSeconds)} vs ${formatDuration(previous.payload.totalSeconds)} tracked.`,
-    `Focus: ${today.payload.focusPct}% today vs ${previous.payload.focusPct}% yesterday.`,
     todayLead || previousLead
       ? `Main thread: ${todayLead ? `today was "${todayLead}"` : 'today had no clear dominant block'}; ${previousLead ? `yesterday was "${previousLead}"` : 'yesterday had no clear dominant block'}.`
       : null,
@@ -1529,6 +1518,7 @@ function buildProjectAmbiguityAnswer(
 }
 
 const EVIDENCE_ENTITY_PATTERNS = [
+  /\bhow (?:many|much) (?:hours?|time).*?(?:spend|spent|work(?:ed)?|log(?:ged)?).*?(?:on|for|with|at)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
   /\bwhat have i been doing\s+(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
   /\bwhat was i (?:doing|working on)\s+(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
   /\bhow much time.*?(?:for|on|with)\s+['"]?(.+?)['"]?(?:\s+(?:this|last|today|yesterday)|[?.!,]|$)/i,
@@ -1536,7 +1526,7 @@ const EVIDENCE_ENTITY_PATTERNS = [
   /\bshow\s+(?:the\s+)?(.+?)\s+timeline\b/i,
 ]
 
-const EVIDENCE_PLACEHOLDER_TERMS = new Set(['it', 'that', 'this', 'them', 'those', 'these'])
+const EVIDENCE_PLACEHOLDER_TERMS = new Set(['it', 'that', 'this', 'them', 'those', 'these', 'each', 'total'])
 
 function extractEvidenceEntity(question: string, previousContext: TemporalContext | null): string | null {
   for (const pattern of EVIDENCE_ENTITY_PATTERNS) {
@@ -1935,7 +1925,6 @@ export async function routeInsightsQuestion(
 
       const weekLabel = normalized.includes('last week') ? 'Last week' : 'This week'
       const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
-      const focusScore = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
       const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
       const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
       const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
@@ -1943,7 +1932,8 @@ export async function routeInsightsQuestion(
       const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
 
       const lines: string[] = [
-        `${weekLabel}: ${formatDuration(totalSeconds)} tracked, focus score ${focusScore}/100.`,
+        `${weekLabel}: ${formatDuration(totalSeconds)} tracked.`,
+        focusSeconds > 0 ? `Focused-category work: ${formatDuration(focusSeconds)}.` : null,
         topApps ? `Top apps: ${topApps}.` : null,
         topSites ? `Top sites: ${topSites}.` : null,
         distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,
@@ -2081,7 +2071,6 @@ export async function routeInsightsQuestion(
     if (totalSeconds === 0 && sites.length === 0) return null
 
     const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
-    const focusScore = totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0
     const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
     const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
     const DISTRACTION_DOMAINS = ['youtube.com', 'x.com', 'twitter.com', 'instagram.com', 'reddit.com', 'tiktok.com', 'netflix.com', 'facebook.com']
@@ -2089,7 +2078,8 @@ export async function routeInsightsQuestion(
     const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
 
     const lines: string[] = [
-      `Yesterday: ${formatDuration(totalSeconds)} tracked, focus score ${focusScore}/100.`,
+      `Yesterday: ${formatDuration(totalSeconds)} tracked.`,
+      focusSeconds > 0 ? `Focused-category work: ${formatDuration(focusSeconds)}.` : null,
       topApps ? `Top apps: ${topApps}.` : null,
       topSites ? `Top sites: ${topSites}.` : null,
       distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,

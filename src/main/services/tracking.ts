@@ -26,9 +26,11 @@ import type {
 import type { WorkspacePresenceState } from '@daylens/remote-contract'
 import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
-import { localDateString } from '../lib/localDate'
+import { localDateString, localDayBounds } from '../lib/localDate'
 import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
+import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
+import { runAttributionForRange } from './attribution'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1029,6 +1031,9 @@ let idleState: IdleState = 'active'
 let provisionalIdleStart: number | null = null
 let powerMonitorListenersRegistered = false
 const trackingTickListeners = new Set<() => void>()
+const ATTRIBUTION_REFRESH_DEBOUNCE_MS = 3_000
+const pendingAttributionDates = new Set<string>()
+let attributionRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 function emitTrackingTick(): void {
   for (const listener of trackingTickListeners) {
@@ -1045,6 +1050,56 @@ export function onTrackingTick(listener: () => void): () => void {
   return () => {
     trackingTickListeners.delete(listener)
   }
+}
+
+function attributionDateKeysForRange(startTime: number, endTime: number): string[] {
+  const startDate = localDateString(new Date(startTime))
+  const endDate = localDateString(new Date(Math.max(startTime, endTime - 1)))
+  if (startDate === endDate) return [startDate]
+
+  const dates: string[] = []
+  const cursor = new Date(startTime)
+  cursor.setHours(0, 0, 0, 0)
+  const end = new Date(Math.max(startTime, endTime - 1))
+  end.setHours(0, 0, 0, 0)
+  while (cursor <= end) {
+    dates.push(localDateString(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return dates
+}
+
+function flushPendingAttributionRefresh(): void {
+  attributionRefreshTimer = null
+  const dates = Array.from(pendingAttributionDates)
+  pendingAttributionDates.clear()
+  if (dates.length === 0) return
+
+  const db = getDb()
+  for (const date of dates) {
+    const [fromMs, toMs] = localDayBounds(date)
+    try {
+      runAttributionForRange(fromMs, toMs, {}, db)
+      invalidateProjectionScope('apps', 'attribution_refreshed', { date })
+      invalidateProjectionScope('insights', 'attribution_refreshed', { date })
+    } catch (err) {
+      console.warn('[tracking] attribution refresh failed:', err)
+      captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:attribution-refresh', {
+        failure_kind: classifyFailureKind(err),
+        reason: 'attribution_refresh_failed',
+        status: 'error',
+        surface: 'tracking',
+      })
+    }
+  }
+}
+
+function scheduleAttributionRefreshForSession(startTime: number, endTime: number): void {
+  for (const date of attributionDateKeysForRange(startTime, endTime)) {
+    pendingAttributionDates.add(date)
+  }
+  if (attributionRefreshTimer) return
+  attributionRefreshTimer = setTimeout(flushPendingAttributionRefresh, ATTRIBUTION_REFRESH_DEBOUNCE_MS)
 }
 
 function persistLiveSnapshot(force = false): void {
@@ -1132,6 +1187,7 @@ function recoverPersistedLiveSnapshot(): void {
         invalidateProjectionScope('insights', 'activity_recorded', {
           date: localDateString(new Date(endTime)),
         })
+        scheduleAttributionRefreshForSession(snapshot.startTime, endTime)
         console.log('[tracking] recovered live session snapshot after restart')
       }
     }
@@ -1147,6 +1203,7 @@ function handleLockScreen(): void {
     flushCurrent(undefined, 'lock_screen')
     console.log('[tracking] screen locked — session flushed')
   }
+  flushActiveBrowserContext(getDb())
   recordActivityEvent('lock_screen')
   lastMeaningfulCaptureAt = Date.now()
   lastPresenceOverride = 'sleeping'
@@ -1159,6 +1216,7 @@ function handleSuspend(): void {
     flushCurrent(undefined, 'suspend')
     console.log('[tracking] system suspended — session flushed')
   }
+  flushActiveBrowserContext(getDb())
   recordActivityEvent('suspend')
   lastMeaningfulCaptureAt = Date.now()
   lastPresenceOverride = 'sleeping'
@@ -1226,6 +1284,7 @@ export function stopTracking(): void {
     powerMonitorListenersRegistered = false
   }
   flushCurrent()
+  flushActiveBrowserContext(getDb())
   idleState = 'active'
   provisionalIdleStart = null
   console.log('[tracking] stopped')
@@ -1265,6 +1324,7 @@ async function poll(): Promise<void> {
           recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
         }
         flushCurrent(idleStartMs, 'away')
+        flushActiveBrowserContext(getDb(), idleStartMs)
         console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
         lastMeaningfulCaptureAt = idleStartMs
       }
@@ -1355,11 +1415,15 @@ async function poll(): Promise<void> {
         : (support ? [support.supportMessage] : [])
     } else {
       const awMod = getActiveWindowModule()
-      if (!awMod) return
+      if (!awMod) {
+        flushActiveBrowserContext(getDb())
+        return
+      }
 
       try {
         win = awMod.getActiveWindow() as ActiveWinResult | null
       } catch (err) {
+        flushActiveBrowserContext(getDb())
         trackingStatus.pollError = formatError(err)
         captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
           failure_kind: classifyFailureKind(err),
@@ -1372,6 +1436,7 @@ async function poll(): Promise<void> {
     }
 
     if (!win) {
+      flushActiveBrowserContext(getDb())
       trackingStatus.pollError = null
       trackingStatus.lastRawWindow = null
       trackingStatus.lastResolvedWindow = null
@@ -1410,12 +1475,16 @@ async function poll(): Promise<void> {
     })
     if (exclusionReason) {
       if (currentSession) flushCurrent(undefined, exclusionReason)
+      flushActiveBrowserContext(getDb())
       clearPersistedLiveSnapshot()
       return
     }
 
     // Skip OS infrastructure processes
-    if (isOsNoise(bundleId, appName, resolvedWin.path)) return
+    if (isOsNoise(bundleId, appName, resolvedWin.path)) {
+      flushActiveBrowserContext(getDb())
+      return
+    }
 
     // App switched → flush the previous session
     if (currentSession && currentSession.bundleId !== bundleId) {
@@ -1460,6 +1529,13 @@ async function poll(): Promise<void> {
       lastPresenceOverride = currentSession.category === 'meetings' ? 'meeting' : 'active'
       persistLiveSnapshot()
     }
+
+    recordActiveBrowserContextSample(getDb(), {
+      bundleId,
+      appName: identity.displayName,
+      windowTitle: resolvedWindowTitle,
+      capturedAt: Date.now(),
+    })
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
     trackingStatus.pollError = formatError(err)
@@ -1529,6 +1605,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
         invalidateProjectionScope('insights', 'activity_recorded', {
           date: localDateString(new Date(endTime)),
         })
+        scheduleAttributionRefreshForSession(currentSession.startTime, endTime)
       }
     } catch (err) {
       console.error('[tracking] flush error:', err)

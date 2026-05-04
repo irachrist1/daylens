@@ -1,6 +1,6 @@
 # Issues
 
-Status last updated 2026-05-01 (post-v1.0.35 macOS/Linux publication, plus Windows Store packaging lane for a Microsoft-signed no-danger-screen path). Prior audit: 2026-04-30.
+Status last updated 2026-05-04 (doc consolidation pass: dropped duplicate AGENTS.md, deleted stale CODEBASE_DEEP_DIVE.md and EXECUTION_PLAN.md, merged REMOTE_PARITY_MATRIX.md and REMOTE_EXECUTION_PLAN.md into REMOTE_CONTRACT.md, refreshed README.md). Prior audit: 2026-05-03 (automatic browser-context tracking and attribution-evidence refresh pass).
 
 This file is the implementation-status ledger. Items below are separated into code-proven, `implemented pending verification`, and still-partial/open. Older docs and summaries were treated as hypotheses during this refresh.
 
@@ -9,6 +9,7 @@ This file is the implementation-status ledger. Items below are separated into co
 ### Desktop Tracking And Persistence
 
 - Foreground tracking persists real sessions to SQLite and recovers a persisted live-session snapshot after restart (`src/main/services/tracking.ts:981-1071`, `src/main/services/tracking.ts:1395-1470`).
+- Foreground tracking now schedules a debounced attribution refresh after completed or recovered sessions, so the derived `activity_segments`, `work_sessions`, `work_session_evidence`, and `daily_entity_rollups` layers stay current without requiring a manual IPC trigger (`src/main/services/tracking.ts`, `src/main/services/attribution.ts`, `tests/attributionBrowserEvidence.test.ts`).
 - Linux tracking diagnostics explicitly report `ready`, `limited`, or `unsupported` depending on session/backend availability (`src/main/services/tracking.ts:196-299`).
 - Foreground tracking filters Daylens self-capture and Daylens project-title sessions before persistence, so Daylens debugging windows do not become user work evidence (`src/main/services/tracking.ts`, `tests/trackingSelfCapture.test.ts`).
 - Timeline day payloads are rebuilt from persisted sessions plus the live session, not renderer memory (`src/main/services/workBlocks.ts:1849-1880`).
@@ -38,6 +39,12 @@ This file is the implementation-status ledger. Items below are separated into co
 - Thread titles no longer echo single-word greetings: `deriveTitleFromMessage` returns `"New chat"` for greeting messages and the first substantive message renames the thread synchronously before `listThreads` is called (`src/main/lib/threadTitles.ts`, `src/main/services/ai.ts:4152`).
 - Thinking… indicator is guarded against re-appearing once streaming content has started, using a message-ID ref set populated by the stream handler (`src/renderer/views/Insights.tsx:streamedContentIdsRef`).
 - The "Which files, docs, or pages did I touch today?" prompt shape now routes to local evidence first and answers from artifacts, page titles, window titles, and apps instead of returning a filename-token fallback (`src/main/lib/insightsQueryRouter.ts`, `tests/touchedEvidenceRouter.test.ts`, `tests/shouldUseRouter.test.ts`).
+- Evidence-backed time questions such as "How many hours did I spend on ASYV this week?" now route through structured work-session evidence even when no first-class client/project attribution exists. Active browser page titles are preserved into `work_session_evidence`, and the answer states when structured attribution is missing (`src/main/services/attribution.ts`, `src/main/lib/insightsQueryRouter.ts`, `tests/attributionBrowserEvidence.test.ts`, `tests/routerHardPromptBenchmark.ts`).
+- Deterministic AI focus readouts avoid user-visible focus percentages and instead describe longest focused-category stretches, context switching, tracked focused-category time, and evidence (`src/main/lib/insightsQueryRouter.ts`). Comparative day, day-blocks, weekly recap, and yesterday-recap router answers no longer surface a `focus score N/100` line either; they now describe focused-category time in plain prose only.
+- Browser evidence for derived work-session segments now propagates the active page title alongside the domain, and the segment window-title prefers a useful raw window title before falling back to the browser page title (`src/main/services/attribution.ts`). The "How many hours did I spend on …" prompt shape is matched explicitly so evidence-backed time questions route deterministically.
+- Daylens has a Raycast-style command palette wired to a global shortcut (`Cmd+Alt+D` on macOS, `Ctrl+Alt+D` on Windows and Linux) and an in-app shortcut (`Cmd/Ctrl+K`). The palette navigates between Timeline, Apps, AI, and Settings; opens today's or yesterday's Day Wrapped; starts or stops a focus session; runs live search across timeline sessions, work blocks, browser pages, and saved artifacts; and triggers an update check or install. Code: `src/main/services/commandPalette.ts`, `src/renderer/components/CommandPalette.tsx`, wiring in `src/preload/index.ts` and `src/renderer/App.tsx`. Documentation: `docs/SHORTCUTS.md`.
+- Daily Summary and Morning Brief notification click-through now calls `app.focus({ steal: true })` on macOS before showing the window, so a notification click reliably surfaces Daylens even when the dock icon is dimmed or the app is hidden in tray (`src/main/services/dailySummaryNavigation.ts`). The palette's "Open today's Day Wrapped" / "Open yesterday's Day Wrapped" actions are a keyboard recovery path if a notification is ever dismissed before the click can reach the app.
+- The in-app updater install path now shows a native pre-install confirmation that names the target version, explains that Daylens replaces the running app in place, suggests cleaning older Daylens DMG/ZIP/installer files out of Downloads (and `/Applications` duplicates on macOS), and offers an "Open Downloads" button so the user can clean up before confirming. Cancelling the dialog aborts cleanly without breaking the existing manual download fallback (`src/main/services/updater.ts`).
 - Day summary parsing refuses malformed raw JSON-looking model output instead of rendering `{ "summary": ... }` in the Timeline, and the deterministic fallback now uses more cautious evidence wording when intent is low-confidence (`src/main/lib/daySummarySuggestions.ts`, `src/main/services/ai.ts`, `tests/followUpChat.test.ts`).
 - AI prompts for daily summaries, week reviews, app narratives, generated reports, router prose, and provider-backed chat now prohibit raw app names as activity nouns, keeping answers focused on work threads, artifacts, pages, and context (`src/main/services/ai.ts`, `tests/aiPromptPolicy.test.ts`).
 - Thread follow-up routing restores conversation state from the active AI thread instead of leaking context across local threads (`src/main/services/ai.ts`, `src/main/db/queries.ts`, `tests/followUpChat.test.ts`).
@@ -92,6 +99,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 ### Browser Evidence
 
 - Linux browser-history ingestion is not implemented in `src/main/services/browser.ts`. Current browser ingestion is macOS/Windows only (`src/main/services/browser.ts:74-107`, `src/main/services/browser.ts:414-620`).
+- macOS Safari active-tab context is implemented pending packaged validation: the foreground tracking loop now samples active browser context and writes timed `website_visits` rows through `src/main/services/browserContext.ts`, with focused coverage in `tests/browserContextTracking.test.ts`. A local macOS reader probe on 2026-05-03 returned the current Safari URL/title, and local tests prove active browser rows can flow into evidence-backed work-session answers, but this has not yet been validated in a packaged macOS build or on a real Windows build.
 
 ### Structured Attribution
 
@@ -123,6 +131,7 @@ These features exist in code and, in several cases, have focused test coverage, 
 - `tests/blockCleanup.test.ts`: selective cleanup/relabel behavior.
 - `tests/updaterReleaseFeed.test.ts`, `tests/releaseNotes.test.ts`, `tests/syncMessages.test.ts`, `tests/touchedEvidenceRouter.test.ts`, and `tests/appIdentityBranding.test.ts`: release-quality regressions for updater progress, visible update notes, sync-error sanitization, touched-evidence answers, and Microsoft 365 icon normalization.
 - `tests/workBlockSplitting.test.ts`, `tests/trackingSelfCapture.test.ts`, `tests/notificationNavigation.test.ts`, `tests/appDetailPayload.test.ts`, `tests/focusMetricCopy.test.ts`, `tests/aiPromptPolicy.test.ts`, and `tests/followUpSuggestions.test.ts`: v1.0.35 regressions for self-capture filtering, timeline block splits, daily-notification navigation, app-detail context, focus-copy removal, AI prompt policy, and follow-up suggestion filtering.
+- `tests/browserContextTracking.test.ts` and `tests/attributionBrowserEvidence.test.ts`: active browser context persistence plus browser page-title propagation into derived work-session evidence and evidence-backed AI time answers.
 
 ## Real Runtime Or User Verification Still Needed
 

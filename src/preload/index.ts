@@ -234,6 +234,20 @@ const api = {
       ipcRenderer.on('navigate', handler)
       return () => { ipcRenderer.removeListener('navigate', handler) }
     },
+    // Drain any route that main queued before this listener mounted.
+    consumePending: (): Promise<string | null> => ipcRenderer.invoke('navigation:consume-pending'),
+  },
+  dev: {
+    fireTestDailyNotification: (): Promise<{ ok: boolean; reason?: string }> =>
+      ipcRenderer.invoke('dev:fire-test-daily-notification'),
+  },
+  palette: {
+    // Fired by the global shortcut handler in main. Renderer should toggle the palette open/closed.
+    onToggle: (callback: () => void): (() => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('palette:toggle', handler)
+      return () => { ipcRenderer.removeListener('palette:toggle', handler) }
+    },
   },
   updater: {
     onStatus: (

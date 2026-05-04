@@ -66,7 +66,9 @@ import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
-import { setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
+import { fireTestDailyNotification, setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
+import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
+import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
@@ -434,6 +436,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopBrowserTracking()
   stopSync()
   stopProcessMonitor()
+  unregisterCommandPaletteShortcut()
 
   if (options?.awaitFinalSync) {
     await Promise.race([
@@ -751,6 +754,12 @@ app.whenReady()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
 
+    // IPC: renderer drains any pending notification-route the main process
+    // queued before the renderer's listener was attached.
+    ipcMain.handle('navigation:consume-pending', () => consumePendingNavigationRoute())
+    // IPC: dev shortcut fires a real main-process daily-summary notification.
+    ipcMain.handle('dev:fire-test-daily-notification', () => fireTestDailyNotification())
+
     mainWindow = createWindow()
     setDailySummaryNotificationWindow(mainWindow)
     setDistractionAlertWindow(mainWindow)
@@ -760,6 +769,8 @@ app.whenReady()
       isQuitting = true
       await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })
     })
+
+    registerCommandPaletteShortcut(() => mainWindow)
 
     startBackgroundServices()
 

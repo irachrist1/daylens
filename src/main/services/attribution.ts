@@ -17,6 +17,11 @@ import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { getDb } from './database'
 import os from 'node:os'
+import {
+  normalizeWebsiteTitleForDisplay,
+  resolveCanonicalBrowser,
+  titleLooksUseful,
+} from '../lib/appIdentity'
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 export const MIN_CONFIDENCE_TO_ATTRIBUTE = 0.75
@@ -47,6 +52,11 @@ interface RawAppSessionRow {
   is_focused: number
   window_title: string | null
   category: string
+}
+
+interface BrowserEvidence {
+  domain: string
+  pageTitle: string | null
 }
 
 interface IdlePeriod {
@@ -218,10 +228,15 @@ export function normalizeToSegments(
         : baseClass === 'focus' ? 'focused'
         : baseClass
 
-      // Domain enrichment from website_visits inside this slice (if browser).
-      const domain = looksLikeBrowser(session.bundle_id, session.app_name)
-        ? topDomainInRange(db, slice.start, slice.end, session.bundle_id)
+      // Browser enrichment turns active-tab/history rows into structured
+      // evidence for AI queries without mutating the raw foreground session.
+      const browserEvidence = looksLikeBrowser(session.bundle_id, session.app_name)
+        ? topBrowserEvidenceInRange(db, slice.start, slice.end, session.bundle_id)
         : null
+      const enrichedWindowTitle =
+        usefulWindowTitle(session.window_title, session.app_name)
+        ?? browserEvidence?.pageTitle
+        ?? session.window_title
 
       segments.push({
         id: `seg_${randomUUID()}`,
@@ -230,8 +245,8 @@ export function normalizeToSegments(
         endedAt: slice.end,
         durationMs,
         primaryBundleId: session.bundle_id,
-        windowTitle: session.window_title,
-        domain,
+        windowTitle: enrichedWindowTitle,
+        domain: browserEvidence?.domain ?? null,
         filePath: null,
         inputScore,
         attentionScore,
@@ -288,20 +303,44 @@ function looksLikeBrowser(bundleId: string, appName: string): boolean {
   return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|browser)/.test(lower)
 }
 
-function topDomainInRange(
+function usefulWindowTitle(title: string | null, appName: string): string | null {
+  if (!titleLooksUseful(title)) return null
+  const trimmed = title.trim()
+  if (trimmed.toLowerCase() === appName.trim().toLowerCase()) return null
+  return trimmed
+}
+
+function topBrowserEvidenceInRange(
   db: Database.Database, start: number, end: number, browserBundleId: string,
-): string | null {
+): BrowserEvidence | null {
+  const canonicalBrowser = resolveCanonicalBrowser(browserBundleId).canonicalBrowserId
   const row = db.prepare(`
-    SELECT domain, SUM(duration_sec) AS total
+    SELECT
+      domain,
+      MAX(page_title) AS page_title,
+      SUM(duration_sec) AS total
     FROM website_visits
     WHERE visit_time >= ? AND visit_time < ?
-      AND (browser_bundle_id = ? OR browser_bundle_id IS NULL)
+      AND (
+        browser_bundle_id = ?
+        OR (? IS NOT NULL AND canonical_browser_id = ?)
+        OR browser_bundle_id IS NULL
+      )
       AND domain IS NOT NULL
     GROUP BY domain
     ORDER BY total DESC
     LIMIT 1
-  `).get(start, end, browserBundleId) as { domain: string; total: number } | undefined
-  return row?.domain ?? null
+  `).get(start, end, browserBundleId, canonicalBrowser, canonicalBrowser) as {
+    domain: string
+    page_title: string | null
+    total: number
+  } | undefined
+
+  if (!row?.domain) return null
+  return {
+    domain: row.domain,
+    pageTitle: normalizeWebsiteTitleForDisplay(row.domain, row.page_title),
+  }
 }
 
 function persistSegments(
@@ -619,14 +658,14 @@ interface PersistedWorkSession {
 function buildSessionTitle(group: SessionizedGroup, candidate: ScoredCandidate | null): string | null {
   const top = candidate?.matchedSignals?.[0]
   const file = group.segments.map((s) => s.filePath).find(Boolean)
-  const domain = group.segments.map((s) => s.domain).find(Boolean)
   if (top?.kind === 'file_prefix' || top?.kind === 'document_title') return top.value
   if (file) return file.split(/[\\/]/).pop() ?? file
-  if (domain) return domain
   const cleaned = group.segments
     .map((s) => stripGenericNouns(s.windowTitle ?? ''))
     .find((value) => value.length > 0)
-  return cleaned ?? null
+  if (cleaned) return cleaned
+  const domain = group.segments.map((s) => s.domain).find(Boolean)
+  return domain ?? null
 }
 
 function persistWorkSessions(

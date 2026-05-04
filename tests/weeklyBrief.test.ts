@@ -260,13 +260,15 @@ test('turns exact reading follow-ups into literal weekly brief mode', async () =
   db.close()
 })
 
-test('keeps generic stats prompts on the deterministic weekly answer path', async () => {
+test('keeps generic stats prompts on the deterministic weekly answer path without fake focus percentages', async () => {
   const db = buildFixtureDb()
   const result = await routeInsightsQuestion('focus score this week', anchorDate(), null, db)
   assert.ok(result)
   assert.equal(result?.kind, 'answer')
   if (result?.kind === 'answer') {
-    assert.match(result.answer, /focus score \d+\/100/i)
+    assert.match(result.answer, /This week:/i)
+    assert.match(result.answer, /Focused-category work:/i)
+    assert.doesNotMatch(result.answer, /focus score \d+\/100/i)
   }
   db.close()
 })
