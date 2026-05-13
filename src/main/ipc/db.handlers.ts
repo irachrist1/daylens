@@ -19,13 +19,22 @@ import {
   resolveDayContext,
   findClientByName,
   listClients,
+  listClientsDetailed,
+  createClient,
+  updateClient,
+  archiveClient,
+  restoreClient,
+  getOrCreateClientByName,
   getRollupSummary,
 } from '../core/query/attributionResolvers'
+import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload } from '../services/workBlocks'
+import { resolveCanonicalApp } from '../lib/appIdentity'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
@@ -258,6 +267,88 @@ export function registerDbHandlers(): void {
     return getAppDetailProjection(getDb(), canonicalAppId, days, getCurrentSession())
   })
 
+  // D5: per-app activity digest used by the Apps list view to lead with what
+  // was accomplished in each app, not how long. Walks each day in the range,
+  // builds canonical-app → best block label + best artifact title pairs.
+  ipcMain.handle(IPC.DB.GET_APP_ACTIVITY_DIGEST, (_e, days: number = 1): import('@shared/types').AppActivityDigest[] => {
+    const db = getDb()
+    const today = localDateString()
+    const dayCount = Math.max(1, days)
+    type Bucket = {
+      canonicalAppId: string
+      bundleId: string
+      appName: string
+      topBlock: { label: string; seconds: number } | null
+      topArtifact: { title: string; seconds: number } | null
+    }
+    // B5: key by canonicalAppId rather than bundleId. The Apps rail's
+    // `summary.canonicalAppId` is the primary lookup key, and it diverges
+    // from `bundleId` whenever resolveCanonicalApp collapses variants
+    // (Chrome profiles, app bundle aliases, etc). Keying on bundleId alone
+    // made every such row miss the digest and fall back to the old name +
+    // minutes row shape, hiding D5 entirely.
+    const buckets = new Map<string, Bucket>()
+    const [todayY, todayM, todayD] = today.split('-').map(Number)
+    for (let offset = 0; offset < dayCount; offset++) {
+      const dt = new Date(todayY, todayM - 1, todayD)
+      dt.setDate(dt.getDate() - offset)
+      const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      const payload = getTimelineDayProjection(db, dateStr, getCurrentSession())
+      for (const block of payload.blocks) {
+        const blockSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
+        if (blockSeconds < 60) continue
+        // B1/B5: route through the sanitized label chain (with the renderer
+        // safety net as final guard) rather than raw block.label.current.
+        // Raw `label.current` still carries pre-sanitization noise on older
+        // persisted blocks; the safety net collapses pipe-joined soup and
+        // rejects generic placeholders.
+        const sanitizedLabel = userVisibleBlockLabel(block)
+        const blockLabel = sanitizedLabel === 'Untitled block' ? '' : sanitizedLabel.trim()
+        for (const app of block.topApps) {
+          if (!app.bundleId) continue
+          const identity = resolveCanonicalApp(app.bundleId, app.appName)
+          const canonicalAppId = identity.canonicalAppId ?? app.bundleId
+          const bucket = buckets.get(canonicalAppId) ?? {
+            canonicalAppId,
+            bundleId: app.bundleId,
+            appName: app.appName,
+            topBlock: null,
+            topArtifact: null,
+          }
+          if (blockLabel && (!bucket.topBlock || blockSeconds > bucket.topBlock.seconds)) {
+            bucket.topBlock = { label: blockLabel, seconds: blockSeconds }
+          }
+          for (const artifact of block.topArtifacts) {
+            const title = artifact.displayTitle?.trim()
+            if (!title) continue
+            if (!bucket.topArtifact || artifact.totalSeconds > bucket.topArtifact.seconds) {
+              bucket.topArtifact = { title, seconds: artifact.totalSeconds }
+            }
+          }
+          // Fallback artifact source: page refs. For browser-heavy apps the
+          // top artifact often surfaces through pageRefs (page title), not
+          // topArtifacts. Without this, browser rows in the rail had no
+          // activity headline and fell back to the old shape silently.
+          for (const page of block.pageRefs) {
+            const title = (page.pageTitle ?? page.displayTitle)?.trim()
+            if (!title) continue
+            if (!bucket.topArtifact || page.totalSeconds > bucket.topArtifact.seconds) {
+              bucket.topArtifact = { title, seconds: page.totalSeconds }
+            }
+          }
+          buckets.set(canonicalAppId, bucket)
+        }
+      }
+    }
+    return Array.from(buckets.values()).map((bucket) => ({
+      canonicalAppId: bucket.canonicalAppId,
+      bundleId: bucket.bundleId,
+      appName: bucket.appName,
+      topBlockLabel: bucket.topBlock?.label ?? null,
+      topArtifactTitle: bucket.topArtifact?.title ?? null,
+    }))
+  })
+
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {
     return getBlockDetailPayload(getDb(), blockId, getCurrentSession())
   })
@@ -321,6 +412,38 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.ATTRIBUTION.LIST_CLIENTS, () => {
     return listClients(getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED, (): ClientRecord[] => {
+    return listClientsDetailed(getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.CREATE_CLIENT, (_e, payload: { name: string; color?: string | null }): ClientRecord => {
+    return createClient(payload, getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.UPDATE_CLIENT, (_e, payload: { id: string; name?: string; color?: string | null }): ClientRecord | null => {
+    return updateClient(payload, getDb())
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.ARCHIVE_CLIENT, (_e, id: string): boolean => {
+    const ok = archiveClient(id, getDb())
+    if (ok) {
+      invalidateProjectionScope('timeline', 'client_archived')
+      invalidateProjectionScope('apps', 'client_archived')
+      invalidateProjectionScope('insights', 'client_archived')
+    }
+    return ok
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.RESTORE_CLIENT, (_e, id: string): boolean => {
+    const ok = restoreClient(id, getDb())
+    if (ok) {
+      invalidateProjectionScope('timeline', 'client_restored')
+      invalidateProjectionScope('apps', 'client_restored')
+      invalidateProjectionScope('insights', 'client_restored')
+    }
+    return ok
   })
 
   ipcMain.handle(IPC.ATTRIBUTION.RUN_FOR_RANGE, (_e, fromMs: number, toMs: number) => {
@@ -457,8 +580,32 @@ export function registerDbHandlers(): void {
     ) AND started_at >= ? AND started_at < ? ORDER BY started_at DESC LIMIT 50`, [bundleId, fromMs, toMs])
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.REASSIGN_SESSION, (_e, sessionId: string, clientId: string | null, projectId: string | null) => {
+  // Supports two call shapes:
+  //   reassign-session(sessionId, clientId, projectId)                    // legacy
+  //   reassign-session(sessionId, { clientId?, clientName?, projectId? }) // new
+  // When `clientName` is provided without `clientId`, a matching client is created (or reused) before reassigning.
+  ipcMain.handle(IPC.ATTRIBUTION.REASSIGN_SESSION, (
+    _e,
+    sessionId: string,
+    secondArg: string | null | { clientId?: string | null; clientName?: string | null; projectId?: string | null },
+    thirdArg?: string | null,
+  ): { clientId: string | null; projectId: string | null } => {
     const db = getDb()
+
+    let clientId: string | null = null
+    let projectId: string | null = null
+    if (typeof secondArg === 'object' && secondArg !== null) {
+      clientId = secondArg.clientId ?? null
+      projectId = secondArg.projectId ?? null
+      if (!clientId && secondArg.clientName && secondArg.clientName.trim()) {
+        const created = getOrCreateClientByName(secondArg.clientName.trim(), db)
+        clientId = created.id
+      }
+    } else {
+      clientId = secondArg ?? null
+      projectId = thirdArg ?? null
+    }
+
     db.prepare(`UPDATE work_sessions SET client_id = ?, project_id = ?, attribution_status = CASE WHEN ? IS NOT NULL THEN 'attributed' ELSE 'unattributed' END, attribution_confidence = CASE WHEN ? IS NOT NULL THEN 1.0 ELSE NULL END, updated_at = ? WHERE id = ?`)
       .run(clientId, projectId, clientId, clientId, Date.now(), sessionId)
     // Update segment attributions to reflect user decision
@@ -470,6 +617,48 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('timeline', 'session_reassigned')
     invalidateProjectionScope('apps', 'session_reassigned')
     invalidateProjectionScope('insights', 'session_reassigned')
+    return { clientId, projectId }
+  })
+
+  // Reassign every work_session overlapping a time range to a client (and
+  // optionally a project). Either `clientId` or `clientName` may be given;
+  // a name without a matching client auto-creates one.
+  ipcMain.handle(IPC.ATTRIBUTION.REASSIGN_RANGE, (
+    _e,
+    payload: { fromMs: number; toMs: number; clientId?: string | null; clientName?: string | null; projectId?: string | null },
+  ): { clientId: string | null; projectId: string | null; sessionsUpdated: number } => {
+    const db = getDb()
+    let clientId: string | null = payload.clientId ?? null
+    const projectId: string | null = payload.projectId ?? null
+    if (!clientId && payload.clientName && payload.clientName.trim()) {
+      const created = getOrCreateClientByName(payload.clientName.trim(), db)
+      clientId = created.id
+    }
+
+    // Pick any session that overlaps the range (started before toMs, ended after fromMs).
+    const sessions = db.prepare(`
+      SELECT id FROM work_sessions
+      WHERE started_at < ? AND ended_at > ?
+    `).all(payload.toMs, payload.fromMs) as Array<{ id: string }>
+
+    const now = Date.now()
+    const tx = db.transaction(() => {
+      for (const { id } of sessions) {
+        db.prepare(`UPDATE work_sessions SET client_id = ?, project_id = ?, attribution_status = CASE WHEN ? IS NOT NULL THEN 'attributed' ELSE 'unattributed' END, attribution_confidence = CASE WHEN ? IS NOT NULL THEN 1.0 ELSE NULL END, updated_at = ? WHERE id = ?`)
+          .run(clientId, projectId, clientId, clientId, now, id)
+        const segmentIds = db.prepare(`SELECT segment_id FROM work_session_segments WHERE work_session_id = ?`).all(id) as Array<{ segment_id: string }>
+        for (const { segment_id } of segmentIds) {
+          db.prepare(`UPDATE segment_attributions SET client_id = ?, project_id = ?, decision_source = 'user', confidence = 1.0 WHERE segment_id = ? AND rank = 1`)
+            .run(clientId, projectId, segment_id)
+        }
+      }
+    })
+    tx()
+
+    invalidateProjectionScope('timeline', 'session_reassigned')
+    invalidateProjectionScope('apps', 'session_reassigned')
+    invalidateProjectionScope('insights', 'session_reassigned')
+    return { clientId, projectId, sessionsUpdated: sessions.length }
   })
 
   ipcMain.handle(IPC.ICONS.RESOLVE, async (_e, payload: IconRequest) => {

@@ -3,7 +3,9 @@ import crypto from 'node:crypto'
 import {
   getActivityStateEventsForRange,
   getAppCharacter,
+  getAppSummariesForRange,
   getBlockLabelOverride,
+  getDomainSummariesForBrowser,
   getFocusSessionsForDateRange,
   getSessionsForRange,
   getTopPagesForDomains,
@@ -36,6 +38,7 @@ import type {
   WorkContextBlock,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
+import { blockActiveSeconds } from '@shared/blockDuration'
 import { localDayBounds } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import {
@@ -80,6 +83,12 @@ const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
 const TIMELINE_MAX_BLOCK_SPAN_MS = 60 * 60_000
+// Higher ceiling for candidates where every session shares the same
+// (bundleId, compacted window title) pair with no internal gap >= 5 min.
+// PRODUCT-SPEC bar: a 90-minute block titled "Daylens AI refactor — extract
+// chat_answer from ai.ts" is the right answer, not three 30-minute slices
+// labelled "Cursor" / "Cursor" / "Untitled block".
+const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 180 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 const TIMELINE_HEURISTIC_VERSION = 'timeline-v3'
@@ -524,12 +533,14 @@ function splitSessionsAtTime(sessions: AppSession[], splitTime: number): [AppSes
 function normalizeTimelineCandidates(candidates: CandidateBlock[]): CandidateBlock[] {
   return candidates.flatMap((candidate) => {
     const spanMs = candidateSpanMs(candidate)
+    const highlyCoherent = isHighlyCoherentCandidate(candidate)
+    const ceilingMs = highlyCoherent ? TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS : TIMELINE_MAX_BLOCK_SPAN_MS
 
-    if (spanMs <= TIMELINE_MAX_BLOCK_SPAN_MS) {
+    if (spanMs <= ceilingMs) {
       return [candidate]
     }
 
-    const maxSplitTime = candidate.sessions[0].startTime + TIMELINE_MAX_BLOCK_SPAN_MS
+    const maxSplitTime = candidate.sessions[0].startTime + ceilingMs
     const [leftSessions, rightSessions] = splitSessionsAtTime(candidate.sessions, maxSplitTime)
     if (leftSessions.length > 0 && rightSessions.length > 0) {
       return normalizeTimelineCandidates(
@@ -549,6 +560,36 @@ function normalizeTimelineCandidates(candidates: CandidateBlock[]): CandidateBlo
         .concat(analyzeSessions(candidate.sessions.slice(splitIndex), false, candidate.boundedAfterGap)),
     )
   })
+}
+
+// Returns true when every session in the candidate shares the same
+// (bundleId, compactedWindowTitle) pair and no internal gap exceeds the
+// split-gap threshold. Single-session candidates are trivially coherent and
+// always qualify.
+//
+// "Coherent" here is deliberately stricter than the coherence score used in
+// `analyzeSessions`: that score is a category-mix heuristic, this one is a
+// "same thing, uninterrupted" test. A candidate that passes this test is a
+// single continuous stretch the user was on one specific thing — so slicing
+// it at 60 minutes just to satisfy a legacy cap is a regression, not a fix.
+function isHighlyCoherentCandidate(candidate: CandidateBlock): boolean {
+  if (candidate.sessions.length === 0) return false
+  if (candidate.sessions.length === 1) return true
+
+  const first = candidate.sessions[0]
+  const firstContext = contentContextForSession(first)
+  const firstBundleId = first.bundleId
+
+  let previousEnd = sessionEndMs(first)
+  for (let index = 1; index < candidate.sessions.length; index++) {
+    const session = candidate.sessions[index]
+    if (session.bundleId !== firstBundleId) return false
+    if (contentContextForSession(session) !== firstContext) return false
+    const gapMs = session.startTime - previousEnd
+    if (gapMs >= TIMELINE_SPLIT_GAP_THRESHOLD_MS) return false
+    previousEnd = sessionEndMs(session)
+  }
+  return true
 }
 
 function splitAndAnalyze(
@@ -859,12 +900,41 @@ function artifactKindForSession(session: AppSession): DocumentRef['artifactType'
   return 'window'
 }
 
+// B9: terminal apps (Warp, Ghostty, iTerm, Kiro terminal) frequently set
+// their window title to whatever the shell prompt emits — the OS username,
+// the current working-directory name, or a single bare token. Surfacing
+// "tonny" or "Obsidian Vault" as a session label in the Apps "What you did
+// there" list is a window-title leak masquerading as activity. Reject
+// titles that match the running user's name or that are a single short
+// bare token with no path/punctuation evidence. A path-shaped title like
+// "~/Dev-Personal/daylens" or a multi-word title still passes through —
+// only username-shaped noise is filtered.
+const SHELL_PROMPT_TOKENS = new Set(['root', 'bash', 'zsh', 'sh', 'fish', 'admin', 'user'])
+const HOME_USERNAME = (process.env.USER ?? process.env.LOGNAME ?? process.env.USERNAME ?? '').toLowerCase()
+
+function looksLikeShellPromptTitle(title: string): boolean {
+  const lower = title.toLowerCase().trim()
+  if (HOME_USERNAME && lower === HOME_USERNAME) return true
+  if (SHELL_PROMPT_TOKENS.has(lower)) return true
+  // Single short bare token with no whitespace, slash, dot, or dash. Genuine
+  // page titles ("Inbox", "Daylens") would still match this shape — but
+  // those are filtered earlier by titleLooksUseful + appName/rawAppName
+  // checks below; terminal-prompt noise is what slips through.
+  if (lower.length <= 14 && !/[\s\/\\.\-:]/.test(lower)) {
+    // Allow it through only if it looks like camelCase or contains digits —
+    // a clue that it's a real entity rather than a shell username.
+    if (!/[A-Z0-9]/.test(title)) return true
+  }
+  return false
+}
+
 function usefulWindowTitle(session: AppSession): string | null {
   if (!titleLooksUseful(session.windowTitle)) return null
   const title = session.windowTitle.trim()
   const lowerTitle = title.toLowerCase()
   if (lowerTitle === session.appName.toLowerCase()) return null
   if (lowerTitle === (session.rawAppName ?? '').toLowerCase()) return null
+  if (looksLikeShellPromptTitle(title)) return null
   return title
 }
 
@@ -1374,11 +1444,29 @@ function blockKindFor(block: WorkContextBlock): string {
   return 'work'
 }
 
+// B10: tab-title soup like "Course | Perusall" or "W2_Reading | Intro to ML
+// | Perusall" should not surface as a block label with a literal pipe. The
+// pipe is join-logic leaking into prose; a colleague would say "Intro to ML
+// on Perusall," not "Intro to ML | Perusall". Collapse pipe-joined values to
+// their longest content-bearing segment so every label-selection path
+// (artifact, workflow, rule-based, AI) emits clean prose.
+function naturalizeLabel(value: string): string {
+  if (!/ \| /.test(value)) return value
+  const segments = value
+    .split(/\s*\|\s*/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0 && !GENERIC_LABELS.has(segment))
+  if (segments.length === 0) return value
+  return segments.reduce((best, segment) => segment.length > best.length ? segment : best, segments[0])
+}
+
 function usefulDerivedLabel(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   if (!trimmed) return null
-  if (GENERIC_LABELS.has(trimmed)) return null
-  return trimmed
+  const natural = naturalizeLabel(trimmed)
+  if (!natural) return null
+  if (GENERIC_LABELS.has(natural)) return null
+  return natural
 }
 
 function normalizedLabelValue(value: string): string {
@@ -1406,11 +1494,20 @@ function usefulBlockLabel(block: WorkContextBlock, value: string | null | undefi
   return labelLooksToolOnly(label, block) ? null : label
 }
 
+// Browser tab titles typically join segments with " | " (pipe + spaces),
+// e.g. "W2_Reading | Introduction to Machine Learning | Perusall". Real
+// document or page titles use em-dashes, hyphens, middle-dots, or colons.
+// Treat any " | "-joined string as raw tab-title evidence, not a label.
+function looksLikeBrowserTabTitle(value: string): boolean {
+  return / \| /.test(value)
+}
+
 function preferredArtifactLabel(block: WorkContextBlock): string | null {
   const documentLabel = usefulDerivedLabel(block.documentRefs[0]?.displayTitle)
-  if (documentLabel) return documentLabel
-  const pageLabel = usefulDerivedLabel(block.pageRefs[0]?.displayTitle ?? block.pageRefs[0]?.pageTitle)
-  if (pageLabel) return pageLabel
+  if (documentLabel && !looksLikeBrowserTabTitle(documentLabel)) return documentLabel
+  const rawPageLabel = block.pageRefs[0]?.displayTitle ?? block.pageRefs[0]?.pageTitle
+  const pageLabel = usefulDerivedLabel(rawPageLabel)
+  if (pageLabel && !looksLikeBrowserTabTitle(pageLabel)) return pageLabel
   const domainLabel = block.websites[0] ? shortDomainLabel(block.websites[0].domain) : null
   return usefulDerivedLabel(domainLabel)
 }
@@ -1942,7 +2039,7 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
 
 export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
   const label = userVisibleLabelForBlock(block)
-  const duration = formatDuration(Math.round((block.endTime - block.startTime) / 1000))
+  const duration = formatDuration(blockActiveSeconds(block))
   const evidenceSummary = deriveWorkEvidenceSummary({
     appSummaries: block.topApps.map((app) => ({
       bundleId: app.bundleId,
@@ -2430,15 +2527,42 @@ export function getAppDetailPayload(
     .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
     .slice(0, 12)
 
+  // Totals and session counts must match the Apps rail so the same app on the
+  // same day reads identically in every surface. Both derive from
+  // getAppSummariesForRange (no MIN_DISPLAY_SEC filter, canonicalApp keyed).
+  // The `sessions` list above keeps the ≥15s filter for legibility — that is
+  // a display concern, not a totals concern. See BUGS.md B4.
+  const summariesForRange = getAppSummariesForRange(db, fromMs, todayTo)
+  const canonicalSummary = summariesForRange.find((row) => row.canonicalAppId === canonicalAppId)
+    ?? summariesForRange.find((row) => row.bundleId === canonicalAppId)
+    ?? null
+  // The rail mixes in the ongoing live session via liveAwareSummaries in
+  // src/renderer/views/Apps.tsx. Mirror the same math here so a currently-
+  // running app's total/sessionCount also agrees.
+  let liveExtraSeconds = 0
+  let liveExtraSessions = 0
+  if (liveSession) {
+    const liveCanonicalId = liveSession.canonicalAppId ?? liveSession.bundleId
+    if (liveCanonicalId === canonicalAppId) {
+      const liveStart = Math.max(liveSession.startTime, fromMs)
+      liveExtraSeconds = Math.max(0, Math.round((Date.now() - liveStart) / 1000))
+      liveExtraSessions = canonicalSummary ? 0 : 1
+    }
+  }
+  const totalSeconds = (canonicalSummary?.totalSeconds ?? sessions.reduce((sum, s) => sum + s.durationSeconds, 0))
+    + liveExtraSeconds
+  const sessionCount = (canonicalSummary?.sessionCount ?? sessions.length) + liveExtraSessions
+
   return {
     canonicalAppId,
     displayName,
     appCharacter,
     profile,
-    totalSeconds: sessions.reduce((sum, session) => sum + session.durationSeconds, 0),
-    sessionCount: sessions.length,
+    totalSeconds,
+    sessionCount,
     topArtifacts,
     topPages,
+    topDomains: topDomainsForBrowser(db, canonicalAppId, sessions, fromMs, todayTo),
     pairedApps,
     blockAppearances,
     workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
@@ -2448,6 +2572,34 @@ export function getAppDetailPayload(
     computedAt: profile.computedAt,
     rangeKey,
   }
+}
+
+// When the selected app is a browser, resolve the per-domain rollup grouped
+// by `canonical_browser_id` so Chrome profiles merge into one total. Returns
+// undefined for non-browser apps so the renderer can hide the section.
+//
+// Detection strategy: treat the app as a browser if any of its sessions are
+// categorised `browsing` OR the canonical id matches the bundle-resolved
+// browser id of a website_visits row inside the range. This avoids a
+// hardcoded browser-id list and keeps the check resilient to new browsers.
+function topDomainsForBrowser(
+  db: Database.Database,
+  canonicalAppId: string,
+  sessions: AppSession[],
+  fromMs: number,
+  toMs: number,
+): AppDetailPayload['topDomains'] {
+  if (sessions.length === 0) return undefined
+  const isBrowser = sessions.some((session) => isBrowserSession(session))
+  if (!isBrowser) return undefined
+  const summaries = getDomainSummariesForBrowser(db, fromMs, toMs, canonicalAppId, 8)
+  if (summaries.length === 0) return []
+  return summaries.map((summary) => ({
+    domain: summary.domain,
+    totalSeconds: summary.totalSeconds,
+    visitCount: summary.visitCount,
+    topTitle: summary.topTitle,
+  }))
 }
 
 export function getDistractionCostPayload(

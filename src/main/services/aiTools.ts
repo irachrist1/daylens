@@ -2,6 +2,7 @@
 // Imported by: spike scripts (Task C), tool-use integration (Task D),
 // MCP server (Task E).
 import type Database from 'better-sqlite3'
+import type { FunctionDeclaration } from '@google/genai'
 import {
   getAppSummariesForRange,
   getSessionsForRange,
@@ -13,8 +14,11 @@ import { computeFocusScoreV2 } from '../lib/focusScore'
 import {
   findClientByName,
   findProjectByName,
+  listClients as dbListClients,
+  listClientsForRange as dbListClientsForRange,
 } from '../core/query/attributionResolvers'
 import { searchFileMentions as execSearchFileMentions, type SearchFileMentionsResult } from '../lib/windowTitleFilenames'
+import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
 
 // ---------------------------------------------------------------------------
 // TypeScript parameter interfaces
@@ -49,6 +53,16 @@ export interface GetAttributionContextParams {
   entityName: string  // client or project name (partial match accepted)
 }
 
+export interface GetBlockAtTimeParams {
+  date: string  // YYYY-MM-DD local
+  time: string  // HH:MM local, 24h
+}
+
+export interface ListClientsParams {
+  startDate?: string  // YYYY-MM-DD local
+  endDate?: string    // YYYY-MM-DD local
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript return interfaces
 // ---------------------------------------------------------------------------
@@ -67,6 +81,16 @@ export interface SessionSearchHit {
 export interface SearchSessionsResult {
   hits: SessionSearchHit[]
   totalFound: number  // before limit
+  // B2: when a strict AND search yields zero hits, the tool broadens to a
+  // per-token OR sweep and reports the broadened results with matchKind
+  // 'broadened'. This is the signal the model uses to frame the answer as
+  // "closest captured signal" (D4) rather than refusing with "I don't see
+  // any evidence." matchKind 'strict' = the original query matched as-is.
+  matchKind: 'strict' | 'broadened' | 'empty'
+  // The tokens the broadened sweep ran (after stripping pipes / punctuation
+  // / stopwords). Empty for strict matches. Useful so the model can name
+  // exactly which fragment of the user's phrase did match.
+  broadenedTokens?: string[]
 }
 
 export interface AppUsageStat {
@@ -74,16 +98,74 @@ export interface AppUsageStat {
   bundleId: string
   totalSeconds: number
   sessionCount: number
+  /**
+   * The block this app contributed the most time to, when computed against a
+   * day's block timeline. Lets D1-compliant answers lead with what was being
+   * done ("Kiro — coding in the Building & Testing block") instead of just a
+   * duration. Null when no block-aware computation was possible.
+   */
+  dominantBlockLabel?: string | null
+  dominantBlockSeconds?: number
+  /** Up to 3 distinct block labels the app appeared in, time-ordered. */
+  blockLabels?: string[]
+}
+
+/**
+ * A single timeline block as the AI should see it: the activity-shaped
+ * record (label, time range, what was in it). This is what the model
+ * cites in answers. App totals are evidence, not the headline.
+ */
+export interface DayBlockNarrative {
+  blockId: string
+  label: string
+  /** Renderer-canonical start in HH:MM 24h. */
+  startTime: string
+  /** Renderer-canonical end in HH:MM 24h. */
+  endTime: string
+  startMs: number
+  endMs: number
+  /** Block duration in whole seconds, computed from endMs - startMs. */
+  durationSeconds: number
+  dominantCategory: string
+  /** Up to 4 apps that participated in this block, ordered by time-in-block. */
+  appsInBlock: Array<{ appName: string; seconds: number; category: string }>
+  /** Up to 4 page titles seen in the block (already URL-sanitized). */
+  pageTitles: string[]
+  /** Up to 3 artifact titles attached to this block (docs, files referenced). */
+  artifactTitles: string[]
 }
 
 export interface DaySummaryResult {
   date: string
+  /** Activity-shaped primary view of the day. Use this to write answers. */
+  blocks: DayBlockNarrative[]
+  /**
+   * Total tracked seconds across the day. Always equals the sum of block
+   * durations — never derived from session sums independently, so the
+   * number matches what the renderer shows.
+   */
   totalTrackedSeconds: number
   focusSeconds: number
+  /**
+   * Apps that participated in any block today. Secondary evidence — quote
+   * an app total only when it adds clarity to a block-led answer, never
+   * as the headline.
+   */
+  _evidence: {
+    topApps: AppUsageStat[]
+    topWebsiteDomains: { domain: string; totalSeconds: number }[]
+    deepWorkSessionCount: number
+    longestStreakSeconds: number
+  }
+  /** @deprecated — present for back-compat. Use `blocks[].label` instead. */
+  timelineBlockLabels: string[]
+  /** @deprecated — present for back-compat. Use `_evidence.topApps`. */
   topApps: AppUsageStat[]
+  /** @deprecated — present for back-compat. Use `_evidence.topWebsiteDomains`. */
   topWebsiteDomains: { domain: string; totalSeconds: number }[]
-  timelineBlockLabels: string[]  // human-readable block labels for the day
+  /** @deprecated — present for back-compat. Use `_evidence.deepWorkSessionCount`. */
   deepWorkSessionCount: number
+  /** @deprecated — present for back-compat. Use `_evidence.longestStreakSeconds`. */
   longestStreakSeconds: number
 }
 
@@ -123,16 +205,41 @@ export interface DailyBreakdownEntry {
   focusSeconds: number
 }
 
+/**
+ * Compact daily block narrative for weekly answers. Each entry is
+ * sufficient for the model to write "On Monday you spent 09:09–10:08 on
+ * 'Building & Testing' with Kiro and Dia." without further tool calls.
+ */
+export interface WeeklyDayBlockSummary {
+  date: string  // YYYY-MM-DD
+  /** Up to 6 top blocks for the day, sorted by duration desc. */
+  topBlocks: Array<{
+    label: string
+    startTime: string  // HH:MM
+    endTime: string    // HH:MM
+    durationSeconds: number
+    appsInBlock: string[]  // up to 3 app names
+  }>
+}
+
 export interface GetWeekSummaryResult {
   weekStart: string  // YYYY-MM-DD
   weekEnd: string    // YYYY-MM-DD
+  /** Sum of block durations across the week — matches what the timeline shows. */
   totalTrackedSeconds: number
   totalFocusSeconds: number
   focusPct: number
-  topApps: AppUsageStat[]
+  /** Activity-shaped primary view: per-day top blocks for narrative grounding. */
+  dailyBlockSummaries: WeeklyDayBlockSummary[]
   dailyBreakdown: DailyBreakdownEntry[]
   bestDay: { date: string; focusPct: number } | null
   mostActiveDay: { date: string; totalSeconds: number } | null
+  /** Apps that participated across the week. Secondary evidence, not headline. */
+  _evidence: {
+    topApps: AppUsageStat[]
+  }
+  /** @deprecated — use `_evidence.topApps`. */
+  topApps: AppUsageStat[]
 }
 
 export interface AttributionSession {
@@ -148,6 +255,62 @@ export interface GetAttributionContextResult {
   totalTrackedSeconds: number   // across available history
   last30DaysSeconds: number
   recentSessions: AttributionSession[]  // last 10
+}
+
+export interface GetBlockAtTimeResult {
+  /** The calendar day the request was resolved against (YYYY-MM-DD local). */
+  date: string
+  /** HH:MM the request was resolved to. */
+  time: string
+  /** True when a covering block was found. False means no block covers `time`. */
+  found: boolean
+  /** The covering block, when found. */
+  block: {
+    blockId: string
+    label: string
+    dominantCategory: string
+    startTime: number   // epoch ms
+    endTime: number     // epoch ms
+    durationSeconds: number
+    topAppNames: string[]        // up to 4
+    keyPageTitles: string[]       // up to 4, deduped
+  } | null
+  /** App sessions overlapping the covering block, newest first. Up to 6. */
+  overlappingSessions: Array<{
+    appName: string
+    windowTitle: string | null
+    startTime: number
+    endTime: number
+    durationSeconds: number
+  }>
+}
+
+export interface ListClientsResult {
+  rangeLabel: string  // "all time" | "today" | "YYYY-MM-DD to YYYY-MM-DD"
+  /**
+   * When present, ranked by attributed time in the window. Each entry is
+   * the portfolio payload for that client (attributed_ms, ambiguous_ms,
+   * session_count, project_names).
+   */
+  attributedClients: Array<{
+    clientId: string
+    clientName: string
+    attributedSeconds: number
+    ambiguousSeconds: number
+    sessionCount: number
+    projectNames: string[]
+  }>
+  /**
+   * Always-populated roster from the `clients` table. When
+   * `attributedClients` is empty (e.g. the user has clients but no
+   * attributed work sessions in the range), the caller should surface this
+   * so "who are my clients" does not hallucinate an empty answer.
+   */
+  clientRoster: Array<{
+    clientId: string
+    clientName: string
+    projectCount: number
+  }>
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +477,46 @@ export const anthropicTools: AnthropicTool[] = [
       required: [],
     },
   },
+
+  {
+    name: 'getBlockAtTime',
+    description:
+      'Return the timeline work block covering a specific moment. Use this for ' +
+      'questions like "what was I doing at 4pm" or "what happened yesterday at 3pm". ' +
+      'Returns the covering block plus the app sessions overlapping it. ' +
+      'If no block covers the moment, `found` is false — do not fabricate an answer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: { ...DATE_PARAM, description: 'Calendar day the moment falls on.' },
+        time: {
+          type: 'string',
+          description: 'Local time in 24-hour HH:MM format (e.g. "16:00" for 4 pm, "09:30" for 9:30 am).',
+          pattern: '^\\d{2}:\\d{2}$',
+        },
+      },
+      required: ['date', 'time'],
+    },
+  },
+
+  {
+    name: 'listClients',
+    description:
+      'Return the list of clients Daylens knows about, optionally ranked by ' +
+      'attributed time in a date range. Always returns the full client roster ' +
+      'from the clients table as `clientRoster`, and additionally returns ' +
+      'ranked usage in `attributedClients` when a date range is given or when ' +
+      'the most recent week has attributed sessions. Use this for questions ' +
+      'like "who are my clients", "list my clients this month".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startDate: { ...DATE_PARAM, description: 'Start of the attribution window (inclusive). Optional — omit for the full client roster.' },
+        endDate: { ...DATE_PARAM, description: 'End of the attribution window (inclusive). Optional — omit for the full client roster.' },
+      },
+      required: [],
+    },
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -348,6 +551,19 @@ export const openaiTools: OpenAITool[] = anthropicTools.map((t) => ({
 }))
 
 // ---------------------------------------------------------------------------
+// Google (@google/genai) function-calling schemas
+// Spec: https://ai.google.dev/gemini-api/docs/function-calling
+// The Anthropic input_schema is already OpenAPI-3.0-shaped JSON Schema, which
+// is what Gemini accepts as a function declaration's `parameters` field.
+// ---------------------------------------------------------------------------
+
+export const googleTools: FunctionDeclaration[] = anthropicTools.map((t) => ({
+  name: t.name,
+  description: t.description,
+  parameters: t.input_schema as unknown as FunctionDeclaration['parameters'],
+}))
+
+// ---------------------------------------------------------------------------
 // Tool name union — used for typed dispatch in execution layer
 // ---------------------------------------------------------------------------
 
@@ -359,6 +575,8 @@ export type ToolName =
   | 'getWeekSummary'
   | 'getAttributionContext'
   | 'searchFileMentions'
+  | 'getBlockAtTime'
+  | 'listClients'
 
 export interface SearchFileMentionsParams {
   startDate?: string
@@ -382,25 +600,89 @@ function toDateStr(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// B2: words that look like tab-title noise rather than meaningful entities.
+// Stripping these before broadening keeps the OR sweep focused on the parts
+// of the user's phrase a colleague would actually search for.
+const SEARCH_STOPWORDS = new Set([
+  'a', 'an', 'and', 'around', 'at', 'by', 'for', 'from', 'in', 'into', 'of',
+  'on', 'or', 'the', 'to', 'was', 'what', 'when', 'where', 'with',
+])
+
+function tokenizeForBroadenedSearch(query: string): string[] {
+  return query
+    .toLowerCase()
+    // Tab-title joiners and bracket characters: keep the meaningful words,
+    // drop the join syntax. "W2_Reading | Intro to ML | Perusall" should
+    // search for "Perusall" and "Reading", not for the literal "|".
+    .replace(/[|()[\]{}"'`,;:!?]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !SEARCH_STOPWORDS.has(token))
+}
+
 function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
-  const hits = dbSearchSessions(db, params.query, {
+  const limit = params.limit ?? 25
+  const strict = dbSearchSessions(db, params.query, {
     startDate: params.startDate,
     endDate: params.endDate,
-    limit: params.limit ?? 25,
+    limit,
   })
-  return {
-    hits: hits.map((h) => ({
-      id: h.id as number,
-      appName: h.appName,
-      windowTitle: h.windowTitle,
-      startTime: h.startTime,
-      endTime: h.endTime,
-      durationSeconds: Math.round((h.endTime - h.startTime) / 1000),
-      date: h.date,
-      excerpt: h.excerpt,
-    })),
-    totalFound: hits.length,
+  const mapHit = (h: { id: number; appName: string; windowTitle: string | null; startTime: number; endTime: number; date: string; excerpt: string | null }) => ({
+    id: h.id,
+    appName: h.appName,
+    windowTitle: h.windowTitle,
+    startTime: h.startTime,
+    endTime: h.endTime,
+    durationSeconds: Math.round((h.endTime - h.startTime) / 1000),
+    date: h.date,
+    excerpt: h.excerpt ?? h.windowTitle ?? h.appName,
+  })
+
+  if (strict.length > 0) {
+    return {
+      hits: strict.map(mapHit),
+      totalFound: strict.length,
+      matchKind: 'strict',
+    }
   }
+
+  // B2: strict AND yielded nothing. Asking "What was I doing around
+  // 'W2_Reading | Introduction to Machine Learning | Perusall'?" used to
+  // produce zero hits because FTS5 demanded every word match, including
+  // the pipe character — even though Perusall sessions exist. Broaden by
+  // searching each meaningful token individually and merging the results.
+  // The model gets matchKind='broadened' so it can frame the answer as
+  // "I don't see that exact phrase, but here's what I do see for Perusall."
+  const tokens = tokenizeForBroadenedSearch(params.query)
+  if (tokens.length === 0) {
+    return { hits: [], totalFound: 0, matchKind: 'empty' }
+  }
+  const byId = new Map<number, ReturnType<typeof mapHit>>()
+  for (const token of tokens) {
+    if (byId.size >= limit) break
+    const partial = dbSearchSessions(db, token, {
+      startDate: params.startDate,
+      endDate: params.endDate,
+      limit: limit - byId.size,
+    })
+    for (const hit of partial) {
+      if (byId.has(hit.id)) continue
+      byId.set(hit.id, mapHit(hit))
+      if (byId.size >= limit) break
+    }
+  }
+  const merged = Array.from(byId.values()).sort((a, b) => b.startTime - a.startTime)
+  return {
+    hits: merged,
+    totalFound: merged.length,
+    matchKind: merged.length > 0 ? 'broadened' : 'empty',
+    broadenedTokens: tokens,
+  }
+}
+
+function fmtHHMM(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): DaySummaryResult {
@@ -408,8 +690,6 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
   const summaries = getAppSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const totalTrackedSeconds = summaries.reduce((s, a) => s + a.totalSeconds, 0)
-  const focusSeconds = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
   const focusScore = computeFocusScoreV2({
     sessions: sessions.map((s) => ({
       startTime: s.startTime,
@@ -418,25 +698,124 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
       category: s.category,
       isFocused: s.isFocused,
     })),
-    totalActiveSeconds: totalTrackedSeconds,
+    totalActiveSeconds: summaries.reduce((s, a) => s + a.totalSeconds, 0),
   })
-  const blockLabels = (db.prepare(`
-    SELECT DISTINCT label_current FROM timeline_blocks
-    WHERE date = ? AND invalidated_at IS NULL
-    ORDER BY start_time ASC LIMIT 20
-  `).all(params.date) as { label_current: string }[]).map((r) => r.label_current)
-  return {
-    date: params.date,
-    totalTrackedSeconds,
-    focusSeconds,
-    topApps: summaries.slice(0, 8).map((a) => ({
+  // Block labels and timings come from the renderer's live path so the
+  // AI cites what the user saw. See docs/AI-FIX-STRATEGY.md §Problem 1.
+  const livePayload = getTimelineDayPayload(db, params.date, null)
+
+  // Build the activity-shaped primary view. Every block answers "what
+  // were you doing between A and B" with exact HH:MM bounds — these are
+  // the strings the model must cite verbatim for D3 (minute precision).
+  const seenLabels = new Set<string>()
+  const blocks: DayBlockNarrative[] = []
+  for (const block of livePayload.blocks) {
+    const label = userVisibleLabelForBlock(block)
+    if (!label) continue
+    const startMs = block.startTime
+    const endMs = block.endTime
+    // Block duration is end - start of the rendered block, never a sum
+    // of session durations. The renderer is the source of truth here so
+    // the AI and the UI agree to the minute.
+    const durationSeconds = Math.max(0, Math.round((endMs - startMs) / 1000))
+    const appsInBlock = block.topApps
+      .filter((a) => a.category !== 'system')
+      .slice(0, 4)
+      .map((a) => ({
+        appName: a.appName,
+        seconds: Math.max(0, Math.round(a.totalSeconds)),
+        category: a.category,
+      }))
+    const pageTitles: string[] = []
+    const seenPages = new Set<string>()
+    for (const page of block.pageRefs) {
+      const title = sanitizeKeyPageTitle(page)
+      if (!title) continue
+      const k = title.toLowerCase()
+      if (seenPages.has(k)) continue
+      seenPages.add(k)
+      pageTitles.push(title)
+      if (pageTitles.length >= 4) break
+    }
+    const artifactTitles: string[] = []
+    for (const artifact of block.topArtifacts ?? []) {
+      const t = (artifact as { displayTitle?: string; title?: string }).displayTitle
+        ?? (artifact as { title?: string }).title
+      if (!t) continue
+      artifactTitles.push(t)
+      if (artifactTitles.length >= 3) break
+    }
+    blocks.push({
+      blockId: block.id,
+      label,
+      startTime: fmtHHMM(startMs),
+      endTime: fmtHHMM(endMs),
+      startMs,
+      endMs,
+      durationSeconds,
+      dominantCategory: block.dominantCategory,
+      appsInBlock,
+      pageTitles,
+      artifactTitles,
+    })
+    seenLabels.add(label)
+  }
+
+  // Total tracked seconds is the sum of block durations — guarantees
+  // the AI's daily total matches the timeline view. App-summary sums
+  // can disagree with block sums due to overlap/idle gaps.
+  const totalTrackedSeconds = blocks.reduce((acc, b) => acc + b.durationSeconds, 0)
+  const focusSeconds = summaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
+
+  // Per-app activity: which block did the app contribute most time to?
+  // Lets D1-compliant answers lead with "Kiro — coding in the Building &
+  // Testing block (1h 19m)" instead of "Kiro — 1h 19m". Without this the
+  // model has app totals but no narrative to attach to each app row.
+  const appToBlockSeconds = new Map<string, Map<string, number>>()
+  for (const block of blocks) {
+    for (const app of block.appsInBlock) {
+      const inner = appToBlockSeconds.get(app.appName) ?? new Map<string, number>()
+      inner.set(block.label, (inner.get(block.label) ?? 0) + app.seconds)
+      appToBlockSeconds.set(app.appName, inner)
+    }
+  }
+  const topApps = summaries.slice(0, 8).map((a) => {
+    const blockMap = appToBlockSeconds.get(a.appName)
+    const ranked = blockMap
+      ? [...blockMap.entries()].sort((x, y) => y[1] - x[1])
+      : []
+    const primary = ranked[0]
+    const dominantBlockLabel = primary?.[0] ?? null
+    const dominantBlockSeconds = primary?.[1] ?? 0
+    const blockLabels = ranked.slice(0, 3).map(([label]) => label)
+    return {
       appName: a.appName,
       bundleId: a.bundleId,
       totalSeconds: a.totalSeconds,
       sessionCount: a.sessionCount ?? 0,
-    })),
-    topWebsiteDomains: websites.slice(0, 5).map((w) => ({ domain: w.domain, totalSeconds: w.totalSeconds })),
-    timelineBlockLabels: blockLabels,
+      dominantBlockLabel,
+      dominantBlockSeconds,
+      blockLabels,
+    }
+  })
+  const topWebsiteDomains = websites.slice(0, 5).map((w) => ({ domain: w.domain, totalSeconds: w.totalSeconds }))
+
+  return {
+    date: params.date,
+    blocks,
+    totalTrackedSeconds,
+    focusSeconds,
+    _evidence: {
+      topApps,
+      topWebsiteDomains,
+      deepWorkSessionCount: focusScore.deepWorkSessionCount,
+      longestStreakSeconds: focusScore.longestStreakSeconds,
+    },
+    // Back-compat shims so any in-flight code that still reads the flat
+    // shape doesn't break. New code should read `blocks` and `_evidence`.
+    timelineBlockLabels: [...seenLabels].slice(0, 20),
+    topApps,
+    topWebsiteDomains,
     deepWorkSessionCount: focusScore.deepWorkSessionCount,
     longestStreakSeconds: focusScore.longestStreakSeconds,
   }
@@ -506,25 +885,46 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
   const weekToMs = weekFromMs + 7 * 86_400_000
   const weekEnd = toDateStr(weekToMs - 1)
   const allSummaries = getAppSummariesForRange(db, weekFromMs, weekToMs)
-  const allSessions = getSessionsForRange(db, weekFromMs, weekToMs)
-  const totalTrackedSeconds = allSummaries.reduce((s, a) => s + a.totalSeconds, 0)
   const totalFocusSeconds = allSummaries.filter((a) => a.isFocused).reduce((s, a) => s + a.totalSeconds, 0)
-  const focusPct = totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0
 
-  // Per-day breakdown from sessions
-  const byDay = new Map<string, { totalSeconds: number; focusSeconds: number }>()
+  // Build per-day block summaries from the renderer's live path. This is
+  // the activity-shaped view that lets weekly answers say
+  // "On Monday from 09:09 to 10:08 you were in 'Building & Testing'…"
+  // without further tool calls.
+  const dailyBlockSummaries: WeeklyDayBlockSummary[] = []
+  const dailyBreakdown: DailyBreakdownEntry[] = []
+  let totalTrackedSeconds = 0
   for (let d = 0; d < 7; d++) {
-    byDay.set(toDateStr(weekFromMs + d * 86_400_000), { totalSeconds: 0, focusSeconds: 0 })
+    const dayStr = toDateStr(weekFromMs + d * 86_400_000)
+    const livePayload = getTimelineDayPayload(db, dayStr, null)
+    const dayBlocks = livePayload.blocks
+      .map((block) => {
+        const startMs = block.startTime
+        const endMs = block.endTime
+        return {
+          label: userVisibleLabelForBlock(block),
+          startTime: fmtHHMM(startMs),
+          endTime: fmtHHMM(endMs),
+          durationSeconds: Math.max(0, Math.round((endMs - startMs) / 1000)),
+          appsInBlock: block.topApps.filter((a) => a.category !== 'system').slice(0, 3).map((a) => a.appName),
+        }
+      })
+      .filter((b) => b.label && b.durationSeconds > 0)
+    const dayTotalSeconds = dayBlocks.reduce((acc, b) => acc + b.durationSeconds, 0)
+    totalTrackedSeconds += dayTotalSeconds
+    dailyBlockSummaries.push({
+      date: dayStr,
+      topBlocks: dayBlocks.sort((a, b) => b.durationSeconds - a.durationSeconds).slice(0, 6),
+    })
+    // Focus seconds per day still come from session-level focus categorisation.
+    const daySessions = livePayload.blocks.flatMap((b) => b.sessions)
+    const dayFocusSeconds = daySessions
+      .filter((s) => s.isFocused)
+      .reduce((acc, s) => acc + s.durationSeconds, 0)
+    dailyBreakdown.push({ date: dayStr, totalSeconds: dayTotalSeconds, focusSeconds: dayFocusSeconds })
   }
-  for (const s of allSessions) {
-    const day = toDateStr(s.startTime)
-    const entry = byDay.get(day)
-    if (entry) {
-      entry.totalSeconds += s.durationSeconds
-      if (s.isFocused) entry.focusSeconds += s.durationSeconds
-    }
-  }
-  const dailyBreakdown = [...byDay.entries()].map(([date, v]) => ({ date, ...v }))
+
+  const focusPct = totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0
   const bestDay = dailyBreakdown.reduce<{ date: string; focusPct: number } | null>((best, d) => {
     const pct = d.totalSeconds > 0 ? Math.round((d.focusSeconds / d.totalSeconds) * 100) : 0
     return !best || pct > best.focusPct ? { date: d.date, focusPct: pct } : best
@@ -532,21 +932,24 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
   const mostActiveDay = dailyBreakdown.reduce<{ date: string; totalSeconds: number } | null>((best, d) => {
     return !best || d.totalSeconds > best.totalSeconds ? { date: d.date, totalSeconds: d.totalSeconds } : best
   }, null)
+  const topApps = allSummaries.slice(0, 8).map((a) => ({
+    appName: a.appName,
+    bundleId: a.bundleId,
+    totalSeconds: a.totalSeconds,
+    sessionCount: a.sessionCount ?? 0,
+  }))
   return {
     weekStart: params.weekStartDate,
     weekEnd,
     totalTrackedSeconds,
     totalFocusSeconds,
     focusPct,
-    topApps: allSummaries.slice(0, 8).map((a) => ({
-      appName: a.appName,
-      bundleId: a.bundleId,
-      totalSeconds: a.totalSeconds,
-      sessionCount: a.sessionCount ?? 0,
-    })),
+    dailyBlockSummaries,
     dailyBreakdown,
     bestDay: bestDay?.focusPct === 0 ? null : bestDay,
     mostActiveDay: mostActiveDay?.totalSeconds === 0 ? null : mostActiveDay,
+    _evidence: { topApps },
+    topApps,
   }
 }
 
@@ -594,6 +997,171 @@ function execGetAttributionContext(params: GetAttributionContextParams, db: Data
   }
 }
 
+// ---------------------------------------------------------------------------
+// Block-at-time tool
+// ---------------------------------------------------------------------------
+
+function looksLikeUrlFragment(value: string): boolean {
+  if (/^https?:\/\//i.test(value)) return true
+  // Long opaque tokens (>= 16 chars, no spaces, mixed case + digits) are
+  // typically URL path segments or query strings — never useful entity names.
+  const stripped = value.trim()
+  if (!stripped.includes(' ') && stripped.length >= 24 && /^[A-Za-z0-9_\-./?&=%]+$/.test(stripped)) return true
+  // Pure base64-ish or hash-ish blobs.
+  if (/^[A-Za-z0-9+/=_-]{20,}$/.test(stripped) && !/\s/.test(stripped)) return true
+  return false
+}
+
+interface PageRefLike {
+  pageTitle?: string | null
+  displayTitle?: string
+  subtitle?: string | null
+  host?: string | null
+  url?: string | null
+}
+
+function sanitizeKeyPageTitle(page: PageRefLike): string | null {
+  const candidates = [page.pageTitle, page.displayTitle]
+  for (const raw of candidates) {
+    if (!raw) continue
+    const value = String(raw).trim()
+    if (!value) continue
+    if (looksLikeUrlFragment(value)) continue
+    return value
+  }
+  const domain = (page.host ?? page.subtitle ?? '').trim()
+  if (domain) return `${domain} (no page title captured)`
+  return null
+}
+
+function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database): GetBlockAtTimeResult {
+  const { date, time } = params
+  const [fromMs] = localDayBounds(date)
+  const match = time.match(/^(\d{1,2}):(\d{2})$/)
+  const hour = match ? Math.min(23, Math.max(0, Number(match[1]))) : 0
+  const minute = match ? Math.min(59, Math.max(0, Number(match[2]))) : 0
+  const momentMs = fromMs + hour * 3_600_000 + minute * 60_000
+
+  const payload = getTimelineDayPayload(db, date, null)
+  const covering = payload.blocks.find((block) => block.startTime <= momentMs && block.endTime >= momentMs)
+
+  if (!covering) {
+    return {
+      date,
+      time,
+      found: false,
+      block: null,
+      overlappingSessions: [],
+    }
+  }
+
+  const label = userVisibleLabelForBlock(covering)
+  const topAppNames = covering.topApps
+    .filter((app) => app.category !== 'system')
+    .slice(0, 4)
+    .map((app) => app.appName)
+
+  const seenTitles = new Set<string>()
+  const keyPageTitles: string[] = []
+  for (const page of covering.pageRefs) {
+    const title = sanitizeKeyPageTitle(page)
+    if (!title) continue
+    const lower = title.toLowerCase()
+    if (seenTitles.has(lower)) continue
+    seenTitles.add(lower)
+    keyPageTitles.push(title)
+    if (keyPageTitles.length >= 4) break
+  }
+
+  // Overlapping sessions — newest first, capped at 6.
+  const overlapping = covering.sessions
+    .filter((session) => {
+      const end = session.endTime ?? (session.startTime + session.durationSeconds * 1000)
+      return end >= momentMs - 30 * 60_000 && session.startTime <= momentMs + 30 * 60_000
+    })
+    .sort((left, right) => right.startTime - left.startTime)
+    .slice(0, 6)
+    .map((session) => ({
+      appName: session.appName,
+      windowTitle: session.windowTitle ?? null,
+      startTime: session.startTime,
+      endTime: session.endTime ?? (session.startTime + session.durationSeconds * 1000),
+      durationSeconds: session.durationSeconds,
+    }))
+
+  return {
+    date,
+    time,
+    found: true,
+    block: {
+      blockId: covering.id,
+      label,
+      dominantCategory: covering.dominantCategory,
+      startTime: covering.startTime,
+      endTime: covering.endTime,
+      durationSeconds: Math.max(0, Math.round((covering.endTime - covering.startTime) / 1000)),
+      topAppNames,
+      keyPageTitles,
+    },
+    overlappingSessions: overlapping,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// List-clients tool
+// ---------------------------------------------------------------------------
+
+function execListClients(params: ListClientsParams, db: Database.Database): ListClientsResult {
+  const roster = dbListClients(db).map((row) => ({
+    clientId: row.id,
+    clientName: row.name,
+    projectCount: row.projectCount,
+  }))
+
+  const hasRange = !!params.startDate && !!params.endDate
+  let rangeLabel = 'all time'
+  let attributed: ListClientsResult['attributedClients'] = []
+
+  if (hasRange && params.startDate && params.endDate) {
+    const [fromMs] = localDayBounds(params.startDate)
+    const [, toMs] = localDayBounds(params.endDate)
+    const portfolio = dbListClientsForRange(fromMs, toMs, db)
+    attributed = portfolio.map((entry) => ({
+      clientId: entry.client_id,
+      clientName: entry.client_name,
+      attributedSeconds: Math.round(entry.attributed_ms / 1000),
+      ambiguousSeconds: Math.round(entry.ambiguous_ms / 1000),
+      sessionCount: entry.session_count,
+      projectNames: entry.project_names,
+    }))
+    rangeLabel = `${params.startDate} to ${params.endDate}`
+  } else {
+    // No range — still try to surface last-7-days attribution so the answer
+    // has recency when possible. If there's nothing there, just return the
+    // roster.
+    const now = Date.now()
+    const fromMs = now - 7 * 86_400_000
+    const portfolio = dbListClientsForRange(fromMs, now, db)
+    if (portfolio.length > 0) {
+      attributed = portfolio.map((entry) => ({
+        clientId: entry.client_id,
+        clientName: entry.client_name,
+        attributedSeconds: Math.round(entry.attributed_ms / 1000),
+        ambiguousSeconds: Math.round(entry.ambiguous_ms / 1000),
+        sessionCount: entry.session_count,
+        projectNames: entry.project_names,
+      }))
+      rangeLabel = 'last 7 days'
+    }
+  }
+
+  return {
+    rangeLabel,
+    attributedClients: attributed,
+    clientRoster: roster,
+  }
+}
+
 export type ToolParams =
   | { name: 'searchSessions'; params: SearchSessionsParams }
   | { name: 'getDaySummary'; params: GetDaySummaryParams }
@@ -602,6 +1170,8 @@ export type ToolParams =
   | { name: 'getWeekSummary'; params: GetWeekSummaryParams }
   | { name: 'getAttributionContext'; params: GetAttributionContextParams }
   | { name: 'searchFileMentions'; params: SearchFileMentionsParams }
+  | { name: 'getBlockAtTime'; params: GetBlockAtTimeParams }
+  | { name: 'listClients'; params: ListClientsParams }
 
 export function executeTool(
   name: ToolName,
@@ -616,5 +1186,7 @@ export function executeTool(
     case 'getWeekSummary': return execGetWeekSummary(params as unknown as GetWeekSummaryParams, db)
     case 'getAttributionContext': return execGetAttributionContext(params as unknown as GetAttributionContextParams, db)
     case 'searchFileMentions': return execSearchFileMentions(db, params as unknown as SearchFileMentionsParams)
+    case 'getBlockAtTime': return execGetBlockAtTime(params as unknown as GetBlockAtTimeParams, db)
+    case 'listClients': return execListClients(params as unknown as ListClientsParams, db)
   }
 }
