@@ -26,6 +26,7 @@ export const ANALYTICS_EVENT = {
   AI_ANSWER_RETRIED: 'ai_answer_retried',
   AI_ANSWER_RATED: 'ai_answer_rated',
   AI_OUTPUT_REQUESTED: 'ai_output_requested',
+  AI_OUTPUT_REDACTED: 'ai_output_redacted',
   AI_FOLLOWUP_SUGGESTIONS_FALLBACK: 'ai_followup_suggestions_fallback',
   AI_FOLLOWUP_RESOLUTION: 'ai_followup_resolution',
   AI_CITATION_RETRY: 'ai_citation_retry',

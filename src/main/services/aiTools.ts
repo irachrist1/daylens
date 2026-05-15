@@ -19,6 +19,7 @@ import {
 } from '../core/query/attributionResolvers'
 import { searchFileMentions as execSearchFileMentions, type SearchFileMentionsResult } from '../lib/windowTitleFilenames'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
+import { sanitizeToolResult } from '@shared/aiSanitize'
 
 // ---------------------------------------------------------------------------
 // TypeScript parameter interfaces
@@ -1202,15 +1203,23 @@ export function executeTool(
   params: Record<string, unknown>,
   db: Database.Database,
 ): unknown {
-  switch (name) {
-    case 'searchSessions': return execSearchSessions(params as unknown as SearchSessionsParams, db)
-    case 'getDaySummary': return execGetDaySummary(params as unknown as GetDaySummaryParams, db)
-    case 'getAppUsage': return execGetAppUsage(params as unknown as GetAppUsageParams, db)
-    case 'searchArtifacts': return execSearchArtifacts(params as unknown as SearchArtifactsParams, db)
-    case 'getWeekSummary': return execGetWeekSummary(params as unknown as GetWeekSummaryParams, db)
-    case 'getAttributionContext': return execGetAttributionContext(params as unknown as GetAttributionContextParams, db)
-    case 'searchFileMentions': return execSearchFileMentions(db, params as unknown as SearchFileMentionsParams)
-    case 'getBlockAtTime': return execGetBlockAtTime(params as unknown as GetBlockAtTimeParams, db)
-    case 'listClients': return execListClients(params as unknown as ListClientsParams, db)
-  }
+  // Every tool result passes through sanitizeToolResult before leaving the
+  // executor: deep-walks every string field and strips OAuth tokens, JWTs,
+  // hex blobs, base64 blobs, and URL query strings. This is the load-bearing
+  // defense against the OAuth-callback leak repro from V1-PHASE-6-AI §1.
+  // sanitizeForRender (renderer streaming path) is the second backstop.
+  const raw = (() => {
+    switch (name) {
+      case 'searchSessions': return execSearchSessions(params as unknown as SearchSessionsParams, db)
+      case 'getDaySummary': return execGetDaySummary(params as unknown as GetDaySummaryParams, db)
+      case 'getAppUsage': return execGetAppUsage(params as unknown as GetAppUsageParams, db)
+      case 'searchArtifacts': return execSearchArtifacts(params as unknown as SearchArtifactsParams, db)
+      case 'getWeekSummary': return execGetWeekSummary(params as unknown as GetWeekSummaryParams, db)
+      case 'getAttributionContext': return execGetAttributionContext(params as unknown as GetAttributionContextParams, db)
+      case 'searchFileMentions': return execSearchFileMentions(db, params as unknown as SearchFileMentionsParams)
+      case 'getBlockAtTime': return execGetBlockAtTime(params as unknown as GetBlockAtTimeParams, db)
+      case 'listClients': return execListClients(params as unknown as ListClientsParams, db)
+    }
+  })()
+  return sanitizeToolResult(raw)
 }

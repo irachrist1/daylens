@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Trash2 } from 'lucide-react'
@@ -22,6 +22,10 @@ import { AI_PROVIDER_META, getSelectedModel } from '../lib/aiProvider'
 import { buildRecapSummaries, recapDateWindow, type RecapChapter, type RecapPeriod, type RecapSummary } from '../lib/recap'
 import ConnectAI from '../components/ConnectAI'
 import { inferWorkIntent } from '../../shared/workIntent'
+import { sanitizeForRender } from '../../shared/aiSanitize'
+import { AICompose } from './insights/AICompose'
+import { StreamingMessage } from './insights/StreamingMessage'
+import { clearStreamingSnapshot, setStreamingSnapshot } from './insights/streamingStore'
 import type { DaylensSearchResult } from '../../preload/index'
 
 type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
@@ -654,14 +658,7 @@ function IconRetry() {
   )
 }
 
-function IconSend() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 13 13 3" />
-      <path d="M5.5 3H13v7.5" />
-    </svg>
-  )
-}
+// IconSend moved into <AICompose />; the parent no longer renders the send button.
 
 function IconSparkle({ size = 16 }: { size?: number }) {
   return (
@@ -926,7 +923,6 @@ function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] 
 export default function Insights() {
   const location = useLocation()
   const [messages, setMessages] = useState<ThreadMessage[]>([])
-  const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [activeRecapPeriod, setActiveRecapPeriod] = useState<RecapPeriod>('day')
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
@@ -955,16 +951,12 @@ export default function Insights() {
   const [threadPickerFocusIdx, setThreadPickerFocusIdx] = useState(0)
   const threadPickerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const routedReportKeyRef = useRef<string | null>(null)
   const loadingRef = useRef(false)
   const historyHydratedThreadRef = useRef<number | null | undefined>(undefined)
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
-  // Track message IDs that have received at least one non-empty streaming chunk.
-  // Prevents Thinking… from re-appearing if React re-renders with a stale snapshot.
-  const streamedContentIdsRef = useRef<Set<string | number>>(new Set())
   loadingRef.current = loading
   const currentDate = todayString()
 
@@ -1045,16 +1037,6 @@ export default function Insights() {
   }, [messages, loading])
 
   useEffect(() => {
-    const textarea = composerTextareaRef.current
-    if (!textarea) return
-
-    textarea.style.height = '0px'
-    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 24), 140)
-    textarea.style.height = `${nextHeight}px`
-    textarea.style.overflowY = textarea.scrollHeight > 140 ? 'auto' : 'hidden'
-  }, [input])
-
-  useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)')
     const sync = () => setReducedMotion(media.matches)
     sync()
@@ -1089,12 +1071,22 @@ export default function Insights() {
 
   useEffect(() => {
     return ipc.ai.onStream((event) => {
-      if (event.snapshot) streamedContentIdsRef.current.add(`assistant:${event.requestId}`)
-      setMessages((current) => current.map((message) => (
-        message.id === `assistant:${event.requestId}`
-          ? { ...message, content: event.snapshot }
-          : message
-      )))
+      // V1-PHASE-6-AI §6: streaming snapshots used to live in React state on
+      // this component, so every chunk re-rendered the entire AI tab — most
+      // critically the controlled <textarea> in the composer. Snapshots now
+      // flow into a per-message store; <StreamingMessage> subscribes by id
+      // and the parent (this component) is not re-rendered on chunks.
+      // 1C sanitizer still runs on every snapshot before it reaches the UI.
+      const { text: safeSnapshot, report } = sanitizeForRender(event.snapshot ?? '')
+      if (report.redactionCount > 0) {
+        track(ANALYTICS_EVENT.AI_OUTPUT_REDACTED, {
+          surface: 'ai_chat',
+          request_id: event.requestId,
+          redaction_count: report.redactionCount,
+          patterns_hit: report.patternsHit,
+        })
+      }
+      setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot)
     })
   }, [])
 
@@ -1255,7 +1247,7 @@ export default function Insights() {
       trigger?: 'freeform' | 'suggested' | 'retry'
     },
   ) {
-    const prompt = (text ?? input).trim()
+    const prompt = (text ?? '').trim()
     if (!prompt || loading || !hasApiKey) return
     const trigger = options?.trigger ?? 'freeform'
     const queryKind = classifyAIOutputIntent(prompt)
@@ -1277,7 +1269,6 @@ export default function Insights() {
     }
 
     setLoading(true)
-    setInput('')
     setMessages((current) => [
       ...current,
       { id: userId, role: 'user', content: prompt, createdAt, state: 'complete' },
@@ -1330,8 +1321,28 @@ export default function Insights() {
       )))
     } finally {
       setLoading(false)
+      // The final assistantMessage is now persisted via setMessages with its
+      // sanitized `content`. Drop the streaming snapshot so it isn't double-
+      // tracked for the lifetime of the tab.
+      clearStreamingSnapshot(assistantId)
     }
   }
+
+  // Stable submit callback for <AICompose />. AICompose is React.memo'd; with
+  // a stable onSubmit reference its only re-render trigger is the `loading`
+  // prop, which is exactly what V1-PHASE-6-AI §6 specifies for the fix.
+  const handleSendRef = useRef(handleSend)
+  handleSendRef.current = handleSend
+  const submitMessage = useCallback((text: string) => {
+    void handleSendRef.current(text)
+  }, [])
+
+  // Scroll-to-bottom hook for streaming chunks. <StreamingMessage> calls this
+  // each time its snapshot grows. Stable across renders so the StreamingMessage
+  // memo never busts on this prop alone.
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
+  }, [])
 
   async function handleRetry(index: number, message: ThreadMessage) {
     if (message.id !== latestCompletedAssistantId) return
@@ -1648,6 +1659,339 @@ export default function Insights() {
     : activeChatProvider === 'codex-cli'
       ? !cliTools?.codex
       : false
+
+  // V1-PHASE-6-AI §6: MessageList memoization. The messages.map JSX is heavy
+  // (Markdown + actions + artifacts + follow-ups + rate buttons per row) and
+  // used to rebuild on every streaming chunk because chunks mutated `messages`.
+  // Streaming snapshots now flow through the streaming store directly into
+  // <StreamingMessage>, so `messages` only changes on real list events
+  // (submit, complete, error). Keying the memo off the `messages` array
+  // reference plus the slices that drive output skips JSX rebuild for
+  // unrelated parent re-renders (settings polls, search input, etc.).
+  const messageListItems = useMemo(() => messages.map((message, index) => (
+    message.role === 'user' ? (
+      <div key={message.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{
+          maxWidth: '76%',
+          borderRadius: '14px 14px 6px 14px',
+          background: 'var(--color-accent-dim)',
+          color: 'var(--color-primary)',
+          padding: '11px 14px',
+          fontSize: 13,
+          fontWeight: 550,
+        }}>
+          {message.content}
+        </div>
+      </div>
+    ) : (
+      <div
+        key={message.id}
+        style={{ display: 'flex', gap: 10, alignItems: 'start' }}
+      >
+        <div style={{ width: 22, flexShrink: 0 }} />
+        <div style={{
+          flex: 1,
+          maxWidth: 680,
+          lineHeight: 1.6,
+          ...(message.state === 'error' ? {
+            borderRadius: 12,
+            border: '1px solid rgba(248, 113, 113, 0.28)',
+            background: 'rgba(248, 113, 113, 0.08)',
+            padding: '14px 16px 10px',
+          } : {}),
+        }}>
+          {message.state === 'pending' ? (
+            <StreamingMessage
+              messageId={String(message.id)}
+              fallback={
+                <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
+                  Thinking…
+                </div>
+              }
+              renderContent={(text) => <MarkdownMessage content={text} />}
+              onSnapshotUpdate={scrollToBottom}
+            />
+          ) : (
+            <>
+              {message.state === 'error' && (
+                <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>
+                  Provider error
+                </div>
+              )}
+              <MarkdownMessage content={message.content} />
+              {(message.actions?.length ?? 0) > 0 && (
+                <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+                  {message.actions?.map((action) => {
+                    const key = messageActionKey(message.id, action)
+                    const state = messageActionState[key]
+
+                    if (action.kind === 'review_focus_session') {
+                      const draft = focusReviewDrafts[key] ?? action.suggestedNote ?? ''
+                      return (
+                        <div
+                          key={key}
+                          style={{
+                            borderRadius: 12,
+                            border: '1px solid var(--color-border-ghost)',
+                            background: 'var(--color-surface-low)',
+                            padding: 12,
+                            display: 'grid',
+                            gap: 8,
+                          }}
+                        >
+                          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                            Save a short reflection to this focus session.
+                          </div>
+                          <textarea
+                            value={draft}
+                            onChange={(event) => {
+                              const value = event.target.value
+                              setFocusReviewDrafts((current) => ({ ...current, [key]: value }))
+                            }}
+                            placeholder={action.placeholder ?? 'Add a short focus review'}
+                            rows={4}
+                            style={{
+                              width: '100%',
+                              resize: 'vertical',
+                              borderRadius: 10,
+                              border: '1px solid var(--color-border-ghost)',
+                              background: 'var(--color-surface)',
+                              color: 'var(--color-text-primary)',
+                              padding: '10px 12px',
+                              fontSize: 12.5,
+                              lineHeight: 1.6,
+                              outline: 'none',
+                            }}
+                          />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => void handleMessageAction(message.id, action)}
+                              disabled={state?.busy}
+                              style={{
+                                padding: '8px 12px',
+                                borderRadius: 9,
+                                border: '1px solid var(--color-border-ghost)',
+                                background: 'var(--color-surface)',
+                                color: 'var(--color-text-primary)',
+                                fontSize: 12.5,
+                                fontWeight: 700,
+                                cursor: state?.busy ? 'default' : 'pointer',
+                                opacity: state?.busy ? 0.7 : 1,
+                              }}
+                            >
+                              {state?.busy ? 'Saving…' : action.label}
+                            </button>
+                            {state?.successLabel && (
+                              <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
+                            )}
+                            {state?.error && (
+                              <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    const disabled = state?.busy
+                      || (action.kind === 'start_focus_session' && Boolean(activeFocusSession))
+                      || (action.kind === 'stop_focus_session' && activeFocusSession?.id !== action.sessionId)
+                    const contextHint = action.kind === 'start_focus_session' && activeFocusSession
+                      ? 'A focus session is already active.'
+                      : action.kind === 'stop_focus_session' && activeFocusSession?.id !== action.sessionId
+                        ? 'That focus session is no longer active.'
+                        : null
+
+                    return (
+                      <div
+                        key={key}
+                        style={{
+                          borderRadius: 12,
+                          border: '1px solid var(--color-border-ghost)',
+                          background: 'var(--color-surface-low)',
+                          padding: 12,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                          {contextHint ?? (action.kind === 'start_focus_session'
+                            ? 'Start a focus session from this chat context.'
+                            : 'Stop the active focus session from here.')}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => void handleMessageAction(message.id, action)}
+                            disabled={disabled}
+                            style={{
+                              padding: '8px 12px',
+                              borderRadius: 9,
+                              border: '1px solid var(--color-border-ghost)',
+                              background: 'var(--color-surface)',
+                              color: 'var(--color-text-primary)',
+                              fontSize: 12.5,
+                              fontWeight: 700,
+                              cursor: disabled ? 'default' : 'pointer',
+                              opacity: disabled ? 0.7 : 1,
+                            }}
+                          >
+                            {state?.busy
+                              ? (action.kind === 'start_focus_session' ? 'Starting…' : 'Stopping…')
+                              : action.label}
+                          </button>
+                          {state?.successLabel && (
+                            <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
+                          )}
+                          {state?.error && (
+                            <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {(message.artifacts?.length ?? 0) > 0 && (
+                <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+                  {message.artifacts?.map((artifact) => (
+                    <button
+                      key={`${message.id}:${artifact.id}`}
+                      type="button"
+                      onClick={() => void ipc.shell.openPath(artifact.path)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface)',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        width: '100%',
+                      }}
+                    >
+                      {(() => {
+                        const color = artifact.format === 'csv' ? '#16a34a' : artifact.format === 'html' ? '#7c3aed' : artifact.format === 'json' ? '#f59e0b' : '#2563eb'
+                        return (
+                          <div style={{ width: 34, height: 34, borderRadius: 8, background: `${color}15`, border: `1px solid ${color}28`, color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <IconArtifactFile kind={artifact.format === 'csv' ? 'csv' : artifact.format === 'html' ? 'html_chart' : 'markdown'} />
+                          </div>
+                        )
+                      })()}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {artifact.title}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                          {artifactFormatLabel(artifact)} · click to open
+                        </div>
+                      </div>
+                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+                        <path d="M2 12L12 2M7 2h5v5" />
+                      </svg>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {message.id === latestCompletedAssistantId && message.state === 'complete' && (message.suggestedFollowUps?.length ?? 0) >= 2 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+                  {message.suggestedFollowUps?.map((suggestion) => (
+                    <button
+                      key={`${message.id}:${suggestion.text}`}
+                      onClick={() => {
+                        track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({
+                          answer_kind: message.answerKind ?? null,
+                          source: suggestion.source,
+                          trigger: 'suggested',
+                        }))
+                        void handleSend(suggestion.text, { trigger: 'suggested' })
+                      }}
+                      style={{
+                        padding: '7px 12px',
+                        borderRadius: 999,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'transparent',
+                        color: 'var(--color-text-secondary)',
+                        cursor: 'pointer',
+                        fontSize: 12.5,
+                      }}
+                    >
+                      {suggestion.text}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                <IconActionButton
+                  label="Copy response"
+                  feedbackLabel={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.success ? 'Copied' : undefined}
+                  success={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.success ?? false}
+                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.pulseNonce ?? 0}
+                  reducedMotion={reducedMotion}
+                  onClick={() => void handleCopy(message.id, message.content, message.answerKind)}
+                >
+                  <IconCopy />
+                </IconActionButton>
+                <IconActionButton
+                  label="Thumbs up"
+                  tone="positive"
+                  selected={message.rating === 'up'}
+                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'up')]?.pulseNonce ?? 0}
+                  reducedMotion={reducedMotion}
+                  onClick={() => {
+                    const nextRating = message.rating === 'up' ? null : 'up'
+                    triggerActionFeedback(message.id, 'up')
+                    void handleRate(message, nextRating)
+                    track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
+                      answer_kind: message.answerKind ?? null,
+                      rating: nextRating ?? 'cleared',
+                      trigger: 'manual',
+                    }))
+                  }}
+                >
+                  <IconThumbsUp />
+                </IconActionButton>
+                <IconActionButton
+                  label="Thumbs down"
+                  tone="negative"
+                  selected={message.rating === 'down'}
+                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'down')]?.pulseNonce ?? 0}
+                  reducedMotion={reducedMotion}
+                  onClick={() => {
+                    const nextRating = message.rating === 'down' ? null : 'down'
+                    triggerActionFeedback(message.id, 'down')
+                    void handleRate(message, nextRating)
+                    track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
+                      answer_kind: message.answerKind ?? null,
+                      rating: nextRating ?? 'cleared',
+                      trigger: 'manual',
+                    }))
+                  }}
+                >
+                  <IconThumbsDown />
+                </IconActionButton>
+                {message.id === latestCompletedAssistantId && (
+                  <IconActionButton
+                    label="Retry response"
+                    pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'retry')]?.pulseNonce ?? 0}
+                    reducedMotion={reducedMotion}
+                    onClick={() => void handleRetry(index, message)}
+                  >
+                    <IconRetry />
+                  </IconActionButton>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  )), [messages, messageActionState, focusReviewDrafts, actionFeedback, latestCompletedAssistantId, reducedMotion, activeFocusSession, scrollToBottom])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -2187,327 +2531,7 @@ export default function Insights() {
 
               {messages.length > 0 && (
                 <div style={{ display: 'grid', gap: 24 }}>
-                  {messages.map((message, index) => (
-                    message.role === 'user' ? (
-                      <div key={message.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        <div style={{
-                          maxWidth: '76%',
-                          borderRadius: '14px 14px 6px 14px',
-                          background: 'var(--color-accent-dim)',
-                          color: 'var(--color-primary)',
-                          padding: '11px 14px',
-                          fontSize: 13,
-                          fontWeight: 550,
-                        }}>
-                          {message.content}
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        key={message.id}
-                        style={{ display: 'flex', gap: 10, alignItems: 'start' }}
-                      >
-                        <div style={{ width: 22, flexShrink: 0 }} />
-                        <div style={{
-                          flex: 1,
-                          maxWidth: 680,
-                          lineHeight: 1.6,
-                          ...(message.state === 'error' ? {
-                            borderRadius: 12,
-                            border: '1px solid rgba(248, 113, 113, 0.28)',
-                            background: 'rgba(248, 113, 113, 0.08)',
-                            padding: '14px 16px 10px',
-                          } : {}),
-                        }}>
-                          {message.state === 'pending' ? (
-                            (message.content.trim() || streamedContentIdsRef.current.has(message.id))
-                              ? <MarkdownMessage content={message.content} />
-                              : (
-                                  <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
-                                    Thinking…
-                                  </div>
-                                )
-                          ) : (
-                            <>
-                              {message.state === 'error' && (
-                                <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>
-                                  Provider error
-                                </div>
-                              )}
-                              <MarkdownMessage content={message.content} />
-                              {(message.actions?.length ?? 0) > 0 && (
-                                <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
-                                  {message.actions?.map((action) => {
-                                    const key = messageActionKey(message.id, action)
-                                    const state = messageActionState[key]
-
-                                    if (action.kind === 'review_focus_session') {
-                                      const draft = focusReviewDrafts[key] ?? action.suggestedNote ?? ''
-                                      return (
-                                        <div
-                                          key={key}
-                                          style={{
-                                            borderRadius: 12,
-                                            border: '1px solid var(--color-border-ghost)',
-                                            background: 'var(--color-surface-low)',
-                                            padding: 12,
-                                            display: 'grid',
-                                            gap: 8,
-                                          }}
-                                        >
-                                          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                                            Save a short reflection to this focus session.
-                                          </div>
-                                          <textarea
-                                            value={draft}
-                                            onChange={(event) => {
-                                              const value = event.target.value
-                                              setFocusReviewDrafts((current) => ({ ...current, [key]: value }))
-                                            }}
-                                            placeholder={action.placeholder ?? 'Add a short focus review'}
-                                            rows={4}
-                                            style={{
-                                              width: '100%',
-                                              resize: 'vertical',
-                                              borderRadius: 10,
-                                              border: '1px solid var(--color-border-ghost)',
-                                              background: 'var(--color-surface)',
-                                              color: 'var(--color-text-primary)',
-                                              padding: '10px 12px',
-                                              fontSize: 12.5,
-                                              lineHeight: 1.6,
-                                              outline: 'none',
-                                            }}
-                                          />
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                            <button
-                                              type="button"
-                                              onClick={() => void handleMessageAction(message.id, action)}
-                                              disabled={state?.busy}
-                                              style={{
-                                                padding: '8px 12px',
-                                                borderRadius: 9,
-                                                border: '1px solid var(--color-border-ghost)',
-                                                background: 'var(--color-surface)',
-                                                color: 'var(--color-text-primary)',
-                                                fontSize: 12.5,
-                                                fontWeight: 700,
-                                                cursor: state?.busy ? 'default' : 'pointer',
-                                                opacity: state?.busy ? 0.7 : 1,
-                                              }}
-                                            >
-                                              {state?.busy ? 'Saving…' : action.label}
-                                            </button>
-                                            {state?.successLabel && (
-                                              <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
-                                            )}
-                                            {state?.error && (
-                                              <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      )
-                                    }
-
-                                    const disabled = state?.busy
-                                      || (action.kind === 'start_focus_session' && Boolean(activeFocusSession))
-                                      || (action.kind === 'stop_focus_session' && activeFocusSession?.id !== action.sessionId)
-                                    const contextHint = action.kind === 'start_focus_session' && activeFocusSession
-                                      ? 'A focus session is already active.'
-                                      : action.kind === 'stop_focus_session' && activeFocusSession?.id !== action.sessionId
-                                        ? 'That focus session is no longer active.'
-                                        : null
-
-                                    return (
-                                      <div
-                                        key={key}
-                                        style={{
-                                          borderRadius: 12,
-                                          border: '1px solid var(--color-border-ghost)',
-                                          background: 'var(--color-surface-low)',
-                                          padding: 12,
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          justifyContent: 'space-between',
-                                          gap: 12,
-                                          flexWrap: 'wrap',
-                                        }}
-                                      >
-                                        <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                                          {contextHint ?? (action.kind === 'start_focus_session'
-                                            ? 'Start a focus session from this chat context.'
-                                            : 'Stop the active focus session from here.')}
-                                        </div>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                          <button
-                                            type="button"
-                                            onClick={() => void handleMessageAction(message.id, action)}
-                                            disabled={disabled}
-                                            style={{
-                                              padding: '8px 12px',
-                                              borderRadius: 9,
-                                              border: '1px solid var(--color-border-ghost)',
-                                              background: 'var(--color-surface)',
-                                              color: 'var(--color-text-primary)',
-                                              fontSize: 12.5,
-                                              fontWeight: 700,
-                                              cursor: disabled ? 'default' : 'pointer',
-                                              opacity: disabled ? 0.7 : 1,
-                                            }}
-                                          >
-                                            {state?.busy
-                                              ? (action.kind === 'start_focus_session' ? 'Starting…' : 'Stopping…')
-                                              : action.label}
-                                          </button>
-                                          {state?.successLabel && (
-                                            <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
-                                          )}
-                                          {state?.error && (
-                                            <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )}
-                              {(message.artifacts?.length ?? 0) > 0 && (
-                                <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
-                                  {message.artifacts?.map((artifact) => (
-                                    <button
-                                      key={`${message.id}:${artifact.id}`}
-                                      type="button"
-                                      onClick={() => void ipc.shell.openPath(artifact.path)}
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 10,
-                                        padding: '10px 12px',
-                                        borderRadius: 10,
-                                        border: '1px solid var(--color-border-ghost)',
-                                        background: 'var(--color-surface)',
-                                        cursor: 'pointer',
-                                        textAlign: 'left',
-                                        width: '100%',
-                                      }}
-                                    >
-                                      {(() => {
-                                        const color = artifact.format === 'csv' ? '#16a34a' : artifact.format === 'html' ? '#7c3aed' : artifact.format === 'json' ? '#f59e0b' : '#2563eb'
-                                        return (
-                                          <div style={{ width: 34, height: 34, borderRadius: 8, background: `${color}15`, border: `1px solid ${color}28`, color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                            <IconArtifactFile kind={artifact.format === 'csv' ? 'csv' : artifact.format === 'html' ? 'html_chart' : 'markdown'} />
-                                          </div>
-                                        )
-                                      })()}
-                                      <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                          {artifact.title}
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                                          {artifactFormatLabel(artifact)} · click to open
-                                        </div>
-                                      </div>
-                                      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="var(--color-text-tertiary)" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
-                                        <path d="M2 12L12 2M7 2h5v5" />
-                                      </svg>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              {message.id === latestCompletedAssistantId && message.state === 'complete' && (message.suggestedFollowUps?.length ?? 0) >= 2 && (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
-                                  {message.suggestedFollowUps?.map((suggestion) => (
-                                    <button
-                                      key={`${message.id}:${suggestion.text}`}
-                                      onClick={() => {
-                                        track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({
-                                          answer_kind: message.answerKind ?? null,
-                                          source: suggestion.source,
-                                          trigger: 'suggested',
-                                        }))
-                                        void handleSend(suggestion.text, { trigger: 'suggested' })
-                                      }}
-                                      style={{
-                                        padding: '7px 12px',
-                                        borderRadius: 999,
-                                        border: '1px solid var(--color-border-ghost)',
-                                        background: 'transparent',
-                                        color: 'var(--color-text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: 12.5,
-                                      }}
-                                    >
-                                      {suggestion.text}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-                                <IconActionButton
-                                  label="Copy response"
-                                  feedbackLabel={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.success ? 'Copied' : undefined}
-                                  success={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.success ?? false}
-                                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'copy')]?.pulseNonce ?? 0}
-                                  reducedMotion={reducedMotion}
-                                  onClick={() => void handleCopy(message.id, message.content, message.answerKind)}
-                                >
-                                  <IconCopy />
-                                </IconActionButton>
-                                <IconActionButton
-                                  label="Thumbs up"
-                                  tone="positive"
-                                  selected={message.rating === 'up'}
-                                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'up')]?.pulseNonce ?? 0}
-                                  reducedMotion={reducedMotion}
-                                  onClick={() => {
-                                    const nextRating = message.rating === 'up' ? null : 'up'
-                                    triggerActionFeedback(message.id, 'up')
-                                    void handleRate(message, nextRating)
-                                    track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
-                                      answer_kind: message.answerKind ?? null,
-                                      rating: nextRating ?? 'cleared',
-                                      trigger: 'manual',
-                                    }))
-                                  }}
-                                >
-                                  <IconThumbsUp />
-                                </IconActionButton>
-                                <IconActionButton
-                                  label="Thumbs down"
-                                  tone="negative"
-                                  selected={message.rating === 'down'}
-                                  pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'down')]?.pulseNonce ?? 0}
-                                  reducedMotion={reducedMotion}
-                                  onClick={() => {
-                                    const nextRating = message.rating === 'down' ? null : 'down'
-                                    triggerActionFeedback(message.id, 'down')
-                                    void handleRate(message, nextRating)
-                                    track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
-                                      answer_kind: message.answerKind ?? null,
-                                      rating: nextRating ?? 'cleared',
-                                      trigger: 'manual',
-                                    }))
-                                  }}
-                                >
-                                  <IconThumbsDown />
-                                </IconActionButton>
-                                {message.id === latestCompletedAssistantId && (
-                                  <IconActionButton
-                                    label="Retry response"
-                                    pulseNonce={actionFeedback[actionFeedbackKey(message.id, 'retry')]?.pulseNonce ?? 0}
-                                    reducedMotion={reducedMotion}
-                                    onClick={() => void handleRetry(index, message)}
-                                  >
-                                    <IconRetry />
-                                  </IconActionButton>
-                                )}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  ))}
+                  {messageListItems}
                   <div ref={bottomRef} />
                 </div>
               )}
@@ -2523,68 +2547,7 @@ export default function Insights() {
           padding: '18px 40px 24px',
         }}>
           <div style={{ maxWidth: 960, margin: '0 auto' }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              borderRadius: 18,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface)',
-              padding: '10px 10px 10px 16px',
-              boxShadow: 'var(--color-shadow-floating)',
-            }}>
-              <textarea
-                ref={composerTextareaRef}
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    void handleSend()
-                  }
-                }}
-                disabled={loading}
-                rows={1}
-                aria-label="Ask Daylens about your work history"
-                placeholder="Ask about your day, or ask for a report, chart, table, or export..."
-                style={{
-                  flex: 1,
-                  minHeight: 20,
-                  maxHeight: 140,
-                  border: 'none',
-                  background: 'transparent',
-                  outline: 'none',
-                  color: 'var(--color-text-primary)',
-                  fontSize: 13.5,
-                  lineHeight: '20px',
-                  resize: 'none',
-                  padding: '8px 0',
-                  display: 'block',
-                }}
-              />
-              <button
-                onClick={() => void handleSend()}
-                disabled={loading || !input.trim()}
-                type="button"
-                aria-label="Send message"
-                style={{
-                  width: 36,
-                  height: 36,
-                  padding: 0,
-                  borderRadius: 999,
-                  border: 'none',
-                  cursor: loading || !input.trim() ? 'default' : 'pointer',
-                  background: input.trim() && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
-                  color: input.trim() && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                <IconSend />
-              </button>
-            </div>
+            <AICompose onSubmit={submitMessage} loading={loading} />
           </div>
         </div>
       )}

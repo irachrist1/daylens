@@ -26,6 +26,7 @@ import type {
 import type { WorkspacePresenceState } from '@daylens/remote-contract'
 import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { stripBrowserUrlFromTitle } from '@shared/aiSanitize'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
@@ -986,6 +987,11 @@ function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: s
   return false
 }
 
+function looksLikeBrowserApp(bundleId: string, appName: string): boolean {
+  const lower = `${bundleId} ${appName}`.toLowerCase()
+  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(lower)
+}
+
 function trackedForegroundSessionExclusionReason(
   session: Pick<Omit<AppSession, 'id'>, 'bundleId' | 'appName' | 'windowTitle' | 'rawAppName'> & { executablePath?: string | null },
 ): string | null {
@@ -1455,7 +1461,13 @@ async function poll(): Promise<void> {
 
     const resolvedWin = resolveWindowIdentity(win)
     const { bundleId, appName } = resolvedWin
-    const resolvedWindowTitle = resolvedWin.title?.trim() || null
+    const rawResolvedTitle = resolvedWin.title?.trim() || null
+    // 1A capture-side hygiene: when a browser app's window title contains a
+    // URL token, strip query/fragment (and the path for non-allowlisted hosts)
+    // before it lands in app_sessions. The full URL still flows into
+    // website_visits.url via the browser-history reader.
+    const isBrowserApp = looksLikeBrowserApp(bundleId, appName)
+    const resolvedWindowTitle = stripBrowserUrlFromTitle(rawResolvedTitle, isBrowserApp)
     trackingStatus.lastResolvedWindow = {
       backend,
       bundleId,

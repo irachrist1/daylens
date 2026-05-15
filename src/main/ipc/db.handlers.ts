@@ -33,8 +33,7 @@ import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload } from '../services/workBlocks'
-import { resolveCanonicalApp } from '../lib/appIdentity'
-import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
@@ -270,83 +269,23 @@ export function registerDbHandlers(): void {
   // D5: per-app activity digest used by the Apps list view to lead with what
   // was accomplished in each app, not how long. Walks each day in the range,
   // builds canonical-app → best block label + best artifact title pairs.
+  // Artifact/page attribution respects ownership: a page captured in Safari
+  // never bleeds onto a non-browser app in the same block, and an artifact
+  // with ownerBundleId=VS Code never attaches to Dia.
   ipcMain.handle(IPC.DB.GET_APP_ACTIVITY_DIGEST, (_e, days: number = 1): import('@shared/types').AppActivityDigest[] => {
     const db = getDb()
     const today = localDateString()
     const dayCount = Math.max(1, days)
-    type Bucket = {
-      canonicalAppId: string
-      bundleId: string
-      appName: string
-      topBlock: { label: string; seconds: number } | null
-      topArtifact: { title: string; seconds: number } | null
-    }
-    // B5: key by canonicalAppId rather than bundleId. The Apps rail's
-    // `summary.canonicalAppId` is the primary lookup key, and it diverges
-    // from `bundleId` whenever resolveCanonicalApp collapses variants
-    // (Chrome profiles, app bundle aliases, etc). Keying on bundleId alone
-    // made every such row miss the digest and fall back to the old name +
-    // minutes row shape, hiding D5 entirely.
-    const buckets = new Map<string, Bucket>()
     const [todayY, todayM, todayD] = today.split('-').map(Number)
+    const blocks: import('@shared/types').WorkContextBlock[] = []
     for (let offset = 0; offset < dayCount; offset++) {
       const dt = new Date(todayY, todayM - 1, todayD)
       dt.setDate(dt.getDate() - offset)
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
       const payload = getTimelineDayProjection(db, dateStr, getCurrentSession())
-      for (const block of payload.blocks) {
-        const blockSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
-        if (blockSeconds < 60) continue
-        // B1/B5: route through the sanitized label chain (with the renderer
-        // safety net as final guard) rather than raw block.label.current.
-        // Raw `label.current` still carries pre-sanitization noise on older
-        // persisted blocks; the safety net collapses pipe-joined soup and
-        // rejects generic placeholders.
-        const sanitizedLabel = userVisibleBlockLabel(block)
-        const blockLabel = sanitizedLabel === 'Untitled block' ? '' : sanitizedLabel.trim()
-        for (const app of block.topApps) {
-          if (!app.bundleId) continue
-          const identity = resolveCanonicalApp(app.bundleId, app.appName)
-          const canonicalAppId = identity.canonicalAppId ?? app.bundleId
-          const bucket = buckets.get(canonicalAppId) ?? {
-            canonicalAppId,
-            bundleId: app.bundleId,
-            appName: app.appName,
-            topBlock: null,
-            topArtifact: null,
-          }
-          if (blockLabel && (!bucket.topBlock || blockSeconds > bucket.topBlock.seconds)) {
-            bucket.topBlock = { label: blockLabel, seconds: blockSeconds }
-          }
-          for (const artifact of block.topArtifacts) {
-            const title = artifact.displayTitle?.trim()
-            if (!title) continue
-            if (!bucket.topArtifact || artifact.totalSeconds > bucket.topArtifact.seconds) {
-              bucket.topArtifact = { title, seconds: artifact.totalSeconds }
-            }
-          }
-          // Fallback artifact source: page refs. For browser-heavy apps the
-          // top artifact often surfaces through pageRefs (page title), not
-          // topArtifacts. Without this, browser rows in the rail had no
-          // activity headline and fell back to the old shape silently.
-          for (const page of block.pageRefs) {
-            const title = (page.pageTitle ?? page.displayTitle)?.trim()
-            if (!title) continue
-            if (!bucket.topArtifact || page.totalSeconds > bucket.topArtifact.seconds) {
-              bucket.topArtifact = { title, seconds: page.totalSeconds }
-            }
-          }
-          buckets.set(canonicalAppId, bucket)
-        }
-      }
+      for (const block of payload.blocks) blocks.push(block)
     }
-    return Array.from(buckets.values()).map((bucket) => ({
-      canonicalAppId: bucket.canonicalAppId,
-      bundleId: bucket.bundleId,
-      appName: bucket.appName,
-      topBlockLabel: bucket.topBlock?.label ?? null,
-      topArtifactTitle: bucket.topArtifact?.title ?? null,
-    }))
+    return computeAppActivityDigest(blocks)
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {
