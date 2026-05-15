@@ -28,6 +28,9 @@ export const ANALYTICS_EVENT = {
   AI_OUTPUT_REQUESTED: 'ai_output_requested',
   AI_FOLLOWUP_SUGGESTIONS_FALLBACK: 'ai_followup_suggestions_fallback',
   AI_FOLLOWUP_RESOLUTION: 'ai_followup_resolution',
+  AI_CITATION_RETRY: 'ai_citation_retry',
+  AI_CITATION_FALLBACK: 'ai_citation_fallback',
+  AI_EMPTY_RESPONSE_RETRY: 'ai_empty_response_retry',
   AI_JOB_COMPLETED: 'ai_job_completed',
   AI_JOB_FAILED: 'ai_job_failed',
 
@@ -140,6 +143,11 @@ const SAFE_NUMBER_KEYS = new Set([
   'score',
   'selected_goal_count',
   'suggestion_count',
+  'missing_entity_count',
+  'rejected_generic_count',
+  'rejected_temporal_count',
+  'rejected_entity_count',
+  'rejected_shape_count',
   'duration_sec',
   'target_minutes',
 ])

@@ -1,0 +1,2 @@
+export { getAppNarrative } from './aiService'
+

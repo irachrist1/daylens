@@ -40,6 +40,7 @@ function normalizeSuggestion(text: string): string {
 
 const GENERIC_REJECT_PHRASES = [
   'tell me more',
+  'tell me more about that',
   'anything else',
   'go on',
   'continue',
@@ -55,7 +56,20 @@ const GENERIC_REJECT_PHRASES = [
   'is there anything else',
   'tell me about it',
   'go ahead',
+  'explain',
+  'explain that',
+  'can you explain',
 ]
+
+const TEMPORAL_REJECT_RE = /\b(today|yesterday|tomorrow|this week|last week|next week|this month|last month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b/i
+const GREETING_RE = /\b(hi|hey|hello|thanks|thank you)\b/i
+
+export type QuestionShape = 'time' | 'specific_work' | 'cross_cutting' | 'reflective' | 'generative'
+
+export interface FollowUpFilterReport {
+  suggestions: FollowUpSuggestion[]
+  rejectedByRule: Record<'temporal' | 'greeting' | 'generic' | 'entity' | 'shape' | 'invalid' | 'duplicate', number>
+}
 
 function validSuggestion(text: string): boolean {
   const normalized = normalizeSuggestion(text)
@@ -63,6 +77,113 @@ function validSuggestion(text: string): boolean {
   if (normalized.split(/\s+/).length > 8) return false
   const lower = normalized.toLowerCase()
   return !GENERIC_REJECT_PHRASES.includes(lower)
+}
+
+export function classifyQuestionShape(text: string): QuestionShape {
+  const lower = text.toLowerCase()
+  if (/\b(how long|how much time|how many hours|spent|duration|when did|longest stretch|gap between)\b/.test(lower)) {
+    return 'time'
+  }
+  if (/\b(write|draft|summari[sz]e|turn .* into|status update|journal|paragraph|recap)\b/.test(lower)) {
+    return 'generative'
+  }
+  if (/\b(show me|which files|which docs|which pages|which windows|what did i work on|what was i doing|what did i do for|for .+)\b/.test(lower)) {
+    return 'specific_work'
+  }
+  if (/\b(compare|trend|rhythm|losing momentum|ratio|pattern|across|vs|versus|best deep work)\b/.test(lower)) {
+    return 'cross_cutting'
+  }
+  return 'reflective'
+}
+
+function answerEntityTokens(answerText: string): Set<string> {
+  const tokens = new Set<string>()
+  const candidates = answerText.match(/\b[A-Za-z0-9][A-Za-z0-9_.-]{2,}\b/g) ?? []
+  for (const raw of candidates) {
+    const token = raw.toLowerCase().replace(/^[^\w]+|[^\w.:-]+$/g, '')
+    if (token.length < 3) continue
+    if (ENTITY_STOP_WORDS.has(token)) continue
+    if (/^\d+$/.test(token)) continue
+    tokens.add(token)
+  }
+  return tokens
+}
+
+function containsAnswerEntity(candidateText: string, answerTokens: Set<string>): boolean {
+  if (answerTokens.size === 0) return false
+  const lower = candidateText.toLowerCase()
+  return [...answerTokens].some((token) => lower.includes(token))
+}
+
+export function filterFollowUpCandidatesWithReport(
+  answerText: string,
+  candidates: FollowUpSuggestion[],
+  justAnsweredShape?: QuestionShape | null,
+): FollowUpFilterReport {
+  const rejectedByRule: FollowUpFilterReport['rejectedByRule'] = {
+    temporal: 0,
+    greeting: 0,
+    generic: 0,
+    entity: 0,
+    shape: 0,
+    invalid: 0,
+    duplicate: 0,
+  }
+  const answerTokens = answerEntityTokens(answerText)
+  const seen = new Set<string>()
+  const usedShapes = new Set<QuestionShape>()
+  const suggestions: FollowUpSuggestion[] = []
+
+  for (const candidate of candidates) {
+    const text = normalizeSuggestion(candidate.text)
+    const key = text.toLowerCase()
+    if (!validSuggestion(text)) {
+      rejectedByRule.invalid += 1
+      continue
+    }
+    if (seen.has(key)) {
+      rejectedByRule.duplicate += 1
+      continue
+    }
+    if (TEMPORAL_REJECT_RE.test(text)) {
+      rejectedByRule.temporal += 1
+      continue
+    }
+    if (GREETING_RE.test(text)) {
+      rejectedByRule.greeting += 1
+      continue
+    }
+    if (GENERIC_REJECT_PHRASES.some((phrase) => key.includes(phrase))) {
+      rejectedByRule.generic += 1
+      continue
+    }
+    if (!containsAnswerEntity(text, answerTokens)) {
+      rejectedByRule.entity += 1
+      continue
+    }
+    const shape = classifyQuestionShape(text)
+    if (justAnsweredShape && shape === justAnsweredShape) {
+      rejectedByRule.shape += 1
+      continue
+    }
+    if (usedShapes.has(shape)) {
+      rejectedByRule.shape += 1
+      continue
+    }
+    seen.add(key)
+    usedShapes.add(shape)
+    suggestions.push({ ...candidate, text })
+  }
+
+  return { suggestions: suggestions.slice(0, 4), rejectedByRule }
+}
+
+export function filterFollowUpCandidates(
+  answerText: string,
+  candidates: FollowUpSuggestion[],
+  justAnsweredShape?: QuestionShape | null,
+): FollowUpSuggestion[] {
+  return filterFollowUpCandidatesWithReport(answerText, candidates, justAnsweredShape).suggestions
 }
 
 // Model-generated suggestions must name a specific app, file, page, or entity.
@@ -113,15 +234,15 @@ function answerEntity(answerText: string | null | undefined): string | null {
   return null
 }
 
-function scopedCandidates(entity: string, state: AIConversationState | null): FollowUpSuggestion[] {
-  const compareTarget = state?.dateRange?.label?.toLowerCase().includes('last week')
-    ? 'this week'
-    : 'yesterday'
+function scopedCandidates(entity: string, _state: AIConversationState | null): FollowUpSuggestion[] {
+  // One chip per question shape so the uniqueness filter does not collapse
+  // them, and no temporal words so the temporal-reject regex does not strip
+  // them. Each chip names the entity explicitly.
   return [
-    candidate(`What drove ${entity}?`, 'deepen'),
-    candidate(`Which windows mention ${entity}?`, 'narrow'),
-    candidate(`What overlapped with ${entity}?`, 'expand'),
-    candidate(`Compare ${entity} with ${compareTarget}`, 'compare'),
+    candidate(`How long on ${entity}?`, 'narrow'),               // time
+    candidate(`Which files appeared in ${entity}?`, 'expand'),   // specific_work
+    candidate(`Compare ${entity} across sessions`, 'compare'),   // cross_cutting
+    candidate(`Draft a short note on ${entity}`, 'deepen'),      // generative
   ]
 }
 

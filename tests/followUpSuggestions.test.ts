@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   buildDeterministicFollowUpCandidates,
   buildFollowUpSuggestionPrompts,
+  classifyQuestionShape,
+  filterFollowUpCandidatesWithReport,
   parseFollowUpSuggestions,
 } from '../src/main/lib/followUpSuggestions.ts'
 import type { FollowUpSuggestion } from '../src/shared/types.ts'
@@ -103,4 +105,70 @@ test('deterministic fallback suggestions name an answer entity', () => {
   )
   assert.ok(result.length >= 2)
   assert.ok(result.every((suggestion) => suggestion.text.includes('Cursor')))
+})
+
+// ── Two-stage P0 filter ───────────────────────────────────────────────────
+
+test('filter rejects temporal words', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor accounted for 2h.', [
+    { text: 'Compare Cursor with yesterday', source: 'deterministic' },
+  ], 'time')
+  assert.equal(report.suggestions.length, 0)
+  assert.equal(report.rejectedByRule.temporal, 1)
+})
+
+test('filter rejects generic verbs', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor accounted for 2h.', [
+    { text: 'Tell me more', source: 'model' },
+  ], 'time')
+  assert.equal(report.suggestions.length, 0)
+  assert.equal(report.rejectedByRule.invalid + report.rejectedByRule.generic, 1)
+})
+
+test('filter requires a named entity from the answer', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor accounted for 2h.', [
+    { text: 'Which Notion pages appeared?', source: 'model' },
+  ], 'time')
+  assert.equal(report.suggestions.length, 0)
+  assert.equal(report.rejectedByRule.entity, 1)
+})
+
+test('filter accepts an entity-backed different-shape chip', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor accounted for 2h in daylens.', [
+    { text: 'Which windows mention Cursor?', source: 'deterministic' },
+  ], 'time')
+  assert.deepEqual(report.suggestions.map((item) => item.text), ['Which windows mention Cursor?'])
+})
+
+test('filter suppresses the just-answered shape', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor accounted for 2h.', [
+    { text: 'How long in Cursor?', source: 'model' },
+  ], 'time')
+  assert.equal(report.suggestions.length, 0)
+  assert.equal(report.rejectedByRule.shape, 1)
+})
+
+test('filter allows empty suggestions when every chip is rejected', () => {
+  const report = filterFollowUpCandidatesWithReport('No named evidence here.', [
+    { text: 'Tell me more', source: 'model' },
+    { text: 'Compare that with yesterday', source: 'deterministic' },
+  ], 'reflective')
+  assert.deepEqual(report.suggestions, [])
+})
+
+test('filter keeps at most one chip per shape', () => {
+  const report = filterFollowUpCandidatesWithReport('Cursor and GitHub appeared in the answer.', [
+    { text: 'Which windows mention Cursor?', source: 'model' },
+    { text: 'Which pages mention GitHub?', source: 'model' },
+  ], 'time')
+  assert.equal(report.suggestions.length, 1)
+  assert.equal(report.rejectedByRule.shape, 1)
+})
+
+test('question shape classifier covers the five taxonomy families', () => {
+  assert.equal(classifyQuestionShape('How long was I in Cursor?'), 'time')
+  assert.equal(classifyQuestionShape('Show me every block where I touched Daylens.'), 'specific_work')
+  assert.equal(classifyQuestionShape('Which projects are losing momentum?'), 'cross_cutting')
+  assert.equal(classifyQuestionShape('Was Tuesday a deep day?'), 'reflective')
+  assert.equal(classifyQuestionShape('Draft a short status update.'), 'generative')
 })

@@ -5,6 +5,7 @@
 // resolveDayContext   → full-day context payload
 
 import type Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
 import { getDb } from '../../services/database'
 
 // ─── Shared row types ────────────────────────────────────────────────────────
@@ -1471,4 +1472,156 @@ export function getRollupSummary(
   }
 
   return { attributed_ms: attributed, ambiguous_ms: ambiguous, session_count: sessions, by_day: rows }
+}
+
+// ─── Client CRUD ────────────────────────────────────────────────────────────
+
+export interface ClientRecord {
+  id: string
+  name: string
+  color: string | null
+  status: 'active' | 'archived'
+  created_at: number
+  updated_at: number
+  projectCount: number
+}
+
+export function listClientsDetailed(
+  db: Database.Database = getDb(),
+): ClientRecord[] {
+  return db.prepare(`
+    SELECT c.id, c.name, c.color, c.status, c.created_at, c.updated_at,
+           (SELECT COUNT(*) FROM projects p WHERE p.client_id = c.id AND p.status = 'active') AS projectCount
+    FROM clients c
+    ORDER BY (c.status = 'active') DESC, c.name ASC
+  `).all() as ClientRecord[]
+}
+
+function normalizeAlias(name: string): string {
+  return name.toLowerCase().trim()
+}
+
+export function createClient(
+  payload: { name: string; color?: string | null },
+  db: Database.Database = getDb(),
+): ClientRecord {
+  const name = payload.name.trim()
+  if (!name) throw new Error('Client name is required.')
+
+  // Case-insensitive uniqueness check against active clients.
+  const existing = db.prepare(`
+    SELECT id, name, color, status, created_at, updated_at FROM clients
+    WHERE LOWER(name) = ? AND status = 'active'
+  `).get(normalizeAlias(name)) as Omit<ClientRecord, 'projectCount'> | undefined
+  if (existing) {
+    throw new Error(`A client named "${existing.name}" already exists.`)
+  }
+
+  const now = Date.now()
+  const id = randomUUID()
+  const color = payload.color?.trim() || null
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO clients (id, name, color, status, created_at, updated_at)
+      VALUES (?, ?, ?, 'active', ?, ?)
+    `).run(id, name, color, now, now)
+    db.prepare(`
+      INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
+      VALUES (?, ?, ?, ?, 'user', ?)
+    `).run(randomUUID(), id, name, normalizeAlias(name), now)
+  })
+  tx()
+
+  return { id, name, color, status: 'active', created_at: now, updated_at: now, projectCount: 0 }
+}
+
+export function updateClient(
+  payload: { id: string; name?: string; color?: string | null },
+  db: Database.Database = getDb(),
+): ClientRecord | null {
+  const current = db.prepare(`SELECT id, name, color, status FROM clients WHERE id = ?`).get(payload.id) as
+    | { id: string; name: string; color: string | null; status: string }
+    | undefined
+  if (!current) return null
+
+  const nextName = payload.name?.trim()
+  const renaming = nextName && nextName !== current.name
+  if (renaming) {
+    const clash = db.prepare(`
+      SELECT id FROM clients WHERE LOWER(name) = ? AND status = 'active' AND id <> ?
+    `).get(normalizeAlias(nextName!), payload.id) as { id: string } | undefined
+    if (clash) throw new Error(`Another active client already uses the name "${nextName}".`)
+  }
+
+  const now = Date.now()
+  const finalName = renaming ? nextName! : current.name
+  const finalColor = payload.color === undefined ? current.color : (payload.color?.trim() || null)
+
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE clients SET name = ?, color = ?, updated_at = ? WHERE id = ?`).run(
+      finalName,
+      finalColor,
+      now,
+      payload.id,
+    )
+    if (renaming) {
+      // Keep a user-source alias matching the new display name so the AI router can still resolve by old/new names.
+      db.prepare(`
+        INSERT OR IGNORE INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
+        VALUES (?, ?, ?, ?, 'user', ?)
+      `).run(randomUUID(), payload.id, finalName, normalizeAlias(finalName), now)
+    }
+  })
+  tx()
+
+  const projectCount = (db.prepare(`SELECT COUNT(*) AS cnt FROM projects WHERE client_id = ? AND status = 'active'`).get(payload.id) as { cnt: number }).cnt
+  return {
+    id: payload.id,
+    name: finalName,
+    color: finalColor,
+    status: current.status as 'active' | 'archived',
+    created_at: now,
+    updated_at: now,
+    projectCount,
+  }
+}
+
+export function archiveClient(
+  id: string,
+  db: Database.Database = getDb(),
+): boolean {
+  const now = Date.now()
+  const result = db.prepare(`UPDATE clients SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`).run(now, id)
+  return result.changes > 0
+}
+
+export function restoreClient(
+  id: string,
+  db: Database.Database = getDb(),
+): boolean {
+  const now = Date.now()
+  const result = db.prepare(`UPDATE clients SET status = 'active', updated_at = ? WHERE id = ? AND status = 'archived'`).run(now, id)
+  return result.changes > 0
+}
+
+// Idempotent get-or-create used by the "attribute a session to a new client by name"
+// shortcut. Returns the existing client when one matches (by name or alias), else creates it.
+export function getOrCreateClientByName(
+  name: string,
+  db: Database.Database = getDb(),
+): ClientRecord {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Client name is required.')
+  const match = findClientByName(trimmed, db)
+  if (match) {
+    const row = db.prepare(`SELECT id, name, color, status, created_at, updated_at FROM clients WHERE id = ?`).get(match.id) as
+      | Omit<ClientRecord, 'projectCount'>
+      | undefined
+    if (row) {
+      const projectCount = (db.prepare(`SELECT COUNT(*) AS cnt FROM projects WHERE client_id = ? AND status = 'active'`).get(row.id) as { cnt: number }).cnt
+      return { ...row, projectCount }
+    }
+  }
+  return createClient({ name: trimmed }, db)
 }

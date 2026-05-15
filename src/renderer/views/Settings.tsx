@@ -15,6 +15,7 @@ import type {
   AppTheme,
   AppUsageSummary,
   BrowserLinkResult,
+  ClientRecord,
   TrackingDiagnosticsPayload,
   SyncStatus,
 } from '@shared/types'
@@ -562,6 +563,15 @@ export default function Settings() {
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string> } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
+  const [clients, setClients] = useState<ClientRecord[]>([])
+  const [clientsLoaded, setClientsLoaded] = useState(false)
+  const [newClientName, setNewClientName] = useState('')
+  const [newClientColor, setNewClientColor] = useState('#7c8cff')
+  const [clientFormError, setClientFormError] = useState<string | null>(null)
+  const [clientBusyId, setClientBusyId] = useState<string | null>(null)
+  const [editingClientId, setEditingClientId] = useState<string | null>(null)
+  const [editingClientName, setEditingClientName] = useState('')
+  const [editingClientColor, setEditingClientColor] = useState('')
 
   useEffect(() => {
     void (async () => {
@@ -754,6 +764,88 @@ export default function Settings() {
     }
   }
 
+  async function reloadClients() {
+    const rows = await ipc.attribution.listClientsDetailed().catch(() => [] as ClientRecord[])
+    setClients(rows)
+    setClientsLoaded(true)
+  }
+
+  useEffect(() => {
+    void reloadClients()
+  }, [])
+
+  async function handleCreateClient() {
+    const name = newClientName.trim()
+    if (!name) {
+      setClientFormError('Name is required.')
+      return
+    }
+    setClientFormError(null)
+    setClientBusyId('__new__')
+    try {
+      await ipc.attribution.createClient({ name, color: newClientColor || null })
+      setNewClientName('')
+      setNewClientColor('#7c8cff')
+      await reloadClients()
+    } catch (error) {
+      setClientFormError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setClientBusyId(null)
+    }
+  }
+
+  function startEditingClient(client: ClientRecord) {
+    setEditingClientId(client.id)
+    setEditingClientName(client.name)
+    setEditingClientColor(client.color ?? '#7c8cff')
+    setClientFormError(null)
+  }
+
+  function cancelEditingClient() {
+    setEditingClientId(null)
+    setEditingClientName('')
+    setEditingClientColor('')
+    setClientFormError(null)
+  }
+
+  async function handleSaveClient(id: string) {
+    const name = editingClientName.trim()
+    if (!name) {
+      setClientFormError('Name is required.')
+      return
+    }
+    setClientBusyId(id)
+    try {
+      await ipc.attribution.updateClient({ id, name, color: editingClientColor || null })
+      setEditingClientId(null)
+      await reloadClients()
+    } catch (error) {
+      setClientFormError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setClientBusyId(null)
+    }
+  }
+
+  async function handleArchiveClient(id: string) {
+    setClientBusyId(id)
+    try {
+      await ipc.attribution.archiveClient(id)
+      await reloadClients()
+    } finally {
+      setClientBusyId(null)
+    }
+  }
+
+  async function handleRestoreClient(id: string) {
+    setClientBusyId(id)
+    try {
+      await ipc.attribution.restoreClient(id)
+      await reloadClients()
+    } finally {
+      setClientBusyId(null)
+    }
+  }
+
   if (!settings) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -831,6 +923,18 @@ export default function Settings() {
                 {quickAccessCopy.body}
               </div>
             </div>
+            {trackingDiagnostics?.platform === 'darwin' && (
+              <SettingsRow
+                title="Capture iMessage history (macOS)"
+                description="Mirrors ~/Library/Messages/chat.db into Daylens so the AI can answer 'who did I message about X' grounded in real text. Off by default. Requires Full Disk Access — grant it in System Settings → Privacy & Security after enabling."
+                control={
+                  <Toggle
+                    checked={settings.imessageCaptureEnabled ?? false}
+                    onChange={(value) => void persist({ imessageCaptureEnabled: value })}
+                  />
+                }
+              />
+            )}
             {trackingDiagnostics?.platform === 'linux' && linuxTracking && (
               <div style={infoPanelStyle}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -1204,18 +1308,176 @@ export default function Settings() {
         </SettingsSection>
 
         <SettingsSection
+          title="Clients"
+        >
+          <div>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6, marginBottom: 14 }}>
+              Track work for specific clients or projects. Once a client exists, Daylens can resolve names like it in AI questions ("how much did I work on X this week") and attribute work sessions to it.
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 8,
+                padding: '12px 14px',
+                borderRadius: 12,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-low)',
+                marginBottom: 14,
+              }}
+            >
+              <input
+                type="text"
+                placeholder="New client name"
+                value={newClientName}
+                onChange={(event) => setNewClientName(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateClient() }}
+                style={inputStyle(220)}
+              />
+              <input
+                type="color"
+                value={newClientColor}
+                onChange={(event) => setNewClientColor(event.target.value)}
+                style={{ width: 36, height: 34, padding: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 8, background: 'transparent', cursor: 'pointer' }}
+                aria-label="Client color"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateClient()}
+                disabled={clientBusyId === '__new__' || !newClientName.trim()}
+                style={{
+                  ...inlineButtonStyle,
+                  opacity: clientBusyId === '__new__' || !newClientName.trim() ? 0.5 : 1,
+                  cursor: clientBusyId === '__new__' || !newClientName.trim() ? 'default' : 'pointer',
+                }}
+              >
+                {clientBusyId === '__new__' ? 'Adding…' : 'Add client'}
+              </button>
+              {clientFormError && (
+                <div style={{ flexBasis: '100%', fontSize: 12, color: 'var(--color-focus-amber, #d97706)' }}>{clientFormError}</div>
+              )}
+            </div>
+
+            {!clientsLoaded ? (
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading clients…</div>
+            ) : clients.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                No clients yet. Add one above.
+              </div>
+            ) : (
+              clients.map((client, index) => {
+                const isEditing = editingClientId === client.id
+                const busy = clientBusyId === client.id
+                const archived = client.status === 'archived'
+                return (
+                  <SettingsRow
+                    key={client.id}
+                    first={index === 0}
+                    title={isEditing ? '' : client.name}
+                    description={isEditing
+                      ? ''
+                      : `${client.projectCount} project${client.projectCount === 1 ? '' : 's'}${archived ? ' · archived' : ''}`}
+                    control={
+                      isEditing ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                          <input
+                            type="text"
+                            value={editingClientName}
+                            onChange={(event) => setEditingClientName(event.target.value)}
+                            style={inputStyle(180)}
+                          />
+                          <input
+                            type="color"
+                            value={editingClientColor || '#7c8cff'}
+                            onChange={(event) => setEditingClientColor(event.target.value)}
+                            style={{ width: 36, height: 34, padding: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 8, background: 'transparent', cursor: 'pointer' }}
+                            aria-label="Client color"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveClient(client.id)}
+                            disabled={busy}
+                            style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditingClient}
+                            disabled={busy}
+                            style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {client.color && (
+                            <span
+                              style={{
+                                width: 12,
+                                height: 12,
+                                borderRadius: 4,
+                                background: client.color,
+                                border: '1px solid var(--color-border-ghost)',
+                              }}
+                              aria-hidden
+                            />
+                          )}
+                          {!archived && (
+                            <button
+                              type="button"
+                              onClick={() => startEditingClient(client)}
+                              disabled={busy}
+                              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {archived ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleRestoreClient(client.id)}
+                              disabled={busy}
+                              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                            >
+                              Restore
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => void handleArchiveClient(client.id)}
+                              disabled={busy}
+                              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                            >
+                              Archive
+                            </button>
+                          )}
+                        </div>
+                      )
+                    }
+                  />
+                )
+              })
+            )}
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
           title="Notifications"
         >
           <div>
             <SettingsRow
               first
-              title="Daily recap"
-              description="End-of-day recap from your local summary."
+              title="Evening wrap"
+              description="End-of-day recap of what you worked on."
               control={<Toggle checked={settings.dailySummaryEnabled ?? true} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
             />
             <SettingsRow
-              title="Morning nudge"
-              description="Reminder if the day has started and tracking is quiet."
+              title="Morning brief"
+              description="Short morning recap of yesterday and the day ahead."
               control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
             />
             <SettingsRow

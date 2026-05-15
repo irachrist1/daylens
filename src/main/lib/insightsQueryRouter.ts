@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
+import { blockActiveSeconds } from '@shared/blockDuration'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
 import {
   buildClientInvoiceNarrativeForRange,
@@ -740,6 +741,37 @@ function buildDayBlocksAnswer(date: Date, db: Database.Database, header?: string
   return lines.join('\n')
 }
 
+function buildMatchingBlocksAnswer(question: string, date: Date, db: Database.Database): string | null {
+  const match = question.match(/\b(?:show|find)\s+me\s+(?:the\s+)?blocks?\s+(?:where|when|for|about)\s+(.+?)(?:[?.!]|$)/i)
+  const rawNeedle = cleanEntityName(match?.[1] ?? '')
+    .replace(/\b(showed up|appeared|was open|showing)\b/gi, '')
+    .trim()
+  if (!rawNeedle || rawNeedle.length < 3) return null
+  const needle = rawNeedle.toLowerCase()
+  const { blocks } = aggregateDayArtifacts(date, db)
+  const matches = blocks.filter((block) => {
+    const haystack = [
+      userVisibleLabelForBlock(block),
+      block.label.current,
+      block.label.narrative,
+      ...block.topArtifacts.map((artifact) => artifact.displayTitle),
+      ...block.pageRefs.map((page) => `${page.displayTitle} ${page.domain ?? ''}`),
+      ...block.sessions.map((session) => `${session.appName} ${session.windowTitle ?? ''}`),
+      ...block.websites.map((site) => `${site.domain} ${site.topTitle ?? ''}`),
+    ].join(' ').toLowerCase()
+    return haystack.includes(needle)
+  })
+  if (matches.length === 0) return null
+
+  return [
+    `${relativeDayLabel(date)} blocks matching ${rawNeedle}:`,
+    ...matches.slice(0, 6).map((block) => {
+      const detail = describeBlockDetail(block)
+      return `- ${formatTime(block.startTime)}-${formatTime(block.endTime)}: ${userVisibleLabelForBlock(block)}${detail ? ` — ${detail}` : ''}`
+    }),
+  ].join('\n')
+}
+
 function buildArtifactAnswer(date: Date, db: Database.Database): string | null {
   const { payload, artifacts, pages, windowTitles, apps } = aggregateDayArtifacts(date, db)
   if (payload.totalSeconds === 0) return null
@@ -804,13 +836,22 @@ function buildComparisonAnswer(date: Date, db: Database.Database): string | null
 }
 
 function durationMatchAnswer(normalized: string, apps: AppUsageSummary[], sites: WebsiteSummary[]): string | null {
+  // D1: never headline with "X hours in App Y" — apps are evidence, not the
+  // answer. If the question names an app, bail to the LLM tool-use path so
+  // it can use tools (getBlockAtTime, searchSessions) to name what the user
+  // was actually DOING in that app. Returning a bare app total here would ship
+  // screen-time-tracker output, which is the wrong product.
   for (const app of apps) {
-    if (normalized.includes(app.appName.toLowerCase())) {
-      return `You spent ${formatDuration(app.totalSeconds)} in ${app.appName}.`
+    const appName = app.appName.toLowerCase()
+    const appTokens = appName.split(/[^a-z0-9]+/).filter((token) => token.length >= 3)
+    if (normalized.includes(appName) || appTokens.some((token) => normalized.includes(token))) {
+      return null
     }
   }
   for (const site of sites) {
-    if (normalized.includes(site.domain.toLowerCase())) {
+    const domain = site.domain.toLowerCase()
+    const base = domain.replace(/^www\./, '').replace(/\.(com|org|net|io|ai|dev)$/i, '')
+    if (normalized.includes(domain) || normalized.includes(base)) {
       return `You spent ${formatDuration(site.totalSeconds)} on ${site.domain}.`
     }
   }
@@ -831,15 +872,135 @@ function durationMatchAnswer(normalized: string, apps: AppUsageSummary[], sites:
     'uncategorized',
   ]
   for (const category of categories) {
-    if (!normalized.includes(category.toLowerCase())) continue
+    const categoryKey = category.toLowerCase()
+    const categoryWords = category.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
+    if (!normalized.includes(categoryKey) && !normalized.includes(categoryWords)) continue
     const totalSeconds = apps
       .filter((app) => app.category === category)
       .reduce((sum, app) => sum + app.totalSeconds, 0)
     if (totalSeconds > 0) {
       return `You spent ${formatDuration(totalSeconds)} in ${category}.`
     }
+    // Category was named but has zero tracked time. Return an explicit
+    // refusal so the weekly catch-all does not surface a generic summary
+    // that the prose-pass would then mis-label (e.g. "focused-category
+    // work: 7h 45m" → "7h 45m in meetings"). See AI-FIX-STRATEGY §N1.
+    return `No ${categoryWords} activity captured in that range.`
   }
   return null
+}
+
+function captureContractRefusalAnswer(normalized: string): string | null {
+  const asksForHiddenContents =
+    /\b(screen|screenshot|pixels?|keystrokes?|typed|type|clipboard|copied|pasted)\b/.test(normalized)
+    || (/\b(email|message|slack|teams|inbox)\b/.test(normalized) && /\b(body|contents?|inside|in my|what was in|what did .* say|what did i type)\b/.test(normalized))
+    || /\b(call audio|transcript|terminal command|commands? did i run)\b/.test(normalized)
+
+  if (!asksForHiddenContents) return null
+  return "Daylens doesn't capture that directly (no screen pixels, keystrokes, clipboard, email bodies, message contents, call audio, or terminal commands). What it does capture: which apps were in the foreground, window titles, website visits, and timeline blocks. Ask about those and I can give you specifics."
+}
+
+function evidenceBackedSessionTimeAnswer(
+  question: string,
+  normalized: string,
+  date: Date,
+  db: Database.Database,
+): string | null {
+  if (!isEntityTimeQuestion(normalized)) return null
+  const label = extractEvidenceEntity(question, null)
+  if (!label) return null
+  const [fromMs, toMs] = dayBounds(date)
+  const needle = label.toLowerCase()
+  const sessions = getSessionsForRange(db, fromMs, toMs)
+    .filter((session) => {
+      const haystack = [
+        session.windowTitle ?? '',
+        session.appName,
+        session.bundleId,
+      ].join(' ').toLowerCase()
+      return haystack.includes(needle)
+    })
+  if (sessions.length === 0) return null
+  const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+  const lines = sessions
+    .sort((left, right) => right.durationSeconds - left.durationSeconds)
+    .slice(0, 4)
+    .map((session) => {
+      const title = session.windowTitle?.trim()
+      const titleText = title && title.toLowerCase() !== session.appName.toLowerCase()
+        ? ` — ${title}`
+        : ''
+      return `- ${formatTime(session.startTime)}-${formatTime(sessionEnd(session))}: ${session.appName}${titleText} (${formatDuration(session.durationSeconds)})`
+    })
+
+  return [
+    `${label} in ${relativeDayLabel(date)} (window-title evidence): ${formatDuration(totalSeconds)} across ${sessions.length} session${sessions.length === 1 ? '' : 's'}.`,
+    ...lines,
+  ].join('\n')
+}
+
+// F2: block-led answer for moment/range questions. Picks the renderer's
+// covering block, names it, and reports the apps inside the asked window.
+// Deliberately omits raw page titles and window titles — those are how
+// URL-fragment artefacts (e.g. "houses - Google Photos") leak past the
+// page-title sanitizer for time-of-day questions.
+function blockLedMomentAnswer(
+  window: { start: Date; end: Date },
+  date: Date,
+  db: Database.Database,
+): string | null {
+  const payload = getTimelineDayPayload(db, localDateString(date), null)
+  if (payload.blocks.length === 0) return null
+  const midMs = (window.start.getTime() + window.end.getTime()) / 2
+  const covering = payload.blocks.find((block) => block.startTime <= midMs && block.endTime >= midMs)
+    ?? payload.blocks.find((block) => {
+      const overlap = Math.max(0, Math.min(block.endTime, window.end.getTime()) - Math.max(block.startTime, window.start.getTime()))
+      return overlap > 0
+    })
+  // D4: never bare-refuse. If no block covers or overlaps the asked moment,
+  // surface the NEAREST block on the same day as the closest captured
+  // signal. Example: question "today at 4 p.m." with window [15:50, 16:10]
+  // and the only nearby block running 16:21–16:58 — the right answer is
+  // "Around 4 p.m. nothing was active yet; the next stretch (16:21–16:58)
+  // was Admin + Security," not "no tracked activity in that time window."
+  const askHHMM = `${String(new Date(midMs).getHours()).padStart(2, '0')}:${String(new Date(midMs).getMinutes()).padStart(2, '0')}`
+  const relativeDay = relativeDayLabel(date).toLowerCase()
+  const dayQualifier = relativeDay === 'today' ? 'today' : relativeDay === 'yesterday' ? 'yesterday' : `on ${localDateString(date)}`
+  if (!covering) {
+    let nearest: typeof payload.blocks[number] | null = null
+    let nearestGapMs = Number.POSITIVE_INFINITY
+    for (const block of payload.blocks) {
+      const gap = block.startTime > midMs
+        ? block.startTime - midMs
+        : midMs - block.endTime
+      if (gap < nearestGapMs) {
+        nearestGapMs = gap
+        nearest = block
+      }
+    }
+    if (!nearest) return null
+    const nearestLabel = userVisibleLabelForBlock(nearest)
+    if (!nearestLabel) return null
+    const direction = nearest.startTime > midMs ? 'The next stretch' : 'The closest stretch before that'
+    const nearestRange = `${formatTime(nearest.startTime)}-${formatTime(nearest.endTime)}`
+    const nearestApps = nearest.topApps
+      .filter((a) => a.category !== 'system')
+      .slice(0, 3)
+      .map((a) => a.appName)
+      .join(', ')
+    const head = `Around ${askHHMM} ${dayQualifier} nothing was foregrounded. ${direction} (${nearestRange}) was "${nearestLabel}"`
+    return nearestApps ? `${head} — top apps: ${nearestApps}.` : `${head}.`
+  }
+  const label = userVisibleLabelForBlock(covering)
+  if (!label) return null
+  const apps = covering.topApps
+    .filter((a) => a.category !== 'system')
+    .slice(0, 4)
+    .map((a) => `${a.appName} (${formatDuration(Math.max(0, Math.round(a.totalSeconds)))})`)
+    .join(', ')
+  const blockRange = `${formatTime(covering.startTime)}-${formatTime(covering.endTime)}`
+  const head = `Around ${askHHMM} ${dayQualifier} you were in the "${label}" block (${blockRange}).`
+  return apps ? `${head} Top apps in that block: ${apps}.` : head
 }
 
 function exactMomentAnswer(window: { start: Date; end: Date }, sessions: AppSession[], sites: WebsiteSummary[]): string | null {
@@ -1160,6 +1321,7 @@ function extractComparisonClients(question: string, db: Database.Database): Arra
 
 function isClientListQuestion(normalized: string): boolean {
   return normalized.includes('list all my clients')
+    || normalized.includes('list my clients')
     || normalized.includes('who are my clients')
     || normalized.includes('time per client')
     || normalized.includes('clientele')
@@ -1593,7 +1755,34 @@ function tryRouteEntityQuestion(
     const range = resolveQuestionRange(normalized, context, db, !timePhraseRegex().test(question))
     const clients = listClientsForRange(range.startMs, range.endMs, db)
     const answer = buildClientListAnswer(clients, range.label)
-    return answer ? { answer, entityContext: null } : null
+    if (answer) return { answer, entityContext: null }
+
+    // Fallback: the user asked "who are my clients" but there is no attributed
+    // activity in the resolved range. The `clients` table is still the source
+    // of truth for "who do I track time against" — answer from the roster
+    // rather than falling through to the LLM (which has no list-clients tool).
+    const roster = listClients(db)
+    if (roster.length === 0) {
+      return {
+        answer: 'No clients yet. Add one from Settings → Clients.',
+        entityContext: null,
+      }
+    }
+    const rosterLines = roster
+      .slice(0, 12)
+      .map((client, index) => {
+        const projects = client.projectCount > 0
+          ? `, ${client.projectCount} active project${client.projectCount === 1 ? '' : 's'}`
+          : ''
+        return `${index + 1}. ${client.name}${projects}`
+      })
+    const preamble = timePhraseRegex().test(question)
+      ? `No attributed time in ${range.label}, but your client roster:`
+      : 'Your client roster:'
+    return {
+      answer: [preamble, ...rosterLines].join('\n'),
+      entityContext: null,
+    }
   }
 
   const comparisonClients = extractComparisonClients(question, db)
@@ -1780,11 +1969,142 @@ export async function routeInsightsQuestion(
 
   const normalized = trimmed.toLowerCase()
   const resolvedContext = resolveTemporalContext(trimmed, defaultDate, previousContext)
+  const refusalAnswer = captureContractRefusalAnswer(normalized)
+  if (refusalAnswer) {
+    return {
+      kind: 'answer',
+      answer: refusalAnswer,
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+    }
+  }
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)} yesterday=${isYesterdayQuestion(normalized)}`)
   }
+
+  // ─── Tracking window guardrails ──────────────────────────────────────────
+  // If the resolved date is before tracking started or in the future, return
+  // a structured answer instead of falling through to the LLM (which would
+  // hallucinate or refuse).
+  const resolvedDateMs = resolvedContext.date.getTime()
+  const nowMs = Date.now()
+  const firstSessionMs = (db.prepare('SELECT MIN(start_time) as t FROM app_sessions').get() as { t: number | null } | undefined)?.t ?? null
+
+  if (resolvedDateMs > nowMs + 24 * 60 * 60 * 1000) {
+    // Future date — Daylens can't predict
+    return {
+      kind: 'answer',
+      answer: "That date is in the future. Daylens captures activity as it happens — ask about today or any past date and I can tell you what was tracked.",
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+    }
+  }
+
+  if (firstSessionMs && resolvedDateMs < firstSessionMs - 24 * 60 * 60 * 1000) {
+    // Before tracking started — offer what's available
+    const trackingStartDate = new Date(firstSessionMs).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    const trackingStartDateStr = localDateString(new Date(firstSessionMs))
+    // Try to get the first available day's summary
+    const firstDayPayload = getTimelineDayPayload(db, trackingStartDateStr, null)
+    const firstDayBlocks = firstDayPayload.blocks
+      .filter((b) => (b.endTime - b.startTime) >= 3 * 60_000)
+      .slice(0, 3)
+      .map((b) => userVisibleLabelForBlock(b))
+      .filter(Boolean)
+    const firstDayHint = firstDayBlocks.length > 0
+      ? ` The earliest day shows: ${firstDayBlocks.join(', ')}.`
+      : ''
+    return {
+      kind: 'answer',
+      answer: `Daylens started tracking on ${trackingStartDate}. The date you asked about is before that.${firstDayHint} Ask about ${trackingStartDate} or later and I can give you specifics.`,
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+    }
+  }
+
+  // ─── Empty day inside tracking window ────────────────────────────────────
+  // If the resolved date has zero sessions but is within the tracking window,
+  // distinguish "machine was off" from a tracking gap and surface the closest
+  // neighbouring day. Only fire this for questions that explicitly reference a
+  // specific day (yesterday, today, a weekday name) — not for generic or
+  // follow-up questions that default to today.
+  const explicitlyReferencesDay = /\b(today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|last\s+\w+day)\b/i.test(normalized)
+  if (firstSessionMs && explicitlyReferencesDay && !isWeeklyQuestion(normalized) && !isAllTimeQuestion(normalized) && !resolvedContext.timeWindow) {
+    const [dayFrom, dayTo] = dayBounds(resolvedContext.date)
+    const daySessions = getSessionsForRange(db, dayFrom, dayTo)
+    if (daySessions.length === 0 && resolvedDateMs < nowMs) {
+      // No sessions on this day — find the closest day with data
+      const closestBefore = (db.prepare(
+        'SELECT MAX(start_time) as t FROM app_sessions WHERE start_time < ?',
+      ).get(dayFrom) as { t: number | null } | undefined)?.t
+      const closestAfter = (db.prepare(
+        'SELECT MIN(start_time) as t FROM app_sessions WHERE start_time >= ?',
+      ).get(dayTo) as { t: number | null } | undefined)?.t
+
+      const dayLabel = relativeDayLabel(resolvedContext.date)
+      let closestHint = ''
+      if (closestBefore) {
+        const beforeDate = new Date(closestBefore)
+        closestHint = ` The closest tracked day before that is ${relativeDayLabel(beforeDate)} (${localDateString(beforeDate)}).`
+      } else if (closestAfter) {
+        const afterDate = new Date(closestAfter)
+        closestHint = ` The next tracked day is ${relativeDayLabel(afterDate)} (${localDateString(afterDate)}).`
+      }
+      return {
+        kind: 'answer',
+        answer: `No tracked activity on ${dayLabel}. Your machine was likely off or Daylens wasn't running.${closestHint} Ask about that day instead and I can tell you what happened.`,
+        resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+      }
+    }
+  }
+
   if (resolvedContext.timeWindow) {
+    // D2: detect future moments today and short-circuit before hitting
+    // session lookup. "What did I do today at 4pm" at 11:37am should not
+    // return "no tracked activity" — that's misleading. Answer the
+    // obvious thing instead.
+    const windowStartMs = resolvedContext.timeWindow.start.getTime()
+    const nowMs = Date.now()
+    const todayStartMs = (() => {
+      const d = new Date()
+      d.setHours(0, 0, 0, 0)
+      return d.getTime()
+    })()
+    const askedAboutToday = windowStartMs >= todayStartMs && windowStartMs < todayStartMs + 86_400_000
+    if (askedAboutToday && windowStartMs > nowMs) {
+      // Use the midpoint of the time window so the asked moment shows
+      // correctly. A "today at 4pm" question parses to a ±10min window
+      // around 16:00 — `start` would be 15:50 which is not what the
+      // user typed.
+      const midMs = (resolvedContext.timeWindow.start.getTime() + resolvedContext.timeWindow.end.getTime()) / 2
+      const mid = new Date(midMs)
+      const askHHMM = `${String(mid.getHours()).padStart(2, '0')}:${String(mid.getMinutes()).padStart(2, '0')}`
+      const nowHHMM = `${String(new Date(nowMs).getHours()).padStart(2, '0')}:${String(new Date(nowMs).getMinutes()).padStart(2, '0')}`
+      // Surface today's activity so far so the answer is not a bare
+      // "come back later." If there's nothing yet (early morning), say so
+      // — but never just refuse.
+      const todayMs = new Date()
+      todayMs.setHours(0, 0, 0, 0)
+      const todayStr = `${todayMs.getFullYear()}-${String(todayMs.getMonth() + 1).padStart(2, '0')}-${String(todayMs.getDate()).padStart(2, '0')}`
+      const recentBlocks = buildDayBlocksAnswer(new Date(), db, 'Today so far') ?? null
+      const tail = recentBlocks
+        ? `\n\n${recentBlocks}`
+        : "\n\nNothing tracked yet today either — looks like Daylens hasn't seen activity, or your machine was off."
+      void todayStr
+      return {
+        kind: 'answer',
+        answer: `It's ${nowHHMM} — ${askHHMM} hasn't happened yet. Check back after ${askHHMM} and I'll have something to say about it.${tail}`,
+        resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+      }
+    }
+    // F2: moment/range questions must lead with the renderer's block label,
+    // not raw window titles or page titles. The previous path called
+    // exactMomentAnswer which pulled topSite.topTitle straight out of the
+    // website summaries — that's how URL-fragment artefacts like
+    // "houses - Google Photos" reached the user. Block label first; apps
+    // and sites become evidence.
+    const blockLed = blockLedMomentAnswer(resolvedContext.timeWindow, resolvedContext.date, db)
+    if (blockLed) {
+      return { kind: 'answer', answer: blockLed, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
+    }
     const sessions = getSessionsForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
     const sites = getWebsiteSummariesForRange(db, resolvedContext.timeWindow.start.getTime(), resolvedContext.timeWindow.end.getTime())
     const answer = timeRangeAnswer(resolvedContext.timeWindow, sessions, sites)
@@ -1830,16 +2150,19 @@ export async function routeInsightsQuestion(
     })
     const mentionedApps = allTimeApps.filter((app) => normalized.includes(app.appName.toLowerCase()))
 
-    if (mentionedSites.length > 0 || mentionedApps.length > 0) {
+    // D1: if the question names an app, bail to the LLM tool-use path so the
+    // answer can describe what the user was DOING in that app, not just the
+    // raw hours. Sites are evidence-as-headline-able (a domain is closer to
+    // an activity signal than a generic app name), so we keep those.
+    if (mentionedApps.length > 0) {
+      return null
+    }
+    if (mentionedSites.length > 0) {
       const lines: string[] = []
       let totalSeconds = 0
       for (const site of mentionedSites) {
         lines.push(`- ${site.domain}: ${formatDuration(site.totalSeconds)}`)
         totalSeconds += site.totalSeconds
-      }
-      for (const app of mentionedApps) {
-        lines.push(`- ${app.appName}: ${formatDuration(app.totalSeconds)}`)
-        totalSeconds += app.totalSeconds
       }
       const header = `Across all tracked sessions (~${trackingDays} days of data):`
       const total = lines.length > 1 ? `\nTotal: ${formatDuration(totalSeconds)}.` : ''
@@ -1912,6 +2235,129 @@ export async function routeInsightsQuestion(
 
     // Catch-all: generic "this week" / "last week" question with no specific sub-pattern
     {
+      // Meetings: app-category alone misses meeting time. A "X (Twitter) + Google Meet"
+      // block is tracked as browsing, and Teams sessions can land in communication.
+      // Before falling through to the zero-meetings refusal, scan block labels for
+      // meeting keywords across the week and report what was found.
+      if (/\bmeetings?\b/.test(normalized)) {
+        const meetingBlocks: Array<{ date: string; label: string; start: number; end: number; durationSec: number }> = []
+        const cursor = new Date(start)
+        while (cursor.getTime() < end.getTime()) {
+          const dateStr = localDateString(cursor)
+          const payload = getTimelineDayPayload(db, dateStr, null)
+          for (const block of payload.blocks) {
+            const label = userVisibleLabelForBlock(block) ?? ''
+            if (/\b(meet|zoom|teams|granola|webex|hangout|huddle|call)\b/i.test(label)) {
+              meetingBlocks.push({
+                date: dateStr,
+                label,
+                start: block.startTime,
+                end: block.endTime,
+                durationSec: blockActiveSeconds(block),
+              })
+            }
+          }
+          cursor.setDate(cursor.getDate() + 1)
+        }
+        if (meetingBlocks.length > 0) {
+          const totalSec = meetingBlocks.reduce((s, b) => s + b.durationSec, 0)
+          const lines = meetingBlocks
+            .sort((a, b) => a.start - b.start)
+            .map((b) => `- ${b.date} ${formatTime(b.start)}-${formatTime(b.end)}: ${b.label} (${formatDuration(b.durationSec)})`)
+          const answer = [
+            `Meeting-shaped activity this week (block-label evidence, not app-category): ${formatDuration(totalSec)} across ${meetingBlocks.length} block${meetingBlocks.length === 1 ? '' : 's'}.`,
+            ...lines,
+          ].join('\n')
+          return { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
+        }
+      }
+
+      // N1 (weekly): if the user asked about a specific category (e.g. "meetings")
+      // and that category has zero time, return a direct answer instead of falling
+      // through to the catch-all which would produce a generic summary.
+      const categoryDurationAnswer = durationMatchAnswer(normalized, apps, sites)
+      if (categoryDurationAnswer) {
+        return { kind: 'answer', answer: categoryDurationAnswer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
+      }
+
+      // N2: if the user named a known project or client, bail to the LLM
+      // tool-use path so getAttributionContext can answer the actual
+      // question. The catch-all would otherwise produce a generic weekly
+      // summary that ignores the entity (e.g. "how much on Daylens this
+      // week" → "Top apps: Kiro, Chrome..." with no mention of Daylens).
+      if (
+        extractSingleProject(trimmed, previousContext, db)
+        || extractSingleClient(trimmed, previousContext, db)
+      ) {
+        return null
+      }
+
+      // N2b: fuzzy entity scope. The projects/clients tables are often
+      // unpopulated even when the user works on named things every day
+      // ("Daylens", "ALU"). Extract a candidate from `on X`/`for X`/`with X`
+      // shapes in the original (case-preserving) question, then check
+      // whether that token appears in any block label, artifact, or page
+      // for the range. If exactly one matches, scope to those blocks.
+      const entityCandidate = (() => {
+        const m =
+          trimmed.match(/\b(?:on|for|with|about)\s+([A-Z][A-Za-z0-9_-]{2,})/)
+          ?? trimmed.match(/\b(?:on|for|with|about)\s+"([^"]{2,40})"/)
+        return m ? m[1] : null
+      })()
+      if (entityCandidate) {
+        const needle = entityCandidate.toLowerCase()
+        const matchingBlocks: Array<{ date: string; label: string; start: number; end: number; durationSec: number; reason: string }> = []
+        const cursor = new Date(start)
+        while (cursor.getTime() < end.getTime()) {
+          const dateStr = localDateString(cursor)
+          const payload = getTimelineDayPayload(db, dateStr, null)
+          for (const block of payload.blocks) {
+            const label = userVisibleLabelForBlock(block) ?? ''
+            const labelHit = label.toLowerCase().includes(needle)
+            const artifactHit = (block.topArtifacts ?? []).some((a) => {
+              const t = (a as { displayTitle?: string; title?: string }).displayTitle
+                ?? (a as { title?: string }).title ?? ''
+              return t.toLowerCase().includes(needle)
+            })
+            const pageHit = (block.pageRefs ?? []).some((p) => {
+              const t = ((p as { pageTitle?: string }).pageTitle ?? '').toLowerCase()
+              const host = ((p as { host?: string }).host ?? '').toLowerCase()
+              return t.includes(needle) || host.includes(needle)
+            })
+            if (labelHit || artifactHit || pageHit) {
+              matchingBlocks.push({
+                date: dateStr,
+                label,
+                start: block.startTime,
+                end: block.endTime,
+                durationSec: blockActiveSeconds(block),
+                reason: labelHit ? 'block label' : artifactHit ? 'artifact' : 'page',
+              })
+            }
+          }
+          cursor.setDate(cursor.getDate() + 1)
+        }
+        if (matchingBlocks.length > 0) {
+          const totalSec = matchingBlocks.reduce((s, b) => s + b.durationSec, 0)
+          const lines = matchingBlocks
+            .sort((a, b) => a.start - b.start)
+            .slice(0, 10)
+            .map((b) => `- ${b.date} ${formatTime(b.start)}-${formatTime(b.end)}: ${b.label} (${formatDuration(b.durationSec)}, matched via ${b.reason})`)
+          const answer = [
+            `${entityCandidate} this week (block-label/artifact/page match — no projects table entry): ${formatDuration(totalSec)} across ${matchingBlocks.length} block${matchingBlocks.length === 1 ? '' : 's'}.`,
+            ...lines,
+            'If "' + entityCandidate + '" should be a tracked client, add it in Settings → Clients to get clean attribution.',
+          ].join('\n')
+          return { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
+        }
+        // No matches at all — say so rather than fall through to a generic
+        // week summary that ignores the named entity.
+        return {
+          kind: 'answer',
+          answer: `No blocks, artifacts, or pages mentioning "${entityCandidate}" were found this week. If "${entityCandidate}" is a client you track time against, add it in Settings → Clients so attribution can pick it up.`,
+          resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+        }
+      }
       const totalSeconds = apps.reduce((sum, a) => sum + a.totalSeconds, 0)
       if (process.env.NODE_ENV === 'development') {
         console.log(`[router] weekly catch-all: apps=${apps.length} sites=${sites.length} totalSec=${totalSeconds}`)
@@ -1919,19 +2365,58 @@ export async function routeInsightsQuestion(
       if (totalSeconds === 0 && sites.length === 0) return null
 
       const weekLabel = normalized.includes('last week') ? 'Last week' : 'This week'
+
+      // D1: lead with what the user was DOING (block labels) rather than which
+      // apps were open. Walk each day in the range and collect the top blocks,
+      // then summarise the week as a list of activities with durations. Apps
+      // and sites land at the bottom as evidence-shaped supporting detail.
+      const weekBlocks: Array<{ date: string; label: string; start: number; durationSec: number }> = []
+      const dayCursor = new Date(start)
+      while (dayCursor.getTime() < end.getTime()) {
+        const dateStr = localDateString(dayCursor)
+        const payload = getTimelineDayPayload(db, dateStr, null)
+        for (const block of payload.blocks) {
+          const sec = blockActiveSeconds(block)
+          if (sec < 5 * 60) continue
+          const label = userVisibleLabelForBlock(block) ?? ''
+          if (!label) continue
+          weekBlocks.push({ date: dateStr, label, start: block.startTime, durationSec: sec })
+        }
+        dayCursor.setDate(dayCursor.getDate() + 1)
+      }
+
+      const lines: string[] = [`${weekLabel}: ${formatDuration(totalSeconds)} tracked.`]
+
+      if (weekBlocks.length > 0) {
+        // Group blocks by normalised label so the same activity across the
+        // week shows as one total rather than five repeats.
+        const byActivity = new Map<string, { label: string; totalSec: number; count: number }>()
+        for (const block of weekBlocks) {
+          const key = block.label.toLowerCase().trim()
+          const existing = byActivity.get(key) ?? { label: block.label, totalSec: 0, count: 0 }
+          existing.totalSec += block.durationSec
+          existing.count += 1
+          byActivity.set(key, existing)
+        }
+        const topActivities = Array.from(byActivity.values())
+          .sort((a, b) => b.totalSec - a.totalSec)
+          .slice(0, 6)
+        lines.push('Main activities:')
+        for (const activity of topActivities) {
+          lines.push(`- ${activity.label}: ${formatDuration(activity.totalSec)}${activity.count > 1 ? ` (across ${activity.count} blocks)` : ''}`)
+        }
+      }
+
       const focusSeconds = apps.filter((a) => isFocusedCategory(a.category)).reduce((sum, a) => sum + a.totalSeconds, 0)
-      const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
       const topSites = sites.slice(0, 5).map((s) => `${s.domain} (${formatDuration(s.totalSeconds)})`).join(', ')
       const distractionSites = sites.filter((s) => DISTRACTION_DOMAINS.includes(s.domain.toLowerCase()))
       const distractionSeconds = distractionSites.reduce((sum, s) => sum + s.totalSeconds, 0)
+      const topApps = apps.slice(0, 5).map((a) => `${a.appName} (${formatDuration(a.totalSeconds)})`).join(', ')
 
-      const lines: string[] = [
-        `${weekLabel}: ${formatDuration(totalSeconds)} tracked.`,
-        focusSeconds > 0 ? `Focused-category work: ${formatDuration(focusSeconds)}.` : null,
-        topApps ? `Top apps: ${topApps}.` : null,
-        topSites ? `Top sites: ${topSites}.` : null,
-        distractionSeconds > 0 ? `Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.` : null,
-      ].filter((line): line is string => line !== null)
+      if (focusSeconds > 0) lines.push(`Focused-category work: ${formatDuration(focusSeconds)}.`)
+      if (topApps) lines.push(`Apps involved (evidence, not the activity): ${topApps}.`)
+      if (topSites) lines.push(`Top sites: ${topSites}.`)
+      if (distractionSeconds > 0) lines.push(`Distraction time (YouTube, X, etc.): ${formatDuration(distractionSeconds)}.`)
 
       return { kind: 'answer', answer: lines.join('\n'), resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
     }
@@ -1966,6 +2451,11 @@ export async function routeInsightsQuestion(
     || normalized.includes('key artifacts')
   ) {
     const answer = buildArtifactAnswer(resolvedContext.date, db)
+    return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
+  }
+
+  if (/\b(?:show|find)\s+me\s+(?:the\s+)?blocks?\s+(?:where|when|for|about)\b/i.test(trimmed)) {
+    const answer = buildMatchingBlocksAnswer(trimmed, resolvedContext.date, db)
     return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
@@ -2043,8 +2533,10 @@ export async function routeInsightsQuestion(
     }
   }
 
-  if (normalized.includes('how much time') || normalized.includes('how long')) {
-    const answer = durationMatchAnswer(normalized, apps, sites)
+  if (normalized.includes('how much time') || normalized.includes('how long') || normalized.includes('how many hours')) {
+    const answer =
+      durationMatchAnswer(normalized, apps, sites)
+      ?? evidenceBackedSessionTimeAnswer(trimmed, normalized, resolvedContext.date, db)
     return answer ? { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } } : null
   }
 
@@ -2053,6 +2545,13 @@ export async function routeInsightsQuestion(
   // Mirrors the weekly catch-all structure so the LLM gets historical context
   // instead of falling through to null.
   if (isYesterdayQuestion(normalized)) {
+    // N2: defer to LLM tool-use when the question names a project/client.
+    if (
+      extractSingleProject(trimmed, previousContext, db)
+      || extractSingleClient(trimmed, previousContext, db)
+    ) {
+      return null
+    }
     const blockAnswer = buildDayBlocksAnswer(resolvedContext.date, db, 'Yesterday')
     if (blockAnswer) {
       return { kind: 'answer', answer: blockAnswer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
@@ -2123,6 +2622,41 @@ const NUMERIC_ROUTE_PATTERNS: RegExp[] = [
  * Temporal modifiers ("last week", "yesterday") are parameters, not routing
  * signals — they do not flip this to true by themselves.
  */
+// Client-list phrases the router answers deterministically via
+// `isClientListQuestion` + `listClientsForRange`. Kept in lockstep with that
+// predicate so "who are my clients"-style prompts route instead of falling to
+// the LLM (which has no list-clients tool and will hallucinate a limitation).
+const CLIENT_LIST_PHRASES = [
+  'who are my clients',
+  'list all my clients',
+  'list my clients',
+  'time per client',
+  'clientele',
+]
+
+// Time-at-moment patterns. `resolveTimeWindow` already parses these into a
+// ±10-minute window and `exactMomentAnswer` already returns the covering
+// block + top signals — but only if the router is invoked. These gates keep
+// "what did I do at 4pm"-style prompts on the deterministic path instead of
+// hitting the synthesis block-list.
+const TIME_AT_MOMENT_PATTERNS: RegExp[] = [
+  // "at 4pm", "at 4 p.m.", "at 4:30 pm", "at 16:00"
+  /\bat\s+\d{1,2}(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)\b/,
+  /\bat\s+\d{1,2}:\d{2}\b/,
+  // "today at 4", "yesterday at 16:00"
+  /\b(today|yesterday)\s+at\s+\d{1,2}(?::\d{2})?\b/,
+  // "around 4pm", "before 3pm", "after 10am"
+  /\b(around|before|after)\s+\d{1,2}(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)\b/,
+]
+
+/**
+ * Returns true only for pure numeric lookups that the deterministic router
+ * can answer without open-ended synthesis. Everything else goes to the
+ * freeform/tool-use path.
+ *
+ * Temporal modifiers ("last week", "yesterday") are parameters, not routing
+ * signals — they do not flip this to true by themselves.
+ */
 export function shouldUseRouter(message: string): boolean {
   const lower = message.trim().toLowerCase()
 
@@ -2137,6 +2671,20 @@ export function shouldUseRouter(message: string): boolean {
     || lower.includes('files, docs, or pages')
   ) {
     return true
+  }
+
+  // Client-list prompts must route before the synthesis block-list check
+  // below — "who are my clients" otherwise falls through to the LLM, which
+  // has no list-clients tool.
+  for (const phrase of CLIENT_LIST_PHRASES) {
+    if (lower.includes(phrase)) return true
+  }
+
+  // Time-at-moment prompts ("what did I do today at 4pm") must bypass the
+  // synthesis block-list too — the prefix "what did i do" would otherwise
+  // reject them, even though the router has `exactMomentAnswer` ready.
+  for (const pattern of TIME_AT_MOMENT_PATTERNS) {
+    if (pattern.test(lower)) return true
   }
 
   for (const prefix of SYNTHESIS_BLOCK_PREFIXES) {

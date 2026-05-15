@@ -1,4 +1,5 @@
 import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import { blockActiveSeconds } from '@shared/blockDuration'
 import { inferWorkIntent } from '@shared/workIntent'
 import { formatDuration, todayString } from './format'
 
@@ -1093,7 +1094,7 @@ function normalizeText(value: string | null | undefined): string {
 }
 
 function blockDurationSeconds(block: WorkContextBlock): number {
-  return Math.max(1, Math.round((block.endTime - block.startTime) / 1000))
+  return blockActiveSeconds(block)
 }
 
 function dayDistanceInclusive(startDate: string, endDate: string): number {

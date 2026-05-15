@@ -1,0 +1,2 @@
+export { getWeekReview } from './aiService'
+

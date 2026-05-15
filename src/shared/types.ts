@@ -37,6 +37,17 @@ export interface AppUsageSummary {
   sessionCount?: number   // populated from DB queries; absent for live/synthetic entries
 }
 
+// D5: each Apps row leads with what was accomplished, not how long.
+// This compact digest provides the headline activity per app over a range —
+// the top work block the app participated in and the top artifact it touched.
+export interface AppActivityDigest {
+  canonicalAppId: string
+  bundleId: string
+  appName: string
+  topBlockLabel: string | null
+  topArtifactTitle: string | null
+}
+
 export type BlockConfidence = 'high' | 'medium' | 'low'
 
 export type WorkIntentRole =
@@ -681,6 +692,21 @@ export interface AppDetailPayload {
   sessionCount: number
   topArtifacts: ArtifactRef[]
   topPages: PageRef[]
+  /**
+   * Per-domain time for browser apps only. When the selected app is a
+   * browser (Chrome, Safari, Arc, Firefox, Edge, etc.), this surfaces the
+   * domains the user actually spent time on inside that browser, ranked by
+   * duration. Omitted for non-browser apps — the renderer should hide the
+   * section when the array is absent or empty. Derived from
+   * `website_visits.browser_bundle_id` via
+   * `getWebsiteSummariesForRange(db, fromMs, toMs, bundleId)`.
+   */
+  topDomains?: Array<{
+    domain: string
+    totalSeconds: number
+    visitCount: number
+    topTitle: string | null
+  }>
   pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
   blockAppearances: Array<{
     blockId: string
@@ -724,6 +750,58 @@ export type AIJobType =
   | 'chat_followup_suggestions'
   | 'report_generation'
   | 'attribution_assist'
+  | 'wrapped_narrative'
+  | 'wrapped_period_narrative'
+
+export interface AIWrappedNarrative {
+  /** 1-sentence opening, used as the morning/evening lead. */
+  lead: string
+  /** Optional 1-sentence reflection tied to the peak block. */
+  peakInsight: string | null
+  /** Optional 1-sentence forward-looking nudge. */
+  nudge: string | null
+  /** Per-slide narration. Each slot is one short, grounded sentence; null means
+   *  the slide should keep its deterministic copy. */
+  slides: {
+    scale: string | null
+    focus: string | null
+    topApp: string | null
+    switching: string | null
+    identity: string | null
+    closing: string | null
+  }
+  /** Tracks whether this came from a validated AI response or the deterministic fallback. */
+  source: 'ai' | 'fallback'
+  factsHash: string
+}
+
+export type WrappedPeriod = 'week' | 'month'
+
+export interface WrappedPeriodFacts {
+  period: WrappedPeriod
+  anchorDate: string
+  totalSeconds: number
+  previousPeriodSeconds: number
+  daysWithActivity: number
+  dominantCategory: AppCategory | 'unknown'
+  dominantCategoryPct: number
+  busiestDay: { dateStr: string; dayLabel: string; totalSeconds: number; dominantCategory: AppCategory | 'unknown' } | null
+  longestBlock: { dateStr: string; dayLabel: string; durationSeconds: number; dominantCategory: AppCategory | 'unknown' } | null
+  /** Compact per-day rollup. For week: 7 entries. For month: weekly buckets. */
+  buckets: Array<{ label: string; totalSeconds: number; dominantCategory: AppCategory | 'unknown' }>
+}
+
+export interface WrappedPeriodNarrative {
+  period: WrappedPeriod
+  lead: string
+  slides: {
+    chart: string | null
+    record: string | null
+    comparison: string | null
+  }
+  source: 'ai' | 'fallback'
+  factsHash: string
+}
 
 export type AISurface =
   | 'timeline_day'
@@ -851,6 +929,7 @@ export interface AppSettings {
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   mcpServerEnabled?: boolean
+  imessageCaptureEnabled?: boolean   // macOS opt-in: mirrors ~/Library/Messages/chat.db into Daylens. Requires Full Disk Access.
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -983,6 +1062,16 @@ export interface ClientSummary {
   projectCount: number
 }
 
+export interface ClientRecord {
+  id: string
+  name: string
+  color: string | null
+  status: 'active' | 'archived'
+  created_at: number
+  updated_at: number
+  projectCount: number
+}
+
 export interface ProjectSummary {
   id: string
   client_id: string
@@ -1076,6 +1165,7 @@ export const IPC = {
     GET_WEEKLY_SUMMARY: 'db:get-weekly-summary',
     GET_APP_CHARACTER: 'db:get-app-character',
     GET_APP_DETAIL: 'db:get-app-detail',
+    GET_APP_ACTIVITY_DIGEST: 'db:get-app-activity-digest',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
@@ -1104,6 +1194,8 @@ export const IPC = {
     GET_WEEK_REVIEW: 'ai:get-week-review',
     GET_APP_NARRATIVE: 'ai:get-app-narrative',
     PREPARE_DAILY_REPORT: 'ai:prepare-daily-report',
+    GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
+    GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
@@ -1158,6 +1250,11 @@ export const IPC = {
     GET_DAY_CONTEXT: 'attribution:get-day-context',
     FIND_CLIENT: 'attribution:find-client',
     LIST_CLIENTS: 'attribution:list-clients',
+    LIST_CLIENTS_DETAILED: 'attribution:list-clients-detailed',
+    CREATE_CLIENT: 'attribution:create-client',
+    UPDATE_CLIENT: 'attribution:update-client',
+    ARCHIVE_CLIENT: 'attribution:archive-client',
+    RESTORE_CLIENT: 'attribution:restore-client',
     RUN_FOR_RANGE: 'attribution:run-for-range',
     GET_CLIENT_DETAIL: 'attribution:get-client-detail',
     GET_WORK_SESSIONS_FOR_DAY: 'attribution:get-work-sessions-for-day',
@@ -1165,6 +1262,7 @@ export const IPC = {
     GET_ROLLUPS: 'attribution:get-rollups',
     GET_APP_WORK_SESSIONS: 'attribution:get-app-work-sessions',
     REASSIGN_SESSION: 'attribution:reassign-session',
+    REASSIGN_RANGE: 'attribution:reassign-range',
   },
   SHELL: {
     OPEN_EXTERNAL: 'shell:open-external',
@@ -1172,5 +1270,9 @@ export const IPC = {
   },
   MCP: {
     GET_CONFIG: 'mcp:get-config',
+  },
+  IMESSAGE: {
+    SYNC_NOW: 'imessage:sync-now',
+    GET_STATUS: 'imessage:get-status',
   },
 } as const

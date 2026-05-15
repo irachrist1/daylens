@@ -33,6 +33,7 @@ import type {
 } from '@shared/snapshot'
 import { SNAPSHOT_SCHEMA_VERSION, type Platform } from '@shared/snapshot'
 import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import { blockActiveSeconds } from '@shared/blockDuration'
 
 // ─── Normalization map ───────────────────────────────────────────────────────
 
@@ -138,8 +139,8 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
-function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime'>): number {
-  return Math.max(1, Math.round((block.endTime - block.startTime) / 1000))
+function blockDurationSeconds(block: Pick<WorkContextBlock, 'startTime' | 'endTime' | 'sessions'>): number {
+  return blockActiveSeconds(block as WorkContextBlock)
 }
 
 function snapshotBlockLabel(block: WorkContextBlock): string {

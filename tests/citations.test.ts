@@ -1,0 +1,69 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  citationFallback,
+  extractNamedEntities,
+  verifyCitedEntities,
+} from '../src/main/ai/citations.ts'
+
+test('extractNamedEntities captures quoted and filename entities (not bare capitals)', () => {
+  // Quoted strings and filenames are the only signal we trust — bare
+  // capitalised words like "Cursor" or "GitHub" produce too many false
+  // positives against tool result JSON (paraphrasing, casing).
+  const entities = extractNamedEntities('Cursor showed "ASYV Report" and schema.sql near GitHub.')
+  assert.ok(entities.includes('ASYV Report'))
+  assert.ok(entities.includes('schema.sql'))
+  assert.ok(!entities.includes('Cursor'))
+  assert.ok(!entities.includes('GitHub'))
+})
+
+test('verifyCitedEntities passes when entities appear in tool results', () => {
+  const result = verifyCitedEntities('Cursor and GitHub appeared together.', [
+    JSON.stringify({ app: 'Cursor', page: 'GitHub pull request' }),
+  ])
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.missingEntities, [])
+})
+
+test('verifyCitedEntities rejects hallucinated quoted entities', () => {
+  // Conversational mentions of "Cursor" and "Notion" no longer trigger
+  // checks (too many false positives). The verifier now only fires on
+  // explicit citations: quoted strings and filenames.
+  const result = verifyCitedEntities('Cursor and Notion appeared together.', [
+    JSON.stringify({ app: 'Cursor', page: 'GitHub pull request' }),
+  ])
+  assert.equal(result.ok, true)
+
+  const quoted = verifyCitedEntities('The window title was "Q2 Plan Draft".', [
+    JSON.stringify({ title: 'something else entirely' }),
+  ])
+  assert.equal(quoted.ok, false)
+  assert.ok(quoted.missingEntities.includes('Q2 Plan Draft'))
+})
+
+test('verifyCitedEntities passes all-stopword answer with no entities', () => {
+  const result = verifyCitedEntities('Today was 2h 10m across two blocks.', ['{}'])
+  assert.equal(result.ok, true)
+})
+
+test('verifyCitedEntities enforces quoted-string entities', () => {
+  const result = verifyCitedEntities('The window title was "ASYV Budget Draft".', [
+    JSON.stringify({ title: 'ASYV board deck' }),
+  ])
+  assert.equal(result.ok, false)
+  assert.ok(result.missingEntities.includes('ASYV Budget Draft'))
+})
+
+test('citationFallback names unsupported entities and surfaces available evidence', () => {
+  const text = citationFallback(['Notion'], [JSON.stringify({ topApps: [{ appName: 'Cursor' }, { appName: 'Dia' }] })])
+  assert.ok(text.includes('Notion'))
+  assert.ok(text.includes('Cursor'))
+  assert.ok(!text.includes("I can't see evidence"))
+})
+
+test('citationFallback with empty tool results still mentions the missing entity', () => {
+  const text = citationFallback(['Notion'], [])
+  assert.ok(text.includes('Notion'))
+  assert.ok(!text.includes("I can't see evidence"))
+})
+

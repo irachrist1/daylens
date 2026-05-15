@@ -57,6 +57,7 @@ import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
+import { startImessageCaptureScheduler, imessageCaptureSupportedOnPlatform } from './services/imessageCapture'
 import { initDb, closeDb } from './services/database'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
@@ -743,6 +744,10 @@ app.whenReady()
 
     if (getSettings().mcpServerEnabled) {
       startMcpServer()
+    }
+
+    if (getSettings().imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
+      startImessageCaptureScheduler()
     }
 
     registerDbHandlers()

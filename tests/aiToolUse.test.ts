@@ -63,7 +63,7 @@ function setupDb(): Database.Database {
 // ---------------------------------------------------------------------------
 
 test('anthropicTools has all entries with required fields', () => {
-  assert.equal(anthropicTools.length, 7)
+  assert.equal(anthropicTools.length, 9)
   for (const tool of anthropicTools) {
     assert.ok(tool.name, 'tool has name')
     assert.ok(tool.description, 'tool has description')
@@ -135,6 +135,67 @@ test('executeTool: searchFileMentions reports filename evidence as inferred', ()
 
   assert.ok(result.mentions.some((mention) => mention.filename.endsWith('ai.ts') && mention.inferred))
   assert.match(result.note, /inferred from window title strings/)
+  db.close()
+})
+
+test('executeTool: getBlockAtTime returns covering block for a tracked moment', () => {
+  const db = setupDb()
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const result = executeTool('getBlockAtTime', { date: dateStr, time: '10:00' }, db) as {
+    found: boolean
+    block: { label: string; topAppNames: string[]; durationSeconds: number } | null
+    overlappingSessions: Array<{ appName: string }>
+  }
+  assert.equal(result.found, true, 'expected a block at 10am on a seeded VS Code/Figma day')
+  assert.ok(result.block, 'block payload present')
+  assert.ok(result.block!.durationSeconds > 0, 'duration present')
+  assert.ok(result.block!.topAppNames.length > 0, 'topAppNames populated')
+  assert.ok(result.overlappingSessions.length > 0, 'overlapping sessions present')
+  db.close()
+})
+
+test('executeTool: getBlockAtTime returns found=false for an untracked moment', () => {
+  const db = setupDb()
+  const today = new Date()
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  // The fixture starts at 09:00 so 03:00 should not be covered.
+  const result = executeTool('getBlockAtTime', { date: dateStr, time: '03:00' }, db) as {
+    found: boolean
+    block: unknown
+    overlappingSessions: unknown[]
+  }
+  assert.equal(result.found, false)
+  assert.equal(result.block, null)
+  assert.equal(result.overlappingSessions.length, 0)
+  db.close()
+})
+
+test('executeTool: listClients returns roster even with no attributed sessions', () => {
+  const db = setupDb()
+  // No clients seeded — roster should be empty, not crash.
+  const emptyResult = executeTool('listClients', {}, db) as {
+    rangeLabel: string
+    attributedClients: unknown[]
+    clientRoster: unknown[]
+  }
+  assert.ok(Array.isArray(emptyResult.clientRoster))
+  assert.ok(Array.isArray(emptyResult.attributedClients))
+
+  // Seed a single client. Roster should surface it regardless of attribution.
+  db.prepare(`
+    INSERT INTO clients (id, name, status, created_at, updated_at)
+    VALUES ('client-acme', 'Acme Co', 'active', ?, ?)
+  `).run(Date.now(), Date.now())
+
+  const result = executeTool('listClients', {}, db) as {
+    rangeLabel: string
+    attributedClients: Array<{ clientName: string }>
+    clientRoster: Array<{ clientName: string; projectCount: number }>
+  }
+  assert.equal(result.clientRoster.length, 1)
+  assert.equal(result.clientRoster[0].clientName, 'Acme Co')
+  assert.equal(result.clientRoster[0].projectCount, 0)
   db.close()
 })
 

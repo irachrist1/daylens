@@ -2,7 +2,7 @@
 
 This file is the product contract for Daylens. It defines what the product is supposed to be.
 
-For implementation status, current code and `docs/ISSUES.md` win over old prose. Do not use this file to claim that something is already shipped or validated.
+For implementation status, the current code wins over any prose in this file. Do not use this file to claim that something is already shipped or validated.
 
 ## What Daylens Is
 
@@ -81,7 +81,7 @@ Hard rules:
 - keyboard shortcuts, tray/menu behavior, launch-on-login, updater behavior, packaging, path handling, permissions, file opening, browser evidence, and diagnostics must all be checked for platform-specific assumptions
 - never use macOS behavior as the implicit definition of done for a shared feature
 - platform-native surfaces may differ in implementation, but should preserve parity of user value
-- if work is intentionally platform-specific, document the Windows and Linux expectation or mark parity pending in `docs/ISSUES.md`
+- if work is intentionally platform-specific, document the Windows and Linux expectation in the CHANGELOG or surface it in the next session prompt
 - do not mark a shared capability done if it only feels finished on one platform
 
 ## In-App Update Contract
@@ -96,7 +96,7 @@ Hard rules:
 - do not remove or rename release assets that `electron-updater` expects without a migration path
 - do not publish unsigned public Windows installers; unsigned builds are internal preview artifacts only
 - do not claim update support is fixed unless an older installed build successfully finds, downloads, and applies the newer build, or the remaining validation gap is documented
-- if updater behavior cannot be validated in the current environment, mark it `implemented pending verification` in `docs/ISSUES.md`
+- if updater behavior cannot be validated in the current environment, mark it `implemented pending verification` in the CHANGELOG and surface it to the user
 - user-visible update notes must be short, meaningful, and user-facing; do not show internal function names, commit dumps, regex details, stop-list implementation, or scoped candidate jargon in banners or release highlights
 - if a fix risks stranding existing users on an old version, stop and ask before merging or releasing
 
@@ -150,7 +150,7 @@ Current behavior to preserve unless there is a measured reason to change it:
 When changing these heuristics:
 
 - protect persistence and reconstruction first
-- document material user-facing behavior changes in `docs/ISSUES.md`
+- document material user-facing behavior changes in the CHANGELOG
 - do not make the live timeline depend on AI availability
 
 ## Apps Surface Contract
@@ -244,7 +244,7 @@ When updating docs:
 - use exact file references where helpful
 - separate code-proven behavior from inferred behavior and runtime-validated behavior
 - use language like `implemented pending verification` when code exists but runtime proof is missing
-- keep `docs/ISSUES.md` as the status ledger instead of scattering status claims across other docs
+- do not scatter status claims across docs; the source of truth is the code, the CHANGELOG names what shipped, and unfinished work is carried session-to-session via the user's prompt
 - keep remote-companion docs aligned with the actual `daylens` and `daylens-web` code, not stale summaries
 
 ## What Must Never Ship

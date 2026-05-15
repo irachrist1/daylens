@@ -16,6 +16,10 @@ import {
   suggestAppCategory,
   testCLITool,
 } from '../services/ai'
+import { getWrappedNarrative } from '../services/wrappedNarrative'
+import { getWrappedPeriodNarrative } from '../services/wrappedPeriodNarrative'
+import { getTimelineDayPayload } from '../services/workBlocks'
+import { getCurrentSession } from '../services/tracking'
 import {
   archiveThread,
   createThread,
@@ -29,7 +33,7 @@ import {
   readArtifactContent,
   renameThread,
 } from '../services/artifacts'
-import { IPC, type AIChatSendRequest, type AIThreadSummary, type WorkContextBlock } from '@shared/types'
+import { IPC, type AIChatSendRequest, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -76,6 +80,20 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.PREPARE_DAILY_REPORT, async (_e, payload?: { date?: string | null }) => {
     return prepareDailyReport(payload?.date ?? undefined)
+  })
+
+  ipcMain.handle(IPC.AI.GET_WRAPPED_NARRATIVE, async (_e, payload: { date: string }) => {
+    const today = (() => {
+      const d = new Date()
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    })()
+    const liveSession = payload.date === today ? getCurrentSession() : null
+    const dayPayload = getTimelineDayPayload(getDb(), payload.date, liveSession)
+    return getWrappedNarrative(dayPayload)
+  })
+
+  ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { facts: WrappedPeriodFacts }) => {
+    return getWrappedPeriodNarrative(payload.facts)
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {

@@ -11,6 +11,12 @@ import { capture, updateAnalyticsPreference } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, startMcpServer, stopMcpServer } from '../services/mcpServer'
+import {
+  syncImessageCapture,
+  imessageCaptureSupportedOnPlatform,
+  startImessageCaptureScheduler,
+  stopImessageCaptureScheduler,
+} from '../services/imessageCapture'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -53,6 +59,14 @@ export function registerSettingsHandlers(): void {
       }
     }
 
+    if ('imessageCaptureEnabled' in partial) {
+      if (partial.imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
+        startImessageCaptureScheduler()
+      } else {
+        stopImessageCaptureScheduler()
+      }
+    }
+
     if (changedKeys.length > 0) {
       capture(ANALYTICS_EVENT.SETTINGS_CHANGED, {
         settings_changed_keys: changedKeys,
@@ -92,4 +106,20 @@ export function registerSettingsHandlers(): void {
   })
 
   ipcMain.handle(IPC.MCP.GET_CONFIG, () => getMcpServerConfig())
+
+  ipcMain.handle(IPC.IMESSAGE.SYNC_NOW, async () => {
+    const settings = await getSettingsAsync()
+    if (!settings.imessageCaptureEnabled) {
+      return { ok: false, inserted: 0, lastSentAt: null, error: 'iMessage capture is disabled in Settings.' }
+    }
+    return syncImessageCapture()
+  })
+
+  ipcMain.handle(IPC.IMESSAGE.GET_STATUS, async () => {
+    const settings = await getSettingsAsync()
+    return {
+      enabled: Boolean(settings.imessageCaptureEnabled),
+      platformSupported: imessageCaptureSupportedOnPlatform(),
+    }
+  })
 }

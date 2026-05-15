@@ -4,12 +4,18 @@ import type { WebsiteSummary } from '../src/shared/types.ts'
 import {
   QUALITY_THRESHOLDS,
   buildBrowserContext,
+  categoryBreakdownFromSources,
   classifyDomain,
   computeFocusByPeriod,
   computeIdentityConfidence,
   computeQuality,
   isDomainWorkRelevant,
+  largestRemainderPercentages,
+  looksLikeRawArtifactLabel,
+  selectPeakBlock,
+  sanitizeWrappedLabel,
 } from '../src/renderer/lib/wrappedFacts.ts'
+import type { AppCategory, WorkContextBlock } from '../src/shared/types.ts'
 
 // ─── computeQuality ────────────────────────────────────────────────────────────
 
@@ -153,6 +159,26 @@ test('buildBrowserContext: two work domains → mentions both', () => {
   assert.match(ctx.interpretation, /stackoverflow\.com/)
 })
 
+test('buildBrowserContext: ChatGPT lead plus meaningful YouTube reads as mixed', () => {
+  const ctx = buildBrowserContext([makeSite('chatgpt.com', 65 * 60), makeSite('youtube.com', 31 * 60)])
+  assert.ok(ctx)
+  assert.equal(ctx.topDomain, 'chatgpt.com')
+  assert.equal(ctx.isWorkRelevant, true)
+  assert.equal(ctx.isMixed, true)
+  assert.match(ctx.interpretation, /ChatGPT|chatgpt\.com/i)
+  assert.match(ctx.interpretation, /youtube\.com/)
+  assert.doesNotMatch(ctx.interpretation, /supported the work/i)
+})
+
+test('buildBrowserContext: YouTube-heavy browser day is not work relevant', () => {
+  const ctx = buildBrowserContext([makeSite('youtube.com', 90 * 60), makeSite('chatgpt.com', 15 * 60)])
+  assert.ok(ctx)
+  assert.equal(ctx.topDomainClass, 'video')
+  assert.equal(ctx.isWorkRelevant, false)
+  assert.equal(ctx.isMixed, false)
+  assert.doesNotMatch(ctx.interpretation, /supported the work/i)
+})
+
 test('buildBrowserContext: social media top domain → drifted copy', () => {
   const ctx = buildBrowserContext([makeSite('reddit.com', 7200)])
   assert.ok(ctx)
@@ -209,6 +235,16 @@ test('computeIdentityConfidence: browsing + YouTube (non-work) context → low',
   assert.equal(computeIdentityConfidence('full', 4 * 3600, 'browsing', 60, ctx), 'low')
 })
 
+test('computeIdentityConfidence: unknown and system never earn an identity', () => {
+  assert.equal(computeIdentityConfidence('full', 4 * 3600, 'uncategorized', 80, null), 'none')
+  assert.equal(computeIdentityConfidence('full', 4 * 3600, 'system', 80, null), 'none')
+})
+
+test('computeIdentityConfidence: mixed browser context stays low', () => {
+  const ctx = buildBrowserContext([makeSite('chatgpt.com', 65 * 60), makeSite('youtube.com', 31 * 60)])!
+  assert.equal(computeIdentityConfidence('full', 4 * 3600, 'browsing', 60, ctx), 'low')
+})
+
 test('computeIdentityConfidence: browsing + github context at high pct → medium', () => {
   const ctx = buildBrowserContext([makeSite('github.com', 7200)])!
   assert.equal(computeIdentityConfidence('full', 4 * 3600, 'browsing', 60, ctx), 'medium')
@@ -258,6 +294,112 @@ test('computeFocusByPeriod: evening focus block → evening peak', () => {
   const result = computeFocusByPeriod([makeBlock(19, 45, 'development')])
   assert.equal(result.evening, 45 * 60)
   assert.equal(result.peakPeriod, 'evening')
+})
+
+// ─── category breakdown ───────────────────────────────────────────────────────
+
+test('largestRemainderPercentages: visible percentages sum to 100', () => {
+  const result = largestRemainderPercentages([1, 1, 1])
+  assert.equal(result.reduce((sum, pct) => sum + pct, 0), 100)
+  assert.deepEqual(result, [34, 33, 33])
+})
+
+test('categoryBreakdownFromSources: prefers session categories over block categories', () => {
+  const result = categoryBreakdownFromSources(
+    [
+      { category: 'aiTools', durationSeconds: 2 * 3600 },
+      { category: 'development', durationSeconds: 3600 },
+    ],
+    [
+      { dominantCategory: 'browsing', startTime: 0, endTime: 3 * 3600 * 1000 },
+    ],
+  )
+  assert.equal(result.dominantCategory, 'aiTools')
+  assert.equal(result.breakdown[0]?.category, 'aiTools')
+  assert.equal(result.breakdown.reduce((sum, item) => sum + item.pct, 0), 100)
+})
+
+test('categoryBreakdownFromSources: supports sessions-without-blocks state', () => {
+  const result = categoryBreakdownFromSources(
+    [{ category: 'productivity', durationSeconds: 30 * 60 }],
+    [],
+  )
+  assert.equal(result.dominantCategory, 'productivity')
+  assert.equal(result.breakdown[0]?.pct, 100)
+})
+
+test('categoryBreakdownFromSources: system and uncategorized sessions are excluded', () => {
+  const result = categoryBreakdownFromSources(
+    [
+      { category: 'uncategorized', durationSeconds: 7 * 3600 },
+      { category: 'system', durationSeconds: 2 * 3600 },
+      { category: 'development', durationSeconds: 90 * 60 },
+      { category: 'aiTools', durationSeconds: 60 * 60 },
+    ],
+    [],
+  )
+  assert.equal(result.dominantCategory, 'development')
+  assert.ok(!result.breakdown.some((item) => item.category === 'uncategorized'))
+  assert.ok(!result.breakdown.some((item) => item.category === 'system'))
+  assert.equal(result.breakdown.reduce((sum, item) => sum + item.pct, 0), 100)
+})
+
+// ─── peak block labels ────────────────────────────────────────────────────────
+
+function makeWrappedBlock(
+  label: string,
+  category: AppCategory,
+  durationMinutes: number,
+  source: WorkContextBlock['label']['source'] = 'rule',
+): WorkContextBlock {
+  return {
+    startTime: 0,
+    endTime: durationMinutes * 60 * 1000,
+    dominantCategory: category,
+    label: {
+      current: label,
+      source,
+      confidence: 0.7,
+      narrative: null,
+      ruleBased: label,
+      aiSuggested: null,
+      override: null,
+    },
+    confidence: 'medium',
+  } as WorkContextBlock
+}
+
+test('artifact label sanitization removes raw LinkedIn and YouTube titles', () => {
+  assert.equal(looksLikeRawArtifactLabel('Andersen in Rwanda: Company Page Admin | LinkedIn'), true)
+  assert.equal(looksLikeRawArtifactLabel('Scott Galloway: AI CEO’s Are Lying - YouTube'), true)
+  assert.equal(sanitizeWrappedLabel('Andersen in Rwanda: Company Page Admin | LinkedIn', 'browsing'), 'Work session')
+  assert.equal(sanitizeWrappedLabel('Scott Galloway: AI CEO’s Are Lying - YouTube', 'productivity'), 'Admin work')
+})
+
+test('selectPeakBlock excludes random browsing artifact blocks', () => {
+  const peak = selectPeakBlock([
+    makeWrappedBlock('Andersen in Rwanda: Company Page Admin | LinkedIn', 'browsing', 60, 'artifact'),
+    makeWrappedBlock('Building & Testing', 'development', 37, 'rule'),
+  ])
+  assert.ok(peak)
+  assert.equal(peak.label, 'Building & Testing')
+  assert.equal(peak.category, 'development')
+})
+
+test('selectPeakBlock does not show YouTube video titles as work labels', () => {
+  const peak = selectPeakBlock([
+    makeWrappedBlock('Scott Galloway: AI CEO’s Are Lying To You To Raise Billions! - YouTube', 'productivity', 60, 'artifact'),
+    makeWrappedBlock('Code generation with AI assistance', 'aiTools', 18, 'ai'),
+  ])
+  assert.ok(peak)
+  assert.equal(peak.label, 'Code generation with AI assistance')
+})
+
+test('selectPeakBlock returns null when no meaningful work block exists', () => {
+  const peak = selectPeakBlock([
+    makeWrappedBlock('Watch 2 Broke Girls Season 3 Episode 1', 'browsing', 60, 'artifact'),
+  ])
+  assert.equal(peak, null)
 })
 
 test('computeFocusByPeriod: morning > afternoon → morning peak', () => {

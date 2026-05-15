@@ -3567,11 +3567,15 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
 }
 
 function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): string {
+  // B4: totals (totalSeconds, sessionCount) intentionally excluded from
+  // the signature. They tick up every minute as the live session ages —
+  // including them in the cache key would invalidate the narrative on
+  // every render even when nothing about WHAT the user did has changed.
+  // The narrative scaffold no longer contains them either; see
+  // buildAppNarrativeBundle.
   return hashText(JSON.stringify({
     canonicalAppId: detail.canonicalAppId,
     rangeKey: detail.rangeKey,
-    totalSeconds: detail.totalSeconds,
-    sessionCount: detail.sessionCount,
     topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => artifact.displayTitle),
     pairedApps: detail.pairedApps.slice(0, 8).map((item) => item.displayName),
     blockAppearances: detail.blockAppearances.slice(0, 8).map((block) => `${block.blockId}:${block.label}:${block.startTime}:${block.endTime}`),
@@ -3582,14 +3586,16 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
   if (detail.totalSeconds <= 0) return null
 
-  // B8: drop trivial pairings so the model doesn't amplify noise into
-  // "primarily paired with X". A paired app must represent at least 10% of
-  // the selected app's tracked time AND at least 5 minutes to surface here.
-  // Without this gate, the model regularly invents prominence (e.g. claiming
-  // "Codex" as a primary pair for Warp when Codex barely registered and is
-  // absent from the Apps rail entirely).
-  const pairingFloor = Math.max(300, Math.round(detail.totalSeconds * 0.10))
-  const filteredPairedApps = detail.pairedApps.filter((item) => item.totalSeconds >= pairingFloor)
+  // B8: drop noise-level pairings (under 60 seconds) but keep everything
+  // else. The earlier 10%-of-total floor was too aggressive — for a 2h
+  // Safari today it required pairings of ≥12 minutes, which filtered out
+  // every legit pair and produced the self-contradicting "no paired
+  // applications captured" narrative even when the rail clearly shows
+  // Safari ran alongside Dia, Kiro, etc. The real fix for B8 (the model
+  // inventing apps like "Codex" that aren't in the data) is the closed-set
+  // prompt rule below: "Only name apps that appear in pairedApps." That
+  // rule prevents fabrication without stripping real signal.
+  const filteredPairedApps = detail.pairedApps.filter((item) => item.totalSeconds >= 60)
 
   // B3: collapse the 24-bucket per-hour distribution into the top whole-hour
   // ranges. The model previously confabulated sub-hour windows like
@@ -3611,12 +3617,17 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   return {
     title: `${detail.displayName} in the last ${days === 1 ? 'day' : `${days} days`}`,
     scopeLabel: `${detail.displayName} over ${days === 1 ? 'today' : `${days} days`}`,
+    // B4: do NOT feed totalTracked / sessionCount to the narrative model.
+    // The rail recomputes those live (and adds live-session minutes) while
+    // the narrative is cache-keyed to a snapshot. The two drift within
+    // seconds, producing "2h 19m · 64 sessions" in the header next to
+    // "2 hours 18 minutes... 59 sessions" in the narrative. Totals belong
+    // in the header and footer; the narrative answers "what did you do
+    // here," not "how long was it open."
     assistantScaffold: JSON.stringify({
       app: {
         canonicalAppId: detail.canonicalAppId,
         displayName: detail.displayName,
-        totalTracked: formatDuration(detail.totalSeconds),
-        sessionCount: detail.sessionCount,
       },
       topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => ({
         title: artifact.displayTitle,
@@ -3879,6 +3890,11 @@ async function generateAppNarrative(
     // domains, or paired apps). Evidence-thin apps must say so plainly —
     // a filler sentence like "used for development work" is not acceptable.
     'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page/domain names, or paired app names. If the evidence is too thin to cite two entities, say "I don\'t see strong signal for this app yet" and stop — do not pad with generic prose.',
+    // B4: totals are rendered in the UI header and footer. The narrative
+    // must not restate them — the header recomputes live and the cached
+    // narrative drifts within seconds. Talk about what was done, not how
+    // long it took.
+    'Do not state total time, session count, or "across N sessions" / "totaling Xh Ym" framings. Those numbers live in the UI; the narrative says what was done in the app.',
     // B8: paired-app fabrication. The Warp narrative recently named "Codex"
     // as a primary pair even though Codex was absent from the rail and the
     // structured evidence. Treat `pairedApps` as the closed set of allowed

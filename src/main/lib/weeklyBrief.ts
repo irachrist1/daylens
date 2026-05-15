@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import { getWebsiteSummariesForRange, getWebsiteVisitsForRange } from '../db/queries'
 import { getTimelineDayPayload } from '../services/workBlocks'
 import type { ArtifactRef, WorkContextBlock } from '../../shared/types'
+import { blockActiveSeconds } from '../../shared/blockDuration'
 
 export type WeeklyBriefIntent =
   | 'weekly_browsing_reading_brief'
@@ -479,7 +480,7 @@ function buildBlockSummary(block: WorkContextBlock, day: string): WeeklyWorkBloc
     day,
     startTime: block.startTime,
     endTime: block.endTime,
-    minutes: Math.max(1, Math.round((block.endTime - block.startTime) / 60_000)),
+    minutes: Math.max(1, Math.round(blockActiveSeconds(block) / 60)),
     apps: block.topApps.slice(0, 4).map((app) => app.appName),
     artifacts: block.topArtifacts.slice(0, 4).map((artifact) => artifact.displayTitle).filter(Boolean),
   }
@@ -499,7 +500,7 @@ function buildWeeklyBlocks(
     const dateStr = formatDateKey(date)
     const payload = getTimelineDayPayload(db, dateStr, null)
     for (const block of payload.blocks) {
-      const minutes = Math.max(1, Math.round((block.endTime - block.startTime) / 60_000))
+      const minutes = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
       const blockText = [
         block.label.current,
         ...block.topArtifacts.map((artifact) => artifact.displayTitle),

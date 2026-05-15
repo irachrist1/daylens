@@ -1743,6 +1743,53 @@ export function insertWebsiteVisit(
   return result.changes > 0
 }
 
+
+// Per-domain time for a canonical browser identity across all its profiles.
+// Exists because `getWebsiteSummariesForRange` filters by the exact
+// `browser_bundle_id`, which misses Chrome profile variants like
+// `com.google.Chrome:profile1`. Apps-view per-domain rollups should group
+// all profiles of the same browser under one number.
+export function getDomainSummariesForBrowser(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  canonicalBrowserId: string,
+  limit = 8,
+): WebsiteSummary[] {
+  const rows = db
+    .prepare(`
+      SELECT domain,
+             SUM(duration_sec)  AS total_sec,
+             COUNT(*)           AS visit_count,
+             MAX(page_title)    AS top_title,
+             MIN(browser_bundle_id) AS browser_id,
+             MIN(canonical_browser_id) AS canonical_browser_id
+      FROM website_visits
+      WHERE visit_time >= ? AND visit_time < ?
+        AND canonical_browser_id = ?
+      GROUP BY domain
+      ORDER BY total_sec DESC, visit_count DESC
+      LIMIT ?
+    `)
+    .all(fromMs, toMs, canonicalBrowserId, limit) as {
+      domain: string
+      total_sec: number
+      visit_count: number
+      top_title: string | null
+      browser_id: string | null
+      canonical_browser_id: string | null
+    }[]
+
+  return rows.map((r) => ({
+    domain:          r.domain,
+    totalSeconds:    r.total_sec,
+    visitCount:      r.visit_count,
+    topTitle:        r.top_title,
+    browserBundleId: r.browser_id,
+    canonicalBrowserId: r.canonical_browser_id,
+  }))
+}
+
 export function getWebsiteSummariesForRange(
   db: Database.Database,
   fromMs: number,

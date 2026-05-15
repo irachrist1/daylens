@@ -35,7 +35,16 @@ export interface AITextJobExecutionOptions {
   cachePolicy: 'off' | 'stable_prefix' | 'repeated_payload'
   promptCachingEnabled: boolean
   onDelta?: (delta: string) => void | Promise<void>
+  // Output token cap for this job. Defaults to DEFAULT_MAX_OUTPUT_TOKENS when
+  // omitted. Long-form jobs (reports, week reviews) override upward; chat
+  // answers stay at the default.
+  maxOutputTokens?: number
 }
+
+export const DEFAULT_MAX_OUTPUT_TOKENS = 1024
+// Report-generation markdown sometimes runs long (multi-section narrative,
+// formatted tables). Audit flagged the 1024 cap as occasionally truncating.
+export const LONG_FORM_MAX_OUTPUT_TOKENS = 4096
 
 interface AIJobDefinition {
   jobType: AIJobType
@@ -49,6 +58,9 @@ interface AIJobDefinition {
   // Use sparingly — only for jobs that genuinely need a specific capability
   // (e.g., report_generation needs Opus for structured agentic output).
   providerModelOverride?: Partial<Record<AIProviderMode, string>>
+  // Override the default output token cap for this job. Defaults to
+  // DEFAULT_MAX_OUTPUT_TOKENS when omitted.
+  maxOutputTokens?: number
 }
 
 const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
@@ -96,6 +108,8 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
+    // Week review prose spans multiple days; the default 1024 cap clips it.
+    maxOutputTokens: 2048,
   },
   app_narrative: {
     jobType: 'app_narrative',
@@ -105,6 +119,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
+    maxOutputTokens: 2048,
   },
   chat_answer: {
     jobType: 'chat_answer',
@@ -128,7 +143,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'report_generation',
     screen: 'ai_chat',
     foreground: true,
-    timeoutMs: 45_000,
+    timeoutMs: 60_000,
     providerPreferenceKey: 'aiArtifactProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'quality',
@@ -139,6 +154,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
       anthropic: 'claude-opus-4-6',
       'claude-cli': 'claude-opus-4-6',
     },
+    maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
   },
   attribution_assist: {
     jobType: 'attribution_assist',
@@ -147,6 +163,28 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     timeoutMs: 15_000,
     providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'stable_prefix',
+    modelStrategy: 'balanced',
+  },
+  wrapped_narrative: {
+    jobType: 'wrapped_narrative',
+    screen: 'timeline_day',
+    foreground: true,
+    timeoutMs: 12_000,
+    providerPreferenceKey: 'aiSummaryProvider',
+    cachePolicy: 'repeated_payload',
+    modelStrategy: 'balanced',
+  },
+  // Weekly/monthly Wrapped narration. Mirrors wrapped_narrative but targets the
+  // period aggregate (see services/wrappedPeriodNarrative.ts). Same provider
+  // routing and tier as the daily variant — the payload is slightly larger
+  // (per-day buckets) but prose quality expectations are identical.
+  wrapped_period_narrative: {
+    jobType: 'wrapped_period_narrative',
+    screen: 'timeline_week',
+    foreground: true,
+    timeoutMs: 14_000,
+    providerPreferenceKey: 'aiSummaryProvider',
+    cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
 }
@@ -374,6 +412,7 @@ export async function executeTextAIJob(
     cachePolicy: definition.cachePolicy,
     promptCachingEnabled: settings.aiPromptCachingEnabled ?? true,
     onDelta: streamOptions?.onDelta,
+    maxOutputTokens: definition.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
   }
   const eventId = randomUUID()
   const startedAt = Date.now()

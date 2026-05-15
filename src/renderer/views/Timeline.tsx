@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -64,7 +66,7 @@ function formatClockTime(timestamp: number): string {
 }
 
 function blockDurationSeconds(block: WorkContextBlock): number {
-  return Math.max(1, Math.round((block.endTime - block.startTime) / 1000))
+  return blockActiveSeconds(block)
 }
 
 function segmentDurationSeconds(segment: TimelineSegment): number {
@@ -100,6 +102,41 @@ function artifactSubtitle(block: WorkContextBlock): string | null {
 
 function blockNarrative(block: WorkContextBlock): string | null {
   return block.label.narrative?.trim() || null
+}
+
+// Short deterministic summary used when the AI narrative hasn't landed yet, so
+// every block on the timeline reads consistently instead of some having prose
+// and others showing nothing between the title and the app icons.
+//
+// B11: the duration here sits directly under the clock range (formatClockTime
+// rendered two lines above) — they must match wall-clock. blockActiveSeconds
+// sums clamped session durations and produces 13m for an 8:55-9:09 span (14m
+// wall-clock), so use blockDisplayedSpanSeconds instead.
+function blockShortSummary(block: WorkContextBlock): string {
+  const duration = formatDuration(blockDisplayedSpanSeconds(block))
+  const apps = block.topApps
+    .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
+    .slice(0, 2)
+    .map((app) => formatDisplayAppName(app.appName))
+  const sites = block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
+  const artifacts = block.topArtifacts
+    .slice(0, 1)
+    .map((artifact) => artifact.displayTitle.trim())
+    .filter(Boolean)
+
+  if (artifacts.length > 0 && apps.length > 0) {
+    return `${duration} on ${artifacts[0]} in ${apps.join(' and ')}.`
+  }
+  if (apps.length > 0 && sites.length > 0) {
+    return `${duration} across ${apps.join(' and ')} with ${sites.join(' and ')}.`
+  }
+  if (apps.length > 0) {
+    return `${duration} mostly in ${apps.join(' and ')}.`
+  }
+  if (sites.length > 0) {
+    return `${duration} across ${sites.join(' and ')}.`
+  }
+  return `${duration} of ${categoryLabel(block.dominantCategory).toLowerCase()}.`
 }
 
 function gapKindLabel(kind: TimelineGapSegment['kind']): string {
@@ -172,7 +209,7 @@ function timelineNavStateFromParams(searchParams: URLSearchParams): TimelineNavS
 
 function currentLiveLabel(blocks: WorkContextBlock[]): string | null {
   const live = blocks.find((block) => block.isLive)
-  return live ? live.label.current : null
+  return live ? userVisibleBlockLabel(live) : null
 }
 
 function IconChevronLeft() {
@@ -311,7 +348,7 @@ function TimelineRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, marginBottom: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <InlineRevealText
-              text={block.label.current}
+              text={userVisibleBlockLabel(block)}
               style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.25 }}
             />
           </div>
@@ -344,11 +381,9 @@ function TimelineRow({
         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)}
         </div>
-        {blockNarrative(block) && (
-          <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
-            {blockNarrative(block)}
-          </p>
-        )}
+        <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
+          {blockNarrative(block) ?? blockShortSummary(block)}
+        </p>
         {artifactLine && (
           <InlineRevealText
             text={artifactLine}
@@ -430,6 +465,40 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
+// Categories that count as focused/deep work, mirroring the backend focus
+// criteria used elsewhere (wrappedFacts.ts, workBlocks.ts). Kept inline here
+// rather than importing the shared constant so this file stays decoupled from
+// the wrapped calculation surface.
+const FOCUSED_CATEGORIES_SET: ReadonlySet<AppCategory> = new Set<AppCategory>([
+  'development', 'research', 'writing', 'aiTools', 'design', 'productivity',
+])
+
+function formatClock(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(ms)
+}
+
+function pickLongestBlock(blocks: WorkContextBlock[]): WorkContextBlock | null {
+  return blocks.reduce<WorkContextBlock | null>((best, block) =>
+    !best || blockDurationSeconds(block) > blockDurationSeconds(best) ? block : best, null)
+}
+
+function pickLongestFocusedBlock(blocks: WorkContextBlock[]): WorkContextBlock | null {
+  const focused = blocks.filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
+  return focused.length > 0 ? pickLongestBlock(focused) : null
+}
+
+function pickBiggestDetour(blocks: WorkContextBlock[], focusedTotal: number): WorkContextBlock | null {
+  // A "detour" is the longest non-focused block in a day that otherwise had
+  // meaningful focused time. For pure browsing/entertainment days, skip the
+  // call-out — nothing was the detour because nothing was the main thread.
+  if (focusedTotal < 30 * 60) return null
+  const detours = blocks.filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
+  const candidate = pickLongestBlock(detours)
+  if (!candidate) return null
+  if (blockDurationSeconds(candidate) < 10 * 60) return null
+  return candidate
+}
+
 function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
@@ -453,14 +522,20 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
       .finally(() => setRecapLoading(false))
   }, [payload.date, payload.totalSeconds])
 
-  const topCategories = Array.from(payload.blocks.reduce<Map<AppCategory, number>>((map, block) => {
-    map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + blockDurationSeconds(block))
-    return map
-  }, new Map()).entries())
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 3)
+  const focusedTotal = payload.blocks
+    .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
+    .reduce((sum, block) => sum + blockDurationSeconds(block), 0)
 
-  const headlineBlocks = payload.blocks.slice(0, 3)
+  const longestFocused = pickLongestFocusedBlock(payload.blocks)
+  const biggestDetour = pickBiggestDetour(payload.blocks, focusedTotal)
+  const callouts: { kind: 'focus' | 'detour'; block: WorkContextBlock; seconds: number }[] = []
+  // Callout `seconds` are rendered next to a "HH:MM – HH:MM" clock range, so
+  // use the displayed-minute span instead of active-seconds to keep mental
+  // math consistent. See BUGS.md B11.
+  if (longestFocused) callouts.push({ kind: 'focus', block: longestFocused, seconds: blockDisplayedSpanSeconds(longestFocused) })
+  if (biggestDetour && biggestDetour.id !== longestFocused?.id) {
+    callouts.push({ kind: 'detour', block: biggestDetour, seconds: blockDisplayedSpanSeconds(biggestDetour) })
+  }
 
   return (
     <div style={{
@@ -476,11 +551,11 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
       background: 'var(--color-surface)',
       padding: 22,
       display: 'grid',
-      gap: 18,
+      gap: 16,
     }} className="timeline-summary-inspector">
       <div>
         <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)', marginBottom: 6 }}>
-          Day summary
+          The shape of the day
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatFullDate(payload.date)}
@@ -489,13 +564,10 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
 
       {recapLoading && (
         <div style={{
-          borderRadius: 10,
-          background: 'var(--color-surface-low)',
-          padding: '14px 16px',
           display: 'grid',
           gap: 8,
         }}>
-          {[100, 80, 60].map((w) => (
+          {[100, 88, 72].map((w) => (
             <div
               key={w}
               style={{
@@ -512,41 +584,28 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
 
       {recap && recap.summary && (
         <div style={{
-          fontSize: 13,
-          lineHeight: 1.7,
+          fontSize: 14,
+          lineHeight: 1.65,
           color: 'var(--color-text-secondary)',
         }}>
           {recap.summary}
         </div>
       )}
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-        gap: 10,
-      }}>
-        <div style={{ borderRadius: 14, background: 'var(--color-surface-low)', padding: '12px 14px' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-            Tracked
-          </div>
-          <div style={{ fontSize: 19, fontWeight: 760, color: 'var(--color-text-primary)' }}>{formatDuration(payload.totalSeconds)}</div>
+      {!recapLoading && !recap && payload.totalSeconds === 0 && (
+        <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+          Nothing tracked yet. Daylens fills this in once the day has something to say.
         </div>
-        <div style={{ borderRadius: 14, background: 'var(--color-surface-low)', padding: '12px 14px' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
-            Blocks
-          </div>
-          <div style={{ fontSize: 19, fontWeight: 760, color: 'var(--color-text-primary)' }}>{payload.blocks.length}</div>
-        </div>
-      </div>
+      )}
 
-      {headlineBlocks.length > 0 && (
+      {callouts.length > 0 && (
         <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-            Main blocks
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
+            What mattered
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
-            {headlineBlocks.map((block) => (
-              <div key={block.id} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
+            {callouts.map(({ kind, block, seconds }) => (
+              <div key={`${kind}:${block.id}`} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
                 <div
                   style={{
                     width: 3,
@@ -556,39 +615,17 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
                   }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
+                    {kind === 'focus' ? 'Longest stretch' : 'Biggest detour'}
+                  </div>
                   <InlineRevealText
-                    text={block.label.current}
+                    text={userVisibleBlockLabel(block)}
                     style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
                   />
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                    {formatDuration(blockDurationSeconds(block))}
+                    {formatClock(block.startTime)} – {formatClock(block.endTime)} · {formatDuration(seconds)}
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {topCategories.length > 0 && (
-        <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-            Where the day went
-          </div>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {topCategories.map(([category, seconds]) => (
-              <div key={category} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  <span style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: CATEGORY_COLORS[category] ?? CATEGORY_COLORS.uncategorized,
-                    flexShrink: 0,
-                  }} />
-                  <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>{categoryLabel(category)}</span>
-                </div>
-                <span style={{ fontSize: 12, color: 'var(--color-text-primary)', whiteSpace: 'nowrap' }}>{formatDuration(seconds)}</span>
               </div>
             ))}
           </div>
@@ -601,10 +638,25 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
 function BlockInspector({ block, payload }: { block: WorkContextBlock | null; payload: DayTimelinePayload }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([])
+  const [clientDraft, setClientDraft] = useState('')
+  const [clientSaving, setClientSaving] = useState(false)
+  const [clientStatus, setClientStatus] = useState<string | null>(null)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
   }, [block?.id, block?.label.current, block?.label.override])
+
+  useEffect(() => {
+    void ipc.attribution.listClientsDetailed()
+      .then((rows) => setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name }))))
+      .catch(() => setClients([]))
+  }, [block?.id])
+
+  useEffect(() => {
+    setClientDraft('')
+    setClientStatus(null)
+  }, [block?.id])
 
   if (!block) {
     return <DaySummaryInspector payload={payload} />
@@ -629,7 +681,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
     }}>
       <div style={{ marginBottom: 18 }}>
         <div
-          title={block.label.current}
+          title={userVisibleBlockLabel(block)}
           style={{
             fontSize: 18,
             fontWeight: 750,
@@ -644,10 +696,10 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
             wordBreak: 'break-word',
           }}
         >
-          {block.label.current}
+          {userVisibleBlockLabel(block)}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockDurationSeconds(block))}
+          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockDisplayedSpanSeconds(block))}
         </div>
       </div>
 
@@ -667,7 +719,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
             type="text"
             value={overrideDraft}
             onChange={(event) => setOverrideDraft(event.target.value)}
-            placeholder={block.label.current}
+            placeholder={userVisibleBlockLabel(block)}
             style={{
               flex: 1,
               minWidth: 0,
@@ -735,6 +787,111 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
             </button>
           )}
         </div>
+      </div>
+
+      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
+          Attribute to client
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <input
+            type="text"
+            list={`timeline-client-options-${block.id}`}
+            value={clientDraft}
+            placeholder="Type a client name…"
+            onChange={(event) => setClientDraft(event.target.value)}
+            disabled={clientSaving}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: 34,
+              borderRadius: 9,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface-high)',
+              color: 'var(--color-text-primary)',
+              padding: '0 12px',
+              fontSize: 13,
+              outline: 'none',
+            }}
+          />
+          <datalist id={`timeline-client-options-${block.id}`}>
+            {clients.map((client) => <option key={client.id} value={client.name} />)}
+          </datalist>
+          <button
+            type="button"
+            disabled={clientSaving || !clientDraft.trim()}
+            onClick={() => {
+              const name = clientDraft.trim()
+              if (!name) return
+              setClientSaving(true)
+              setClientStatus(null)
+              const existing = clients.find((client) => client.name.toLowerCase() === name.toLowerCase())
+              const requestPayload = existing
+                ? { fromMs: block.startTime, toMs: block.endTime, clientId: existing.id }
+                : { fromMs: block.startTime, toMs: block.endTime, clientName: name }
+              void ipc.attribution.reassignRange(requestPayload)
+                .then((result) => {
+                  setClientStatus(result.sessionsUpdated === 0
+                    ? `No work sessions in this block to attribute.`
+                    : `Attributed ${result.sessionsUpdated} session${result.sessionsUpdated === 1 ? '' : 's'} to ${name}${existing ? '' : ' (new client)'}.`)
+                  if (!existing) {
+                    void ipc.attribution.listClientsDetailed()
+                      .then((rows) => setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name }))))
+                      .catch(() => {})
+                  }
+                })
+                .catch((err) => setClientStatus(err instanceof Error ? err.message : String(err)))
+                .finally(() => setClientSaving(false))
+            }}
+            style={{
+              height: 34,
+              padding: '0 14px',
+              borderRadius: 9,
+              border: 'none',
+              background: 'var(--gradient-primary)',
+              color: 'var(--color-primary-contrast)',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: clientSaving || !clientDraft.trim() ? 'default' : 'pointer',
+              opacity: clientSaving || !clientDraft.trim() ? 0.6 : 1,
+            }}
+          >
+            {clientSaving ? 'Saving…' : 'Attribute'}
+          </button>
+          <button
+            type="button"
+            disabled={clientSaving}
+            onClick={() => {
+              setClientSaving(true)
+              setClientStatus(null)
+              void ipc.attribution.reassignRange({ fromMs: block.startTime, toMs: block.endTime, clientId: null })
+                .then((result) => setClientStatus(result.sessionsUpdated === 0
+                  ? 'No work sessions in this block.'
+                  : `Cleared attribution on ${result.sessionsUpdated} session${result.sessionsUpdated === 1 ? '' : 's'}.`))
+                .catch((err) => setClientStatus(err instanceof Error ? err.message : String(err)))
+                .finally(() => setClientSaving(false))
+            }}
+            style={{
+              height: 34,
+              padding: '0 12px',
+              borderRadius: 9,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface-high)',
+              color: 'var(--color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: clientSaving ? 'default' : 'pointer',
+              opacity: clientSaving ? 0.6 : 1,
+            }}
+          >
+            Clear
+          </button>
+        </div>
+        {clientStatus && (
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+            {clientStatus}
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gap: 18 }}>
@@ -924,7 +1081,7 @@ function WeekView({
           topLabels: [...new Set(
             payload.blocks
               .slice(0, 5)
-              .map((block) => block.label.current)
+              .map((block) => userVisibleBlockLabel(block))
               .filter(Boolean)
           )].slice(0, 3),
         }

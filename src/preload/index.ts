@@ -9,6 +9,7 @@ import type {
   AIMessageFeedbackUpdate,
   AIChatTurnResult,
   AIDailyReportPreparationResult,
+  AIWrappedNarrative,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadSummary,
@@ -16,10 +17,12 @@ import type {
   AIArtifactContent,
   AIDaySummaryResult,
   AIProvider,
+  AppActivityDigest,
   AppDetailPayload,
   AppSettings,
   AIProviderMode,
   BrowserLinkResult,
+  ClientRecord,
   BreakRecommendation,
   DayTimelinePayload,
   DistractionCostPayload,
@@ -33,6 +36,8 @@ import type {
   TrackingDiagnosticsPayload,
   TrackingPermissionState,
   WorkspaceResult,
+  WrappedPeriodFacts,
+  WrappedPeriodNarrative,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 import type { McpServerConfig } from '../main/services/mcpServer'
@@ -120,6 +125,8 @@ const api = {
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
     getAppDetail: (canonicalAppId: string, days?: number): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
+    getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_ACTIVITY_DIGEST, days),
   },
   icons: {
     resolve: (request: IconRequest): Promise<ResolvedIconPayload> => ipcRenderer.invoke(IPC.ICONS.RESOLVE, request),
@@ -141,6 +148,10 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days }),
     prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
+    getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date }),
+    getWrappedPeriodNarrative: (facts: WrappedPeriodFacts): Promise<WrappedPeriodNarrative | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { facts }),
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
@@ -218,11 +229,35 @@ const api = {
     openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
     openPath: (targetPath: string) => ipcRenderer.invoke(IPC.SHELL.OPEN_PATH, targetPath),
   },
+  attribution: {
+    listClientsDetailed: (): Promise<ClientRecord[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED),
+    createClient: (payload: { name: string; color?: string | null }): Promise<ClientRecord> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.CREATE_CLIENT, payload),
+    updateClient: (payload: { id: string; name?: string; color?: string | null }): Promise<ClientRecord | null> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.UPDATE_CLIENT, payload),
+    archiveClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.ARCHIVE_CLIENT, id),
+    restoreClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.RESTORE_CLIENT, id),
+    reassignSession: (
+      sessionId: string,
+      payload: { clientId?: string | null; clientName?: string | null; projectId?: string | null },
+    ): Promise<{ clientId: string | null; projectId: string | null }> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.REASSIGN_SESSION, sessionId, payload),
+    reassignRange: (
+      payload: { fromMs: number; toMs: number; clientId?: string | null; clientName?: string | null; projectId?: string | null },
+    ): Promise<{ clientId: string | null; projectId: string | null; sessionsUpdated: number }> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.REASSIGN_RANGE, payload),
+  },
   distractionAlerter: {
     setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
   },
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
+  },
+  imessage: {
+    syncNow: (): Promise<{ ok: boolean; inserted: number; lastSentAt: number | null; error?: string }> =>
+      ipcRenderer.invoke(IPC.IMESSAGE.SYNC_NOW),
+    getStatus: (): Promise<{ enabled: boolean; platformSupported: boolean }> =>
+      ipcRenderer.invoke(IPC.IMESSAGE.GET_STATUS),
   },
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>

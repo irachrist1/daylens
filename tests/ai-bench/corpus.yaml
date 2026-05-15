@@ -1,0 +1,809 @@
+# Daylens AI regression corpus.
+#
+# Each entry pins one user question to a deterministic fixture plus a set of
+# expected-answer characteristics. The harness runs router-mode assertions in
+# CI and adds live-provider assertions when AI_BENCH_LIVE=1 and a relevant API
+# key is in the environment.
+#
+# Schema:
+#   id              unique short identifier
+#   question        the user message, verbatim
+#   fixture         name from tests/ai-bench/fixtures.ts
+#   mode            router | both
+#   provider        optional, restricts live-mode entries to a provider
+#   note            optional human comment, e.g. "known router gap: domain time"
+#   expect:
+#     router_kind   answer | weeklyBrief | null | any
+#     must_include  case-insensitive substrings the answer must contain
+#     must_not_include   substrings the answer must NOT contain
+#     min_length    minimum trimmed answer length in characters
+#     must_cite_block    if true, answer must contain a time/duration shape
+#     live_*        same shape, applied to the live-provider answer when run
+#
+# Calibration rule: every entry encodes either (a) current router behavior
+# pinned so regressions show up, or (b) an explicit deferral to the provider
+# path. Entries marked `note: gap` are known router shortcomings that should
+# graduate to `router_kind: answer` once filled.
+
+questions:
+  # ─── App-time questions the router answers ─────────────────────────────
+
+  - id: top_apps_today
+    question: "What were my top apps today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["i don't know"]
+      min_length: 20
+
+  - id: how_long_cursor_today
+    question: "How long was I in Cursor today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: how_long_figma_today
+    question: "How long did I spend in Figma today?"
+    fixture: figmaDesignDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["figma"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: meeting_day_zoom_time
+    question: "How long in Zoom today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["zoom"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: meeting_day_slack_time
+    question: "How long was I in Slack today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["slack"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: top_apps_youtube_day
+    question: "Top apps today?"
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["chrome"]
+      must_not_include: ["i don't know", "researcher", "researched"]
+      min_length: 15
+
+  # ─── Focus / peak / scoring ─────────────────────────────────────────────
+
+  - id: focus_score_today
+    question: "What's my focus score today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "n/a", "error"]
+      min_length: 20
+
+  - id: focus_score_quiet_day
+    question: "Was I focused today?"
+    fixture: quietDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 10
+
+  - id: peak_focus_today
+    note: "Router returns evidence-light prose for single-day fixtures; provider would do better"
+    question: "When was I most focused today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["error", "[object", "undefined"]
+
+  # ─── Touched files / artifacts — the router shines here ─────────────────
+
+  - id: touched_files_today_excel
+    question: "Which files, docs, or pages did I touch today?"
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv"]
+      must_not_include: ["i don't know", "no files"]
+      min_length: 30
+
+  - id: touched_files_today_coding
+    question: "Which files or pages did I touch today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know"]
+      min_length: 25
+
+  # ─── Yesterday / comparison ─────────────────────────────────────────────
+
+  - id: yesterday_recap
+    question: "How was yesterday?"
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 25
+
+  - id: yesterday_cursor_time
+    question: "How long was I in Cursor yesterday?"
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: compare_today_vs_yesterday
+    question: "Was today different from yesterday?"
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 25
+
+  # ─── Weekly questions ──────────────────────────────────────────────────
+  # Current behavior: the router answers most weekly questions deterministically
+  # rather than handing off to the weeklyBrief synthesis path. The brief path
+  # fires for explicit "review my week" style prompts. These entries pin the
+  # current split.
+
+  - id: weekly_summary
+    question: "How was last week?"
+    fixture: weekOfCoding
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 20
+
+  - id: weekly_top_apps
+    question: "What did I work on this week?"
+    fixture: weekOfCoding
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "[object"]
+      min_length: 20
+
+  - id: weekly_cursor_time
+    question: "How many hours in Cursor this week?"
+    fixture: weekOfCoding
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know"]
+      min_length: 15
+
+  # ─── Empty / minimal data — graceful degradation ────────────────────────
+
+  - id: empty_day_how_was_today
+    question: "How was today?"
+    fixture: emptyDay
+    mode: router
+    expect:
+      router_kind: null
+
+  - id: empty_day_top_apps
+    question: "What were my top apps today?"
+    fixture: emptyDay
+    mode: router
+    expect:
+      router_kind: null
+
+  - id: meeting_day_summary_open_question
+    note: "Open-ended summaries route to provider on a meeting-only day"
+    question: "How was today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: null
+
+  - id: youtube_day_open_question
+    note: "Open-ended summaries route to provider; provider must not call YouTube research"
+    question: "What did I do today?"
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: null
+
+  # ─── Former router gaps — domain time and entity attribution ────────────
+
+  - id: chrome_youtube_drift_domain_time
+    question: "How long was I on YouTube today?"
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["youtube.com"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: ai_tool_day_chatgpt_time
+    question: "How long was I on ChatGPT today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["chatgpt.com"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: how_long_chrome_today
+    question: "How long was I on Chrome today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["chrome"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: asyv_time_today
+    question: "How many hours did I spend on ASYV today?"
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv"]
+      min_length: 30
+      must_cite_block: true
+
+  - id: ai_tool_day_top_sites
+    note: "Open-ended site questions defer to provider"
+    question: "What sites did I use today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: null
+
+  # ─── Refusal / capture-contract — router defers to provider ─────────────
+
+  - id: refusal_keystrokes
+    question: "What did I type in Slack today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["doesn't capture that directly", "keystrokes"]
+      min_length: 40
+
+  - id: refusal_email_contents
+    question: "What was in my email at 12:30?"
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["doesn't capture that directly", "email bodies"]
+      must_not_include: ["error", "[object", "undefined"]
+      min_length: 40
+
+  - id: refusal_screen_contents
+    question: "What was on my screen during the design review?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["doesn't capture that directly", "screen pixels"]
+      min_length: 40
+
+  # ─── Open-ended single-day questions that route to provider ─────────────
+
+  - id: peak_block_question
+    question: "What was my longest stretch today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: null
+
+  - id: distraction_today
+    question: "How distracted was I today?"
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: null
+
+  # ─── Expanded P0 taxonomy coverage ─────────────────────────────────────
+
+  - id: domain_github_time_today
+    question: "How long was I on github.com today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["github.com"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: domain_react_time_today
+    question: "How long did I spend on react.dev today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["react.dev"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: domain_claude_time_today
+    question: "How long was I on Claude today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["claude.ai"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: ai_tools_category_time
+    question: "How much time did I spend in AI tools today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["aiTools"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: development_category_time
+    question: "How much time did I spend in development today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["development"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: design_category_time
+    question: "How much time did I spend in design today?"
+    fixture: figmaDesignDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["design"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: meetings_category_time
+    question: "How much time did I spend in meetings today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["meetings"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: show_block_asyv
+    question: "Show me the block where ASYV showed up today."
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv"]
+      min_length: 30
+      must_cite_block: true
+
+  - id: show_block_react
+    question: "Show me the block where react.dev showed up today."
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["react.dev"]
+      min_length: 30
+      must_cite_block: true
+
+  - id: show_block_youtube
+    question: "Show me the block where YouTube showed up today."
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["youtube"]
+      min_length: 30
+      must_cite_block: true
+
+  - id: daily_short_report_coding
+    question: "Summarize today as a short report."
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 40
+
+  - id: daily_short_report_excel
+    question: "What did I actually get done today?"
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv"]
+      must_not_include: ["i don't know", "error"]
+      min_length: 40
+
+  - id: work_thread_meeting_day
+    question: "What was I working on today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["zoom"]
+      must_not_include: ["i don't know", "error"]
+      min_length: 30
+
+  - id: work_thread_figma_day
+    question: "What did I work on today?"
+    fixture: figmaDesignDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["figma"]
+      must_not_include: ["i don't know", "error"]
+      min_length: 30
+
+  - id: touched_pages_ai_tools
+    question: "Which pages did I touch today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["chatgpt"]
+      must_not_include: ["i don't know"]
+      min_length: 30
+
+  - id: touched_pages_youtube
+    question: "Which pages did I touch today?"
+    fixture: youtubeDriftDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["youtube"]
+      must_not_include: ["i don't know"]
+      min_length: 30
+
+  - id: top_site_ai_tools
+    question: "What was my top site today?"
+    fixture: allDayChatGPT
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["claude.ai"]
+      min_length: 15
+
+  - id: top_site_coding
+    question: "What was my top website today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["react.dev"]
+      min_length: 15
+
+  - id: compare_today_yesterday_alt
+    question: "Compare today with yesterday."
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["i don't know", "error"]
+      min_length: 25
+
+  - id: weekly_distraction
+    question: "What distracted me this week?"
+    fixture: weekOfCoding
+    mode: router
+    expect:
+      router_kind: answer
+      must_not_include: ["error", "[object"]
+      min_length: 20
+
+  - id: weekly_where_time_go
+    question: "Where did my time go this week?"
+    fixture: weekOfCoding
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["error", "[object"]
+      min_length: 20
+
+  - id: yesterday_work_thread
+    question: "What was I working on yesterday?"
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["i don't know", "error"]
+      min_length: 30
+
+  - id: yesterday_touched_files
+    question: "Which files or pages did I touch yesterday?"
+    fixture: yesterdayCodingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["daylens"]
+      must_not_include: ["i don't know"]
+      min_length: 30
+
+  - id: exact_moment_zoom
+    question: "What was I doing at 11am today?"
+    fixture: meetingHeavyDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["zoom"]
+      must_not_include: ["error"]
+      min_length: 20
+
+  - id: time_range_coding
+    question: "What was happening between 9am and 11am today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["error"]
+      min_length: 30
+
+  # ─── Coherent-ceiling regression: long single-session days ──────────────
+  # These pin the behaviour introduced by
+  # TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS in src/main/services/workBlocks.ts.
+  # Before the change, each of these fixtures produced three blocks with
+  # the last labelled "Untitled block". The router answers below assert the
+  # one-block shape holds end-to-end.
+
+  - id: long_cursor_session_block_query
+    question: "Show me the block where chatAnswer showed up today."
+    fixture: longCursorSession
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["chatanswer", "cursor", "9:00 am-12:00 pm"]
+      must_not_include: ["untitled block"]
+      min_length: 30
+
+  - id: long_cursor_session_work_thread
+    question: "What was I working on today?"
+    fixture: longCursorSession
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["1 work block", "cursor"]
+      must_not_include: ["untitled block", "error"]
+      min_length: 30
+
+  - id: long_cursor_session_cursor_time
+    question: "How long was I in Cursor today?"
+    fixture: longCursorSession
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor", "3h"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  - id: long_excel_report_block_query
+    question: "Show me the block where ASYV showed up today."
+    fixture: longExcelReport
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv", "microsoft excel", "9:30 am-12:15 pm"]
+      must_not_include: ["untitled block"]
+      min_length: 30
+
+  - id: long_excel_report_asyv_time
+    question: "How many hours did I spend on ASYV today?"
+    fixture: longExcelReport
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv", "2h 45m", "1 session"]
+      must_not_include: ["i don't know"]
+      min_length: 30
+      must_cite_block: true
+
+  - id: long_excel_report_work_thread
+    question: "What was I working on today?"
+    fixture: longExcelReport
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["1 work block", "asyv"]
+      must_not_include: ["untitled block", "error"]
+      min_length: 30
+
+  # ─── P0 taxonomy coverage — two screenshot failures + specific-work,
+  # time-range, client attribution shapes. These lock in the corpus shapes
+  # the router must answer without LLM help.
+
+  # Screenshot failure #1 — exact moment, past-tense "at 4 pm". Under the
+  # existing exact_moment_zoom entry the moment is 11am against the
+  # meetingHeavyDay fixture; this one exercises the 4pm shape specifically,
+  # against a fixture where the 4pm clock actually lands inside a tracked
+  # block (codingDay's afternoon Cursor session runs 13:30-16:15).
+  - id: at_4pm_today_exact_coding
+    question: "What did I do today at 4 p.m., exactly?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["error", "[object", "i don't know"]
+      min_length: 30
+
+  - id: at_4pm_today_exact_excel
+    question: "What did I do today at 4 p.m., exactly?"
+    fixture: excelClientReportDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["microsoft excel"]
+      must_not_include: ["error", "[object"]
+      min_length: 30
+
+  # Time range — "between 9am and 11am."
+  - id: range_9_11_morning_cursor
+    question: "Between 9am and 11am this morning, what was I on?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["error"]
+      min_length: 30
+
+  # Specific-work — "how long on Figma yesterday" (we don't have an
+  # attributed Figma yesterday fixture, but we do have a today Figma
+  # fixture; the yesterday-Figma case exercises the router fallthrough
+  # against `figmaDesignDay`'s today payload. We pin the shape the router
+  # would use if a user actually asked with `today`).
+  - id: how_long_figma_today_again
+    question: "How long on Figma today?"
+    fixture: figmaDesignDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["figma"]
+      must_not_include: ["i don't know"]
+      min_length: 15
+      must_cite_block: true
+
+  # Specific-work — "which pages for ASYV" against the longExcelReport
+  # fixture, which has ASYV in the Excel window title end-to-end.
+  - id: which_pages_for_asyv
+    question: "Which pages did I touch for ASYV today?"
+    fixture: longExcelReport
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["asyv"]
+      must_not_include: ["i don't know"]
+      min_length: 30
+
+  # Client attribution — "who are my clients" fallback to roster when no
+  # attributed work sessions exist. This is screenshot failure #2 exactly.
+  # The fixture has no clients row seeded, so the router should surface
+  # the "no clients yet" guidance text — not fall through to the LLM.
+  - id: client_list_roster_basic
+    question: "Who are my clients?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["no clients yet"]
+      must_not_include: ["error", "[object"]
+      min_length: 30
+
+  # Client attribution — "list my clients this month" against the empty
+  # client-table fixture. Same router path, different phrasing.
+  - id: client_list_this_month
+    question: "List my clients this month."
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["no clients yet"]
+      must_not_include: ["error", "[object"]
+      min_length: 30
+
+  # Time-at-moment — "what was I doing at 10am" ensures the router picks up
+  # the bare-hour pattern too.
+  - id: at_10am_today_exact
+    question: "What was I doing at 10am today?"
+    fixture: codingDay
+    mode: router
+    expect:
+      router_kind: answer
+      must_include: ["cursor"]
+      must_not_include: ["error"]
+      min_length: 20
+
+  # ─── Live-mode entries (skipped unless AI_BENCH_LIVE=1) ─────────────────
+
+  - id: live_specific_file_today
+    question: "Did I work on the ASYV financial report today?"
+    fixture: excelClientReportDay
+    mode: both
+    expect:
+      router_kind: null
+      live_must_include: ["asyv"]
+      live_must_not_include: ["i don't know", "i do not have"]
+      live_min_length: 40
+
+  - id: live_top_apps_today
+    question: "What did I spend the most time in today?"
+    fixture: codingDay
+    mode: both
+    expect:
+      router_kind: any
+      live_must_include: ["cursor"]
+      live_min_length: 30
+
+  - id: live_google_specific_file_today
+    question: "Did I work on the ASYV financial report today?"
+    fixture: excelClientReportDay
+    mode: both
+    provider: google
+    expect:
+      router_kind: null
+      live_must_include: ["asyv"]
+      live_must_not_include: ["i don't know", "i do not have"]
+      live_min_length: 40
+
+  - id: live_google_top_apps_today
+    question: "What did I spend the most time in today?"
+    fixture: codingDay
+    mode: both
+    provider: google
+    expect:
+      router_kind: any
+      live_must_include: ["cursor"]
+      live_min_length: 30
+
+  - id: live_openai_status_update
+    question: "Draft a short status update from today's work."
+    fixture: codingDay
+    mode: both
+    provider: openai
+    expect:
+      router_kind: any
+      live_must_include: ["cursor"]
+      live_min_length: 40

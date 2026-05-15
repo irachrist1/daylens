@@ -91,6 +91,11 @@ export interface SearchSessionsResult {
   // / stopwords). Empty for strict matches. Useful so the model can name
   // exactly which fragment of the user's phrase did match.
   broadenedTokens?: string[]
+  // Explicit framing instruction included in the tool result so the model
+  // can't sleepwalk into a bare refusal. The instruction tells the model
+  // exactly how to phrase the answer and which next tool to call when the
+  // current search is empty.
+  _instruction?: string
 }
 
 export interface AppUsageStat {
@@ -643,6 +648,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
       hits: strict.map(mapHit),
       totalFound: strict.length,
       matchKind: 'strict',
+      _instruction: `Strict match for "${params.query}" — answer directly from these hits.`,
     }
   }
 
@@ -655,9 +661,15 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
   // "I don't see that exact phrase, but here's what I do see for Perusall."
   const tokens = tokenizeForBroadenedSearch(params.query)
   if (tokens.length === 0) {
-    return { hits: [], totalFound: 0, matchKind: 'empty' }
+    return {
+      hits: [],
+      totalFound: 0,
+      matchKind: 'empty',
+      _instruction: `No usable tokens in "${params.query}". Call getDaySummary (today) or getBlockAtTime if the user named a time, and answer from the closest captured signal — do not refuse with "I can't see that."`,
+    }
   }
   const byId = new Map<number, ReturnType<typeof mapHit>>()
+  const tokenMatches: Record<string, number> = {}
   for (const token of tokens) {
     if (byId.size >= limit) break
     const partial = dbSearchSessions(db, token, {
@@ -665,6 +677,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
       endDate: params.endDate,
       limit: limit - byId.size,
     })
+    tokenMatches[token] = partial.length
     for (const hit of partial) {
       if (byId.has(hit.id)) continue
       byId.set(hit.id, mapHit(hit))
@@ -672,12 +685,23 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
     }
   }
   const merged = Array.from(byId.values()).sort((a, b) => b.startTime - a.startTime)
+  const matchKind: 'broadened' | 'empty' = merged.length > 0 ? 'broadened' : 'empty'
+  // B2: the model has historically bare-refused even on broadened hits.
+  // The _instruction field is read in the tool_result JSON the model sees;
+  // it makes the right answer shape explicit so even a sloppy model can't
+  // miss the framing. For empty results it points to the next tool to try
+  // — "I can't see that" is never the answer when getDaySummary exists.
+  const matchedTokens = Object.entries(tokenMatches).filter(([, n]) => n > 0).map(([t]) => t)
+  const instruction = matchKind === 'broadened'
+    ? `No exact match for "${params.query}". Broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')} — these hits ARE the closest captured signal. Frame as: "I don't see that exact phrase, but for ${matchedTokens[0]} I see…" then cite the hits. Never write "I can't find any sessions" or "doesn't appear in your tracked activity" — those phrases are banned.`
+    : `No sessions matched "${params.query}" even after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Never refuse with "I can't see that" — frame as "Here's what Daylens captured for the relevant time range…"`
   return {
     hits: merged,
     totalFound: merged.length,
-    matchKind: merged.length > 0 ? 'broadened' : 'empty',
+    matchKind,
     broadenedTokens: tokens,
-  }
+    _instruction: instruction,
+  } as SearchSessionsResult & { _instruction?: string }
 }
 
 function fmtHHMM(ms: number): string {

@@ -52,6 +52,7 @@ const DEFAULTS: AppSettings = {
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: false,
   mcpServerEnabled: false,
+  imessageCaptureEnabled: false,
 }
 
 export function getSettings(): AppSettings {
@@ -95,6 +96,7 @@ export function getSettings(): AppSettings {
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
+    imessageCaptureEnabled: (_store.get('imessageCaptureEnabled', false) as boolean),
   }
 }
 
