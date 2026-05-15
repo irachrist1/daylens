@@ -38,6 +38,7 @@ import type {
   WorkContextBlock,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
+import { isHostFilteredFromArtifacts, isHostBlockedForLabel } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { localDayBounds } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
@@ -1021,6 +1022,14 @@ function buildPageCandidates(
   }>()
 
   for (const visit of getWebsiteVisitsForRange(db, startTime, endTime)) {
+    // Domain policy gate: adult-host pages are filtered at source so they
+    // never become artifact candidates, never get promoted to block labels,
+    // and never appear in any app's topArtifacts list. The raw visit row
+    // stays in website_visits.url so the user can still see their own
+    // browsing history if they look — we just don't surface it as a
+    // headline anywhere in the product.
+    if (isHostFilteredFromArtifacts(visit.domain)) continue
+
     const canonicalKey = visit.normalizedUrl ?? normalizeUrlForStorage(visit.url) ?? `domain:${visit.domain}`
     const existing = grouped.get(canonicalKey)
     const pageTitle = normalizeWebsiteTitleForDisplay(visit.domain, visit.pageTitle)
@@ -1104,6 +1113,13 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
   }>()
 
   for (const session of sessions) {
+    // Browser sessions' window titles ARE their page titles — those should
+    // be sourced from website_visits via buildPageCandidates (which is
+    // policy-aware), not from window-title heuristics. Creating a
+    // window-type document artifact from a browser window title duplicates
+    // the page and bypasses the adult-host filter at buildPageCandidates.
+    if (isBrowserSession(session)) continue
+
     const title = usefulWindowTitle(session)
     if (!title) continue
 
@@ -1502,13 +1518,45 @@ function looksLikeBrowserTabTitle(value: string): boolean {
   return / \| /.test(value)
 }
 
+// Categories where a browser page / website is the natural label source.
+// For anything else (development, communication, design, etc.), a stray
+// browser page should NOT be picked as the block label — that's how
+// "Pornhub - $title" ended up labeling a development block.
+const PAGE_LABEL_COMPATIBLE_CATEGORIES = new Set<AppCategory>([
+  'browsing',
+  'aiTools',
+  'research',
+  'entertainment',
+  'social',
+])
+
+function isPageLabelCompatible(block: WorkContextBlock): boolean {
+  return PAGE_LABEL_COMPATIBLE_CATEGORIES.has(block.dominantCategory)
+}
+
 function preferredArtifactLabel(block: WorkContextBlock): string | null {
+  // Document artifacts (files, repos, projects, window-derived) are
+  // produced by the foreground app itself, so they're category-compatible
+  // by construction — a VS Code window artifact reflects VS Code work.
+  // Keep them unconditional.
   const documentLabel = usefulDerivedLabel(block.documentRefs[0]?.displayTitle)
   if (documentLabel && !looksLikeBrowserTabTitle(documentLabel)) return documentLabel
-  const rawPageLabel = block.pageRefs[0]?.displayTitle ?? block.pageRefs[0]?.pageTitle
+
+  // Page and website labels only apply when the block is browsing-dominant.
+  // For a development block, a stray YouTube/Pornhub/news page is noise,
+  // not a label.
+  if (!isPageLabelCompatible(block)) return null
+
+  // Even within browsing-compatible categories, blocked hosts (adult,
+  // social-feed, entertainment) never label a block. The host gate at
+  // buildPageCandidates already drops adult; this is the belt-and-braces.
+  const firstAllowedPage = block.pageRefs.find((page) => !isHostBlockedForLabel(page.domain ?? page.host ?? null))
+  const rawPageLabel = firstAllowedPage?.displayTitle ?? firstAllowedPage?.pageTitle
   const pageLabel = usefulDerivedLabel(rawPageLabel)
   if (pageLabel && !looksLikeBrowserTabTitle(pageLabel)) return pageLabel
-  const domainLabel = block.websites[0] ? shortDomainLabel(block.websites[0].domain) : null
+
+  const firstAllowedSite = block.websites.find((site) => !isHostBlockedForLabel(site.domain))
+  const domainLabel = firstAllowedSite ? shortDomainLabel(firstAllowedSite.domain) : null
   return usefulDerivedLabel(domainLabel)
 }
 

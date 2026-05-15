@@ -13,6 +13,22 @@ import { ipc } from '../lib/ipc'
 import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, todayString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
+import { sanitizeForModel } from '@shared/aiSanitize'
+
+// Browser keyword check used to filter the "in App and App" clause down to
+// the apps that could plausibly own a page artifact (i.e. browsers).
+function isBrowserAppName(bundleId: string, appName: string): boolean {
+  const haystack = `${bundleId} ${appName}`.toLowerCase()
+  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(haystack)
+}
+
+// Strip raw URL query/fragment + secret-shaped tokens from any free-text the
+// timeline displays. The renderer used to print page artifact displayTitles
+// verbatim, so an OAuth callback URL stored as the artifact title leaked the
+// `?code=…` straight into the block card.
+function safeTimelineText(text: string): string {
+  return sanitizeForModel(text)
+}
 
 const CATEGORY_COLORS: Record<AppCategory, string> = {
   development: '#5b8cff',
@@ -87,7 +103,7 @@ function shortDomainLabel(domain: string): string {
 function artifactSubtitle(block: WorkContextBlock): string | null {
   const titles = block.topArtifacts
     .slice(0, 3)
-    .map((artifact) => artifact.displayTitle.trim())
+    .map((artifact) => safeTimelineText(artifact.displayTitle.trim()))
     .filter(Boolean)
 
   if (titles.length > 0) return titles.join(' • ')
@@ -114,15 +130,32 @@ function blockNarrative(block: WorkContextBlock): string | null {
 // wall-clock), so use blockDisplayedSpanSeconds instead.
 function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockDisplayedSpanSeconds(block))
-  const apps = block.topApps
+  const allApps = block.topApps
     .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
-    .slice(0, 2)
-    .map((app) => formatDisplayAppName(app.appName))
   const sites = block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
-  const artifacts = block.topArtifacts
-    .slice(0, 1)
-    .map((artifact) => artifact.displayTitle.trim())
-    .filter(Boolean)
+  const topArtifact = block.topArtifacts.find((artifact) => artifact.displayTitle.trim().length > 0)
+  const artifacts = topArtifact ? [safeTimelineText(topArtifact.displayTitle.trim())] : []
+
+  // Filter the "in App and App" clause to apps that could plausibly own the
+  // chosen artifact. For page artifacts, only browsers qualify — VS Code did
+  // not visit `intune.microsoft.com` just because Safari did so in the same
+  // block. Same root cause as the digest ownership bug.
+  const apps = (() => {
+    if (!topArtifact) {
+      return allApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+    }
+    if (topArtifact.artifactType === 'page') {
+      const browsers = allApps.filter((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
+      const candidates = browsers.length > 0 ? browsers : allApps
+      return candidates.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+    }
+    if (topArtifact.ownerBundleId) {
+      const owners = allApps.filter((app) => app.bundleId === topArtifact.ownerBundleId)
+      const candidates = owners.length > 0 ? owners : allApps
+      return candidates.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+    }
+    return allApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+  })()
 
   if (artifacts.length > 0 && apps.length > 0) {
     return `${duration} on ${artifacts[0]} in ${apps.join(' and ')}.`

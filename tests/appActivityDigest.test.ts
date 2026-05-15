@@ -166,3 +166,33 @@ test('block label still attaches to all apps in the block', () => {
     ]),
   )
 })
+
+// Regression for the live-DB symptom in V1-PHASE-6 screenshots: VS Code and
+// Ghostty rows in the Apps tab were headlined "YouTube" because the digest
+// fell back to "single app in block" attribution for page artifacts whose
+// canonicalAppId / canonicalBrowserId / browserBundleId were all null
+// (legacy rows). Pages must NEVER attach to a non-browser app — even when
+// the block has only one app — because we cannot prove the app owned the page.
+test('page artifacts with no browser owner do not leak onto a single non-browser app', () => {
+  const orphanYouTubePage: ArtifactRef = {
+    id: 'page-youtube-orphan',
+    artifactType: 'page',
+    displayTitle: 'YouTube',
+    totalSeconds: 120,
+    confidence: 0.5,
+    // canonicalAppId, ownerBundleId, canonicalBrowserId, browserBundleId all unset.
+    openTarget: { kind: 'external_url', value: 'https://youtube.com/' },
+  } as ArtifactRef
+
+  const block = makeBlock({
+    topApps: [
+      { bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', totalSeconds: 1200, sessionCount: 1, isBrowser: false },
+    ],
+    topArtifacts: [orphanYouTubePage],
+  })
+
+  const digest = computeAppActivityDigest([block], resolve)
+  const vscode = digest.find((row) => row.canonicalAppId === 'vscode')
+  assert.ok(vscode, 'vscode row should still exist')
+  assert.equal(vscode!.topArtifactTitle, null, 'unowned page must not headline a non-browser app')
+})

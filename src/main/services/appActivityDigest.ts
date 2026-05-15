@@ -7,6 +7,7 @@ import type {
 } from '@shared/types'
 import { resolveCanonicalApp as defaultResolveCanonicalApp } from '../lib/appIdentity'
 import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { isHostBlockedForAppsRail } from '@shared/domainPolicy'
 
 type ResolveCanonicalApp = (bundleId: string, appName: string) => { canonicalAppId: string | null }
 
@@ -55,6 +56,30 @@ function artifactOwnerCanonicalId(
   return null
 }
 
+// True when the persisted block label appears to have come from a
+// host-blocklisted artifact. We check both pageRefs and topArtifacts of
+// the block: if any of them sits on a blocked host AND its title matches
+// the persisted label, the label was sourced from that artifact and is
+// not safe to propagate. This guards against legacy bad labels that the
+// backfill migration hasn't cleared yet.
+function labelLooksHostBlocked(block: WorkContextBlock, label: string): boolean {
+  const normalizedLabel = label.toLowerCase()
+  const candidates: Array<{ host: string | null | undefined; title: string | null | undefined }> = []
+  for (const page of block.pageRefs) {
+    candidates.push({ host: page.domain ?? page.host, title: page.displayTitle })
+    candidates.push({ host: page.domain ?? page.host, title: page.pageTitle ?? null })
+  }
+  for (const artifact of block.topArtifacts) {
+    candidates.push({ host: artifact.host, title: artifact.displayTitle })
+  }
+  for (const c of candidates) {
+    if (!c.title || !c.host) continue
+    if (!isHostBlockedForAppsRail(c.host)) continue
+    if (c.title.toLowerCase() === normalizedLabel) return true
+  }
+  return false
+}
+
 export function computeAppActivityDigest(
   blocks: WorkContextBlock[],
   resolve: ResolveCanonicalApp = defaultResolveCanonicalApp,
@@ -66,7 +91,10 @@ export function computeAppActivityDigest(
     if (blockSeconds < 60) continue
 
     const sanitizedLabel = userVisibleBlockLabel(block)
-    const blockLabel = sanitizedLabel === 'Untitled block' ? '' : sanitizedLabel.trim()
+    let blockLabel = sanitizedLabel === 'Untitled block' ? '' : sanitizedLabel.trim()
+    // Legacy labels persisted before the domain policy may still carry a
+    // blocked-host title. Suppress so they don't propagate to every app.
+    if (blockLabel && labelLooksHostBlocked(block, blockLabel)) blockLabel = ''
 
     const appCanonicalIds = new Map<string, { bundleId: string; appName: string; canonicalAppId: string }>()
     for (const app of block.topApps) {
@@ -95,13 +123,23 @@ export function computeAppActivityDigest(
       }
 
       for (const artifact of block.topArtifacts) {
+        // Domain policy: adult/social-feed/entertainment hosts never head
+        // the Apps view. Adult is already filtered at buildPageCandidates,
+        // but persisted artifacts predating the policy can still appear
+        // here, so we defend a second time.
+        if (isHostBlockedForAppsRail(artifact.host)) continue
+
         const ownerId = artifactOwnerCanonicalId(artifact, resolve)
-        // If we cannot determine ownership, only attribute when this app is
-        // the only canonical app in the block — otherwise we'd misattribute
-        // (e.g. a page captured by Safari leaking onto VS Code).
+        // Pages always belong to a browser. If we can't resolve the owning
+        // browser (legacy rows with null canonicalAppId AND null
+        // canonicalBrowserId AND null browserBundleId), drop the artifact —
+        // never fall back to "only app in the block," because that path is
+        // exactly how YouTube/Perplexity ended up labeling VS Code and
+        // Ghostty rows in the Apps tab.
+        const isPageArtifact = artifact.artifactType === 'page'
         const owned = ownerId !== null
           ? ownerId === canonicalAppId
-          : appCanonicalIds.size === 1
+          : (isPageArtifact ? false : appCanonicalIds.size === 1)
         if (!owned) continue
 
         const title = artifact.displayTitle?.trim()
@@ -112,6 +150,7 @@ export function computeAppActivityDigest(
       }
 
       for (const page of block.pageRefs) {
+        if (isHostBlockedForAppsRail(page.domain ?? page.host ?? null)) continue
         const ownerId = pageOwnerCanonicalId(page, resolve)
         // Pages without a resolvable browser owner cannot be safely attributed
         // to a non-browser app; drop them rather than smearing across topApps.

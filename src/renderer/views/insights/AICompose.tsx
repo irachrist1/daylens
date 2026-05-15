@@ -17,6 +17,13 @@ function IconSend() {
 function AIComposeImpl({ onSubmit, loading }: AIComposeProps) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Render counter is unconditional so React's hook order is stable across
+  // dev/prod and HMR. The console.debug side-effect is gated on NODE_ENV.
+  // (The previous conditional `useRef` inside `if (NODE_ENV === 'development')`
+  // tripped "Rendered more hooks than during the previous render" and crashed
+  // the AI tab — Rules of Hooks violation.)
+  const renderCountRef = useRef(0)
+  renderCountRef.current++
 
   // Auto-resize the textarea to fit content (1–7 visual lines).
   useEffect(() => {
@@ -28,11 +35,7 @@ function AIComposeImpl({ onSubmit, loading }: AIComposeProps) {
     textarea.style.overflowY = textarea.scrollHeight > 140 ? 'auto' : 'hidden'
   }, [input])
 
-  // Dev render counter: confirms the composer only re-renders on `loading`
-  // changes (and its own input state), not on every streaming chunk.
   if (process.env.NODE_ENV === 'development') {
-    const renderCountRef = useRef(0)
-    renderCountRef.current++
     // eslint-disable-next-line no-console
     console.debug('[AICompose] render #', renderCountRef.current, { loading, inputLen: input.length })
   }
