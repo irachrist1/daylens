@@ -14,3 +14,10 @@ CONTEXT.md
 PROMPTS.md
 .agents/
 skills-lock.json
+
+# AI regression harness — last-run cache, regenerated each run
+tests/ai-bench/.last-results.json
+.ai-behaviour/
+
+# Claude Code local permissions (per-user, not shared)
+.claude/settings.local.json
