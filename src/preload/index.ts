@@ -1,0 +1,321 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import os from 'node:os'
+import type { ProjectionInvalidationEvent } from '@shared/core'
+import type {
+  AppCategory,
+  AppUsageSummary,
+  AIChatSendRequest,
+  AIChatStreamEvent,
+  AIMessageFeedbackUpdate,
+  AIChatTurnResult,
+  AIDailyReportPreparationResult,
+  AIWrappedNarrative,
+  AISurfaceSummary,
+  AIThreadMessage,
+  AIThreadSummary,
+  AIArtifactRecord,
+  AIArtifactContent,
+  AIDaySummaryResult,
+  AIProvider,
+  AppActivityDigest,
+  AppDetailPayload,
+  AppSettings,
+  AIProviderMode,
+  BrowserLinkResult,
+  ClientRecord,
+  BreakRecommendation,
+  DayTimelinePayload,
+  DistractionCostPayload,
+  FocusReflectionSavePayload,
+  FocusSession,
+  FocusStartPayload,
+  IconRequest,
+  ProviderConnectionResult,
+  ResolvedIconPayload,
+  SyncStatus,
+  TrackingDiagnosticsPayload,
+  TrackingPermissionState,
+  WorkspaceResult,
+  WrappedPeriodFacts,
+  WrappedPeriodNarrative,
+} from '@shared/types'
+import { IPC } from '@shared/types'
+import type { McpServerConfig } from '../main/services/mcpServer'
+
+export interface UpdaterStatusInfo {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error' | 'installing'
+  version: string | null
+  progressPct: number | null
+  errorMessage: string | null
+  releaseName: string | null
+  releaseNotesText: string | null
+  releaseDate: string | null
+  packageType?: string | null
+  supported?: boolean
+  supportMessage?: string | null
+  downloadUrl?: string | null
+}
+
+export interface SearchOptions {
+  startDate?: string
+  endDate?: string
+  limit?: number
+}
+
+export type DaylensSearchResult =
+  | {
+      type: 'session'
+      id: number
+      appName: string
+      windowTitle: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'block'
+      id: string
+      label: string
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'browser'
+      id: number
+      domain: string
+      pageTitle: string | null
+      url: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+  | {
+      type: 'artifact'
+      id: number
+      title: string
+      filePath: string | null
+      startTime: number
+      endTime: number
+      date: string
+      excerpt: string
+    }
+
+// Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
+const api = {
+  // Window controls — used by the custom TitleBar (needed on Windows frameless)
+  win: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    maximize: () => ipcRenderer.send('window:maximize'),
+    close: () => ipcRenderer.send('window:close'),
+  },
+  db: {
+    getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
+    getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
+    getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
+    getCategoryOverrides: (): Promise<Record<string, AppCategory>> => ipcRenderer.invoke(IPC.DB.GET_CATEGORY_OVERRIDES),
+    setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
+      ipcRenderer.invoke(IPC.DB.SET_CATEGORY_OVERRIDE, bundleId, category),
+    clearCategoryOverride: (bundleId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_CATEGORY_OVERRIDE, bundleId),
+    setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }): Promise<void> =>
+      ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
+    clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
+    getAppDetail: (canonicalAppId: string, days?: number): Promise<AppDetailPayload> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
+    getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
+      ipcRenderer.invoke(IPC.DB.GET_APP_ACTIVITY_DIGEST, days),
+  },
+  icons: {
+    resolve: (request: IconRequest): Promise<ResolvedIconPayload> => ipcRenderer.invoke(IPC.ICONS.RESOLVE, request),
+  },
+  ai: {
+    sendMessage: (payload: AIChatSendRequest): Promise<AIChatTurnResult> => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, payload),
+    onStream: (callback: (event: AIChatStreamEvent) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, event: AIChatStreamEvent) => callback(event)
+      ipcRenderer.on(IPC.AI.STREAM_EVENT, handler)
+      return () => { ipcRenderer.removeListener(IPC.AI.STREAM_EVENT, handler) }
+    },
+    setMessageFeedback: (payload: AIMessageFeedbackUpdate): Promise<AIThreadMessage | null> =>
+      ipcRenderer.invoke(IPC.AI.SET_MESSAGE_FEEDBACK, payload),
+    generateDaySummary: (date: string): Promise<AIDaySummaryResult> =>
+      ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
+    getWeekReview: (weekStart: string): Promise<AISurfaceSummary | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart }),
+    getAppNarrative: (canonicalAppId: string, days?: number): Promise<AISurfaceSummary | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days }),
+    prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
+      ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
+    getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date }),
+    getWrappedPeriodNarrative: (facts: WrappedPeriodFacts): Promise<WrappedPeriodNarrative | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { facts }),
+    getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
+      ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
+    clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
+    detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
+    listThreads: (payload?: { includeArchived?: boolean }): Promise<AIThreadSummary[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_THREADS, payload),
+    getThread: (threadId: number): Promise<{ thread: AIThreadSummary | null; messages: AIThreadMessage[] }> =>
+      ipcRenderer.invoke(IPC.AI.GET_THREAD, { threadId }),
+    createThread: (title?: string | null): Promise<AIThreadSummary> =>
+      ipcRenderer.invoke(IPC.AI.CREATE_THREAD, { title }),
+    archiveThread: (threadId: number, archived: boolean): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.ARCHIVE_THREAD, { threadId, archived }),
+    renameThread: (threadId: number, title: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.RENAME_THREAD, { threadId, title }),
+    deleteThread: (threadId: number): Promise<void> =>
+      ipcRenderer.invoke(IPC.AI.DELETE_THREAD, { threadId }),
+    listArtifacts: (threadId: number): Promise<AIArtifactRecord[]> =>
+      ipcRenderer.invoke(IPC.AI.LIST_ARTIFACTS, { threadId }),
+    getArtifact: (artifactId: number): Promise<AIArtifactContent | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_ARTIFACT, { artifactId }),
+    openArtifact: (artifactId: number): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
+    exportArtifact: (artifactId: number): Promise<{ ok: boolean; path?: string; error?: string; canceled?: boolean }> =>
+      ipcRenderer.invoke(IPC.AI.EXPORT_ARTIFACT, { artifactId }),
+  },
+  search: {
+    all: (query: string, opts?: SearchOptions): Promise<DaylensSearchResult[]> =>
+      ipcRenderer.invoke('search:all', { query, opts }),
+    sessions: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'session' }>[]> =>
+      ipcRenderer.invoke('search:sessions', { query, opts }),
+    blocks: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'block' }>[]> =>
+      ipcRenderer.invoke('search:blocks', { query, opts }),
+    browser: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'browser' }>[]> =>
+      ipcRenderer.invoke('search:browser', { query, opts }),
+    artifacts: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'artifact' }>[]> =>
+      ipcRenderer.invoke('search:artifacts', { query, opts }),
+  },
+  settings: {
+    get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),
+    set: (partial: Partial<AppSettings>) => ipcRenderer.invoke(IPC.SETTINGS.SET, partial),
+    hasApiKey: (provider?: AIProviderMode): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS.HAS_API_KEY, provider),
+    setApiKey: (key: string, provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.SET_API_KEY, key, provider),
+    clearApiKey: (provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
+    validateApiKey: (provider: AIProvider, key: string): Promise<ProviderConnectionResult> =>
+      ipcRenderer.invoke(IPC.SETTINGS.VALIDATE_API_KEY, { provider, key }),
+  },
+  tracking: {
+    getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
+    getDiagnostics: (): Promise<TrackingDiagnosticsPayload> => ipcRenderer.invoke(IPC.TRACKING.GET_DIAGNOSTICS),
+    getPermissionState: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_STATE),
+    requestScreenPermission: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.REQUEST_SCREEN_PERMISSION),
+  },
+  focus: {
+    start: (payload?: FocusStartPayload | string | null): Promise<number> => ipcRenderer.invoke(IPC.FOCUS.START, payload),
+    stop: (sessionId: number): Promise<void> => ipcRenderer.invoke(IPC.FOCUS.STOP, sessionId),
+    getActive: (): Promise<FocusSession | null> => ipcRenderer.invoke(IPC.FOCUS.GET_ACTIVE),
+    getRecent: (limit?: number): Promise<FocusSession[]> => ipcRenderer.invoke(IPC.FOCUS.GET_RECENT, limit),
+    saveReflection: (payload: FocusReflectionSavePayload): Promise<void> => ipcRenderer.invoke(IPC.FOCUS.SAVE_REFLECTION, payload),
+    getDistractionCount: (payload: { sessionId: number }): Promise<number> => ipcRenderer.invoke(IPC.FOCUS.GET_DISTRACTION_COUNT, payload),
+    getBreakRecommendation: (): Promise<BreakRecommendation | null> => ipcRenderer.invoke(IPC.FOCUS.GET_BREAK_RECOMMENDATION),
+  },
+  app: {
+    getDefaultUserName: (): Promise<string> => Promise.resolve(os.userInfo().username),
+    relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
+    completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
+  },
+  sync: {
+    getStatus: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.SYNC.GET_STATUS),
+    link: (): Promise<WorkspaceResult> => ipcRenderer.invoke(IPC.SYNC.LINK),
+    createBrowserLink: (): Promise<BrowserLinkResult> => ipcRenderer.invoke(IPC.SYNC.CREATE_BROWSER_LINK),
+    disconnect: () => ipcRenderer.invoke(IPC.SYNC.DISCONNECT),
+    getMnemonic: () => ipcRenderer.invoke(IPC.SYNC.GET_MNEMONIC),
+  },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.send(IPC.SHELL.OPEN_EXTERNAL, url),
+    openPath: (targetPath: string) => ipcRenderer.invoke(IPC.SHELL.OPEN_PATH, targetPath),
+  },
+  attribution: {
+    listClientsDetailed: (): Promise<ClientRecord[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED),
+    createClient: (payload: { name: string; color?: string | null }): Promise<ClientRecord> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.CREATE_CLIENT, payload),
+    updateClient: (payload: { id: string; name?: string; color?: string | null }): Promise<ClientRecord | null> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.UPDATE_CLIENT, payload),
+    archiveClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.ARCHIVE_CLIENT, id),
+    restoreClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.RESTORE_CLIENT, id),
+    reassignSession: (
+      sessionId: string,
+      payload: { clientId?: string | null; clientName?: string | null; projectId?: string | null },
+    ): Promise<{ clientId: string | null; projectId: string | null }> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.REASSIGN_SESSION, sessionId, payload),
+    reassignRange: (
+      payload: { fromMs: number; toMs: number; clientId?: string | null; clientName?: string | null; projectId?: string | null },
+    ): Promise<{ clientId: string | null; projectId: string | null; sessionsUpdated: number }> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.REASSIGN_RANGE, payload),
+  },
+  distractionAlerter: {
+    setThreshold: (payload: { minutes: number }) => ipcRenderer.invoke('distraction-alerter:set-threshold', payload),
+  },
+  mcp: {
+    getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
+  },
+  imessage: {
+    syncNow: (): Promise<{ ok: boolean; inserted: number; lastSentAt: number | null; error?: string }> =>
+      ipcRenderer.invoke(IPC.IMESSAGE.SYNC_NOW),
+    getStatus: (): Promise<{ enabled: boolean; platformSupported: boolean }> =>
+      ipcRenderer.invoke(IPC.IMESSAGE.GET_STATUS),
+  },
+  analytics: {
+    capture: (event: string, properties: Record<string, unknown>) =>
+      ipcRenderer.send('analytics:capture', event, properties),
+  },
+  navigation: {
+    // Subscribe to main-process navigation requests (e.g. notification click → route).
+    // Returns a cleanup function — call it in useEffect's return to avoid leaks.
+    onNavigate: (callback: (route: string) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, route: string) => callback(route)
+      ipcRenderer.on('navigate', handler)
+      return () => { ipcRenderer.removeListener('navigate', handler) }
+    },
+    // Drain any route that main queued before this listener mounted.
+    consumePending: (): Promise<string | null> => ipcRenderer.invoke('navigation:consume-pending'),
+  },
+  dev: {
+    fireTestDailyNotification: (): Promise<{ ok: boolean; reason?: string }> =>
+      ipcRenderer.invoke('dev:fire-test-daily-notification'),
+  },
+  palette: {
+    // Fired by the global shortcut handler in main. Renderer should toggle the palette open/closed.
+    onToggle: (callback: () => void): (() => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('palette:toggle', handler)
+      return () => { ipcRenderer.removeListener('palette:toggle', handler) }
+    },
+  },
+  updater: {
+    onStatus: (
+      callback: (info: UpdaterStatusInfo) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        info: UpdaterStatusInfo,
+      ) => callback(info)
+      ipcRenderer.on('update:status', handler)
+      return () => { ipcRenderer.removeListener('update:status', handler) }
+    },
+    getStatus: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:get-status'),
+    check: (): Promise<UpdaterStatusInfo> => ipcRenderer.invoke('update:check'),
+    install: (): Promise<boolean> => ipcRenderer.invoke('update:install'),
+  },
+  projections: {
+    onInvalidated: (
+      callback: (event: ProjectionInvalidationEvent) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        event: ProjectionInvalidationEvent,
+      ) => callback(event)
+      ipcRenderer.on(IPC.PROJECTIONS.INVALIDATED, handler)
+      return () => { ipcRenderer.removeListener(IPC.PROJECTIONS.INVALIDATED, handler) }
+    },
+  },
+}
+
+contextBridge.exposeInMainWorld('daylens', api)
+
+// Type augmentation for renderer window access
+export type DaylensAPI = typeof api

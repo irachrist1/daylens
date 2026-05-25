@@ -1,0 +1,23 @@
+node_modules/
+.vite/
+out/
+dist/
+dist-release/
+.tmp-benchmark/
+*.log
+.DS_Store
+private/
+
+# AI agent working files — ephemeral planning docs, not part of the source record
+PLAN.md
+CONTEXT.md
+PROMPTS.md
+.agents/
+skills-lock.json
+
+# AI regression harness — last-run cache, regenerated each run
+tests/ai-bench/.last-results.json
+.ai-behaviour/
+
+# Claude Code local permissions (per-user, not shared)
+.claude/settings.local.json

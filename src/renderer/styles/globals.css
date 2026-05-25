@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+
+  --color-bg:                  #0b0e14;
+  --color-surface:             #10131a;
+  --color-surface-low:         #191c22;
+  --color-surface-container:   #1d2026;
+  --color-surface-high:        #272a32;
+  --color-surface-highest:     #32353c;
+  --color-surface-card:        #1d2026;
+  --color-surface-muted:       rgba(255,255,255,0.045);
+  --color-border:              rgba(255,255,255,0.0);
+  --color-border-ghost:        rgba(255,255,255,0.06);
+  --color-text-primary:        #e1e2eb;
+  --color-text-secondary:      #c2c6d6;
+  --color-text-tertiary:       rgba(194,198,214,0.45);
+  --color-primary:             #adc6ff;
+  --color-primary-glow:        #4d8eff;
+  --color-primary-contrast:    #001a42;
+  --color-secondary:           #ffb95f;
+  --color-tertiary:            #4fdbc8;
+  --color-accent:              #adc6ff;
+  --color-accent-dim:          rgba(173,198,255,0.10);
+  --color-focus-green:         #4fdbc8;
+  --color-pill-bg:             rgba(255,255,255,0.055);
+  --color-icon-bg:             rgba(255,255,255,0.055);
+  --color-sidebar-bg:          #0b0e14;
+  --color-sidebar-border:      rgba(50,53,60,0.18);
+  --color-titlebar-bg:         #10131a;
+  --color-glass-bg:            rgba(50,53,60,0.60);
+  --color-glass-border:        rgba(173,198,255,0.20);
+  --color-shadow-soft:         0 24px 60px rgba(0,0,0,0.28);
+  --color-shadow-floating:     0 20px 48px rgba(0,0,0,0.18);
+  --color-recap-shell:         linear-gradient(180deg, rgba(14, 24, 43, 0.92), rgba(11, 20, 35, 0.88));
+  --color-recap-shell-border:  rgba(173,198,255,0.18);
+  --color-recap-shell-shadow:  0 28px 64px rgba(6,12,24,0.24);
+  --color-recap-hero-glow:     radial-gradient(circle at top right, rgba(125, 193, 255, 0.18), transparent 48%);
+  --color-recap-panel:         rgba(255,255,255,0.03);
+  --color-recap-panel-strong:  rgba(255,255,255,0.055);
+  --color-recap-track:         rgba(255,255,255,0.03);
+  --color-recap-bar-border:    rgba(173,198,255,0.18);
+  --color-recap-divider:       rgba(173,198,255,0.12);
+  --color-recap-line:          linear-gradient(180deg, rgba(173,198,255,0.22), rgba(173,198,255,0));
+  --color-recap-kicker:        rgba(221,235,255,0.72);
+  --color-recap-dim:           rgba(221,235,255,0.54);
+  --color-recap-title:         #f8fbff;
+  --color-recap-body:          rgba(229,238,255,0.82);
+  --color-recap-warning-bg:    rgba(244,200,130,0.08);
+  --color-recap-warning-border:rgba(244,200,130,0.24);
+  --color-recap-warning-text:  rgba(252,226,179,0.92);
+  --gradient-primary-from:     #adc6ff;
+  --gradient-primary-to:       #4d8eff;
+  --gradient-primary:          linear-gradient(135deg, #adc6ff, #4d8eff);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --radius-card:              10px;
+  --radius-panel:             12px;
+  --radius-pill:              999px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg:               #ffffff;
+  --color-surface:          #ffffff;
+  --color-surface-low:      #fafafa;
+  --color-surface-container:#ffffff;
+  --color-surface-high:     #f3f4f6;
+  --color-surface-highest:  #e5e7eb;
+  --color-surface-card:     #ffffff;
+  --color-surface-muted:    rgba(15,99,219,0.08);
+  --color-border:           rgba(0,0,0,0.0);
+  --color-border-ghost:     rgba(17,24,39,0.16);
+  --color-text-primary:     #1f2633;
+  --color-text-secondary:   #5c6474;
+  --color-text-tertiary:    #8b93a3;
+  --color-primary:          #0f63db;
+  --color-primary-glow:     #3a8dff;
+  --color-primary-contrast: #f6f9ff;
+  --color-accent:           #0f63db;
+  --color-accent-dim:       rgba(15,99,219,0.10);
+  --color-secondary:        #b45309;
+  --color-tertiary:         #0f766e;
+  --color-focus-green:      #0f766e;
+  --color-pill-bg:          rgba(31,38,51,0.05);
+  --color-icon-bg:          rgba(31,38,51,0.05);
+  --color-sidebar-bg:       #ffffff;
+  --color-sidebar-border:   rgba(31,38,51,0.14);
+  --color-titlebar-bg:      #ffffff;
+  --color-glass-bg:         rgba(255,255,255,0.94);
+  --color-glass-border:     rgba(17,24,39,0.16);
+  --color-shadow-soft:      none;
+  --color-shadow-floating:  0 20px 40px rgba(15,99,219,0.08);
+  --color-recap-shell:      linear-gradient(180deg, #fcfdff, #f5f8ff);
+  --color-recap-shell-border: rgba(15,99,219,0.14);
+  --color-recap-shell-shadow: 0 24px 48px rgba(15,99,219,0.08);
+  --color-recap-hero-glow:  radial-gradient(circle at top right, rgba(58,141,255,0.12), transparent 52%);
+  --color-recap-panel:      rgba(15,99,219,0.05);
+  --color-recap-panel-strong: rgba(15,99,219,0.08);
+  --color-recap-track:      rgba(15,99,219,0.06);
+  --color-recap-bar-border: rgba(15,99,219,0.14);
+  --color-recap-divider:    rgba(15,99,219,0.10);
+  --color-recap-line:       linear-gradient(180deg, rgba(15,99,219,0.18), rgba(15,99,219,0));
+  --color-recap-kicker:     #52617c;
+  --color-recap-dim:        #6d7890;
+  --color-recap-title:      #152033;
+  --color-recap-body:       #33425a;
+  --color-recap-warning-bg: rgba(244,200,130,0.16);
+  --color-recap-warning-border: rgba(180,83,9,0.16);
+  --color-recap-warning-text: #8f4d08;
+  --gradient-primary-from:  #0f63db;
+  --gradient-primary-to:    #3a8dff;
+  --gradient-primary:       linear-gradient(135deg, #0f63db, #3a8dff);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    color-scheme: light;
+
+    --color-bg:               #ffffff;
+    --color-surface:          #ffffff;
+    --color-surface-low:      #fafafa;
+    --color-surface-container:#ffffff;
+    --color-surface-high:     #f3f4f6;
+    --color-surface-highest:  #e5e7eb;
+    --color-surface-card:     #ffffff;
+    --color-surface-muted:    rgba(15,99,219,0.08);
+    --color-border:           rgba(0,0,0,0.0);
+    --color-border-ghost:     rgba(17,24,39,0.16);
+    --color-text-primary:     #1f2633;
+    --color-text-secondary:   #5c6474;
+    --color-text-tertiary:    #8b93a3;
+    --color-primary:          #0f63db;
+    --color-primary-glow:     #3a8dff;
+    --color-primary-contrast: #f6f9ff;
+    --color-accent:           #0f63db;
+    --color-accent-dim:       rgba(15,99,219,0.10);
+    --color-secondary:        #b45309;
+    --color-tertiary:         #0f766e;
+    --color-focus-green:      #0f766e;
+    --color-pill-bg:          rgba(31,38,51,0.05);
+    --color-icon-bg:          rgba(31,38,51,0.05);
+    --color-sidebar-bg:       #ffffff;
+    --color-sidebar-border:   rgba(31,38,51,0.14);
+    --color-titlebar-bg:      #ffffff;
+    --color-glass-bg:         rgba(255,255,255,0.94);
+    --color-glass-border:     rgba(17,24,39,0.16);
+    --color-shadow-soft:      none;
+    --color-shadow-floating:  0 20px 40px rgba(15,99,219,0.08);
+    --color-recap-shell:      linear-gradient(180deg, #fcfdff, #f5f8ff);
+    --color-recap-shell-border: rgba(15,99,219,0.14);
+    --color-recap-shell-shadow: 0 24px 48px rgba(15,99,219,0.08);
+    --color-recap-hero-glow:  radial-gradient(circle at top right, rgba(58,141,255,0.12), transparent 52%);
+    --color-recap-panel:      rgba(15,99,219,0.05);
+    --color-recap-panel-strong: rgba(15,99,219,0.08);
+    --color-recap-track:      rgba(15,99,219,0.06);
+    --color-recap-bar-border: rgba(15,99,219,0.14);
+    --color-recap-divider:    rgba(15,99,219,0.10);
+    --color-recap-line:       linear-gradient(180deg, rgba(15,99,219,0.18), rgba(15,99,219,0));
+    --color-recap-kicker:     #52617c;
+    --color-recap-dim:        #6d7890;
+    --color-recap-title:      #152033;
+    --color-recap-body:       #33425a;
+    --color-recap-warning-bg: rgba(244,200,130,0.16);
+    --color-recap-warning-border: rgba(180,83,9,0.16);
+    --color-recap-warning-text: #8f4d08;
+    --gradient-primary-from:  #0f63db;
+    --gradient-primary-to:    #3a8dff;
+    --gradient-primary:       linear-gradient(135deg, #0f63db, #3a8dff);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: auto;
+}
+
+button,
+input,
+textarea,
+select,
+a,
+svg,
+svg text {
+  font: inherit;
+  color: inherit;
+}
+
+/* Electron drag region helpers */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Thin, calm scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-ghost);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+.timeline-summary-inspector::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Card base */
+.card {
+  background: var(--color-surface-card);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border-ghost);
+  padding: 16px;
+}
+:root[data-theme="light"] .card,
+:root:not([data-theme="dark"]):not([data-theme="light"]) .card {
+  box-shadow: none;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .card {
+    box-shadow: none;
+  }
+}
+
+/* Section header */
+.section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+}
+
+/* Native cursor + selection rules */
+button, [role="button"], nav, .sidebar, header, label, th {
+  user-select: none;
+  cursor: default;
+}
+a[href], button.link-style {
+  cursor: pointer;
+}
+
+@keyframes insightsActionBounceA {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.08); }
+  70% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
+@keyframes insightsActionBounceB {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.08); }
+  70% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+
+/* ── Day Wrapped overlay animations ─────────────────────────────────────── */
+
+@keyframes wrappedOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes wrappedEnterFromRight {
+  from { opacity: 0; transform: translateX(56px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0)    scale(1); }
+}
+
+@keyframes wrappedEnterFromLeft {
+  from { opacity: 0; transform: translateX(-56px) scale(0.96); }
+  to   { opacity: 1; transform: translateX(0)     scale(1); }
+}
+
+@keyframes wrappedIdentityBounce {
+  0%   { opacity: 0; transform: scale(0.55); }
+  62%  { opacity: 1; transform: scale(1.10); }
+  80%  { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}

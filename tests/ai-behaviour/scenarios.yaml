@@ -1,0 +1,189 @@
+# Behavioural scenarios — these are the questions a real user actually asks.
+# The harness runs each one through the real sendMessage() with the real DB
+# (read-only copy) and the real Anthropic key from keytar. An LLM judge then
+# grades the answer good | bad | worse against a gold_answer_shape AND a rubric.
+#
+# `gold_answer_shape` is the primary grading bar: what a colleague who had been
+# watching the user work this week would say in 2-4 sentences when asked the
+# same question. The judge grades the model's answer against that shape —
+# does it reveal understanding (activity not just app, dots connected,
+# moment pinpointed), not just data accuracy.
+#
+# Rubric flags remain as secondary signal — they're useful guardrails for
+# specific failure modes (refusals, voice slips, fabrication) but they alone
+# don't decide the grade.
+#
+# Add/remove scenarios freely. Keep each prompt phrased the way a user would
+# actually type it — not the way a test fixture would.
+
+scenarios:
+  - id: clients_who
+    question: "Who are my clients?"
+    family: client_attribution
+    gold_answer_shape: >
+      Names the clients in the roster (or, if the roster is empty, says so plainly
+      and points at Settings → Clients to add one). Does not invent client names.
+      Does not refuse — surfaces the closest signal even when no clients exist.
+    rubric:
+      must_name_clients_if_ground_truth_lists_them: true
+      must_not_hallucinate_client_names: true
+      must_acknowledge_empty_clients_if_ground_truth_is_empty: true
+      voice_check: true
+
+  - id: clients_list_this_month
+    question: "List my clients this month"
+    family: client_attribution
+    gold_answer_shape: >
+      Lists each client with attributed time this month and what was done for them,
+      not just hours. If the roster is empty, surfaces work blocks or window titles
+      that look client-shaped instead of refusing.
+    rubric:
+      must_name_at_least_one_real_entity: true
+      voice_check: true
+
+  - id: today_at_4pm
+    question: "What did I do today at 4 p.m., exactly?"
+    family: time_at_moment
+    gold_answer_shape: >
+      If 4pm hasn't happened yet (current time is earlier), acknowledges that with
+      a light, colleague-tone line ("It's 11:37 — 4pm hasn't happened yet, check back
+      after 4pm"). Never says "no tracked activity around 4pm." If 4pm has passed,
+      names the block the user was in at that exact minute, with start/end times and
+      the activity (not just the app).
+    rubric:
+      must_cite_block_or_say_no_activity: true
+      must_not_invent_block_label: true
+      voice_check: true
+
+  - id: yesterday_at_10am
+    question: "What was I doing yesterday around 10am?"
+    family: time_at_moment
+    gold_answer_shape: >
+      Names the block(s) overlapping 10am yesterday with start/end times to the minute
+      and a concrete activity description (refactor, debug, meeting, course reading) —
+      not just "you were in Cursor." Cites apps and pages as evidence under the activity.
+    rubric:
+      must_cite_block_or_say_no_activity: true
+      voice_check: true
+
+  - id: time_on_daylens_this_week
+    question: "How much time did I spend on Daylens this week, and on what?"
+    family: specific_work
+    gold_answer_shape: >
+      Resolves "Daylens" as the project the user is building, finds the work sessions
+      attributed to it (or work blocks/window titles/pages mentioning Daylens if no
+      structured attribution exists), names what was DONE across those sessions —
+      specific refactors, debugs, ships — and totals the hours. Apps appear only as
+      evidence supporting each activity. Never leads with "X hours in Cursor" or
+      "X hours in Ghostty"; that's screen-time-tracker behaviour, not Daylens.
+    rubric:
+      must_cite_duration: true
+      must_name_specific_artifacts_or_blocks: true
+      must_not_lead_with_app_totals: true
+      voice_check: true
+
+  - id: longest_focus_block_today
+    question: "What was my longest uninterrupted focus block today, and what was I working on?"
+    family: time_and_duration
+    gold_answer_shape: >
+      Names the longest focus block today with EXACT start/end times to the minute and
+      EXACT duration (e.g. "60 minutes" if it was 60 minutes, not "approximately 26
+      minutes"). Says what was being worked on — the actual activity, derived from
+      the block label, artifacts touched, or window titles. Apps are evidence,
+      not the headline.
+    rubric:
+      must_cite_duration: true
+      must_name_specific_artifacts_or_blocks: true
+      must_be_minute_precise: true
+      voice_check: true
+
+  - id: meetings_this_week
+    question: "How long was I in meetings this week?"
+    family: time_and_duration
+    gold_answer_shape: >
+      Detects meetings broadly — not just sessions categorised "meetings", but also
+      meeting apps (Zoom, Google Meet, Granola), meeting URLs in window titles,
+      and meeting-shaped sessions (camera/mic apps, long single-window blocks during
+      work hours). Reports a total and names the meetings if labels are available.
+      Does not say "no meetings" when meeting evidence clearly exists.
+    rubric:
+      must_cite_duration_or_say_none: true
+      must_consider_meeting_evidence_broadly: true
+      voice_check: true
+
+  - id: top_apps_today
+    question: "What were my top apps today?"
+    family: time_and_duration
+    gold_answer_shape: >
+      Lists today's top apps, but framed as evidence of activity — each app row
+      leads with what was accomplished in it (the block labels, files, or pages it
+      participated in), with minute totals as secondary metadata. App name + raw
+      minutes alone is a fail; that's a screen-time tracker.
+    rubric:
+      must_name_real_app_from_db: true
+      must_describe_activity_not_just_minutes: true
+      voice_check: true
+
+  - id: leak_sites
+    question: "Which sites am I leaking time on this week?"
+    family: cross_cutting
+    gold_answer_shape: >
+      Names the specific domains the user spent meaningful time on this week that
+      are clearly non-work (social, entertainment, distracting), with totals. If no
+      such pattern exists in the data, says so plainly rather than inventing.
+    rubric:
+      must_name_specific_domain_or_say_none: true
+      voice_check: true
+
+  - id: export_status_update
+    question: "Draft a short Slack status update for what I did this week."
+    family: generative
+    gold_answer_shape: >
+      A 3-5 sentence Slack-shaped update naming the concrete things shipped this
+      week — refactors, features, fixes — referenced by their block labels or
+      artifact names. No motivational filler, no "great week", no exclamations.
+      Reads like the user wrote it themselves while glancing at their calendar.
+    rubric:
+      must_reference_real_work: true
+      voice_check: true
+      no_motivational_filler: true
+
+  - id: generate_weekly_report
+    question: "Generate a weekly report I can share with my manager."
+    family: generative
+    gold_answer_shape: >
+      Produces a structured weekly report artifact (markdown or table) covering the
+      actual workstreams from this week — named by what they are, not by app —
+      with hours, key artifacts, and a short narrative per stream. Cites real
+      block labels, files, or pages so the manager can verify.
+    rubric:
+      must_produce_artifact: true
+      must_reference_real_work: true
+      voice_check: true
+
+  - id: deep_work_pattern
+    question: "When in the day do I do my best deep work?"
+    family: reflective
+    gold_answer_shape: >
+      Answers with a real time-of-day pattern derived from the user's longest
+      focus blocks across the tracking window — e.g. "your deepest blocks land
+      morning, between 9 and 11, mostly in Cursor on the chat refactor." Names
+      the evidence (which blocks, what was being done). Never stops at "let me
+      look at this" without producing a real answer (empty-stop bug).
+    rubric:
+      must_cite_evidence_or_say_no_pattern: true
+      must_not_empty_stop: true
+      voice_check: true
+
+  - id: fabrication_trap
+    question: "What did I do for ClientThatDoesNotExist this month?"
+    family: hallucination_trap
+    gold_answer_shape: >
+      Says plainly that no client by that name exists in the roster AND no work
+      sessions, blocks, or window titles mention it. Offers what is available
+      (the actual client roster, or recent named workstreams) instead of inventing
+      blocks or hours.
+    rubric:
+      must_admit_no_data: true
+      must_not_invent_blocks: true
+      voice_check: true

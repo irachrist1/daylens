@@ -1,0 +1,209 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*-mac"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: macOS version number to release
+        required: true
+      tag_name:
+        description: Git tag to publish against
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    timeout-minutes: 90
+    # Blacksmith M4 Apple Silicon runner — faster native arm64 builds, ~2x GitHub-hosted.
+    # Requires the Blacksmith GitHub App installed on this repo: https://github.com/apps/blacksmith
+    runs-on: blacksmith-6vcpu-macos-latest
+    env:
+      CSC_LINK: ${{ secrets.MAC_CERTIFICATE_FILE }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Derive version from tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${VERSION%-mac}"
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+          RELEASE_TAG="v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Stamp version into package.json
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.meta.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Detect signing mode
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${CSC_LINK:-}" ] && [ -n "${CSC_KEY_PASSWORD:-}" ]; then
+            echo "mode=developer-id" >> "$GITHUB_OUTPUT"
+            echo "Developer ID signing credentials detected; electron-builder will sign and notarize."
+          else
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+            echo "No Developer ID credentials; will build ad-hoc signed DMG. The afterSign hook will re-sign the bundle deeply so Gatekeeper does not report it as 'damaged'."
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package with electron-builder
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_MODE" = "adhoc" ]; then
+            # Job-level env declares CSC_LINK / APPLE_* as empty strings when
+            # the corresponding secrets are missing. electron-builder then
+            # treats those empty strings as file paths and exits with
+            # "<cwd> not a file". Unset every signing-related variable so
+            # electron-builder takes the no-identity path and our afterSign
+            # hook can re-sign the bundle ad-hoc.
+            unset CSC_LINK CSC_KEY_PASSWORD
+            unset APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+
+      - name: Verify packaged native module layout
+        run: node scripts/verify-packaged-natives.js dist-release
+
+      - name: Build release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          RELEASE_TAG="${{ steps.meta.outputs.release_tag }}"
+          CHANGELOG_SECTION=""
+          if [ -f CHANGELOG.md ]; then
+            CHANGELOG_SECTION="$(awk -v version="$VERSION" '
+              $0 ~ "^## v" version " -" { flag = 1; next }
+              /^## v/ && flag { exit }
+              flag { print }
+            ' CHANGELOG.md)"
+          fi
+
+          if [ -z "$CHANGELOG_SECTION" ]; then
+            CHANGELOG_SECTION="- Preview release build for v$VERSION"
+          fi
+
+          PREV_TAG="$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' | grep -vx "$RELEASE_TAG" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_LINES="$(git log --pretty='- %h %s' --max-count=12 "${PREV_TAG}..${{ github.sha }}")"
+            COMPARE_URL="https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.sha }}"
+          else
+            COMMIT_LINES="$(git log --pretty='- %h %s' --max-count=12 HEAD)"
+            COMPARE_URL=""
+          fi
+
+          if [ -z "$COMMIT_LINES" ]; then
+            COMMIT_LINES="- Initial macOS release build"
+          fi
+
+          {
+            echo 'body<<EOF'
+            echo "## Daylens $VERSION"
+            echo
+            echo "### Highlights"
+            echo "$CHANGELOG_SECTION"
+            echo
+            echo "### Included commits"
+            echo "$COMMIT_LINES"
+            if [ -n "$COMPARE_URL" ]; then
+              echo
+              echo "Compare changes: $COMPARE_URL"
+            fi
+            echo
+            echo "### Downloads"
+            echo "- macOS installer: \`Daylens-${VERSION}-arm64.dmg\`"
+            echo "- macOS archive: \`Daylens-${VERSION}-arm64.zip\`"
+            echo "- macOS updater metadata: \`latest-mac.yml\`"
+            echo
+            echo "### Release assets"
+            echo "This shared version release can be populated by the macOS, Windows, and Linux workflows."
+            echo 'This macOS workflow uploads the DMG, ZIP, and `latest-mac.yml`.'
+            echo 'Windows and Linux assets only appear on this release when their matching workflows run for the same version.'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Daylens ${{ steps.meta.outputs.version }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          body: ${{ steps.notes.outputs.body }}
+          overwrite_files: true
+          files: |
+            dist-release/*.dmg
+            dist-release/*.dmg.blockmap
+            dist-release/*.zip
+            dist-release/*.zip.blockmap
+            dist-release/latest-mac.yml
+
+      - name: Upload macOS diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-release-diagnostics-${{ steps.meta.outputs.version }}
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

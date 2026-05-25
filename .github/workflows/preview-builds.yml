@@ -1,0 +1,115 @@
+name: Preview Builds
+
+on:
+  push:
+    tags-ignore:
+      - "v*-win"
+      - "v*-mac"
+      - "v*-linux"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-preview:
+    name: Preview ${{ matrix.platform }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Blacksmith M4 Apple Silicon — native arm64, faster than GitHub-hosted Intel macos-latest.
+          # Requires the Blacksmith GitHub App: https://github.com/apps/blacksmith
+          - os: blacksmith-6vcpu-macos-latest
+            platform: mac
+            artifact_name: daylens-preview-macos
+            artifact_paths: |
+              dist-release/*.dmg
+              dist-release/*.zip
+          # Windows stays on GitHub-hosted runners — Blacksmith Windows is in public beta and the
+          # NSIS signing toolchain is sensitive to runner environment changes.
+          - os: windows-latest
+            platform: win
+            artifact_name: daylens-preview-windows
+            artifact_paths: |
+              dist-release/*.exe
+              dist-release/*.blockmap
+              dist-release/latest*.yml
+          # Blacksmith Ubuntu 24.04 — faster builds, Docker supported for RPM smoke tests.
+          - os: blacksmith-4vcpu-ubuntu-2404
+            platform: linux
+            artifact_name: daylens-preview-linux
+            artifact_paths: |
+              dist-release/*.AppImage
+              dist-release/*.deb
+              dist-release/*.rpm
+              dist-release/*.tar.gz
+              dist-release/latest-linux.yml
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles
+        run: npm run build:all
+
+      - name: Package preview build
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            npx electron-builder --mac zip dmg --publish never --config electron-builder.config.js
+          elif [ "${{ matrix.platform }}" = "linux" ]; then
+            npx electron-builder --linux AppImage deb rpm tar.gz --x64 --publish never --config electron-builder.config.js
+          else
+            npx electron-builder --win nsis --publish never --config electron-builder.config.js
+          fi
+
+      - name: Verify packaged native module layout
+        run: node scripts/verify-packaged-natives.js dist-release
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload preview diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}-diagnostics
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*

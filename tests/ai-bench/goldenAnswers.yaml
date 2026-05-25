@@ -1,0 +1,80 @@
+# Golden-answer shapes for the two screenshot-failure prompts plus the rest
+# of the AI quality regression set. Each entry describes what the IDEAL
+# answer looks like — this is the user-facing contract the deterministic
+# router and the tool-use LLM path are both graded against.
+#
+# Shape format uses {placeholder} tokens. These are descriptive — the
+# runtime is not expected to string-substitute them. They exist so a human
+# can read an entry and immediately know what a good answer should contain.
+# Actual assertions are encoded as:
+#   minimum_entities_cited   integer, how many concrete entities the answer
+#                             must name (app, block label, artifact, page,
+#                             domain, or client)
+#   must_cite_block           boolean, whether the answer must reference a
+#                             specific time-bound work block
+#   assertion_ids             ids into tests/ai-bench/corpus.yaml that
+#                             encode the machine-readable version of these
+#                             expectations
+
+goldens:
+
+  # ─── Screenshot failure #1: "what did I do today at 4 p.m., exactly?" ──
+  - id: at_4pm_today
+    question: "What did I do today at 4 p.m., exactly?"
+    expected_shape: >-
+      At {clock}, you were in {app}. The covering block was {label}
+      ({start}-{end}). Top signals: {signals}.
+    minimum_entities_cited: 2
+    must_cite_block: true
+    assertion_ids: [exact_moment_zoom, time_range_coding]
+
+  # ─── Screenshot failure #2: "who are my clients" ──────────────────────
+  - id: who_are_my_clients
+    question: "Who are my clients?"
+    expected_shape: >-
+      Your client roster: {1}. {client} — {N} active projects. Ranked by
+      attributed time in the active range when attribution data exists;
+      otherwise the raw roster from the clients table.
+    minimum_entities_cited: 1
+    must_cite_block: false
+    assertion_ids: [client_list_roster_basic]
+
+  # ─── Time & duration ─────────────────────────────────────────────────
+  - id: range_9_to_11
+    question: "Between 9 and 11 this morning, what was I on?"
+    expected_shape: >-
+      Between {start} and {end}, the main thread was {task}. Top sessions:
+      {app} ({dur}), {app} ({dur}). Strongest signals: {signals}.
+    minimum_entities_cited: 2
+    must_cite_block: true
+
+  - id: how_long_on_figma_yesterday
+    question: "How long on Figma yesterday?"
+    expected_shape: "You spent {dur} in Figma."
+    minimum_entities_cited: 1
+    must_cite_block: true
+
+  # ─── Specific work / attributed client ───────────────────────────────
+  - id: asyv_this_week
+    question: "What did I work on for ASYV this week?"
+    expected_shape: >-
+      ASYV in this week: {dur} attributed across {N} sessions on {M} active
+      days. Main work: {item1}, {item2}.
+    minimum_entities_cited: 2
+    must_cite_block: false
+
+  - id: which_pages_for_asyv
+    question: "Which pages did I touch for ASYV this week?"
+    expected_shape: >-
+      ASYV evidence in this week: 1. {page/file} — {kind}{via app}. 2. …
+    minimum_entities_cited: 2
+    must_cite_block: false
+
+  # ─── Client attribution ──────────────────────────────────────────────
+  - id: list_clients_this_month
+    question: "List my clients this month."
+    expected_shape: >-
+      Clients in this month: 1. {name} — {dur} attributed, {N} sessions
+      ({project1}, {project2}).
+    minimum_entities_cited: 1
+    must_cite_block: false
