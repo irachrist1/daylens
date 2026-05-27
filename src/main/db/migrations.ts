@@ -1595,17 +1595,40 @@ const migrations: Migration[] = [
           id            INTEGER PRIMARY KEY AUTOINCREMENT,
           ts_ms         INTEGER NOT NULL,
           mono_ns       INTEGER NOT NULL,
-          event_type    TEXT    NOT NULL,
+          event_type    TEXT    NOT NULL CHECK(event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock',
+            'tab_changed',
+            'tab_sampled'
+          )),
           app_bundle_id TEXT,
           app_name      TEXT,
           pid           INTEGER,
           window_title  TEXT,
           url           TEXT,
           page_title    TEXT,
-          source        TEXT    NOT NULL,
-          confidence    TEXT    NOT NULL,
+          source        TEXT    NOT NULL CHECK(source IN ('nsworkspace_event', 'apple_events_tab')),
+          confidence    TEXT    NOT NULL CHECK(confidence IN ('observed', 'unknown')),
           platform      TEXT    NOT NULL DEFAULT 'darwin',
-          schema_ver    INTEGER NOT NULL DEFAULT 1
+          schema_ver    INTEGER NOT NULL DEFAULT 1 CHECK(schema_ver = 1),
+          CHECK(confidence <> 'unknown' OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source <> 'nsworkspace_event' OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source <> 'apple_events_tab' OR confidence <> 'observed' OR url IS NOT NULL),
+          CHECK(source <> 'apple_events_tab' OR event_type IN ('tab_changed', 'tab_sampled')),
+          CHECK(source <> 'nsworkspace_event' OR event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock'
+          ))
         );
         CREATE INDEX IF NOT EXISTS idx_focus_events_ts ON focus_events(ts_ms);
         CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
