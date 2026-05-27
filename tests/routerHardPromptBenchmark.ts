@@ -737,6 +737,11 @@ const CASES: BenchmarkCase[] = [
       return /exclude|ambiguous|renewal|portal|forecast/i.test(answer) ? null : 'answer should create a billable narrative'
     },
   },
+  {
+    name: 'Learning topic weekly query falls through to tool search',
+    question: 'What did I learn about machine learning this week?',
+    shouldRoute: false,
+  },
 ]
 
 async function ask(

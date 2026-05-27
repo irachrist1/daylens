@@ -357,9 +357,9 @@ export const anthropicTools: AnthropicTool[] = [
   {
     name: 'searchSessions',
     description:
-      'Full-text search across app sessions by app name and window title. ' +
+      'Full-text search across app sessions and browser page visits by app name, window title, URL, and page title. ' +
       'Use this to find when the user worked in a specific app, on a specific project, ' +
-      'or saw a particular window title. Results are sorted by recency.',
+      'studied a topic, consumed web pages, or saw a particular window/page title. Results are sorted by recency.',
     input_schema: {
       type: 'object',
       properties: {
@@ -608,6 +608,60 @@ function toDateStr(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function normalizeAppLookupValue(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function appLookupCandidates(app: { appName: string; bundleId: string; canonicalAppId?: string | null }): string[] {
+  const pathTail = (value: string | null | undefined): string | null => {
+    if (!value) return null
+    return value.split(/[\\/]/).filter(Boolean).pop() ?? value
+  }
+  return [
+    app.appName,
+    app.bundleId,
+    app.canonicalAppId ?? null,
+    pathTail(app.bundleId),
+    pathTail(app.canonicalAppId ?? null),
+  ].filter((value): value is string => !!value)
+}
+
+function appMatchesExactly(
+  app: { appName: string; bundleId: string; canonicalAppId?: string | null },
+  lookup: string,
+): boolean {
+  return appLookupCandidates(app).some((value) => normalizeAppLookupValue(value) === lookup)
+}
+
+function appMatchesLoosely(
+  app: { appName: string; bundleId: string; canonicalAppId?: string | null },
+  lookup: string,
+): boolean {
+  return appLookupCandidates(app).some((value) => {
+    const normalized = normalizeAppLookupValue(value)
+    if (!normalized) return false
+    if (normalized.includes(lookup)) return true
+    return normalized.length >= 4 && lookup.includes(normalized)
+  })
+}
+
+function sessionIdentityWhereClause(canonicalIds: string[], bundleIds: string[]): { clause: string; params: string[] } {
+  const clauses: string[] = []
+  const params: string[] = []
+  if (canonicalIds.length > 0) {
+    clauses.push(`canonical_app_id IN (${canonicalIds.map(() => '?').join(', ')})`)
+    params.push(...canonicalIds)
+  }
+  if (bundleIds.length > 0) {
+    clauses.push(`bundle_id IN (${bundleIds.map(() => '?').join(', ')})`)
+    params.push(...bundleIds)
+  }
+  return {
+    clause: clauses.length > 0 ? `(${clauses.join(' OR ')})` : '0',
+    params,
+  }
+}
+
 // B2: words that look like tab-title noise rather than meaningful entities.
 // Stripping these before broadening keeps the OR sweep focused on the parts
 // of the user's phrase a colleague would actually search for.
@@ -711,8 +765,8 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
   const matchKind: 'broadened' | 'empty' = merged.length > 0 ? 'broadened' : 'empty'
   const matchedTokens = Object.entries(tokenMatches).filter(([, n]) => n > 0).map(([t]) => t)
   const instruction = matchKind === 'broadened'
-    ? `No exact match for "${params.query}". Broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')} — these hits ARE the closest captured signal. Hits tagged kind:'page' are specific web pages; cite their titles. Frame as: "I don't see that exact phrase, but for ${matchedTokens[0]} I see…" then cite the hits. Never write "I can't find any sessions" or "doesn't appear in your tracked activity" — those phrases are banned.`
-    : `No sessions or pages matched "${params.query}" even after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Never refuse with "I can't see that" — frame as "Here's what Daylens captured for the relevant time range…"`
+    ? `Closest captured signal for "${params.query}": strict phrase search missed, so Daylens broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')}. These hits ARE the evidence. Hits tagged kind:'page' are specific web pages; cite their titles and dates. Frame as: "Closest captured signal for ${matchedTokens[0]}…" Refusal-style wording is banned; answer from captured evidence.`
+    : `Direct session/page hit count is zero for "${params.query}" after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Refusal-style wording is banned; frame as "Here's what Daylens captured for the relevant time range…"`
   return {
     hits: merged,
     totalFound: merged.length,
@@ -868,8 +922,15 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   const fromMs = params.startDate ? localDayBounds(params.startDate)[0] : now - 365 * 86_400_000
   const toMs = params.endDate ? localDayBounds(params.endDate)[1] : now
   const allSummaries = getAppSummariesForRange(db, fromMs, toMs)
-  const nameLower = params.appName.toLowerCase()
-  const matched = allSummaries.filter((a) => a.appName.toLowerCase().includes(nameLower))
+  const lookup = normalizeAppLookupValue(params.appName)
+  const exactMatches = lookup
+    ? allSummaries.filter((app) => appMatchesExactly(app, lookup))
+    : []
+  const matched = exactMatches.length > 0
+    ? exactMatches
+    : lookup
+      ? allSummaries.filter((app) => appMatchesLoosely(app, lookup))
+      : []
   const totalSeconds = matched.reduce((s, a) => s + a.totalSeconds, 0)
   const sessionCount = matched.reduce((s, a) => s + (a.sessionCount ?? 0), 0)
   const bundleId = matched[0]?.bundleId ?? ''
@@ -879,20 +940,22 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   // A lightweight query finds candidate days; actual totals come from the
   // canonical path which applies UX-noise filtering, canonical-app collapsing,
   // session merging, and range clipping.
-  const matchedCanonicalIds = new Set(matched.map((a) => a.canonicalAppId))
-  const candidateDays = (db.prepare(`
+  const matchedCanonicalIds = [...new Set(matched.map((a) => a.canonicalAppId).filter((id): id is string => !!id))]
+  const matchedBundleIds = [...new Set(matched.map((a) => a.bundleId).filter(Boolean))]
+  const identityFilter = sessionIdentityWhereClause(matchedCanonicalIds, matchedBundleIds)
+  const candidateDays = matched.length === 0 ? [] : (db.prepare(`
     SELECT DISTINCT strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS day
     FROM app_sessions
-    WHERE LOWER(app_name) LIKE ?
-      AND start_time >= ? AND start_time < ?
+    WHERE start_time >= ? AND start_time < ?
+      AND ${identityFilter.clause}
     ORDER BY day DESC
     LIMIT 90
-  `).all(`%${nameLower}%`, fromMs, toMs) as { day: string }[])
+  `).all(fromMs, toMs, ...identityFilter.params) as { day: string }[])
   const dailyBreakdown = candidateDays
     .map(({ day }) => {
       const [dayFrom, dayTo] = localDayBounds(day)
       const daySummaries = getAppSummariesForRange(db, dayFrom, dayTo)
-      const dayMatched = daySummaries.filter((a) => matchedCanonicalIds.has(a.canonicalAppId))
+      const dayMatched = daySummaries.filter((a) => a.canonicalAppId && matchedCanonicalIds.includes(a.canonicalAppId))
       return {
         date: day,
         totalSeconds: dayMatched.reduce((s, a) => s + a.totalSeconds, 0),
@@ -902,12 +965,13 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
     .filter((d) => d.totalSeconds > 0)
 
   // Recent distinct window titles
-  const titleRows = (db.prepare(`
+  const titleRows = matched.length === 0 ? [] : (db.prepare(`
     SELECT DISTINCT window_title FROM app_sessions
-    WHERE LOWER(app_name) LIKE ? AND window_title IS NOT NULL
+    WHERE window_title IS NOT NULL
       AND start_time >= ? AND start_time < ?
+      AND ${identityFilter.clause}
     ORDER BY start_time DESC LIMIT 10
-  `).all(`%${nameLower}%`, fromMs, toMs) as { window_title: string }[])
+  `).all(fromMs, toMs, ...identityFilter.params) as { window_title: string }[])
 
   return {
     appName: matched[0]?.appName ?? params.appName,

@@ -215,6 +215,13 @@ test('routes AI exploration questions to the weekly brief path', async () => {
   db.close()
 })
 
+test('falls through to tool use when a weekly topic/entity has no deterministic match', async () => {
+  const db = buildFixtureDb()
+  const result = await routeInsightsQuestion('How much time did I spend on Coursera this week?', anchorDate(), null, db)
+  assert.equal(result, null)
+  db.close()
+})
+
 test('builds named weekly evidence instead of collapsing to domains', () => {
   const db = buildFixtureDb()
   const context = resolveWeeklyBriefContext('what have i read this week in my browsers', anchorDate(), null)
