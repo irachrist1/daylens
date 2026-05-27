@@ -304,6 +304,31 @@ export function ensureSearchSchema(db: Database.Database): void {
   `)
 }
 
+export function scrubStaleAppNarrativeMetricSummaries(db: Database.Database): number {
+  // B4: older app-detail narratives cached prose like "2 hours 18 minutes
+  // across 59 sessions" while the header rendered live canonical totals.
+  // New app narratives are forbidden from mentioning totals; delete stale
+  // metric-bearing app summaries so the renderer falls back to deterministic
+  // activity context until a fresh narrative is generated.
+  const metricClauses = [
+    `LOWER(summary_text) LIKE '% across % session%'`,
+    `LOWER(summary_text) LIKE '% session totaling %'`,
+    `LOWER(summary_text) LIKE '% sessions totaling %'`,
+    `LOWER(summary_text) LIKE '% total of %'`,
+    `LOWER(summary_text) LIKE '% totaling %'`,
+    `LOWER(summary_text) LIKE '% totaled %'`,
+    `LOWER(summary_text) LIKE '% totalled %'`,
+    `LOWER(summary_text) LIKE '% hours % sessions%'`,
+    `LOWER(summary_text) LIKE '% minutes % sessions%'`,
+  ]
+  const result = db.prepare(`
+    DELETE FROM ai_surface_summaries
+    WHERE scope_type = 'app_detail'
+      AND (${metricClauses.join(' OR ')})
+  `).run()
+  return result.changes
+}
+
 function ensureAppSessionIdentityColumns(): void {
   const db = getDb()
 
@@ -1551,6 +1576,14 @@ const migrations: Migration[] = [
         .prepare(`UPDATE timeline_blocks SET invalidated_at = ? WHERE invalidated_at IS NULL AND (${tokenClauses})`)
         .run(now, ...params)
       console.log(`[migrations:v25] invalidated ${result.changes} corrupted block label(s)`)
+    },
+  },
+  {
+    version: 26,
+    description: 'Delete stale metric-bearing app narrative summaries so B4 canonical totals cannot drift',
+    up: () => {
+      const changes = scrubStaleAppNarrativeMetricSummaries(getDb())
+      console.log(`[migrations:v26] deleted ${changes} stale app narrative summar${changes === 1 ? 'y' : 'ies'}`)
     },
   },
 ]
