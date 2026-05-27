@@ -87,6 +87,97 @@ test('executeTool: searchSessions returns hits array', () => {
   db.close()
 })
 
+test('executeTool: searchSessions returns browser page hits from website visits', () => {
+  const db = setupDb()
+  const now = new Date()
+  now.setHours(12, 0, 0, 0)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain,
+      page_title,
+      url,
+      visit_time,
+      visit_time_us,
+      duration_sec,
+      browser_bundle_id,
+      canonical_browser_id,
+      browser_profile_id,
+      normalized_url,
+      page_key,
+      source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'test')
+  `).run(
+    'coursera.org',
+    'Deep Neural Network - Application',
+    'https://www.coursera.org/learn/neural-networks-deep-learning/programming/deep-neural-network-application',
+    now.getTime(),
+    BigInt(now.getTime()) * 1000n,
+    900,
+    'com.apple.Safari',
+    'safari',
+    'default',
+    'https://www.coursera.org/learn/neural-networks-deep-learning/programming/deep-neural-network-application',
+    'coursera.org/deep-neural-network-application',
+  )
+
+  const result = executeTool('searchSessions', { query: 'Deep Neural Network', limit: 10 }, db) as {
+    hits: Array<{ kind: string; windowTitle: string | null; appName: string }>
+    matchKind: string
+  }
+
+  assert.equal(result.matchKind, 'strict')
+  assert.ok(
+    result.hits.some((hit) => hit.kind === 'page' && hit.windowTitle === 'Deep Neural Network - Application' && hit.appName === 'coursera.org'),
+    'expected a page hit for the Coursera lesson title',
+  )
+  db.close()
+})
+
+test('executeTool: searchSessions broadens noisy learning titles to page evidence', () => {
+  const db = setupDb()
+  const now = new Date()
+  now.setHours(12, 0, 0, 0)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain,
+      page_title,
+      url,
+      visit_time,
+      visit_time_us,
+      duration_sec,
+      browser_bundle_id,
+      canonical_browser_id,
+      browser_profile_id,
+      normalized_url,
+      page_key,
+      source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'test')
+  `).run(
+    'app.perusall.com',
+    'Introduction to Machine Learning',
+    'https://app.perusall.com/courses/introduction-to-machine-learning',
+    now.getTime(),
+    BigInt(now.getTime()) * 1000n,
+    300,
+    'com.apple.Safari',
+    'safari',
+    'default',
+    'https://app.perusall.com/courses/introduction-to-machine-learning',
+    'app.perusall.com/introduction-to-machine-learning',
+  )
+
+  const result = executeTool('searchSessions', { query: 'W2_Reading | Introduction to Machine Learning | Perusall', limit: 10 }, db) as {
+    hits: Array<{ kind: string; windowTitle: string | null; appName: string }>
+    matchKind: string
+    _instruction: string
+  }
+
+  assert.equal(result.matchKind, 'broadened')
+  assert.ok(result.hits.some((hit) => hit.kind === 'page' && hit.windowTitle === 'Introduction to Machine Learning'))
+  assert.doesNotMatch(result._instruction, /I don't see|I can't find|doesn't appear/i)
+  db.close()
+})
+
 test('executeTool: getDaySummary returns date and topApps', () => {
   const db = setupDb()
   const today = new Date()
@@ -101,6 +192,47 @@ test('executeTool: getAppUsage returns totalSeconds for Code', () => {
   const db = setupDb()
   const result = executeTool('getAppUsage', { appName: 'Code' }, db) as { totalSeconds: number }
   assert.ok(result.totalSeconds > 0, 'expected tracked Code time')
+  db.close()
+})
+
+test('executeTool: getAppUsage prefers exact app identity before substring matches', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const startMs = today.getTime() + 9 * 60 * 60_000
+
+  const insert = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id,
+      app_name,
+      start_time,
+      end_time,
+      duration_sec,
+      category,
+      is_focused,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      capture_source,
+      capture_version
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'test', 1)
+  `)
+  insert.run('/Applications/Dia.app/Contents/MacOS/Dia', 'Dia', startMs, startMs + 30 * 60_000, 30 * 60, 'browsing', 'Dia window', 'Dia', 'dia')
+  insert.run('/Applications/Obsidian.app/Contents/MacOS/Obsidian', 'Obsidian', startMs + 40 * 60_000, startMs + 42 * 60_000, 2 * 60, 'writing', 'Obsidian Vault', 'Obsidian', 'obsidian')
+
+  const result = executeTool('getAppUsage', { appName: 'Dia', startDate: dateStr, endDate: dateStr }, db) as {
+    totalSeconds: number
+    sessionCount: number
+    dailyBreakdown: Array<{ date: string; totalSeconds: number; sessionCount: number }>
+    recentWindowTitles: string[]
+  }
+
+  assert.equal(result.totalSeconds, 30 * 60)
+  assert.equal(result.sessionCount, 1)
+  assert.deepEqual(result.dailyBreakdown, [{ date: dateStr, totalSeconds: 30 * 60, sessionCount: 1 }])
+  assert.deepEqual(result.recentWindowTitles, ['Dia window'])
   db.close()
 })
 
