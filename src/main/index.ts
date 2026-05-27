@@ -61,6 +61,7 @@ import { startImessageCaptureScheduler, imessageCaptureSupportedOnPlatform } fro
 import { initDb, closeDb } from './services/database'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
+import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { computeAllMissingSummaries } from './db/dailySummaries'
@@ -317,6 +318,7 @@ function startBackgroundServices(): void {
   if (!shouldStartTrackingForSettings(getSettings())) return
 
   startTracking()
+  startFocusCapture()
   startSync()
   startDailySummaryNotifier(mainWindow)
   setDistractionAlertWindow(mainWindow)
@@ -434,6 +436,7 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
   stopMcpServer()
   stopTracking()
+  stopFocusCapture()
   stopBrowserTracking()
   stopSync()
   stopProcessMonitor()

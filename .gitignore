@@ -8,6 +8,9 @@ dist-release/
 .DS_Store
 private/
 
+# Compiled native helpers — built by scripts/build-capture-helper.sh
+build/capture-helper
+
 # AI agent working files — ephemeral planning docs, not part of the source record
 PLAN.md
 CONTEXT.md
