@@ -52,3 +52,36 @@ test('app detail omits app-name-only block appearances', () => {
   assert.deepEqual(detail.blockAppearances, [])
   db.close()
 })
+
+test('app detail totals and session count come from canonical app summaries, not display-filtered sessions', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = todayKey()
+  const start = localMs(date, 9)
+
+  const insert = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id,
+      app_name,
+      start_time,
+      end_time,
+      duration_sec,
+      category,
+      is_focused,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      capture_source,
+      capture_version
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'test', 1)
+  `)
+
+  insert.run('com.example.TestApp', 'Test App', start, start + 10_000, 10, 'development', 'Brief flicker', 'Test App', 'test-app')
+  insert.run('com.example.TestApp', 'Test App', start + 60_000, start + 80_000, 20, 'development', 'Visible session', 'Test App', 'test-app')
+
+  const detail = getAppDetailPayload(db, 'test-app', 1, null)
+
+  assert.equal(detail.totalSeconds, 30)
+  assert.equal(detail.sessionCount, 2)
+  db.close()
+})

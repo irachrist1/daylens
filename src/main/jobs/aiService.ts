@@ -3566,6 +3566,22 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
   }
 }
 
+const APP_NARRATIVE_CACHE_VERSION = 2
+
+function appNarrativeHasStaleMetrics(summary: AISurfaceSummary | null): boolean {
+  if (!summary) return false
+  const text = summary.summary.toLowerCase()
+  return [
+    /\bi don't see strong signal\b/,
+    /\bno specific (?:artifacts|pages|work blocks|paired applications)\b/,
+    /\bacross\s+\d+\s+sessions?\b/,
+    /\b\d+\s+sessions?\s+(?:totaling|totalling|totaled|totalled)\b/,
+    /\b(?:totaling|totalling|totaled|totalled)\s+\d+\s+(?:hours?|minutes?)\b/,
+    /\b\d+\s+(?:hours?|minutes?)\s+(?:across|over|in)\s+\d+\s+sessions?\b/,
+    /\b\d+\s+(?:hours?|minutes?|hrs?|mins?)\b/,
+  ].some((pattern) => pattern.test(text))
+}
+
 function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): string {
   // B4: totals (totalSeconds, sessionCount) intentionally excluded from
   // the signature. They tick up every minute as the live session ages —
@@ -3574,6 +3590,7 @@ function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): 
   // The narrative scaffold no longer contains them either; see
   // buildAppNarrativeBundle.
   return hashText(JSON.stringify({
+    version: APP_NARRATIVE_CACHE_VERSION,
     canonicalAppId: detail.canonicalAppId,
     rangeKey: detail.rangeKey,
     topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => artifact.displayTitle),
@@ -3873,10 +3890,12 @@ async function generateAppNarrative(
   const inputSignature = appNarrativeSignature(detail)
   const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
   if (existingSignature === inputSignature) {
-    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
+    const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
+    if (!appNarrativeHasStaleMetrics(existing)) return existing
   }
 
-  const fallback = getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+  const cachedFallback = getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+  const fallback = appNarrativeHasStaleMetrics(cachedFallback) ? null : cachedFallback
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     'You are Daylens, writing the short narrative card for an app detail view.',
@@ -3889,7 +3908,7 @@ async function generateAppNarrative(
     // from the structured evidence (block labels, artifacts, pages,
     // domains, or paired apps). Evidence-thin apps must say so plainly —
     // a filler sentence like "used for development work" is not acceptable.
-    'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page/domain names, or paired app names. If the evidence is too thin to cite two entities, say "I don\'t see strong signal for this app yet" and stop — do not pad with generic prose.',
+    'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page/domain names, or paired app names. If the evidence is too thin to cite two entities, say "Daylens has only thin app-specific signal for this app." and stop — do not pad with generic prose.',
     // B4: totals are rendered in the UI header and footer. The narrative
     // must not restate them — the header recomputes live and the cached
     // narrative drifts within seconds. Talk about what was done, not how
