@@ -1586,6 +1586,32 @@ const migrations: Migration[] = [
       console.log(`[migrations:v26] deleted ${changes} stale app narrative summar${changes === 1 ? 'y' : 'ies'}`)
     },
   },
+  {
+    version: 27,
+    description: 'Add focus_events capture layer (Swift helper ndjson sink)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS focus_events (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts_ms         INTEGER NOT NULL,
+          mono_ns       INTEGER NOT NULL,
+          event_type    TEXT    NOT NULL,
+          app_bundle_id TEXT,
+          app_name      TEXT,
+          pid           INTEGER,
+          window_title  TEXT,
+          url           TEXT,
+          page_title    TEXT,
+          source        TEXT    NOT NULL,
+          confidence    TEXT    NOT NULL,
+          platform      TEXT    NOT NULL DEFAULT 'darwin',
+          schema_ver    INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_focus_events_ts ON focus_events(ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
