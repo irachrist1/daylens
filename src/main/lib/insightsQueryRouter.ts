@@ -431,6 +431,11 @@ function isWeeklyQuestion(normalized: string): boolean {
   return normalized.includes('this week') || normalized.includes('last week')
 }
 
+function isLearningOrTopicQuestion(normalized: string): boolean {
+  return /\b(learn|learned|learning|studied|study|studying|consume|consumed|consuming|read|reading|watched|watching|research|researched|researching)\b/.test(normalized)
+    || /\b(?:about|around)\s+["']?[a-z0-9][a-z0-9 _-]{2,}/.test(normalized)
+}
+
 function isYesterdayQuestion(normalized: string): boolean {
   return normalized.includes('yesterday')
 }
@@ -2351,13 +2356,10 @@ export async function routeInsightsQuestion(
           ].join('\n')
           return { kind: 'answer', answer, resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null } }
         }
-        // No matches at all — say so rather than fall through to a generic
-        // week summary that ignores the named entity.
-        return {
-          kind: 'answer',
-          answer: `No blocks, artifacts, or pages mentioning "${entityCandidate}" were found this week. If "${entityCandidate}" is a client you track time against, add it in Settings → Clients so attribution can pick it up.`,
-          resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
-        }
+        return null
+      }
+      if (isLearningOrTopicQuestion(normalized)) {
+        return null
       }
       const totalSeconds = apps.reduce((sum, a) => sum + a.totalSeconds, 0)
       if (process.env.NODE_ENV === 'development') {
