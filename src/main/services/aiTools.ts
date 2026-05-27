@@ -8,6 +8,7 @@ import {
   getSessionsForRange,
   getWebsiteSummariesForRange,
   searchSessions as dbSearchSessions,
+  searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
 } from '../db/queries'
 import { computeFocusScoreV2 } from '../lib/focusScore'
@@ -70,6 +71,7 @@ export interface ListClientsParams {
 
 export interface SessionSearchHit {
   id: number
+  kind: 'session' | 'page'
   appName: string
   windowTitle: string | null
   startTime: number   // epoch ms
@@ -628,13 +630,11 @@ function tokenizeForBroadenedSearch(query: string): string[] {
 
 function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
-  const strict = dbSearchSessions(db, params.query, {
-    startDate: params.startDate,
-    endDate: params.endDate,
-    limit,
-  })
-  const mapHit = (h: { id: number; appName: string; windowTitle: string | null; startTime: number; endTime: number; date: string; excerpt: string | null }) => ({
+  const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
+
+  const mapSessionHit = (h: { id: number; appName: string; windowTitle: string | null; startTime: number; endTime: number; date: string; excerpt: string | null }): SessionSearchHit => ({
     id: h.id,
+    kind: 'session',
     appName: h.appName,
     windowTitle: h.windowTitle,
     startTime: h.startTime,
@@ -644,22 +644,38 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
     excerpt: h.excerpt ?? h.windowTitle ?? h.appName,
   })
 
-  if (strict.length > 0) {
+  const mapBrowserHit = (h: { id: number; domain: string; pageTitle: string | null; url: string | null; startTime: number; endTime: number; date: string; excerpt: string }): SessionSearchHit => ({
+    id: h.id,
+    kind: 'page',
+    appName: h.domain,
+    windowTitle: h.pageTitle,
+    startTime: h.startTime,
+    endTime: h.endTime,
+    durationSeconds: Math.max(0, Math.round((h.endTime - h.startTime) / 1000)),
+    date: h.date,
+    excerpt: h.excerpt ?? h.pageTitle ?? h.url ?? h.domain,
+  })
+
+  // B2: search both app_sessions_fts and website_visits_fts so the AI can
+  // cite specific page titles (e.g. Coursera lesson names), not just app names.
+  const strictSessions = dbSearchSessions(db, params.query, searchOpts)
+  const strictPages = dbSearchBrowser(db, params.query, searchOpts)
+  const strictHits = [
+    ...strictSessions.map(mapSessionHit),
+    ...strictPages.map(mapBrowserHit),
+  ].sort((a, b) => b.startTime - a.startTime).slice(0, limit)
+
+  if (strictHits.length > 0) {
     return {
-      hits: strict.map(mapHit),
-      totalFound: strict.length,
+      hits: strictHits,
+      totalFound: strictHits.length,
       matchKind: 'strict',
-      _instruction: `Strict match for "${params.query}" — answer directly from these hits.`,
+      _instruction: `Strict match for "${params.query}" — answer directly from these hits. Hits tagged kind:'page' are specific web pages with titles; cite those titles when answering learning/topic questions.`,
     }
   }
 
-  // B2: strict AND yielded nothing. Asking "What was I doing around
-  // 'W2_Reading | Introduction to Machine Learning | Perusall'?" used to
-  // produce zero hits because FTS5 demanded every word match, including
-  // the pipe character — even though Perusall sessions exist. Broaden by
-  // searching each meaningful token individually and merging the results.
-  // The model gets matchKind='broadened' so it can frame the answer as
-  // "I don't see that exact phrase, but here's what I do see for Perusall."
+  // B2: strict AND yielded nothing across both surfaces. Broaden by
+  // searching each meaningful token individually and merging.
   const tokens = tokenizeForBroadenedSearch(params.query)
   if (tokens.length === 0) {
     return {
@@ -669,33 +685,34 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
       _instruction: `No usable tokens in "${params.query}". Call getDaySummary (today) or getBlockAtTime if the user named a time, and answer from the closest captured signal — do not refuse with "I can't see that."`,
     }
   }
-  const byId = new Map<number, ReturnType<typeof mapHit>>()
+  const byKey = new Map<string, SessionSearchHit>()
   const tokenMatches: Record<string, number> = {}
   for (const token of tokens) {
-    if (byId.size >= limit) break
-    const partial = dbSearchSessions(db, token, {
-      startDate: params.startDate,
-      endDate: params.endDate,
-      limit: limit - byId.size,
-    })
-    tokenMatches[token] = partial.length
-    for (const hit of partial) {
-      if (byId.has(hit.id)) continue
-      byId.set(hit.id, mapHit(hit))
-      if (byId.size >= limit) break
+    if (byKey.size >= limit) break
+    const remaining = limit - byKey.size
+    const partialSessions = dbSearchSessions(db, token, { ...searchOpts, limit: remaining })
+    const partialPages = dbSearchBrowser(db, token, { ...searchOpts, limit: remaining })
+    tokenMatches[token] = partialSessions.length + partialPages.length
+    for (const hit of partialSessions) {
+      const key = `session:${hit.id}`
+      if (byKey.has(key)) continue
+      byKey.set(key, mapSessionHit(hit))
+      if (byKey.size >= limit) break
+    }
+    if (byKey.size >= limit) break
+    for (const hit of partialPages) {
+      const key = `page:${hit.id}`
+      if (byKey.has(key)) continue
+      byKey.set(key, mapBrowserHit(hit))
+      if (byKey.size >= limit) break
     }
   }
-  const merged = Array.from(byId.values()).sort((a, b) => b.startTime - a.startTime)
+  const merged = Array.from(byKey.values()).sort((a, b) => b.startTime - a.startTime)
   const matchKind: 'broadened' | 'empty' = merged.length > 0 ? 'broadened' : 'empty'
-  // B2: the model has historically bare-refused even on broadened hits.
-  // The _instruction field is read in the tool_result JSON the model sees;
-  // it makes the right answer shape explicit so even a sloppy model can't
-  // miss the framing. For empty results it points to the next tool to try
-  // — "I can't see that" is never the answer when getDaySummary exists.
   const matchedTokens = Object.entries(tokenMatches).filter(([, n]) => n > 0).map(([t]) => t)
   const instruction = matchKind === 'broadened'
-    ? `No exact match for "${params.query}". Broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')} — these hits ARE the closest captured signal. Frame as: "I don't see that exact phrase, but for ${matchedTokens[0]} I see…" then cite the hits. Never write "I can't find any sessions" or "doesn't appear in your tracked activity" — those phrases are banned.`
-    : `No sessions matched "${params.query}" even after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Never refuse with "I can't see that" — frame as "Here's what Daylens captured for the relevant time range…"`
+    ? `No exact match for "${params.query}". Broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')} — these hits ARE the closest captured signal. Hits tagged kind:'page' are specific web pages; cite their titles. Frame as: "I don't see that exact phrase, but for ${matchedTokens[0]} I see…" then cite the hits. Never write "I can't find any sessions" or "doesn't appear in your tracked activity" — those phrases are banned.`
+    : `No sessions or pages matched "${params.query}" even after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Never refuse with "I can't see that" — frame as "Here's what Daylens captured for the relevant time range…"`
   return {
     hits: merged,
     totalFound: merged.length,
@@ -857,19 +874,32 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   const sessionCount = matched.reduce((s, a) => s + (a.sessionCount ?? 0), 0)
   const bundleId = matched[0]?.bundleId ?? ''
 
-  // Per-day breakdown via raw query
-  const dailyRows = (db.prepare(`
-    SELECT
-      strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS day,
-      SUM(duration_sec) AS total_sec,
-      COUNT(*) AS session_count
+  // B4: daily breakdown must come from getAppSummariesForRange (the canonical
+  // source) so per-day numbers agree with the Apps rail and detail header.
+  // A lightweight query finds candidate days; actual totals come from the
+  // canonical path which applies UX-noise filtering, canonical-app collapsing,
+  // session merging, and range clipping.
+  const matchedCanonicalIds = new Set(matched.map((a) => a.canonicalAppId))
+  const candidateDays = (db.prepare(`
+    SELECT DISTINCT strftime('%Y-%m-%d', start_time / 1000, 'unixepoch', 'localtime') AS day
     FROM app_sessions
     WHERE LOWER(app_name) LIKE ?
       AND start_time >= ? AND start_time < ?
-    GROUP BY day
     ORDER BY day DESC
     LIMIT 90
-  `).all(`%${nameLower}%`, fromMs, toMs) as { day: string; total_sec: number; session_count: number }[])
+  `).all(`%${nameLower}%`, fromMs, toMs) as { day: string }[])
+  const dailyBreakdown = candidateDays
+    .map(({ day }) => {
+      const [dayFrom, dayTo] = localDayBounds(day)
+      const daySummaries = getAppSummariesForRange(db, dayFrom, dayTo)
+      const dayMatched = daySummaries.filter((a) => matchedCanonicalIds.has(a.canonicalAppId))
+      return {
+        date: day,
+        totalSeconds: dayMatched.reduce((s, a) => s + a.totalSeconds, 0),
+        sessionCount: dayMatched.reduce((s, a) => s + (a.sessionCount ?? 0), 0),
+      }
+    })
+    .filter((d) => d.totalSeconds > 0)
 
   // Recent distinct window titles
   const titleRows = (db.prepare(`
@@ -886,7 +916,7 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
     sessionCount,
     startDate: params.startDate ?? toDateStr(fromMs),
     endDate: params.endDate ?? toDateStr(toMs),
-    dailyBreakdown: dailyRows.map((r) => ({ date: r.day, totalSeconds: r.total_sec, sessionCount: r.session_count })),
+    dailyBreakdown,
     recentWindowTitles: titleRows.map((r) => r.window_title),
   }
 }

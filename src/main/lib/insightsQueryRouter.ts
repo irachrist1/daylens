@@ -881,11 +881,12 @@ function durationMatchAnswer(normalized: string, apps: AppUsageSummary[], sites:
     if (totalSeconds > 0) {
       return `You spent ${formatDuration(totalSeconds)} in ${category}.`
     }
-    // Category was named but has zero tracked time. Return an explicit
-    // refusal so the weekly catch-all does not surface a generic summary
-    // that the prose-pass would then mis-label (e.g. "focused-category
-    // work: 7h 45m" → "7h 45m in meetings"). See AI-FIX-STRATEGY §N1.
-    return `No ${categoryWords} activity captured in that range.`
+    // B2: category was named but has zero tracked time. Fall through to
+    // null so the tool-use path can search website_visits_fts for page-
+    // level evidence. The old refusal string ("No X activity captured")
+    // short-circuited before searchSessions could run, blocking topic/
+    // learning questions from ever seeing page titles.
+    return null
   }
   return null
 }
