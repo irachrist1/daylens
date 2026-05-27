@@ -1644,6 +1644,41 @@ export default function Insights() {
   }, [hasApiKey, todayDateKey])
 
   if (!settings || hasApiKey === null) {
+    // If the projection load failed before settings could hydrate, surface a
+    // recoverable error instead of spinning on "Loading AI…" forever.
+    if (insightsResource.error && !insightsResource.loading) {
+      return (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 12,
+          height: '100%',
+          padding: 24,
+        }}>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
+            Couldn't load AI settings. {insightsResource.error}
+          </p>
+          <button
+            type="button"
+            onClick={() => { void insightsResource.refresh() }}
+            style={{
+              padding: '7px 14px',
+              borderRadius: 8,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading AI…</p>
