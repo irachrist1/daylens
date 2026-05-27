@@ -1643,58 +1643,6 @@ export default function Insights() {
     setHeroSummarySignature(null)
   }, [hasApiKey, todayDateKey])
 
-  if (!settings || hasApiKey === null) {
-    // If the projection load failed before settings could hydrate, surface a
-    // recoverable error instead of spinning on "Loading AI…" forever.
-    if (insightsResource.error && !insightsResource.loading) {
-      return (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 12,
-          height: '100%',
-          padding: 24,
-        }}>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
-            Couldn't load AI settings. {insightsResource.error}
-          </p>
-          <button
-            type="button"
-            onClick={() => { void insightsResource.refresh() }}
-            style={{
-              padding: '7px 14px',
-              borderRadius: 8,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)',
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      )
-    }
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading AI…</p>
-      </div>
-    )
-  }
-
-  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
-  const providerMeta = AI_PROVIDER_META[activeChatProvider]
-  const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
-  const cliMissing = activeChatProvider === 'claude-cli'
-    ? !cliTools?.claude
-    : activeChatProvider === 'codex-cli'
-      ? !cliTools?.codex
-      : false
-
   // V1-PHASE-6-AI §6: MessageList memoization. The messages.map JSX is heavy
   // (Markdown + actions + artifacts + follow-ups + rate buttons per row) and
   // used to rebuild on every streaming chunk because chunks mutated `messages`.
@@ -1703,6 +1651,13 @@ export default function Insights() {
   // (submit, complete, error). Keying the memo off the `messages` array
   // reference plus the slices that drive output skips JSX rebuild for
   // unrelated parent re-renders (settings polls, search input, etc.).
+  //
+  // This memo MUST live above the `if (!settings || hasApiKey === null)` early
+  // return below — otherwise React sees a different hook count between the
+  // initial loading render (early-return path) and the post-load render
+  // (continues past the guard) and throws "Rendered more hooks than during
+  // the previous render". The Rules of Hooks demand a stable hook order on
+  // every render; an early return between two hooks breaks that contract.
   const messageListItems = useMemo(() => messages.map((message, index) => (
     message.role === 'user' ? (
       <div key={message.id} style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -2027,6 +1982,58 @@ export default function Insights() {
       </div>
     )
   )), [messages, messageActionState, focusReviewDrafts, actionFeedback, latestCompletedAssistantId, reducedMotion, activeFocusSession, scrollToBottom])
+
+  if (!settings || hasApiKey === null) {
+    // If the projection load failed before settings could hydrate, surface a
+    // recoverable error instead of spinning on "Loading AI…" forever.
+    if (insightsResource.error && !insightsResource.loading) {
+      return (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 12,
+          height: '100%',
+          padding: 24,
+        }}>
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', textAlign: 'center', maxWidth: 360 }}>
+            Couldn't load AI settings. {insightsResource.error}
+          </p>
+          <button
+            type="button"
+            onClick={() => { void insightsResource.refresh() }}
+            style={{
+              padding: '7px 14px',
+              borderRadius: 8,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+        <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading AI…</p>
+      </div>
+    )
+  }
+
+  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
+  const providerMeta = AI_PROVIDER_META[activeChatProvider]
+  const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
+  const cliMissing = activeChatProvider === 'claude-cli'
+    ? !cliTools?.claude
+    : activeChatProvider === 'codex-cli'
+      ? !cliTools?.codex
+      : false
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
