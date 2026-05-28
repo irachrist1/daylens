@@ -1,4 +1,25 @@
-import type { WorkContextBlock } from './types'
+import type { AppCategory, ArtifactRef, WorkContextBlock } from './types'
+
+// Categories where a browser page artifact is a plausible label source for the
+// whole block. For development/communication/writing/etc. a co-occurring browser
+// tab (YouTube, Slack web, a news site) is noise — never the block's identity.
+const PAGE_ARTIFACT_LABEL_CATEGORIES = new Set<AppCategory>([
+  'browsing',
+  'aiTools',
+  'research',
+  'entertainment',
+  'social',
+])
+
+export function isArtifactCompatibleWithBlockCategory(
+  artifact: Pick<ArtifactRef, 'artifactType'>,
+  category: AppCategory,
+): boolean {
+  if (artifact.artifactType === 'page' || artifact.artifactType === 'domain') {
+    return PAGE_ARTIFACT_LABEL_CATEGORIES.has(category)
+  }
+  return true
+}
 
 const GENERIC_LABELS = new Set([
   'AI Tools',
@@ -101,7 +122,13 @@ export function userVisibleBlockLabel(block: WorkContextBlock): string {
   // dominant artifact title — that is what the user was actually looking at,
   // and a naturalized version reads better than "Untitled block" or a bare
   // domain like "github.com".
-  const topArtifact = block.topArtifacts.find((artifact) => artifact.displayTitle?.trim().length > 0)
+  // Skip page/domain artifacts that don't fit the block's category — a stray
+  // YouTube tab in a development block must not label the block.
+  const topArtifact = block.topArtifacts.find(
+    (artifact) =>
+      artifact.displayTitle?.trim().length > 0
+      && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
+  )
   if (topArtifact) {
     const naturalized = naturalizeLabel(topArtifact.displayTitle.trim())
     if (naturalized && !GENERIC_LABELS.has(naturalized)) return naturalized

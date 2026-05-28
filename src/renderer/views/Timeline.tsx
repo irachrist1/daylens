@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
-import { naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
+import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -102,6 +102,7 @@ function shortDomainLabel(domain: string): string {
 
 function artifactSubtitle(block: WorkContextBlock): string | null {
   const titles = block.topArtifacts
+    .filter((artifact) => isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory))
     .slice(0, 3)
     .map((artifact) => safeTimelineText(artifact.displayTitle.trim()))
     .filter(Boolean)
@@ -170,7 +171,14 @@ function blockShortSummary(block: WorkContextBlock): string {
   const allApps = block.topApps
     .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
   const sites = block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
-  const topArtifact = block.topArtifacts.find((artifact) => artifact.displayTitle.trim().length > 0)
+  // Skip page/domain artifacts that don't fit the block's category — a dev
+  // block with a co-occurring YouTube tab must not summarize itself as the
+  // YouTube video.
+  const topArtifact = block.topArtifacts.find(
+    (artifact) =>
+      artifact.displayTitle.trim().length > 0
+      && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
+  )
   const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
   const naturalizedArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
 
@@ -758,9 +766,19 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
   )
 }
 
-function BlockInspector({ block, payload }: { block: WorkContextBlock | null; payload: DayTimelinePayload }) {
+function BlockInspector({
+  block,
+  payload,
+  onRefresh,
+}: {
+  block: WorkContextBlock | null
+  payload: DayTimelinePayload
+  onRefresh: () => Promise<void>
+}) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
+  const [regeneratingLabel, setRegeneratingLabel] = useState(false)
+  const [regenerateError, setRegenerateError] = useState<string | null>(null)
   const [clients, setClients] = useState<{ id: string; name: string }[]>([])
   const [clientDraft, setClientDraft] = useState('')
   const [clientSaving, setClientSaving] = useState(false)
@@ -768,6 +786,8 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
+    setRegenerateError(null)
+    setRegeneratingLabel(false)
   }, [block?.id, block?.label.current, block?.label.override])
 
   useEffect(() => {
@@ -836,16 +856,17 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
         <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
           Block label
         </label>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           <input
             id="timeline-block-label-override"
             type="text"
             value={overrideDraft}
             onChange={(event) => setOverrideDraft(event.target.value)}
             placeholder={userVisibleBlockLabel(block)}
+            disabled={regeneratingLabel}
             style={{
               flex: 1,
-              minWidth: 0,
+              minWidth: 160,
               height: 34,
               borderRadius: 9,
               border: '1px solid var(--color-border-ghost)',
@@ -858,7 +879,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
           />
           <button
             type="button"
-            disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+            disabled={overrideSaving || regeneratingLabel || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
             onClick={() => {
               const label = overrideDraft.trim()
               if (!label) return
@@ -879,7 +900,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
               fontSize: 12,
               fontWeight: 700,
               cursor: overrideSaving ? 'default' : 'pointer',
-              opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
+              opacity: overrideSaving || regeneratingLabel || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
             }}
           >
             {overrideSaving ? 'Saving…' : 'Save'}
@@ -887,7 +908,7 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
           {hasOverride && (
             <button
               type="button"
-              disabled={overrideSaving}
+              disabled={overrideSaving || regeneratingLabel}
               onClick={() => {
                 setOverrideSaving(true)
                 void ipc.db.clearBlockLabelOverride(block.id)
@@ -902,14 +923,50 @@ function BlockInspector({ block, payload }: { block: WorkContextBlock | null; pa
                 color: 'var(--color-text-secondary)',
                 fontSize: 12,
                 fontWeight: 700,
-                cursor: overrideSaving ? 'default' : 'pointer',
-                opacity: overrideSaving ? 0.6 : 1,
+                cursor: overrideSaving || regeneratingLabel ? 'default' : 'pointer',
+                opacity: overrideSaving || regeneratingLabel ? 0.6 : 1,
               }}
             >
               Reset
             </button>
           )}
+          <button
+            type="button"
+            disabled={overrideSaving || regeneratingLabel}
+            onClick={() => {
+              setRegenerateError(null)
+              setRegeneratingLabel(true)
+              void ipc.ai.regenerateBlockLabel(block)
+                .then(async (insight) => {
+                  setOverrideDraft(insight.label?.trim() || '')
+                  await onRefresh()
+                })
+                .catch((error) => {
+                  setRegenerateError(error instanceof Error ? error.message : String(error))
+                })
+                .finally(() => setRegeneratingLabel(false))
+            }}
+            style={{
+              height: 34,
+              padding: '0 12px',
+              borderRadius: 9,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'transparent',
+              color: 'var(--color-text-secondary)',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: overrideSaving || regeneratingLabel ? 'default' : 'pointer',
+              opacity: overrideSaving || regeneratingLabel ? 0.6 : 1,
+            }}
+          >
+            {regeneratingLabel ? 'Generating…' : 'Regenerate label'}
+          </button>
         </div>
+        {regenerateError && (
+          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>
+            {regenerateError}
+          </div>
+        )}
       </div>
 
       <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
@@ -1872,7 +1929,7 @@ export default function Timeline() {
                         )
                       ))}
                     </div>
-                    <BlockInspector block={selectedBlock} payload={payload} />
+                    <BlockInspector block={selectedBlock} payload={payload} onRefresh={timelineResource.refresh} />
                   </div>
                 )}
               </>
