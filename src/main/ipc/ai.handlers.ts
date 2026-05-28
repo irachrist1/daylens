@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
-import { updateAIMessageFeedback } from '../db/queries'
+import crypto from 'node:crypto'
+import { clearBlockLabelOverride, updateAIMessageFeedback } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
 import {
@@ -106,6 +107,45 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.GENERATE_BLOCK_INSIGHT, async (_e, block: WorkContextBlock) => {
     return generateWorkBlockInsight(block)
+  })
+
+  ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, block: WorkContextBlock) => {
+    const insight = await generateWorkBlockInsight(
+      { ...block, label: { ...block.label, override: null } },
+      { jobType: 'block_label_finalize', triggerSource: 'system', throwOnError: true },
+    )
+    const label = insight.label?.trim()
+    if (!label) throw new Error('AI did not return a label.')
+
+    const db = getDb()
+    const now = Date.now()
+    clearBlockLabelOverride(db, block.id)
+    db.prepare(`
+      UPDATE timeline_blocks
+      SET label_current = ?,
+          label_source = 'ai',
+          label_confidence = ?,
+          narrative_current = ?,
+          computed_at = ?
+      WHERE id = ?
+    `).run(label, 0.72, insight.narrative ?? null, now, block.id)
+
+    const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
+    db.prepare(`
+      INSERT OR REPLACE INTO timeline_block_labels (
+        id,
+        block_id,
+        label,
+        narrative,
+        source,
+        confidence,
+        created_at,
+        model_info_json
+      )
+      VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
+    `).run(`${block.id}:ai:${labelHash}`, block.id, label, insight.narrative ?? null, 0.72, now, null)
+
+    return insight
   })
 
   ipcMain.handle(IPC.AI.SUGGEST_APP_CATEGORY, async (_e, bundleId: string, appName: string) => {
