@@ -18,6 +18,7 @@ import type {
   ClientRecord,
   TrackingDiagnosticsPayload,
   SyncStatus,
+  WorkMemorySettingsSummary,
 } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
@@ -561,6 +562,9 @@ export default function Settings() {
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
+  const [workMemorySummary, setWorkMemorySummary] = useState<WorkMemorySettingsSummary | null>(null)
+  const [workMemoryBusy, setWorkMemoryBusy] = useState<string | null>(null)
+  const [workMemoryError, setWorkMemoryError] = useState<string | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string> } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [clients, setClients] = useState<ClientRecord[]>([])
@@ -613,6 +617,9 @@ export default function Settings() {
       void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
         if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
       })
+      void ipc.db.getWorkMemorySummary().catch(() => null).then((summary) => {
+        if (!cancelled) setWorkMemorySummary(summary as WorkMemorySettingsSummary | null)
+      })
       void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
         if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
       })
@@ -662,6 +669,40 @@ export default function Settings() {
     if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
       const cfg = await ipc.mcp.getConfig()
       setMcpConfig(cfg)
+    }
+  }
+
+  async function refreshWorkMemorySummary() {
+    const summary = await ipc.db.getWorkMemorySummary()
+    setWorkMemorySummary(summary)
+    return summary
+  }
+
+  async function forgetWorkMemoryPattern(patternId: string, label: string) {
+    if (!window.confirm(`Forget "${label}"?`)) return
+    setWorkMemoryBusy(patternId)
+    setWorkMemoryError(null)
+    try {
+      const summary = await ipc.db.forgetWorkMemoryPattern(patternId)
+      setWorkMemorySummary(summary)
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  async function forgetAllWorkMemory() {
+    if (!window.confirm('Forget all work memory?')) return
+    setWorkMemoryBusy('all')
+    setWorkMemoryError(null)
+    try {
+      const summary = await ipc.db.forgetAllWorkMemory()
+      setWorkMemorySummary(summary)
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
     }
   }
 
@@ -1275,6 +1316,129 @@ export default function Settings() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          title="Work memory"
+        >
+          <div>
+            <SettingsRow
+              first
+              title="Consolidate at end of day"
+              description="Archives finalized blocks, promotes repeated patterns, and decays stale learned patterns."
+              control={<Toggle checked={settings.workMemoryConsolidationEnabled ?? true} onChange={(value) => void persist({ workMemoryConsolidationEnabled: value })} />}
+            />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+              <div style={infoPanelStyle}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                  Promoted patterns
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 780, color: 'var(--color-text-primary)' }}>
+                  {workMemorySummary?.promotedCount ?? 0}
+                </div>
+              </div>
+              <div style={infoPanelStyle}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                  Total occurrences
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 780, color: 'var(--color-text-primary)' }}>
+                  {workMemorySummary?.totalOccurrences ?? 0}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ ...infoPanelStyle, marginTop: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                  Top learned patterns
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkMemoryError(null)
+                    void refreshWorkMemorySummary().catch((error) => {
+                      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+                    })
+                  }}
+                  style={inlineButtonStyle}
+                >
+                  Refresh
+                </button>
+              </div>
+              {workMemoryError && (
+                <div style={{ fontSize: 12, color: '#f87171', lineHeight: 1.55 }}>
+                  {workMemoryError}
+                </div>
+              )}
+              {workMemorySummary === null ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
+                  Loading…
+                </div>
+              ) : workMemorySummary.topPatterns.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
+                  No promoted work memory yet.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: 0 }}>
+                  {workMemorySummary.topPatterns.map((pattern, index) => {
+                    const busy = workMemoryBusy === pattern.id
+                    return (
+                      <div
+                        key={pattern.id}
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          padding: index === 0 ? '2px 0 12px' : '12px 0',
+                          borderTop: index === 0 ? 'none' : '1px solid var(--color-border-ghost)',
+                        }}
+                      >
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: 13.5, fontWeight: 680, color: 'var(--color-text-primary)' }}>
+                            {pattern.label}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+                            {Math.round(pattern.confidence * 100)}% confidence · {pattern.recallCount} recalls · {pattern.occurrenceCount} occurrences{pattern.category ? ` · ${pattern.category}` : ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busy || workMemoryBusy === 'all'}
+                          onClick={() => void forgetWorkMemoryPattern(pattern.id, pattern.label)}
+                          style={{
+                            ...inlineButtonStyle,
+                            color: '#f87171',
+                            opacity: busy || workMemoryBusy === 'all' ? 0.6 : 1,
+                            cursor: busy || workMemoryBusy === 'all' ? 'default' : 'pointer',
+                          }}
+                        >
+                          {busy ? 'Forgetting…' : 'Forget'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <div style={{ paddingTop: 12, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <button
+                  type="button"
+                  disabled={workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0}
+                  onClick={() => void forgetAllWorkMemory()}
+                  style={{
+                    ...inlineButtonStyle,
+                    borderColor: 'rgba(248, 113, 113, 0.28)',
+                    color: '#f87171',
+                    opacity: workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0 ? 0.6 : 1,
+                    cursor: workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  {workMemoryBusy === 'all' ? 'Forgetting…' : 'Forget everything'}
+                </button>
+              </div>
             </div>
           </div>
         </SettingsSection>

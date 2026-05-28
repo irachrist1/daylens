@@ -37,6 +37,7 @@ import type {
   TrackingPermissionState,
   WorkContextBlock,
   WorkContextInsight,
+  WorkMemorySettingsSummary,
   WorkspaceResult,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
@@ -131,6 +132,12 @@ const api = {
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_ACTIVITY_DIGEST, days),
+    getWorkMemorySummary: (): Promise<WorkMemorySettingsSummary> =>
+      ipcRenderer.invoke(IPC.DB.GET_WORK_MEMORY_SUMMARY),
+    forgetWorkMemoryPattern: (patternId: string): Promise<WorkMemorySettingsSummary> =>
+      ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_PATTERN, patternId),
+    forgetAllWorkMemory: (): Promise<WorkMemorySettingsSummary> =>
+      ipcRenderer.invoke(IPC.DB.FORGET_ALL_WORK_MEMORY),
   },
   icons: {
     resolve: (request: IconRequest): Promise<ResolvedIconPayload> => ipcRenderer.invoke(IPC.ICONS.RESOLVE, request),

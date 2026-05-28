@@ -172,6 +172,22 @@ export interface WorkContextInsight {
   narrative: string | null
 }
 
+export interface WorkMemoryPatternSummary {
+  id: string
+  label: string
+  category: AppCategory | null
+  confidence: number
+  recallCount: number
+  occurrenceCount: number
+  updatedAt: number
+}
+
+export interface WorkMemorySettingsSummary {
+  promotedCount: number
+  totalOccurrences: number
+  topPatterns: WorkMemoryPatternSummary[]
+}
+
 export interface AppCategorySuggestion {
   suggestedCategory: AppCategory | null
   reason: string | null
@@ -1187,6 +1203,9 @@ export const IPC = {
     GET_APP_CHARACTER: 'db:get-app-character',
     GET_APP_DETAIL: 'db:get-app-detail',
     GET_APP_ACTIVITY_DIGEST: 'db:get-app-activity-digest',
+    GET_WORK_MEMORY_SUMMARY: 'db:get-work-memory-summary',
+    FORGET_WORK_MEMORY_PATTERN: 'db:forget-work-memory-pattern',
+    FORGET_ALL_WORK_MEMORY: 'db:forget-all-work-memory',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
