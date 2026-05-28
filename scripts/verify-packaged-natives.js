@@ -27,20 +27,32 @@ function verifyPackage(asarPath) {
   const resourcesDir = path.dirname(asarPath)
   const unpackedDir = path.join(resourcesDir, 'app.asar.unpacked')
 
-  const nativeBinding = path.join(
-    unpackedDir,
-    'node_modules',
-    'better-sqlite3',
-    'build',
-    'Release',
-    'better_sqlite3.node',
-  )
+  // All three native modules listed in asarUnpack must be present.
+  // Missing any of them means the app will crash on launch.
+  const requiredNativeBindings = [
+    {
+      name: 'better-sqlite3',
+      binding: path.join('node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
+    },
+    {
+      name: '@paymoapp/active-window',
+      binding: path.join('node_modules', '@paymoapp', 'active-window', 'build', 'Release', 'PaymoActiveWindow.node'),
+    },
+    {
+      name: 'keytar',
+      binding: path.join('node_modules', 'keytar', 'build', 'Release', 'keytar.node'),
+    },
+  ]
 
-  if (!fs.existsSync(nativeBinding)) {
-    fail(`${path.relative(process.cwd(), asarPath)} is missing unpacked better-sqlite3 native binding at ${nativeBinding}`)
+  for (const { name, binding } of requiredNativeBindings) {
+    const fullPath = path.join(unpackedDir, binding)
+    if (!fs.existsSync(fullPath)) {
+      fail(`${path.relative(process.cwd(), asarPath)} is missing unpacked ${name} native binding at ${fullPath}`)
+    }
   }
 
   const requiredUnpackedEntries = [
+    // better-sqlite3 and its transitive deps (loaded via `bindings` package)
     path.join('node_modules', 'better-sqlite3', 'package.json'),
     path.join('node_modules', 'better-sqlite3', 'lib', 'index.js'),
     path.join('node_modules', 'better-sqlite3', 'lib', 'database.js'),
@@ -48,6 +60,12 @@ function verifyPackage(asarPath) {
     path.join('node_modules', 'bindings', 'bindings.js'),
     path.join('node_modules', 'file-uri-to-path', 'package.json'),
     path.join('node_modules', 'file-uri-to-path', 'index.js'),
+    // @paymoapp/active-window (loads .node via direct relative require)
+    path.join('node_modules', '@paymoapp', 'active-window', 'package.json'),
+    path.join('node_modules', '@paymoapp', 'active-window', 'dist', 'index.js'),
+    // keytar (loads .node via direct relative require)
+    path.join('node_modules', 'keytar', 'package.json'),
+    path.join('node_modules', 'keytar', 'lib', 'keytar.js'),
   ]
 
   for (const entry of requiredUnpackedEntries) {

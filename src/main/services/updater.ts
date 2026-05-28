@@ -601,104 +601,7 @@ async function confirmInstallWithCleanupHint(version: string | null): Promise<bo
   }
 }
 
-function escapePowerShellSingleQuoted(value: string): string {
-  return value.replace(/'/g, "''")
-}
 
-async function scheduleWindowsInstaller(installerPath: string): Promise<void> {
-  const installId = `${Date.now()}-${process.pid}`
-  const scriptPath = path.join(os.tmpdir(), `daylens-update-${installId}.ps1`)
-  const logPath = path.join(os.tmpdir(), `daylens-update-${installId}.log`)
-  const parentPid = process.pid
-  const currentExe = escapePowerShellSingleQuoted(process.execPath)
-  const escapedInstallerPath = escapePowerShellSingleQuoted(installerPath)
-  const escapedLogPath = escapePowerShellSingleQuoted(logPath)
-
-  const script = `
-$ErrorActionPreference = 'Stop'
-$parentPid = ${parentPid}
-$installerPath = '${escapedInstallerPath}'
-$appExe = '${currentExe}'
-$logPath = '${escapedLogPath}'
-try {
-  Start-Transcript -Path $logPath -Append | Out-Null
-} catch {}
-while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {
-  Start-Sleep -Milliseconds 250
-}
-Start-Sleep -Milliseconds 500
-$proc = Start-Process -FilePath $installerPath -ArgumentList '/S' -PassThru -Wait
-if ($proc.ExitCode -ne 0) {
-  throw "Installer exited with code $($proc.ExitCode)."
-}
-Start-Sleep -Seconds 1
-if (Test-Path $appExe) {
-  Start-Process -FilePath $appExe | Out-Null
-}
-Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
-`
-
-  await fs.writeFile(scriptPath, script, 'utf8')
-  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  child.unref()
-}
-
-async function performWindowsInstall(): Promise<boolean> {
-  if (_installingUpdate || !_pendingRemoteUpdate) return false
-
-  const version = _pendingRemoteUpdate.version
-  capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
-    surface: 'updater',
-    trigger: 'manual',
-    version,
-  })
-
-  if (!(await confirmInstallWithCleanupHint(version))) return false
-
-  try {
-    setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
-    const installerPath = await downloadRemoteInstaller((pct) => {
-      setUpdaterState({ status: 'downloading', progressPct: pct })
-    })
-
-    setUpdaterState({ status: 'installing', progressPct: 100, errorMessage: null })
-    capture(ANALYTICS_EVENT.UPDATE_INSTALL_STARTED, {
-      surface: 'updater',
-      trigger: 'manual',
-      version,
-    })
-
-    if (_beforeInstall) await _beforeInstall()
-
-    await scheduleWindowsInstaller(installerPath)
-    _installingUpdate = true
-    setTimeout(() => app.quit(), 250)
-    return true
-  } catch (err) {
-    _installingUpdate = false
-    const baseMessage = err instanceof Error ? err.message : 'Daylens could not finish the Windows update install.'
-    capture(ANALYTICS_EVENT.UPDATE_ERROR, {
-      failure_kind: classifyFailureKind(err),
-      result: 'error',
-      surface: 'updater',
-    })
-    captureException(err, {
-      tags: { process_type: 'main', reason: 'windows_install_failed' },
-    })
-    setUpdaterState({
-      status: 'error',
-      errorMessage: `${normalizeUpdaterErrorMessage(baseMessage)} You can also download the update manually from ${MANUAL_DOWNLOAD_URL}.`,
-      progressPct: null,
-      downloadUrl: _pendingRemoteUpdate?.manualUrl ?? MANUAL_DOWNLOAD_URL,
-    })
-    return false
-  }
-}
 
 export function initUpdater(win: BrowserWindow): void {
   _statusWindow = win
@@ -769,10 +672,7 @@ export function initUpdater(win: BrowserWindow): void {
       return performAdhocMacInstall()
     }
 
-    if (process.platform === 'win32') {
-      if (_state.status !== 'available' || _installingUpdate) return false
-      return performWindowsInstall()
-    }
+
 
     if (_state.status !== 'downloaded' || _installingUpdate) return false
 

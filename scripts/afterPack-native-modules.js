@@ -32,6 +32,22 @@ function requiredFilesFor(name) {
     return ['package.json', 'index.js']
   }
 
+  if (name === '@paymoapp/active-window') {
+    return [
+      'package.json',
+      path.join('dist', 'index.js'),
+      path.join('build', 'Release', 'PaymoActiveWindow.node'),
+    ]
+  }
+
+  if (name === 'keytar') {
+    return [
+      'package.json',
+      path.join('lib', 'keytar.js'),
+      path.join('build', 'Release', 'keytar.node'),
+    ]
+  }
+
   return ['package.json']
 }
 
@@ -59,12 +75,20 @@ exports.default = async function afterPackNativeModules(context) {
   const asarPaths = walk(context.appOutDir)
   for (const asarPath of asarPaths) {
     const resourcesDir = path.dirname(asarPath)
-    const unpackedSqlite = path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'better-sqlite3')
+    const unpackedBase = path.join(resourcesDir, 'app.asar.unpacked', 'node_modules')
 
-    if (!fs.existsSync(unpackedSqlite)) continue
+    // Only run repairs if electron-builder created an unpacked directory
+    if (!fs.existsSync(unpackedBase)) continue
 
+    // better-sqlite3 and its transitive deps (uses `bindings` package)
     copyDependency(context.packager.info.projectDir, resourcesDir, 'better-sqlite3')
     copyDependency(context.packager.info.projectDir, resourcesDir, 'bindings')
     copyDependency(context.packager.info.projectDir, resourcesDir, 'file-uri-to-path')
+
+    // @paymoapp/active-window (tracking backend — app cannot launch without this)
+    copyDependency(context.packager.info.projectDir, resourcesDir, '@paymoapp/active-window')
+
+    // keytar (secure credential storage)
+    copyDependency(context.packager.info.projectDir, resourcesDir, 'keytar')
   }
 }
