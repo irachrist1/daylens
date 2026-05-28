@@ -10,6 +10,7 @@ import { onTrackingTick } from './tracking'
 import { getDb } from './database'
 import { projectDay, reprojectStaleDays } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { runEveningConsolidation } from '../jobs/eveningConsolidation'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
 const SYNC_INTERVAL_MS = 60_000
@@ -141,18 +142,39 @@ function projectFinalizedDay(dateStr: string, reason: string): void {
     const result = projectDay(getDb(), dateStr, { finalize: true })
     if (result.skipped) {
       console.log('[projection] skipped finalized day', { date: dateStr, reason: result.reason })
-      return
+    } else {
+      invalidateProjectedDay(dateStr, reason)
+      console.log('[projection] finalized day', {
+        date: dateStr,
+        events: result.events,
+        sessions: result.sessions,
+        blocks: result.blocks,
+        reason,
+      })
     }
-    invalidateProjectedDay(dateStr, reason)
-    console.log('[projection] finalized day', {
-      date: dateStr,
-      events: result.events,
-      sessions: result.sessions,
-      blocks: result.blocks,
-      reason,
-    })
   } catch (error) {
     console.warn('[projection] failed to finalize day:', error)
+  }
+  consolidateWorkMemory(dateStr, reason)
+}
+
+function consolidateWorkMemory(dateStr: string, reason: string): void {
+  try {
+    const outcome = runEveningConsolidation(getDb(), dateStr)
+    if (outcome.skipped) {
+      console.log('[work-memory] consolidation skipped', { date: dateStr, reason, skipReason: outcome.reason })
+      return
+    }
+    console.log('[work-memory] consolidated day', {
+      date: dateStr,
+      reason,
+      newCandidates: outcome.newCandidates,
+      promoted: outcome.promoted,
+      decayed: outcome.decayed,
+      backfilled: outcome.backfilled,
+    })
+  } catch (error) {
+    console.warn('[work-memory] consolidation failed:', error)
   }
 }
 

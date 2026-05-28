@@ -538,6 +538,28 @@ export function matchPromotedPatterns(
   return best
 }
 
+// Public helper for the evening consolidation job: turn a block + its
+// concurrent evidence into the same canonical pattern key the matcher uses
+// at label time. Returns null when the block has no learnable signal
+// (no apps, no domains/titles/files) — those blocks shouldn't seed
+// candidates, they'd just match every future block.
+export function buildBlockPatternKeyJson(
+  block: WorkMemoryBlockInput,
+  evidence: ConcurrentEvidence,
+): { json: string; project: string | null; devContext: boolean } | null {
+  const key = buildPatternKey(block, evidence)
+  if (!key) return null
+  return { json: JSON.stringify(key), project: key.project, devContext: key.devContext }
+}
+
+export function blockHasDevOrTerminalApp(block: WorkMemoryBlockInput): boolean {
+  return hasDevOrTerminalApp(block)
+}
+
+export function evidenceIsAllDistraction(evidence: ConcurrentEvidence): boolean {
+  return onlyDistractionEvidence(evidence)
+}
+
 function blockInputFromTimeline(db: Database.Database, blockId: string): WorkMemoryBlockInput | null {
   if (!tableExists(db, 'timeline_blocks')) return null
   const row = db.prepare(`
