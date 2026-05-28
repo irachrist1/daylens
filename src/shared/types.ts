@@ -715,6 +715,25 @@ export interface AppDetailPayload {
     label: string
     dominantCategory: AppCategory
   }>
+  /**
+   * Memory-pattern rollup of the same blocks: when several
+   * `blockAppearances` share a promoted memory pattern (e.g. Tonny renamed
+   * three Ghostty blocks to "Daylens development" so all three matched the
+   * same `context_patterns` row), the renderer can collapse them under the
+   * pattern label instead of listing near-identical rows.
+   *
+   * `patternLabel` is the promoted pattern's `label_suggestion`. Rows with
+   * no matching pattern keep `patternId: null` and one row per block.
+   */
+  blockMemoryRollups?: Array<{
+    patternId: string | null
+    patternLabel: string
+    sessionCount: number
+    totalSeconds: number
+    earliestStart: number
+    latestEnd: number
+    sampleBlockIds: string[]
+  }>
   workflowAppearances: WorkflowRef[]
   timeOfDayDistribution: Array<{ hour: number; totalSeconds: number }>
   computedAt: number

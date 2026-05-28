@@ -901,9 +901,54 @@ export default function Apps() {
                   // page-titled blocks for browser apps (Safari surfaced empty).
                   const filteredAppearances = detail.blockAppearances
                   const fileArtifacts = detail.topArtifacts.filter((a) => a.artifactType !== 'page')
+                  // F6: prefer the memory-pattern rollup when at least one row
+                  // collapses 2+ sessions under a learned pattern. For an Apps
+                  // view that previously listed 14 near-identical "Daylens
+                  // development" rows, this surfaces a single row with
+                  // "Daylens development × 14 sessions" instead.
+                  const rollups = detail.blockMemoryRollups ?? []
+                  const useRollup = rollups.some((row) => row.patternId && row.sessionCount >= 2)
                   return (
                     <>
-                      {filteredAppearances.length > 0 && (
+                      {useRollup && rollups.length > 0 && (
+                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+                            What you did there
+                          </div>
+                          <div style={{ display: 'grid', gap: 8 }}>
+                            {rollups.slice(0, 10).map((row) => (
+                              <button
+                                key={`${row.patternId ?? row.sampleBlockIds[0]}`}
+                                type="button"
+                                onClick={() => { window.location.hash = `#/timeline?view=day&date=${localDateKey(row.earliestStart)}` }}
+                                style={{
+                                  width: '100%',
+                                  border: '1px solid var(--color-border-ghost)',
+                                  background: 'var(--color-surface-low)',
+                                  borderRadius: 12,
+                                  padding: '10px 14px',
+                                  textAlign: 'left',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+                                  {row.patternLabel}
+                                  {row.sessionCount > 1 && (
+                                    <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
+                                      {' '}× {row.sessionCount} sessions
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+                                  {formatDuration(row.totalSeconds)}
+                                  {row.sessionCount === 1 ? ` · ${formatBlockRange(row.earliestStart, row.latestEnd)}` : ''}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                      )}
+                      {!useRollup && filteredAppearances.length > 0 && (
                         <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
                           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
                             What you did there

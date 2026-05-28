@@ -747,6 +747,93 @@ function shortDomainLabel(domain: string): string {
   return websiteDisplayLabel(domain)
 }
 
+// F6: roll up block appearances under their promoted memory pattern. A
+// block participates in a rollup only when `pattern_occurrences` records a
+// match for one of its block IDs. Blocks without a match fall through as
+// single-row rollups so the Apps view can still render every appearance.
+function memoryRollupsForBlocks(
+  db: Database.Database,
+  appearances: Array<{ blockId: string; startTime: number; endTime: number; label: string }>,
+): AppDetailPayload['blockMemoryRollups'] {
+  if (appearances.length === 0) return []
+
+  const blockIds = appearances.map((row) => row.blockId)
+  const hasOccurrences = (() => {
+    const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='pattern_occurrences' LIMIT 1`).get() as { name: string } | undefined
+    return Boolean(row)
+  })()
+  if (!hasOccurrences) {
+    return appearances.map((row) => ({
+      patternId: null,
+      patternLabel: row.label,
+      sessionCount: 1,
+      totalSeconds: Math.max(0, Math.round((row.endTime - row.startTime) / 1000)),
+      earliestStart: row.startTime,
+      latestEnd: row.endTime,
+      sampleBlockIds: [row.blockId],
+    }))
+  }
+
+  const placeholders = blockIds.map(() => '?').join(', ')
+  const occurrences = db.prepare(`
+    SELECT
+      pattern_occurrences.block_id AS blockId,
+      pattern_occurrences.pattern_id AS patternId,
+      context_patterns.label_suggestion AS label,
+      context_patterns.status AS status
+    FROM pattern_occurrences
+    JOIN context_patterns ON context_patterns.id = pattern_occurrences.pattern_id
+    WHERE pattern_occurrences.block_id IN (${placeholders})
+      AND context_patterns.status = 'promoted'
+  `).all(...blockIds) as Array<{ blockId: string; patternId: string; label: string; status: string }>
+
+  const patternByBlock = new Map<string, { patternId: string; label: string }>()
+  for (const row of occurrences) {
+    if (!patternByBlock.has(row.blockId)) {
+      patternByBlock.set(row.blockId, { patternId: row.patternId, label: row.label })
+    }
+  }
+
+  type Rollup = {
+    patternId: string | null
+    patternLabel: string
+    sessionCount: number
+    totalSeconds: number
+    earliestStart: number
+    latestEnd: number
+    sampleBlockIds: string[]
+  }
+  const rollupsByKey = new Map<string, Rollup>()
+  const orderKeys: string[] = []
+  for (const row of appearances) {
+    const match = patternByBlock.get(row.blockId)
+    const key = match?.patternId ?? `solo:${row.blockId}`
+    const seconds = Math.max(0, Math.round((row.endTime - row.startTime) / 1000))
+    const existing = rollupsByKey.get(key)
+    if (existing) {
+      existing.sessionCount += 1
+      existing.totalSeconds += seconds
+      existing.earliestStart = Math.min(existing.earliestStart, row.startTime)
+      existing.latestEnd = Math.max(existing.latestEnd, row.endTime)
+      if (existing.sampleBlockIds.length < 5) existing.sampleBlockIds.push(row.blockId)
+      continue
+    }
+    rollupsByKey.set(key, {
+      patternId: match?.patternId ?? null,
+      patternLabel: match?.label ?? row.label,
+      sessionCount: 1,
+      totalSeconds: seconds,
+      earliestStart: row.startTime,
+      latestEnd: row.endTime,
+      sampleBlockIds: [row.blockId],
+    })
+    orderKeys.push(key)
+  }
+
+  return orderKeys.map((key) => rollupsByKey.get(key)!)
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+}
+
 function workflowRefsByBlockId(
   db: Database.Database,
   blockIds: string[],
@@ -3131,6 +3218,8 @@ export function getAppDetailPayload(
     .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
     .slice(0, 12)
 
+  const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
+
   // Totals and session counts must match the Apps rail so the same app on the
   // same day reads identically in every surface. Both derive from
   // getAppSummariesForRange (no MIN_DISPLAY_SEC filter, canonicalApp keyed).
@@ -3169,6 +3258,7 @@ export function getAppDetailPayload(
     topDomains: topDomainsForBrowser(db, canonicalAppId, sessions, fromMs, todayTo),
     pairedApps,
     blockAppearances,
+    blockMemoryRollups,
     workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
       .filter((workflow, index, workflows) => workflows.findIndex((entry) => entry.id === workflow.id) === index)
       .slice(0, 10),
