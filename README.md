@@ -4,7 +4,7 @@
 
 ---
 
-Daylens is a **local-first personal memory system** for your laptop (macOS, Windows, and Linux). It quietly logs your foreground app sessions, browser history, focus sessions, and active work blocks, turning your raw behavioral history into a rich, structured database. 
+Daylens is a **local-first personal memory system** for your laptop (macOS, Windows, and Linux). It quietly logs your foreground app sessions, browser history, focus sessions, and active work blocks, turning your raw behavioral history into a rich, structured database.
 
 With a grounded **AI chat interface** and a built-in **Model Context Protocol (MCP) server**, Daylens allows you, and the AI tools you already use (like Cursor, Claude Code, or Claude Desktop), to ask grounded questions about your digital past and retrieve exact context instantly.
 

@@ -2454,7 +2454,7 @@ function getLightweightDayPayload(
   const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
 
   const blocks: WorkContextBlock[] = []
-  
+
   let totalSeconds = 0
   let focusSeconds = 0
 

@@ -269,7 +269,7 @@ Research agents: complete these and update [Research deliverables](#research-del
 
 ### R1: Label/summary injection points
 
-A thorough code audit has mapped the exact files and lines where block labels and summaries are created, retrieved, or formatted. 
+A thorough code audit has mapped the exact files and lines where block labels and summaries are created, retrieved, or formatted.
 
 #### 1. Timeline Block Labels (Code-Proven)
 *   **Resolution and Fallbacks**:
@@ -279,7 +279,7 @@ A thorough code audit has mapped the exact files and lines where block labels an
 *   **Aesthetic Impact**: The mismatch between `isUsefulLabel` (in renderer) and `usefulBlockLabel` (in `workBlocks.ts`, which performs `labelLooksToolOnly` checks) leads to labels reverting to slow site names or "Untitled block" even when useful artifacts are present.
 
 #### 2. Timeline Summaries & Narratives (Code-Proven)
-*   **Timeline Row Summaries**: `src/renderer/views/Timeline.tsx` — Renders narrative lines using `blockNarrative(block) ?? blockShortSummary(block)` (lines 103–140, `code-proven`). 
+*   **Timeline Row Summaries**: `src/renderer/views/Timeline.tsx` — Renders narrative lines using `blockNarrative(block) ?? blockShortSummary(block)` (lines 103–140, `code-proven`).
 *   **AI Insight Generation**: `src/main/jobs/aiService.ts` — `generateWorkBlockInsight` (lines 4582–4642, `code-proven`) runs background LLM tasks utilizing `workBlockPrompt` (lines 4437–4489, `code-proven`) to construct narrative prompt payloads. AI outputs are stored using `upsertWorkContextInsight` (lines 4619, 4633) into the `work_context_observations` table.
 
 #### 3. Apps Surface & Rollup Digests (Code-Proven)
@@ -369,7 +369,7 @@ CREATE TABLE IF NOT EXISTS daily_memory_archive (
 ### R4: Concurrent evidence spec
 
 #### Algorithm Rationale (Inferred/Observed)
-In active timeline reconstruction (`src/main/services/workBlocks.ts`), blocks represent foreground active time. However, background supporting context is vital: when Tonny works in a terminal (Ghostty), a supporting web tab ("Daylens Development" or "localhost:5173" running on Safari) is active in the background, not in the foreground session list. 
+In active timeline reconstruction (`src/main/services/workBlocks.ts`), blocks represent foreground active time. However, background supporting context is vital: when Tonny works in a terminal (Ghostty), a supporting web tab ("Daylens Development" or "localhost:5173" running on Safari) is active in the background, not in the foreground session list.
 
 #### Time Window Selection
 We recommend a sliding **$\pm$10-minute window** around the block's `startTime` and `endTime`. For very brief blocks ($<5$ minutes), the window is capped at the block's duration to prevent short transitions from grabbing unrelated context.
@@ -383,8 +383,8 @@ interface ConcurrentEvidencePool {
 }
 
 function gatherConcurrentEvidence(
-  db: Database.Database, 
-  block: WorkContextBlock, 
+  db: Database.Database,
+  block: WorkContextBlock,
   N_minutes = 10
 ): ConcurrentEvidencePool {
   const padMs = N_minutes * 60 * 1000
@@ -393,7 +393,7 @@ function gatherConcurrentEvidence(
 
   // 1. Fetch website visits that occurred concurrently
   const overlappingVisits = db.prepare(`
-    SELECT * FROM website_visits 
+    SELECT * FROM website_visits
     WHERE visit_time >= ? AND visit_time < ?
   `).all(searchStart, searchEnd) as WebsiteVisitRecord[]
 
@@ -413,18 +413,18 @@ function gatherConcurrentEvidence(
 }
 
 function scoreAndMatchPattern(
-  block: WorkContextBlock, 
+  block: WorkContextBlock,
   pool: ConcurrentEvidencePool
 ): { label: string; confidence: number } | null {
   const terminalActive = block.topApps.some(a => ['ghostty', 'warp', 'iterm2', 'terminal'].includes(a.bundleId.toLowerCase()))
-  
+
   if (terminalActive) {
     // Audit for a concurrent local server or project name in browser evidence
-    const devTab = pool.browserContexts.find(event => 
+    const devTab = pool.browserContexts.find(event =>
       /localhost|127\.0\.0\.1|5173|daylens/i.test(event.tab_title ?? '') ||
       /localhost|127\.0\.0\.1|5173/i.test(event.tab_url ?? '')
     )
-    
+
     if (devTab) {
       return {
         label: "Daylens Development",
@@ -446,7 +446,7 @@ Triggered automatically by the system background scheduler:
 2.  **Explicit Finalization**: Executed during daily recap page loads or when a user locks their timeline for a date.
 
 #### Idempotency
-Each evening run targets a specific date string (e.g. `YYYY-MM-DD`). 
+Each evening run targets a specific date string (e.g. `YYYY-MM-DD`).
 Before starting, it begins a SQLite transaction and purges any records for that date:
 ```sql
 DELETE FROM pattern_occurrences WHERE block_id IN (SELECT id FROM timeline_blocks WHERE date = ?);
