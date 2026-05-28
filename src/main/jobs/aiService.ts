@@ -119,6 +119,7 @@ import {
   fallbackNarrativeForBlock,
   getAppDetailPayload,
   getTimelineDayPayload,
+  listTimelineDaysNeedingHeuristicUpgrade,
   getWorkflowSummaries,
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
@@ -4890,6 +4891,8 @@ let lastCleanupAnchorDate: string | null = null
 const BLOCK_FINALIZE_QUIET_MS = 90_000
 const CLEANUP_BLOCK_BATCH_SIZE = 12
 const CLEANUP_BATCH_PAUSE_MS = 750
+const HISTORY_HEURISTIC_UPGRADE_BATCH_SIZE = 4
+const HISTORY_HEURISTIC_UPGRADE_PAUSE_MS = 500
 
 const cleanupQueueState: {
   active: boolean
@@ -4901,6 +4904,11 @@ const cleanupQueueState: {
   pendingBlocks: [],
 }
 let cleanupQueueTimer: ReturnType<typeof setTimeout> | null = null
+let historyHeuristicUpgradeStarted = false
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function resetCleanupQueue(): void {
   if (cleanupQueueTimer) {
@@ -5013,7 +5021,48 @@ function scheduleOvernightCleanup(anchorDate: string): void {
   void processCleanupQueue()
 }
 
+async function runHistoryHeuristicUpgrade(anchorDate: string): Promise<void> {
+  try {
+    const db = getDb()
+    let upgradedAny = false
+    while (true) {
+      const dates = listTimelineDaysNeedingHeuristicUpgrade(db, anchorDate, HISTORY_HEURISTIC_UPGRADE_BATCH_SIZE)
+      if (dates.length === 0) break
+
+      for (const dateStr of dates) {
+        const payload = getTimelineDayPayload(db, dateStr, null)
+        upgradedAny = true
+        if (getSettings().aiBackgroundEnrichment) {
+          for (const block of payload.blocks) {
+            if (backgroundRelabelDispositionForBlock(block) !== 'relabel') continue
+            await runBlockInsightJob(block, 'block_cleanup_relabel')
+          }
+        }
+        await pause(HISTORY_HEURISTIC_UPGRADE_PAUSE_MS)
+      }
+    }
+
+    if (upgradedAny) {
+      invalidateProjectionScope('timeline', 'timeline-heuristic-upgrade')
+      invalidateProjectionScope('apps', 'timeline-heuristic-upgrade')
+      invalidateProjectionScope('insights', 'timeline-heuristic-upgrade')
+    }
+  } catch (error) {
+    console.warn('[ai] timeline heuristic upgrade sweep failed:', error)
+  }
+}
+
+function scheduleHistoryHeuristicUpgrade(anchorDate: string): void {
+  if (historyHeuristicUpgradeStarted) return
+  historyHeuristicUpgradeStarted = true
+  setTimeout(() => {
+    void runHistoryHeuristicUpgrade(anchorDate)
+  }, 1_000)
+}
+
 export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
+  scheduleHistoryHeuristicUpgrade(currentLocalDateString())
+
   const settings = getSettings()
   if (!settings.aiBackgroundEnrichment) return
 

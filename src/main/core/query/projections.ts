@@ -5,18 +5,16 @@ import type {
   AppDetailPayload,
   ArtifactRef,
   DayTimelinePayload,
-  FocusSession,
   HistoryDayPayload,
   LiveSession,
   TimelineSegment,
   WeeklySummary,
-  WorkContextAppSummary,
   WorkContextBlock,
   WorkflowPattern,
 } from '@shared/types'
-import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries } from '../../services/workBlocks'
+import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksFromSessions, persistTimelineDay } from '../../services/workBlocks'
 import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
-import { readDerivedDay, PROJECTION_VERSION, type DerivedDayBlock, type DerivedDayResult } from '../projections/chunk2'
+import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString, localDayBounds } from '../../lib/localDate'
 import { isCategoryFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
@@ -66,58 +64,6 @@ function derivedSessionToAppSession(session: DerivedDayResult['sessions'][number
   }
 }
 
-function topAppsFromDerivedSessions(sessions: AppSession[]): WorkContextAppSummary[] {
-  const grouped = new Map<string, WorkContextAppSummary>()
-  for (const session of sessions) {
-    const existing = grouped.get(session.bundleId)
-    if (existing) {
-      existing.totalSeconds += session.durationSeconds
-      existing.sessionCount += 1
-      continue
-    }
-    grouped.set(session.bundleId, {
-      bundleId: session.bundleId,
-      appName: session.appName,
-      category: session.category,
-      totalSeconds: session.durationSeconds,
-      sessionCount: 1,
-      isBrowser: session.category === 'browsing',
-    })
-  }
-  return [...grouped.values()]
-    .sort((left, right) => right.totalSeconds - left.totalSeconds || left.appName.localeCompare(right.appName))
-    .slice(0, 5)
-}
-
-function categoryDistributionFor(sessions: AppSession[]): Partial<Record<AppCategory, number>> {
-  const distribution: Partial<Record<AppCategory, number>> = {}
-  for (const session of sessions) {
-    distribution[session.category] = (distribution[session.category] ?? 0) + session.durationSeconds
-  }
-  return distribution
-}
-
-function focusOverlapForBlock(
-  focusSessions: FocusSession[],
-  startTime: number,
-  endTime: number,
-): { totalSeconds: number; pct: number; sessionIds: number[] } {
-  const overlaps = focusSessions
-    .map((session) => {
-      const overlapStart = Math.max(session.startTime, startTime)
-      const overlapEnd = Math.min(session.endTime ?? endTime, endTime)
-      return { sessionId: session.id, seconds: Math.max(0, Math.round((overlapEnd - overlapStart) / 1000)) }
-    })
-    .filter((entry) => entry.seconds > 0)
-  const totalSeconds = overlaps.reduce((sum, entry) => sum + entry.seconds, 0)
-  const spanSeconds = Math.max(1, Math.round((endTime - startTime) / 1000))
-  return {
-    totalSeconds,
-    pct: Math.min(100, Math.round((totalSeconds / spanSeconds) * 100)),
-    sessionIds: overlaps.map((entry) => entry.sessionId),
-  }
-}
-
 const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
 
 function buildDerivedSegments(dateStr: string, blocks: WorkContextBlock[]): TimelineSegment[] {
@@ -160,66 +106,6 @@ function buildDerivedSegments(dateStr: string, blocks: WorkContextBlock[]): Time
   return segments.filter((segment) => segment.endTime > segment.startTime)
 }
 
-function derivedBlockToWorkContextBlock(
-  db: Database.Database,
-  block: DerivedDayBlock,
-  focusSessions: FocusSession[],
-): WorkContextBlock {
-  const sessions = block.sessions.map(derivedSessionToAppSession)
-  const topApps = topAppsFromDerivedSessions(sessions)
-  const websites = getWebsiteSummariesForRange(db, block.startTime, block.endTime).slice(0, 5)
-  const pageTitles = block.sessions
-    .map((session) => session.page_title?.trim())
-    .filter((title): title is string => Boolean(title))
-    .filter((title, index, titles) => titles.indexOf(title) === index)
-    .slice(0, 4)
-  const dominantCategory = toAppCategory(block.dominantCategory)
-  const labelSource = block.labelSource === 'ai'
-    ? 'ai'
-    : block.labelSource === 'artifact'
-      ? 'artifact'
-      : 'rule'
-  const confidence = block.confidence === 'observed' ? 'high' : 'low'
-  return {
-    id: block.id,
-    startTime: block.startTime,
-    endTime: block.endTime,
-    dominantCategory,
-    categoryDistribution: categoryDistributionFor(sessions),
-    ruleBasedLabel: block.label,
-    aiLabel: null,
-    sessions,
-    topApps,
-    websites,
-    keyPages: pageTitles,
-    pageRefs: [],
-    documentRefs: [],
-    topArtifacts: [],
-    workflowRefs: [],
-    label: {
-      current: block.label,
-      source: labelSource,
-      confidence: confidence === 'high' ? 0.9 : 0.45,
-      narrative: null,
-      ruleBased: block.label,
-      aiSuggested: null,
-      override: null,
-    },
-    focusOverlap: focusOverlapForBlock(focusSessions, block.startTime, block.endTime),
-    evidenceSummary: {
-      apps: topApps,
-      pages: [],
-      documents: [],
-      domains: websites.map((website) => website.domain),
-    },
-    heuristicVersion: `derived:${PROJECTION_VERSION}`,
-    computedAt: Date.now(),
-    switchCount: Math.max(0, sessions.length - 1),
-    confidence,
-    isLive: false,
-  }
-}
-
 function getDerivedDayTimelinePayload(db: Database.Database, dateStr: string): DayTimelinePayload | null {
   if (dateStr === localDateString()) return null
   const day = readDerivedDay(db, dateStr)
@@ -229,7 +115,20 @@ function getDerivedDayTimelinePayload(db: Database.Database, dateStr: string): D
   const sessions = day.sessions.map(derivedSessionToAppSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
-  const blocks = day.blocks.map((block) => derivedBlockToWorkContextBlock(db, block, focusSessions))
+  // Past days must go through the same coalescing pipeline as today. The
+  // precomputed derived_blocks are raw, un-coalesced chunks (the source of the
+  // 100+ micro-block timelines on past days), so rebuild blocks from the
+  // derived sessions instead of mapping derived_blocks one-to-one.
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  // Persist the reconstructed blocks into timeline_blocks. Without this the
+  // derived view's block IDs exist only in memory, so any block-scoped write
+  // (regenerate label, save override, attribute-to-client) failed the
+  // timeline_blocks foreign key (R2), and the day-level "Rebuild" had nothing
+  // to act on (R1). Persisting here makes the displayed blocks and the stored
+  // blocks the same rows, so edits land and survive a recompute (block IDs are
+  // content-derived, so the next reconstruction reuses them and picks the
+  // override back up).
+  persistTimelineDay(db, dateStr, blocks)
   const segments = buildDerivedSegments(dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions

@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import crypto from 'node:crypto'
 import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
@@ -34,9 +35,9 @@ import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
-import { scheduleTimelineAIJobs } from '../services/ai'
+import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC } from '@shared/types'
@@ -52,6 +53,8 @@ import type {
   ProjectSummary,
   RollupEntry,
   DayWorkSessionsPayload,
+  WorkContextBlock,
+  WorkContextInsight,
   TimelineWorkSession,
   WorkMemorySettingsSummary,
 } from '@shared/types'
@@ -313,6 +316,47 @@ export function registerDbHandlers(): void {
     const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
     scheduleTimelineAIJobs(payload)
     return payload
+  })
+
+  ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string) => {
+    // "Rebuild" is intentionally no longer a destructive block wipe. Days
+    // already self-heal on open; the useful manual action is to spend AI work
+    // only where the day is still on a deterministic floor or low-confidence
+    // label, preserving curated AI labels and user overrides.
+    const db = getDb()
+    const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    let changed = false
+    let attempted = 0
+    const failures: string[] = []
+
+    for (const block of payload.blocks) {
+      if (!shouldReanalyzeBlockWithAI(block)) continue
+      attempted++
+      try {
+        const insight = await generateWorkBlockInsight(
+          { ...block, label: { ...block.label, override: null } },
+          { jobType: 'block_cleanup_relabel', triggerSource: 'system', throwOnError: true },
+        )
+        changed = applyAIInsightToTimelineBlock(db, block, insight) || changed
+      } catch (error) {
+        console.warn(`[timeline] AI re-analysis failed for block ${block.id}:`, error)
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    if (attempted > 0 && !changed && failures.length > 0) {
+      throw new Error(`AI re-analysis failed: ${failures[0]}`)
+    }
+
+    if (changed) {
+      invalidateProjectionScope('timeline', 'timeline-ai-reanalysis')
+      invalidateProjectionScope('apps', 'timeline-ai-reanalysis')
+      invalidateProjectionScope('insights', 'timeline-ai-reanalysis')
+    }
+
+    const refreshed = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    scheduleTimelineAIJobs(refreshed)
+    return refreshed
   })
 
   ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
@@ -776,4 +820,48 @@ function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSe
       isFocused: FOCUSED_CATEGORIES.includes(live.category),
     },
   ].sort((left, right) => left.startTime - right.startTime)
+}
+
+function applyAIInsightToTimelineBlock(
+  db: ReturnType<typeof getDb>,
+  block: WorkContextBlock,
+  insight: WorkContextInsight,
+): boolean {
+  const label = insight.label?.trim()
+  if (!label) return false
+
+  const now = Date.now()
+  const result = db.prepare(`
+    UPDATE timeline_blocks
+    SET label_current = ?,
+        label_source = 'ai',
+        label_confidence = ?,
+        narrative_current = ?,
+        computed_at = ?
+    WHERE id = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM block_label_overrides
+        WHERE block_id = ?
+      )
+  `).run(label, 0.72, insight.narrative ?? null, now, block.id, block.id)
+
+  if (result.changes === 0) return false
+
+  const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
+  db.prepare(`
+    INSERT OR REPLACE INTO timeline_block_labels (
+      id,
+      block_id,
+      label,
+      narrative,
+      source,
+      confidence,
+      created_at,
+      model_info_json
+    )
+    VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
+  `).run(`${block.id}:ai:${labelHash}`, block.id, label, insight.narrative ?? null, 0.72, now, null)
+
+  return true
 }

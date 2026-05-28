@@ -323,16 +323,26 @@ function projectFromTitle(title: string): string | null {
   return usefulProjectName(title)
 }
 
-function projectFromUrl(rawUrl: string): string | null {
+// Hosts where a URL path identifies a real code repository. The repo slug is a
+// legitimate project name; the bare hostname of a non-code site is not.
+const CODE_REPO_HOSTS = new Set([
+  'github.com',
+  'gitlab.com',
+  'bitbucket.org',
+])
+
+// Extract a project name only from a recognized code-repository URL
+// (github.com/<owner>/<repo> etc.). Returns null for every other host, so a
+// social, video, or news site can never be promoted into a "<host> development"
+// label. The previous generic `hostname → project` fallback is exactly what
+// produced "Instagram development" / "Youtube development".
+function projectFromRepoUrl(rawUrl: string): string | null {
   try {
     const parsed = new URL(rawUrl)
-    if (parsed.hostname === 'github.com') {
-      const [, , repo] = parsed.pathname.split('/')
-      const useful = usefulProjectName(repo ?? '')
-      if (useful) return useful
-    }
-    if (isLocalhost(parsed.hostname)) return null
-    return usefulProjectName(parsed.hostname.replace(/^www\./, '').split('.')[0] ?? '')
+    const host = parsed.hostname.replace(/^www\./, '')
+    if (!CODE_REPO_HOSTS.has(host)) return null
+    const [, , repo] = parsed.pathname.split('/')
+    return usefulProjectName(repo ?? '')
   } catch {
     return null
   }
@@ -358,6 +368,24 @@ function onlyDistractionEvidence(evidence: ConcurrentEvidence): boolean {
   return domains.length > 0 && domains.every(isDistractionDomain) && evidence.fileActivity.length === 0
 }
 
+// Title/url pairs from concurrent browsing evidence, so a candidate title can
+// be judged against the URL it came from.
+function titledUrls(evidence: ConcurrentEvidence): Array<{ url: string; title: string }> {
+  return [
+    ...evidence.browserContexts.map((row) => ({ url: row.tabUrl ?? '', title: row.tabTitle ?? '' })),
+    ...evidence.overlappingVisits.map((row) => ({ url: row.url ?? '', title: row.pageTitle ?? '' })),
+  ].filter((pair) => pair.title.trim().length > 0)
+}
+
+// A project hint is a deterministic "<project> development" floor label, used
+// only when nothing better (AI, artifact, workflow) is available. It must be
+// grounded in a *real* project signal: the file being edited, a code repository
+// that was open, or a local dev server (localhost) the user was running. It
+// must NEVER be invented from an arbitrary web page title or hostname — a
+// background "YouTube"/"Instagram"/"Inbox (1)" tab is not a project, and that is
+// exactly how a block ended up labeled "<noun> development" with a contradicting
+// category badge (P1). The dev signal has to tie the title to the user's own
+// code, not to whatever site happened to be open.
 export function extractProjectHintFromEvidence(
   block: WorkMemoryBlockInput,
   evidence: ConcurrentEvidence,
@@ -365,20 +393,37 @@ export function extractProjectHintFromEvidence(
   if (!hasDevOrTerminalApp(block)) return null
   if (onlyDistractionEvidence(evidence)) return null
 
-  for (const title of titleCandidates(evidence)) {
+  // 1. The file actually being edited is the strongest, least ambiguous signal.
+  const fileProject = projectFromFileActivity(evidence)
+  if (fileProject) {
+    return {
+      project: fileProject,
+      label: `${fileProject} development`,
+      confidence: 0.78,
+      evidence: evidence.fileActivity.map((row) => row.projectRoot ?? row.filePath).filter(Boolean).slice(0, 2),
+    }
+  }
+
+  // 2. A local dev server (localhost:5173, 127.0.0.1, …) is the user running
+  //    their own app; its page title names the project ("Daylens - localhost:5173").
+  for (const { url, title } of titledUrls(evidence)) {
+    if (!isLocalhost(url)) continue
     const project = projectFromTitle(title)
     if (project) {
       return {
         project,
         label: `${project} development`,
-        confidence: 0.76,
+        confidence: 0.74,
         evidence: [title],
       }
     }
   }
 
+  // 3. A code-repository URL (e.g. github.com/<owner>/<repo>) is a real project.
+  //    projectFromRepoUrl returns null for non-code hosts, so a social or video
+  //    site can never masquerade as a "project" here.
   for (const url of urlCandidates(evidence)) {
-    const project = projectFromUrl(url)
+    const project = projectFromRepoUrl(url)
     if (project) {
       return {
         project,
@@ -386,16 +431,6 @@ export function extractProjectHintFromEvidence(
         confidence: 0.7,
         evidence: [url],
       }
-    }
-  }
-
-  const fileProject = projectFromFileActivity(evidence)
-  if (fileProject) {
-    return {
-      project: fileProject,
-      label: `${fileProject} development`,
-      confidence: 0.72,
-      evidence: evidence.fileActivity.map((row) => row.projectRoot ?? row.filePath).filter(Boolean).slice(0, 2),
     }
   }
 

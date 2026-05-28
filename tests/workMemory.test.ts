@@ -150,7 +150,7 @@ function insertAppSessionForBlock(db: Database.Database, block: WorkMemoryBlockI
   )
 }
 
-test('overlapping website visits provide a generic project development hint', () => {
+test('a localhost dev server title provides a project development hint', () => {
   const db = createDb()
   try {
     const block = ghosttyBlock()
@@ -165,6 +165,39 @@ test('overlapping website visits provide a generic project development hint', ()
 
     assert.equal(hint?.project, 'Daylens')
     assert.equal(hint?.label, 'Daylens development')
+  } finally {
+    db.close()
+  }
+})
+
+test('a web page title is never turned into a "<noun> development" project hint', () => {
+  // The old behavior minted "YouTube development" / "Instagram development" from
+  // any tab title. A non-localhost, non-code web page must yield no hint.
+  for (const visit of [
+    { domain: 'youtube.com', title: 'Some Documentary - YouTube', url: 'https://youtube.com/watch?v=abc' },
+    { domain: 'instagram.com', title: 'Instagram', url: 'https://instagram.com/' },
+    { domain: 'mail.google.com', title: 'Inbox (1)', url: 'https://mail.google.com/' },
+  ]) {
+    const db = createDb()
+    try {
+      const block = ghosttyBlock()
+      insertVisit(db, visit)
+      const evidence = gatherConcurrentEvidence(db, block)
+      assert.equal(extractProjectHintFromEvidence(block, evidence), null, `${visit.domain} should not yield a project hint`)
+    } finally {
+      db.close()
+    }
+  }
+})
+
+test('a github repo URL yields the repo as the project, non-code hosts do not', () => {
+  const db = createDb()
+  try {
+    const block = ghosttyBlock()
+    insertVisit(db, { domain: 'github.com', title: 'irachrist1/daylens-v1', url: 'https://github.com/irachrist1/daylens-v1' })
+    const evidence = gatherConcurrentEvidence(db, block)
+    const hint = extractProjectHintFromEvidence(block, evidence)
+    assert.equal(hint?.project?.toLowerCase().includes('daylens'), true)
   } finally {
     db.close()
   }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
-import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
+import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
@@ -175,10 +175,12 @@ function blockNarrative(block: WorkContextBlock): string | null {
 // every block on the timeline reads consistently instead of some having prose
 // and others showing nothing between the title and the app icons.
 //
-// B11: the duration here sits directly under the clock range (formatClockTime
-// rendered two lines above) — they must match wall-clock. blockActiveSeconds
-// sums clamped session durations and produces 13m for an 8:55-9:09 span (14m
-// wall-clock), so use blockDisplayedSpanSeconds instead.
+// The duration in this prose summary is the block's *active tracked* time, not
+// its wall-clock span. A block that bridges an untracked lull has a span far
+// larger than what was logged inside it; saying "Spent 1h 57m watching …" for a
+// window that only logged 1h 4m overstates the day (R4). blockActiveSeconds
+// (summed session time clamped to span) is the honest figure, and it lines up
+// with the Focus/Drift totals which now use the same basis.
 // Pick a verb that fits the block's dominant category. Keeps deterministic
 // summaries from reading like "56m on X in Y" and instead sounds like the
 // human-voice examples in the V1 punch-list ("Spent 56m preparing …").
@@ -217,7 +219,7 @@ function artifactPhraseForCategory(
 }
 
 function blockShortSummary(block: WorkContextBlock): string {
-  const duration = formatDuration(blockDisplayedSpanSeconds(block))
+  const duration = formatDuration(blockActiveSeconds(block))
   const allApps = block.topApps
     .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
   // Same ownership gate as the label/artifact path: a development block with a
@@ -618,15 +620,26 @@ function normalizeThemeLabel(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+function themeLabelForText(label: string): string {
+  let cleaned = naturalizeInboxLabel(naturalizeLabel(safeTimelineText(label))).trim()
+  const repoTitle = cleaned.match(/^[\w.-]+\/[\w.-]+:\s*(.+)$/)
+  if (repoTitle?.[1]) cleaned = repoTitle[1].trim()
+  return cleaned || label.trim()
+}
+
+function themeLabelForBlock(block: WorkContextBlock): string {
+  return themeLabelForText(railLabelForBlock(block))
+}
+
 function blockThemeKey(block: WorkContextBlock): string {
-  const label = normalizeThemeLabel(railLabelForBlock(block))
+  const label = normalizeThemeLabel(themeLabelForBlock(block))
   if (label && !['building testing', 'mixed work', 'untitled activity', 'web session'].includes(label)) return label
   if (label === 'building testing' || label === 'mixed work') return `cat:${block.dominantCategory}`
   const compatibleArtifact = block.topArtifacts.find((artifact) =>
     artifact.displayTitle?.trim()
     && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
   )
-  if (compatibleArtifact) return normalizeThemeLabel(safeTimelineText(compatibleArtifact.displayTitle.trim()))
+  if (compatibleArtifact) return normalizeThemeLabel(themeLabelForText(compatibleArtifact.displayTitle.trim()))
   if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) {
     const site = block.websites[0]?.domain?.trim()
     if (site) return normalizeThemeLabel(site)
@@ -638,16 +651,16 @@ function buildDayThemes(blocks: WorkContextBlock[]): DayTheme[] {
   const map = new Map<string, DayTheme>()
   for (const block of blocks) {
     const key = blockThemeKey(block)
-    const seconds = blockDisplayedSpanSeconds(block)
+    const seconds = blockActiveSeconds(block)
     const existing = map.get(key)
-    const label = railLabelForBlock(block)
+    const label = themeLabelForBlock(block)
     const apps = block.topApps
       .filter((app) => app.category !== 'system')
       .slice(0, 3)
       .map((app) => formatDisplayAppName(app.appName))
     const artifacts = block.topArtifacts
       .slice(0, 3)
-      .map((artifact) => safeTimelineText(artifact.displayTitle.trim()))
+      .map((artifact) => themeLabelForText(artifact.displayTitle.trim()))
       .filter(Boolean)
 
     if (existing) {
@@ -679,11 +692,38 @@ function productivityScore(totalSeconds: number, focusedSeconds: number, detourS
   return Math.max(0, Math.min(100, Math.round(35 + focusShare * 60 + trackedDepthBonus - detourShare * 12)))
 }
 
-function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void }) {
+// Gates for naming "the shape of the day". A day needs both a floor of tracked
+// time and a handful of substantive blocks before Daylens will describe what it
+// was about — otherwise it says so plainly instead of overreaching on thin data.
+const SHAPE_OF_DAY_MIN_TRACKED_SECONDS = 90 * 60
+const SHAPE_OF_DAY_MIN_BLOCKS = 3
+
+function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
+  const [reanalyzing, setReanalyzing] = useState(false)
+  const [reanalyzeStatus, setReanalyzeStatus] = useState<string | null>(null)
+
+  const handleReanalyze = async () => {
+    if (reanalyzing) return
+    setReanalyzing(true)
+    setReanalyzeStatus(null)
+    try {
+      await ipc.db.rebuildTimelineDay(payload.date)
+      await onRefresh?.()
+      setReanalyzeStatus('AI labels refreshed')
+    } catch (error) {
+      const message = error instanceof Error && error.message.trim()
+        ? error.message.trim()
+        : 'AI re-analysis failed'
+      setReanalyzeStatus(message)
+    } finally {
+      setReanalyzing(false)
+    }
+  }
 
   useEffect(() => {
+    setReanalyzeStatus(null)
     const cached = daySummaryRecapCache.get(payload.date)
     if (cached) {
       setRecap(cached)
@@ -694,18 +734,45 @@ function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelineP
     setRecapLoading(false)
   }, [payload.date])
 
+  // Focus / Drift / Score must be measured in *active tracked* time, not
+  // wall-clock span. A block that bridged a 17-minute untracked lull has a span
+  // far larger than the time actually logged inside it; summing spans inflated
+  // Focused + Drift past the day's tracked total (R3/R4). blockActiveSeconds is
+  // the summed session time clamped to span, so these totals stay within the
+  // tracked total shown in the header.
   const focusedTotal = payload.blocks
     .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockDisplayedSpanSeconds(block), 0)
+    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   const detourTotal = payload.blocks
     .filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockDisplayedSpanSeconds(block), 0)
+    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   const score = productivityScore(payload.totalSeconds, focusedTotal, detourTotal)
   const themes = buildDayThemes(payload.blocks)
   const topThemes = themes.slice(0, 4)
+  // The "clustered around" claim is about the day's focused work; the "drift" is
+  // the non-focused time. Keep them disjoint so the same theme never appears as
+  // both the headline and the distraction (the P3 "named the same items as both
+  // the cluster and the drift" bug). Fall back to the overall top themes only if
+  // no focused theme cleared the bar.
+  const focusedThemes = themes.filter((theme) => FOCUSED_CATEGORIES_SET.has(theme.category))
+  const clusterThemes = (focusedThemes.length > 0 ? focusedThemes : topThemes).slice(0, 2)
+  const clusterKeys = new Set(clusterThemes.map((theme) => normalizeThemeLabel(theme.label)))
   const driftThemes = themes
     .filter((theme) => !FOCUSED_CATEGORIES_SET.has(theme.category))
+    .filter((theme) => !clusterKeys.has(normalizeThemeLabel(theme.label)))
     .slice(0, 2)
+
+  // The shape of the day is a claim about what the day was about. Don't make it
+  // until there is enough tracked activity to support it — early in the day, or
+  // on a sparsely-tracked day, the honest answer is "not yet". This is purely
+  // data-driven (no wall-clock), so a genuinely heavy morning qualifies and a
+  // thin all-day trickle does not. The factual stat tiles below are always safe
+  // to show; only the narrative sentence is gated.
+  const substantiveBlocks = payload.blocks.filter((block) => blockActiveSeconds(block) >= 5 * 60)
+  const hasEnoughForShape =
+    payload.totalSeconds >= SHAPE_OF_DAY_MIN_TRACKED_SECONDS
+    && substantiveBlocks.length >= SHAPE_OF_DAY_MIN_BLOCKS
+    && topThemes.length > 0
 
   return (
     <div style={{
@@ -732,6 +799,35 @@ function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelineP
         </div>
       </div>
 
+      {payload.totalSeconds > 0 && onRefresh && (
+        <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
+          <button
+            type="button"
+            onClick={() => { void handleReanalyze() }}
+            disabled={reanalyzing}
+            style={{
+              justifySelf: 'start',
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface-high)',
+              color: 'var(--color-text-secondary)',
+              borderRadius: 10,
+              padding: '7px 12px',
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: reanalyzing ? 'default' : 'pointer',
+              opacity: reanalyzing ? 0.6 : 1,
+            }}
+          >
+            {reanalyzing ? 'Re-analyzing…' : 'Re-analyze with AI'}
+          </button>
+          {reanalyzeStatus && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
+              {reanalyzeStatus}
+            </div>
+          )}
+        </div>
+      )}
+
       {payload.totalSeconds > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
           <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
@@ -749,15 +845,19 @@ function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelineP
         </div>
       )}
 
-      {payload.totalSeconds > 0 && (
+      {hasEnoughForShape && (
         <div style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)' }}>
-          {topThemes.length > 0
-            ? `The day clustered around ${topThemes.slice(0, 2).map((theme) => theme.label).join(' and ')}. ${driftThemes.length > 0 ? `The main drift came from ${driftThemes.map((theme) => theme.label).join(' and ')}.` : 'Most of the tracked time stayed inside focused work.'}`
-            : 'Daylens captured activity, but there is not enough connected evidence yet to name a strong shape.'}
+          {`The day centered on ${clusterThemes.map((theme) => theme.label).join(' and ')}. ${driftThemes.length > 0 ? `The main drift came from ${driftThemes.map((theme) => theme.label).join(' and ')}.` : 'Most of the tracked time stayed inside focused work.'}`}
         </div>
       )}
 
-      {recap && recap.summary && (
+      {!hasEnoughForShape && payload.totalSeconds > 0 && (
+        <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+          Not enough tracked activity yet to name the shape of the day. Daylens fills this in as the day builds up.
+        </div>
+      )}
+
+      {hasEnoughForShape && recap && recap.summary && (
         <div style={{
           fontSize: 14,
           lineHeight: 1.65,
@@ -769,7 +869,7 @@ function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelineP
 
       {recapLoading && null}
 
-      {!recap && payload.totalSeconds === 0 && (
+      {payload.totalSeconds === 0 && (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
           Nothing tracked yet. Daylens fills this in once the day has something to say.
         </div>
@@ -819,7 +919,7 @@ function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelineP
                   />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
-                      {formatDuration(theme.seconds)} · {theme.blocks.length} related stretch{theme.blocks.length === 1 ? '' : 'es'}
+                      {formatDuration(theme.seconds)}{theme.blocks.length > 1 ? ` · ${theme.blocks.length} stretches` : ''}
                     </div>
                     <InlineRevealText
                       text={theme.label}
@@ -879,7 +979,7 @@ function BlockInspector({
   }, [block?.id])
 
   if (!block) {
-    return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} />
+    return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
@@ -919,7 +1019,7 @@ function BlockInspector({
           {userVisibleBlockLabel(block)}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockDisplayedSpanSeconds(block))}
+          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
       </div>
 
