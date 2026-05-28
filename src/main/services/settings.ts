@@ -54,6 +54,7 @@ const DEFAULTS: AppSettings = {
   mcpServerEnabled: false,
   imessageCaptureEnabled: false,
   workMemoryConsolidationEnabled: true,
+  useRemoteAI: true,
 }
 
 export function getSettings(): AppSettings {
@@ -99,6 +100,7 @@ export function getSettings(): AppSettings {
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
     imessageCaptureEnabled: (_store.get('imessageCaptureEnabled', false) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
+    useRemoteAI: (_store.get('useRemoteAI', true) as boolean),
   }
 }
 
