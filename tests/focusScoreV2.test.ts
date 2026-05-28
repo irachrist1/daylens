@@ -99,3 +99,25 @@ test('computeFocusScoreV2 merges continuous same-category sessions', () => {
   assert.equal(breakdown.deepWorkSessionCount, 1)
   assert.equal(breakdown.switchCount, 1)
 })
+
+test('computeFocusScoreV2 scores steady dev blocks with modest drift in the 75-85 band', () => {
+  const breakdown = computeFocusScoreV2({
+    sessions: [
+      session(0, 50, 'development'),
+      session(50, 25, 'communication'),
+      session(75, 50, 'development'),
+      session(125, 25, 'communication'),
+      session(150, 50, 'development'),
+      session(200, 50, 'development'),
+      session(250, 50, 'communication'),
+    ],
+    totalActiveSeconds: 5 * 60 * 60,
+  })
+
+  assert.equal(breakdown.deepWorkSessionCount, 3)
+  assert.equal(breakdown.longestStreakSeconds, 100 * 60)
+  assert.ok(
+    breakdown.deepWorkPct !== null && breakdown.deepWorkPct >= 75 && breakdown.deepWorkPct <= 85,
+    `expected steady dev day to land in 75-85 band, got ${breakdown.deepWorkPct}`,
+  )
+})

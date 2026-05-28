@@ -160,10 +160,21 @@ export function computeFocusScoreV2(input: FocusScoreV2Input): FocusScoreBreakdo
   closeStreak()
   const hasEnoughData = totalActiveSeconds >= MIN_SCORE_ACTIVE_SECONDS
 
+  const rawDeepWorkPct = hasEnoughData
+    ? Math.round((deepWorkSeconds / totalActiveSeconds) * 100)
+    : null
+  // Repeated 25m+ focus blocks now get continuity credit so steady dev days with modest drift do not read as failing focus days.
+  const deepWorkPct = rawDeepWorkPct !== null
+    && rawDeepWorkPct >= 60
+    && rawDeepWorkPct < 85
+    && deepWorkSessionCount >= 3
+    && longestStreakSeconds >= 35 * 60
+    && switchCount <= sessions.length
+      ? Math.min(85, rawDeepWorkPct + Math.min(15, Math.round((100 - rawDeepWorkPct) * 0.4)))
+      : rawDeepWorkPct
+
   return {
-    deepWorkPct: hasEnoughData
-      ? Math.round((deepWorkSeconds / totalActiveSeconds) * 100)
-      : null,
+    deepWorkPct,
     longestStreakSeconds,
     switchCount,
     deepWorkSessionCount,
