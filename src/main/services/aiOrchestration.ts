@@ -4,6 +4,7 @@ import { getDb } from './database'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
+import { getConvexSiteUrl, getSessionToken } from './workspaceLinker'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -389,6 +390,55 @@ async function resolveProviderConfigsForJob(
   return configs
 }
 
+// R6: surfaces eligible for server-side generation. These are self-contained
+// (the desktop builds the full prompt locally), so they can run through the
+// workspace key without a local provider. Chat and report generation are
+// deliberately excluded — they carry thread/agentic semantics the simple
+// surface endpoint does not model.
+const REMOTE_AI_ELIGIBLE_JOBS = new Set<AIJobType>(['day_summary', 'week_review', 'app_narrative'])
+
+// Attempt server-side generation against the linked workspace. Returns the
+// generated text, or null when remote AI is off, the workspace is not linked,
+// the job is not eligible, or the request fails — every null falls back to the
+// local provider path so a transient remote failure never blocks a summary.
+async function tryRemoteSurfaceSummary(
+  jobType: AIJobType,
+  settings: AppSettings,
+  systemPrompt: string,
+  userMessage: string,
+  maxOutputTokens: number,
+): Promise<string | null> {
+  if (settings.useRemoteAI === false) return null
+  if (!REMOTE_AI_ELIGIBLE_JOBS.has(jobType)) return null
+
+  const siteUrl = getConvexSiteUrl()
+  const sessionToken = await getSessionToken()
+  if (!siteUrl || !sessionToken) return null
+
+  try {
+    const res = await fetch(`${siteUrl}/remote/aiSurfaceSummary`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionToken}`,
+      },
+      // Model is intentionally omitted: the server picks its allowed default,
+      // which avoids a model_not_allowed rejection from desktop tier names.
+      body: JSON.stringify({ system: systemPrompt, userContent: userMessage, maxTokens: maxOutputTokens }),
+    })
+    if (!res.ok) {
+      console.warn(`[ai] remote surface summary failed for ${jobType}: ${res.status}`)
+      return null
+    }
+    const data = (await res.json()) as { text?: unknown }
+    const text = typeof data.text === 'string' ? data.text.trim() : ''
+    return text.length > 0 ? text : null
+  } catch (error) {
+    console.warn(`[ai] remote surface summary error for ${jobType}:`, error instanceof Error ? error.message : error)
+    return null
+  }
+}
+
 export async function executeTextAIJob(
   payload: {
     jobType: AIJobType
@@ -427,6 +477,49 @@ export async function executeTextAIJob(
     role: message.role,
     content: redactAIText(message.content, settings),
   }))
+
+  // R6: try the linked workspace's server key first for eligible surfaces, so a
+  // user without a local provider key still gets summaries. Any failure falls
+  // through to the local provider loop below.
+  const remoteText = await tryRemoteSurfaceSummary(
+    payload.jobType,
+    settings,
+    systemPrompt,
+    userMessage,
+    executionOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+  )
+  if (remoteText !== null) {
+    startAIUsageEvent(getDb(), {
+      id: eventId,
+      jobType: payload.jobType,
+      screen: payload.screen ?? definition.screen,
+      triggerSource: payload.triggerSource,
+      provider: 'anthropic',
+      model: 'remote-workspace',
+      startedAt,
+    })
+    const completedAt = Date.now()
+    finishAIUsageEvent(getDb(), {
+      id: eventId,
+      provider: 'anthropic',
+      model: 'remote-workspace',
+      success: true,
+      completedAt,
+      latencyMs: completedAt - startedAt,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      cacheHit: false,
+    })
+    return {
+      text: remoteText,
+      config: { provider: 'anthropic', apiKey: null, model: 'remote-workspace' },
+      usage: null,
+      cachePolicy: definition.cachePolicy,
+    }
+  }
+
   const configs = await resolveProviderConfigsForJob(payload.jobType, settings, payload.preferredProviderOverride)
 
   startAIUsageEvent(getDb(), {

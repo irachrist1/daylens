@@ -1313,6 +1313,11 @@ export default function Settings() {
                       control={<Toggle checked={settings.aiPromptCachingEnabled ?? true} onChange={(value) => void persist({ aiPromptCachingEnabled: value })} />}
                     />
                     <SettingsRow
+                      title="Use workspace AI"
+                      description="Generate summaries through your linked workspace so you don't need a local key. Falls back to your local provider if it's unavailable."
+                      control={<Toggle checked={settings.useRemoteAI ?? true} onChange={(value) => void persist({ useRemoteAI: value })} />}
+                    />
+                    <SettingsRow
                       title="Spend soft limit (USD)"
                       control={
                         <input

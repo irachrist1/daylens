@@ -982,6 +982,7 @@ export interface AppSettings {
   mcpServerEnabled?: boolean
   imessageCaptureEnabled?: boolean   // macOS opt-in: mirrors ~/Library/Messages/chat.db into Daylens. Requires Full Disk Access.
   workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
+  useRemoteAI?: boolean   // Generate AI surfaces (app narrative, week review, day summary) via the linked workspace's server key instead of a local provider. Falls back to local on failure.
 }
 
 // In-flight session that has not yet been flushed to the DB.
