@@ -2604,6 +2604,8 @@ function getLightweightDayPayload(
   dateStr: string,
 ): DayTimelinePayload | null {
   const [fromMs, toMs] = localDayBounds(dateStr)
+  const sessions = getSessionsForRange(db, fromMs, toMs)
+  const websitesForDay = getWebsiteSummariesForRange(db, fromMs, toMs)
 
   const rows = db.prepare(`
     SELECT
@@ -2640,12 +2642,7 @@ function getLightweightDayPayload(
   }>
 
   if (rows.length === 0) {
-    const hasSessions = db.prepare(`
-      SELECT 1 FROM app_sessions
-      WHERE start_time >= ? AND start_time < ?
-      LIMIT 1
-    `).get(fromMs, toMs)
-    if (!hasSessions) {
+    if (sessions.length === 0) {
       return emptyLightweightDayPayload(dateStr)
     }
     return null
@@ -2684,26 +2681,31 @@ function getLightweightDayPayload(
     const overrideRow = labelRows.find(r => r.source === 'user')
 
     const memberRows = db.prepare(`
-      SELECT weight_seconds
+      SELECT member_id, weight_seconds
       FROM timeline_block_members
       WHERE block_id = ? AND member_type = 'app_session'
-    `).all(row.id) as Array<{ weight_seconds: number }>
+    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
 
-    const blockSessions = memberRows.map((r) => ({
-      durationSeconds: r.weight_seconds,
-      startTime: row.start_time,
-      endTime: row.end_time,
-    })) as any[]
+    const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
+    const blockSessions = sessions.filter((session) => sessionIds.has(session.id))
 
-    const websites = (evidence.domains ?? []).map((domain) => ({
-      domain,
-      totalSeconds: 0,
-      visitCount: 0,
-      topTitle: null,
-      browserBundleId: null,
-    })) as WebsiteSummary[]
+    const blockWebsites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
+    const websites = blockWebsites.length > 0
+      ? blockWebsites
+      : (evidence.domains ?? []).map((domain) => ({
+          domain,
+          totalSeconds: 0,
+          visitCount: 0,
+          topTitle: null,
+          browserBundleId: null,
+        })) as WebsiteSummary[]
 
-    const keyPages: string[] = []
+    const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
+    const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
+      .map((page) => page.title?.trim())
+      .filter((title): title is string => Boolean(title))
+      .filter((title, index, titles) => titles.indexOf(title) === index)
+      .slice(0, 4)
 
     const focusRows = db.prepare(`
       SELECT member_id, weight_seconds
@@ -2712,7 +2714,7 @@ function getLightweightDayPayload(
     `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
 
     const focusSessionIds = focusRows.map((r) => Number(r.member_id))
-    const focusTotalSeconds = focusRows[0]?.weight_seconds ?? 0
+    const focusTotalSeconds = focusRows.reduce((sum, r) => sum + r.weight_seconds, 0)
     const durationSec = Math.max(1, (row.end_time - row.start_time) / 1000)
     const focusOverlap = {
       totalSeconds: focusTotalSeconds,
@@ -2727,11 +2729,15 @@ function getLightweightDayPayload(
       categoryDistribution = {}
     }
 
-    const blockActiveSec = memberRows.reduce((sum, r) => sum + r.weight_seconds, 0)
+    const blockActiveSec = blockSessions.length > 0
+      ? blockSessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+      : memberRows.reduce((sum, r) => sum + r.weight_seconds, 0)
     totalSeconds += blockActiveSec
     if (FOCUSED_CATEGORIES.includes(row.dominant_category)) {
       focusSeconds += blockActiveSec
     }
+    const evidenceApps = Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : []
+    const topApps = evidenceApps.length > 0 ? evidenceApps : topAppsFromSessions(blockSessions)
 
     blocks.push({
       id: row.id,
@@ -2742,7 +2748,7 @@ function getLightweightDayPayload(
       ruleBasedLabel: ruleLabel,
       aiLabel: aiLabel,
       sessions: blockSessions,
-      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      topApps,
       websites,
       keyPages,
       pageRefs,
@@ -2760,7 +2766,7 @@ function getLightweightDayPayload(
       },
       focusOverlap,
       evidenceSummary: {
-        apps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+        apps: topApps,
         pages: pageRefs,
         documents: documentRefs,
         domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
@@ -2779,21 +2785,28 @@ function getLightweightDayPayload(
   }
 
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
+  const segments = buildSegmentsForDay(db, dateStr, blocks)
+  const activeSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+  const focusedSeconds = sessions
+    .filter((session) => session.isFocused)
+    .reduce((sum, session) => sum + session.durationSeconds, 0)
+  const payloadTotalSeconds = activeSeconds > 0 ? activeSeconds : totalSeconds
+  const payloadFocusSeconds = activeSeconds > 0 ? focusedSeconds : focusSeconds
 
   return {
     date: dateStr,
-    sessions: [],
-    websites: [],
+    sessions,
+    websites: websitesForDay,
     blocks,
-    segments: [],
+    segments,
     focusSessions,
     computedAt: Date.now(),
     version: TIMELINE_HEURISTIC_VERSION,
-    totalSeconds,
-    focusSeconds,
-    focusPct: totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0,
-    appCount: 0,
-    siteCount: 0,
+    totalSeconds: payloadTotalSeconds,
+    focusSeconds: payloadFocusSeconds,
+    focusPct: payloadTotalSeconds > 0 ? Math.round((payloadFocusSeconds / payloadTotalSeconds) * 100) : 0,
+    appCount: new Set(sessions.map((session) => session.bundleId)).size,
+    siteCount: websitesForDay.length,
   }
 }
 
