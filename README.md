@@ -8,6 +8,12 @@ Daylens is a **local-first personal memory system** for your laptop (macOS, Wind
 
 With a grounded **AI chat interface** and a built-in **Model Context Protocol (MCP) server**, Daylens allows you, and the AI tools you already use (like Cursor, Claude Code, or Claude Desktop), to ask grounded questions about your digital past and retrieve exact context instantly.
 
+## Active Branch
+
+| Track | Branch | Commit | Remote | Status |
+|---|---|---|---|---|
+| V1 integration | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` | `v1` → `github.com/irachrist1/daylens-v1` | Work Memory Batch 1 code-proven; package/runtime validation not performed |
+
 ---
 
 ## 🌟 Hackathon Focus: Track 3 — Economic Empowerment & Education

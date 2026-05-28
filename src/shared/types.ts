@@ -472,7 +472,7 @@ export interface WebsiteSummary {
   canonicalBrowserId?: string | null
 }
 
-export type LabelSource = 'rule' | 'artifact' | 'workflow' | 'ai' | 'user'
+export type LabelSource = 'rule' | 'artifact' | 'workflow' | 'memory' | 'ai' | 'user'
 
 export interface OpenTarget {
   kind: 'external_url' | 'local_path' | 'unsupported'

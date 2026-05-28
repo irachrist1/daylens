@@ -51,6 +51,12 @@ import {
   titleLooksUseful,
   websiteDisplayLabel,
 } from '../lib/appIdentity'
+import {
+  extractProjectHintFromEvidence,
+  gatherConcurrentEvidence,
+  matchPromotedPatterns,
+  memoryEnabled,
+} from './workMemory'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -1614,12 +1620,23 @@ function finalizedLabelForBlock(
   block: WorkContextBlock,
 ): WorkContextBlock {
   const override = getBlockLabelOverride(db, block.id)
+  const concurrentEvidence = memoryEnabled() && !override?.label?.trim()
+    ? gatherConcurrentEvidence(db, block)
+    : null
+  const memoryPattern = concurrentEvidence
+    ? matchPromotedPatterns(db, block, concurrentEvidence)
+    : null
+  const projectHint = concurrentEvidence
+    ? extractProjectHintFromEvidence(block, concurrentEvidence)
+    : null
   const artifactLabel = preferredArtifactLabel(block)
   const workflowLabel = usefulBlockLabel(block, block.workflowRefs[0]?.label)
   const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
   const aiLabel = usefulBlockLabel(block, block.aiLabel)
 
   const chosen = override?.label?.trim()
+    || memoryPattern?.label
+    || projectHint?.label
     || artifactLabel
     || workflowLabel
     || aiLabel
@@ -1628,15 +1645,17 @@ function finalizedLabelForBlock(
 
   const source = override?.label?.trim()
     ? 'user'
-    : artifactLabel && chosen === artifactLabel
-      ? 'artifact'
-      : workflowLabel && chosen === workflowLabel
-        ? 'workflow'
-        : aiLabel && chosen === aiLabel
-          ? 'ai'
-          : ruleLabel && chosen === ruleLabel
-            ? 'rule'
-            : 'rule'
+    : (memoryPattern?.label && chosen === memoryPattern.label) || (projectHint?.label && chosen === projectHint.label)
+      ? 'memory'
+      : artifactLabel && chosen === artifactLabel
+        ? 'artifact'
+        : workflowLabel && chosen === workflowLabel
+          ? 'workflow'
+          : aiLabel && chosen === aiLabel
+            ? 'ai'
+            : ruleLabel && chosen === ruleLabel
+              ? 'rule'
+              : 'rule'
 
   return {
     ...block,
@@ -1645,6 +1664,8 @@ function finalizedLabelForBlock(
       source,
       confidence: source === 'user'
         ? 1
+        : source === 'memory'
+          ? memoryPattern?.confidence ?? projectHint?.confidence ?? 0.72
         : source === 'artifact'
           ? 0.88
           : source === 'workflow'

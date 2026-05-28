@@ -4,7 +4,7 @@ Last updated: 2026-05-28
 
 Single source of truth for Daylens **Work Memory** — a local-first system that learns what your activity blocks *mean*, connects signals across apps (terminal + browser + editor), and evolves with you over time. Inspired by [OpenClaw](https://docs.openclaw.ai/concepts/memory) and [Hermes Agent](https://github.com/NousResearch/hermes-agent) memory architectures, adapted to structured desktop activity data.
 
-**Status:** Vision documented. **Research/planning phase** — no implementation until research deliverables below are complete and the user approves an implementation prompt.
+**Status:** Batch 1 implemented. **Code-proven through migration, focused work-memory tests, and typecheck**; not yet validated in a packaged app or against real user activity data.
 
 This track is separate from:
 - [STATUS.md](./STATUS.md) — V1 UX/performance fixes (Settings, recap, etc.)
@@ -19,8 +19,9 @@ Daylens is **in active development**. Do not assume earlier agent claims are tru
 | Field | Value |
 |---|---|
 | Remote | `v1` → `github.com/irachrist1/daylens-v1` |
-| Branch | *Confirm at session start after user merge* |
-| Research completed on | local worktree (may differ from CI branch — reconcile before Batch 1 impl) |
+| Branch | `main` |
+| Batch 1 commit | `011245254b9ee92a2d2992adee4887f470243dc6` |
+| Research completed on | local worktree; Batch 1 implementation reconciled to `v1/main` |
 
 ---
 
@@ -274,7 +275,7 @@ A thorough code audit has mapped the exact files and lines where block labels an
 #### 1. Timeline Block Labels (Code-Proven)
 *   **Resolution and Fallbacks**:
     *   `src/shared/blockLabel.ts` — `userVisibleBlockLabel(block)` (lines 85–117, `code-proven`): Determines the final text rendered on each timeline block card. Priority order: `block.label.override` (trim-checked, preserved verbatim) $\rightarrow$ `block.label.current` $\rightarrow$ `block.aiLabel` $\rightarrow$ `block.ruleBasedLabel` $\rightarrow$ dominant artifact (`topArtifacts[].displayTitle` naturalized) $\rightarrow$ clean website domain $\rightarrow$ `Untitled block`.
-    *   `src/main/services/workBlocks.ts` — `finalizedLabelForBlock` (lines 1612–1661, `code-proven`): Invoked during day persistence. Fallback order: `override` $\rightarrow$ `preferredArtifactLabel` $\rightarrow$ `workflowLabel` $\rightarrow$ `aiLabel` $\rightarrow$ `ruleLabel` $\rightarrow$ `userVisibleLabelForBlock` $\rightarrow$ `Untitled block`. Records `label.source` ('user', 'artifact', 'workflow', 'ai', 'rule') and `confidence` rating.
+    *   `src/main/services/workBlocks.ts` — `finalizedLabelForBlock` (`code-proven`): Invoked during day persistence. Batch 1 order is `override` $\rightarrow$ promoted memory pattern $\rightarrow$ concurrent project hint $\rightarrow$ `preferredArtifactLabel` $\rightarrow$ `workflowLabel` $\rightarrow$ `aiLabel` $\rightarrow$ `ruleLabel` $\rightarrow$ `userVisibleLabelForBlock`. Records `label.source` (`'user'`, `'memory'`, `'artifact'`, `'workflow'`, `'ai'`, `'rule'`) and `confidence` rating.
     *   `src/main/services/workBlocks.ts` — `userVisibleLabelForBlock` (lines 2272–2292, `code-proven`): Baseline fallback chain using `aiLabel` $\rightarrow$ `ruleBasedLabel` $\rightarrow$ joined domain names $\rightarrow$ 'Untitled block'.
 *   **Aesthetic Impact**: The mismatch between `isUsefulLabel` (in renderer) and `usefulBlockLabel` (in `workBlocks.ts`, which performs `labelLooksToolOnly` checks) leads to labels reverting to slow site names or "Untitled block" even when useful artifacts are present.
 
@@ -576,7 +577,7 @@ In compliance with local-first privacy principles (`docs/AGENTS.md` §11, `code-
 
 #### Rollback Strategy
 All database migrations include robust `down` blocks. If any memory-related regression occurs in the UI:
-1.  Disable memory lookups via a single global feature flag: `aiMemoryEnabled = false` in `src/main/services/workBlocks.ts`.
+1.  Disable memory lookups via the default-on feature flag: set `DAYLENS_WORK_MEMORY_ENABLED=0`.
 2.  Downgrade database schema back to version `28` via SQLite rollback scripts, dropping the isolated memory tables while leaving the core `timeline_blocks` table completely intact.
 
 ---
@@ -628,21 +629,43 @@ Research phase done when:
 - [x] R1–R8 deliverables filled with `code-proven` citations
 - [x] Schema and evening job spec reviewed against existing migrations
 - [x] At least three concrete before/after examples (Ghostty/Daylens, Building & Testing rollup, Apps "needs more context")
-- [ ] Implementation plan approved by user
+- [x] Implementation plan approved by user for Batch 1
 
-Implementation phase done when (future):
+Implementation phase done when:
 
-- [ ] Ghostty block with co-active Daylens tab labels as workstream, not "Terminal work"
-- [ ] User override teaches memory; next matching block uses learned label
+- [x] Ghostty block with co-active project/localhost tab labels as workstream, not "Terminal work" (`code-proven` by `tests/workMemory.test.ts`; not packaged-runtime validated)
+- [x] User override teaches memory; next matching block uses learned label (`code-proven` by `tests/workMemory.test.ts`)
 - [ ] Evening job runs locally; daily archive row exists
 - [ ] Settings shows learned patterns; user can delete one
-- [ ] No regression: typecheck + existing recap/block tests pass
+- [x] No regression gate for Batch 1 scope: typecheck + focused migration/work-memory tests pass
 
 ---
 
 ## Fix log
 
-*(Empty — implementation has not started.)*
+### 2026-05-28 — Work Memory Batch 1
+
+| Field | Value |
+|---|---|
+| Repo | `v1` → `github.com/irachrist1/daylens-v1` |
+| Branch | `main` |
+| Commit | `011245254b9ee92a2d2992adee4887f470243dc6` |
+| Status | `code-proven`; not packaged-runtime validated; not validated against live personal activity data |
+
+Shipped:
+- Added migration v29 and schema mirror for `context_patterns`, `pattern_occurrences`, `user_memory_facts`, and `daily_memory_archive`.
+- Added `src/main/services/workMemory.ts` with concurrent evidence gathering, generic project hint extraction, promoted pattern matching, override learning, and a default-on feature flag.
+- Wired `finalizedLabelForBlock` priority to `user override → memory pattern → concurrent evidence project hint → artifact → workflow → ai → rule → fallback`.
+- Wired `setBlockLabelOverride` so user renames promote an override pattern at confidence `1.0`.
+- Added focused tests for overlapping project tabs, override learning, promoted-pattern reuse, and YouTube-only entertainment non-learning.
+
+Validation:
+- `npm run typecheck` passed.
+- `npx cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/workMemory.test.ts` passed.
+- `npx cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/migrationRoundtrip.test.ts` passed, including migration to v29.
+
+Not in Batch 1:
+- Evening archive/consolidation job, promotion/decay sweep, memory-augmented AI prompts, Apps rollup integration, Settings UI, and platform shipping.
 
 ---
 
