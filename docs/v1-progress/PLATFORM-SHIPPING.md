@@ -14,8 +14,8 @@ Daylens is **in active development**. Treat this doc as a living plan: read what
 |---|---|
 | Remote | `v1` → `github.com/irachrist1/daylens-v1` |
 | Branch | `main` |
-| Last CI commit | `c8bd80a` |
-| Last CI run | [Preview Builds 26579986419](https://github.com/irachrist1/daylens-v1/actions/runs/26579986419) — mac+win+linux green on `main` (c8bd80a) |
+| Last CI commit | `04f8b33c765e717b8ebf895324b95b35fa8229c2` |
+| Last CI run | [Preview Builds 26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022) and [Verify Linux Runtime 26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639) — green on `main` |
 
 ---
 
@@ -39,11 +39,11 @@ Check off items here as they are completed. Re-order only if a dependency forces
 
 | ID | Item | Status | Notes |
 |---|---|---|---|
-| SH-1 | Native module verify/repair covers all three unpacked natives | ✅ implemented | Fix 1 below. Pending CI proof. |
+| SH-1 | Native module verify/repair covers all three unpacked natives | ✅ CI-proven | Fix 1 below. Preview Builds run 26581189022 passed `verify-packaged-natives.js` on macOS, Windows, and Linux. |
 | SH-2 | Windows in-app updater uses electron-updater `quitAndInstall` | ✅ implemented | Fix 2 below. Pending packaged Windows proof. |
-| SH-3 | `preview-builds.yml` green on mac/win/linux with updated native checks | ✅ CI-proven | `workflow_dispatch` run [26579986419](https://github.com/irachrist1/daylens-v1/actions/runs/26579986419) on `main` / `c8bd80a`: mac (2m59s), win (2m45s), linux (9m19s) all green. Includes `verify-packaged-natives.js` per platform. |
-| SH-4 | `verify-linux-runtime.yml` green (AppImage + DEB + RPM smoke) | ✅ CI-proven | Run [26579964973](https://github.com/irachrist1/daylens-v1/actions/runs/26579964973) on `main` / `c8bd80a`: AppImage + DEB + RPM smoke all green on hosted Ubuntu runner. |
-| SH-5 | Confirm `latest.yml` / `latest-linux.yml` emitted in preview/release artifacts | ✅ CI-proven | Run [26579986419](https://github.com/irachrist1/daylens-v1/actions/runs/26579986419) "Verify preview update metadata" step asserts `dist-release/latest.yml` (win) and `dist-release/latest-linux.yml` (linux) exist; both are uploaded in `daylens-preview-windows` / `daylens-preview-linux` artifacts. |
+| SH-3 | `preview-builds.yml` green on mac/win/linux with updated native checks | ✅ CI-proven | `workflow_dispatch` run [26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022) on `main` / `04f8b33`: mac, win, and linux all green. Includes `verify-packaged-natives.js` per platform. |
+| SH-4 | `verify-linux-runtime.yml` green (AppImage + DEB + RPM smoke) | ✅ CI-proven | Run [26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639) on `main` / `04f8b33`: AppImage + DEB + RPM smoke all green on hosted Ubuntu runner. |
+| SH-5 | Confirm `latest.yml` / `latest-linux.yml` emitted in preview/release artifacts | ✅ CI-proven | Run [26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022) "Verify preview update metadata" step asserts `dist-release/latest.yml` (win) and `dist-release/latest-linux.yml` (linux) exist; both are uploaded in `daylens-preview-windows` / `daylens-preview-linux` artifacts. |
 | SH-6 | Windows smoke test in CI (launch packaged `.exe`, basic health) | ⬜ not started | Linux has smoke infra; Windows has none today. Design minimal headless or scripted launch check. |
 | SH-7 | Manual Windows VM validation checklist | ⬜ not started | Install NSIS build, launch, tray, tracking, updater dry-run. Document SmartScreen bypass steps for testers. |
 | SH-8 | Manual Linux desktop validation checklist | ⬜ not started | AppImage + DEB on real Ubuntu; tray/autostart/keyring spot-check. |
@@ -61,8 +61,8 @@ Check off items here as they are completed. Re-order only if a dependency forces
 | `npm run typecheck` | ✅ passed | 2026-05-28 |
 | `tests/updaterReleaseFeed.test.ts` | ✅ passed (7 tests) | 2026-05-28 |
 | Native scripts syntax (`node -c`) | ✅ passed | 2026-05-28 |
-| `preview-builds.yml` all platforms | ✅ mac+win+linux green (run 26579986419) | 2026-05-28 |
-| `verify-linux-runtime.yml` | ✅ green (run 26579964973) | 2026-05-28 |
+| `preview-builds.yml` all platforms | ✅ mac+win+linux green on `main` / `04f8b33` ([run 26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022)) | 2026-05-28 |
+| `verify-linux-runtime.yml` | ✅ green on `main` / `04f8b33` ([run 26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639)) | 2026-05-28 |
 | Packaged app on real Windows | ⬜ not validated | — |
 | Packaged app on real Linux desktop | ⬜ not validated | — |
 | In-app update end-to-end (Win/Linux) | ⬜ not validated | — |
@@ -80,9 +80,9 @@ Check off items here as they are completed. Re-order only if a dependency forces
 - `scripts/verify-packaged-natives.js` — verifies all three `.node` bindings and JS entry points
 - `scripts/afterPack-native-modules.js` — copies `@paymoapp/active-window` and `keytar` alongside `better-sqlite3`
 
-**Proven:** scripts parse; typecheck passes; layout matches local `node_modules`; Windows CI package passed `verify-packaged-natives.js` in run 26576220347.
+**Proven:** scripts parse; typecheck passes; layout matches local `node_modules`; macOS, Windows, and Linux CI packages passed `verify-packaged-natives.js` in Preview Builds run 26581189022.
 
-**Not proven:** run against macOS/Linux packaged `dist-release/` from CI (needs SH-3 to finish).
+**Not proven:** real-machine launch on macOS/Windows/Linux outside CI packaging.
 
 ---
 
@@ -116,15 +116,15 @@ Result: Windows in-app updates could not complete.
 
 ---
 
-### Validation attempt: 2026-05-28 — SH-3/4/5 closed
+### Validation pass: 2026-05-28 — SH-3/4/5 closed
 
-**Action:** Merged platform CI fixes onto `main` (commit `c8bd80a`: switch matrix to GitHub-hosted runners; commit `04f8b33`: add `latest*.yml` existence assertion). Triggered `preview-builds.yml` via `workflow_dispatch` (run [26579986419](https://github.com/irachrist1/daylens-v1/actions/runs/26579986419)) and `verify-linux-runtime.yml` (run [26579964973](https://github.com/irachrist1/daylens-v1/actions/runs/26579964973)) against `main`.
+**Action:** Merged platform CI fixes onto `main` (commit `c8bd80a`: switch matrix to GitHub-hosted runners; commit `04f8b33`: add `latest*.yml` existence assertion). Triggered `preview-builds.yml` via `workflow_dispatch` (run [26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022)) and used the push-triggered `verify-linux-runtime.yml` (run [26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639)) against `main`.
 
-**Proven (SH-3):** All three preview jobs green on `main` / `c8bd80a` — `Preview mac` (2m59s), `Preview win` (2m45s), `Preview linux` (9m19s). Each ran dependency install, Electron native rebuild, typecheck, Vite build, electron-builder packaging, and `verify-packaged-natives.js`.
+**Proven (SH-3):** All three preview jobs green on `main` / `04f8b33`. Each ran dependency install, Electron native rebuild, typecheck, Vite build, electron-builder packaging, and `verify-packaged-natives.js`.
 
-**Proven (SH-4):** `verify-linux-runtime.yml` run 26579964973 green on hosted Ubuntu runner — AppImage + DEB + RPM smoke complete.
+**Proven (SH-4):** `verify-linux-runtime.yml` run 26581168639 green on hosted Ubuntu runner — AppImage + DEB + RPM smoke complete.
 
-**Proven (SH-5):** Run 26579986419 "Verify preview update metadata" step asserts the existence of `dist-release/latest.yml` (windows) and `dist-release/latest-linux.yml` (linux). Both files are present in the `daylens-preview-windows` and `daylens-preview-linux` artifacts uploaded by that run (artifact upload uses `if-no-files-found: error` over the `latest*.yml` glob).
+**Proven (SH-5):** Run 26581189022 "Verify preview update metadata" step asserts the existence of `dist-release/latest.yml` (Windows) and `dist-release/latest-linux.yml` (Linux). The same run uploaded `daylens-preview-windows` and `daylens-preview-linux` artifacts containing those metadata files.
 
 ---
 
@@ -150,11 +150,11 @@ Verified by reading the source tree. Does **not** imply runtime or CI validation
 
 ---
 
-## CI workflows (exist; green runs not confirmed on current diff)
+## CI workflows
 
 | Workflow | Purpose |
 |---|---|
-| `preview-builds.yml` | Package mac/win/linux; run `verify-packaged-natives.js` |
+| `preview-builds.yml` | Package mac/win/linux; run `verify-packaged-natives.js`; verify Win/Linux update metadata |
 | `verify-linux-runtime.yml` | Linux packages + AppImage/DEB/RPM smoke tests |
 | `release-windows.yml` | NSIS release + optional signing + `latest.yml` |
 | `release-linux.yml` | Linux artifacts + smoke + `latest-linux.yml` |
@@ -210,7 +210,7 @@ Verified by reading the source tree. Does **not** imply runtime or CI validation
 
 | Blocker | Status |
 |---|---|
-| AppImage / deb / rpm packaging | Code-ready; CI not confirmed green |
+| AppImage / deb / rpm packaging | CI-proven in run 26581168639 |
 | Package-manager updates (deb/rpm) | Code-ready; needs pkexec; not validated E2E |
 | GPG repo signing | Not implemented (optional for direct downloads) |
 

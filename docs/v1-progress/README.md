@@ -51,7 +51,7 @@ Tonny is **merging divergent branches**. After a merge, update the **Active bran
 
 | Track | Branch | Commit | Remote | Last updated |
 |---|---|---|---|---|
-| Platform shipping | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (Batch 1 did not change platform shipping status) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
+| Platform shipping | `main` | `04f8b33` (SH-3/4/5 CI-proven) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
 | Work Memory | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (Batch 1 code-proven) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
 | V1 UX fixes | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (current integration branch) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
 
