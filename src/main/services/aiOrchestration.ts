@@ -41,10 +41,14 @@ export interface AITextJobExecutionOptions {
   maxOutputTokens?: number
 }
 
-export const DEFAULT_MAX_OUTPUT_TOKENS = 1024
-// Report-generation markdown sometimes runs long (multi-section narrative,
-// formatted tables). Audit flagged the 1024 cap as occasionally truncating.
-export const LONG_FORM_MAX_OUTPUT_TOKENS = 4096
+// R5 context-32k: the cap is an upper bound, not a target — the model still
+// stops when the answer is done, and per-job timeouts bound any runaway. Every
+// model in the tier table (Haiku 4.5, Sonnet 4.6, plus the Opus override)
+// supports >=32k output, so the surfaces that were clipping rich summaries no
+// longer truncate. Short jobs (block labels, follow-up chips) naturally emit a
+// handful of tokens regardless of this ceiling.
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32000
+export const LONG_FORM_MAX_OUTPUT_TOKENS = 32000
 
 interface AIJobDefinition {
   jobType: AIJobType
@@ -108,8 +112,8 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
-    // Week review prose spans multiple days; the default 1024 cap clips it.
-    maxOutputTokens: 2048,
+    // Week review prose spans multiple days; give it the full 32k budget.
+    maxOutputTokens: 32000,
   },
   app_narrative: {
     jobType: 'app_narrative',
@@ -119,7 +123,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
-    maxOutputTokens: 2048,
+    maxOutputTokens: 32000,
   },
   chat_answer: {
     jobType: 'chat_answer',

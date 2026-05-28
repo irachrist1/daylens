@@ -3560,6 +3560,42 @@ function buildWeekDateRange(weekStartStr: string): { weekStart: string; weekEnd:
   }
 }
 
+// R5 context-32k: feed up to ~28k tokens of evidence to the summary models
+// instead of fixed tiny slices, so day reports, week reviews, and app
+// narratives draw on the full picture and stop reading thin. 4 chars ~= 1
+// token. We hold the input well under the 32k output ceiling so the model has
+// room to respond.
+const CONTEXT_EVIDENCE_TOKEN_BUDGET = 28_000
+const CONTEXT_EVIDENCE_CHAR_BUDGET = CONTEXT_EVIDENCE_TOKEN_BUDGET * 4
+
+// A running char budget shared across every evidence list in one bundle. Each
+// `take` call appends items until either the per-list cap or the remaining
+// shared budget runs out, so the lists compete for one ~28k-token pool rather
+// than each getting an arbitrary fixed slice. The first item of a list is
+// always admitted so a list never silently empties.
+function createEvidenceBudget(budgetChars = CONTEXT_EVIDENCE_CHAR_BUDGET) {
+  let used = 0
+  return function take<T>(
+    items: readonly T[],
+    cost: (item: T) => number,
+    maxItems = Number.MAX_SAFE_INTEGER,
+  ): T[] {
+    const packed: T[] = []
+    for (const item of items) {
+      if (packed.length >= maxItems) break
+      const itemCost = cost(item)
+      if (packed.length > 0 && used + itemCost > budgetChars) break
+      packed.push(item)
+      used += itemCost
+    }
+    return packed
+  }
+}
+
+function evidenceCost(value: unknown): number {
+  return JSON.stringify(value)?.length ?? 0
+}
+
 function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null {
   const db = getDb()
   const { weekStart, weekEnd, dates } = buildWeekDateRange(weekStartStr)
@@ -3689,17 +3725,23 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
         focusPct: totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0,
         activeDayCount: activeDays.length,
       },
-      dailyHighlights: activeDays.map((payload) => ({
-        date: payload.date,
-        tracked: formatDuration(payload.totalSeconds),
-        focus: formatDuration(payload.focusSeconds),
-        focusPct: payload.focusPct,
-        topBlocks: payload.blocks.slice(0, 3).map((block) => ({
-          label: block.label.current,
-          duration: formatDuration(blockActiveSeconds(block)),
-          artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
-        })),
-      })),
+      dailyHighlights: (() => {
+        // R5: pack each day's blocks against one shared ~28k-token budget rather
+        // than capping every day at three, so a dense week reaches the model in
+        // full instead of three-blocks-per-day thin.
+        const take = createEvidenceBudget()
+        return activeDays.map((payload) => ({
+          date: payload.date,
+          tracked: formatDuration(payload.totalSeconds),
+          focus: formatDuration(payload.focusSeconds),
+          focusPct: payload.focusPct,
+          topBlocks: take(payload.blocks, evidenceCost).map((block) => ({
+            label: block.label.current,
+            duration: formatDuration(blockActiveSeconds(block)),
+            artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
+          })),
+        }))
+      })(),
       topCategories,
       namedArtifacts: topArtifacts,
     }, null, 2),
@@ -3780,6 +3822,14 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
       sharePct: totalHourSeconds > 0 ? Math.round((entry.totalSeconds / totalHourSeconds) * 100) : 0,
     }))
 
+  // R5: pack artifacts, paired apps, and block appearances against one shared
+  // ~28k-token budget instead of fixed slices, so a heavy day's evidence is not
+  // clipped to the first handful of items.
+  const take = createEvidenceBudget()
+  const packedArtifacts = take(detail.topArtifacts, evidenceCost)
+  const packedPairedApps = take(filteredPairedApps, evidenceCost)
+  const packedBlockAppearances = take(detail.blockAppearances, evidenceCost)
+
   return {
     title: `${detail.displayName} in the last ${days === 1 ? 'day' : `${days} days`}`,
     scopeLabel: `${detail.displayName} over ${days === 1 ? 'today' : `${days} days`}`,
@@ -3795,16 +3845,16 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
         canonicalAppId: detail.canonicalAppId,
         displayName: detail.displayName,
       },
-      topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => ({
+      topArtifacts: packedArtifacts.map((artifact) => ({
         title: artifact.displayTitle,
         subtitle: artifact.subtitle ?? artifact.host ?? artifact.path ?? null,
         duration: formatDuration(artifact.totalSeconds),
       })),
-      pairedApps: filteredPairedApps.slice(0, 8).map((item) => ({
+      pairedApps: packedPairedApps.map((item) => ({
         displayName: item.displayName,
         duration: formatDuration(item.totalSeconds),
       })),
-      blockAppearances: detail.blockAppearances.slice(0, 10).map((block) => ({
+      blockAppearances: packedBlockAppearances.map((block) => ({
         label: block.label,
         when: `${localDateKeyForMs(block.startTime)} ${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
       })),
@@ -3812,7 +3862,7 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
     }, null, 2),
     reportMarkdownScaffold: '',
     tableColumns: ['block_label', 'when', 'category'],
-    tableRows: detail.blockAppearances.slice(0, 12).map((block) => ({
+    tableRows: packedBlockAppearances.map((block) => ({
       block_label: block.label,
       when: `${localDateKeyForMs(block.startTime)} ${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
       category: block.dominantCategory,
@@ -3918,6 +3968,13 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
   }, new Map()).entries())
     .sort((left, right) => right[1] - left[1])
 
+  // R5: pack the day's blocks and named sessions against one shared
+  // ~28k-token budget so a long day's evidence is not clipped to the first
+  // dozen-ish blocks.
+  const take = createEvidenceBudget()
+  const packedBlocks = take(payload.blocks, evidenceCost)
+  const packedNamedSessions = take(dayAttribution.sessions, evidenceCost)
+
   return {
     title: `Day report ${dateStr}`,
     scopeLabel: dateStr,
@@ -3935,7 +3992,7 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
         contentLens,
         attribution: {
           summary: dayAttribution.day_summary,
-          namedSessions: dayAttribution.sessions.slice(0, 12).map((session) => ({
+          namedSessions: packedNamedSessions.map((session) => ({
             start: session.start,
             end: session.end,
             active_ms: session.active_ms,
@@ -3951,7 +4008,7 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
     ].join('\n'),
     reportMarkdownScaffold: '',
     tableColumns: ['start', 'end', 'block', 'category', 'apps', 'artifacts', 'duration'],
-    tableRows: payload.blocks.slice(0, 16).map((block) => ({
+    tableRows: packedBlocks.map((block) => ({
       start: formatClock(block.startTime),
       end: formatClock(block.endTime),
       block: block.label.current,
