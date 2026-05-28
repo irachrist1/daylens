@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange } from '../db/queries'
+import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteSummariesForRange, searchBrowser } from '../db/queries'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -434,6 +434,41 @@ function isWeeklyQuestion(normalized: string): boolean {
 function isLearningOrTopicQuestion(normalized: string): boolean {
   return /\b(learn|learned|learning|studied|study|studying|consume|consumed|consuming|read|reading|watched|watching|research|researched|researching)\b/.test(normalized)
     || /\b(?:about|around)\s+["']?[a-z0-9][a-z0-9 _-]{2,}/.test(normalized)
+}
+
+const MONTH_INDEX: Record<string, number> = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+}
+
+function parseNamedMonthRange(normalized: string, reference: Date): { name: string; start: Date; end: Date } | null {
+  const match = normalized.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/)
+  if (!match) return null
+  const month = MONTH_INDEX[match[1]]
+  if (month === undefined) return null
+  const yearMatch = normalized.match(/\b(20\d{2})\b/)
+  const year = yearMatch ? Number(yearMatch[1]) : reference.getFullYear()
+  return {
+    name: `${match[1][0].toUpperCase()}${match[1].slice(1)} ${year}`,
+    start: new Date(year, month, 1, 0, 0, 0, 0),
+    end: new Date(year, month + 1, 1, 0, 0, 0, 0),
+  }
+}
+
+function extractConsumptionTopic(question: string): string | null {
+  const match = question.match(/\b(?:about|around|on)\s+(.+?)\s+\b(?:in|during)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/i)
+  const raw = cleanEntityName(match?.[1] ?? '')
+  return raw.length >= 3 ? raw : null
 }
 
 function isYesterdayQuestion(normalized: string): boolean {
@@ -942,6 +977,40 @@ function evidenceBackedSessionTimeAnswer(
   return [
     `${label} in ${relativeDayLabel(date)} (window-title evidence): ${formatDuration(totalSeconds)} across ${sessions.length} session${sessions.length === 1 ? '' : 's'}.`,
     ...lines,
+  ].join('\n')
+}
+
+function monthlyConsumptionTopicAnswer(question: string, normalized: string, reference: Date, db: Database.Database): string | null {
+  if (!/\b(show|list|everything|what)\b/.test(normalized)) return null
+  if (!/\b(consume|consumed|consuming|read|reading|watched|watching|learn|learned|studied|study|research|researched)\b/.test(normalized)) return null
+  const range = parseNamedMonthRange(normalized, reference)
+  if (!range) return null
+  const topic = extractConsumptionTopic(question)
+  if (!topic) return null
+  const startDate = localDateString(range.start)
+  const endDate = localDateString(new Date(range.end.getTime() - 1))
+  const hits = searchBrowser(db, topic, { startDate, endDate, limit: 60 })
+  if (hits.length === 0) return null
+
+  const seen = new Set<string>()
+  const rows = hits
+    .filter((hit) => hit.pageTitle || hit.url)
+    .sort((left, right) => left.startTime - right.startTime)
+    .filter((hit) => {
+      const key = `${hit.date}:${(hit.pageTitle ?? hit.url ?? '').toLowerCase()}:${hit.domain}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 18)
+
+  if (rows.length === 0) return null
+  return [
+    `${topic} in ${range.name} — captured pages:`,
+    ...rows.map((hit) => {
+      const title = hit.pageTitle ?? hit.url ?? hit.domain
+      return `- ${workItemDayLabel(hit.date)} ${formatTime(hit.startTime)}: "${title}" (${hit.domain})`
+    }),
   ].join('\n')
 }
 
@@ -1984,6 +2053,15 @@ export async function routeInsightsQuestion(
     }
   }
 
+  const monthlyConsumptionAnswer = monthlyConsumptionTopicAnswer(trimmed, normalized, defaultDate, db)
+  if (monthlyConsumptionAnswer) {
+    return {
+      kind: 'answer',
+      answer: monthlyConsumptionAnswer,
+      resolvedContext: { ...resolvedContext, weeklyBrief: null, entity: null },
+    }
+  }
+
   if (process.env.NODE_ENV === 'development') {
     console.log(`[router] q="${trimmed.slice(0, 80)}" allTime=${isAllTimeQuestion(normalized)} weekly=${isWeeklyQuestion(normalized)} yesterday=${isYesterdayQuestion(normalized)}`)
   }
@@ -2688,6 +2766,17 @@ export function shouldUseRouter(message: string): boolean {
   // reject them, even though the router has `exactMomentAnswer` ready.
   for (const pattern of TIME_AT_MOMENT_PATTERNS) {
     if (pattern.test(lower)) return true
+  }
+
+  if (
+    /\b(consume|consumed|consuming|read|reading|watched|watching|learn|learned|studied|study|research|researched)\b/.test(lower)
+    && /\b(?:about|around|on)\s+/.test(lower)
+    && (
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/.test(lower)
+      || /\b(this|last|whole)\s+week\b/.test(lower)
+    )
+  ) {
+    return true
   }
 
   for (const prefix of SYNTHESIS_BLOCK_PREFIXES) {

@@ -4391,6 +4391,7 @@ function weeklyBriefPrompts(
     'Open with the main idea of the week.',
     'Group the answer into 2-4 short paragraphs or, for literal reading requests, a compact list plus one short caveat.',
     'Mention exact titles when available.',
+    'When the scaffold includes dates on evidence or supporting blocks, include concrete calendar dates such as "May 27" instead of only saying Monday, Tuesday, or Wednesday.',
     'Distinguish named evidence from ambient or generic browser usage.',
     'Use language like "looks like" or "suggests" when interpreting patterns.',
     'Never fall back to dashboard language like top apps, top sites, or distraction time unless the user explicitly asked for stats.',

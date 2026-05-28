@@ -1635,6 +1635,73 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 28,
+    description: 'Add derived session and block projection cache tables',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS derived_sessions (
+          id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          date               TEXT    NOT NULL,
+          start_ts_ms        INTEGER NOT NULL,
+          end_ts_ms          INTEGER NOT NULL,
+          active_seconds     INTEGER NOT NULL,
+          app_bundle_id      TEXT,
+          app_name           TEXT,
+          window_title       TEXT,
+          url                TEXT,
+          page_title         TEXT,
+          confidence         TEXT    NOT NULL CHECK(confidence IN ('observed', 'uncertain')),
+          category           TEXT    NOT NULL DEFAULT 'uncategorized',
+          is_browser         INTEGER NOT NULL DEFAULT 0,
+          domain             TEXT,
+          projection_version INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_derived_sessions_date_start
+          ON derived_sessions (date, start_ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_derived_sessions_app
+          ON derived_sessions (date, app_bundle_id);
+
+        CREATE TABLE IF NOT EXISTS derived_blocks (
+          id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          date               TEXT    NOT NULL,
+          start_ts_ms        INTEGER NOT NULL,
+          end_ts_ms          INTEGER NOT NULL,
+          active_seconds     INTEGER NOT NULL,
+          label              TEXT    NOT NULL,
+          label_source       TEXT    NOT NULL CHECK(label_source IN ('artifact', 'domain', 'app', 'ai')),
+          dominant_category  TEXT,
+          confidence         TEXT    NOT NULL CHECK(confidence IN ('observed', 'uncertain')),
+          projection_version INTEGER NOT NULL,
+          finalized_at       INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_derived_blocks_date_start
+          ON derived_blocks (date, start_ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_derived_blocks_version
+          ON derived_blocks (projection_version);
+
+        CREATE TABLE IF NOT EXISTS derived_block_sessions (
+          block_id   INTEGER NOT NULL REFERENCES derived_blocks(id) ON DELETE CASCADE,
+          session_id INTEGER NOT NULL REFERENCES derived_sessions(id) ON DELETE CASCADE,
+          PRIMARY KEY (block_id, session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_derived_block_sessions_session
+          ON derived_block_sessions (session_id);
+
+        CREATE TABLE IF NOT EXISTS derived_projection_runs (
+          date               TEXT PRIMARY KEY,
+          projection_version INTEGER NOT NULL,
+          events_in          INTEGER NOT NULL,
+          sessions_out       INTEGER NOT NULL,
+          blocks_out         INTEGER NOT NULL,
+          finalized_at       INTEGER NOT NULL,
+          started_at         INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_derived_projection_runs_version
+          ON derived_projection_runs (projection_version);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

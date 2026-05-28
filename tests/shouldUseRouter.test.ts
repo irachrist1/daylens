@@ -59,6 +59,10 @@ test('routes "which files did I touch this morning?" to local evidence lookup', 
   assert.equal(shouldUseRouter('Which files did I touch this morning?'), true)
 })
 
+test('routes weekly learning topic questions to evidence lookup', () => {
+  assert.equal(shouldUseRouter('What did I learn about machine learning this week?'), true)
+})
+
 test('does not route "summarize my Monday"', () => {
   assert.equal(shouldUseRouter('Summarize my Monday.'), false)
 })

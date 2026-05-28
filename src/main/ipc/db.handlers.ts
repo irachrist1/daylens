@@ -13,6 +13,7 @@ import {
   getCategoryOverrides,
 } from '../db/queries'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection } from '../core/query/projections'
+import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
   resolveClientQuery,
@@ -40,6 +41,7 @@ import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC } from '@shared/types'
 import { getTrackingPermissionState, requestScreenTrackingPermission } from '../services/trackingPermissions'
 import type {
+  AppUsageSummary,
   AppSession,
   WorkSessionPayload,
   WorkSessionApp,
@@ -73,6 +75,49 @@ function dayBounds(dateStr: string): [number, number] {
   const [y, m, d] = dateStr.split('-').map(Number)
   const from = new Date(y, m - 1, d).getTime()  // local midnight
   return [from, from + 86_400_000]
+}
+
+function shiftLocalDate(dateStr: string, offset: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const next = new Date(y, m - 1, d + offset)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+function mergeAppSummaryRows(rows: AppUsageSummary[]): AppUsageSummary[] {
+  const map = new Map<string, AppUsageSummary>()
+  for (const row of rows) {
+    const key = row.canonicalAppId ?? row.bundleId
+    const existing = map.get(key)
+    if (existing) {
+      existing.totalSeconds += row.totalSeconds
+      existing.sessionCount = (existing.sessionCount ?? 0) + (row.sessionCount ?? 0)
+      existing.isFocused = existing.isFocused || row.isFocused
+      continue
+    }
+    map.set(key, { ...row })
+  }
+  return [...map.values()]
+    .filter((summary) => summary.totalSeconds > 0)
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+}
+
+function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
+  const db = getDb()
+  const today = localDateString()
+  const rows: AppUsageSummary[] = []
+  for (let offset = Math.max(1, days) - 1; offset >= 0; offset--) {
+    const dateStr = shiftLocalDate(today, -offset)
+    if (dateStr !== today) {
+      const derived = readDerivedAppSummariesForDate(db, dateStr)
+      if (derived) {
+        rows.push(...derived)
+        continue
+      }
+    }
+    const [from, to] = dayBounds(dateStr)
+    rows.push(...getAppSummariesForRange(db, from, to))
+  }
+  return mergeAppSummaryRows(rows)
 }
 
 // ─── Work session payload helpers ────────────────────────────────────────────
@@ -209,9 +254,18 @@ export function registerDbHandlers(): void {
     if (days <= 1) {
       return getAppSummariesForRange(getDb(), todayFrom, todayTo)
     }
-    // N days: from (N-1) days before today's midnight to end of today
-    const from = todayFrom - (days - 1) * 86_400_000
-    return getAppSummariesForRange(getDb(), from, todayTo)
+    return getCachedRangeAppSummaries(days)
+  })
+
+  // C23 / D6: Apps view date switcher. Returns summaries for a specific
+  // calendar day. Today is raw foreground totals; past days are equivalent.
+  ipcMain.handle(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, (_e, dateStr: string) => {
+    if (dateStr !== localDateString()) {
+      const derived = readDerivedAppSummariesForDate(getDb(), dateStr)
+      if (derived) return derived
+    }
+    const [from, to] = dayBounds(dateStr)
+    return getAppSummariesForRange(getDb(), from, to)
   })
 
   ipcMain.handle(IPC.DB.SET_CATEGORY_OVERRIDE, (_e, bundleId: string, category: string) => {
@@ -282,7 +336,7 @@ export function registerDbHandlers(): void {
       const dt = new Date(todayY, todayM - 1, todayD)
       dt.setDate(dt.getDate() - offset)
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-      const payload = getTimelineDayProjection(db, dateStr, getCurrentSession())
+      const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
       for (const block of payload.blocks) blocks.push(block)
     }
     return computeAppActivityDigest(blocks)

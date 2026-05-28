@@ -1156,6 +1156,7 @@ export const IPC = {
     GET_HISTORY_DAY: 'db:get-history-day',
     GET_TIMELINE_DAY: 'db:get-timeline-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
+    GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
     GET_CATEGORY_OVERRIDES: 'db:get-category-overrides',
     SET_CATEGORY_OVERRIDE: 'db:set-category-override',
     CLEAR_CATEGORY_OVERRIDE: 'db:clear-category-override',

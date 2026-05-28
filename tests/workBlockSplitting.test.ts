@@ -59,6 +59,13 @@ function insertSession(
   )
 }
 
+function insertActivityEvent(db: Database.Database, eventType: string, ts: number): void {
+  db.prepare(`
+    INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
+    VALUES (?, ?, 'test', '{}')
+  `).run(ts, eventType)
+}
+
 function labelsFor(db: Database.Database): string[] {
   return getTimelineDayPayload(db, TEST_DATE).blocks.map((block) => block.label.current)
 }
@@ -91,16 +98,49 @@ test('brief context changes under two minutes stay inside the surrounding block'
   db.close()
 })
 
-test('blocks split when they exceed the maximum duration even without an activity change', () => {
+test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
   const db = createDb()
-  insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 150 })
+  insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
   assert.ok(blocks.length >= 2, `expected maximum duration split; got ${blocks.length}`)
   assert.ok(
-    blocks.every((block) => block.endTime - block.startTime <= 60 * 60_000),
-    `expected every block at or below 60 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
+    blocks.every((block) => block.endTime - block.startTime <= 180 * 60_000),
+    `expected every block at or below 180 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
+  )
+  db.close()
+})
+
+test('timeline hides short gap events while preserving meaningful untracked spans', () => {
+  const db = createDb()
+  insertSession(db, {
+    title: 'Morning implementation - Cursor',
+    bundleId: 'com.todesktop.cursor',
+    appName: 'Cursor',
+    category: 'development',
+    startMinute: 0,
+    durationMinutes: 30,
+  })
+  insertSession(db, {
+    title: 'Follow-up implementation - Cursor',
+    bundleId: 'com.todesktop.cursor',
+    appName: 'Cursor',
+    category: 'development',
+    startMinute: 90,
+    durationMinutes: 30,
+  })
+  insertActivityEvent(db, 'idle_start', localMs(9, 40))
+  insertActivityEvent(db, 'idle_end', localMs(9, 40) + 10_000)
+
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  const gaps = payload.segments.filter((segment) => segment.kind !== 'work_block')
+  const shortGaps = gaps.filter((segment) => segment.endTime - segment.startTime < 30 * 60_000)
+
+  assert.equal(shortGaps.length, 0, `short gaps should be hidden: ${JSON.stringify(shortGaps)}`)
+  assert.ok(
+    gaps.some((segment) => segment.kind === 'idle_gap' && segment.startTime === localMs(9, 30) && segment.endTime === localMs(10, 30)),
+    `expected the full 60-minute untracked span to remain: ${JSON.stringify(gaps)}`,
   )
   db.close()
 })

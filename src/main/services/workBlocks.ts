@@ -669,6 +669,8 @@ function labelForCandidate(
   }
 
   if (dominantCategory === 'browsing') {
+    const titleLabel = bestTitleLabelForSessions(candidate.sessions)
+    if (titleLabel) return titleLabel
     return 'Web Session'
   }
 
@@ -682,6 +684,25 @@ function labelForCandidate(
   const focusedCategories = Array.from(categories).filter((category) => appCategoryIsFocused(category))
   if (focusedCategories.length > 1) return prettyCategory(dominantCategory)
   return prettyCategory(dominantCategory)
+}
+
+function bestTitleLabelForSessions(sessions: AppSession[]): string | null {
+  const counts = new Map<string, { label: string; seconds: number }>()
+  for (const session of sessions) {
+    const title = usefulWindowTitle(session)
+    if (!title) continue
+    const label = compactWindowTitle(title)
+    const key = label.toLowerCase()
+    const current = counts.get(key)
+    if (current) {
+      current.seconds += session.durationSeconds
+    } else {
+      counts.set(key, { label, seconds: session.durationSeconds })
+    }
+  }
+  const best = [...counts.values()]
+    .sort((left, right) => right.seconds - left.seconds || left.label.localeCompare(right.label))[0]
+  return best?.label ?? null
 }
 
 function websiteAwareLabel(block: WorkContextBlock): string {
@@ -1934,6 +1955,13 @@ function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
   return merged
 }
 
+const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
+
+function isVisibleGapSegment(segment: TimelineSegment): boolean {
+  if (segment.kind === 'work_block') return true
+  return segment.endTime - segment.startTime >= MIN_VISIBLE_GAP_MS
+}
+
 function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
@@ -2004,32 +2032,40 @@ function buildSegmentsForDay(
       .sort((left, right) => left.startTime - right.startTime)
 
     for (const eventSegment of overlappingEvents) {
+      if (!isVisibleGapSegment(eventSegment)) continue
+
       if (eventSegment.startTime > gapCursor) {
-        gapSegments.push({
-          kind: 'idle_gap',
-          startTime: gapCursor,
-          endTime: eventSegment.startTime,
-          label: 'Idle gap',
-          source: 'derived_gap',
-        })
+        const gapDuration = eventSegment.startTime - gapCursor
+        if (gapDuration >= MIN_VISIBLE_GAP_MS) {
+          gapSegments.push({
+            kind: 'idle_gap',
+            startTime: gapCursor,
+            endTime: eventSegment.startTime,
+            label: 'Idle gap',
+            source: 'derived_gap',
+          })
+        }
       }
       gapSegments.push(eventSegment)
       gapCursor = Math.max(gapCursor, eventSegment.endTime)
     }
 
     if (gapCursor < range.endTime) {
-      gapSegments.push({
-        kind: 'idle_gap',
-        startTime: gapCursor,
-        endTime: range.endTime,
-        label: 'Idle gap',
-        source: 'derived_gap',
-      })
+      const gapDuration = range.endTime - gapCursor
+      if (gapDuration >= MIN_VISIBLE_GAP_MS) {
+        gapSegments.push({
+          kind: 'idle_gap',
+          startTime: gapCursor,
+          endTime: range.endTime,
+          label: 'Idle gap',
+          source: 'derived_gap',
+        })
+      }
     }
   }
 
   const merged = mergeAdjacentSegments([...workSegments, ...gapSegments]
-    .filter((segment) => segment.endTime > segment.startTime)
+    .filter((segment) => segment.endTime > segment.startTime && isVisibleGapSegment(segment))
     .sort((left, right) => left.startTime - right.startTime))
 
   return merged

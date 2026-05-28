@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { routeInsightsQuestion, type TemporalContext } from '../src/main/lib/insightsQueryRouter.ts'
+import { ensureSearchSchema } from '../src/main/db/migrations.ts'
+import { routeInsightsQuestion, shouldUseRouter, type TemporalContext } from '../src/main/lib/insightsQueryRouter.ts'
 
 function localMs(year: number, month: number, day: number, hour: number, minute = 0): number {
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
@@ -359,6 +360,7 @@ function seedUnattributedWorkSession(
 function buildFixtureDb(): Database.Database {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
+  ensureSearchSchema(db)
   seedCatalog(db)
 
   const asyvCodeStart = localMs(2026, 4, 15, 9, 0)
@@ -549,6 +551,7 @@ function buildFixtureDb(): Database.Database {
 function buildEvidenceBackedFixtureDb(): Database.Database {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
+  ensureSearchSchema(db)
   seedCatalog(db)
 
   const workbookStart = localMs(2026, 4, 9, 9, 28)
@@ -738,9 +741,9 @@ const CASES: BenchmarkCase[] = [
     },
   },
   {
-    name: 'Learning topic weekly query falls through to tool search',
+    name: 'Learning topic weekly query reaches weekly evidence pack',
     question: 'What did I learn about machine learning this week?',
-    shouldRoute: false,
+    shouldRoute: true,
   },
 ]
 
@@ -833,5 +836,26 @@ test('Windows entity routing reuses prior evidence-backed context for follow-ups
   assert.match(second.answer, /ASYV \(evidence-backed\) by app in this month/i)
   assert.match(second.answer, /Excel|Outlook/i)
 
+  db.close()
+})
+
+test('monthly topic consumption query returns page titles instead of falling through', async () => {
+  const db = buildFixtureDb()
+  insertWebsiteVisit(db, {
+    domain: 'coursera.org',
+    title: 'Deep Neural Network - Application | Coursera',
+    url: 'https://www.coursera.org/learn/neural-networks-deep-learning/deep-neural-network-application',
+    visitTime: localMs(2026, 5, 27, 13, 0),
+    durationSec: 600,
+  })
+
+  const question = 'Show me everything I consumed about neural networks in May.'
+  const result = await ask(db, question)
+
+  assert.equal(shouldUseRouter(question), true)
+  assert.ok(result && result.kind === 'answer')
+  assert.match(result.answer, /neural networks in May 2026/i)
+  assert.match(result.answer, /Deep Neural Network - Application \| Coursera/i)
+  assert.match(result.answer, /May 27/i)
   db.close()
 })

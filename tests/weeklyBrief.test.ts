@@ -215,6 +215,18 @@ test('routes AI exploration questions to the weekly brief path', async () => {
   db.close()
 })
 
+test('routes weekly learning topic questions to the weekly brief path', async () => {
+  const db = buildFixtureDb()
+  const result = await routeInsightsQuestion('What did I learn about machine learning this week?', anchorDate(), null, db)
+  assert.ok(result)
+  assert.equal(result?.kind, 'weeklyBrief')
+  if (result?.kind === 'weeklyBrief') {
+    assert.equal(result.briefContext.responseMode, 'exploration')
+    assert.equal(result.briefContext.topic, 'machine learning')
+  }
+  db.close()
+})
+
 test('falls through to tool use when a weekly topic/entity has no deterministic match', async () => {
   const db = buildFixtureDb()
   const result = await routeInsightsQuestion('How much time did I spend on Coursera this week?', anchorDate(), null, db)
@@ -233,6 +245,7 @@ test('builds named weekly evidence instead of collapsing to domains', () => {
   assert.ok(titles.includes('Credit Limits and Context'))
   assert.ok(pack.ambientUsage.some((item) => item.source === 'x.com'))
   assert.match(buildWeeklyBriefScaffold(context as WeeklyBriefContext, pack), /Codex use cases/)
+  assert.match(buildWeeklyBriefScaffold(context as WeeklyBriefContext, pack), /"dates"/)
   db.close()
 })
 

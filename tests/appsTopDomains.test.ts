@@ -11,10 +11,20 @@ import assert from 'node:assert/strict'
 import { setupFixture } from './ai-bench/fixtures'
 import { getAppDetailPayload } from '../src/main/services/workBlocks'
 
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function daysFromFixtureThroughToday(fixtureToday: Date): number {
+  const fixtureDay = new Date(localDateKey(fixtureToday)).getTime()
+  const today = new Date(localDateKey(new Date())).getTime()
+  return Math.max(1, Math.floor((today - fixtureDay) / 86_400_000) + 1)
+}
+
 test('browser app detail includes per-domain time rollup', () => {
-  const { db } = setupFixture('allDayChatGPT')
+  const { db, today } = setupFixture('allDayChatGPT')
   // canonical id for Google Chrome in the appIdentity catalog is "chrome".
-  const detail = getAppDetailPayload(db, 'chrome', 1, null)
+  const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
   assert.ok(Array.isArray(detail.topDomains), 'topDomains must be present for a browser app')
   const domains = detail.topDomains ?? []
   const domainNames = domains.map((d) => d.domain)
@@ -26,15 +36,15 @@ test('browser app detail includes per-domain time rollup', () => {
 })
 
 test('native app detail omits per-domain rollup', () => {
-  const { db } = setupFixture('codingDay')
-  const detail = getAppDetailPayload(db, 'cursor', 1, null)
+  const { db, today } = setupFixture('codingDay')
+  const detail = getAppDetailPayload(db, 'cursor', daysFromFixtureThroughToday(today), null)
   assert.equal(detail.topDomains, undefined, 'non-browser apps must not carry topDomains')
   db.close()
 })
 
 test('domain rollup is ordered by duration desc', () => {
-  const { db } = setupFixture('allDayChatGPT')
-  const detail = getAppDetailPayload(db, 'chrome', 1, null)
+  const { db, today } = setupFixture('allDayChatGPT')
+  const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
   const domains = detail.topDomains ?? []
   for (let i = 1; i < domains.length; i++) {
     assert.ok(

@@ -7,6 +7,9 @@ import {
 } from './workspaceLinker'
 import { buildRemoteSyncPayload, buildWorkspaceLivePresence } from './remoteSync'
 import { onTrackingTick } from './tracking'
+import { getDb } from './database'
+import { projectDay, reprojectStaleDays } from '../core/projections/chunk2'
+import { invalidateProjectionScope } from '../core/projections/invalidation'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
 const SYNC_INTERVAL_MS = 60_000
@@ -26,6 +29,7 @@ let hasCompletedInitialDaySync = false
 let lastTrackingTriggeredSyncAt = 0
 let heartbeatInFlight = false
 let syncInFlight = false
+let lastObservedLocalDate = todayStr()
 
 export interface SyncRuntimeState {
   lastHeartbeatAt: number | null
@@ -40,7 +44,8 @@ export interface SyncRuntimeState {
 export function startSync(): void {
   if (heartbeatTimer || syncTimer) return
 
-  markDirty(todayStr())
+  lastObservedLocalDate = todayStr()
+  markDirty(lastObservedLocalDate)
 
   setTimeout(() => {
     void heartbeatNow()
@@ -52,7 +57,14 @@ export function startSync(): void {
   }, HEARTBEAT_INTERVAL_MS)
 
   syncTimer = setInterval(() => {
-    markDirty(todayStr())
+    const currentDate = todayStr()
+    if (currentDate !== lastObservedLocalDate) {
+      const finalizedDate = lastObservedLocalDate
+      lastObservedLocalDate = currentDate
+      markDirty(finalizedDate)
+      projectFinalizedDay(finalizedDate, 'day-rollover')
+    }
+    markDirty(currentDate)
     void syncNow()
   }, SYNC_INTERVAL_MS)
 
@@ -119,7 +131,49 @@ export function getSyncRuntimeState(): SyncRuntimeState {
 export function finalizePreviousDay(): void {
   const yesterday = daysFromTodayLocalDateString(-1)
   markDirty(yesterday)
+  projectFinalizedDay(yesterday, 'startup-finalize')
+  reprojectStaleProjectionDays()
   void syncNow()
+}
+
+function projectFinalizedDay(dateStr: string, reason: string): void {
+  try {
+    const result = projectDay(getDb(), dateStr, { finalize: true })
+    if (result.skipped) {
+      console.log('[projection] skipped finalized day', { date: dateStr, reason: result.reason })
+      return
+    }
+    invalidateProjectedDay(dateStr, reason)
+    console.log('[projection] finalized day', {
+      date: dateStr,
+      events: result.events,
+      sessions: result.sessions,
+      blocks: result.blocks,
+      reason,
+    })
+  } catch (error) {
+    console.warn('[projection] failed to finalize day:', error)
+  }
+}
+
+function reprojectStaleProjectionDays(): void {
+  try {
+    const result = reprojectStaleDays(getDb(), { maxDays: 7 })
+    for (const date of result.reprojected) {
+      invalidateProjectedDay(date, 'projection-version')
+    }
+    if (result.reprojected.length > 0 || result.skipped.length > 0) {
+      console.log('[projection] stale-day sweep', result)
+    }
+  } catch (error) {
+    console.warn('[projection] failed stale-day sweep:', error)
+  }
+}
+
+function invalidateProjectedDay(dateStr: string, reason: string): void {
+  invalidateProjectionScope('timeline', reason, { date: dateStr })
+  invalidateProjectionScope('apps', reason, { date: dateStr })
+  invalidateProjectionScope('insights', reason, { date: dateStr })
 }
 
 async function heartbeatNow(): Promise<void> {

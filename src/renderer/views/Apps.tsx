@@ -102,6 +102,11 @@ function detailSummary(detail: AppDetailPayload, selectedAppName: string): strin
   return parts.join('. ') || 'Daylens needs more context to describe this tool.'
 }
 
+function appMetricSentence(totalSeconds: number, sessionCount?: number): string {
+  const sessions = sessionCount ?? 0
+  return `Tracked for ${formatDuration(totalSeconds)}${sessions ? ` across ${sessions} session${sessions === 1 ? '' : 's'}` : ''}.`
+}
+
 function formatBlockRange(startTime: number, endTime: number): string {
   const formatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
   return `${formatter.format(startTime)} – ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(endTime)}`
@@ -112,8 +117,25 @@ function localDateKey(timestamp: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+function shiftAppsDate(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const next = new Date(y, m - 1, d + delta)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+function formatAppsDateLabel(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(y, m - 1, d))
+}
+
 export default function Apps() {
+  // days === 1 enables the date switcher (today raw OR a past day). 7d/30d
+  // are range modes that ignore selectedDate.
   const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(1)
+  const [selectedDate, setSelectedDate] = useState<string>(todayString())
+  const dateMode = days === 1
+  const isAppsToday = dateMode && selectedDate === todayString()
+  const isAppsPastDay = dateMode && selectedDate !== todayString()
   const [selectedCategory, setSelectedCategory] = useState<AppCategory | null>(null)
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
@@ -140,14 +162,22 @@ export default function Apps() {
     digest: AppActivityDigest[]
   }>({
     scope: 'apps',
-    dependencies: [days],
-    intervalMs: 30_000,
+    dependencies: [days, dateMode ? selectedDate : null],
+    // Only auto-poll today's live data. Past-day reads are static; no
+    // refresh on date navigation (follow-up C).
+    intervalMs: isAppsToday ? 30_000 : 0,
     load: async () => {
-      const [summaries, live, digest] = await Promise.all([
-        ipc.db.getAppSummaries(days),
-        ipc.tracking.getLiveSession(),
-        ipc.db.getAppActivityDigest(days).catch(() => [] as AppActivityDigest[]),
-      ])
+      const summariesP = dateMode
+        ? (isAppsToday ? ipc.db.getAppSummaries(1) : ipc.db.getAppSummariesForDate(selectedDate))
+        : ipc.db.getAppSummaries(days)
+      const liveP = isAppsToday ? ipc.tracking.getLiveSession() : Promise.resolve(null)
+      // Past days and today (raw) skip the narrative-shaped digest fetch —
+      // those panels render finalized projections or raw totals, never the
+      // narrative-driven digest.
+      const digestP = isAppsPastDay || isAppsToday
+        ? Promise.resolve([] as AppActivityDigest[])
+        : ipc.db.getAppActivityDigest(days).catch(() => [] as AppActivityDigest[])
+      const [summaries, live, digest] = await Promise.all([summariesP, liveP, digestP])
       return {
         summaries: summaries as AppUsageSummary[],
         live: live as LiveSession | null,
@@ -251,8 +281,8 @@ export default function Apps() {
 
   const detailResource = useProjectionResource<AppDetailPayload>({
     scope: 'apps',
-    enabled: !!selectedCanonicalId,
-    dependencies: [selectedCanonicalId, days],
+    enabled: !!selectedCanonicalId && !isAppsPastDay,
+    dependencies: [selectedCanonicalId, days, isAppsPastDay ? selectedDate : null],
     shouldReload: (event) => (
       !event.canonicalAppId
       || event.canonicalAppId === selectedCanonicalId
@@ -261,7 +291,7 @@ export default function Apps() {
   })
   const narrativeResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'apps',
-    enabled: !!selectedCanonicalId,
+    enabled: !!selectedCanonicalId && (!dateMode || isAppsToday),
     dependencies: [selectedCanonicalId, days],
     intervalMs: 0,
     shouldReload: (event) => (
@@ -272,6 +302,9 @@ export default function Apps() {
   })
 
   const expectedRangeKey = `${days}d:${todayString()}`
+  const selectedRangeLabel = dateMode
+    ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
+    : `last ${days} days`
   const detail = detailResource.data && detailResource.data.canonicalAppId === selectedCanonicalId
     && detailResource.data.rangeKey === expectedRangeKey
     ? detailResource.data
@@ -310,39 +343,117 @@ export default function Apps() {
         borderBottom: '1px solid var(--color-border-ghost)',
         background: 'var(--color-bg)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
-          <div>
-            <h1 style={{ fontSize: 30, lineHeight: 1.1, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)' }}>
-              Apps
-            </h1>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
+          {/* LEFT: date switcher (C23, mirrors Timeline header). */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { setDays(1); setSelectedDate((d) => shiftAppsDate(dateMode ? d : todayString(), -1)) }}
+              style={{
+                width: 32, height: 32, borderRadius: 999, border: 'none',
+                background: 'transparent', cursor: 'pointer',
+                color: 'var(--color-text-secondary)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              aria-label="Previous day"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m10 3.5-4.5 4.5 4.5 4.5" />
+              </svg>
+            </button>
+            <div style={{
+              minWidth: 156,
+              textAlign: 'center',
+              padding: '8px 16px',
+              borderRadius: 999,
+              border: '1px solid var(--color-border-ghost)',
+              background: 'var(--color-surface)',
+              fontSize: 13,
+              fontWeight: 700,
+              color: 'var(--color-text-primary)',
+            }}>
+              {dateMode
+                ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate))
+                : `Last ${days} days`}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const next = shiftAppsDate(dateMode ? selectedDate : todayString(), 1)
+                if (next <= todayString()) { setDays(1); setSelectedDate(next) }
+              }}
+              disabled={dateMode && selectedDate === todayString()}
+              style={{
+                width: 32, height: 32, borderRadius: 999, border: 'none',
+                background: 'transparent',
+                cursor: (dateMode && selectedDate === todayString()) ? 'default' : 'pointer',
+                color: 'var(--color-text-secondary)',
+                opacity: (dateMode && selectedDate === todayString()) ? 0.3 : 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              aria-label="Next day"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
+            </button>
           </div>
-          <div style={{
-            display: 'flex',
-            gap: 3,
-            padding: 3,
-            borderRadius: 9,
-            background: 'var(--color-surface-high)',
-            border: '1px solid var(--color-border-ghost)',
-            flexShrink: 0,
-          }}>
-            {DAYS_OPTIONS.map((option) => (
+
+          {/* RIGHT: range toggle + jump-to-today, mirroring Timeline's right cluster. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {(!dateMode || selectedDate !== todayString()) && (
               <button
-                key={option}
-                onClick={() => setDays(option)}
+                type="button"
+                onClick={() => { setDays(1); setSelectedDate(todayString()) }}
                 style={{
-                  padding: '4px 12px',
-                  borderRadius: 7,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: days === option ? 'var(--gradient-primary)' : 'transparent',
-                  color: days === option ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                  padding: '7px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-low)',
+                  color: 'var(--color-text-secondary)',
                   fontSize: 12,
                   fontWeight: 700,
+                  cursor: 'pointer',
                 }}
               >
-                {option === 1 ? 'Today' : `${option}d`}
+                Today
               </button>
-            ))}
+            )}
+            <div style={{
+              display: 'flex',
+              gap: 3,
+              padding: 3,
+              borderRadius: 9,
+              background: 'var(--color-surface-high)',
+              border: '1px solid var(--color-border-ghost)',
+              flexShrink: 0,
+            }}>
+              {DAYS_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  onClick={() => {
+                    setDays(option)
+                    if (option === 1) setSelectedDate(todayString())
+                  }}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: 7,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: dateMode && option === 1
+                      ? 'var(--gradient-primary)'
+                      : (!dateMode && days === option ? 'var(--gradient-primary)' : 'transparent'),
+                    color: (dateMode && option === 1) || (!dateMode && days === option)
+                      ? 'var(--color-primary-contrast)'
+                      : 'var(--color-text-secondary)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {option === 1 ? 'Day' : `${option}d`}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -383,11 +494,14 @@ export default function Apps() {
         )}
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
         <div style={{
           display: 'grid',
           gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : '320px minmax(0, 1fr)',
           height: '100%',
+          width: '100%',
+          maxWidth: 1180,
+          minWidth: isCompact ? 0 : 980,
         }}>
           <div style={{
             borderRight: isCompact ? 'none' : '1px solid var(--color-border-ghost)',
@@ -601,38 +715,48 @@ export default function Apps() {
                         style={{ fontSize: 27, fontWeight: 780, letterSpacing: '-0.03em', color: 'var(--color-text-primary)' }}
                       />
                       <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                        {categoryLabel(selectedSummary.category)} · {days === 1 ? 'today' : `last ${days} days`}
+                        {categoryLabel(selectedSummary.category)} · {selectedRangeLabel}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void narrativeResource.refresh()}
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid var(--color-border-ghost)',
-                        background: 'var(--color-surface-low)',
-                        color: 'var(--color-text-secondary)',
-                        fontSize: 11.5,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Refresh
-                    </button>
+                    {(!dateMode || isAppsToday) && (
+                      <button
+                        type="button"
+                        onClick={() => void narrativeResource.refresh()}
+                        style={{
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          border: '1px solid var(--color-border-ghost)',
+                          background: 'var(--color-surface-low)',
+                          color: 'var(--color-text-secondary)',
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {isAppsToday && !narrative ? 'Generate' : 'Refresh'}
+                      </button>
+                    )}
                   </div>
-                  <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                    {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
-                  </p>
-                  {narrativeResource.loading && !narrative && (
-                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                      Generating a stronger app narrative…
-                    </div>
-                  )}
-                  {narrative?.stale && (
-                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                      Showing the last saved narrative while new activity settles.
-                    </div>
+                  {isAppsPastDay ? (
+                    <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
+                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} Showing finalized app totals for {formatAppsDateLabel(selectedDate)}.
+                    </p>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
+                        {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
+                      </p>
+                      {narrativeResource.loading && !narrative && (
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                          Generating a stronger app narrative…
+                        </div>
+                      )}
+                      {narrative?.stale && (
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                          Showing the last saved narrative while new activity settles.
+                        </div>
+                      )}
+                    </>
                   )}
                   {/* B12: minute totals are secondary metadata, not headline. */}
                   <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 14, letterSpacing: '0.02em' }}>
@@ -647,7 +771,7 @@ export default function Apps() {
                   </div>
                 )}
 
-                {!detail && !detailResource.error && (
+                {!detail && !detailResource.error && !isAppsPastDay && (
                   <div style={{ display: 'grid', gap: 10 }} aria-label="Loading app detail">
                     {[80, 64, 72].map((w) => (
                       <div

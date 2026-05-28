@@ -33,6 +33,7 @@ export interface NamedEvidenceItem {
   source: string
   kind: 'page' | 'video' | 'thread' | 'chat' | 'artifact'
   minutes: number
+  dates: string[]
   confidence: number
   url: string | null
   domain: string | null
@@ -108,6 +109,10 @@ const EXPLORATION_PATTERNS = [
   'what have i explored',
   'what did i explore',
   'what have i been exploring',
+  'what did i learn',
+  'what have i learned',
+  'what did i study',
+  'what have i studied',
   'ai related',
   'last week in ai',
   'what have i looked at',
@@ -273,6 +278,14 @@ function rollingWeekRange(defaultDate: Date, label: 'this week' | 'last week'): 
 
 function inferTopic(normalized: string, previous: WeeklyBriefContext | null): string | null {
   if (includesAny(normalized, TOPIC_AI_PATTERNS)) return 'AI'
+  const aboutMatch = normalized.match(/\b(?:about|on|around)\s+(.+?)(?:\s+(?:this|last|whole)\s+week|\s+in\s+my\s+browsers?|\?|$)/)
+  if (aboutMatch?.[1]) {
+    const topic = aboutMatch[1]
+      .replace(/\b(this|last|whole)\s+week\b/g, '')
+      .replace(/\b(today|yesterday)\b/g, '')
+      .trim()
+    if (topic.length >= 2) return topic
+  }
   if (previous && (looksLikeDeeperQuestion(normalized) || looksLikeLiteralReadingQuestion(normalized) || normalized.includes('this whole week'))) {
     return previous.topic
   }
@@ -395,6 +408,7 @@ function buildNamedEvidenceFromVisits(
     url: string | null
     domain: string | null
     note: string | null
+    dates: Set<string>
   }>()
 
   for (const visit of visits) {
@@ -409,9 +423,11 @@ function buildNamedEvidenceFromVisits(
     const key = visit.normalizedUrl?.trim() || visit.url?.trim() || `${visit.domain}:${normalizeEvidenceKey(rawTitle)}`
     const existing = grouped.get(key)
     const confidence = topicBoost ? 0.96 : 0.86
+    const date = formatDateKey(new Date(visit.visitTime))
     if (existing) {
       existing.seconds += visit.durationSec
       existing.confidence = Math.max(existing.confidence, confidence)
+      existing.dates.add(date)
       continue
     }
     grouped.set(key, {
@@ -423,6 +439,7 @@ function buildNamedEvidenceFromVisits(
       url: visit.url,
       domain: visit.domain,
       note: inferEvidenceKind(visit.domain, rawTitle) === 'chat' ? 'active chat tab' : null,
+      dates: new Set([date]),
     })
   }
 
@@ -436,6 +453,7 @@ function buildNamedEvidenceFromVisits(
       source: entry.source,
       kind: entry.kind,
       minutes: Math.max(1, Math.round(entry.seconds / 60)),
+      dates: [...entry.dates].sort(),
       confidence: Number(entry.confidence.toFixed(2)),
       url: entry.url,
       domain: entry.domain,
@@ -466,6 +484,7 @@ function summarizeArtifact(artifact: ArtifactRef): NamedEvidenceItem | null {
     source: artifact.host ?? artifact.subtitle ?? artifact.artifactType,
     kind: 'artifact',
     minutes: Math.max(1, Math.round(artifact.totalSeconds / 60)),
+    dates: [],
     confidence: Number(Math.max(0.7, Math.min(0.98, artifact.confidence || 0.85)).toFixed(2)),
     url: artifact.url ?? null,
     domain: artifact.host ?? null,
@@ -711,6 +730,7 @@ export function buildWeeklyBriefScaffold(
         source: evidence.source,
         kind: evidence.kind,
         minutes: evidence.minutes,
+        dates: evidence.dates,
         note: evidence.note,
       })),
       supportingBlocks: theme.supportingBlocks.map((block) => ({
@@ -725,6 +745,7 @@ export function buildWeeklyBriefScaffold(
       source: item.source,
       kind: item.kind,
       minutes: item.minutes,
+      dates: item.dates,
       note: item.note,
     })),
     ambientUsage: pack.ambientUsage,

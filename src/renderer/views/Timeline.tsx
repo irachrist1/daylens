@@ -185,6 +185,7 @@ type DisplayTimelineSegment = TimelineSegment | {
   items: TimelineGapSegment[]
 }
 
+const MIN_VISIBLE_GAP_SECONDS = 30 * 60
 const LONG_GAP_ANCHOR_SECONDS = 75 * 60
 
 function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineSegment[] {
@@ -215,7 +216,10 @@ function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineS
       continue
     }
 
-    if (segmentDurationSeconds(segment) >= LONG_GAP_ANCHOR_SECONDS) {
+    const gapSeconds = segmentDurationSeconds(segment)
+    if (gapSeconds < MIN_VISIBLE_GAP_SECONDS) continue
+
+    if (gapSeconds >= LONG_GAP_ANCHOR_SECONDS) {
       flushGapCluster()
       compressed.push(segment)
       continue
@@ -506,30 +510,72 @@ const FOCUSED_CATEGORIES_SET: ReadonlySet<AppCategory> = new Set<AppCategory>([
   'development', 'research', 'writing', 'aiTools', 'design', 'productivity',
 ])
 
-function formatClock(ms: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(ms)
+interface DayTheme {
+  label: string
+  seconds: number
+  blocks: WorkContextBlock[]
+  category: AppCategory
+  apps: string[]
+  artifacts: string[]
 }
 
-function pickLongestBlock(blocks: WorkContextBlock[]): WorkContextBlock | null {
-  return blocks.reduce<WorkContextBlock | null>((best, block) =>
-    !best || blockDurationSeconds(block) > blockDurationSeconds(best) ? block : best, null)
+function normalizeThemeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-function pickLongestFocusedBlock(blocks: WorkContextBlock[]): WorkContextBlock | null {
-  const focused = blocks.filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-  return focused.length > 0 ? pickLongestBlock(focused) : null
+function blockThemeKey(block: WorkContextBlock): string {
+  const label = normalizeThemeLabel(userVisibleBlockLabel(block))
+  if (label && !['building testing', 'mixed work', 'untitled activity', 'web session'].includes(label)) return label
+  if (label === 'building testing' || label === 'mixed work') return `cat:${block.dominantCategory}`
+  const artifact = block.topArtifacts[0]?.displayTitle?.trim()
+  if (artifact) return normalizeThemeLabel(safeTimelineText(artifact))
+  const site = block.websites[0]?.domain?.trim()
+  if (site) return normalizeThemeLabel(site)
+  return block.dominantCategory
 }
 
-function pickBiggestDetour(blocks: WorkContextBlock[], focusedTotal: number): WorkContextBlock | null {
-  // A "detour" is the longest non-focused block in a day that otherwise had
-  // meaningful focused time. For pure browsing/entertainment days, skip the
-  // call-out — nothing was the detour because nothing was the main thread.
-  if (focusedTotal < 30 * 60) return null
-  const detours = blocks.filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-  const candidate = pickLongestBlock(detours)
-  if (!candidate) return null
-  if (blockDurationSeconds(candidate) < 10 * 60) return null
-  return candidate
+function buildDayThemes(blocks: WorkContextBlock[]): DayTheme[] {
+  const map = new Map<string, DayTheme>()
+  for (const block of blocks) {
+    const key = blockThemeKey(block)
+    const seconds = blockDisplayedSpanSeconds(block)
+    const existing = map.get(key)
+    const label = userVisibleBlockLabel(block)
+    const apps = block.topApps
+      .filter((app) => app.category !== 'system')
+      .slice(0, 3)
+      .map((app) => formatDisplayAppName(app.appName))
+    const artifacts = block.topArtifacts
+      .slice(0, 3)
+      .map((artifact) => safeTimelineText(artifact.displayTitle.trim()))
+      .filter(Boolean)
+
+    if (existing) {
+      existing.seconds += seconds
+      existing.blocks.push(block)
+      for (const app of apps) if (!existing.apps.includes(app) && existing.apps.length < 4) existing.apps.push(app)
+      for (const artifact of artifacts) if (!existing.artifacts.includes(artifact) && existing.artifacts.length < 4) existing.artifacts.push(artifact)
+    } else {
+      map.set(key, {
+        label,
+        seconds,
+        blocks: [block],
+        category: block.dominantCategory,
+        apps,
+        artifacts,
+      })
+    }
+  }
+  return [...map.values()]
+    .filter((theme) => theme.seconds >= 5 * 60)
+    .sort((left, right) => right.seconds - left.seconds)
+}
+
+function productivityScore(totalSeconds: number, focusedSeconds: number, detourSeconds: number): number | null {
+  if (totalSeconds < 15 * 60) return null
+  const focusShare = focusedSeconds / Math.max(1, totalSeconds)
+  const detourShare = detourSeconds / Math.max(1, totalSeconds)
+  return Math.max(0, Math.min(100, Math.round(35 + focusShare * 70 - detourShare * 25)))
 }
 
 function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
@@ -537,38 +583,28 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
   const [recapLoading, setRecapLoading] = useState(false)
 
   useEffect(() => {
-    if (payload.totalSeconds === 0) {
-      setRecap(null)
+    const cached = daySummaryRecapCache.get(payload.date)
+    if (cached) {
+      setRecap(cached)
       setRecapLoading(false)
       return
     }
-    const cached = daySummaryRecapCache.get(payload.date)
-    if (cached) { setRecap(cached); return }
     setRecap(null)
-    setRecapLoading(true)
-    ipc.ai.generateDaySummary(payload.date)
-      .then((result) => {
-        daySummaryRecapCache.set(payload.date, result)
-        setRecap(result)
-      })
-      .catch(() => { /* silently skip on error */ })
-      .finally(() => setRecapLoading(false))
-  }, [payload.date, payload.totalSeconds])
+    setRecapLoading(false)
+  }, [payload.date])
 
   const focusedTotal = payload.blocks
     .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockDurationSeconds(block), 0)
-
-  const longestFocused = pickLongestFocusedBlock(payload.blocks)
-  const biggestDetour = pickBiggestDetour(payload.blocks, focusedTotal)
-  const callouts: { kind: 'focus' | 'detour'; block: WorkContextBlock; seconds: number }[] = []
-  // Callout `seconds` are rendered next to a "HH:MM – HH:MM" clock range, so
-  // use the displayed-minute span instead of active-seconds to keep mental
-  // math consistent. See BUGS.md B11.
-  if (longestFocused) callouts.push({ kind: 'focus', block: longestFocused, seconds: blockDisplayedSpanSeconds(longestFocused) })
-  if (biggestDetour && biggestDetour.id !== longestFocused?.id) {
-    callouts.push({ kind: 'detour', block: biggestDetour, seconds: blockDisplayedSpanSeconds(biggestDetour) })
-  }
+    .reduce((sum, block) => sum + blockDisplayedSpanSeconds(block), 0)
+  const detourTotal = payload.blocks
+    .filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
+    .reduce((sum, block) => sum + blockDisplayedSpanSeconds(block), 0)
+  const score = productivityScore(payload.totalSeconds, focusedTotal, detourTotal)
+  const themes = buildDayThemes(payload.blocks)
+  const topThemes = themes.slice(0, 4)
+  const driftThemes = themes
+    .filter((theme) => !FOCUSED_CATEGORIES_SET.has(theme.category))
+    .slice(0, 2)
 
   return (
     <div style={{
@@ -595,23 +631,28 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
         </div>
       </div>
 
-      {recapLoading && (
-        <div style={{
-          display: 'grid',
-          gap: 8,
-        }}>
-          {[100, 88, 72].map((w) => (
-            <div
-              key={w}
-              style={{
-                height: 11,
-                borderRadius: 5,
-                background: 'var(--color-surface-high)',
-                width: `${w}%`,
-                opacity: 0.6,
-              }}
-            />
-          ))}
+      {payload.totalSeconds > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Score</div>
+            <div style={{ fontSize: 20, color: 'var(--color-text-primary)', fontWeight: 760 }}>{score ?? '—'}</div>
+          </div>
+          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Focused</div>
+            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(focusedTotal)}</div>
+          </div>
+          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Drift</div>
+            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(detourTotal)}</div>
+          </div>
+        </div>
+      )}
+
+      {payload.totalSeconds > 0 && (
+        <div style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)' }}>
+          {topThemes.length > 0
+            ? `The day clustered around ${topThemes.slice(0, 2).map((theme) => theme.label).join(' and ')}. ${driftThemes.length > 0 ? `The main drift came from ${driftThemes.map((theme) => theme.label).join(' and ')}.` : 'Most of the tracked time stayed inside focused work.'}`
+            : 'Daylens captured activity, but there is not enough connected evidence yet to name a strong shape.'}
         </div>
       )}
 
@@ -625,39 +666,43 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
         </div>
       )}
 
-      {!recapLoading && !recap && payload.totalSeconds === 0 && (
+      {recapLoading && null}
+
+      {!recap && payload.totalSeconds === 0 && (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
           Nothing tracked yet. Daylens fills this in once the day has something to say.
         </div>
       )}
 
-      {callouts.length > 0 && (
+      {topThemes.length > 0 && (
         <section>
           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
             What mattered
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
-            {callouts.map(({ kind, block, seconds }) => (
-              <div key={`${kind}:${block.id}`} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
+            {topThemes.map((theme) => (
+              <div key={theme.label} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
                 <div
                   style={{
                     width: 3,
                     borderRadius: 999,
-                    background: CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized,
+                    background: CATEGORY_COLORS[theme.category] ?? CATEGORY_COLORS.uncategorized,
                     flexShrink: 0,
                   }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
-                    {kind === 'focus' ? 'Longest stretch' : 'Biggest detour'}
+                    {formatDuration(theme.seconds)} · {theme.blocks.length} related stretch{theme.blocks.length === 1 ? '' : 'es'}
                   </div>
                   <InlineRevealText
-                    text={userVisibleBlockLabel(block)}
+                    text={theme.label}
                     style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
                   />
-                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                    {formatClock(block.startTime)} – {formatClock(block.endTime)} · {formatDuration(seconds)}
-                  </div>
+                  {(theme.artifacts.length > 0 || theme.apps.length > 0) && (
+                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
+                      {[...theme.artifacts.slice(0, 2), ...theme.apps.slice(0, 2)].join(' · ')}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

@@ -736,7 +736,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
       hits: [],
       totalFound: 0,
       matchKind: 'empty',
-      _instruction: `No usable tokens in "${params.query}". Call getDaySummary (today) or getBlockAtTime if the user named a time, and answer from the closest captured signal — do not refuse with "I can't see that."`,
+      _instruction: `Closest captured signal for "${params.query}": the phrase did not contain searchable session/page tokens. Call getDaySummary (today) or getBlockAtTime if the user named a time, then answer from captured evidence. Refusal-style wording is banned.`,
     }
   }
   const byKey = new Map<string, SessionSearchHit>()
@@ -766,7 +766,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
   const matchedTokens = Object.entries(tokenMatches).filter(([, n]) => n > 0).map(([t]) => t)
   const instruction = matchKind === 'broadened'
     ? `Closest captured signal for "${params.query}": strict phrase search missed, so Daylens broadened to tokens ${matchedTokens.map((t) => `"${t}"`).join(', ')}. These hits ARE the evidence. Hits tagged kind:'page' are specific web pages; cite their titles and dates. Frame as: "Closest captured signal for ${matchedTokens[0]}…" Refusal-style wording is banned; answer from captured evidence.`
-    : `Direct session/page hit count is zero for "${params.query}" after broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')}. Call getDaySummary (today) or getBlockAtTime if a time was named, and answer from the closest captured signal. Refusal-style wording is banned; frame as "Here's what Daylens captured for the relevant time range…"`
+    : `Closest captured signal for "${params.query}": broadening across tokens ${tokens.map((t) => `"${t}"`).join(', ')} did not surface direct session/page hits. Call getDaySummary (today) or getBlockAtTime if a time was named, then answer from captured evidence for the relevant time range. Refusal-style wording is banned.`
   return {
     hits: merged,
     totalFound: merged.length,
