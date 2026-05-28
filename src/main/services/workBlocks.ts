@@ -40,7 +40,7 @@ import type {
   WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
-import { isHostFilteredFromArtifacts, isHostBlockedForLabel } from '@shared/domainPolicy'
+import { isHostFilteredFromArtifacts, isHostBlockedForLabel, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { localDayBounds, localDateString } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
@@ -176,6 +176,7 @@ const BROWSER_KEYWORDS = [
   'firefox',
   'brave',
   'arc',
+  'dia',
   'browser',
   'safari',
 ]
@@ -243,6 +244,17 @@ function dominantCategoryFromDistribution(distribution: Partial<Record<AppCatego
       }
       return right[1] - left[1]
     })[0]?.[0] ?? 'uncategorized'
+}
+
+function categoryForTopPageArtifact(topArtifacts: ArtifactRef[]): AppCategory | null {
+  const topArtifact = topArtifacts[0]
+  if (!topArtifact || topArtifact.artifactType !== 'page') return null
+
+  const page = topArtifact as PageRef
+  const policy = policyForHost(page.domain ?? topArtifact.host ?? null)
+  if (policy === 'social_feed') return 'social'
+  if (policy === 'entertainment') return 'entertainment'
+  return null
 }
 
 function coherenceScore(distribution: Partial<Record<AppCategory, number>>): number {
@@ -1268,7 +1280,6 @@ function buildBlockFromCandidate(
 ): WorkContextBlock {
   const effectiveSessions = effectiveSessionsFor(candidate.sessions)
   const distribution = categoryDistributionFor(effectiveSessions)
-  const dominantCategory = dominantCategoryFromDistribution(distribution)
   const coherence = coherenceScore(distribution)
   const switchCount = countAppSwitches(candidate.sessions)
   const blockStart = candidate.sessions[0].startTime
@@ -1293,6 +1304,8 @@ function buildBlockFromCandidate(
   const topArtifacts = [...pageRefs, ...documentRefs]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 6)
+  const artifactDominantCategory = categoryForTopPageArtifact(topArtifacts)
+  const dominantCategory = artifactDominantCategory ?? dominantCategoryFromDistribution(distribution)
   const evidenceSummary = {
     apps: topApps,
     pages: pageRefs,
@@ -1305,7 +1318,9 @@ function buildBlockFromCandidate(
     candidate.sessions.map((session) => session.id),
     isLive,
   )
-  const rawRuleLabel = labelForCandidate(candidate, dominantCategory, distribution, coherence, switchCount)
+  const rawRuleLabel = artifactDominantCategory
+    ? prettyCategory(artifactDominantCategory)
+    : labelForCandidate(candidate, dominantCategory, distribution, coherence, switchCount)
 
   const baseBlock: WorkContextBlock = {
     id: blockId,

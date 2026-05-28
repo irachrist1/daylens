@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import type { AppCategory, WorkContextAppSummary } from '@shared/types'
+import { policyForHost } from '@shared/domainPolicy'
 
 export interface WorkMemoryBlockInput {
   id: string
@@ -347,6 +348,8 @@ function projectFromFileActivity(evidence: ConcurrentEvidence): string | null {
 }
 
 function isDistractionDomain(domain: string): boolean {
+  const policy = policyForHost(domain)
+  if (policy === 'adult' || policy === 'entertainment' || policy === 'social_feed') return true
   return DISTRACTION_DOMAINS.some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`))
 }
 

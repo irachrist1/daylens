@@ -61,10 +61,18 @@ const HOST_RULES: Map<string, DomainPolicyCategory> = new Map([
   ['facebook.com', 'social_feed'],
 
   // Entertainment sinks where the page title is the content, not the work.
-  // (YouTube is intentionally NOT here: many people watch YouTube for work,
-  // so we don't gate it globally — but per-block category logic already
-  // routes entertainment-category sessions away from non-entertainment
-  // block labels.)
+  ['youtube.com', 'entertainment'],
+  ['youtu.be', 'entertainment'],
+  ['music.youtube.com', 'entertainment'],
+  ['netflix.com', 'entertainment'],
+  ['twitch.tv', 'entertainment'],
+  ['primevideo.com', 'entertainment'],
+  ['hulu.com', 'entertainment'],
+  ['disneyplus.com', 'entertainment'],
+  ['max.com', 'entertainment'],
+  ['spotify.com', 'entertainment'],
+  ['soundcloud.com', 'entertainment'],
+  ['vimeo.com', 'entertainment'],
 ])
 
 // Suffix rules — any host ENDING in one of these strings hits the rule.

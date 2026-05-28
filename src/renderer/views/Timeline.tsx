@@ -619,7 +619,8 @@ function productivityScore(totalSeconds: number, focusedSeconds: number, detourS
   if (totalSeconds < 15 * 60) return null
   const focusShare = focusedSeconds / Math.max(1, totalSeconds)
   const detourShare = detourSeconds / Math.max(1, totalSeconds)
-  return Math.max(0, Math.min(100, Math.round(35 + focusShare * 70 - detourShare * 25)))
+  const trackedDepthBonus = Math.min(totalSeconds / (5 * 60 * 60), 1) * 10
+  return Math.max(0, Math.min(100, Math.round(35 + focusShare * 60 + trackedDepthBonus - detourShare * 12)))
 }
 
 function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {

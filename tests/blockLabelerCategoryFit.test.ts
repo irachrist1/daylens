@@ -210,3 +210,43 @@ test('block with mixed dev + brief non-adult browsing keeps dev-class label', ()
   )
   db.close()
 })
+
+test('development-carried YouTube top artifact categorizes as entertainment', () => {
+  const db = setupDb()
+  const date = '2026-05-16'
+  const start = ms(date, 12, 20)
+  const end = ms(date, 13, 0)
+
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'test', 1)
+  `).run(
+    'dev.kiro.app', 'Kiro',
+    start, end, Math.floor((end - start) / 1000),
+    'development', 1, 'FREE Apps We ACTUALLY Use - YouTube', 'Kiro',
+  )
+
+  db.prepare(`
+    INSERT INTO website_visits (
+      browser_bundle_id, canonical_browser_id, visit_time, duration_sec,
+      url, normalized_url, domain, page_title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'dev.kiro.app', 'kiro',
+    start, Math.floor((end - start) / 1000),
+    'https://www.youtube.com/watch?v=abc123',
+    'https://www.youtube.com/watch',
+    'youtube.com',
+    'FREE Apps We ACTUALLY Use',
+  )
+
+  const payload = getTimelineDayPayload(db, date)
+  const block = payload.blocks.find((candidate) => candidate.topArtifacts.some((artifact) => artifact.host === 'youtube.com'))
+  assert.ok(block, 'expected block with YouTube artifact')
+  assert.equal(block!.dominantCategory, 'entertainment')
+  assert.notEqual(block!.dominantCategory, 'development')
+
+  db.close()
+})
