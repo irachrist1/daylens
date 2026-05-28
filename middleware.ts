@@ -6,7 +6,7 @@ import {
 } from "@/app/lib/sessionConfig";
 import { stripBasePath, withBasePath } from "@/app/lib/basePath";
 
-const PUBLIC_PATHS = ["/", "/link", "/recover", "/docs", "/roadmap", "/changelog"];
+const PUBLIC_PATHS = ["/", "/link", "/recover", "/docs", "/roadmap", "/changelog", "/hackathon"];
 const PUBLIC_API_PATHS = [
   "/api/link",
   "/api/recover",

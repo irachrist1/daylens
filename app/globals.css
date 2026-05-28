@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (Tailwind 4 + next-themes). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme inline {
   --color-surface: var(--t-surface);
   --color-surface-lowest: var(--t-surface-lowest);
@@ -11299,5 +11302,16 @@ body:has(.daylens-shell) .glass-bg::after {
   .daylens-shell .timeline-gap-row__rail {
     display: flex;
     gap: 8px;
+  }
+}
+
+/* Hackathon landing — border beam animation */
+@theme {
+  --animate-border-beam: border-beam var(--duration, 10s) infinite linear;
+}
+
+@keyframes border-beam {
+  100% {
+    offset-distance: 100%;
   }
 }

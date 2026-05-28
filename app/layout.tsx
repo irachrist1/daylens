@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import { ServiceWorker } from "./components/ServiceWorker";
 import { PHProvider } from "./providers";
@@ -54,11 +55,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} h-full antialiased`}
+    >
       <body className="min-h-full flex flex-col bg-surface text-on-surface font-sans">
-        <PHProvider>
-          {children}
-        </PHProvider>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
+          <PHProvider>
+            {children}
+          </PHProvider>
+        </ThemeProvider>
         <ServiceWorker />
       </body>
     </html>
