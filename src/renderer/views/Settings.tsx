@@ -706,6 +706,29 @@ export default function Settings() {
     }
   }
 
+  // Triggers the one-time backfill from history. The IPC binding is owned by
+  // the memory-backfill change (R4); the button calls it via optional-chained
+  // access on the preload bridge so it degrades to a clear error if the
+  // preload side hasn't shipped yet.
+  async function rebuildWorkMemoryFromHistory() {
+    if (!window.confirm('Rebuild work memory from your full history? This walks every tracked day and may take a moment.')) return
+    setWorkMemoryBusy('backfill')
+    setWorkMemoryError(null)
+    try {
+      const bridge = (window as unknown as { daylens?: { memory?: { backfill?: () => Promise<unknown> } } }).daylens
+      const backfill = bridge?.memory?.backfill
+      if (typeof backfill !== 'function') {
+        throw new Error('Memory backfill is not available yet — restart Daylens after updating to enable it.')
+      }
+      await backfill()
+      await refreshWorkMemorySummary()
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
   async function refreshAIAccess() {
     const current = await ipc.settings.get()
     const access = current.aiProvider === 'claude-cli'
@@ -1423,7 +1446,19 @@ export default function Settings() {
                   })}
                 </div>
               )}
-              <div style={{ paddingTop: 12, borderTop: '1px solid var(--color-border-ghost)' }}>
+              <div style={{ paddingTop: 12, borderTop: '1px solid var(--color-border-ghost)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  disabled={workMemoryBusy !== null}
+                  onClick={() => void rebuildWorkMemoryFromHistory()}
+                  style={{
+                    ...inlineButtonStyle,
+                    opacity: workMemoryBusy !== null ? 0.6 : 1,
+                    cursor: workMemoryBusy !== null ? 'default' : 'pointer',
+                  }}
+                >
+                  {workMemoryBusy === 'backfill' ? 'Rebuilding…' : 'Rebuild memory from history'}
+                </button>
                 <button
                   type="button"
                   disabled={workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0}
