@@ -296,11 +296,6 @@ function timelineNavStateFromParams(searchParams: URLSearchParams): TimelineNavS
   }
 }
 
-function currentLiveLabel(blocks: WorkContextBlock[]): string | null {
-  const live = blocks.find((block) => block.isLive)
-  return live ? userVisibleBlockLabel(live) : null
-}
-
 function IconChevronLeft() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -318,8 +313,6 @@ function IconChevronRight() {
 }
 
 function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
-  const liveLabel = currentLiveLabel(payload.blocks)
-
   return (
     <div style={{
       display: 'flex',
@@ -335,12 +328,6 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
       <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
       <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
       <span>{payload.siteCount} site{payload.siteCount !== 1 ? 's' : ''}</span>
-      {liveLabel && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#22c55e', fontWeight: 600 }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
-          Live now: {liveLabel}
-        </span>
-      )}
     </div>
   )
 }
