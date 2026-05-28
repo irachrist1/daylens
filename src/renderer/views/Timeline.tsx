@@ -22,6 +22,56 @@ function isBrowserAppName(bundleId: string, appName: string): boolean {
   return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(haystack)
 }
 
+const PAGE_ARTIFACT_LABEL_CATEGORIES: ReadonlySet<AppCategory> = new Set<AppCategory>([
+  'browsing', 'research', 'entertainment', 'social', 'aiTools',
+])
+
+// Mirror of the R1 ownership gate at the renderer surface so the rail / day
+// sentence / summary subject all reject browser-page leaks even if a stale
+// label.current was persisted before the backend gate was tightened.
+function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
+  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) return true
+  const totalSeconds = block.topApps.reduce((sum, app) => sum + (app.totalSeconds ?? 0), 0)
+  if (totalSeconds <= 0) return false
+  const top2 = block.topApps.slice(0, 2)
+  const browserInTop2 = top2.find((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
+  if (!browserInTop2) return false
+  return (browserInTop2.totalSeconds ?? 0) / totalSeconds > 0.5
+}
+
+// Inbox(N) → "Email". The blockShortSummary path already normalizes this for
+// artifact phrases; the rail/day-clustered/drift paths need the same so
+// "Inbox (3)" doesn't surface verbatim.
+function naturalizeInboxLabel(label: string): string {
+  if (/^inbox(?:\s*\(\d+\))?$/i.test(label.trim())) return 'Email'
+  return label
+}
+
+// Defensive rail/day-summary label. If userVisibleBlockLabel returned a label
+// that matches a top page artifact or a website domain for a block whose
+// dominant category should not adopt page artifacts, fall back to a
+// category-derived workstream name instead of surfacing the leak.
+function railLabelForBlock(block: WorkContextBlock): string {
+  const raw = userVisibleBlockLabel(block)
+  const naturalized = naturalizeInboxLabel(raw)
+  if (pageArtifactLabelAllowed(block)) return naturalized
+
+  const lower = naturalized.toLowerCase().trim()
+  const matchesArtifact = block.topArtifacts.some((artifact) => {
+    if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
+    const title = naturalizeLabel(artifact.displayTitle.trim()).toLowerCase()
+    return title.length > 0 && title === lower
+  })
+  const matchesSite = block.websites.some((site) => {
+    const stripped = site.domain.replace(/^www\./i, '').split('.')[0]?.toLowerCase() ?? ''
+    return stripped.length > 0 && stripped === lower
+  })
+  if (matchesArtifact || matchesSite) {
+    return categoryLabel(block.dominantCategory)
+  }
+  return naturalized
+}
+
 // Strip raw URL query/fragment + secret-shaped tokens from any free-text the
 // timeline displays. The renderer used to print page artifact displayTitles
 // verbatim, so an OAuth callback URL stored as the artifact title leaked the
@@ -170,7 +220,13 @@ function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockDisplayedSpanSeconds(block))
   const allApps = block.topApps
     .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
-  const sites = block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
+  // Same ownership gate as the label/artifact path: a development block with a
+  // background youtube.com tab must not read "across youtube.com". Only carry
+  // site phrases when the block's category could plausibly own a page artifact.
+  const allowPageSubject = pageArtifactLabelAllowed(block)
+  const sites = allowPageSubject
+    ? block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
+    : []
   // Skip page/domain artifacts that don't fit the block's category — a dev
   // block with a co-occurring YouTube tab must not summarize itself as the
   // YouTube video.
@@ -563,13 +619,18 @@ function normalizeThemeLabel(label: string): string {
 }
 
 function blockThemeKey(block: WorkContextBlock): string {
-  const label = normalizeThemeLabel(userVisibleBlockLabel(block))
+  const label = normalizeThemeLabel(railLabelForBlock(block))
   if (label && !['building testing', 'mixed work', 'untitled activity', 'web session'].includes(label)) return label
   if (label === 'building testing' || label === 'mixed work') return `cat:${block.dominantCategory}`
-  const artifact = block.topArtifacts[0]?.displayTitle?.trim()
-  if (artifact) return normalizeThemeLabel(safeTimelineText(artifact))
-  const site = block.websites[0]?.domain?.trim()
-  if (site) return normalizeThemeLabel(site)
+  const compatibleArtifact = block.topArtifacts.find((artifact) =>
+    artifact.displayTitle?.trim()
+    && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
+  )
+  if (compatibleArtifact) return normalizeThemeLabel(safeTimelineText(compatibleArtifact.displayTitle.trim()))
+  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) {
+    const site = block.websites[0]?.domain?.trim()
+    if (site) return normalizeThemeLabel(site)
+  }
   return block.dominantCategory
 }
 
@@ -579,7 +640,7 @@ function buildDayThemes(blocks: WorkContextBlock[]): DayTheme[] {
     const key = blockThemeKey(block)
     const seconds = blockDisplayedSpanSeconds(block)
     const existing = map.get(key)
-    const label = userVisibleBlockLabel(block)
+    const label = railLabelForBlock(block)
     const apps = block.topApps
       .filter((app) => app.category !== 'system')
       .slice(0, 3)
