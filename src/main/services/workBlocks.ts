@@ -40,7 +40,7 @@ import type {
   WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
-import { isHostFilteredFromArtifacts, isHostBlockedForLabel, policyForHost } from '@shared/domainPolicy'
+import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { localDayBounds, localDateString } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
@@ -1578,6 +1578,67 @@ function isPageLabelCompatible(block: WorkContextBlock): boolean {
   return PAGE_LABEL_COMPATIBLE_CATEGORIES.has(block.dominantCategory)
 }
 
+// Share of the block's time spent in non-browser focused-work apps
+// (development, writing, design, productivity, research — excluding
+// browsing and aiTools since those legitimately host page artifacts).
+// Used to detect "the user was actually working, the foreground tab is
+// background noise" — the core F1 case.
+const WORK_APP_DOMINANT_SHARE = 0.3
+
+function workAppDominantShare(block: WorkContextBlock): number {
+  const workAppSeconds = block.topApps
+    .filter((app) =>
+      FOCUSED_CATEGORIES.includes(app.category)
+      && app.category !== 'browsing'
+      && app.category !== 'aiTools'
+      && !app.isBrowser,
+    )
+    .reduce((sum, app) => sum + app.totalSeconds, 0)
+  const totalSeconds = block.topApps.reduce((sum, app) => sum + app.totalSeconds, 0)
+  if (totalSeconds <= 0) return 0
+  return workAppSeconds / totalSeconds
+}
+
+// F1 ownership rule: a development-dominant block (IDE/terminal top apps)
+// must not adopt a co-occurring browser page artifact as its label. A
+// 5-minute YouTube tab open while the user spent 90 minutes in Kiro and
+// Ghostty is background noise, not the block headline. Applies to the
+// post-F2(a) "artifact-driven" entertainment override too: even when the
+// top page artifact rewrote the dominantCategory to 'entertainment', if
+// the actual time spent was mostly in work apps, the entertainment page
+// title still can't be the block label.
+function blockHasWorkAppDominance(block: WorkContextBlock): boolean {
+  return workAppDominantShare(block) >= WORK_APP_DOMINANT_SHARE
+}
+
+// Normalize for label-vs-page-title equivalence checks. Strip punctuation,
+// collapse whitespace, lowercase.
+function normalizeForLeakCheck(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+// True when `label` looks like it was lifted verbatim from a page artifact
+// hosted on an entertainment/social/adult domain inside this block. Catches
+// the AI-labeler case where the model saw a YouTube tab in the evidence and
+// emitted its title as the block headline.
+function labelIsBrowserContentLeak(label: string, block: WorkContextBlock): boolean {
+  if (!blockHasWorkAppDominance(block)) return false
+  const normLabel = normalizeForLeakCheck(label)
+  if (!normLabel) return false
+  for (const page of block.pageRefs) {
+    if (!isHostBlockedForAppsRail(page.domain ?? page.host ?? null)) continue
+    const candidates = [page.pageTitle, page.displayTitle].filter((value): value is string => Boolean(value))
+    for (const candidate of candidates) {
+      const norm = normalizeForLeakCheck(candidate)
+      if (!norm) continue
+      if (norm === normLabel) return true
+      if (norm.length >= 12 && normLabel.includes(norm)) return true
+      if (normLabel.length >= 12 && norm.includes(normLabel)) return true
+    }
+  }
+  return false
+}
+
 function preferredArtifactLabel(block: WorkContextBlock): string | null {
   // Document artifacts (files, repos, projects, window-derived) are
   // produced by the foreground app itself, so they're category-compatible
@@ -1591,15 +1652,27 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   // not a label.
   if (!isPageLabelCompatible(block)) return null
 
-  // Even within browsing-compatible categories, blocked hosts (adult,
-  // social-feed, entertainment) never label a block. The host gate at
-  // buildPageCandidates already drops adult; this is the belt-and-braces.
-  const firstAllowedPage = block.pageRefs.find((page) => !isHostBlockedForLabel(page.domain ?? page.host ?? null))
+  // F1: even on a block whose dominantCategory is page-label-compatible (or
+  // was rewritten to 'entertainment' by the top-artifact override), reject
+  // entertainment/social/adult pages as the label when the user actually
+  // spent most of the block in non-browser work apps. The IDE/terminal time
+  // is what they were doing; the open tab is incidental.
+  const workAppDominant = blockHasWorkAppDominance(block)
+  const firstAllowedPage = block.pageRefs.find((page) => {
+    const host = page.domain ?? page.host ?? null
+    if (isHostBlockedForLabel(host)) return false
+    if (workAppDominant && isHostBlockedForAppsRail(host)) return false
+    return true
+  })
   const rawPageLabel = firstAllowedPage?.displayTitle ?? firstAllowedPage?.pageTitle
   const pageLabel = usefulDerivedLabel(rawPageLabel)
   if (pageLabel && !looksLikeBrowserTabTitle(pageLabel)) return pageLabel
 
-  const firstAllowedSite = block.websites.find((site) => !isHostBlockedForLabel(site.domain))
+  const firstAllowedSite = block.websites.find((site) => {
+    if (isHostBlockedForLabel(site.domain)) return false
+    if (workAppDominant && isHostBlockedForAppsRail(site.domain)) return false
+    return true
+  })
   const domainLabel = firstAllowedSite ? shortDomainLabel(firstAllowedSite.domain) : null
   return usefulDerivedLabel(domainLabel)
 }
@@ -1647,7 +1720,12 @@ function finalizedLabelForBlock(
   const artifactLabel = preferredArtifactLabel(block)
   const workflowLabel = usefulBlockLabel(block, block.workflowRefs[0]?.label)
   const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
-  const aiLabel = usefulBlockLabel(block, block.aiLabel)
+  const rawAiLabel = usefulBlockLabel(block, block.aiLabel)
+  // F1: the AI labeler can also lift a YouTube tab title verbatim into the
+  // block headline when it sees that page in the evidence. Reject any
+  // suggested label that matches an entertainment/social/adult page title
+  // in the block when the user's actual time was spent on work apps.
+  const aiLabel = rawAiLabel && labelIsBrowserContentLeak(rawAiLabel, block) ? null : rawAiLabel
 
   const chosen = override?.label?.trim()
     || memoryPattern?.label
