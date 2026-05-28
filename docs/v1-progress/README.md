@@ -51,11 +51,11 @@ Tonny is **merging divergent branches**. After a merge, update the **Active bran
 
 | Track | Branch | Commit | Remote | Last updated |
 |---|---|---|---|---|
-| Platform shipping | `codex/platform-shipping-sh3` | `a03ee30` (partial SH-3) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
-| Work Memory | *pending merge* | — | `v1` | 2026-05-28 |
-| V1 UX fixes | *local dirty / unmerged* | — | confirm | 2026-05-28 |
+| Platform shipping | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (Batch 1 did not change platform shipping status) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
+| Work Memory | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (Batch 1 code-proven) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
+| V1 UX fixes | `main` | `011245254b9ee92a2d2992adee4887f470243dc6` (current integration branch) | `v1` / `irachrist1/daylens-v1` | 2026-05-28 |
 
-*User: after you finish merging, update this table to a single integration branch and commit.*
+Current integration work is consolidated on `main` in `irachrist1/daylens-v1`. Keep updating the track-specific docs with the exact commit that changed each track.
 
 ## Ground rules
 

@@ -658,4 +658,47 @@ CREATE TABLE IF NOT EXISTS rebuild_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rebuild_jobs_scope ON rebuild_jobs (scope, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS context_patterns (
+  id                  TEXT PRIMARY KEY,
+  pattern_type        TEXT NOT NULL CHECK(pattern_type IN ('app_combo', 'window_match', 'domain_match', 'override')),
+  pattern_key         TEXT NOT NULL UNIQUE,
+  label_suggestion    TEXT NOT NULL,
+  category_suggestion TEXT,
+  confidence          REAL NOT NULL DEFAULT 0.5,
+  recall_count        INTEGER NOT NULL DEFAULT 1,
+  status              TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate', 'promoted', 'decayed', 'ignored')),
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL,
+  last_recalled_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_context_patterns_status ON context_patterns (status, confidence);
+CREATE INDEX IF NOT EXISTS idx_context_patterns_key ON context_patterns (pattern_key);
+
+CREATE TABLE IF NOT EXISTS pattern_occurrences (
+  id                  TEXT PRIMARY KEY,
+  pattern_id          TEXT NOT NULL REFERENCES context_patterns(id) ON DELETE CASCADE,
+  block_id            TEXT NOT NULL,
+  matched_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_occurrences_pattern ON pattern_occurrences (pattern_id);
+CREATE INDEX IF NOT EXISTS idx_pattern_occurrences_block ON pattern_occurrences (block_id);
+
+CREATE TABLE IF NOT EXISTS user_memory_facts (
+  id                  TEXT PRIMARY KEY,
+  fact_type           TEXT NOT NULL CHECK(fact_type IN ('project', 'client', 'preference')),
+  fact_key            TEXT NOT NULL UNIQUE,
+  subject             TEXT NOT NULL,
+  fact_value_json     TEXT NOT NULL DEFAULT '{}',
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_memory_facts_type ON user_memory_facts (fact_type);
+
+CREATE TABLE IF NOT EXISTS daily_memory_archive (
+  date                TEXT PRIMARY KEY,
+  archive_markdown    TEXT NOT NULL,
+  archive_json        TEXT NOT NULL,
+  created_at          INTEGER NOT NULL
+);
 `

@@ -20,6 +20,7 @@ import type {
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDayBounds } from '../lib/localDate'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { learnFromBlockOverride } from '../services/workMemory'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -1971,6 +1972,7 @@ export function setBlockLabelOverride(
   label: string,
   narrative: string | null = null,
 ): void {
+  const trimmedLabel = label.trim()
   db.prepare(`
     INSERT INTO block_label_overrides (block_id, label, narrative, updated_at)
     VALUES (?, ?, ?, ?)
@@ -1978,7 +1980,8 @@ export function setBlockLabelOverride(
       label = excluded.label,
       narrative = excluded.narrative,
       updated_at = excluded.updated_at
-  `).run(blockId, label, narrative, Date.now())
+  `).run(blockId, trimmedLabel, narrative, Date.now())
+  learnFromBlockOverride(db, blockId, trimmedLabel)
 }
 
 export function clearBlockLabelOverride(
