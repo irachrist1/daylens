@@ -52,6 +52,7 @@ import type {
   RollupEntry,
   DayWorkSessionsPayload,
   TimelineWorkSession,
+  WorkMemorySettingsSummary,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 
@@ -118,6 +119,73 @@ function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
     rows.push(...getAppSummariesForRange(db, from, to))
   }
   return mergeAppSummaryRows(rows)
+}
+
+function tableExists(db: ReturnType<typeof getDb>, tableName: string): boolean {
+  const row = db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+    LIMIT 1
+  `).get(tableName) as { name: string } | undefined
+  return Boolean(row)
+}
+
+function getWorkMemorySettingsSummary(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
+  if (!tableExists(db, 'context_patterns')) {
+    return { promotedCount: 0, totalOccurrences: 0, topPatterns: [] }
+  }
+
+  const promoted = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM context_patterns
+    WHERE status = 'promoted'
+  `).get() as { count: number }
+
+  const totalOccurrences = tableExists(db, 'pattern_occurrences')
+    ? (db.prepare(`SELECT COUNT(*) AS count FROM pattern_occurrences`).get() as { count: number }).count
+    : 0
+
+  const topPatterns = db.prepare(`
+    SELECT
+      context_patterns.id,
+      context_patterns.label_suggestion AS label,
+      context_patterns.category_suggestion AS category,
+      context_patterns.confidence,
+      context_patterns.recall_count AS recallCount,
+      context_patterns.updated_at AS updatedAt,
+      COUNT(pattern_occurrences.id) AS occurrenceCount
+    FROM context_patterns
+    LEFT JOIN pattern_occurrences
+      ON pattern_occurrences.pattern_id = context_patterns.id
+    WHERE context_patterns.status = 'promoted'
+    GROUP BY context_patterns.id
+    ORDER BY context_patterns.confidence DESC, occurrenceCount DESC, context_patterns.updated_at DESC
+    LIMIT 5
+  `).all() as WorkMemorySettingsSummary['topPatterns']
+
+  return {
+    promotedCount: promoted.count,
+    totalOccurrences,
+    topPatterns,
+  }
+}
+
+function forgetWorkMemoryPattern(db: ReturnType<typeof getDb>, patternId: string): WorkMemorySettingsSummary {
+  if (tableExists(db, 'pattern_occurrences')) {
+    db.prepare(`DELETE FROM pattern_occurrences WHERE pattern_id = ?`).run(patternId)
+  }
+  if (tableExists(db, 'context_patterns')) {
+    db.prepare(`DELETE FROM context_patterns WHERE id = ?`).run(patternId)
+  }
+  return getWorkMemorySettingsSummary(db)
+}
+
+function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
+  const tables = ['pattern_occurrences', 'context_patterns', 'user_memory_facts', 'daily_memory_archive']
+  for (const table of tables) {
+    if (tableExists(db, table)) db.prepare(`DELETE FROM ${table}`).run()
+  }
+  return getWorkMemorySettingsSummary(db)
 }
 
 // ─── Work session payload helpers ────────────────────────────────────────────
@@ -344,6 +412,18 @@ export function registerDbHandlers(): void {
       for (const block of payload.blocks) blocks.push(block)
     }
     return computeAppActivityDigest(blocks)
+  })
+
+  ipcMain.handle(IPC.DB.GET_WORK_MEMORY_SUMMARY, () => {
+    return getWorkMemorySettingsSummary(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.FORGET_WORK_MEMORY_PATTERN, (_e, patternId: string) => {
+    return forgetWorkMemoryPattern(getDb(), patternId)
+  })
+
+  ipcMain.handle(IPC.DB.FORGET_ALL_WORK_MEMORY, () => {
+    return forgetAllWorkMemory(getDb())
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {
