@@ -53,6 +53,7 @@ const DEFAULTS: AppSettings = {
   distractionAlertsEnabled: false,
   mcpServerEnabled: false,
   imessageCaptureEnabled: false,
+  workMemoryConsolidationEnabled: true,
 }
 
 export function getSettings(): AppSettings {
@@ -97,6 +98,7 @@ export function getSettings(): AppSettings {
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
     imessageCaptureEnabled: (_store.get('imessageCaptureEnabled', false) as boolean),
+    workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
   }
 }
 
