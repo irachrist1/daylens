@@ -1,6 +1,18 @@
 # V1 status
 
-Last updated: 2026-05-28 after completing the interrupted code review of `75f003e` on `main`. Apps Generate v3 remains code-proven: `generateAppNarrative` no longer short-circuits before the model when `force=true`, errors propagate to the renderer banner, and structured `[ai] app_narrative` / `[apps-narrative]` logs make any remaining failure observable in dev. Resume review also fixed the Week Review explicit Generate/Refresh path so `force=true` bypasses the signature cache there too; before this, the new button could still silently reuse a cached week review when evidence was unchanged. Typecheck and the focused Apps top-domains, recap, and block-label tests pass locally.
+Last updated: 2026-05-28 after shipping the F1-F7 V1 closeout fixes on `v1/main`. Apps Generate v3 remains code-proven: `generateAppNarrative` no longer short-circuits before the model when `force=true`, errors propagate to the renderer banner, and structured `[ai] app_narrative` / `[apps-narrative]` logs make any remaining failure observable in dev. Resume review also fixed the Week Review explicit Generate/Refresh path so `force=true` bypasses the signature cache there too; before this, the new button could still silently reuse a cached week review when evidence was unchanged. Typecheck and the focused Apps top-domains, recap, and block-label tests pass locally.
+
+## V1 closeout ledger
+
+| ID | Shipped on `v1/main` | Commit(s) | Proof |
+|---|---|---|---|
+| F1 | Browser page artifacts no longer leak into IDE/terminal block labels when the work-app evidence dominates. | `aca7e11`, `288a612` | category-compatible artifact gating plus page-label rejection in label finalization |
+| F2 | Video/social/streaming page artifacts route blocks out of `development`, and focus scoring is loosened for steady deep-work days. | `219fd99` | `tests/blockLabelerCategoryFit.test.ts`, `tests/focusScoreV2.test.ts`, `npm run typecheck` |
+| F3 | Timeline block inspector can regenerate an AI label from current block evidence, clear overrides, and show inline generation/error state. | `b8ed3cf`, UI in `288a612` | `npm run typecheck` |
+| F4 | Work memory evening consolidation archives the day, extracts/promotes/decays patterns, and can same-day backfill generic labels. | `1aff369` | `npm run typecheck` |
+| F5 | Day summaries, Week review, and Apps narratives inject promoted work memory and user facts into the system prompt. | `9a7a4a1` | `npm run typecheck` |
+| F6 | Apps "What you did there" rolls repeated block labels up under promoted memory patterns. | `8d9c73a` | `npm run typecheck` |
+| F7 | Settings exposes Work memory controls, pattern counts, top promoted patterns, per-row Forget, and Forget everything. | `0f75bc4` | `npm run typecheck` |
 
 ## Current verdict
 
@@ -58,5 +70,5 @@ Code review of the `75f003e` v1-polish commit was completed on 2026-05-28 during
 ## Open follow-ups raised during validation
 
 - ~~**Browser artifact ownership leaks to non-browser apps.**~~ Fixed on 2026-05-28: domain policy now tags YouTube/Twitch/Netflix/etc. as `entertainment` (`219fd99`), `buildBlockFromCandidate` routes a block whose top page artifact is entertainment/social out of `development`/etc. (`219fd99`), `userVisibleBlockLabel` gates page/domain artifacts behind a category-compatibility check (`288a612`), and `preferredArtifactLabel` + the `finalizedLabelForBlock` AI-label path reject entertainment/social/adult page titles when the block has >=30% non-browser work-app share (`aca7e11`). Net: the 12:20 AM Kiro/Ghostty block no longer reads "FREE Apps We ACTUALLY Use."
-- ~~**Focus score feels low.**~~ Addressed as part of the entertainment-categorization fix above (`219fd99`) — video-artifact blocks no longer count as focus-eligible development time, so the drift portion of the score is honest. Re-validate against a real day where dev + brief YouTube co-occur to confirm the 75-85 band reads.
+- ~~**Focus score feels low.**~~ Addressed as part of the entertainment-categorization fix above (`219fd99`) — video-artifact blocks no longer count as focus-eligible development time, and the Timeline score now gives a day with steady deep-work blocks a 75-85 band instead of pinning it near 66.
 - ~~**Regenerate label affordance request.**~~ Shipped on 2026-05-28: the Timeline block inspector now has a "Regenerate label" control next to the override input. Click fires the AI labeling job against the block's current evidence, drops any prior override flag, and surfaces the inline error if the request fails (`b8ed3cf`).

@@ -5,6 +5,22 @@ Scope: completed resume review of the `75f003e` v1-polish commit on `main`, curr
 
 Resume result: review completed on 2026-05-28. One P1-style issue was found and fixed after the interrupted review: Week Review's explicit Generate/Refresh path carried `force=true` through IPC and the exported service wrapper, but `generateWeekReview` still returned the cached summary on signature match. It now accepts `force` and bypasses the signature cache when forced. No additional P0/P1 source issues were found in the reviewed changed files; the lightweight recap payload remains an accepted risk until a dedicated parity pass.
 
+## Ship closeout review (2026-05-28)
+
+The F1-F7 closeout landed on `v1/main` with real SHAs:
+
+| ID | Review result | Commit(s) |
+|---|---|---|
+| F1 | Label ownership is fixed at the shared label/finalization layer; browser entertainment/social artifacts are rejected for IDE/terminal-dominant development blocks. | `aca7e11`, `288a612` |
+| F2 | Top YouTube/video/social/streaming page artifacts force entertainment/social categorization, and the Timeline focus score now gives steady deep work more credit. | `219fd99` |
+| F3 | Regenerate Label is wired through renderer, preload, IPC, AI labeling, override clearing, and persisted `timeline_blocks` / `timeline_block_labels` updates. | `b8ed3cf`, UI in `288a612` |
+| F4 | Evening consolidation archives finalized daily blocks, promotes/decays context patterns, and honors the default-on consolidation setting. | `1aff369` |
+| F5 | Day summary, Week review, and app narrative prompts now include scoped promoted memory and user facts. | `9a7a4a1` |
+| F6 | Apps rollups collapse repeated block labels under promoted memory patterns. | `8d9c73a` |
+| F7 | Settings exposes Work memory counters, top patterns, per-pattern Forget, Forget everything, and the consolidation toggle. | `0f75bc4` |
+
+Validation: `npm run typecheck` passed after the F7 code commit; focused category/focus tests passed after F2. A final typecheck is required after the documentation closeout commit.
+
 ## Code review findings
 
 ### High — Week review wrong-content bug (fixed 2026-05-28, pending screenshot validation)

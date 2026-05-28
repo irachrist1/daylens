@@ -4,7 +4,7 @@ Last updated: 2026-05-28
 
 Single source of truth for Daylens **Work Memory** — a local-first system that learns what your activity blocks *mean*, connects signals across apps (terminal + browser + editor), and evolves with you over time. Inspired by [OpenClaw](https://docs.openclaw.ai/concepts/memory) and [Hermes Agent](https://github.com/NousResearch/hermes-agent) memory architectures, adapted to structured desktop activity data.
 
-**Status:** Batch 1 implemented. **Code-proven through migration, focused work-memory tests, and typecheck**; not yet validated in a packaged app or against real user activity data.
+**Status:** Batches 1-3 implemented on `v1/main`. **Code-proven through migrations, focused work-memory tests, and typecheck**; packaged-runtime proof is tracked separately in [PLATFORM-SHIPPING.md](./PLATFORM-SHIPPING.md).
 
 This track is separate from:
 - [STATUS.md](./STATUS.md) — V1 UX/performance fixes (Settings, recap, etc.)
@@ -21,6 +21,8 @@ Daylens is **in active development**. Do not assume earlier agent claims are tru
 | Remote | `v1` → `github.com/irachrist1/daylens-v1` |
 | Branch | `main` |
 | Batch 1 commit | `011245254b9ee92a2d2992adee4887f470243dc6` |
+| Batch 2 commit | `1aff369` |
+| Batch 3 commits | `9a7a4a1`, `8d9c73a`, `0f75bc4` |
 | Research completed on | local worktree; Batch 1 implementation reconciled to `v1/main` |
 
 ---
@@ -685,6 +687,23 @@ Shipped:
 Validation:
 - `npm run typecheck` passed.
 
+### 2026-05-28 — Work Memory Batch 3 (Phase 5: memory-augmented AI prompts)
+
+| Field | Value |
+|---|---|
+| Repo | `v1` → `github.com/irachrist1/daylens-v1` |
+| Branch | `main` |
+| Commit | `9a7a4a1` |
+| Status | `code-proven` |
+
+Shipped:
+- Added a compact prompt block titled `Daylens memory for this user (do not invent beyond this list)` for `generateDaySummary`, `getWeekReview`, and `generateAppNarrative`.
+- Retrieval scopes promoted `context_patterns` and `user_memory_facts` to the summarized date range, with a highest-confidence fallback when a range has no occurrences yet.
+- Included the memory prompt hash in the day-summary cache key and the week/app input signatures so regenerated surfaces see changed memory instead of stale cached text.
+
+Validation:
+- `npm run typecheck` passed.
+
 ### 2026-05-28 — Work Memory Batch 3 (Phase 6: Apps rollup)
 
 | Field | Value |
@@ -698,6 +717,23 @@ Shipped:
 - Added `memoryRollupsForBlocks` in `src/main/services/workBlocks.ts` that joins `pattern_occurrences` × `context_patterns` for the Apps-detail block IDs, grouping appearances under their promoted pattern label.
 - Extended `AppDetailPayload` with an optional `blockMemoryRollups` field.
 - Updated `src/renderer/views/Apps.tsx` "What you did there" section: when any rollup row collapses two or more sessions under a promoted pattern, the renderer shows the rollup view ("`patternLabel × N sessions`" with combined duration) instead of per-block rows.
+
+Validation:
+- `npm run typecheck` passed.
+
+### 2026-05-28 — Work Memory Batch 3 (Phase 7: Settings transparency)
+
+| Field | Value |
+|---|---|
+| Repo | `v1` → `github.com/irachrist1/daylens-v1` |
+| Branch | `main` |
+| Commit | `0f75bc4` |
+| Status | `code-proven` |
+
+Shipped:
+- Added `Work memory` to Settings with the default-on evening consolidation toggle, promoted-pattern and occurrence counters, top promoted patterns, per-pattern `Forget`, and destructive confirmed `Forget everything`.
+- Added IPC/read-model support for `getWorkMemorySummary`, `forgetWorkMemoryPattern`, and `forgetAllWorkMemory`.
+- Forgetting a pattern deletes its `pattern_occurrences`; forgetting everything clears `pattern_occurrences`, `context_patterns`, `user_memory_facts`, and `daily_memory_archive`.
 
 Validation:
 - `npm run typecheck` passed.
