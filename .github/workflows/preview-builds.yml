@@ -90,6 +90,17 @@ jobs:
       - name: Verify packaged native module layout
         run: node scripts/verify-packaged-natives.js dist-release
 
+      - name: Verify preview update metadata
+        if: matrix.platform == 'win' || matrix.platform == 'linux'
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "win" ]; then
+            test -f dist-release/latest.yml
+          else
+            test -f dist-release/latest-linux.yml
+          fi
+          ls -l dist-release/latest*.yml
+
       - name: Upload preview artifact
         uses: actions/upload-artifact@v6
         with:
