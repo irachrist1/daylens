@@ -679,7 +679,7 @@ function productivityScore(totalSeconds: number, focusedSeconds: number, detourS
   return Math.max(0, Math.min(100, Math.round(35 + focusShare * 60 + trackedDepthBonus - detourShare * 12)))
 }
 
-function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
+function DaySummaryInspector({ payload, onSelectBlock }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
 
@@ -781,32 +781,59 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
             What mattered
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
-            {topThemes.map((theme) => (
-              <div key={theme.label} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
+            {topThemes.map((theme) => {
+              const jumpTarget = theme.blocks[0]?.id ?? null
+              const clickable = Boolean(jumpTarget && onSelectBlock)
+              const handleJump = () => {
+                if (jumpTarget && onSelectBlock) onSelectBlock(jumpTarget)
+              }
+              return (
                 <div
+                  key={theme.label}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={clickable ? handleJump : undefined}
+                  onKeyDown={clickable ? (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      handleJump()
+                    }
+                  } : undefined}
                   style={{
-                    width: 3,
-                    borderRadius: 999,
-                    background: CATEGORY_COLORS[theme.category] ?? CATEGORY_COLORS.uncategorized,
-                    flexShrink: 0,
+                    display: 'flex',
+                    gap: 10,
+                    minWidth: 0,
+                    cursor: clickable ? 'pointer' : 'default',
+                    borderRadius: 8,
+                    padding: clickable ? '2px 4px' : 0,
+                    margin: clickable ? '-2px -4px' : 0,
                   }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
-                    {formatDuration(theme.seconds)} · {theme.blocks.length} related stretch{theme.blocks.length === 1 ? '' : 'es'}
-                  </div>
-                  <InlineRevealText
-                    text={theme.label}
-                    style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                >
+                  <div
+                    style={{
+                      width: 3,
+                      borderRadius: 999,
+                      background: CATEGORY_COLORS[theme.category] ?? CATEGORY_COLORS.uncategorized,
+                      flexShrink: 0,
+                    }}
                   />
-                  {theme.apps.length > 0 && (
-                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
-                      {theme.apps.slice(0, 3).join(' · ')}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
+                      {formatDuration(theme.seconds)} · {theme.blocks.length} related stretch{theme.blocks.length === 1 ? '' : 'es'}
                     </div>
-                  )}
+                    <InlineRevealText
+                      text={theme.label}
+                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                    />
+                    {theme.apps.length > 0 && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
+                        {theme.apps.slice(0, 3).join(' · ')}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </section>
       )}
@@ -818,10 +845,12 @@ function BlockInspector({
   block,
   payload,
   onRefresh,
+  onSelectBlock,
 }: {
   block: WorkContextBlock | null
   payload: DayTimelinePayload
   onRefresh: () => Promise<void>
+  onSelectBlock?: (blockId: string) => void
 }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
@@ -850,7 +879,7 @@ function BlockInspector({
   }, [block?.id])
 
   if (!block) {
-    return <DaySummaryInspector payload={payload} />
+    return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} />
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
@@ -1977,7 +2006,18 @@ export default function Timeline() {
                         )
                       ))}
                     </div>
-                    <BlockInspector block={selectedBlock} payload={payload} onRefresh={timelineResource.refresh} />
+                    <BlockInspector
+                      block={selectedBlock}
+                      payload={payload}
+                      onRefresh={timelineResource.refresh}
+                      onSelectBlock={(blockId) => {
+                        setSelectedBlockId(blockId)
+                        requestAnimationFrame(() => {
+                          const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
+                          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        })
+                      }}
+                    />
                   </div>
                 )}
               </>
