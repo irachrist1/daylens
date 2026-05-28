@@ -2237,6 +2237,152 @@ function buildWorkflowsContext(): string {
   }
 }
 
+function tableExistsForAIPrompt(tableName: string): boolean {
+  try {
+    const row = getDb().prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = ?
+      LIMIT 1
+    `).get(tableName) as { name: string } | undefined
+    return Boolean(row)
+  } catch {
+    return false
+  }
+}
+
+function localDateBoundsFromString(dateStr: string): [number, number] {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const from = new Date(year, month - 1, day).getTime()
+  return [from, from + 86_400_000]
+}
+
+function summarizePatternKey(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      apps?: unknown
+      domains?: unknown
+      titleTokens?: unknown
+      project?: unknown
+      hasLocalhost?: unknown
+    }
+    const parts: string[] = []
+    const apps = Array.isArray(parsed.apps) ? parsed.apps.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
+    const domains = Array.isArray(parsed.domains) ? parsed.domains.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
+    const titles = Array.isArray(parsed.titleTokens) ? parsed.titleTokens.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
+    if (apps.length > 0) parts.push(`apps ${apps.join(' + ')}`)
+    if (domains.length > 0) parts.push(`domains ${domains.join(', ')}`)
+    if (titles.length > 0) parts.push(`titles ${titles.join(', ')}`)
+    if (typeof parsed.project === 'string' && parsed.project) parts.push(`project ${parsed.project}`)
+    if (parsed.hasLocalhost) parts.push('localhost')
+    return parts.length > 0 ? parts.join('; ') : null
+  } catch {
+    return null
+  }
+}
+
+function compactFactValue(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const entries = Object.entries(parsed)
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .slice(0, 3)
+      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.slice(0, 3).join(', ') : String(value)}`)
+    return entries.length > 0 ? entries.join('; ') : null
+  } catch {
+    return null
+  }
+}
+
+function buildDaylensMemoryPromptBlock(range: { fromMs: number; toMs: number }, limit = 10): string {
+  try {
+    const db = getDb()
+    if (!tableExistsForAIPrompt('context_patterns')) return ''
+
+    const scopedPatterns = db.prepare(`
+      SELECT
+        context_patterns.pattern_key AS patternKey,
+        context_patterns.label_suggestion AS label,
+        context_patterns.category_suggestion AS category,
+        context_patterns.confidence AS confidence,
+        context_patterns.recall_count AS recallCount,
+        COUNT(pattern_occurrences.id) AS rangeMatches
+      FROM context_patterns
+      JOIN pattern_occurrences
+        ON pattern_occurrences.pattern_id = context_patterns.id
+      JOIN timeline_blocks
+        ON timeline_blocks.id = pattern_occurrences.block_id
+      WHERE context_patterns.status = 'promoted'
+        AND context_patterns.confidence >= 0.65
+        AND timeline_blocks.start_time < ?
+        AND timeline_blocks.end_time > ?
+      GROUP BY context_patterns.id
+      ORDER BY rangeMatches DESC, context_patterns.confidence DESC, context_patterns.recall_count DESC, context_patterns.updated_at DESC
+      LIMIT ?
+    `).all(range.toMs, range.fromMs, limit) as Array<{
+      patternKey: string
+      label: string
+      category: string | null
+      confidence: number
+      recallCount: number
+      rangeMatches: number
+    }>
+
+    const patternRows = scopedPatterns.length > 0
+      ? scopedPatterns
+      : db.prepare(`
+        SELECT
+          pattern_key AS patternKey,
+          label_suggestion AS label,
+          category_suggestion AS category,
+          confidence,
+          recall_count AS recallCount,
+          0 AS rangeMatches
+        FROM context_patterns
+        WHERE status = 'promoted'
+          AND confidence >= 0.65
+        ORDER BY confidence DESC, recall_count DESC, updated_at DESC
+        LIMIT ?
+      `).all(Math.max(0, Math.floor(limit / 2))) as typeof scopedPatterns
+
+    const lines = patternRows.map((row) => {
+      const confidencePct = Math.round(row.confidence * 100)
+      const category = row.category ? `, ${row.category}` : ''
+      const signal = summarizePatternKey(row.patternKey)
+      const matched = row.rangeMatches > 0 ? `, matched ${row.rangeMatches}x in this range` : ''
+      return `- Pattern: "${row.label}"${category} (${confidencePct}% confidence, seen ${row.recallCount}x${matched})${signal ? ` — signals: ${signal}` : ''}`
+    })
+
+    if (tableExistsForAIPrompt('user_memory_facts') && lines.length < limit) {
+      const facts = db.prepare(`
+        SELECT fact_type AS factType, fact_key AS factKey, subject, fact_value_json AS factValueJson
+        FROM user_memory_facts
+        WHERE updated_at <= ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `).all(range.toMs, limit - lines.length) as Array<{
+        factType: string
+        factKey: string
+        subject: string
+        factValueJson: string
+      }>
+
+      for (const fact of facts) {
+        const value = compactFactValue(fact.factValueJson)
+        lines.push(`- Fact: ${fact.factType} "${fact.subject}" (${fact.factKey})${value ? ` — ${value}` : ''}`)
+      }
+    }
+
+    if (lines.length === 0) return ''
+    return [
+      'Daylens memory for this user (do not invent beyond this list)',
+      ...lines.slice(0, limit),
+    ].join('\n')
+  } catch (error) {
+    console.warn('[ai] memory prompt context failed:', error)
+    return ''
+  }
+}
+
 function buildHourlyShapeContext(sessions: { startTime: number; durationSeconds: number; category: string }[]): string {
   if (sessions.length === 0) return ''
   // Build a coarse morning / midday / afternoon / evening profile from today's sessions.
@@ -3329,12 +3475,15 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     return fallback
   }
 
-  const cacheKey = daySummaryCacheKey(payload)
+  const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}`
   const cached = daySummaryCache.get(cacheKey)
   if (cached) return cached
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
+    memoryPrompt,
     'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
     'Do not use emoji in any part of your response.',
     'Turn deterministic local work evidence into a concise, useful summary.',
@@ -3357,7 +3506,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     'Good examples: "What did I actually get done today?", "Which files or pages mattered most today?", "Summarize today as a short report I could share".',
     'Bad examples: "Are you building a model right now?", "Did task planning settle into place?", "Is this still in discovery phase?".',
     'Never ask the user to confirm intent, progress, or motivation.',
-  ].join(' ')
+  ].filter(Boolean).join('\n')
 
   const userMessage = [
     `Date: ${dateStr}`,
@@ -3824,7 +3973,11 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   if (!bundle) return null
 
   const scopeKey = `week:${weekStartStr}`
-  const inputSignature = hashText(bundle.assistantScaffold)
+  const { weekStart, weekEnd } = buildWeekDateRange(weekStartStr)
+  const [memoryFromMs] = localDateBoundsFromString(weekStart)
+  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt].join('\n'))
   if (!force) {
     const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
     if (existingSignature === inputSignature) {
@@ -3835,6 +3988,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   const fallback = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
+    memoryPrompt,
     'You are Daylens, writing the short week-review card for the Timeline week view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
@@ -3843,7 +3997,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     'Avoid dashboard filler or generic productivity language.',
     'Return strict JSON with keys "title" and "summary".',
     '"summary" must be 2-4 sentences and grounded in the evidence.',
-  ].join(' ')
+  ].filter(Boolean).join('\n')
   const userMessage = [
     `Write a concise week review for ${bundle.scopeLabel}.`,
     '',
@@ -3893,7 +4047,12 @@ async function generateAppNarrative(
 
   const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
   const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
-  const inputSignature = appNarrativeSignature(detail)
+  const [, todayToMs] = dayBounds(new Date())
+  const memoryPrompt = buildDaylensMemoryPromptBlock({
+    fromMs: todayToMs - Math.max(1, days) * 86_400_000,
+    toMs: todayToMs,
+  })
+  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
   // Force=true must bypass the signature short-circuit. Without this, clicking
   // Generate/Refresh on an app whose evidence has not changed since the last
   // cached narrative returns the same cached row without ever calling the AI,
@@ -3916,6 +4075,7 @@ async function generateAppNarrative(
   const fallback = appNarrativeHasStaleMetrics(cachedFallback) ? null : cachedFallback
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
+    memoryPrompt,
     'You are Daylens, writing the short narrative card for an app detail view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
@@ -3944,7 +4104,7 @@ async function generateAppNarrative(
     'When citing a time window, you may only use ranges from `topHourBuckets` (whole-hour spans like "9:00-10:00"). Never invent sub-hour minute boundaries such as "9:00-9:46". If activity spans many hours with no single concentration, say it spans the morning/afternoon/evening rather than citing a fake narrow window.',
     'Return strict JSON with keys "title" and "summary".',
     '"summary" must be 2-4 sentences.',
-  ].join(' ')
+  ].filter(Boolean).join('\n')
   const userMessage = [
     `Write an app narrative for ${bundle.scopeLabel}.`,
     '',
