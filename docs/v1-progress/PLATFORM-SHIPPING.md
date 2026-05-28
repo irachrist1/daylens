@@ -15,7 +15,7 @@ Daylens is **in active development**. Treat this doc as a living plan: read what
 | Remote | `v1` → `github.com/irachrist1/daylens-v1` |
 | Branch | `main` |
 | Last CI commit | `04f8b33c765e717b8ebf895324b95b35fa8229c2` |
-| Last CI run | [Preview Builds 26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022) and [Verify Linux Runtime 26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639) — green on `main` |
+| Last CI run | [Preview Builds 26581779077](https://github.com/irachrist1/daylens-v1/actions/runs/26581779077) produced the Windows/Linux artifacts uploaded to [v1.0.36](https://github.com/irachrist1/daylens-v1/releases/tag/v1.0.36); [Verify Linux Runtime 26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639) remains the Linux smoke proof on `main` |
 
 ---
 
@@ -47,10 +47,10 @@ Check off items here as they are completed. Re-order only if a dependency forces
 | SH-6 | Windows smoke test in CI (launch packaged `.exe`, basic health) | ⬜ not started | Linux has smoke infra; Windows has none today. Design minimal headless or scripted launch check. |
 | SH-7 | Manual Windows VM validation checklist | ⬜ not started | Install NSIS build, launch, tray, tracking, updater dry-run. Document SmartScreen bypass steps for testers. |
 | SH-8 | Manual Linux desktop validation checklist | ⬜ not started | AppImage + DEB on real Ubuntu; tray/autostart/keyring spot-check. |
-| SH-9 | Unsigned preview release (`v*-win`, `v*-linux` tags) | ✅ shipped | [v1.0.36](https://github.com/irachrist1/daylens-v1/releases/tag/v1.0.36) carries the cross-platform installer set: `Daylens-1.0.36-Setup.exe` + `.blockmap` + `latest.yml` for Windows, `Daylens-1.0.36.deb` + `Daylens-1.0.36.rpm` + `latest-linux.yml` for Linux, alongside the existing macOS `.dmg` + `.zip`. Uploaded from preview-builds run [26581779077](https://github.com/irachrist1/daylens-v1/actions/runs/26581779077) artifacts. AppImage still pending — re-upload tracked below. |
+| SH-9 | Unsigned preview release (`v*-win`, `v*-linux` tags) | ✅ shipped | [v1.0.36](https://github.com/irachrist1/daylens-v1/releases/tag/v1.0.36) carries the cross-platform installer set: `Daylens-1.0.36-Setup.exe` + `.blockmap` + `latest.yml` for Windows, `Daylens-1.0.36.AppImage` + `Daylens-1.0.36.deb` + `Daylens-1.0.36.rpm` + `latest-linux.yml` for Linux, alongside the existing macOS `.dmg` + `.zip`. Uploaded from preview-builds run [26581779077](https://github.com/irachrist1/daylens-v1/actions/runs/26581779077) artifacts. |
 | SH-10 | Windows Authenticode signing secrets | ⬜ not provisioned | Optional until external users; see signing blockers below. |
 
-**Current next step:** **SH-6** — Windows smoke test in CI (launch packaged `.exe`, basic health). SH-9 cross-platform installer set landed on the v1.0.36 release; daylens.io download proxy now serves Windows and Linux installers without a code change.
+**Current next step:** **SH-6 / SH-7 / SH-8** — add Windows smoke coverage and perform real-machine Windows/Linux validation. SH-9 cross-platform installer set landed on the v1.0.36 release; daylens.io download proxy now serves Windows and Linux installers without a code change.
 
 ---
 
@@ -62,6 +62,7 @@ Check off items here as they are completed. Re-order only if a dependency forces
 | `tests/updaterReleaseFeed.test.ts` | ✅ passed (7 tests) | 2026-05-28 |
 | Native scripts syntax (`node -c`) | ✅ passed | 2026-05-28 |
 | `preview-builds.yml` all platforms | ✅ mac+win+linux green on `main` / `04f8b33` ([run 26581189022](https://github.com/irachrist1/daylens-v1/actions/runs/26581189022)) | 2026-05-28 |
+| `v1.0.36` Windows/Linux release assets | ✅ uploaded to [v1.0.36](https://github.com/irachrist1/daylens-v1/releases/tag/v1.0.36): `.exe`, `.AppImage`, `.deb`, `.rpm`, `latest.yml`, `latest-linux.yml` | 2026-05-28 |
 | `verify-linux-runtime.yml` | ✅ green on `main` / `04f8b33` ([run 26581168639](https://github.com/irachrist1/daylens-v1/actions/runs/26581168639)) | 2026-05-28 |
 | Packaged app on real Windows | ⬜ not validated | — |
 | Packaged app on real Linux desktop | ⬜ not validated | — |
@@ -120,9 +121,9 @@ Result: Windows in-app updates could not complete.
 
 **Action:** Pulled the Windows + Linux installer set out of the green preview-builds artifacts on run [26581779077](https://github.com/irachrist1/daylens-v1/actions/runs/26581779077) (built from main on `v1.0.36-preview.1`) and uploaded them to the existing [v1.0.36 GitHub Release](https://github.com/irachrist1/daylens-v1/releases/tag/v1.0.36) using `gh release upload --clobber`.
 
-**Proven (SH-9):** The release now lists `Daylens-1.0.36-Setup.exe`, `Daylens-1.0.36-Setup.exe.blockmap`, `latest.yml`, `Daylens-1.0.36.deb`, `Daylens-1.0.36.rpm`, and `latest-linux.yml` next to the existing macOS `.dmg` + `.zip`. `daylens.io`'s download proxy already pointed at this release and floor version, so Windows and Linux downloads start working without any change to `daylens-web`.
+**Proven (SH-9):** The release now lists `Daylens-1.0.36-Setup.exe`, `Daylens-1.0.36-Setup.exe.blockmap`, `latest.yml`, `Daylens-1.0.36.AppImage`, `Daylens-1.0.36.deb`, `Daylens-1.0.36.rpm`, and `latest-linux.yml` next to the existing macOS `.dmg` + `.zip`. `daylens.io`'s download proxy already pointed at this release and floor version, so Windows and Linux downloads start working without any change to `daylens-web`.
 
-**Not proven:** Linux `.AppImage` is still pending re-upload (build artifact is 576 MB and the preview-builds workflow only produces .deb/.rpm without an AppImage step today). Logged as a follow-up below.
+**Not proven:** real-machine Windows/Linux installs and in-app updater end-to-end; those remain SH-6/SH-7/SH-8.
 
 ---
 
