@@ -37,6 +37,19 @@ function seedSingleBlockDay(db: Database.Database): void {
   )
   const sessionId = String(info.lastInsertRowid)
 
+  db.prepare(`
+    INSERT INTO website_visits (
+      browser_bundle_id, canonical_browser_id, visit_time, duration_sec,
+      url, normalized_url, domain, page_title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'com.apple.Safari', 'safari', start + 5 * 60_000, 600,
+    'https://github.com/irachrist1/daylens-v1/pull/36',
+    'https://github.com/irachrist1/daylens-v1/pull/36',
+    'github.com',
+    'daylens-v1 pull request',
+  )
+
   const evidenceSummary = {
     apps: [
       {
@@ -101,6 +114,11 @@ test('getRecapRange lightweight payload populates every field recap consumers re
   assert.ok(payload.totalSeconds > 0, 'totalSeconds must be populated')
   assert.equal(typeof payload.focusSeconds, 'number', 'focusSeconds must be a number')
   assert.equal(payload.focusSeconds, payload.totalSeconds, 'development session counts as focused')
+  assert.ok(Array.isArray(payload.sessions) && payload.sessions.length === 1, 'sessions must be real day sessions')
+  assert.ok(Array.isArray(payload.websites) && payload.websites.length === 1, 'websites must be real day websites')
+  assert.ok(Array.isArray(payload.segments) && payload.segments.some((segment) => segment.kind === 'work_block'), 'segments must include work blocks')
+  assert.equal(payload.appCount, 1, 'appCount must be populated from real sessions')
+  assert.equal(payload.siteCount, 1, 'siteCount must be populated from real websites')
   assert.ok(Array.isArray(payload.blocks) && payload.blocks.length === 1, 'blocks must be populated')
   assert.ok(Array.isArray(payload.focusSessions), 'focusSessions must be an array')
 
@@ -112,6 +130,9 @@ test('getRecapRange lightweight payload populates every field recap consumers re
   assert.ok(block.label.current.length > 0, 'block.label.current must be populated')
   assert.ok(Array.isArray(block.topApps), 'block.topApps must be populated')
   assert.ok(block.topApps.length > 0, 'block.topApps populated from evidence_summary_json')
+  assert.ok(Array.isArray(block.sessions) && block.sessions.length === 1, 'block.sessions must use real member sessions')
+  assert.ok(Array.isArray(block.websites) && block.websites.length === 1, 'block.websites must be populated from website visits')
+  assert.ok(block.keyPages.includes('daylens-v1 pull request'), 'keyPages must be populated from top pages')
   assert.ok(Array.isArray(block.pageRefs), 'block.pageRefs must be an array')
   assert.ok(Array.isArray(block.documentRefs), 'block.documentRefs must be populated')
   assert.ok(Array.isArray(block.topArtifacts), 'block.topArtifacts must be populated')
