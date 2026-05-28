@@ -98,6 +98,34 @@ test('brief context changes under two minutes stay inside the surrounding block'
   db.close()
 })
 
+test('a sub-five-minute terminal sliver is absorbed into the adjacent coding block', () => {
+  const db = createDb()
+  insertSession(db, { title: 'aiService.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 30 })
+  insertSession(db, { title: 'npm run typecheck - daylens - zsh', bundleId: 'com.warp.dev', appName: 'Warp', category: 'development', startMinute: 30, durationMinutes: 1 })
+  insertSession(db, { title: 'aiService.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 31, durationMinutes: 30 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `the 1-minute terminal sliver should fold in; got ${blocks.length} blocks`)
+  assert.ok(blocks[0].endTime - blocks[0].startTime >= 60 * 60_000, 'merged block should span the full hour')
+  db.close()
+})
+
+test('adjacent same-category development fragments coalesce into one block', () => {
+  const db = createDb()
+  // Two contiguous coding stretches on the same project, interleaving Cursor
+  // and the terminal — one continuous work session, not two blocks.
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'npm test - daylens - zsh', bundleId: 'com.warp.dev', appName: 'Warp', category: 'development', startMinute: 25, durationMinutes: 20 })
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 45, durationMinutes: 25 })
+  insertSession(db, { title: 'npm test - daylens - zsh', bundleId: 'com.warp.dev', appName: 'Warp', category: 'development', startMinute: 70, durationMinutes: 20 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `same-work dev fragments should merge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
 test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
   const db = createDb()
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })

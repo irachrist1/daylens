@@ -91,7 +91,15 @@ const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
-const TIMELINE_MAX_BLOCK_SPAN_MS = 60 * 60_000
+// R2 block-sizing: the target shape is a 60-120 minute block, not a string of
+// 20-minute slices. The base ceiling sits at 120 min so a sustained stretch of
+// the same work is not chopped at 60, and the coalesce pass below re-joins
+// adjacent fragments of the same work up to this same ceiling.
+const TIMELINE_MAX_BLOCK_SPAN_MS = 120 * 60_000
+// Blocks shorter than this are noise on the timeline (e.g. a 50-second
+// "Terminal work" sliver). They are merged into an adjacent block instead of
+// being shown standalone.
+const TIMELINE_MIN_BLOCK_SPAN_MS = 5 * 60_000
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
 // PRODUCT-SPEC bar: a 90-minute block titled "Daylens AI refactor — extract
@@ -1577,10 +1585,142 @@ function analyzeSessions(
   return [{ sessions, formation, boundedBeforeGap, boundedAfterGap }]
 }
 
+// Categories where the page/topic IS the activity, so a topic change is a real
+// boundary even when the app and category stay the same. A camera-research tab
+// and a city-council tab are both "browsing" in the same browser, but they are
+// two different things and must stay two blocks. Work categories are the
+// opposite: switching from a source file to a terminal command is the same
+// coding session and should read as one block.
+const TOPIC_SENSITIVE_CATEGORIES = new Set<AppCategory>([
+  'browsing',
+  'aiTools',
+  'research',
+  'entertainment',
+  'social',
+])
+
+function candidateDominantCategory(candidate: CandidateBlock): AppCategory {
+  return dominantCategoryFromDistribution(categoryDistributionFor(effectiveSessionsFor(candidate.sessions)))
+}
+
+function candidateTopAppIds(candidate: CandidateBlock): Set<string> {
+  return new Set(topAppsFromSessions(candidate.sessions).map((app) => app.bundleId))
+}
+
+function dominantContentContext(sessions: AppSession[]): string {
+  const runs = contextRunsFor(sessions)
+  if (runs.length === 0) return ''
+  return runs.reduce((best, run) => (run.totalSeconds > best.totalSeconds ? run : best), runs[0]).context
+}
+
+function gapBetweenCandidates(left: CandidateBlock, right: CandidateBlock): number {
+  return right.sessions[0].startTime - sessionEndMs(left.sessions[left.sessions.length - 1])
+}
+
+function combinedSpanMs(left: CandidateBlock, right: CandidateBlock): number {
+  return sessionEndMs(right.sessions[right.sessions.length - 1]) - left.sessions[0].startTime
+}
+
+function mergeCandidatePair(left: CandidateBlock, right: CandidateBlock): CandidateBlock {
+  return {
+    sessions: [...left.sessions, ...right.sessions],
+    // The merged stretch is no longer a single forced-label unit, so let
+    // buildBlockFromCandidate re-derive the label from the combined evidence.
+    formation: 'heuristic',
+    boundedBeforeGap: left.boundedBeforeGap,
+    boundedAfterGap: right.boundedAfterGap,
+  }
+}
+
+// Soft-merge rule (R2): two adjacent candidates within 5 minutes of each other
+// and under the 120-minute ceiling are the same work when they share a dominant
+// category. For a work category that is enough — interleaving an editor and a
+// terminal on one project splits into single-app fragments at every context
+// shift, and those are one coding session, not four blocks. For a
+// topic-sensitive category the dominant content context must also match (and we
+// require a shared top app), so two distinct browsing topics stay separate.
+function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock): boolean {
+  if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  if (gapBetweenCandidates(left, right) >= TIMELINE_SPLIT_GAP_THRESHOLD_MS) return false
+  if (combinedSpanMs(left, right) > TIMELINE_MAX_BLOCK_SPAN_MS) return false
+
+  const category = candidateDominantCategory(left)
+  if (category !== candidateDominantCategory(right)) return false
+
+  if (!TOPIC_SENSITIVE_CATEGORIES.has(category)) return true
+
+  const leftApps = candidateTopAppIds(left)
+  const sharesTopApp = [...candidateTopAppIds(right)].some((id) => leftApps.has(id))
+  if (!sharesTopApp) return false
+  return dominantContentContext(left.sessions) === dominantContentContext(right.sessions)
+}
+
+// Tiny blocks (<5 min) are timeline noise. Fold each one into the adjacent
+// block it most belongs with — preferring a same-category neighbour, otherwise
+// the one separated by the smaller gap — without ever swallowing a meeting.
+function absorbTinyCandidates(candidates: CandidateBlock[]): CandidateBlock[] {
+  if (candidates.length <= 1) return candidates
+
+  const result = [...candidates]
+  for (let index = 0; index < result.length; index++) {
+    const candidate = result[index]
+    if (candidate.formation === 'meeting') continue
+    if (candidateSpanMs(candidate) >= TIMELINE_MIN_BLOCK_SPAN_MS) continue
+
+    const left = index > 0 ? result[index - 1] : null
+    const right = index < result.length - 1 ? result[index + 1] : null
+    const category = candidateDominantCategory(candidate)
+    const leftOk = left && left.formation !== 'meeting'
+    const rightOk = right && right.formation !== 'meeting'
+
+    let mergeLeft: boolean
+    if (leftOk && !rightOk) mergeLeft = true
+    else if (!leftOk && rightOk) mergeLeft = false
+    else if (!leftOk && !rightOk) continue
+    else if (candidateDominantCategory(left!) === category && candidateDominantCategory(right!) !== category) mergeLeft = true
+    else if (candidateDominantCategory(right!) === category && candidateDominantCategory(left!) !== category) mergeLeft = false
+    else mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)
+
+    if (mergeLeft) {
+      result[index - 1] = mergeCandidatePair(left!, candidate)
+      result.splice(index, 1)
+      index -= 2
+    } else {
+      result[index] = mergeCandidatePair(candidate, right!)
+      result.splice(index + 1, 1)
+      index -= 1
+    }
+  }
+  return result
+}
+
+// Coalesce a single coarse segment's candidates: re-join fragments of the same
+// work, then fold away any remaining sub-5-minute slivers. Runs per coarse
+// segment so it never merges across sleep / >15-minute idle boundaries.
+function coalesceTimelineCandidates(candidates: CandidateBlock[]): CandidateBlock[] {
+  if (candidates.length <= 1) return candidates
+
+  const merged: CandidateBlock[] = [candidates[0]]
+  for (let index = 1; index < candidates.length; index++) {
+    const previous = merged[merged.length - 1]
+    const current = candidates[index]
+    if (shouldSoftMerge(previous, current)) {
+      merged[merged.length - 1] = mergeCandidatePair(previous, current)
+    } else {
+      merged.push(current)
+    }
+  }
+
+  return absorbTinyCandidates(merged)
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[]): WorkContextBlock[] {
   return coarseSegmentsFromSessions(sessions)
-    .flatMap((segment) => analyzeSessions(segment.sessions, segment.boundedBeforeGap, segment.boundedAfterGap))
-    .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
+    .flatMap((segment) => {
+      const candidates = analyzeSessions(segment.sessions, segment.boundedBeforeGap, segment.boundedAfterGap)
+        .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
+      return coalesceTimelineCandidates(candidates)
+    })
     .map((candidate) => buildBlockFromCandidate(candidate, db))
 }
 
