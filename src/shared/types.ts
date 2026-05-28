@@ -188,6 +188,22 @@ export interface WorkMemorySettingsSummary {
   topPatterns: WorkMemoryPatternSummary[]
 }
 
+// Result of the one-shot work-memory backfill across the user's full history
+// (R4). Returned to the renderer so the Settings panel can report what ran.
+export interface MemoryBackfillResult {
+  ran: boolean
+  reason?: 'disabled' | 'no-tables' | 'no-history'
+  fromDate: string | null
+  throughDate: string | null
+  daysProcessed: number
+  daysArchived: number
+  daysSkipped: number
+  newCandidates: number
+  promoted: number
+  decayed: number
+  backfilled: number
+}
+
 export interface AppCategorySuggestion {
   suggestedCategory: AppCategory | null
   reason: string | null
@@ -1206,6 +1222,7 @@ export const IPC = {
     GET_WORK_MEMORY_SUMMARY: 'db:get-work-memory-summary',
     FORGET_WORK_MEMORY_PATTERN: 'db:forget-work-memory-pattern',
     FORGET_ALL_WORK_MEMORY: 'db:forget-all-work-memory',
+    BACKFILL_WORK_MEMORY: 'db:backfill-work-memory',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
