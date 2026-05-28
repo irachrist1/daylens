@@ -667,6 +667,41 @@ Validation:
 Not in Batch 1:
 - Evening archive/consolidation job, promotion/decay sweep, memory-augmented AI prompts, Apps rollup integration, Settings UI, and platform shipping.
 
+### 2026-05-28 — Work Memory Batch 2 (Phases 3-4)
+
+| Field | Value |
+|---|---|
+| Repo | `v1` → `github.com/irachrist1/daylens-v1` |
+| Branch | `main` |
+| Commit | `1aff369` |
+| Status | `code-proven`; not packaged-runtime validated |
+
+Shipped:
+- Added `src/main/jobs/eveningConsolidation.ts` with `runEveningConsolidation(db, dateStr)`. Each day-rollover the job iterates today's finalized timeline blocks, rebuilds the canonical pattern key from concurrent evidence, upserts candidates in `context_patterns`, promotes ones at >=2 occurrences or >=0.65 confidence, decays non-override promoted patterns that did not fire today (with a 14-day recall grace before `decayed`), same-day-backfills generic-labeled blocks against newly-promoted patterns, and writes a `daily_memory_archive` row (markdown + JSON) once per date.
+- Hooked into `syncUploader.ts` `projectFinalizedDay` so it fires alongside the existing projection-finalize on `day-rollover` and `startup-finalize`.
+- Added `workMemoryConsolidationEnabled` setting (default on) to `AppSettings`.
+- Added public helpers in `workMemory.ts`: `buildBlockPatternKeyJson`, `blockHasDevOrTerminalApp`, `evidenceIsAllDistraction`.
+
+Validation:
+- `npm run typecheck` passed.
+
+### 2026-05-28 — Work Memory Batch 3 (Phase 6: Apps rollup)
+
+| Field | Value |
+|---|---|
+| Repo | `v1` → `github.com/irachrist1/daylens-v1` |
+| Branch | `main` |
+| Commit | `8d9c73a` |
+| Status | `code-proven`; not packaged-runtime validated |
+
+Shipped:
+- Added `memoryRollupsForBlocks` in `src/main/services/workBlocks.ts` that joins `pattern_occurrences` × `context_patterns` for the Apps-detail block IDs, grouping appearances under their promoted pattern label.
+- Extended `AppDetailPayload` with an optional `blockMemoryRollups` field.
+- Updated `src/renderer/views/Apps.tsx` "What you did there" section: when any rollup row collapses two or more sessions under a promoted pattern, the renderer shows the rollup view ("`patternLabel × N sessions`" with combined duration) instead of per-block rows.
+
+Validation:
+- `npm run typecheck` passed.
+
 ---
 
 ## References
