@@ -30,6 +30,7 @@ import {
 } from '../core/query/attributionResolvers'
 import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
+import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
@@ -424,6 +425,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.FORGET_ALL_WORK_MEMORY, () => {
     return forgetAllWorkMemory(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.BACKFILL_WORK_MEMORY, () => {
+    return backfillMemoryFromHistory(getDb())
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {

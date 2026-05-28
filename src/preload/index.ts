@@ -33,6 +33,7 @@ import type {
   ProviderConnectionResult,
   ResolvedIconPayload,
   SyncStatus,
+  MemoryBackfillResult,
   TrackingDiagnosticsPayload,
   TrackingPermissionState,
   WorkContextBlock,
@@ -138,6 +139,10 @@ const api = {
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_PATTERN, patternId),
     forgetAllWorkMemory: (): Promise<WorkMemorySettingsSummary> =>
       ipcRenderer.invoke(IPC.DB.FORGET_ALL_WORK_MEMORY),
+  },
+  memory: {
+    backfill: (): Promise<MemoryBackfillResult> =>
+      ipcRenderer.invoke(IPC.DB.BACKFILL_WORK_MEMORY),
   },
   icons: {
     resolve: (request: IconRequest): Promise<ResolvedIconPayload> => ipcRenderer.invoke(IPC.ICONS.RESOLVE, request),

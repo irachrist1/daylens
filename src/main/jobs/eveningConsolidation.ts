@@ -6,7 +6,7 @@
 
 import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
-import { localDayBounds } from '../lib/localDate'
+import { daysFromTodayLocalDateString, localDayBounds } from '../lib/localDate'
 import {
   buildBlockPatternKeyJson,
   evidenceIsAllDistraction,
@@ -15,7 +15,7 @@ import {
   memoryEnabled,
   type WorkMemoryBlockInput,
 } from '../services/workMemory'
-import type { WorkContextAppSummary } from '@shared/types'
+import type { MemoryBackfillResult, WorkContextAppSummary } from '@shared/types'
 import { getSettings } from '../services/settings'
 
 const PROMOTION_THRESHOLD_CONFIDENCE = 0.65
@@ -298,9 +298,14 @@ function buildArchiveMarkdown(
 export function runEveningConsolidation(
   db: Database.Database,
   dateStr: string,
+  options: { force?: boolean } = {},
 ): EveningConsolidationResult | EveningConsolidationSkip {
   if (!memoryEnabled()) return { date: dateStr, skipped: true, reason: 'disabled' }
-  if (!getSettings().workMemoryConsolidationEnabled) {
+  // `force` is set by the explicit "Rebuild memory from history" action. That
+  // user gesture depends only on the master memory switch above, not on the
+  // nightly auto-consolidation preference — turning off the automatic job
+  // should not block a deliberate rebuild.
+  if (!options.force && !getSettings().workMemoryConsolidationEnabled) {
     return { date: dateStr, skipped: true, reason: 'disabled' }
   }
   if (!tableExists(db, 'context_patterns') || !tableExists(db, 'daily_memory_archive')) {
@@ -396,4 +401,112 @@ export function runEveningConsolidation(
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+// R4: one-shot backfill of the work-memory system across the user's whole
+// history. The nightly consolidation only ever sees today; everything tracked
+// before the memory feature shipped never got a chance to form patterns. This
+// walks every finalized day from the earliest tracked date through yesterday
+// and runs the same deterministic evening consolidation on each. It is safe to
+// run repeatedly: runEveningConsolidation gates each day on daily_memory_archive,
+// so days already consolidated are skipped rather than double-counted.
+
+const MEMORY_BACKFILLED_FACT_KEY = 'memory_backfilled_at'
+
+function earliestFinalizedDate(db: Database.Database): string | null {
+  if (!tableExists(db, 'timeline_blocks')) return null
+  const row = db.prepare(`
+    SELECT MIN(date) AS minDate
+    FROM timeline_blocks
+    WHERE invalidated_at IS NULL AND is_live = 0
+  `).get() as { minDate: string | null } | undefined
+  return row?.minDate ?? null
+}
+
+function* eachDateInclusive(fromDate: string, throughDate: string): Generator<string> {
+  const [fy, fm, fd] = fromDate.split('-').map(Number)
+  const [ty, tm, td] = throughDate.split('-').map(Number)
+  const end = new Date(ty, tm - 1, td).getTime()
+  const cursor = new Date(fy, fm - 1, fd)
+  while (cursor.getTime() <= end) {
+    const y = cursor.getFullYear()
+    const m = String(cursor.getMonth() + 1).padStart(2, '0')
+    const d = String(cursor.getDate()).padStart(2, '0')
+    yield `${y}-${m}-${d}`
+    cursor.setDate(cursor.getDate() + 1)
+  }
+}
+
+function recordBackfillFact(db: Database.Database, result: MemoryBackfillResult): void {
+  if (!tableExists(db, 'user_memory_facts')) return
+  const now = nowMs()
+  db.prepare(`
+    INSERT INTO user_memory_facts (
+      id, fact_type, fact_key, subject, fact_value_json, created_at, updated_at
+    ) VALUES (?, 'preference', ?, ?, ?, ?, ?)
+    ON CONFLICT(fact_key) DO UPDATE SET
+      fact_value_json = excluded.fact_value_json,
+      updated_at = excluded.updated_at
+  `).run(
+    `fact_${sha1(MEMORY_BACKFILLED_FACT_KEY).slice(0, 16)}`,
+    MEMORY_BACKFILLED_FACT_KEY,
+    'Work memory backfill',
+    JSON.stringify({
+      ranAt: now,
+      throughDate: result.throughDate,
+      daysProcessed: result.daysProcessed,
+      promoted: result.promoted,
+      backfilled: result.backfilled,
+    }),
+    now,
+    now,
+  )
+}
+
+export function backfillMemoryFromHistory(db: Database.Database): MemoryBackfillResult {
+  const empty: MemoryBackfillResult = {
+    ran: false,
+    fromDate: null,
+    throughDate: null,
+    daysProcessed: 0,
+    daysArchived: 0,
+    daysSkipped: 0,
+    newCandidates: 0,
+    promoted: 0,
+    decayed: 0,
+    backfilled: 0,
+  }
+
+  // Rebuild depends on the master memory switch only; the nightly-automation
+  // toggle is irrelevant to an explicit user-triggered backfill.
+  if (!memoryEnabled()) {
+    return { ...empty, reason: 'disabled' }
+  }
+  if (!tableExists(db, 'context_patterns') || !tableExists(db, 'daily_memory_archive')) {
+    return { ...empty, reason: 'no-tables' }
+  }
+
+  const fromDate = earliestFinalizedDate(db)
+  const throughDate = daysFromTodayLocalDateString(-1)
+  if (!fromDate || fromDate > throughDate) {
+    return { ...empty, reason: 'no-history', throughDate }
+  }
+
+  const result: MemoryBackfillResult = { ...empty, ran: true, fromDate, throughDate }
+  for (const date of eachDateInclusive(fromDate, throughDate)) {
+    const outcome = runEveningConsolidation(db, date, { force: true })
+    result.daysProcessed++
+    if (outcome.skipped) {
+      result.daysSkipped++
+      continue
+    }
+    result.daysArchived++
+    result.newCandidates += outcome.newCandidates
+    result.promoted += outcome.promoted
+    result.decayed += outcome.decayed
+    result.backfilled += outcome.backfilled
+  }
+
+  recordBackfillFact(db, result)
+  return result
 }
