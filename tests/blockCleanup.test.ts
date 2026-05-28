@@ -113,7 +113,7 @@ function insertTimelineBlock(
   `).run(payload.id, payload.date, payload.startTime, payload.endTime, payload.startTime)
 }
 
-test('background relabel only reopens weak fallback or legacy generic AI labels', () => {
+test('background relabel reopens deterministic floors while preserving good AI and overrides', () => {
   const strongRuleBlock = makeBlock({
     ruleBasedLabel: 'GitHub',
     label: {
@@ -126,7 +126,21 @@ test('background relabel only reopens weak fallback or legacy generic AI labels'
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(strongRuleBlock), 'review')
+  assert.equal(backgroundRelabelDispositionForBlock(strongRuleBlock), 'relabel')
+
+  const artifactFloorBlock = makeBlock({
+    id: 'block-artifact-floor',
+    label: {
+      current: 'irachrist1/daylens-v1: Daylens',
+      source: 'artifact',
+      confidence: 0.88,
+      narrative: null,
+      ruleBased: 'Research',
+      aiSuggested: null,
+      override: null,
+    },
+  })
+  assert.equal(backgroundRelabelDispositionForBlock(artifactFloorBlock), 'relabel')
 
   const weakFallbackBlock = makeBlock({
     id: 'block-2',

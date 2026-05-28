@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import type { AppCategory } from '../src/shared/types.ts'
+import type { AppCategory, AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
-import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade } from '../src/main/services/workBlocks.ts'
 
 const TEST_DATE = '2026-04-22'
 
@@ -56,6 +56,43 @@ function insertSession(
     payload.category ?? 'browsing',
     payload.title,
     appName,
+  )
+}
+
+function insertWebsiteVisit(
+  db: Database.Database,
+  payload: {
+    domain: string
+    pageTitle: string
+    url: string
+    startMinute: number
+    durationSeconds: number
+    browserBundleId?: string
+  },
+): void {
+  const startTime = localMs(9, payload.startMinute)
+  db.prepare(`
+    INSERT INTO website_visits (
+      browser_bundle_id,
+      canonical_browser_id,
+      visit_time,
+      visit_time_us,
+      duration_sec,
+      url,
+      normalized_url,
+      domain,
+      page_title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    payload.browserBundleId ?? 'com.google.Chrome',
+    payload.browserBundleId ?? 'com.google.Chrome',
+    startTime,
+    startTime * 1000,
+    payload.durationSeconds,
+    payload.url,
+    payload.url,
+    payload.domain,
+    payload.pageTitle,
   )
 }
 
@@ -123,6 +160,111 @@ test('adjacent same-category development fragments coalesce into one block', () 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
   assert.equal(blocks.length, 1, `same-work dev fragments should merge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
+test('a sub-30-minute fragment folds into the related neighbour it continues', () => {
+  const db = createDb()
+  // Excel, a short detour, back to the same Excel workbook. The short middle
+  // run is the same spreadsheet work continued; it should not stand alone.
+  insertSession(db, { title: 'Q2 forecast.xlsx - Excel', bundleId: 'com.microsoft.Excel', appName: 'Microsoft Excel', category: 'productivity', startMinute: 0, durationMinutes: 35 })
+  insertSession(db, { title: 'Q2 forecast.xlsx - Excel', bundleId: 'com.microsoft.Excel', appName: 'Microsoft Excel', category: 'productivity', startMinute: 35, durationMinutes: 20 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `same-app spreadsheet work should read as one block; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
+test('same-app work bridges a moderate untracked gap into one block', () => {
+  const db = createDb()
+  // A 50-second terminal sliver, then a 17-minute untracked gap, then an hour
+  // of the same app. This is one coding session resuming, not two blocks.
+  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 1 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 18, durationMinutes: 63 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `same-app work across a 17m gap should bridge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
+test('sparse AI/dev tool spans fold into surrounding development work by active time', () => {
+  const db = createDb()
+  const sessions: AppSession[] = [
+    {
+      id: 1,
+      bundleId: 'com.todesktop.cursor',
+      appName: 'Cursor',
+      startTime: localMs(9, 0),
+      endTime: localMs(9, 40),
+      durationSeconds: 40 * 60,
+      category: 'development',
+      isFocused: true,
+      windowTitle: 'workBlocks.ts - daylens - Cursor',
+      rawAppName: 'Cursor',
+    },
+    {
+      id: 2,
+      bundleId: 'com.google.antigravity',
+      appName: 'Antigravity',
+      startTime: localMs(10, 3),
+      endTime: localMs(10, 44),
+      durationSeconds: 27,
+      category: 'uncategorized',
+      isFocused: false,
+      windowTitle: 'Daylens agent run - Antigravity',
+      rawAppName: 'Antigravity',
+    },
+  ]
+
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+
+  assert.equal(blocks.length, 1, `low-active Antigravity span should fold into dev work; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks[0].dominantCategory, 'development')
+  db.close()
+})
+
+test('same-app work does not bridge across a real lock boundary', () => {
+  const db = createDb()
+  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 20 })
+  insertActivityEvent(db, 'lock', localMs(9, 25))
+  insertActivityEvent(db, 'unlock', localMs(9, 35))
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 42, durationMinutes: 40 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 2, `real lock boundary should split resumed work; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
+test('entertainment does not bridge a gap into one runaway "watching" block', () => {
+  const db = createDb()
+  // Two video stretches in the same browser separated by a 17-minute untracked
+  // lull. These are two separate detours, not "the same work resuming" — drift
+  // categories must never bridge, or one block's span (and old duration) would
+  // swallow the whole evening (R4).
+  insertSession(db, { title: 'Video A - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'Video B - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 42, durationMinutes: 25 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 2, `entertainment across a 17m gap must not bridge; got ${blocks.length} block(s)`)
+  db.close()
+})
+
+test('a sub-30-minute block with no related neighbour keeps its own block', () => {
+  const db = createDb()
+  // A 20-minute email block wedged between two coding stretches. Email is
+  // unrelated to the development work on either side, so it stays standalone
+  // rather than being forced into something it is not.
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+  insertSession(db, { title: 'Inbox - Gmail - Google Chrome', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'email', startMinute: 40, durationMinutes: 20 })
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 60, durationMinutes: 40 })
+
+  const categories = getTimelineDayPayload(db, TEST_DATE).blocks.map((b) => b.dominantCategory)
+
+  assert.ok(categories.includes('email'), `the unrelated email block should survive: ${JSON.stringify(categories)}`)
   db.close()
 })
 
@@ -217,7 +359,114 @@ test('terminal-dominant blocks use terminal window titles before browser page ti
   db.close()
 })
 
-test('chat blocks with only app-name evidence stay untitled instead of using the app name', () => {
+test('mixed Daylens development and research does not keep a browsing badge when focused work is substantial', () => {
+  const db = createDb()
+  insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 16 })
+  insertSession(db, { title: 'irachrist1/daylens-v1: Daylens - GitHub - Google Chrome', startMinute: 16, durationMinutes: 24, category: 'browsing' })
+
+  const [block] = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(block.dominantCategory, 'development')
+  assert.notEqual(block.dominantCategory, 'browsing')
+  db.close()
+})
+
+test('GitHub repo review pages badge as focused research rather than browsing', () => {
+  const db = createDb()
+  insertSession(db, { title: 'irachrist1/daylens-v1: Daylens - GitHub - Google Chrome', startMinute: 0, durationMinutes: 35, category: 'browsing' })
+  insertWebsiteVisit(db, {
+    domain: 'github.com',
+    pageTitle: 'irachrist1/daylens-v1: Daylens',
+    url: 'https://github.com/irachrist1/daylens-v1',
+    startMinute: 0,
+    durationSeconds: 35 * 60,
+  })
+
+  const [block] = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(block.dominantCategory, 'research')
+  db.close()
+})
+
+test('contiguous AI assistant and GitHub repo review collapse into one assisted work block', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Claude Code - Dia', bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'aiTools', startMinute: 0, durationMinutes: 120 })
+  insertSession(db, { title: 'irachrist1/daylens-v1: Daylens - GitHub - Google Chrome', startMinute: 120, durationMinutes: 115, category: 'browsing' })
+  insertWebsiteVisit(db, {
+    domain: 'github.com',
+    pageTitle: 'irachrist1/daylens-v1: Daylens',
+    url: 'https://github.com/irachrist1/daylens-v1',
+    startMinute: 120,
+    durationSeconds: 115 * 60,
+  })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `AI assistant plus repo review should merge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks[0].dominantCategory, 'research')
+  db.close()
+})
+
+function heuristicVersions(db: Database.Database): string[] {
+  return (db.prepare(
+    `SELECT heuristic_version FROM timeline_blocks WHERE invalidated_at IS NULL AND is_live = 0 ORDER BY start_time`,
+  ).all() as Array<{ heuristic_version: string }>).map((r) => r.heuristic_version)
+}
+
+test('a stale, never-processed past day is reconstructed on revisit', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  // First visit persists under the current heuristic version.
+  getTimelineDayPayload(db, TEST_DATE)
+  // Simulate the day having been persisted by a superseded heuristic.
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  assert.deepEqual(heuristicVersions(db), ['timeline-v3'])
+
+  // Revisiting an older, unprocessed day rebuilds it more accurately.
+  getTimelineDayPayload(db, TEST_DATE)
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale unprocessed day should be rebuilt')
+  db.close()
+})
+
+test('a nightly-processed past day is kept even when its heuristic is stale', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  getTimelineDayPayload(db, TEST_DATE)
+  const blockId = (db.prepare(`SELECT id FROM timeline_blocks LIMIT 1`).get() as { id: string }).id
+  // Mark the day as nightly-processed (an AI label) under a superseded heuristic.
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  db.prepare(`
+    INSERT INTO timeline_block_labels (id, block_id, label, narrative, source, confidence, created_at, model_info_json)
+    VALUES (?, ?, 'Refactoring the router', NULL, 'ai', 0.9, ?, NULL)
+  `).run(`${blockId}:ai:test`, blockId, Date.now())
+
+  getTimelineDayPayload(db, TEST_DATE)
+  assert.deepEqual(heuristicVersions(db), ['timeline-v3'], 'processed day must be kept as summarized')
+  db.close()
+})
+
+test('background upgrade finds stale unprocessed days but leaves processed days alone', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  getTimelineDayPayload(db, TEST_DATE)
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+
+  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [TEST_DATE])
+
+  const blockId = (db.prepare(`SELECT id FROM timeline_blocks LIMIT 1`).get() as { id: string }).id
+  db.prepare(`
+    INSERT INTO timeline_block_labels (id, block_id, label, narrative, source, confidence, created_at, model_info_json)
+    VALUES (?, ?, 'Refactoring the router', NULL, 'ai', 0.9, ?, NULL)
+  `).run(`${blockId}:ai:processed`, blockId, Date.now())
+
+  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [])
+  db.close()
+})
+
+test('chat blocks with only app-name evidence read as the category, never the app name', () => {
   const db = createDb()
   insertSession(db, {
     title: 'WhatsApp',
@@ -230,6 +479,9 @@ test('chat blocks with only app-name evidence stay untitled instead of using the
 
   const [label] = labelsFor(db)
 
-  assert.equal(label, 'Untitled block')
+  // The app name ("WhatsApp") must never become the label, but the category
+  // floor "Communication" is a better, badge-consistent answer than a blank.
+  assert.equal(label, 'Communication')
+  assert.notEqual(label?.toLowerCase(), 'whatsapp')
   db.close()
 })

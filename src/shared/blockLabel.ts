@@ -54,6 +54,20 @@ export function naturalizeLabel(value: string): string {
   if (!value) return ''
   let cleaned = value.trim()
 
+  // 0. Strip a leading notification/unread count like "(1) ", "(12) " — these
+  //    are tab-title cruft ("(1) Instagram", "(5) Andersen …"), never part of
+  //    what the activity actually was. Loop so "(1) (2) X" fully unwraps.
+  let previous: string
+  do {
+    previous = cleaned
+    cleaned = cleaned.replace(/^\(\d+\)\s*/, '').trim()
+  } while (cleaned !== previous)
+
+  cleaned = cleaned.replace(/^[*✳]\s*/, '').trim()
+
+  const repoTitle = cleaned.match(/^[\w.-]+\/[\w.-]+:\s*(.+)$/)
+  if (repoTitle?.[1]) cleaned = repoTitle[1].trim()
+
   // 1. Clean trailing browser/app names
   cleaned = cleaned.replace(/\s*-\s*(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome)$/i, '')
 
@@ -97,6 +111,13 @@ function isUsefulLabel(value: string | null | undefined): value is string {
   return true
 }
 
+function categoryDisplayName(category: AppCategory): string {
+  if (category === 'aiTools') return 'AI tools'
+  return category
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 function cleanSiteName(domain: string): string {
   const stripped = domain.replace(/^www\./i, '').split('.')[0] ?? ''
   if (!stripped) return ''
@@ -134,11 +155,22 @@ export function userVisibleBlockLabel(block: WorkContextBlock): string {
     if (naturalized && !GENERIC_LABELS.has(naturalized)) return naturalized
   }
 
-  const site = block.websites[0]?.domain
-  if (site) {
-    const clean = cleanSiteName(site)
-    if (clean) return clean
+  // A bare site name is only an honest label when a page could own the block.
+  // On a development/writing/etc. block the open tabs are background noise, so
+  // never let "github.com" or "youtube.com" become a coding block's name.
+  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) {
+    const site = block.websites[0]?.domain
+    if (site) {
+      const clean = cleanSiteName(site)
+      if (clean) return clean
+    }
   }
 
+  // Floor: name the category ("Development") rather than "Untitled block". It
+  // reads better and agrees with the badge. Only truly contentless blocks
+  // (system / uncategorized) fall through to "Untitled block".
+  if (block.dominantCategory !== 'uncategorized' && block.dominantCategory !== 'system') {
+    return categoryDisplayName(block.dominantCategory)
+  }
   return 'Untitled block'
 }

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { WorkContextBlock } from '../src/shared/types.ts'
-import { userVisibleBlockLabel } from '../src/shared/blockLabel.ts'
+import { userVisibleBlockLabel, naturalizeLabel } from '../src/shared/blockLabel.ts'
 
 function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock {
   const base: WorkContextBlock = {
@@ -115,7 +115,28 @@ test('keeps a useful AI label over generic rule label', () => {
   assert.equal(userVisibleBlockLabel(block), 'Chat pipeline refactor')
 })
 
-test('falls back to Untitled block when nothing usable is present', () => {
+test('falls back to the category name when nothing more specific is present', () => {
+  // A categorized block with no usable label reads as its category ("Research")
+  // rather than "Untitled block" — the category agrees with the badge and is a
+  // better floor than a blank.
   const block = makeBlock({})
-  assert.equal(userVisibleBlockLabel(block), 'Untitled block')
+  assert.equal(userVisibleBlockLabel(block), 'Research')
+})
+
+test('falls back to Untitled block only when the category is contentless', () => {
+  assert.equal(userVisibleBlockLabel(makeBlock({ dominantCategory: 'uncategorized' })), 'Untitled block')
+  assert.equal(userVisibleBlockLabel(makeBlock({ dominantCategory: 'system' })), 'Untitled block')
+})
+
+test('naturalizeLabel strips leading notification counts like "(1) Instagram"', () => {
+  assert.equal(naturalizeLabel('(1) Instagram'), 'Instagram')
+  assert.equal(naturalizeLabel('(5) Andersen In Rwanda'), 'Andersen In Rwanda')
+  assert.equal(naturalizeLabel('(12)  Slack'), 'Slack')
+  // A non-count parenthetical is preserved.
+  assert.equal(naturalizeLabel('Notes (draft)'), 'Notes (draft)')
+})
+
+test('naturalizeLabel collapses repo-title and marker cruft', () => {
+  assert.equal(naturalizeLabel('irachrist1/daylens-v1: Daylens'), 'Daylens')
+  assert.equal(naturalizeLabel('✳ Break down and fix 5 bugs'), 'Break down and fix 5 bugs')
 })
