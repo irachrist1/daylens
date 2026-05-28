@@ -19,9 +19,9 @@ permissions:
 jobs:
   build-macos:
     timeout-minutes: 90
-    # Blacksmith M4 Apple Silicon runner — faster native arm64 builds, ~2x GitHub-hosted.
-    # Requires the Blacksmith GitHub App installed on this repo: https://github.com/apps/blacksmith
-    runs-on: blacksmith-6vcpu-macos-latest
+    # GitHub-hosted Apple Silicon runner. Switch back to a Blacksmith label
+    # (e.g. blacksmith-6vcpu-macos-latest) once the Blacksmith app/credits are restored.
+    runs-on: macos-latest
     env:
       CSC_LINK: ${{ secrets.MAC_CERTIFICATE_FILE }}
       CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
