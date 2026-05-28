@@ -3819,15 +3819,17 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
   }
 }
 
-async function generateWeekReview(weekStartStr: string): Promise<AISurfaceSummary | null> {
+async function generateWeekReview(weekStartStr: string, force = false): Promise<AISurfaceSummary | null> {
   const bundle = buildWeekReviewBundle(weekStartStr)
   if (!bundle) return null
 
   const scopeKey = `week:${weekStartStr}`
   const inputSignature = hashText(bundle.assistantScaffold)
-  const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
-  if (existingSignature === inputSignature) {
-    return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
+  if (!force) {
+    const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
+    if (existingSignature === inputSignature) {
+      return getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
+    }
   }
 
   const fallback = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
@@ -5376,7 +5378,7 @@ export async function getWeekReview(
     if (existing && existing.scopeKey === scopeKey) return existing
     return null
   }
-  return generateWeekReview(weekStartStr)
+  return generateWeekReview(weekStartStr, true)
 }
 
 export async function getAppNarrative(

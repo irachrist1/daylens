@@ -1,7 +1,9 @@
 # Review of current V1 implementation
 
-Date: 2026-05-28  
-Scope: current working tree, `npm run typecheck`, focused Apps/recap tests, and Desktop screenshots from 2:00-2:01 PM.
+Date: 2026-05-28
+Scope: completed resume review of the `75f003e` v1-polish commit on `main`, current working tree, `npm run typecheck`, focused Apps/recap/block-label tests, and earlier Desktop screenshots from 2:00-2:01 PM.
+
+Resume result: review completed on 2026-05-28. One P1-style issue was found and fixed after the interrupted review: Week Review's explicit Generate/Refresh path carried `force=true` through IPC and the exported service wrapper, but `generateWeekReview` still returned the cached summary on signature match. It now accepts `force` and bypasses the signature cache when forced. No additional P0/P1 source issues were found in the reviewed changed files; the lightweight recap payload remains an accepted risk until a dedicated parity pass.
 
 ## Code review findings
 
@@ -14,6 +16,7 @@ Root cause: `getWeekReview` auto-generated on every navigation, and the renderer
 Fix (`code-proven`):
 
 - `src/main/jobs/aiService.ts` — `getWeekReview(weekStartStr, force = false)` now reads `ai_surface_summaries` for the exact `week:${weekStartStr}` row when `force` is false; only `force=true` runs the AI generation path.
+- `src/main/jobs/aiService.ts` — resume review fixed the remaining force gap by passing `force=true` into `generateWeekReview`; the generator itself now skips the signature short-circuit when forced, so an explicit Generate/Refresh click reaches `executeTextAIJob` even when evidence has not changed.
 - `src/main/ipc/ai.handlers.ts` and `src/preload/index.ts` — IPC carries the `force` flag.
 - `src/renderer/views/Timeline.tsx` — defensively discards any returned summary whose `scopeKey !== week:${weekStart}`; replaces the always-on `Refresh` button with `Generate` (becomes `Refresh` only once a real review exists for the exact week); removes the silent stale fallback message; generation is only triggered by an explicit user click.
 
@@ -92,9 +95,9 @@ The old tracker claimed all issues were `done`, Settings was `<2ms`, and Insight
 Passed:
 
 - `npm run typecheck`
-- `npx cross-env ELECTRON_RUN_AS_NODE=1 electron --loader ./tests/support/ts-loader.mjs --test ./tests/appsTopDomains.test.ts ./tests/recap.test.ts`
+- `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --loader ./tests/support/ts-loader.mjs --test ./tests/appsTopDomains.test.ts ./tests/recap.test.ts ./tests/blockLabel.test.ts` (19/19)
 
-These tests do not cover the new `getRecapRange` path, Settings first paint, or the stale Week review screenshot issue.
+These tests do not cover Settings first paint or live Electron UI behavior. `tests/recap.test.ts` covers recap summary behavior, but not full parity between lightweight `getRecapRange` payloads and dynamic day payloads.
 
 ## Screenshot review
 
