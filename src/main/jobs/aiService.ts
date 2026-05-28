@@ -4603,7 +4603,11 @@ export async function suggestAppCategory(bundleId: string, appName: string): Pro
 
 export async function generateWorkBlockInsight(
   block: WorkContextBlock,
-  options?: { jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'; triggerSource?: 'system' | 'background' },
+  options?: {
+    jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'
+    triggerSource?: 'system' | 'background'
+    throwOnError?: boolean
+  },
 ): Promise<WorkContextInsight> {
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
@@ -4646,7 +4650,8 @@ export async function generateWorkBlockInsight(
       })
     }
     return insight
-  } catch {
+  } catch (error) {
+    if (options?.throwOnError) throw error
     const insight = {
       label: userVisibleLabelForBlock(block),
       narrative: fallbackNarrativeForBlock(block),

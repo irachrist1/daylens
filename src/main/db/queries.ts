@@ -1989,6 +1989,7 @@ export function clearBlockLabelOverride(
   blockId: string,
 ): void {
   db.prepare(`DELETE FROM block_label_overrides WHERE block_id = ?`).run(blockId)
+  db.prepare(`DELETE FROM timeline_block_labels WHERE block_id = ? AND source = 'user'`).run(blockId)
 }
 
 export function getBlockLabelOverride(

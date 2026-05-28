@@ -930,6 +930,7 @@ export interface AppSettings {
   distractionAlertsEnabled?: boolean
   mcpServerEnabled?: boolean
   imessageCaptureEnabled?: boolean   // macOS opt-in: mirrors ~/Library/Messages/chat.db into Daylens. Requires Full Disk Access.
+  workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1201,6 +1202,7 @@ export const IPC = {
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
+    REGENERATE_BLOCK_LABEL: 'ai:regenerate-block-label',
     SUGGEST_APP_CATEGORY: 'ai:suggest-app-category',
     DETECT_CLI_TOOLS: 'ai:detect-cli-tools',
     TEST_CLI_TOOL: 'ai:test-cli-tool',
