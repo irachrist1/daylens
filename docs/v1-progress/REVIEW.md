@@ -3,7 +3,7 @@
 Date: 2026-05-28
 Scope: completed resume review of the `75f003e` v1-polish commit on `main`, current working tree, `npm run typecheck`, focused Apps/recap/block-label tests, and earlier Desktop screenshots from 2:00-2:01 PM.
 
-Resume result: review completed on 2026-05-28. One P1-style issue was found and fixed after the interrupted review: Week Review's explicit Generate/Refresh path carried `force=true` through IPC and the exported service wrapper, but `generateWeekReview` still returned the cached summary on signature match. It now accepts `force` and bypasses the signature cache when forced. No additional P0/P1 source issues were found in the reviewed changed files; the lightweight recap payload remains an accepted risk until a dedicated parity pass.
+Resume result: review completed on 2026-05-28. One P1-style issue was found and fixed after the interrupted review: Week Review's explicit Generate/Refresh path carried `force=true` through IPC and the exported service wrapper, but `generateWeekReview` still returned the cached summary on signature match. It now accepts `force` and bypasses the signature cache when forced. The lightweight recap payload parity risk is now closed by `6c577e5`.
 
 ## Ship closeout review (2026-05-28)
 
@@ -20,7 +20,9 @@ The F0-F7 closeout landed on `v1/main` with real SHAs or release-asset proof:
 | F6 | Apps rollups collapse repeated block labels under promoted memory patterns. | `8d9c73a` |
 | F7 | Settings exposes Work memory counters, top patterns, per-pattern Forget, Forget everything, and the consolidation toggle. | `0f75bc4` |
 
-Validation: `npm run typecheck` passed after the F7 code commit; focused category/focus tests passed after F2. A final typecheck is required after the documentation closeout commit.
+Validation: `npm run typecheck` passed after the closeout commits. The focused prompt suite passed locally (40/40): appsTopDomains, recap, blockLabel, workMemory, blockLabelerCategoryFit, focusScoreV2, blockOwnership, and recapRange.
+
+Prompt closeout mapping: Item A shipped in `aca7e11`/`288a612`, Item B shipped in `6c577e5` with test coverage from `ded84b8`, and Item C shipped in `219fd99`/`57c65d5`.
 
 ## Code review findings
 
@@ -47,9 +49,9 @@ Fix (`code-proven`): only `ipc.settings.get()` is awaited before flipping `setti
 
 Pending: visually confirm the shell paints immediately on Settings open and sections fill in progressively.
 
-### High — `getRecapRange` lightweight payloads are not equivalent to full day payloads
+### High — `getRecapRange` lightweight payloads are not equivalent to full day payloads (fixed 2026-05-28)
 
-`code-proven`: `getLightweightDayPayload` returns `DayTimelinePayload` objects with:
+Original finding: `getLightweightDayPayload` returned `DayTimelinePayload` objects with:
 
 - `sessions: []`
 - `websites: []`
@@ -58,9 +60,9 @@ Pending: visually confirm the shell paints immediately on Settings open and sect
 - `siteCount: 0`
 - blocks reconstructed from persisted block rows and evidence JSON
 
-This may be acceptable for a dedicated recap-summary DTO, but it is risky to type it as full `DayTimelinePayload[]`. `recap.ts` reads block artifacts, switch counts, focus sessions, duration, and workstream labels. Some of that is reconstructed, some is synthetic, and some is missing.
+Fix (`code-proven`/`tested`): `6c577e5` hydrates real day sessions, website summaries, timeline segments, `appCount`, and `siteCount` in the lightweight path; block member sessions, block websites, and key pages are populated from DB reads plus persisted evidence. `tests/recapRange.test.ts` asserts the fields read by recap consumers and `buildRecapSummaries`.
 
-Required next action: introduce a smaller `RecapDayPayload` type or prove parity with tests against `buildRecapSummaries`.
+Pending: runtime timing measurements for the recap path; no remaining known payload-shape gap.
 
 ### High — Apps Generate/Refresh root cause: signature short-circuit before AI (fixed 2026-05-28 v3, pending log/screenshot validation)
 
@@ -112,9 +114,9 @@ The old tracker claimed all issues were `done`, Settings was `<2ms`, and Insight
 Passed:
 
 - `npm run typecheck`
-- `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --loader ./tests/support/ts-loader.mjs --test ./tests/appsTopDomains.test.ts ./tests/recap.test.ts ./tests/blockLabel.test.ts` (19/19)
+- `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --loader ./tests/support/ts-loader.mjs --test ./tests/blockLabel.test.ts ./tests/appsTopDomains.test.ts ./tests/recap.test.ts ./tests/workMemory.test.ts ./tests/blockLabelerCategoryFit.test.ts ./tests/focusScoreV2.test.ts ./tests/blockOwnership.test.ts ./tests/recapRange.test.ts` (40/40)
 
-These tests do not cover Settings first paint or live Electron UI behavior. `tests/recap.test.ts` covers recap summary behavior, but not full parity between lightweight `getRecapRange` payloads and dynamic day payloads.
+These tests do not cover Settings first paint or live Electron UI behavior. `tests/recapRange.test.ts` now covers the lightweight `getRecapRange` fields consumed by recap summaries.
 
 ## Screenshot review
 
