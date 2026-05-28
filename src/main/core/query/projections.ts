@@ -287,10 +287,10 @@ export function getWeeklySummaryProjection(
 export function getAppDetailProjection(
   db: Database.Database,
   canonicalAppId: string,
-  days = 7,
+  days: number | string = 7,
   liveSession?: LiveSession | null,
 ): AppDetailPayload {
-  return getAppDetailPayload(db, canonicalAppId, days, liveSession)
+  return getAppDetailPayload(db, canonicalAppId, days as any, liveSession)
 }
 
 export function getWorkflowPatternsProjection(

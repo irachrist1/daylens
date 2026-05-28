@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds, blockDisplayedSpanSeconds } from '@shared/blockDuration'
-import { userVisibleBlockLabel } from '@shared/blockLabel'
+import { naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -128,48 +128,92 @@ function blockNarrative(block: WorkContextBlock): string | null {
 // rendered two lines above) — they must match wall-clock. blockActiveSeconds
 // sums clamped session durations and produces 13m for an 8:55-9:09 span (14m
 // wall-clock), so use blockDisplayedSpanSeconds instead.
+// Pick a verb that fits the block's dominant category. Keeps deterministic
+// summaries from reading like "56m on X in Y" and instead sounds like the
+// human-voice examples in the V1 punch-list ("Spent 56m preparing …").
+function categoryVerbPhrase(category: WorkContextBlock['dominantCategory']): { verb: string; noun: string } {
+  switch (category) {
+    case 'development': return { verb: 'editing', noun: 'code' }
+    case 'design': return { verb: 'working on', noun: 'design work' }
+    case 'writing': return { verb: 'writing', noun: 'a draft' }
+    case 'research': return { verb: 'researching', noun: 'reference material' }
+    case 'aiTools': return { verb: 'working with', noun: 'AI tools' }
+    case 'email': return { verb: 'checking', noun: 'email' }
+    case 'communication': return { verb: 'in', noun: 'conversation' }
+    case 'meetings': return { verb: 'in', noun: 'meetings' }
+    case 'browsing': return { verb: 'reviewing', noun: 'web context' }
+    case 'productivity': return { verb: 'working through', noun: 'tasks' }
+    case 'entertainment': return { verb: 'watching', noun: 'video content' }
+    case 'social': return { verb: 'on', noun: 'social' }
+    case 'system': return { verb: 'on', noun: 'system tasks' }
+    default: return { verb: 'spent on', noun: 'mixed work' }
+  }
+}
+
+function artifactPhraseForCategory(
+  artifactTitle: string,
+  artifactType: string,
+  category: WorkContextBlock['dominantCategory'],
+): string {
+  // "Inbox (3)", "Inbox" → "email"; the title alone is noise here.
+  if (/^inbox(?:\s*\(\d+\))?$/i.test(artifactTitle)) return 'email'
+  if (artifactType === 'page' && category === 'browsing') return `the ${artifactTitle} page`
+  if (artifactType === 'page' && (category === 'research' || category === 'aiTools')) {
+    return `${artifactTitle}`
+  }
+  if (artifactType === 'document') return `${artifactTitle}`
+  return artifactTitle
+}
+
 function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockDisplayedSpanSeconds(block))
   const allApps = block.topApps
     .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
   const sites = block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
   const topArtifact = block.topArtifacts.find((artifact) => artifact.displayTitle.trim().length > 0)
-  const artifacts = topArtifact ? [safeTimelineText(topArtifact.displayTitle.trim())] : []
+  const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
+  const naturalizedArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
 
-  // Filter the "in App and App" clause to apps that could plausibly own the
-  // chosen artifact. For page artifacts, only browsers qualify — VS Code did
-  // not visit `intune.microsoft.com` just because Safari did so in the same
-  // block. Same root cause as the digest ownership bug.
-  const apps = (() => {
-    if (!topArtifact) {
-      return allApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
-    }
+  // Same artifact-ownership filter as before: only attribute the artifact to
+  // apps that could plausibly own it (browsers for page artifacts, the named
+  // owner for document artifacts).
+  const orderedApps = (() => {
+    if (!topArtifact) return allApps
     if (topArtifact.artifactType === 'page') {
       const browsers = allApps.filter((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
-      const candidates = browsers.length > 0 ? browsers : allApps
-      return candidates.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+      return browsers.length > 0 ? browsers : allApps
     }
     if (topArtifact.ownerBundleId) {
       const owners = allApps.filter((app) => app.bundleId === topArtifact.ownerBundleId)
-      const candidates = owners.length > 0 ? owners : allApps
-      return candidates.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+      return owners.length > 0 ? owners : allApps
     }
-    return allApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+    return allApps
   })()
+  const appNames = orderedApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
+  const primaryApp = appNames[0] ?? null
+  const secondaryApp = appNames[1] ?? null
+  const { verb, noun } = categoryVerbPhrase(block.dominantCategory)
 
-  if (artifacts.length > 0 && apps.length > 0) {
-    return `${duration} on ${artifacts[0]} in ${apps.join(' and ')}.`
+  const supportingClause = secondaryApp
+    ? `, mostly in ${primaryApp} with ${secondaryApp} as supporting context`
+    : primaryApp
+      ? `, mostly in ${primaryApp}`
+      : ''
+
+  if (naturalizedArtifact) {
+    const artifactPhrase = artifactPhraseForCategory(naturalizedArtifact, topArtifact!.artifactType, block.dominantCategory)
+    return `Spent ${duration} ${verb} ${artifactPhrase}${supportingClause}.`
   }
-  if (apps.length > 0 && sites.length > 0) {
-    return `${duration} across ${apps.join(' and ')} with ${sites.join(' and ')}.`
+  if (primaryApp && sites.length > 0) {
+    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}${supportingClause}.`
   }
-  if (apps.length > 0) {
-    return `${duration} mostly in ${apps.join(' and ')}.`
+  if (primaryApp) {
+    return `Spent ${duration} ${verb} ${noun}${supportingClause}.`
   }
   if (sites.length > 0) {
-    return `${duration} across ${sites.join(' and ')}.`
+    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}.`
   }
-  return `${duration} of ${categoryLabel(block.dominantCategory).toLowerCase()}.`
+  return `Spent ${duration} on ${categoryLabel(block.dominantCategory).toLowerCase()}.`
 }
 
 function gapKindLabel(kind: TimelineGapSegment['kind']): string {
@@ -421,13 +465,13 @@ function TimelineRow({
         <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
           {blockNarrative(block) ?? blockShortSummary(block)}
         </p>
-        {artifactLine && (
+        {isSelected && artifactLine && (
           <InlineRevealText
             text={artifactLine}
             style={{ fontSize: 12.5, color: 'var(--color-text-primary)', marginBottom: appsLine ? 6 : 0 }}
           />
         )}
-        {appsLine && (
+        {isSelected && appsLine && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {block.topApps.slice(0, 2).map((app) => (
@@ -698,9 +742,9 @@ function DaySummaryInspector({ payload }: { payload: DayTimelinePayload }) {
                     text={theme.label}
                     style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
                   />
-                  {(theme.artifacts.length > 0 || theme.apps.length > 0) && (
+                  {theme.apps.length > 0 && (
                     <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
-                      {[...theme.artifacts.slice(0, 2), ...theme.apps.slice(0, 2)].join(' · ')}
+                      {theme.apps.slice(0, 3).join(' · ')}
                     </div>
                   )}
                 </div>
@@ -1166,15 +1210,30 @@ function WeekView({
       })
     },
   })
+  const expectedWeekReviewScopeKey = `week:${weekStart}`
   const weekReviewResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'timeline',
     dependencies: [weekStart],
     intervalMs: 0,
     load: () => ipc.ai.getWeekReview(weekStart).catch(() => null),
   })
+  const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
 
   const data = weekResource.data ?? []
-  const weekReview = weekReviewResource.data ?? null
+  const rawWeekReview = weekReviewResource.data ?? null
+  const weekReview = rawWeekReview && rawWeekReview.scopeKey === expectedWeekReviewScopeKey
+    ? rawWeekReview
+    : null
+
+  const handleGenerateWeekReview = useCallback(async () => {
+    setGeneratingWeekReview(true)
+    try {
+      await ipc.ai.getWeekReview(weekStart, true).catch(() => null)
+      await weekReviewResource.refresh()
+    } finally {
+      setGeneratingWeekReview(false)
+    }
+  }, [weekStart, weekReviewResource])
   const maxSeconds = data.length > 0 ? Math.max(...data.map((day) => day.totalSeconds), 1) : 1
   const activeDays = data.filter((day) => day.totalSeconds > 0)
   const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.totalSeconds, 0)
@@ -1330,46 +1389,45 @@ function WeekView({
           </div>
         </div>
 
-        {(weekReviewResource.loading || weekReview) && (
-          <div style={{
-            borderTop: '1px solid var(--color-border-ghost)',
-            paddingTop: 14,
-            display: 'grid',
-            gap: 8,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
-                Week review
-              </div>
-              <button
-                type="button"
-                onClick={() => void weekReviewResource.refresh()}
-                style={{
-                  padding: '6px 10px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-low)',
-                  color: 'var(--color-text-secondary)',
-                  fontSize: 11.5,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Refresh
-              </button>
+        <div style={{
+          borderTop: '1px solid var(--color-border-ghost)',
+          paddingTop: 14,
+          display: 'grid',
+          gap: 8,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
+              Week review
             </div>
-            <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
-              {weekReviewResource.loading && !weekReview
-                ? 'Generating a grounded review for this week…'
-                : weekReview?.summary}
-            </div>
-            {weekReview?.stale && (
-              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-                Showing the last saved review while newer activity catches up.
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => void handleGenerateWeekReview()}
+              disabled={generatingWeekReview || weekReviewResource.loading}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 8,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-low)',
+                color: 'var(--color-text-secondary)',
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: generatingWeekReview || weekReviewResource.loading ? 'default' : 'pointer',
+                opacity: generatingWeekReview || weekReviewResource.loading ? 0.6 : 1,
+              }}
+            >
+              {generatingWeekReview ? 'Generating…' : weekReview ? 'Refresh' : 'Generate'}
+            </button>
           </div>
-        )}
+          <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
+            {generatingWeekReview
+              ? 'Generating a grounded review for this week…'
+              : weekReview
+                ? weekReview.summary
+                : weekReviewResource.loading
+                  ? 'Checking for a saved review…'
+                  : 'No saved review for this week yet. Click Generate to summarize what happened.'}
+          </div>
+        </div>
 
         {activeDay && (
           <div style={{

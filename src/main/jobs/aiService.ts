@@ -3881,18 +3881,34 @@ async function generateWeekReview(weekStartStr: string): Promise<AISurfaceSummar
 async function generateAppNarrative(
   canonicalAppId: string,
   days = 7,
+  force = false,
 ): Promise<AISurfaceSummary | null> {
   const bundle = buildAppNarrativeBundle(canonicalAppId, days)
-  if (!bundle) return null
+  if (!bundle) {
+    console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${days}d`)
+    return null
+  }
 
   const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
   const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
   const inputSignature = appNarrativeSignature(detail)
-  const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
-  if (existingSignature === inputSignature) {
-    const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
-    if (!appNarrativeHasStaleMetrics(existing)) return existing
+  // Force=true must bypass the signature short-circuit. Without this, clicking
+  // Generate/Refresh on an app whose evidence has not changed since the last
+  // cached narrative returns the same cached row without ever calling the AI,
+  // which surfaces in the UI as "the button does nothing visible" — the most
+  // common case being a cached "thin app-specific signal" narrative that the
+  // renderer treats as no narrative.
+  if (!force) {
+    const existingSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
+    if (existingSignature === inputSignature) {
+      const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
+      if (!appNarrativeHasStaleMetrics(existing)) {
+        console.info(`[ai] app_narrative cache-hit (signature match) for ${scopeKey}`)
+        return existing
+      }
+    }
   }
+  console.info(`[ai] app_narrative running model for ${scopeKey} (force=${force})`)
 
   const cachedFallback = getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
   const fallback = appNarrativeHasStaleMetrics(cachedFallback) ? null : cachedFallback
@@ -3946,7 +3962,10 @@ async function generateAppNarrative(
       sendWithProvider,
     )
     const parsed = parseSurfaceSummaryResult(text, bundle.title)
-    if (!parsed) return fallback
+    if (!parsed) {
+      console.warn(`[ai] app_narrative parse-failed for ${scopeKey}; falling back`)
+      return fallback
+    }
     const stored = upsertAISurfaceSummary(getDb(), {
       scopeType: 'app_detail',
       scopeKey,
@@ -3958,10 +3977,11 @@ async function generateAppNarrative(
     invalidateProjectionScope('apps', 'ai:app_narrative', {
       canonicalAppId,
     })
+    console.info(`[ai] app_narrative stored for ${scopeKey} (summary chars=${parsed.summary.length})`)
     return stored
   } catch (error) {
     console.warn(`[ai] app_narrative failed for ${scopeKey}:`, error)
-    return fallback
+    throw error
   }
 }
 
@@ -5346,15 +5366,32 @@ export function getThreadHistory(threadId: number): AIThreadMessage[] {
   return getThreadMessages(getDb(), threadId)
 }
 
-export async function getWeekReview(weekStartStr: string): Promise<AISurfaceSummary | null> {
+export async function getWeekReview(
+  weekStartStr: string,
+  force = false,
+): Promise<AISurfaceSummary | null> {
+  const scopeKey = `week:${weekStartStr}`
+  if (!force) {
+    const existing = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
+    if (existing && existing.scopeKey === scopeKey) return existing
+    return null
+  }
   return generateWeekReview(weekStartStr)
 }
 
 export async function getAppNarrative(
   canonicalAppId: string,
   days = 7,
+  force = false,
 ): Promise<AISurfaceSummary | null> {
-  return generateAppNarrative(canonicalAppId, days)
+  if (!force) {
+    const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
+    const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
+    const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
+    if (existing) return existing
+    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+  }
+  return generateAppNarrative(canonicalAppId, days, true)
 }
 
 export function clearAIHistory(): void {

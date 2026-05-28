@@ -531,13 +531,13 @@ export function getAppSummariesForRange(
   const overrides = getCategoryOverrides(db)
 
   const rows = db
-    .prepare<[number, number]>(`
+    .prepare<[number, number, number]>(`
       SELECT *
       FROM app_sessions
-      WHERE COALESCE(end_time, start_time + duration_sec * 1000) > ? AND start_time < ?
+      WHERE start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(fromMs, toMs) as AppSessionRow[]
+    .all(fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
 
   const clippedSessions = mergeSessions(
     rows
@@ -591,12 +591,12 @@ export function getSessionsForRange(
   const overrides = getCategoryOverrides(db)
 
   const rows = db
-    .prepare<[number, number]>(`
+    .prepare<[number, number, number]>(`
       SELECT * FROM app_sessions
-      WHERE COALESCE(end_time, start_time + duration_sec * 1000) > ? AND start_time < ?
+      WHERE start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(fromMs, toMs) as AppSessionRow[]
+    .all(fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
 
   return mergeSessions(
     rows
@@ -1647,12 +1647,12 @@ export function getSessionsForApp(
   const overrides = getCategoryOverrides(db)
 
   const rows = db
-    .prepare<[string, number, number]>(`
+    .prepare<[string, number, number, number]>(`
       SELECT * FROM app_sessions
-      WHERE bundle_id = ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ? AND start_time < ?
+      WHERE bundle_id = ? AND start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(bundleId, fromMs, toMs) as AppSessionRow[]
+    .all(bundleId, fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
 
   const clipped = rows
     .filter((r) => !isUxNoise(r.app_name))

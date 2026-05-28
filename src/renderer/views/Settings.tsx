@@ -574,33 +574,51 @@ export default function Settings() {
   const [editingClientColor, setEditingClientColor] = useState('')
 
   useEffect(() => {
+    let cancelled = false
+
+    // Render the Settings shell as soon as `ipc.settings.get()` resolves.
+    // Everything else (CLI detection, diagnostics, sync, summaries, overrides,
+    // suggested name) is loaded in parallel afterwards so each section can
+    // appear as soon as its own data is ready, without blocking first paint.
     void (async () => {
-      const [current, tools, tracking, status, summaries, overrides, suggestedName] = await Promise.all([
-        ipc.settings.get(),
-        ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })),
-        ipc.tracking.getDiagnostics().catch(() => null),
-        ipc.sync.getStatus().catch(() => null),
-        ipc.db.getAppSummaries(30).catch(() => []),
-        ipc.db.getCategoryOverrides().catch(() => ({})),
-        ipc.app.getDefaultUserName().catch(() => ''),
-      ])
-      const access = current.aiProvider === 'claude-cli'
-        ? !!tools.claude
-        : current.aiProvider === 'codex-cli'
-          ? !!tools.codex
-          : await ipc.settings.hasApiKey(current.aiProvider)
+      const current = await ipc.settings.get()
+      if (cancelled) return
       setSettings(current)
-      setHasApiKey(access)
-      setCliTools(tools as { claude: string | null; codex: string | null })
-      setTrackingDiagnostics(tracking as TrackingDiagnosticsPayload | null)
-      setSyncStatus(status)
-      setRecentApps((summaries as AppUsageSummary[])
-        .filter((summary) => summary.totalSeconds > 0 && summary.bundleId)
-        .sort((left, right) => right.totalSeconds - left.totalSeconds)
-        .slice(0, 8))
-      setCategoryOverrides(overrides as Record<string, AppCategory>)
-      setDefaultUserName(String(suggestedName ?? ''))
+
+      // Optimistic AI-access guess based on persisted provider, refined below
+      // when CLI detection or hasApiKey resolves.
+      if (current.aiProvider !== 'claude-cli' && current.aiProvider !== 'codex-cli') {
+        void ipc.settings.hasApiKey(current.aiProvider).then((access) => {
+          if (!cancelled) setHasApiKey(access)
+        })
+      }
+
+      void ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })).then((tools) => {
+        if (cancelled) return
+        setCliTools(tools as { claude: string | null; codex: string | null })
+      })
+      void ipc.tracking.getDiagnostics().catch(() => null).then((tracking) => {
+        if (!cancelled) setTrackingDiagnostics(tracking as TrackingDiagnosticsPayload | null)
+      })
+      void ipc.sync.getStatus().catch(() => null).then((status) => {
+        if (!cancelled) setSyncStatus(status)
+      })
+      void ipc.db.getAppSummaries(30).catch(() => []).then((summaries) => {
+        if (cancelled) return
+        setRecentApps((summaries as AppUsageSummary[])
+          .filter((summary) => summary.totalSeconds > 0 && summary.bundleId)
+          .sort((left, right) => right.totalSeconds - left.totalSeconds)
+          .slice(0, 8))
+      })
+      void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
+        if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
+      })
+      void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
+        if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
+      })
     })()
+
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {

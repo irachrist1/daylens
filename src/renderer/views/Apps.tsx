@@ -281,27 +281,34 @@ export default function Apps() {
 
   const detailResource = useProjectionResource<AppDetailPayload>({
     scope: 'apps',
-    enabled: !!selectedCanonicalId && !isAppsPastDay,
+    enabled: !!selectedCanonicalId,
     dependencies: [selectedCanonicalId, days, isAppsPastDay ? selectedDate : null],
     shouldReload: (event) => (
       !event.canonicalAppId
       || event.canonicalAppId === selectedCanonicalId
     ),
-    load: () => ipc.db.getAppDetail(selectedCanonicalId as string, days),
+    load: () => ipc.db.getAppDetail(selectedCanonicalId as string, isAppsPastDay ? selectedDate : days),
   })
+  // Always loads cache-only on selection or app/range change. The explicit
+  // generate handler below owns force-generation; we never bake `force=true`
+  // into this resource because its loading state cannot be reliably observed
+  // (subsequent loads set `reloading`, not `loading`), making any state
+  // machine tied to it race against itself.
   const narrativeResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'apps',
-    enabled: !!selectedCanonicalId && (!dateMode || isAppsToday),
-    dependencies: [selectedCanonicalId, days],
+    enabled: !!selectedCanonicalId,
+    dependencies: [selectedCanonicalId, days, isAppsPastDay ? selectedDate : null],
     intervalMs: 0,
     shouldReload: (event) => (
       !event.canonicalAppId
       || event.canonicalAppId === selectedCanonicalId
     ),
-    load: () => ipc.ai.getAppNarrative(selectedCanonicalId as string, days).catch(() => null),
+    load: () => ipc.ai.getAppNarrative(selectedCanonicalId as string, isAppsPastDay ? 1 : days, false).catch(() => null),
   })
 
-  const expectedRangeKey = `${days}d:${todayString()}`
+  const expectedRangeKey = isAppsPastDay
+    ? `1d:${selectedDate}`
+    : `${days}d:${todayString()}`
   const selectedRangeLabel = dateMode
     ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
     : `last ${days} days`
@@ -317,11 +324,99 @@ export default function Apps() {
   const expectedNarrativeScopeKey = selectedCanonicalId
     ? `app:${selectedCanonicalId}:${expectedRangeKey}`
     : null
-  const narrative = narrativeResource.data
+  const rawNarrative = narrativeResource.data
     && narrativeResource.data.scope === 'app_detail'
     && narrativeResource.data.scopeKey === expectedNarrativeScopeKey
     ? narrativeResource.data
     : null
+  // The AI is instructed to return the literal phrase below when it lacks
+  // enough evidence to cite two entities. Treat that as "no real narrative":
+  // the user sees deterministic local summary, and the button reads Generate
+  // instead of Refresh (the latter implies a generated story already exists).
+  const THIN_NARRATIVE_MARKER = 'thin app-specific signal'
+  const isThinNarrative = (value: { summary: string } | null): boolean =>
+    !!value && value.summary.includes(THIN_NARRATIVE_MARKER)
+  const narrative = rawNarrative && !isThinNarrative(rawNarrative) ? rawNarrative : null
+
+  // Past-day Apps cannot ask for an AI narrative scoped to the chosen date —
+  // the main-side narrative path keys cache by `1d:<today>` regardless of the
+  // selected date, so any returned summary would be rejected by the scopeKey
+  // check above and the section would silently never populate. Hide the
+  // narrative affordance for past-day until the AI path becomes date-aware.
+  const narrativeSupported = !isAppsPastDay
+
+  // Tracks scopeKeys the user explicitly clicked Generate on in this session.
+  // The "Generating a stronger app narrative…" message and the disabled
+  // button state are only shown for these scopes — cache-only reads on
+  // selection no longer flash the spinner. Cleared in the handler's finally
+  // block once the force-generation roundtrip completes.
+  const [activeGenerationScopes, setActiveGenerationScopes] = useState<Set<string>>(() => new Set())
+  // Per-scope status from the most recent Generate click. Lets the UI tell the
+  // user when the AI ran but produced no usable narrative ("thin signal"),
+  // when it errored, or when it succeeded — instead of the previous silent
+  // failure where the button cycled back to "Generate" with no visible change.
+  type GenerationStatus =
+    | { kind: 'ok' }
+    | { kind: 'thin' }
+    | { kind: 'no-bundle' }
+    | { kind: 'error'; message: string }
+  const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
+  const isUserGenerating = expectedNarrativeScopeKey
+    ? activeGenerationScopes.has(expectedNarrativeScopeKey)
+    : false
+  const currentGenerationStatus = expectedNarrativeScopeKey
+    ? lastGenerationStatus[expectedNarrativeScopeKey] ?? null
+    : null
+  const handleGenerateAppNarrative = async () => {
+    if (!selectedCanonicalId || !expectedNarrativeScopeKey) {
+      console.warn('[apps-narrative] click ignored: no selected app')
+      return
+    }
+    if (activeGenerationScopes.has(expectedNarrativeScopeKey)) return
+    const scopeKey = expectedNarrativeScopeKey
+    const requestDays = isAppsPastDay ? 1 : days
+    console.info(`[apps-narrative] generating for ${scopeKey} (days=${requestDays})`)
+    setActiveGenerationScopes((prev) => {
+      const next = new Set(prev)
+      next.add(scopeKey)
+      return next
+    })
+    setLastGenerationStatus((prev) => {
+      if (!(scopeKey in prev)) return prev
+      const next = { ...prev }
+      delete next[scopeKey]
+      return next
+    })
+    try {
+      const result = await ipc.ai.getAppNarrative(selectedCanonicalId, requestDays, true)
+      console.info(`[apps-narrative] ipc returned for ${scopeKey}`, {
+        hasResult: !!result,
+        scopeKey: result?.scopeKey,
+        chars: result?.summary?.length ?? 0,
+      })
+      let status: GenerationStatus
+      if (!result) {
+        status = { kind: 'no-bundle' }
+      } else if (result.summary.includes(THIN_NARRATIVE_MARKER)) {
+        status = { kind: 'thin' }
+      } else {
+        status = { kind: 'ok' }
+      }
+      setLastGenerationStatus((prev) => ({ ...prev, [scopeKey]: status }))
+      await narrativeResource.refresh()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[apps-narrative] generation failed for ${scopeKey}:`, message)
+      setLastGenerationStatus((prev) => ({ ...prev, [scopeKey]: { kind: 'error', message } }))
+    } finally {
+      setActiveGenerationScopes((prev) => {
+        if (!prev.has(scopeKey)) return prev
+        const next = new Set(prev)
+        next.delete(scopeKey)
+        return next
+      })
+    }
+  }
 
   useEffect(() => {
     if (!detail) return
@@ -501,7 +596,7 @@ export default function Apps() {
           height: '100%',
           width: '100%',
           maxWidth: 1180,
-          minWidth: isCompact ? 0 : 980,
+          minWidth: 0,
         }}>
           <div style={{
             borderRight: isCompact ? 'none' : '1px solid var(--color-border-ghost)',
@@ -718,10 +813,11 @@ export default function Apps() {
                         {categoryLabel(selectedSummary.category)} · {selectedRangeLabel}
                       </div>
                     </div>
-                    {(!dateMode || isAppsToday) && (
+                    {narrativeSupported && (!narrative || !dateMode || isAppsToday) && (
                       <button
                         type="button"
-                        onClick={() => void narrativeResource.refresh()}
+                        disabled={isUserGenerating}
+                        onClick={() => { void handleGenerateAppNarrative() }}
                         style={{
                           padding: '7px 10px',
                           borderRadius: 8,
@@ -730,34 +826,44 @@ export default function Apps() {
                           color: 'var(--color-text-secondary)',
                           fontSize: 11.5,
                           fontWeight: 700,
-                          cursor: 'pointer',
+                          cursor: isUserGenerating ? 'default' : 'pointer',
+                          opacity: isUserGenerating ? 0.6 : 1,
                         }}
                       >
-                        {isAppsToday && !narrative ? 'Generate' : 'Refresh'}
+                        {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
                       </button>
                     )}
                   </div>
-                  {isAppsPastDay ? (
+                  <>
                     <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} Showing finalized app totals for {formatAppsDateLabel(selectedDate)}.
+                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
                     </p>
-                  ) : (
-                    <>
-                      <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                        {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
-                      </p>
-                      {narrativeResource.loading && !narrative && (
-                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                          Generating a stronger app narrative…
-                        </div>
-                      )}
-                      {narrative?.stale && (
-                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                          Showing the last saved narrative while new activity settles.
-                        </div>
-                      )}
-                    </>
-                  )}
+                    {isUserGenerating && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                        Generating a stronger app narrative…
+                      </div>
+                    )}
+                    {!isUserGenerating && currentGenerationStatus?.kind === 'thin' && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                        Daylens has only thin signal for this app right now — try again after more activity.
+                      </div>
+                    )}
+                    {!isUserGenerating && currentGenerationStatus?.kind === 'no-bundle' && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                        No recent activity for this app in the selected range.
+                      </div>
+                    )}
+                    {!isUserGenerating && currentGenerationStatus?.kind === 'error' && (
+                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
+                        Could not generate narrative: {currentGenerationStatus.message}
+                      </div>
+                    )}
+                    {narrative?.stale && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                        Showing the last saved narrative while new activity settles.
+                      </div>
+                    )}
+                  </>
                   {/* B12: minute totals are secondary metadata, not headline. */}
                   <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 14, letterSpacing: '0.02em' }}>
                     {formatDuration(selectedSummary.totalSeconds)}
@@ -771,7 +877,7 @@ export default function Apps() {
                   </div>
                 )}
 
-                {!detail && !detailResource.error && !isAppsPastDay && (
+                {!detail && !detailResource.error && (
                   <div style={{ display: 'grid', gap: 10 }} aria-label="Loading app detail">
                     {[80, 64, 72].map((w) => (
                       <div

@@ -33,7 +33,7 @@ import { runAttributionForRange } from '../services/attribution'
 import { getDb } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
@@ -244,6 +244,10 @@ export function registerDbHandlers(): void {
     const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
     scheduleTimelineAIJobs(payload)
     return payload
+  })
+
+  ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
+    return getRecapRange(getDb(), dates)
   })
 
   // App usage summaries for a range — used by Apps view

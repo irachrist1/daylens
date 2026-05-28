@@ -70,12 +70,12 @@ export function registerAIHandlers(): void {
     return generateDaySummary(date)
   })
 
-  ipcMain.handle(IPC.AI.GET_WEEK_REVIEW, async (_e, payload: { weekStart: string }) => {
-    return getWeekReview(payload.weekStart)
+  ipcMain.handle(IPC.AI.GET_WEEK_REVIEW, async (_e, payload: { weekStart: string; force?: boolean }) => {
+    return getWeekReview(payload.weekStart, payload.force ?? false)
   })
 
-  ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (_e, payload: { canonicalAppId: string; days?: number }) => {
-    return getAppNarrative(payload.canonicalAppId, payload.days ?? 7)
+  ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (_e, payload: { canonicalAppId: string; days?: number; force?: boolean }) => {
+    return getAppNarrative(payload.canonicalAppId, payload.days ?? 7, payload.force ?? false)
   })
 
   ipcMain.handle(IPC.AI.PREPARE_DAILY_REPORT, async (_e, payload?: { date?: string | null }) => {

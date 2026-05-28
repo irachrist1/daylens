@@ -114,6 +114,7 @@ const api = {
   },
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
+    getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSummariesForDate: (date: string): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, date),
@@ -124,7 +125,7 @@ const api = {
     setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
-    getAppDetail: (canonicalAppId: string, days?: number): Promise<AppDetailPayload> =>
+    getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_ACTIVITY_DIGEST, days),
@@ -143,10 +144,10 @@ const api = {
       ipcRenderer.invoke(IPC.AI.SET_MESSAGE_FEEDBACK, payload),
     generateDaySummary: (date: string): Promise<AIDaySummaryResult> =>
       ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
-    getWeekReview: (weekStart: string): Promise<AISurfaceSummary | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart }),
-    getAppNarrative: (canonicalAppId: string, days?: number): Promise<AISurfaceSummary | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days }),
+    getWeekReview: (weekStart: string, force?: boolean): Promise<AISurfaceSummary | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart, force }),
+    getAppNarrative: (canonicalAppId: string, days?: number, force?: boolean): Promise<AISurfaceSummary | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days, force }),
     prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>

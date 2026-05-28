@@ -36,11 +36,13 @@ import type {
   WorkflowRef,
   WorkContextAppSummary,
   WorkContextBlock,
+  LabelSource,
+  WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { localDayBounds } from '../lib/localDate'
+import { localDayBounds, localDateString } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import {
   normalizeUrlForStorage,
@@ -1919,11 +1921,179 @@ function persistTimelineDay(
   persist()
 }
 
+function loadPersistedTimelineBlocksForDay(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+): WorkContextBlock[] | null {
+  const rows = db.prepare(`
+    SELECT
+      id,
+      start_time,
+      end_time,
+      dominant_category,
+      category_distribution_json,
+      switch_count,
+      label_current,
+      label_source,
+      label_confidence,
+      narrative_current,
+      evidence_summary_json,
+      heuristic_version,
+      computed_at
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+    ORDER BY start_time ASC
+  `).all(dateStr) as Array<{
+    id: string
+    start_time: number
+    end_time: number
+    dominant_category: AppCategory
+    category_distribution_json: string
+    switch_count: number
+    label_current: string
+    label_source: string
+    label_confidence: number
+    narrative_current: string | null
+    evidence_summary_json: string
+    heuristic_version: string
+    computed_at: number
+  }>
+
+  if (rows.length === 0) {
+    return null
+  }
+
+  const blockIds = rows.map((row) => row.id)
+  const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+
+  const blocks: WorkContextBlock[] = []
+
+  for (const row of rows) {
+    let evidence: Partial<TimelineEvidenceSummary> = {}
+    try {
+      evidence = JSON.parse(row.evidence_summary_json || '{}') as Partial<TimelineEvidenceSummary>
+    } catch {
+      evidence = {}
+    }
+
+    const pageRefs = Array.isArray(evidence.pages) ? evidence.pages as PageRef[] : []
+    const documentRefs = Array.isArray(evidence.documents) ? evidence.documents as DocumentRef[] : []
+    const topArtifacts = [...pageRefs, ...documentRefs]
+      .sort((left, right) => right.totalSeconds - left.totalSeconds)
+      .slice(0, 6)
+
+    const labelRows = db.prepare(`
+      SELECT label, source
+      FROM timeline_block_labels
+      WHERE block_id = ?
+    `).all(row.id) as Array<{ label: string; source: string }>
+
+    const ruleLabel = labelRows.find(r => r.source === 'rule')?.label || row.label_current
+    const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
+    const overrideRow = labelRows.find(r => r.source === 'user')
+
+    const memberRows = db.prepare(`
+      SELECT member_id
+      FROM timeline_block_members
+      WHERE block_id = ? AND member_type = 'app_session'
+    `).all(row.id) as Array<{ member_id: string }>
+
+    const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
+    const blockSessions = sessions.filter((s) => sessionIds.has(s.id))
+
+    const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
+
+    const keyPagesByDomain = getTopPagesForDomains(db, row.start_time, row.end_time, websites.map((site) => site.domain), 2)
+    const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
+      .map((page) => page.title?.trim())
+      .filter((title): title is string => Boolean(title))
+      .filter((title, index, titles) => titles.indexOf(title) === index)
+      .slice(0, 4)
+
+    const focusRows = db.prepare(`
+      SELECT member_id, weight_seconds
+      FROM timeline_block_members
+      WHERE block_id = ? AND member_type = 'focus_session'
+    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+
+    const focusSessionIds = focusRows.map((r) => Number(r.member_id))
+    const focusTotalSeconds = focusRows[0]?.weight_seconds ?? 0
+    const durationSec = Math.max(1, (row.end_time - row.start_time) / 1000)
+    const focusOverlap = {
+      totalSeconds: focusTotalSeconds,
+      pct: Math.min(100, Math.round((focusTotalSeconds / durationSec) * 100)),
+      sessionIds: focusSessionIds,
+    }
+
+    let categoryDistribution: Partial<Record<AppCategory, number>> = {}
+    try {
+      categoryDistribution = JSON.parse(row.category_distribution_json)
+    } catch {
+      categoryDistribution = {}
+    }
+
+    blocks.push({
+      id: row.id,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      dominantCategory: row.dominant_category,
+      categoryDistribution,
+      ruleBasedLabel: ruleLabel,
+      aiLabel: aiLabel,
+      sessions: blockSessions,
+      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      websites,
+      keyPages,
+      pageRefs,
+      documentRefs,
+      topArtifacts,
+      workflowRefs: workflowsByBlock.get(row.id) ?? [],
+      label: {
+        current: row.label_current,
+        source: row.label_source as LabelSource,
+        confidence: row.label_confidence,
+        narrative: row.narrative_current,
+        ruleBased: ruleLabel,
+        aiSuggested: aiLabel,
+        override: overrideRow?.label ?? null,
+      },
+      focusOverlap,
+      evidenceSummary: {
+        apps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+        pages: pageRefs,
+        documents: documentRefs,
+        domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
+      },
+      heuristicVersion: row.heuristic_version,
+      computedAt: row.computed_at,
+      switchCount: row.switch_count,
+      confidence: confidenceForCandidate({
+        sessions: blockSessions,
+        formation: 'mixed',
+        boundedBeforeGap: false,
+        boundedAfterGap: false,
+      }, coherenceScore(categoryDistribution)),
+      isLive: false,
+    })
+  }
+
+  return blocks
+}
+
 function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
 ): WorkContextBlock[] {
+  const todayStr = localDateString()
+  if (dateStr < todayStr) {
+    const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
+    if (persisted && persisted.length > 0) {
+      return persisted
+    }
+  }
+
   const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
   persistTimelineDay(db, dateStr, computed)
   return computed
@@ -2210,6 +2380,239 @@ export function getHistoryDayPayload(
   return getTimelineDayPayload(db, dateStr, liveSession)
 }
 
+function emptyLightweightDayPayload(dateStr: string): DayTimelinePayload {
+  return {
+    date: dateStr,
+    sessions: [],
+    websites: [],
+    blocks: [],
+    segments: [],
+    focusSessions: [],
+    computedAt: Date.now(),
+    version: 'empty',
+    totalSeconds: 0,
+    focusSeconds: 0,
+    focusPct: 0,
+    appCount: 0,
+    siteCount: 0,
+  }
+}
+
+function getLightweightDayPayload(
+  db: Database.Database,
+  dateStr: string,
+): DayTimelinePayload | null {
+  const [fromMs, toMs] = localDayBounds(dateStr)
+
+  const rows = db.prepare(`
+    SELECT
+      id,
+      start_time,
+      end_time,
+      dominant_category,
+      category_distribution_json,
+      switch_count,
+      label_current,
+      label_source,
+      label_confidence,
+      narrative_current,
+      evidence_summary_json,
+      heuristic_version,
+      computed_at
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+    ORDER BY start_time ASC
+  `).all(dateStr) as Array<{
+    id: string
+    start_time: number
+    end_time: number
+    dominant_category: AppCategory
+    category_distribution_json: string
+    switch_count: number
+    label_current: string
+    label_source: string
+    label_confidence: number
+    narrative_current: string | null
+    evidence_summary_json: string
+    heuristic_version: string
+    computed_at: number
+  }>
+
+  if (rows.length === 0) {
+    const hasSessions = db.prepare(`
+      SELECT 1 FROM app_sessions
+      WHERE start_time >= ? AND start_time < ?
+      LIMIT 1
+    `).get(fromMs, toMs)
+    if (!hasSessions) {
+      return emptyLightweightDayPayload(dateStr)
+    }
+    return null
+  }
+
+  const blockIds = rows.map((row) => row.id)
+  const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+
+  const blocks: WorkContextBlock[] = []
+  
+  let totalSeconds = 0
+  let focusSeconds = 0
+
+  for (const row of rows) {
+    let evidence: Partial<TimelineEvidenceSummary> = {}
+    try {
+      evidence = JSON.parse(row.evidence_summary_json || '{}') as Partial<TimelineEvidenceSummary>
+    } catch {
+      evidence = {}
+    }
+
+    const pageRefs = Array.isArray(evidence.pages) ? evidence.pages as PageRef[] : []
+    const documentRefs = Array.isArray(evidence.documents) ? evidence.documents as DocumentRef[] : []
+    const topArtifacts = [...pageRefs, ...documentRefs]
+      .sort((left, right) => right.totalSeconds - left.totalSeconds)
+      .slice(0, 6)
+
+    const labelRows = db.prepare(`
+      SELECT label, source
+      FROM timeline_block_labels
+      WHERE block_id = ?
+    `).all(row.id) as Array<{ label: string; source: string }>
+
+    const ruleLabel = labelRows.find(r => r.source === 'rule')?.label || row.label_current
+    const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
+    const overrideRow = labelRows.find(r => r.source === 'user')
+
+    const memberRows = db.prepare(`
+      SELECT weight_seconds
+      FROM timeline_block_members
+      WHERE block_id = ? AND member_type = 'app_session'
+    `).all(row.id) as Array<{ weight_seconds: number }>
+
+    const blockSessions = memberRows.map((r) => ({
+      durationSeconds: r.weight_seconds,
+      startTime: row.start_time,
+      endTime: row.end_time,
+    })) as any[]
+
+    const websites = (evidence.domains ?? []).map((domain) => ({
+      domain,
+      totalSeconds: 0,
+      visitCount: 0,
+      topTitle: null,
+      browserBundleId: null,
+    })) as WebsiteSummary[]
+
+    const keyPages: string[] = []
+
+    const focusRows = db.prepare(`
+      SELECT member_id, weight_seconds
+      FROM timeline_block_members
+      WHERE block_id = ? AND member_type = 'focus_session'
+    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+
+    const focusSessionIds = focusRows.map((r) => Number(r.member_id))
+    const focusTotalSeconds = focusRows[0]?.weight_seconds ?? 0
+    const durationSec = Math.max(1, (row.end_time - row.start_time) / 1000)
+    const focusOverlap = {
+      totalSeconds: focusTotalSeconds,
+      pct: Math.min(100, Math.round((focusTotalSeconds / durationSec) * 100)),
+      sessionIds: focusSessionIds,
+    }
+
+    let categoryDistribution: Partial<Record<AppCategory, number>> = {}
+    try {
+      categoryDistribution = JSON.parse(row.category_distribution_json)
+    } catch {
+      categoryDistribution = {}
+    }
+
+    const blockActiveSec = memberRows.reduce((sum, r) => sum + r.weight_seconds, 0)
+    totalSeconds += blockActiveSec
+    if (FOCUSED_CATEGORIES.includes(row.dominant_category)) {
+      focusSeconds += blockActiveSec
+    }
+
+    blocks.push({
+      id: row.id,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      dominantCategory: row.dominant_category,
+      categoryDistribution,
+      ruleBasedLabel: ruleLabel,
+      aiLabel: aiLabel,
+      sessions: blockSessions,
+      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      websites,
+      keyPages,
+      pageRefs,
+      documentRefs,
+      topArtifacts,
+      workflowRefs: workflowsByBlock.get(row.id) ?? [],
+      label: {
+        current: row.label_current,
+        source: row.label_source as LabelSource,
+        confidence: row.label_confidence,
+        narrative: row.narrative_current,
+        ruleBased: ruleLabel,
+        aiSuggested: aiLabel,
+        override: overrideRow?.label ?? null,
+      },
+      focusOverlap,
+      evidenceSummary: {
+        apps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+        pages: pageRefs,
+        documents: documentRefs,
+        domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
+      },
+      heuristicVersion: row.heuristic_version,
+      computedAt: row.computed_at,
+      switchCount: row.switch_count,
+      confidence: confidenceForCandidate({
+        sessions: blockSessions,
+        formation: 'mixed',
+        boundedBeforeGap: false,
+        boundedAfterGap: false,
+      }, coherenceScore(categoryDistribution)),
+      isLive: false,
+    })
+  }
+
+  const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
+
+  return {
+    date: dateStr,
+    sessions: [],
+    websites: [],
+    blocks,
+    segments: [],
+    focusSessions,
+    computedAt: Date.now(),
+    version: TIMELINE_HEURISTIC_VERSION,
+    totalSeconds,
+    focusSeconds,
+    focusPct: totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0,
+    appCount: 0,
+    siteCount: 0,
+  }
+}
+
+export function getRecapRange(
+  db: Database.Database,
+  dateStrs: string[],
+): DayTimelinePayload[] {
+  const todayStr = localDateString()
+  return dateStrs.map((dateStr) => {
+    if (dateStr >= todayStr) {
+      return getTimelineDayPayload(db, dateStr)
+    }
+    const lightweight = getLightweightDayPayload(db, dateStr)
+    if (lightweight) {
+      return lightweight
+    }
+    return getTimelineDayPayload(db, dateStr)
+  })
+}
+
 function localDateStringForOffset(offsetDays: number): string {
   const target = new Date()
   target.setDate(target.getDate() + offsetDays)
@@ -2435,13 +2838,16 @@ export function getArtifactDetails(
 export function getAppDetailPayload(
   db: Database.Database,
   canonicalAppId: string,
-  days = 7,
+  daysOrDate: number | string = 7,
   liveSession?: LiveSession | null,
 ): AppDetailPayload {
-  const today = localDateStringForOffset(0)
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const today = isDate ? (daysOrDate as string) : localDateStringForOffset(0)
+  const days = isDate ? 1 : Number(daysOrDate)
+
   const [todayFrom, todayTo] = localDayBounds(today)
   const fromMs = todayFrom - Math.max(0, days - 1) * 86_400_000
-  const rangeKey = `${days}d:${today}`
+  const rangeKey = isDate ? `1d:${today}` : `${days}d:${today}`
 
   const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), liveSession)
   const sessions = allSessions.filter((session) => {

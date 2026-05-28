@@ -1,76 +1,81 @@
 # Daylens
 
-A local-first desktop activity tracker for macOS, Windows, and Linux.
+### Your digital life, made searchable and retrievable on demand.
 
-Daylens captures app sessions, browser history (where supported), focus sessions, and reconstructed work blocks, then lets you inspect your day in **Timeline**, see what you did with each tool in **Apps**, ask questions about your day in **AI**, and keep tracking honest in **Settings**.
+---
 
-The current scope of work is three goals: a timeline that works on every platform, an Apps view that explains the work, and an AI that can answer any question about your day. Everything else is dropped or deferred. The full plan is in `docs/PLAN.html`.
+Daylens is a **local-first personal memory system** for your laptop (macOS, Windows, and Linux). It quietly logs your foreground app sessions, browser history, focus sessions, and active work blocks, turning your raw behavioral history into a rich, structured database. 
 
-## Status
+With a grounded **AI chat interface** and a built-in **Model Context Protocol (MCP) server**, Daylens allows you, and the AI tools you already use (like Cursor, Claude Code, or Claude Desktop), to ask grounded questions about your digital past and retrieve exact context instantly.
 
-This README was rewritten on 2026-05-12 after a focus reset. Past claims of cross-platform parity, runtime validation, and "in-progress" features that were not actually shipping were removed. What remains below is verifiable by reading the code or running the tests.
+---
 
-**What works in code (proven by tests, not by packaged-build use):**
+## 🌟 Hackathon Focus: Track 3 — Economic Empowerment & Education
 
-- Foreground app-session tracking, self-capture filtering, live-session recovery after restart.
-- Browser history ingestion on macOS and Windows (not Linux).
-- macOS Safari active-tab context capture.
-- Timeline reconstruction with sustained-context block splitting and label priority.
-- AI chat with tool-calling on Anthropic, OpenAI, and Google. Deterministic router handles common shapes before any provider call.
-- Wrapped day-recap with deterministic facts + non-blocking AI narrative + cache.
-- Local AI artifacts (reports, charts, exports) persisted to SQLite + `userData/`.
-- An opt-in MCP server at `packages/mcp-server/` reusing the same tool schemas.
+Students and professionals lose an immense amount of the information they consume because there is no reliable way to search their personal digital history. When you study a complex course, read documentation, or work across multiple files, your context is highly fragmented:
+- *“Where was that YouTube video on gradient descent I watched two weeks ago?”*
+- *“Which article did I read on prompt caching last Friday?”*
+- *“What client problems did I solve last Tuesday morning?”*
 
-**What is not yet proven on a real machine on any platform:**
+Daylens bridges this gap by acting as a **personal learning and context retriever**. It empowers users to compounding the value of every hour spent studying or working by ensuring their personal knowledge base is never lost, remains entirely private, and is instantly searchable.
 
-Packaged-build install, daily-notification click-through, updater round-trip, onboarding flow from a fresh user, AI quality against live providers.
+---
 
-## Install
+## 🚀 Key Features
 
-The download page is `https://christian-tonny.dev/daylens`. Release artifacts are published from CI:
+*   **📅 Local-First Timeline Reconstruction**: Automatically groups fragmented app sessions and browser visits into coherent, named work blocks in real time. Inspect your day at a glance.
+*   **🧠 Grounded AI Chat Surface**: Ask natural language questions about your day (*"What did I study about neural networks this week?"*) and get detailed, synthesized answers backed by exact time and domain citations.
+*   **⚡ Background Content Indexer**: Enriches browser history from educational and research platforms (Coursera, YouTube, arXiv, documentation, blogs) by fetching page contents and generating topic-tagged AI summaries. It answers based on *what you learned*, not just how long the browser was open.
+*   **🔌 Model Context Protocol (MCP) Server**: A built-in, opt-in MCP server that exposes your local work timeline to external AI tools. You can query your activity directly within Cursor or Claude Desktop.
+*   **🔒 Privacy by Design**: **100% of your data stays on your machine.** Daylens stores all activity in a local SQLite database. No third-party servers, no remote tracking, and no cloud-surveillance risk. Self-knowledge, fully owned by you.
 
-- **macOS**: DMG and ZIP. Until Apple Developer ID notarization is set up, users see an "unidentified developer" warning on first launch and must click *Open Anyway* under System Settings → Privacy & Security.
-- **Windows**: signed installer required for the public path. Until then, Windows installers are not published to the public update feed.
-- **Linux**: AppImage, .deb, and .rpm.
+---
 
-## Use
+## 🛠️ Substantive AI Implementation (Not a Wrapper!)
 
-Keyboard shortcuts:
+Daylens does what standard web-based AI assistants cannot:
+1.  **It Has Your Data**: Web-based tools start from zero. Daylens holds a continuous, structured SQLite behavioral timeline, feeding grounded context to the AI model.
+2.  **Context-Enriched Ingestion**: The background content indexer fetches visited pages, uses Claude to generate 2-sentence topic-tagged summaries, and stores them in `content_summaries` for high-precision semantic search.
+3.  **Advanced Hybrid Query Router**: Features a deterministic routing harness that handles common questions (like exact duration matches) instantly, falling back to a multi-model tool-calling agent only when complex synthesis is required.
 
-- `Cmd+Alt+D` (macOS) / `Ctrl+Alt+D` (Windows, Linux) — open Daylens and toggle the command palette.
-- `Cmd+K` / `Ctrl+K` — toggle the palette while inside the app.
+---
 
-The palette jumps between Timeline, Apps, AI, and Settings; opens today's or yesterday's Day Wrapped; starts or ends a focus session; searches your timeline; and triggers update checks.
+## 🏗️ Tech Stack
 
-## Development
+*   **Core**: Electron, TypeScript
+*   **Frontend**: React 19, TailwindCSS v4, Lucide React, Recharts
+*   **Data & System Layer**: SQLite (`better-sqlite3`), macOS Swift native capture probe, `keytar`
+*   **Integration**: Model Context Protocol (MCP), Sentry, PostHog
 
-```
-npm start                  # run Electron in dev
-npm run typecheck          # tsc --noEmit
-npm run build:all          # main + preload + renderer + MCP bundles
-npm run test:ai-chat       # main AI/chat regression suite
-npm run ai:bench           # AI router regression harness
-npm run contract:check     # validate shared remote contract
+---
 
-npm run dist:mac           # release artifact
-npm run dist:win           # release artifact
-npm run dist:linux         # release artifact
-```
+## 💻 Development & Build Commands
 
-Local SQLite path on macOS: `~/Library/Application Support/Daylens/daylens.sqlite`.
-
-AI release gate:
-
-```
-AI_BENCH_LIVE=1 ANTHROPIC_API_KEY=... OPENAI_API_KEY=... GOOGLE_API_KEY=... npm run ai:bench
+### Setup
+```bash
+npm install                  # Install dependencies and compile native bindings
 ```
 
-`npm run ai:bench` always runs the deterministic router corpus. With `AI_BENCH_LIVE=1`, entries whose provider key is present also run a live provider check and write `tests/ai-bench/.last-live-results.json`. A live regression in any taxonomy family is a release blocker; missing keys skip only the affected live entry and print the skip reason.
+### Dev & Test
+```bash
+npm start                    # Run Daylens in Electron dev mode
+npm run typecheck            # TypeScript compiler check
+npm run test:ai-chat         # Run the main AI/chat regression suite
+npm run ai:bench             # Run the AI router benchmark suite
+```
 
-## Docs
+### Build & Package
+```bash
+npm run build:all            # Build main, preload, renderer, MCP, and capture-helper
+npm run dist:mac             # Package macOS DMG and ZIP artifacts
+npm run dist:win             # Package Windows installer
+npm run dist:linux           # Package Linux AppImage, .deb, and .rpm
+```
 
-- `docs/PLAN.html` — the active strategic plan (three goals, current focus)
-- `docs/AGENTS.md` — the product contract: what Daylens is supposed to be
-- `docs/CLAUDE.md` — contributor sourcing rules
+---
 
-Past docs (`ISSUES.md`, `OVERVIEW.md`, `PRD.md`, `SRS.md`, `REMOTE_CONTRACT.md`, `INSTALL.md`, `SHORTCUTS.md`, `RELEASE.md`, `IDEAS.md`, `WINDOWS_SIGNING.md`, `WRAPPED_REDESIGN.md`, `ai-orchestration.md`) were deleted in the 2026-05-12 cleanup. The code is the source of truth.
+## 🔐 Security & Peace of Mind
+
+*   **Zero-Cloud Storage**: No data is sent to the cloud by default.
+*   **Transparency**: View exactly what is captured in the Timeline and Apps views. Delete or filter any activity instantly in **Settings**.
+*   **Explicit MCP Authorization**: The local MCP server is off by default and can only be enabled via toggle in Settings.

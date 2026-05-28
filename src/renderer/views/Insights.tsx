@@ -1015,7 +1015,7 @@ export default function Insights() {
     dependencies: [currentDate],
     load: async () => {
       const dates = recapDateWindow(currentDate)
-      const payloads = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date).catch(() => null)))
+      const payloads = await ipc.db.getRecapRange(dates).catch(() => [])
       return payloads.filter((payload): payload is DayTimelinePayload => Boolean(payload))
     },
   })
