@@ -17,6 +17,7 @@ import {
 } from '../services/workMemory'
 import type { MemoryBackfillResult, WorkContextAppSummary } from '@shared/types'
 import { getSettings } from '../services/settings'
+import { tableExists } from '../services/database'
 
 const PROMOTION_THRESHOLD_CONFIDENCE = 0.65
 const PROMOTION_THRESHOLD_OCCURRENCES = 2
@@ -47,15 +48,6 @@ function sha1(value: string): string {
 
 function nowMs(): number {
   return Date.now()
-}
-
-function tableExists(db: Database.Database, tableName: string): boolean {
-  const row = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `).get(tableName) as { name: string } | undefined
-  return Boolean(row)
 }
 
 interface FinalizedBlockRow {

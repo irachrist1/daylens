@@ -32,7 +32,7 @@ import {
 import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
-import { getDb } from '../services/database'
+import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
@@ -123,15 +123,6 @@ function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
     rows.push(...getAppSummariesForRange(db, from, to))
   }
   return mergeAppSummaryRows(rows)
-}
-
-function tableExists(db: ReturnType<typeof getDb>, tableName: string): boolean {
-  const row = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `).get(tableName) as { name: string } | undefined
-  return Boolean(row)
 }
 
 function getWorkMemorySettingsSummary(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {

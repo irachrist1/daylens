@@ -46,6 +46,24 @@ const UX_NOISE_SUBSTRINGS = [
 // Sessions shorter than this are noise from brief app transitions.
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
+
+// How far before a range's start we look for sessions that began earlier but
+// overlap into the window. Range queries filter on `start_time` (the indexed
+// column) so they need a lower bound to keep the index scan tight. Sessions are
+// flushed on idle/away (AWAY_THRESHOLD in tracking) and the Windows backfill
+// discards anything over 8h, so no real session spans longer than this; 12h
+// leaves generous margin for a long continuous-activity session that crosses
+// into the window while cutting the previous 48h over-scan by 4x.
+const SESSION_OVERLAP_LOOKBACK_MS = 12 * 60 * 60 * 1000
+
+// Columns hydrated into AppSessionRow / clipRowToRange. Selecting them
+// explicitly (instead of SELECT *) keeps these hot range reads from pulling
+// unused or future wide columns across the boundary.
+const APP_SESSION_COLUMNS = `
+  id, bundle_id, app_name, start_time, end_time, duration_sec, category,
+  window_title, raw_app_name, canonical_app_id, app_instance_id,
+  capture_source, ended_reason, capture_version
+`
 const LEGACY_WEAK_AI_LABELS = [
   'AI Tools',
   'Browsing',
@@ -243,6 +261,10 @@ export interface SearchOptions {
   startDate?: string
   endDate?: string
   limit?: number
+  // Internal: a recency floor (epoch ms) applied on top of startDate. searchAll
+  // raises this as it collects results so lower-yield tables only scan rows that
+  // could still land in the final top-`limit` set. Not set by IPC callers.
+  minStartMs?: number
 }
 
 export interface SessionSearchResult {
@@ -314,8 +336,9 @@ function parseDateBound(date: string | undefined, edge: 'start' | 'end'): number
 }
 
 function searchBounds(opts: SearchOptions): { fromMs: number; toMs: number; limit: number } {
+  const dateFloor = parseDateBound(opts.startDate, 'start') ?? 0
   return {
-    fromMs: parseDateBound(opts.startDate, 'start') ?? 0,
+    fromMs: Math.max(dateFloor, opts.minStartMs ?? 0),
     toMs: parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
     limit: normalizedSearchLimit(opts.limit),
   }
@@ -533,12 +556,12 @@ export function getAppSummariesForRange(
 
   const rows = db
     .prepare<[number, number, number]>(`
-      SELECT *
+      SELECT ${APP_SESSION_COLUMNS}
       FROM app_sessions
       WHERE start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
+    .all(fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
   const clippedSessions = mergeSessions(
     rows
@@ -593,11 +616,11 @@ export function getSessionsForRange(
 
   const rows = db
     .prepare<[number, number, number]>(`
-      SELECT * FROM app_sessions
+      SELECT ${APP_SESSION_COLUMNS} FROM app_sessions
       WHERE start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
+    .all(fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
   return mergeSessions(
     rows
@@ -803,15 +826,33 @@ export function searchAll(
   query: string,
   opts: SearchOptions = {},
 ): SearchResult[] {
+  // One parse + one empty short-circuit instead of four (each sub-search would
+  // otherwise re-derive the FTS query and return [] independently).
+  if (!toFtsQuery(query)) return []
+
   const limit = normalizedSearchLimit(opts.limit)
-  return [
-    ...searchSessions(db, query, { ...opts, limit }),
-    ...searchBlocks(db, query, { ...opts, limit }),
-    ...searchBrowser(db, query, { ...opts, limit }),
-    ...searchArtifacts(db, query, { ...opts, limit }),
-  ]
-    .sort((left, right) => right.startTime - left.startTime)
-    .slice(0, limit)
+
+  // Run highest-yield tables (largest by row count in normal use) first, then
+  // raise a recency floor: once we hold `limit` results, anything older than
+  // the oldest of them can never make the final top-`limit`-by-recency set, so
+  // later tables only scan rows newer than that floor. Output is identical to
+  // merging all four unbounded and slicing — just less work per keystroke.
+  const searchers = [searchSessions, searchBrowser, searchBlocks, searchArtifacts] as const
+  let results: SearchResult[] = []
+  let minStartMs = opts.minStartMs ?? 0
+
+  for (const search of searchers) {
+    const batch = search(db, query, { ...opts, limit, minStartMs })
+    if (batch.length > 0) {
+      results = results.concat(batch).sort((left, right) => right.startTime - left.startTime)
+      if (results.length > limit) results = results.slice(0, limit)
+      if (results.length === limit) {
+        minStartMs = Math.max(minStartMs, results[limit - 1].startTime)
+      }
+    }
+  }
+
+  return results
 }
 
 export function getHourlyBreakdown(
@@ -870,23 +911,52 @@ export function getPeakHours(
   fromMs: number,
   toMs: number,
 ): PeakHoursResult | null {
-  const dayRows = db
-    .prepare<[number, number]>(`
-      SELECT start_time, app_name
+  // Single grouped scan returns per (local day, hour) buckets. From those we
+  // derive both the distinct-day gate and the 24-hour breakdown, replacing the
+  // previous two full scans (distinct-day pass + getHourlyBreakdown).
+  const focusedCategoryPlaceholders = FOCUSED_CATEGORIES.map(() => '?').join(', ')
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const rows = db
+    .prepare(`
+      SELECT
+        strftime('%Y-%m-%d', app_sessions.start_time / 1000, 'unixepoch', 'localtime') AS day,
+        CAST(strftime('%H', app_sessions.start_time / 1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
+        SUM(app_sessions.duration_sec) AS total_seconds,
+        SUM(
+          CASE
+            WHEN COALESCE(category_overrides.category, app_sessions.category) IN (${focusedCategoryPlaceholders})
+              THEN app_sessions.duration_sec
+            ELSE 0
+          END
+        ) AS focus_seconds
       FROM app_sessions
-      WHERE start_time >= ? AND start_time < ?
-      ORDER BY start_time ASC
+      LEFT JOIN category_overrides
+        ON category_overrides.bundle_id = app_sessions.bundle_id
+      WHERE app_sessions.start_time >= ? AND app_sessions.start_time < ?
+        AND ${noiseFilters}
+      GROUP BY day, hour
     `)
-    .all(fromMs, toMs) as { start_time: number; app_name: string }[]
+    .all(
+      ...FOCUSED_CATEGORIES,
+      fromMs,
+      toMs,
+      ...UX_NOISE_SUBSTRINGS.map((substring) => `%${substring}%`),
+    ) as { day: string; hour: number; total_seconds: number; focus_seconds: number }[]
 
-  const distinctDays = new Set(
-    dayRows
-      .filter((row) => !isUxNoise(row.app_name))
-      .map((row) => toLocalDateKey(row.start_time)),
-  )
+  const distinctDays = new Set<string>()
+  const hourlyBreakdown = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    totalSeconds: 0,
+    focusSeconds: 0,
+  }))
+  for (const row of rows) {
+    distinctDays.add(row.day)
+    const bucket = hourlyBreakdown[row.hour]
+    bucket.totalSeconds += row.total_seconds ?? 0
+    bucket.focusSeconds += row.focus_seconds ?? 0
+  }
   if (distinctDays.size < 3) return null
 
-  const hourlyBreakdown = getHourlyBreakdown(db, fromMs, toMs)
   let bestWindow: PeakHoursResult | null = null
   let bestFocusSeconds = -1
 
@@ -1662,11 +1732,11 @@ export function getSessionsForApp(
 
   const rows = db
     .prepare<[string, number, number, number]>(`
-      SELECT * FROM app_sessions
+      SELECT ${APP_SESSION_COLUMNS} FROM app_sessions
       WHERE bundle_id = ? AND start_time >= ? AND start_time < ? AND COALESCE(end_time, start_time + duration_sec * 1000) > ?
       ORDER BY start_time ASC
     `)
-    .all(bundleId, fromMs - 172800000, toMs, fromMs) as AppSessionRow[]
+    .all(bundleId, fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
   const clipped = rows
     .filter((r) => !isUxNoise(r.app_name))
