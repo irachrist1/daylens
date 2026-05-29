@@ -5064,11 +5064,17 @@ const lastTimelineAIJobFingerprint = new Map<string, string>()
  * block identity, end time, and current label/source.
  */
 export function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
-  const parts: string[] = []
-  for (const block of payload.blocks) {
-    parts.push(`${block.id}:${block.endTime}:${block.label.source}:${block.label.current ?? ''}`)
-  }
-  return parts.join('|')
+  // Hash a structured (delimiter-free) encoding of the block fields. The old
+  // `:`/`|`-joined string collided when a label itself contained those
+  // characters, letting two different day states share a fingerprint and
+  // suppress scheduling for a changed day.
+  const shape = payload.blocks.map((block) => [
+    block.id,
+    block.endTime,
+    block.label.source,
+    block.label.current ?? '',
+  ])
+  return createHash('sha1').update(JSON.stringify(shape)).digest('hex')
 }
 
 export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {

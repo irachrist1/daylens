@@ -363,11 +363,13 @@ function topBrowserEvidenceInRange(
   const grouped = new Map<string, { domain: string; pageTitle: string | null; total: number }>()
   for (const row of rows) {
     if (row.visitTime < start || row.visitTime >= end) continue
-    if (
-      row.browserBundleId !== browserBundleId
-      && !(canonicalBrowserId && row.canonicalBrowserId === canonicalBrowserId)
-      && row.browserBundleId !== null
-    ) {
+    // A row only counts as this browser's evidence when its bundle matches, or
+    // its canonical browser id matches. Rows with a null browserBundleId are not
+    // a match (the old predicate let them through and smeared evidence across
+    // browsers).
+    const matchesBundle = row.browserBundleId === browserBundleId
+    const matchesCanonical = canonicalBrowserId !== null && row.canonicalBrowserId === canonicalBrowserId
+    if (!matchesBundle && !matchesCanonical) {
       continue
     }
 

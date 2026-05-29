@@ -30,8 +30,16 @@ fi
 # unless this helper is owned by root and carries mode 4755.
 sandbox="${INSTALL_DIR}/chrome-sandbox"
 if [[ -f "$sandbox" ]]; then
-    chown root:root "$sandbox" || true
-    chmod 4755 "$sandbox" || true
+    # Do not swallow these — if hardening fails the app cannot launch, so the
+    # install should surface a clear error rather than complete silently.
+    if ! chown root:root "$sandbox"; then
+        echo "daylens postinst: failed to chown root:root $sandbox (chrome-sandbox must be root-owned)" >&2
+        exit 1
+    fi
+    if ! chmod 4755 "$sandbox"; then
+        echo "daylens postinst: failed to chmod 4755 $sandbox (chrome-sandbox needs the setuid bit)" >&2
+        exit 1
+    fi
 fi
 
 exit 0

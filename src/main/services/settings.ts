@@ -167,8 +167,19 @@ async function readKeyWithMigration(account: string): Promise<string | null> {
   return null
 }
 
+// Opt-in env override for headless / CI / eval runs: DAYLENS_ANTHROPIC_API_KEY,
+// DAYLENS_OPENAI_API_KEY, DAYLENS_GOOGLE_API_KEY. Dedicated names so they never
+// collide with the SDK-standard ANTHROPIC_API_KEY etc. that a shell may already
+// export. Takes precedence over keytar when set; otherwise keytar is used.
+function envApiKeyOverride(provider: AIProviderMode): string | null {
+  if (provider === 'claude-cli' || provider === 'codex-cli') return null
+  const value = process.env[`DAYLENS_${provider.toUpperCase()}_API_KEY`]
+  return value && value.trim() ? value.trim() : null
+}
+
 export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return true
+  if (envApiKeyOverride(provider)) return true
   try {
     const key = await readKeyWithMigration(keytarAccount(provider))
     return !!key
@@ -180,6 +191,8 @@ export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
 
 export async function getApiKey(provider: AIProviderMode): Promise<string | null> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return null
+  const override = envApiKeyOverride(provider)
+  if (override) return override
   try {
     return await readKeyWithMigration(keytarAccount(provider))
   } catch {

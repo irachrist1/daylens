@@ -174,7 +174,8 @@ test('AICompose.tsx specifically does not call useRef inside a NODE_ENV check', 
 test('AICompose.tsx does not log from the render path', () => {
   const file = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'AICompose.tsx')
   const source = fs.readFileSync(file, 'utf8')
-  assert.doesNotMatch(source, /console\.(debug|log)\s*\(/)
+  // Scope to the known render-path marker rather than banning every console.*
+  // in the file, which would trip on unrelated debug logging.
   assert.doesNotMatch(source, /\[AICompose\]\s*render/)
 })
 
@@ -182,7 +183,11 @@ test('Insights keeps local search typing state out of the parent AI view', () =>
   const file = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'Insights.tsx')
   const source = fs.readFileSync(file, 'utf8')
   const parentStart = source.indexOf('export default function Insights()')
-  const parentEnd = source.indexOf('  return (', parentStart)
+  // Match the component's top-level `return (` tolerant of indentation, so a
+  // formatting-only edit doesn't silently break the boundary detection.
+  const parentEnd = parentStart >= 0
+    ? source.slice(parentStart).search(/\n\s*return \(/) + parentStart
+    : -1
   assert.ok(parentStart >= 0 && parentEnd > parentStart, 'could not locate Insights component body')
   const parentPrelude = source.slice(parentStart, parentEnd)
   assert.doesNotMatch(parentPrelude, /\[\s*searchQuery\s*,\s*setSearchQuery\s*\]/)

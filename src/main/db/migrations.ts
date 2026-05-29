@@ -1754,15 +1754,17 @@ const migrations: Migration[] = [
   },
   {
     version: 30,
-    description: 'Add hot-path indexes for timeline and focus lookups',
+    description: 'Add hot-path index for focus session lookups',
     up: () => {
+      // Only idx_focus_sessions_start is created here. The (bundle_id, start_time)
+      // and timeline_block_members(block_id) indexes this migration used to add
+      // were redundant: the former duplicates the UNIQUE idx_app_sessions_dedup
+      // (v3) and the latter duplicates the timeline_block_members PRIMARY KEY
+      // leading column. Existing DBs that already ran the old v30 keep those
+      // harmless extra indexes; new installs no longer create them.
       getDb().exec(`
-        CREATE INDEX IF NOT EXISTS idx_app_sessions_bundle_start
-          ON app_sessions (bundle_id, start_time);
         CREATE INDEX IF NOT EXISTS idx_focus_sessions_start
           ON focus_sessions (start_time);
-        CREATE INDEX IF NOT EXISTS idx_timeline_block_members_block
-          ON timeline_block_members (block_id);
       `)
     },
   },

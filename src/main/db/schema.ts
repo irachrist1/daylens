@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sessions_start ON app_sessions (start_time);
-CREATE INDEX IF NOT EXISTS idx_app_sessions_bundle_start ON app_sessions (bundle_id, start_time);
+-- (bundle_id, start_time) lookups are already served by the UNIQUE
+-- idx_app_sessions_dedup (migration v3), so no separate index is needed here.
 
 CREATE TABLE IF NOT EXISTS live_app_session_snapshot (
   singleton        INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -247,7 +248,8 @@ CREATE TABLE IF NOT EXISTS timeline_block_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_timeline_block_members_member ON timeline_block_members (member_type, member_id);
-CREATE INDEX IF NOT EXISTS idx_timeline_block_members_block ON timeline_block_members (block_id);
+-- block_id lookups are already served by the PRIMARY KEY (block_id, member_type,
+-- member_id) leading column, so no separate block_id index is needed.
 
 CREATE TABLE IF NOT EXISTS timeline_block_labels (
   id TEXT PRIMARY KEY,
