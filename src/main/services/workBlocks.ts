@@ -117,7 +117,7 @@ const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
 const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 30 * 60_000
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
-// PRODUCT-SPEC bar: a 90-minute block titled "Daylens AI refactor — extract
+// Quality bar: a 90-minute block titled "Daylens AI refactor — extract
 // chat_answer from ai.ts" is the right answer, not three 30-minute slices
 // labelled "Cursor" / "Cursor" / "Untitled block".
 const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 180 * 60_000

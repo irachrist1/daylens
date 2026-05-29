@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Trash2 } from 'lucide-react'
@@ -912,6 +912,157 @@ function HighlightedExcerpt({ text }: { text: string }) {
   )
 }
 
+const LocalHistorySearch = memo(function LocalHistorySearch({
+  onResultClick,
+}: {
+  onResultClick: (result: DaylensSearchResult) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<DaylensSearchResult[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed) {
+      setResults([])
+      setLoading(false)
+      setError(null)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    const timer = window.setTimeout(() => {
+      ipc.search.all(trimmed, { limit: 30 })
+        .then((nextResults) => {
+          if (!cancelled) setResults(nextResults)
+        })
+        .catch((searchError) => {
+          if (!cancelled) {
+            setResults([])
+            setError(searchError instanceof Error ? searchError.message : String(searchError))
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 180)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [query])
+
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        borderBottom: '1px solid var(--color-border-ghost)',
+        paddingBottom: 10,
+      }}>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search your history or ask anything."
+          aria-label="Search local Daylens history"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: 'none',
+            background: 'transparent',
+            outline: 'none',
+            color: 'var(--color-text-primary)',
+            fontSize: 13.5,
+          }}
+        />
+        {loading && (
+          <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Searching...</span>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 12.5, color: '#f87171', lineHeight: 1.5 }}>
+          Search failed: {error}
+        </div>
+      )}
+
+      {query.trim() && !loading && !error && results.length === 0 && (
+        <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+          No local matches yet.
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {results.map((result) => (
+            <button
+              key={`${result.type}:${result.id}:${result.startTime}`}
+              type="button"
+              onClick={() => onResultClick(result)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '46px minmax(0, 1fr) auto',
+                alignItems: 'start',
+                gap: 12,
+                textAlign: 'left',
+                border: '1px solid var(--color-border-ghost)',
+                borderRadius: 12,
+                background: 'transparent',
+                padding: '10px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 24,
+                borderRadius: 999,
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-secondary)',
+                fontSize: 10.5,
+                fontWeight: 800,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+              }}>
+                {searchResultIcon(result.type)}
+              </span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{
+                  display: 'block',
+                  fontSize: 13,
+                  fontWeight: 720,
+                  color: 'var(--color-text-primary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {searchResultTitle(result)}
+                </span>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+                  {searchResultSubtitle(result)}
+                </span>
+                <span style={{ display: 'block', fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55, marginTop: 6 }}>
+                  <HighlightedExcerpt text={result.excerpt} />
+                </span>
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', paddingTop: 2 }}>
+                {formatSearchTimestamp(result.startTime)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+
 function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] {
   return history.map((message, index) => ({
     ...message,
@@ -940,10 +1091,6 @@ export default function Insights() {
   const [artifactsVersion, setArtifactsVersion] = useState(0)
   const [artifactPreview, setArtifactPreview] = useState<{ record: AIArtifactRecord; content: string | null } | null>(null)
   const [aiView, setAiView] = useState<'chat' | 'files'>('chat')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<DaylensSearchResult[]>([])
-  const [searchLoading, setSearchLoading] = useState(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
   const [threadPickerOpen, setThreadPickerOpen] = useState(false)
   const [reducedMotion, setReducedMotion] = useState(false)
   const [hoveredThreadId, setHoveredThreadId] = useState<number | null>(null)
@@ -1089,40 +1236,6 @@ export default function Insights() {
       setStreamingSnapshot(`assistant:${event.requestId}`, safeSnapshot)
     })
   }, [])
-
-  useEffect(() => {
-    const query = searchQuery.trim()
-    if (!query) {
-      setSearchResults([])
-      setSearchLoading(false)
-      setSearchError(null)
-      return
-    }
-
-    let cancelled = false
-    setSearchLoading(true)
-    setSearchError(null)
-    const timer = window.setTimeout(() => {
-      ipc.search.all(query, { limit: 30 })
-        .then((results) => {
-          if (!cancelled) setSearchResults(results)
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setSearchResults([])
-            setSearchError(error instanceof Error ? error.message : String(error))
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setSearchLoading(false)
-        })
-    }, 150)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [searchQuery])
 
   useEffect(() => {
     return () => {
@@ -1573,8 +1686,9 @@ export default function Insights() {
   }, [location.search])
 
   const defaultSummary = summaryText(today)
-  const daySummarySignature = today
-    ? JSON.stringify({
+  const daySummarySignature = useMemo(() => (
+    today
+      ? JSON.stringify({
         date: today.date,
         totalSeconds: today.totalSeconds,
         focusSeconds: today.focusSeconds,
@@ -1583,7 +1697,8 @@ export default function Insights() {
         blockLabels: today.blocks.map((block) => block.label.current),
         artifacts: today.blocks.flatMap((block) => block.topArtifacts.slice(0, 2).map((artifact) => artifact.displayTitle)),
       })
-    : 'no-day'
+      : 'no-day'
+  ), [today])
   const todayDateKey = today?.date ?? 'no-day'
   const todayLabel = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
   const hasHeroSummary = heroSummary.trim().length > 0
@@ -1599,7 +1714,7 @@ export default function Insights() {
     void handleSend(prompt, { trigger: 'suggested' })
   }
 
-  function handleSearchResultClick(result: DaylensSearchResult) {
+  const handleSearchResultClick = useCallback((result: DaylensSearchResult) => {
     if (result.type === 'artifact') {
       void ipc.ai.openArtifact(result.id)
       return
@@ -1609,7 +1724,7 @@ export default function Insights() {
       return
     }
     window.location.hash = `/timeline?view=day&date=${encodeURIComponent(result.date)}`
-  }
+  }, [])
 
   async function handleGenerateHeroSummary() {
     if (!today || !hasApiKey || today.totalSeconds === 0) {
@@ -2384,109 +2499,7 @@ export default function Insights() {
           </div>
 
           {aiView === 'chat' && <div style={{ order: 1, marginBottom: 20 }}>
-            <div style={{ display: 'grid', gap: 10 }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                borderBottom: '1px solid var(--color-border-ghost)',
-                paddingBottom: 10,
-              }}>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search your history or ask anything."
-                  aria-label="Search local Daylens history"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    border: 'none',
-                    background: 'transparent',
-                    outline: 'none',
-                    color: 'var(--color-text-primary)',
-                    fontSize: 13.5,
-                  }}
-                />
-                {searchLoading && (
-                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Searching…</span>
-                )}
-              </div>
-
-              {searchError && (
-                <div style={{ fontSize: 12.5, color: '#f87171', lineHeight: 1.5 }}>
-                  Search failed: {searchError}
-                </div>
-              )}
-
-              {searchQuery.trim() && !searchLoading && !searchError && searchResults.length === 0 && (
-                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
-                  No local matches yet.
-                </div>
-              )}
-
-              {searchResults.length > 0 && (
-                <div style={{ display: 'grid', gap: 8 }}>
-                  {searchResults.map((result) => (
-                    <button
-                      key={`${result.type}:${result.id}:${result.startTime}`}
-                      type="button"
-                      onClick={() => handleSearchResultClick(result)}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '46px minmax(0, 1fr) auto',
-                        alignItems: 'start',
-                        gap: 12,
-                        textAlign: 'left',
-                        border: '1px solid var(--color-border-ghost)',
-                        borderRadius: 12,
-                        background: 'transparent',
-                        padding: '10px 12px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        minHeight: 24,
-                        borderRadius: 999,
-                        background: 'var(--color-surface-high)',
-                        color: 'var(--color-text-secondary)',
-                        fontSize: 10.5,
-                        fontWeight: 800,
-                        letterSpacing: '0.06em',
-                        textTransform: 'uppercase',
-                      }}>
-                        {searchResultIcon(result.type)}
-                      </span>
-                      <span style={{ minWidth: 0 }}>
-                        <span style={{
-                          display: 'block',
-                          fontSize: 13,
-                          fontWeight: 720,
-                          color: 'var(--color-text-primary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {searchResultTitle(result)}
-                        </span>
-                        <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                          {searchResultSubtitle(result)}
-                        </span>
-                        <span style={{ display: 'block', fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.55, marginTop: 6 }}>
-                          <HighlightedExcerpt text={result.excerpt} />
-                        </span>
-                      </span>
-                      <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', paddingTop: 2 }}>
-                        {formatSearchTimestamp(result.startTime)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <LocalHistorySearch onResultClick={handleSearchResultClick} />
           </div>}
 
           {messages.length === 0 && aiView === 'chat' && (
@@ -2572,7 +2585,7 @@ export default function Insights() {
               )}
 
               {messages.length > 0 && (
-                <div style={{ display: 'grid', gap: 24 }}>
+                <div style={{ display: 'grid', gap: 24, contain: 'layout' }}>
                   {messageListItems}
                   <div ref={bottomRef} />
                 </div>

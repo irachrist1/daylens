@@ -797,7 +797,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
     totalActiveSeconds: summaries.reduce((s, a) => s + a.totalSeconds, 0),
   })
   // Block labels and timings come from the renderer's live path so the
-  // AI cites what the user saw. See docs/AI-FIX-STRATEGY.md §Problem 1.
+  // AI cites what the user saw.
   const livePayload = getTimelineDayPayload(db, params.date, null)
 
   // Build the activity-shaped primary view. Every block answers "what

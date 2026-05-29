@@ -17,28 +17,20 @@ function IconSend() {
 function AIComposeImpl({ onSubmit, loading }: AIComposeProps) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // Render counter is unconditional so React's hook order is stable across
-  // dev/prod and HMR. The console.debug side-effect is gated on NODE_ENV.
-  // (The previous conditional `useRef` inside `if (NODE_ENV === 'development')`
-  // tripped "Rendered more hooks than during the previous render" and crashed
-  // the AI tab — Rules of Hooks violation.)
-  const renderCountRef = useRef(0)
-  renderCountRef.current++
 
   // Auto-resize the textarea to fit content (1–7 visual lines).
+  // Read scrollHeight exactly once and reuse it: this effect runs on every
+  // keystroke, and reading a layout property forces a synchronous reflow. The
+  // AI tab mounts a long conversation tree, so a second forced reflow per
+  // keystroke is what makes typing feel like it freezes.
   useEffect(() => {
     const textarea = textareaRef.current
     if (!textarea) return
-    textarea.style.height = '0px'
-    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 24), 140)
-    textarea.style.height = `${nextHeight}px`
-    textarea.style.overflowY = textarea.scrollHeight > 140 ? 'auto' : 'hidden'
+    textarea.style.height = 'auto'
+    const contentHeight = textarea.scrollHeight
+    textarea.style.height = `${Math.min(Math.max(contentHeight, 24), 140)}px`
+    textarea.style.overflowY = contentHeight > 140 ? 'auto' : 'hidden'
   }, [input])
-
-  if (process.env.NODE_ENV === 'development') {
-    // eslint-disable-next-line no-console
-    console.debug('[AICompose] render #', renderCountRef.current, { loading, inputLen: input.length })
-  }
 
   const send = () => {
     const text = input.trim()

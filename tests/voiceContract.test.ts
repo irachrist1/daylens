@@ -7,7 +7,7 @@ import {
   assertNoBannedVocab,
 } from '../src/main/ai/voiceContract.ts'
 
-test('banned vocabulary mirrors PRODUCT-SPEC', () => {
+test('banned vocabulary matches the voice contract', () => {
   assert.deepEqual([...BANNED_VOCAB], [
     'dive into',
     'unleash',

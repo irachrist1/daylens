@@ -1231,6 +1231,7 @@ export const IPC = {
     SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
     CLEAR_BLOCK_LABEL_OVERRIDE: 'db:clear-block-label-override',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
+    GET_AI_SPEND: 'db:get-ai-spend',
     GET_RECAP_RANGE: 'db:get-recap-range',
   },
   DEBUG: {
