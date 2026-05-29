@@ -59,6 +59,15 @@ interface BrowserEvidence {
   pageTitle: string | null
 }
 
+interface BrowserEvidenceRow {
+  domain: string
+  pageTitle: string | null
+  visitTime: number
+  durationSec: number
+  browserBundleId: string | null
+  canonicalBrowserId: string | null
+}
+
 interface IdlePeriod {
   startedAt: number
   endedAt: number
@@ -202,6 +211,8 @@ export function normalizeToSegments(
 
   const idlePeriods = loadIdlePeriods(db, fromMs, toMs)
   const appMap = loadAppAttentionMap(db)
+  const browserEvidenceRows = loadBrowserEvidenceRows(db, fromMs, toMs)
+  const canonicalBrowserByBundleId = new Map<string, string | null>()
   const segments: ActivitySegmentRecord[] = []
   const now = Date.now()
 
@@ -230,9 +241,22 @@ export function normalizeToSegments(
 
       // Browser enrichment turns active-tab/history rows into structured
       // evidence for AI queries without mutating the raw foreground session.
-      const browserEvidence = looksLikeBrowser(session.bundle_id, session.app_name)
-        ? topBrowserEvidenceInRange(db, slice.start, slice.end, session.bundle_id)
-        : null
+      let browserEvidence: BrowserEvidence | null = null
+      if (looksLikeBrowser(session.bundle_id, session.app_name)) {
+        if (!canonicalBrowserByBundleId.has(session.bundle_id)) {
+          canonicalBrowserByBundleId.set(
+            session.bundle_id,
+            resolveCanonicalBrowser(session.bundle_id).canonicalBrowserId,
+          )
+        }
+        browserEvidence = topBrowserEvidenceInRange(
+          browserEvidenceRows,
+          slice.start,
+          slice.end,
+          session.bundle_id,
+          canonicalBrowserByBundleId.get(session.bundle_id) ?? null,
+        )
+      }
       const enrichedWindowTitle =
         usefulWindowTitle(session.window_title, session.app_name)
         ?? browserEvidence?.pageTitle
@@ -310,36 +334,64 @@ function usefulWindowTitle(title: string | null, appName: string): string | null
   return trimmed
 }
 
-function topBrowserEvidenceInRange(
-  db: Database.Database, start: number, end: number, browserBundleId: string,
-): BrowserEvidence | null {
-  const canonicalBrowser = resolveCanonicalBrowser(browserBundleId).canonicalBrowserId
-  const row = db.prepare(`
+function loadBrowserEvidenceRows(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+): BrowserEvidenceRow[] {
+  return db.prepare(`
     SELECT
       domain,
-      MAX(page_title) AS page_title,
-      SUM(duration_sec) AS total
+      page_title AS pageTitle,
+      visit_time AS visitTime,
+      duration_sec AS durationSec,
+      browser_bundle_id AS browserBundleId,
+      canonical_browser_id AS canonicalBrowserId
     FROM website_visits
     WHERE visit_time >= ? AND visit_time < ?
-      AND (
-        browser_bundle_id = ?
-        OR (? IS NOT NULL AND canonical_browser_id = ?)
-        OR browser_bundle_id IS NULL
-      )
       AND domain IS NOT NULL
-    GROUP BY domain
-    ORDER BY total DESC
-    LIMIT 1
-  `).get(start, end, browserBundleId, canonicalBrowser, canonicalBrowser) as {
-    domain: string
-    page_title: string | null
-    total: number
-  } | undefined
+  `).all(fromMs, toMs) as BrowserEvidenceRow[]
+}
+
+function topBrowserEvidenceInRange(
+  rows: BrowserEvidenceRow[],
+  start: number,
+  end: number,
+  browserBundleId: string,
+  canonicalBrowserId: string | null,
+): BrowserEvidence | null {
+  const grouped = new Map<string, { domain: string; pageTitle: string | null; total: number }>()
+  for (const row of rows) {
+    if (row.visitTime < start || row.visitTime >= end) continue
+    if (
+      row.browserBundleId !== browserBundleId
+      && !(canonicalBrowserId && row.canonicalBrowserId === canonicalBrowserId)
+      && row.browserBundleId !== null
+    ) {
+      continue
+    }
+
+    const existing = grouped.get(row.domain)
+    if (existing) {
+      existing.total += row.durationSec
+      if (row.pageTitle && (!existing.pageTitle || row.pageTitle > existing.pageTitle)) {
+        existing.pageTitle = row.pageTitle
+      }
+    } else {
+      grouped.set(row.domain, {
+        domain: row.domain,
+        pageTitle: row.pageTitle,
+        total: row.durationSec,
+      })
+    }
+  }
+
+  const row = [...grouped.values()].sort((left, right) => right.total - left.total)[0]
 
   if (!row?.domain) return null
   return {
     domain: row.domain,
-    pageTitle: normalizeWebsiteTitleForDisplay(row.domain, row.page_title),
+    pageTitle: normalizeWebsiteTitleForDisplay(row.domain, row.pageTitle),
   }
 }
 
