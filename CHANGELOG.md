@@ -4,6 +4,12 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
+## v1.0.39 - 2026-05-29 — Updater Recovery
+
+- macOS in-app updates validate the downloaded ZIP size and stage the replacement before closing Daylens services.
+- Update downloads show a progress bar as well as percentage text when the release feed provides byte sizes.
+- The install button no longer opens the extra cleanup confirmation sheet before downloading.
+
 ## v1.0.38 - 2026-05-29 — Daylens 1.0 (First Stable)
 
 - Work memory system learns workstream patterns from desktop activity and backfills across full history.

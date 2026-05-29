@@ -5,6 +5,7 @@ export interface RemoteUpdateDescriptor {
   releaseDate: string | null
   installUrl: string
   installFileName: string
+  installSizeBytes?: number | null
   manualUrl: string | null
   releasePageUrl: string | null
 }
@@ -48,6 +49,7 @@ export function isRemoteUpdateDescriptor(value: unknown): value is RemoteUpdateD
     typeof candidate.version === 'string' &&
     typeof candidate.installUrl === 'string' &&
     typeof candidate.installFileName === 'string' &&
+    (candidate.installSizeBytes === undefined || candidate.installSizeBytes === null || typeof candidate.installSizeBytes === 'number') &&
     (candidate.releaseName === null || typeof candidate.releaseName === 'string') &&
     (candidate.releaseNotesText === null || typeof candidate.releaseNotesText === 'string') &&
     (candidate.releaseDate === null || typeof candidate.releaseDate === 'string') &&

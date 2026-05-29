@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, net } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { spawn, spawnSync } from 'node:child_process'
 import { createWriteStream, constants as fsConstants } from 'node:fs'
@@ -411,7 +411,12 @@ async function checkRemoteFeed(trigger: 'manual' | 'background', support: Return
   }
 }
 
-function downloadToFile(url: string, destPath: string, onProgress: (pct: number | null) => void): Promise<void> {
+function downloadToFile(
+  url: string,
+  destPath: string,
+  onProgress: (pct: number | null) => void,
+  expectedBytes?: number | null,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, redirect: 'follow' })
     request.on('response', (response) => {
@@ -421,10 +426,20 @@ function downloadToFile(url: string, destPath: string, onProgress: (pct: number 
         return
       }
       const totalHeader = response.headers['content-length']
-      const total = Array.isArray(totalHeader) ? Number(totalHeader[0]) : Number(totalHeader)
+      const headerTotal = Array.isArray(totalHeader) ? Number(totalHeader[0]) : Number(totalHeader)
+      const total = Number.isFinite(expectedBytes) && expectedBytes && expectedBytes > 0
+        ? expectedBytes
+        : headerTotal
       let received = 0
       const fileStream = createWriteStream(destPath)
       let lastEmittedPct: number | null = null
+      let settled = false
+      const settleReject = (err: unknown) => {
+        if (settled) return
+        settled = true
+        fileStream.destroy()
+        reject(err)
+      }
       response.on('data', (chunk: Buffer) => {
         received += chunk.length
         fileStream.write(chunk)
@@ -435,12 +450,18 @@ function downloadToFile(url: string, destPath: string, onProgress: (pct: number 
         }
       })
       response.on('end', () => {
-        fileStream.end(() => resolve())
+        if (Number.isFinite(total) && total && received !== total) {
+          settleReject(new Error(`Downloaded update was incomplete (${received} of ${total} bytes).`))
+          return
+        }
+        fileStream.end(() => {
+          if (settled) return
+          settled = true
+          resolve()
+        })
       })
-      response.on('error', (err) => {
-        fileStream.destroy()
-        reject(err)
-      })
+      response.on('error', settleReject)
+      fileStream.on('error', settleReject)
     })
     request.on('error', reject)
     request.end()
@@ -453,7 +474,13 @@ async function downloadRemoteInstaller(onProgress: (pct: number | null) => void)
   const fileName = _pendingRemoteUpdate.installFileName || `daylens-update-${_pendingRemoteUpdate.version}`
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-update-'))
   const tmpFile = path.join(tmpDir, fileName)
-  await downloadToFile(url, tmpFile, onProgress)
+  await downloadToFile(url, tmpFile, onProgress, _pendingRemoteUpdate.installSizeBytes)
+  if (_pendingRemoteUpdate.installSizeBytes) {
+    const stat = await fs.stat(tmpFile)
+    if (stat.size !== _pendingRemoteUpdate.installSizeBytes) {
+      throw new Error(`Downloaded update was incomplete (${stat.size} of ${_pendingRemoteUpdate.installSizeBytes} bytes).`)
+    }
+  }
   return tmpFile
 }
 
@@ -522,8 +549,6 @@ async function performAdhocMacInstall(): Promise<boolean> {
     version,
   })
 
-  if (!(await confirmInstallWithCleanupHint(version))) return false
-
   try {
     setUpdaterState({ status: 'downloading', progressPct: null, errorMessage: null, downloadUrl: null })
     const zipPath = await downloadRemoteInstaller((pct) => {
@@ -537,10 +562,10 @@ async function performAdhocMacInstall(): Promise<boolean> {
       version,
     })
 
-    if (_beforeInstall) await _beforeInstall()
-
     await scheduleAdhocMacSwap(zipPath)
     _installingUpdate = true
+
+    if (_beforeInstall) await _beforeInstall()
 
     setTimeout(() => app.quit(), 250)
     return true
@@ -564,44 +589,6 @@ async function performAdhocMacInstall(): Promise<boolean> {
     return false
   }
 }
-
-// Pre-install nudge so users have one chance to clear old installers from
-// Downloads before the running app is replaced. Returns false when the user
-// cancels — callers must abort the install path on a false return.
-async function confirmInstallWithCleanupHint(version: string | null): Promise<boolean> {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return true
-
-  const parent = _statusWindow && !_statusWindow.isDestroyed() ? _statusWindow : undefined
-  const downloadsLabel = process.platform === 'darwin' ? 'Show Downloads' : 'Open Downloads'
-  const cleanupHint = process.platform === 'darwin'
-    ? 'Daylens replaces the running app in place. To keep things tidy, take a moment to remove older Daylens DMG or ZIP files from Downloads, and any older Daylens.app duplicates from /Applications.'
-    : 'Daylens replaces the running app in place. To keep things tidy, take a moment to remove older Daylens-Setup .exe installers from Downloads.'
-
-  while (true) {
-    const promptOptions: Electron.MessageBoxOptions = {
-      type: 'info',
-      title: 'Install Daylens update',
-      message: version ? `Install Daylens ${version}?` : 'Install the new Daylens build?',
-      detail: cleanupHint,
-      buttons: ['Install now', downloadsLabel, 'Cancel'],
-      defaultId: 0,
-      cancelId: 2,
-      noLink: true,
-    }
-
-    const result = parent
-      ? await dialog.showMessageBox(parent, promptOptions)
-      : await dialog.showMessageBox(promptOptions)
-
-    if (result.response === 0) return true
-    if (result.response === 2) return false
-
-    try { await shell.openPath(app.getPath('downloads')) } catch { /* best effort */ }
-    // Loop back so the user can come back, clean up, then confirm.
-  }
-}
-
-
 
 export function initUpdater(win: BrowserWindow): void {
   _statusWindow = win
@@ -681,8 +668,6 @@ export function initUpdater(win: BrowserWindow): void {
       trigger: 'manual',
       version: _state.version ?? app.getVersion(),
     })
-
-    if (!(await confirmInstallWithCleanupHint(_state.version ?? app.getVersion()))) return false
 
     try {
       setUpdaterState({ status: 'installing', errorMessage: null })
