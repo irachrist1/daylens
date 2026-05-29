@@ -1168,15 +1168,27 @@ export function getDistractionCountForSession(
 // Category overrides
 // ---------------------------------------------------------------------------
 
+const categoryOverridesCache = new WeakMap<Database.Database, Record<string, AppCategory>>()
+
+function invalidateCategoryOverridesCache(db: Database.Database): void {
+  categoryOverridesCache.delete(db)
+}
+
 export function getCategoryOverrides(db: Database.Database): Record<string, AppCategory> {
+  const cached = categoryOverridesCache.get(db)
+  if (cached) return { ...cached }
+
   const rows = db
     .prepare(`SELECT bundle_id, category FROM category_overrides`)
     .all() as { bundle_id: string; category: AppCategory }[]
-  return Object.fromEntries(rows.map((r) => [r.bundle_id, r.category]))
+  const overrides = Object.fromEntries(rows.map((r) => [r.bundle_id, r.category])) as Record<string, AppCategory>
+  categoryOverridesCache.set(db, overrides)
+  return { ...overrides }
 }
 
 export function clearCategoryOverride(db: Database.Database, bundleId: string): void {
   db.prepare(`DELETE FROM category_overrides WHERE bundle_id = ?`).run(bundleId)
+  invalidateCategoryOverridesCache(db)
 }
 
 export function setCategoryOverride(
@@ -1189,6 +1201,7 @@ export function setCategoryOverride(
     VALUES (?, ?, ?)
     ON CONFLICT (bundle_id) DO UPDATE SET category = excluded.category, updated_at = excluded.updated_at
   `).run(bundleId, category, Date.now())
+  invalidateCategoryOverridesCache(db)
 }
 
 // ---------------------------------------------------------------------------

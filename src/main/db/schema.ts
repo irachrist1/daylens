@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sessions_start ON app_sessions (start_time);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_bundle_start ON app_sessions (bundle_id, start_time);
 
 CREATE TABLE IF NOT EXISTS live_app_session_snapshot (
   singleton        INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   planned_apps TEXT NOT NULL DEFAULT '[]',
   reflection_note TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_start ON focus_sessions (start_time);
 
 CREATE TABLE IF NOT EXISTS ai_conversations (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,6 +242,7 @@ CREATE TABLE IF NOT EXISTS timeline_block_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_timeline_block_members_member ON timeline_block_members (member_type, member_id);
+CREATE INDEX IF NOT EXISTS idx_timeline_block_members_block ON timeline_block_members (block_id);
 
 CREATE TABLE IF NOT EXISTS timeline_block_labels (
   id TEXT PRIMARY KEY,

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactElement } from 'react'
 import type { AiSpendSummary } from '@shared/aiPricing'
 import { formatUSD } from '@shared/aiPricing'
 import { ipc } from '../lib/ipc'
@@ -18,7 +19,7 @@ function fmtTokens(n: number): string {
  * the current calendar month and shows totals, per-feature/model breakdown, and
  * cache reuse.
  */
-export function AiSpendPanel(): JSX.Element {
+export function AiSpendPanel(): ReactElement {
   const [summary, setSummary] = useState<AiSpendSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

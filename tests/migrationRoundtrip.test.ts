@@ -35,6 +35,13 @@ function tableNames(db: Database.Database): Set<string> {
   return new Set(rows.map((r) => r.name))
 }
 
+function indexNames(db: Database.Database): Set<string> {
+  const rows = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`)
+    .all() as { name: string }[]
+  return new Set(rows.map((r) => r.name))
+}
+
 function currentSchemaVersion(db: Database.Database): number {
   const row = db
     .prepare('SELECT MAX(version) AS v FROM schema_version')
@@ -118,6 +125,29 @@ test('migration ladder leaves the database queryable', () => {
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM website_visits').get())
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM ai_threads').get())
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM schema_version').get())
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('fresh schema and migrations include hot-path performance indexes', () => {
+  const db = new Database(':memory:')
+  db.pragma('foreign_keys = ON')
+  db.exec(SCHEMA_SQL)
+
+  setTestDb(db)
+  try {
+    runMigrations()
+
+    const indexes = indexNames(db)
+    for (const indexName of [
+      'idx_app_sessions_bundle_start',
+      'idx_focus_sessions_start',
+      'idx_timeline_block_members_block',
+    ]) {
+      assert.ok(indexes.has(indexName), `missing hot-path index: ${indexName}`)
+    }
   } finally {
     clearTestDb()
     db.close()

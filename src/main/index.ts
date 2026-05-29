@@ -64,7 +64,6 @@ import { startTracking, stopTracking, trackingStatus } from './services/tracking
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
-import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
@@ -342,7 +341,6 @@ function startBackgroundServices(): void {
   }, 5_000)
 
   setTimeout(() => {
-    try { computeAllMissingSummaries() } catch (err) { console.warn('[init] summaries:', err) }
     setTimeout(() => finalizePreviousDay(), 0)
   }, 10_000)
 }
