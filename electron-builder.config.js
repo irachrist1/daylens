@@ -124,6 +124,12 @@ module.exports = {
   rpm: {
     packageName: 'daylens',
     depends: ['gtk3', 'libnotify', 'nss', 'libXScrnSaver', '(libXtst or libXtst6)', 'xdg-utils', 'at-spi2-core', '(libuuid or libuuid1)', 'libsecret'],
+    // Same Chromium SUID sandbox hardening as deb (issue #17): rpm installs to
+    // /opt/Daylens and ships the same chrome-sandbox helper, so without these
+    // hooks rpm users hit the "chrome-sandbox is not configured correctly"
+    // launch failure. The scripts are POSIX sh so rpm's %post/%postun can run them.
+    afterInstall: 'build/linux/after-install.sh',
+    afterRemove: 'build/linux/after-remove.sh',
   },
   nsis: {
     oneClick: true,
