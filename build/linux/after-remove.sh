@@ -8,12 +8,21 @@ set -e
 
 EXECUTABLE='daylens'
 
-if [ -L "/usr/bin/${EXECUTABLE}" ]; then
-    rm -f "/usr/bin/${EXECUTABLE}"
-fi
-
-if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
-fi
+# Only clean up on a real uninstall, NOT during an upgrade. rpm runs the old
+# package's %postun AFTER the new package's %post, so an unconditional removal
+# would delete the symlink the upgrade just created, leaving users without
+# `daylens` on PATH. rpm passes the remaining-instance count ($1 = 0 on final
+# removal, >= 1 on upgrade); deb passes an action word ("remove"/"purge" for a
+# real removal, "upgrade" otherwise).
+case "${1:-}" in
+  0|remove|purge)
+    if [ -L "/usr/bin/${EXECUTABLE}" ]; then
+        rm -f "/usr/bin/${EXECUTABLE}"
+    fi
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
 
 exit 0
