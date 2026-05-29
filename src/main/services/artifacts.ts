@@ -240,13 +240,22 @@ export async function readArtifactPreview(
   }
 
   const db = getDb()
+  // Operate on bytes, not characters: SQLite substr/length count characters, so
+  // for multibyte (emoji/CJK) content a 256KB char cap could return up to ~1MB.
+  // Cast to BLOB so substr/length are byte-accurate (a split trailing multibyte
+  // char just yields a replacement char in the preview, which is fine).
   const row = db
-    .prepare(`SELECT substr(inline_content, 1, ?) AS content, length(inline_content) AS len FROM ai_artifacts WHERE id = ?`)
-    .get(maxBytes, id) as { content: string | null; len: number | null } | undefined
+    .prepare(`
+      SELECT
+        CAST(substr(CAST(inline_content AS BLOB), 1, ?) AS TEXT) AS content,
+        length(CAST(inline_content AS BLOB)) AS byteLen
+      FROM ai_artifacts WHERE id = ?
+    `)
+    .get(maxBytes, id) as { content: string | null; byteLen: number | null } | undefined
   return {
     record,
     content: row?.content ?? null,
-    truncated: (row?.len ?? 0) > maxBytes,
+    truncated: (row?.byteLen ?? 0) > maxBytes,
   }
 }
 
