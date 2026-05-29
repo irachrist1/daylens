@@ -195,15 +195,36 @@ function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSu
 
 // ─── Work session payload helpers ────────────────────────────────────────────
 
-function buildAppNameMap(db: ReturnType<typeof getDb>): Map<string, string> {
-  const rows = db.prepare(`SELECT bundle_id, app_name FROM apps`).all() as Array<{ bundle_id: string; app_name: string }>
-  const map = new Map(rows.map(r => [r.bundle_id, r.app_name]))
-  try {
-    const legacy = db.prepare(`SELECT DISTINCT bundle_id, app_name FROM app_sessions WHERE bundle_id NOT IN (SELECT bundle_id FROM apps)`).all() as Array<{ bundle_id: string; app_name: string }>
-    for (const r of legacy) {
+function placeholders(values: readonly unknown[]): string {
+  return values.map(() => '?').join(', ')
+}
+
+function buildAppNameMap(db: ReturnType<typeof getDb>, bundleIds: string[]): Map<string, string> {
+  const uniqueBundleIds = [...new Set(bundleIds.filter(Boolean))]
+  const map = new Map<string, string>()
+  if (uniqueBundleIds.length === 0) return map
+
+  const inClause = placeholders(uniqueBundleIds)
+  const rows = db.prepare(`
+    SELECT bundle_id, app_name
+    FROM apps
+    WHERE bundle_id IN (${inClause})
+  `).all(...uniqueBundleIds) as Array<{ bundle_id: string; app_name: string }>
+  for (const r of rows) map.set(r.bundle_id, r.app_name)
+
+  const unresolvedBundleIds = uniqueBundleIds.filter((bundleId) => !map.has(bundleId))
+  if (unresolvedBundleIds.length > 0) {
+    const legacyRows = db.prepare(`
+      SELECT bundle_id, app_name
+      FROM app_sessions
+      WHERE bundle_id IN (${placeholders(unresolvedBundleIds)})
+      ORDER BY start_time DESC
+    `).all(...unresolvedBundleIds) as Array<{ bundle_id: string; app_name: string }>
+    for (const r of legacyRows) {
       if (!map.has(r.bundle_id)) map.set(r.bundle_id, r.app_name)
     }
-  } catch { /* app_sessions may not exist */ }
+  }
+
   return map
 }
 
@@ -227,29 +248,74 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
   const rows = db.prepare(`SELECT * FROM work_sessions ${whereClause}`).all(...params) as WsRow[]
   if (rows.length === 0) return []
 
-  const appNameMap = buildAppNameMap(db)
+  const sessionIds = rows.map((row) => row.id)
+  const sessionInClause = placeholders(sessionIds)
+
+  const memberRows = db.prepare(`
+    SELECT wss.work_session_id, wss.role, wss.contribution_ms, aseg.primary_bundle_id
+    FROM work_session_segments wss
+    JOIN activity_segments aseg ON aseg.id = wss.segment_id
+    WHERE wss.work_session_id IN (${sessionInClause})
+  `).all(...sessionIds) as Array<{
+    work_session_id: string
+    role: string
+    contribution_ms: number
+    primary_bundle_id: string
+  }>
+  const membersBySession = new Map<string, typeof memberRows>()
+  for (const member of memberRows) {
+    const existing = membersBySession.get(member.work_session_id)
+    if (existing) existing.push(member)
+    else membersBySession.set(member.work_session_id, [member])
+  }
+
+  const appNameMap = buildAppNameMap(db, memberRows.map((row) => row.primary_bundle_id))
 
   const clientIds = [...new Set(rows.map(r => r.client_id).filter(Boolean))] as string[]
   const projectIds = [...new Set(rows.map(r => r.project_id).filter(Boolean))] as string[]
   const clientMap = new Map<string, { name: string; color: string | null }>()
   const projectMap = new Map<string, string>()
 
-  for (const cid of clientIds) {
-    const row = db.prepare(`SELECT name, color FROM clients WHERE id = ?`).get(cid) as { name: string; color: string | null } | undefined
-    if (row) clientMap.set(cid, row)
+  if (clientIds.length > 0) {
+    const clientRows = db.prepare(`
+      SELECT id, name, color
+      FROM clients
+      WHERE id IN (${placeholders(clientIds)})
+    `).all(...clientIds) as Array<{ id: string; name: string; color: string | null }>
+    for (const row of clientRows) clientMap.set(row.id, { name: row.name, color: row.color })
   }
-  for (const pid of projectIds) {
-    const row = db.prepare(`SELECT name FROM projects WHERE id = ?`).get(pid) as { name: string } | undefined
-    if (row) projectMap.set(pid, row.name)
+  if (projectIds.length > 0) {
+    const projectRows = db.prepare(`
+      SELECT id, name
+      FROM projects
+      WHERE id IN (${placeholders(projectIds)})
+    `).all(...projectIds) as Array<{ id: string; name: string }>
+    for (const row of projectRows) projectMap.set(row.id, row.name)
+  }
+
+  const evidenceRows = db.prepare(`
+    SELECT work_session_id, evidence_type, evidence_value, weight
+    FROM work_session_evidence
+    WHERE work_session_id IN (${sessionInClause})
+    ORDER BY work_session_id ASC, weight DESC
+  `).all(...sessionIds) as Array<{
+    work_session_id: string
+    evidence_type: string
+    evidence_value: string
+    weight: number
+  }>
+  const evidenceBySession = new Map<string, typeof evidenceRows>()
+  for (const evidence of evidenceRows) {
+    const existing = evidenceBySession.get(evidence.work_session_id)
+    if (existing) {
+      if (existing.length < 10) existing.push(evidence)
+    } else {
+      evidenceBySession.set(evidence.work_session_id, [evidence])
+    }
   }
 
   return rows.map(ws => {
-    const members = db.prepare(`
-      SELECT wss.role, wss.contribution_ms, aseg.primary_bundle_id
-      FROM work_session_segments wss
-      JOIN activity_segments aseg ON aseg.id = wss.segment_id
-      WHERE wss.work_session_id = ?
-    `).all(ws.id) as Array<{ role: string; contribution_ms: number; primary_bundle_id: string }>
+    const members = membersBySession.get(ws.id) ?? []
 
     const appMs = new Map<string, { ms: number; role: string }>()
     for (const m of members) {
@@ -264,12 +330,7 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
         duration_ms: ms,
         role,
       }))
-
-    const evidence = db.prepare(`
-      SELECT evidence_type, evidence_value, weight
-      FROM work_session_evidence WHERE work_session_id = ?
-      ORDER BY weight DESC LIMIT 10
-    `).all(ws.id) as Array<{ evidence_type: string; evidence_value: string; weight: number }>
+    const evidence = evidenceBySession.get(ws.id) ?? []
 
     const clientInfo = ws.client_id ? clientMap.get(ws.client_id) : null
 
@@ -681,7 +742,7 @@ export function registerDbHandlers(): void {
       ORDER BY as2.started_at ASC
     `).all(sessionId) as Array<{ id: string; started_at: number; ended_at: number; duration_ms: number; primary_bundle_id: string; class: string }>
 
-    const appNameMap = buildAppNameMap(db)
+    const appNameMap = buildAppNameMap(db, rows.map((row) => row.primary_bundle_id))
     return rows.map(r => ({
       id: r.id,
       started_at: r.started_at,

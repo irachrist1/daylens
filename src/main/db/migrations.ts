@@ -1752,6 +1752,20 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 30,
+    description: 'Add hot-path indexes for timeline and focus lookups',
+    up: () => {
+      getDb().exec(`
+        CREATE INDEX IF NOT EXISTS idx_app_sessions_bundle_start
+          ON app_sessions (bundle_id, start_time);
+        CREATE INDEX IF NOT EXISTS idx_focus_sessions_start
+          ON focus_sessions (start_time);
+        CREATE INDEX IF NOT EXISTS idx_timeline_block_members_block
+          ON timeline_block_members (block_id);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

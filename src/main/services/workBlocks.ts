@@ -2591,6 +2591,58 @@ export function persistTimelineDay(
   persist()
 }
 
+type PersistedBlockLabelRow = { block_id: string; label: string; source: string }
+type PersistedBlockMemberRow = { block_id: string; member_id: string; weight_seconds: number }
+
+function sqlPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+function persistedBlockLabelsByBlockId(
+  db: Database.Database,
+  blockIds: string[],
+): Map<string, PersistedBlockLabelRow[]> {
+  const labelsByBlock = new Map<string, PersistedBlockLabelRow[]>()
+  if (blockIds.length === 0) return labelsByBlock
+
+  const rows = db.prepare(`
+    SELECT block_id, label, source
+    FROM timeline_block_labels
+    WHERE block_id IN (${sqlPlaceholders(blockIds.length)})
+    ORDER BY block_id ASC, created_at ASC, id ASC
+  `).all(...blockIds) as PersistedBlockLabelRow[]
+
+  for (const row of rows) {
+    const labels = labelsByBlock.get(row.block_id)
+    if (labels) labels.push(row)
+    else labelsByBlock.set(row.block_id, [row])
+  }
+  return labelsByBlock
+}
+
+function persistedBlockMembersByBlockId(
+  db: Database.Database,
+  blockIds: string[],
+  memberType: 'app_session' | 'focus_session',
+): Map<string, PersistedBlockMemberRow[]> {
+  const membersByBlock = new Map<string, PersistedBlockMemberRow[]>()
+  if (blockIds.length === 0) return membersByBlock
+
+  const rows = db.prepare(`
+    SELECT block_id, member_id, weight_seconds
+    FROM timeline_block_members
+    WHERE member_type = ? AND block_id IN (${sqlPlaceholders(blockIds.length)})
+    ORDER BY block_id ASC, start_time ASC, member_id ASC
+  `).all(memberType, ...blockIds) as PersistedBlockMemberRow[]
+
+  for (const row of rows) {
+    const members = membersByBlock.get(row.block_id)
+    if (members) members.push(row)
+    else membersByBlock.set(row.block_id, [row])
+  }
+  return membersByBlock
+}
+
 function loadPersistedTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -2636,6 +2688,9 @@ function loadPersistedTimelineBlocksForDay(
 
   const blockIds = rows.map((row) => row.id)
   const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+  const labelsByBlock = persistedBlockLabelsByBlockId(db, blockIds)
+  const appSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'app_session')
+  const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
 
   const blocks: WorkContextBlock[] = []
 
@@ -2653,11 +2708,7 @@ function loadPersistedTimelineBlocksForDay(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 6)
 
-    const labelRows = db.prepare(`
-      SELECT label, source
-      FROM timeline_block_labels
-      WHERE block_id = ?
-    `).all(row.id) as Array<{ label: string; source: string }>
+    const labelRows = labelsByBlock.get(row.id) ?? []
 
     let categoryDistribution: Partial<Record<AppCategory, number>> = {}
     try {
@@ -2671,11 +2722,7 @@ function loadPersistedTimelineBlocksForDay(
     const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
     const overrideRow = labelRows.find(r => r.source === 'user')
 
-    const memberRows = db.prepare(`
-      SELECT member_id
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'app_session'
-    `).all(row.id) as Array<{ member_id: string }>
+    const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
     const blockSessions = sessions.filter((s) => sessionIds.has(s.id))
@@ -2689,11 +2736,7 @@ function loadPersistedTimelineBlocksForDay(
       .filter((title, index, titles) => titles.indexOf(title) === index)
       .slice(0, 4)
 
-    const focusRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'focus_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const focusRows = focusSessionMembersByBlock.get(row.id) ?? []
 
     const focusSessionIds = focusRows.map((r) => Number(r.member_id))
     const focusTotalSeconds = focusRows[0]?.weight_seconds ?? 0
@@ -3205,6 +3248,9 @@ function getLightweightDayPayload(
 
   const blockIds = rows.map((row) => row.id)
   const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+  const labelsByBlock = persistedBlockLabelsByBlockId(db, blockIds)
+  const appSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'app_session')
+  const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
 
   const blocks: WorkContextBlock[] = []
 
@@ -3225,11 +3271,7 @@ function getLightweightDayPayload(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 6)
 
-    const labelRows = db.prepare(`
-      SELECT label, source
-      FROM timeline_block_labels
-      WHERE block_id = ?
-    `).all(row.id) as Array<{ label: string; source: string }>
+    const labelRows = labelsByBlock.get(row.id) ?? []
 
     let categoryDistribution: Partial<Record<AppCategory, number>> = {}
     try {
@@ -3242,11 +3284,7 @@ function getLightweightDayPayload(
     const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
     const overrideRow = labelRows.find(r => r.source === 'user')
 
-    const memberRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'app_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
     const blockSessions = sessions.filter((session) => sessionIds.has(session.id))
@@ -3269,11 +3307,7 @@ function getLightweightDayPayload(
       .filter((title, index, titles) => titles.indexOf(title) === index)
       .slice(0, 4)
 
-    const focusRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'focus_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const focusRows = focusSessionMembersByBlock.get(row.id) ?? []
 
     const focusSessionIds = focusRows.map((r) => Number(r.member_id))
     const focusTotalSeconds = focusRows.reduce((sum, r) => sum + r.weight_seconds, 0)
