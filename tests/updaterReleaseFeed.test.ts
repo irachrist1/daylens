@@ -33,6 +33,7 @@ test('isRemoteUpdateDescriptor validates the expected payload shape', () => {
     releaseDate: '2026-04-23T00:00:00.000Z',
     installUrl: 'https://example.com/mac.zip',
     installFileName: 'Daylens-1.0.31-arm64.zip',
+    installSizeBytes: 1234,
     manualUrl: 'https://example.com/mac.dmg',
     releasePageUrl: 'https://example.com/releases/v1.0.31',
   }), true)

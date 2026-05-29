@@ -109,6 +109,10 @@ export default function UpdateBanner() {
   }
 
   if (update.status === 'downloading') {
+    const progressPct = typeof update.progressPct === 'number'
+      ? Math.max(1, Math.min(100, update.progressPct))
+      : null
+
     return (
       <div
         style={{
@@ -143,6 +147,27 @@ export default function UpdateBanner() {
             ? `${update.progressPct}% complete. You can keep using the app while it downloads.`
             : 'You can keep using the app while it downloads.'}
         </span>
+        <div
+          aria-label={progressPct === null ? 'Download in progress' : `Download ${progressPct}% complete`}
+          style={{
+            width: 150,
+            height: 6,
+            borderRadius: 999,
+            background: 'rgba(173,198,255,0.24)',
+            overflow: 'hidden',
+            flexShrink: 0,
+          }}
+        >
+          <div
+            style={{
+              width: progressPct === null ? '34%' : `${progressPct}%`,
+              height: '100%',
+              borderRadius: 999,
+              background: 'var(--gradient-primary)',
+              transition: 'width 180ms ease',
+            }}
+          />
+        </div>
         {highlights[0] && (
           <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             Includes: {highlights[0]}
