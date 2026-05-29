@@ -2420,6 +2420,7 @@ export function persistTimelineDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
+  options: { finalized?: boolean } = {},
 ): void {
   const validIds = blocks.filter((block) => !block.isLive).map((block) => block.id)
   const persist = db.transaction(() => {
@@ -2440,7 +2441,7 @@ export function persistTimelineDay(
 
     for (const rawBlock of blocks) {
       if (rawBlock.isLive) continue
-      const block = finalizedLabelForBlock(db, rawBlock)
+      const block = options.finalized ? rawBlock : finalizedLabelForBlock(db, rawBlock)
       db.prepare(`
         INSERT INTO timeline_blocks (
           id,
@@ -2685,7 +2686,7 @@ function persistTimelineDayIfChanged(
     return
   }
 
-  persistTimelineDay(db, dateStr, blocks)
+  persistTimelineDay(db, dateStr, blocks, { finalized: true })
   timelineMaterializationFingerprints.set(cacheKey, fingerprint)
 }
 
