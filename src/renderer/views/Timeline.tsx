@@ -1065,6 +1065,7 @@ function BlockInspector({
               setOverrideSaving(true)
               void ipc.db.setBlockLabelOverride({
                 blockId: block.id,
+                date: payload.date,
                 label,
                 narrative: block.label.narrative,
               }).finally(() => setOverrideSaving(false))

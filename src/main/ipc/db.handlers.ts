@@ -13,7 +13,7 @@ import {
   clearCategoryOverride,
   getCategoryOverrides,
 } from '../db/queries'
-import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection } from '../core/query/projections'
+import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
@@ -371,11 +371,11 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
-    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
+    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
   })
 
   ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
-    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
     scheduleTimelineAIJobs(payload)
     return payload
   })
@@ -386,7 +386,7 @@ export function registerDbHandlers(): void {
     // only where the day is still on a deterministic floor or low-confidence
     // label, preserving curated AI labels and user overrides.
     const db = getDb()
-    const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    const payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     let changed = false
     let attempted = 0
     const failures: string[] = []
@@ -416,7 +416,7 @@ export function registerDbHandlers(): void {
       invalidateProjectionScope('insights', 'timeline-ai-reanalysis')
     }
 
-    const refreshed = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    const refreshed = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     scheduleTimelineAIJobs(refreshed)
     return refreshed
   })
@@ -515,7 +515,7 @@ export function registerDbHandlers(): void {
       const dt = new Date(todayY, todayM - 1, todayD)
       dt.setDate(dt.getDate() - offset)
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-      const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+      const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr), { materialize: false })
       for (const block of payload.blocks) blocks.push(block)
     }
     return computeAppActivityDigest(blocks)
@@ -549,8 +549,12 @@ export function registerDbHandlers(): void {
     return getArtifactDetailProjection(getDb(), artifactId)
   })
 
-  ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; label: string; narrative?: string | null }) => {
-    setBlockLabelOverride(getDb(), payload.blockId, payload.label, payload.narrative ?? null)
+  ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }) => {
+    const db = getDb()
+    if (payload.date) {
+      materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+    }
+    setBlockLabelOverride(db, payload.blockId, payload.label, payload.narrative ?? null)
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')

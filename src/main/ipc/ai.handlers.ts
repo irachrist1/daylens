@@ -21,6 +21,8 @@ import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodNarrative } from '../services/wrappedPeriodNarrative'
 import { getTimelineDayPayload } from '../services/workBlocks'
 import { getCurrentSession } from '../services/tracking'
+import { materializeTimelineDayProjection } from '../core/query/projections'
+import { localDateString } from '../lib/localDate'
 import {
   archiveThread,
   createThread,
@@ -118,6 +120,8 @@ export function registerAIHandlers(): void {
     if (!label) throw new Error('AI did not return a label.')
 
     const db = getDb()
+    const blockDate = localDateString(new Date(block.startTime))
+    materializeTimelineDayProjection(db, blockDate, blockDate === localDateString() ? getCurrentSession() : null)
     const now = Date.now()
     clearBlockLabelOverride(db, block.id)
     db.prepare(`

@@ -2591,6 +2591,8 @@ export function persistTimelineDay(
   persist()
 }
 
+const timelineMaterializationFingerprints = new Map<string, string>()
+
 type PersistedBlockLabelRow = { block_id: string; label: string; source: string }
 type PersistedBlockMemberRow = { block_id: string; member_id: string; weight_seconds: number }
 
@@ -2641,6 +2643,50 @@ function persistedBlockMembersByBlockId(
     else membersByBlock.set(row.block_id, [row])
   }
   return membersByBlock
+}
+
+function validPersistedTimelineBlockCount(db: Database.Database, dateStr: string): number {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+  `).get(dateStr) as { count: number } | undefined
+  return row?.count ?? 0
+}
+
+function timelineMaterializationFingerprint(
+  dateStr: string,
+  sessions: AppSession[],
+  blocks: WorkContextBlock[],
+): string {
+  const hash = crypto.createHash('sha1')
+  hash.update(dateStr)
+  hash.update(TIMELINE_HEURISTIC_VERSION)
+  for (const session of sessions) {
+    hash.update(`s:${session.id}:${session.startTime}:${session.endTime ?? ''}:${session.durationSeconds}:${session.bundleId}:${session.category};`)
+  }
+  for (const block of blocks) {
+    hash.update(`b:${block.id}:${block.startTime}:${block.endTime}:${block.label.current}:${block.label.source}:${block.heuristicVersion};`)
+  }
+  return hash.digest('hex')
+}
+
+function persistTimelineDayIfChanged(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+  blocks: WorkContextBlock[],
+  force = false,
+): void {
+  const fingerprint = timelineMaterializationFingerprint(dateStr, sessions, blocks)
+  const cacheKey = dateStr
+  const hasPersistedBlocks = validPersistedTimelineBlockCount(db, dateStr) > 0
+  if (!force && hasPersistedBlocks && timelineMaterializationFingerprints.get(cacheKey) === fingerprint) {
+    return
+  }
+
+  persistTimelineDay(db, dateStr, blocks)
+  timelineMaterializationFingerprints.set(cacheKey, fingerprint)
 }
 
 function loadPersistedTimelineBlocksForDay(
@@ -2859,12 +2905,16 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
-function buildTimelineBlocksForDay(
+export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
+  options: { materialize?: boolean } = {},
 ): WorkContextBlock[] {
+  const shouldMaterialize = options.materialize ?? true
   const todayStr = localDateString()
+  let forceMaterialize = false
+
   if (dateStr < todayStr) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
     if (persisted && persisted.length > 0) {
@@ -2876,11 +2926,18 @@ function buildTimelineBlocksForDay(
       if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
         return persisted
       }
+      forceMaterialize = true
+    } else {
+      forceMaterialize = true
     }
+  } else if (validPersistedTimelineBlockCount(db, dateStr) === 0) {
+    forceMaterialize = true
   }
 
   const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
-  persistTimelineDay(db, dateStr, computed)
+  if (shouldMaterialize) {
+    persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
+  }
   return computed
 }
 
@@ -3138,11 +3195,12 @@ export function getTimelineDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
   const [fromMs, toMs] = localDayBounds(dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions)
+  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
@@ -3175,8 +3233,9 @@ export function getHistoryDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): HistoryDayPayload {
-  return getTimelineDayPayload(db, dateStr, liveSession)
+  return getTimelineDayPayload(db, dateStr, liveSession, options)
 }
 
 function emptyLightweightDayPayload(dateStr: string): DayTimelinePayload {
