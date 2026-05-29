@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import type { AppCategory, WorkContextAppSummary } from '@shared/types'
 import { policyForHost } from '@shared/domainPolicy'
+import { tableExists } from './database'
 
 export interface WorkMemoryBlockInput {
   id: string
@@ -140,15 +141,6 @@ export function memoryEnabled(): boolean {
   const raw = process.env.DAYLENS_WORK_MEMORY_ENABLED
   if (!raw) return true
   return !['0', 'false', 'off', 'no'].includes(raw.trim().toLowerCase())
-}
-
-function tableExists(db: Database.Database, tableName: string): boolean {
-  const row = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `).get(tableName) as { name: string } | undefined
-  return Boolean(row)
 }
 
 function contextWindowForBlock(block: WorkMemoryBlockInput): { searchStart: number; searchEnd: number } {

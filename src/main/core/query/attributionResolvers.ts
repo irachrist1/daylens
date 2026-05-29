@@ -1106,14 +1106,22 @@ export function resolveEvidenceBackedQuery(
     return row.name
   }
 
+  // EXISTS instead of LEFT JOIN + DISTINCT: the join fanned out one row per
+  // evidence value before collapsing. The subquery resolves through
+  // idx_work_session_evidence_session (work_session_id leading) and the outer
+  // range through idx_work_sessions_time, so the substring LIKE only runs over
+  // the rows already inside the time window. Match set is unchanged.
   const sessions = db.prepare(`
-    SELECT DISTINCT ws.*
+    SELECT ws.*
     FROM work_sessions ws
-    LEFT JOIN work_session_evidence wse ON wse.work_session_id = ws.id
     WHERE ws.started_at >= ? AND ws.started_at < ?
       AND (
         LOWER(COALESCE(ws.title, '')) LIKE ?
-        OR LOWER(COALESCE(wse.evidence_value, '')) LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM work_session_evidence wse
+          WHERE wse.work_session_id = ws.id
+            AND LOWER(COALESCE(wse.evidence_value, '')) LIKE ?
+        )
       )
     ORDER BY ws.started_at ASC
   `).all(fromMs, toMs, normalized, normalized) as WorkSessionRow[]

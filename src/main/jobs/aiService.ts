@@ -60,7 +60,7 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
-import { getDb } from '../services/database'
+import { getDb, tableExists } from '../services/database'
 import {
   createArtifact,
   createThread,
@@ -2240,12 +2240,7 @@ function buildWorkflowsContext(): string {
 
 function tableExistsForAIPrompt(tableName: string): boolean {
   try {
-    const row = getDb().prepare(`
-      SELECT name FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `).get(tableName) as { name: string } | undefined
-    return Boolean(row)
+    return tableExists(getDb(), tableName)
   } catch {
     return false
   }
