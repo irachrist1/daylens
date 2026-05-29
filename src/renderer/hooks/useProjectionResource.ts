@@ -9,6 +9,14 @@ interface UseProjectionResourceOptions<T> {
   intervalMs?: number
   pauseWhenHidden?: boolean
   shouldReload?: (event: ProjectionInvalidationEvent) => boolean
+  /**
+   * Coalesce a burst of invalidation events into a single refresh. A session
+   * flush fans out several scope invalidations (timeline/apps/insights) and the
+   * attribution pass fires more ~3s later, so without a debounce every mounted
+   * view can refetch several times per flush. Only applies to invalidation-driven
+   * refreshes; mount and interval refreshes are unaffected.
+   */
+  invalidationDebounceMs?: number
   dependencies?: ReadonlyArray<unknown>
 }
 
@@ -27,6 +35,7 @@ export function useProjectionResource<T>({
   intervalMs = 0,
   pauseWhenHidden = true,
   shouldReload,
+  invalidationDebounceMs = 250,
   dependencies = [],
 }: UseProjectionResourceOptions<T>): UseProjectionResourceState<T> {
   const [data, setData] = useState<T | null>(null)
@@ -112,13 +121,26 @@ export function useProjectionResource<T>({
 
   useEffect(() => {
     if (!enabled) return
-    return ipc.projections.onInvalidated((event) => {
+    let debounceTimer: number | null = null
+    const unsubscribe = ipc.projections.onInvalidated((event) => {
       const scopeMatches = event.scope === 'all' || event.scope === scope
       if (!scopeMatches) return
       if (shouldReload && !shouldReload(event)) return
-      void refresh()
+      if (invalidationDebounceMs <= 0) {
+        void refresh()
+        return
+      }
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null
+        void refresh()
+      }, invalidationDebounceMs)
     })
-  }, [enabled, refresh, scope, shouldReload])
+    return () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      unsubscribe?.()
+    }
+  }, [enabled, refresh, scope, shouldReload, invalidationDebounceMs])
 
   useEffect(() => {
     if (!enabled || intervalMs <= 0) return
