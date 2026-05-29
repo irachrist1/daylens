@@ -78,6 +78,10 @@ npm run dist:win             # Package Windows installer
 npm run dist:linux           # Package Linux AppImage, .deb, and .rpm
 ```
 
+### Release Recovery
+
+If a macOS install is stuck on an old build and the in-app updater cannot repair itself, use the recovery runbook in [docs/UPDATE-RECOVERY.md](docs/UPDATE-RECOVERY.md).
+
 ---
 
 ## 🔐 Security & Peace of Mind
