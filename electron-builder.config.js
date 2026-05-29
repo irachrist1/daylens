@@ -112,9 +112,17 @@ module.exports = {
   appx,
   linux,
   deb: {
+    // Force the Debian Package field to "daylens". Without this electron-builder
+    // derives it from package.json "name" (currently "daylens-windows"), which is
+    // why the App Center listed the package as daylens-windows (issue #18).
+    packageName: 'daylens',
     depends: ['libgtk-3-0', 'libnotify4', 'libnss3', 'libxss1', 'libxtst6', 'xdg-utils', 'libatspi2.0-0', 'libuuid1', 'libsecret-1-0'],
+    // Guarantee the Chromium SUID sandbox is root-owned with mode 4755 (issue #17).
+    afterInstall: 'build/linux/after-install.sh',
+    afterRemove: 'build/linux/after-remove.sh',
   },
   rpm: {
+    packageName: 'daylens',
     depends: ['gtk3', 'libnotify', 'nss', 'libXScrnSaver', '(libXtst or libXtst6)', 'xdg-utils', 'at-spi2-core', '(libuuid or libuuid1)', 'libsecret'],
   },
   nsis: {
