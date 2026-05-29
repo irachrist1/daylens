@@ -5060,20 +5060,55 @@ function scheduleHistoryHeuristicUpgrade(anchorDate: string): void {
   }, 1_000)
 }
 
+const lastTimelineAIJobFingerprint = new Map<string, string>()
+
+/**
+ * Identity of the relabel-relevant state of a day's blocks. Two reads with the
+ * same fingerprint would schedule exactly the same AI jobs, so the second can be
+ * skipped. Keyed on what `backgroundRelabelDispositionForBlock` actually reads:
+ * block identity, end time, and current label/source.
+ */
+export function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
+  const parts: string[] = []
+  for (const block of payload.blocks) {
+    parts.push(`${block.id}:${block.endTime}:${block.label.source}:${block.label.current ?? ''}`)
+  }
+  return parts.join('|')
+}
+
 export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   scheduleHistoryHeuristicUpgrade(currentLocalDateString())
 
   const settings = getSettings()
   if (!settings.aiBackgroundEnrichment) return
 
+  // GET_TIMELINE_DAY runs on every 30s today-poll, every week-view fan-out, and
+  // every Day Wrapped open. Skip the per-block scheduling when this day's blocks
+  // are byte-for-byte what they were last time we scheduled them (F15).
+  const fingerprint = timelineAIJobFingerprint(payload)
+  if (lastTimelineAIJobFingerprint.get(payload.date) === fingerprint) return
+
   const now = Date.now()
+  let pendingQuietBlock = false
   for (const block of payload.blocks) {
     if (backgroundRelabelDispositionForBlock(block) !== 'relabel') continue
-    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) continue
+    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) {
+      // Eligible but still settling; it will become schedulable purely with the
+      // passage of time, without any fingerprint change.
+      pendingQuietBlock = true
+      continue
+    }
     void runBlockInsightJob(block, 'block_label_finalize')
   }
 
   scheduleOvernightCleanup(currentLocalDateString())
+
+  // Only memoize once every relabel-eligible block has actually been scheduled,
+  // so a block still inside its quiet window is re-checked on the next read
+  // instead of being stranded until the block set next changes.
+  if (!pendingQuietBlock) {
+    lastTimelineAIJobFingerprint.set(payload.date, fingerprint)
+  }
 }
 
 const APP_VOCABULARY_HINT =
