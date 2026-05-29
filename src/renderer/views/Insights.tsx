@@ -40,6 +40,14 @@ interface ActionFeedbackEntry {
   success: boolean
 }
 
+interface MessageActionStateEntry {
+  busy: boolean
+  error: string | null
+  successLabel: string | null
+}
+
+type ReviewFocusAction = Extract<AIMessageAction, { kind: 'review_focus_session' }>
+
 function actionFeedbackKey(messageId: string | number, action: MessageAction): string {
   return `${String(messageId)}:${action}`
 }
@@ -1071,14 +1079,86 @@ function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] 
   }))
 }
 
+function FocusReviewActionCard({
+  action,
+  state,
+  onSave,
+}: {
+  action: ReviewFocusAction
+  state?: MessageActionStateEntry
+  onSave: (note: string) => void
+}) {
+  const [draft, setDraft] = useState(action.suggestedNote ?? '')
+
+  return (
+    <div
+      style={{
+        borderRadius: 12,
+        border: '1px solid var(--color-border-ghost)',
+        background: 'var(--color-surface-low)',
+        padding: 12,
+        display: 'grid',
+        gap: 8,
+      }}
+    >
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+        Save a short reflection to this focus session.
+      </div>
+      <textarea
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder={action.placeholder ?? 'Add a short focus review'}
+        rows={4}
+        style={{
+          width: '100%',
+          resize: 'vertical',
+          borderRadius: 10,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          color: 'var(--color-text-primary)',
+          padding: '10px 12px',
+          fontSize: 12.5,
+          lineHeight: 1.6,
+          outline: 'none',
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={() => onSave(draft)}
+          disabled={state?.busy}
+          style={{
+            padding: '8px 12px',
+            borderRadius: 9,
+            border: '1px solid var(--color-border-ghost)',
+            background: 'var(--color-surface)',
+            color: 'var(--color-text-primary)',
+            fontSize: 12.5,
+            fontWeight: 700,
+            cursor: state?.busy ? 'default' : 'pointer',
+            opacity: state?.busy ? 0.7 : 1,
+          }}
+        >
+          {state?.busy ? 'Saving…' : action.label}
+        </button>
+        {state?.successLabel && (
+          <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
+        )}
+        {state?.error && (
+          <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Insights() {
   const location = useLocation()
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [activeRecapPeriod, setActiveRecapPeriod] = useState<RecapPeriod>('day')
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
-  const [messageActionState, setMessageActionState] = useState<Record<string, { busy: boolean; error: string | null; successLabel: string | null }>>({})
-  const [focusReviewDrafts, setFocusReviewDrafts] = useState<Record<string, string>>({})
+  const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [heroSummary, setHeroSummary] = useState('')
   const [heroSummaryLoading, setHeroSummaryLoading] = useState(false)
   const [heroSummarySignature, setHeroSummarySignature] = useState<string | null>(null)
@@ -1528,7 +1608,7 @@ export default function Insights() {
     }
   }
 
-  async function handleMessageAction(messageId: string | number, action: AIMessageAction) {
+  async function handleMessageAction(messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) {
     const key = messageActionKey(messageId, action)
     setMessageActionState((current) => ({
       ...current,
@@ -1553,7 +1633,7 @@ export default function Insights() {
           [key]: { busy: false, error: null, successLabel: 'Focus session stopped.' },
         }))
       } else {
-        const draft = (focusReviewDrafts[key] ?? action.suggestedNote ?? '').trim()
+        const draft = (options?.reviewNote ?? action.suggestedNote ?? '').trim()
         if (!draft) {
           setMessageActionState((current) => ({
             ...current,
@@ -1604,7 +1684,6 @@ export default function Insights() {
     setArtifactPreview(null)
     setActionFeedback({})
     setMessageActionState({})
-    setFocusReviewDrafts({})
     suggestionImpressionsRef.current = {}
     historyHydratedThreadRef.current = threadId
   }
@@ -1831,70 +1910,13 @@ export default function Insights() {
                     const state = messageActionState[key]
 
                     if (action.kind === 'review_focus_session') {
-                      const draft = focusReviewDrafts[key] ?? action.suggestedNote ?? ''
                       return (
-                        <div
+                        <FocusReviewActionCard
                           key={key}
-                          style={{
-                            borderRadius: 12,
-                            border: '1px solid var(--color-border-ghost)',
-                            background: 'var(--color-surface-low)',
-                            padding: 12,
-                            display: 'grid',
-                            gap: 8,
-                          }}
-                        >
-                          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-                            Save a short reflection to this focus session.
-                          </div>
-                          <textarea
-                            value={draft}
-                            onChange={(event) => {
-                              const value = event.target.value
-                              setFocusReviewDrafts((current) => ({ ...current, [key]: value }))
-                            }}
-                            placeholder={action.placeholder ?? 'Add a short focus review'}
-                            rows={4}
-                            style={{
-                              width: '100%',
-                              resize: 'vertical',
-                              borderRadius: 10,
-                              border: '1px solid var(--color-border-ghost)',
-                              background: 'var(--color-surface)',
-                              color: 'var(--color-text-primary)',
-                              padding: '10px 12px',
-                              fontSize: 12.5,
-                              lineHeight: 1.6,
-                              outline: 'none',
-                            }}
-                          />
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              onClick={() => void handleMessageAction(message.id, action)}
-                              disabled={state?.busy}
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: 9,
-                                border: '1px solid var(--color-border-ghost)',
-                                background: 'var(--color-surface)',
-                                color: 'var(--color-text-primary)',
-                                fontSize: 12.5,
-                                fontWeight: 700,
-                                cursor: state?.busy ? 'default' : 'pointer',
-                                opacity: state?.busy ? 0.7 : 1,
-                              }}
-                            >
-                              {state?.busy ? 'Saving…' : action.label}
-                            </button>
-                            {state?.successLabel && (
-                              <span style={{ fontSize: 12, color: 'var(--color-focus-green)' }}>{state.successLabel}</span>
-                            )}
-                            {state?.error && (
-                              <span style={{ fontSize: 12, color: '#f87171' }}>{state.error}</span>
-                            )}
-                          </div>
-                        </div>
+                          action={action}
+                          state={state}
+                          onSave={(reviewNote) => void handleMessageAction(message.id, action, { reviewNote })}
+                        />
                       )
                     }
 
@@ -2096,7 +2118,7 @@ export default function Insights() {
         </div>
       </div>
     )
-  )), [messages, messageActionState, focusReviewDrafts, actionFeedback, latestCompletedAssistantId, reducedMotion, activeFocusSession, scrollToBottom])
+  )), [messages, messageActionState, actionFeedback, latestCompletedAssistantId, reducedMotion, activeFocusSession, scrollToBottom])
 
   if (!settings || hasApiKey === null) {
     // If the projection load failed before settings could hydrate, surface a
