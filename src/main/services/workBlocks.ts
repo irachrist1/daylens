@@ -3521,6 +3521,18 @@ function localDateStringForOffset(offsetDays: number): string {
   return `${year}-${month}-${day}`
 }
 
+function lookupPersistedTimelineBlockDate(db: Database.Database, blockId: string): string | null {
+  const row = db.prepare(`
+    SELECT date
+    FROM timeline_blocks
+    WHERE id = ?
+      AND invalidated_at IS NULL
+    LIMIT 1
+  `).get(blockId) as { date: string } | undefined
+
+  return row?.date ?? null
+}
+
 const APP_DETAIL_FALLBACK_MERGE_GAP_MS = 5 * 60_000
 
 function dominantCategoryForSessions(sessions: AppSession[]): AppCategory {
@@ -3618,8 +3630,17 @@ export function getBlockDetailPayload(
   blockId: string,
   liveSession?: LiveSession | null,
 ): WorkContextBlock | null {
+  const persistedDate = lookupPersistedTimelineBlockDate(db, blockId)
+  if (persistedDate) {
+    const payload = getTimelineDayPayload(db, persistedDate, liveSession)
+    const match = payload.blocks.find((block) => block.id === blockId)
+    if (match) return match
+  }
+
   for (let offset = 0; offset >= -30; offset--) {
-    const payload = getTimelineDayPayload(db, localDateStringForOffset(offset), liveSession)
+    const dateStr = localDateStringForOffset(offset)
+    if (dateStr === persistedDate) continue
+    const payload = getTimelineDayPayload(db, dateStr, liveSession)
     const match = payload.blocks.find((block) => block.id === blockId)
     if (match) return match
   }
