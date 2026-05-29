@@ -129,7 +129,7 @@ const api = {
     setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_CATEGORY_OVERRIDE, bundleId, category),
     clearCategoryOverride: (bundleId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_CATEGORY_OVERRIDE, bundleId),
-    setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }): Promise<void> =>
+    setBlockLabelOverride: (payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>

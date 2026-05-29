@@ -12,7 +12,7 @@ import type {
   WorkContextBlock,
   WorkflowPattern,
 } from '@shared/types'
-import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksFromSessions, persistTimelineDay } from '../../services/workBlocks'
+import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay } from '../../services/workBlocks'
 import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString, localDayBounds } from '../../lib/localDate'
@@ -106,7 +106,11 @@ function buildDerivedSegments(dateStr: string, blocks: WorkContextBlock[]): Time
   return segments.filter((segment) => segment.endTime > segment.startTime)
 }
 
-function getDerivedDayTimelinePayload(db: Database.Database, dateStr: string): DayTimelinePayload | null {
+function getDerivedDayTimelinePayload(
+  db: Database.Database,
+  dateStr: string,
+  options: { materialize?: boolean } = {},
+): DayTimelinePayload | null {
   if (dateStr === localDateString()) return null
   const day = readDerivedDay(db, dateStr)
   if (!day) return null
@@ -119,16 +123,7 @@ function getDerivedDayTimelinePayload(db: Database.Database, dateStr: string): D
   // precomputed derived_blocks are raw, un-coalesced chunks (the source of the
   // 100+ micro-block timelines on past days), so rebuild blocks from the
   // derived sessions instead of mapping derived_blocks one-to-one.
-  const blocks = buildTimelineBlocksFromSessions(db, sessions)
-  // Persist the reconstructed blocks into timeline_blocks. Without this the
-  // derived view's block IDs exist only in memory, so any block-scoped write
-  // (regenerate label, save override, attribute-to-client) failed the
-  // timeline_blocks foreign key (R2), and the day-level "Rebuild" had nothing
-  // to act on (R1). Persisting here makes the displayed blocks and the stored
-  // blocks the same rows, so edits land and survive a recompute (block IDs are
-  // content-derived, so the next reconstruction reuses them and picks the
-  // override back up).
-  persistTimelineDay(db, dateStr, blocks)
+  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const segments = buildDerivedSegments(dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions
@@ -156,24 +151,34 @@ export function getTimelineDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
   if (!liveSession) {
-    const derived = getDerivedDayTimelinePayload(db, dateStr)
+    const derived = getDerivedDayTimelinePayload(db, dateStr, options)
     if (derived) return derived
   }
-  return getTimelineDayPayload(db, dateStr, liveSession)
+  return getTimelineDayPayload(db, dateStr, liveSession, options)
 }
 
 export function getHistoryDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): HistoryDayPayload {
   if (!liveSession) {
-    const derived = getDerivedDayTimelinePayload(db, dateStr)
+    const derived = getDerivedDayTimelinePayload(db, dateStr, options)
     if (derived) return derived
   }
-  return getHistoryDayPayload(db, dateStr, liveSession)
+  return getHistoryDayPayload(db, dateStr, liveSession, options)
+}
+
+export function materializeTimelineDayProjection(
+  db: Database.Database,
+  dateStr: string,
+  liveSession?: LiveSession | null,
+): DayTimelinePayload {
+  return getTimelineDayProjection(db, dateStr, liveSession, { materialize: true })
 }
 
 export function getWeeklySummaryProjection(
