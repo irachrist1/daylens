@@ -14,6 +14,24 @@ import ts from 'typescript'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+// vite injects these as compile-time `define` globals (see vite.main.config.ts).
+// The loaders transpile without that step, so any module that reads one (e.g.
+// workspaceLinker.ts) throws ReferenceError at import. Inject the same defaults
+// as real module-scoped consts, but only into modules that actually reference
+// one so we don't touch every file.
+const BUILD_DEFINES = {
+  __DAYLENS_CONVEX_SITE_URL__: process.env.DAYLENS_CONVEX_SITE_URL || 'https://decisive-aardvark-847.convex.site',
+  __POSTHOG_KEY__: process.env.POSTHOG_KEY || '',
+  __POSTHOG_HOST__: process.env.POSTHOG_HOST || '',
+  __SENTRY_DSN__: process.env.SENTRY_DSN || '',
+}
+
+function buildDefineShim(source) {
+  return Object.entries(BUILD_DEFINES)
+    .filter(([name]) => source.includes(name))
+    .map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`)
+}
+
 function tryFile(basePath) {
   const candidates = [
     basePath,
@@ -94,6 +112,7 @@ export async function load(url, context, defaultLoad) {
       'const __filename = __codexFileURLToPath(import.meta.url);',
       'const __dirname = __codexDirname(__filename);',
       'const require = __codexCreateRequire(import.meta.url);',
+      ...buildDefineShim(source),
       source,
     ].join('\n')
     return {
