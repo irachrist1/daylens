@@ -1,6 +1,6 @@
 // Label cleaning rules for Chunk 2 projections.
 //
-// Spec: docs/CHUNK-2-PROJECTIONS-SPEC.md "Cleaning rules":
+// Cleaning rules:
 //   - No literal pipes. "Course | Perusall" -> the longest content segment.
 //   - No raw window titles as labels.
 //   - No shell usernames or bare cwd strings for terminal apps.

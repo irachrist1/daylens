@@ -4,9 +4,6 @@
 // byte-identical derived_sessions and derived_blocks out. The live day is
 // never projected unless an explicit finalize flag is passed — Day rollover
 // finalization (D2) is the only caller that sets it for today.
-//
-// Spec: docs/CHUNK-2-PROJECTIONS-SPEC.md
-// Policy: docs/BUGS-2026-05-27.md "Addendum 2026-05-28 (morning)" pivot.
 
 import type Database from 'better-sqlite3'
 import type { AppCategory, AppUsageSummary } from '@shared/types'

@@ -10,7 +10,7 @@
 // - Without that permission, the read fails with a permission error; the
 //   service surfaces the error and does not retry every tick.
 //
-// Privacy is not the constraint here (per docs/AI-PRODUCT-DIRECTION.md D6):
+// Privacy is not the constraint here:
 // speed and usefulness are. The setting is OFF by default; turning it on is
 // an explicit signal that the user wants Daylens to know what's in their
 // messages.

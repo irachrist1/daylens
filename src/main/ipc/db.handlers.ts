@@ -33,6 +33,7 @@ import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb } from '../services/database'
+import { getAiSpendSummary } from '../db/aiSpendQueries'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getLatestSnapshot } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
@@ -503,6 +504,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_DISTRACTION_COST, () => {
     return getDistractionCostPayload(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.GET_AI_SPEND, (_e, fromMs: number, toMs: number) => {
+    return getAiSpendSummary(getDb(), fromMs, toMs)
   })
 
   // Returns the current in-flight session (not yet flushed to DB) so the renderer

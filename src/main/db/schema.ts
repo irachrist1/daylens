@@ -1,4 +1,4 @@
-// Raw SQL schema — will be replaced by Drizzle in Phase 2a (see docs/next-steps.md)
+// Raw SQL schema — will be replaced by Drizzle in Phase 2a.
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_sessions (
