@@ -46,6 +46,8 @@ export interface CanonicalAppIdentity {
 }
 
 let cachedNormalizationMap: NormalizationMap | null = null
+const CANONICAL_APP_CACHE_LIMIT = 2048
+const canonicalAppCache = new Map<string, CanonicalAppIdentity>()
 
 function normalizationCandidates(): string[] {
   return [
@@ -86,6 +88,10 @@ function basenameLower(value: string): string {
 }
 
 export function resolveCanonicalApp(bundleId: string, appName: string): CanonicalAppIdentity {
+  const cacheKey = `${bundleId}\u0000${appName}`
+  const cached = canonicalAppCache.get(cacheKey)
+  if (cached) return cached
+
   const map = loadNormalizationMap()
   const trimmedBundleId = bundleId.trim()
   const trimmedName = appName.trim() || stripExecutableSuffix(path.basename(trimmedBundleId)) || 'Unknown app'
@@ -113,13 +119,18 @@ export function resolveCanonicalApp(bundleId: string, appName: string): Canonica
   }
 
   const catalogEntry = canonicalAppId ? map.catalog[canonicalAppId] : null
-  return {
+  const identity = {
     canonicalAppId,
     appInstanceId: trimmedBundleId || lowerNameNoExe || trimmedName,
     displayName: catalogEntry?.displayName ?? trimmedName,
     rawAppName: trimmedName,
     defaultCategory: catalogEntry?.defaultCategory ?? null,
   }
+  if (canonicalAppCache.size >= CANONICAL_APP_CACHE_LIMIT) {
+    canonicalAppCache.clear()
+  }
+  canonicalAppCache.set(cacheKey, identity)
+  return identity
 }
 
 export function resolveCanonicalBrowser(browserBundleId: string | null | undefined): {
