@@ -19,7 +19,7 @@ import {
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodNarrative } from '../services/wrappedPeriodNarrative'
-import { getTimelineDayPayload } from '../services/workBlocks'
+import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
@@ -111,7 +111,13 @@ export function registerAIHandlers(): void {
     return generateWorkBlockInsight(block)
   })
 
-  ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, block: WorkContextBlock) => {
+  ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, blockId: string) => {
+    // Load the block on the main side from its id instead of shipping the whole
+    // WorkContextBlock (nested sessions, artifacts, websites) across IPC (F44).
+    const db = getDb()
+    const block = getBlockDetailPayload(db, blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+
     const insight = await generateWorkBlockInsight(
       { ...block, label: { ...block.label, override: null } },
       { jobType: 'block_label_finalize', triggerSource: 'system', throwOnError: true },
@@ -119,7 +125,6 @@ export function registerAIHandlers(): void {
     const label = insight.label?.trim()
     if (!label) throw new Error('AI did not return a label.')
 
-    const db = getDb()
     const blockDate = localDateString(new Date(block.startTime))
     materializeTimelineDayProjection(db, blockDate, blockDate === localDateString() ? getCurrentSession() : null)
     const now = Date.now()

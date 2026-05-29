@@ -27,7 +27,7 @@ let lastHeartbeatFailureMessage: string | null = null
 let lastDaySyncFailureAt: number | null = null
 let lastDaySyncFailureMessage: string | null = null
 let hasCompletedInitialDaySync = false
-let lastTrackingTriggeredSyncAt = 0
+let lastTrackingTriggeredHeartbeatAt = 0
 let heartbeatInFlight = false
 let syncInFlight = false
 let lastObservedLocalDate = todayStr()
@@ -70,14 +70,17 @@ export function startSync(): void {
   }, SYNC_INTERVAL_MS)
 
   unsubscribeTrackingTick = onTrackingTick(() => {
+    // Heartbeat-only on the tracking tick. The full per-dirty-day snapshot upload
+    // is left to the SYNC_INTERVAL_MS timer below, so steady tracking no longer
+    // rebuilds and ships the remote payload every few seconds (F12). markDirty
+    // keeps today queued for that periodic sync.
     markDirty(todayStr())
     const now = Date.now()
-    if (now - lastTrackingTriggeredSyncAt < TRACKING_SYNC_DEBOUNCE_MS) {
+    if (now - lastTrackingTriggeredHeartbeatAt < TRACKING_SYNC_DEBOUNCE_MS) {
       return
     }
-    lastTrackingTriggeredSyncAt = now
+    lastTrackingTriggeredHeartbeatAt = now
     void heartbeatNow()
-    void syncNow()
   })
 
   console.log('[sync] started', {
@@ -132,12 +135,31 @@ export function getSyncRuntimeState(): SyncRuntimeState {
 export function finalizePreviousDay(): void {
   const yesterday = daysFromTodayLocalDateString(-1)
   markDirty(yesterday)
-  projectFinalizedDay(yesterday, 'startup-finalize')
-  reprojectStaleProjectionDays()
-  void syncNow()
+
+  // Stagger the heavy startup chain across macrotasks instead of running
+  // finalize -> consolidation -> reproject sweep -> sync back-to-back in one
+  // tick (the old ~10s-after-launch CPU/IO spike). setImmediate hands the event
+  // loop back between phases so the window and tracking poll stay responsive.
+  const steps: Array<() => void> = [
+    () => projectFinalizedDayProjection(yesterday, 'startup-finalize'),
+    () => consolidateWorkMemory(yesterday, 'startup-finalize'),
+    () => reprojectStaleProjectionDays(),
+    () => { void syncNow() },
+  ]
+  const runStep = (index: number): void => {
+    if (index >= steps.length) return
+    try {
+      steps[index]()
+    } finally {
+      setImmediate(() => runStep(index + 1))
+    }
+  }
+  setImmediate(() => runStep(0))
 }
 
-function projectFinalizedDay(dateStr: string, reason: string): void {
+// Projection only. Day-rollover finalize pairs this with consolidation; the
+// staggered startup path runs the two as separate macrotasks.
+function projectFinalizedDayProjection(dateStr: string, reason: string): void {
   try {
     const result = projectDay(getDb(), dateStr, { finalize: true })
     if (result.skipped) {
@@ -155,6 +177,10 @@ function projectFinalizedDay(dateStr: string, reason: string): void {
   } catch (error) {
     console.warn('[projection] failed to finalize day:', error)
   }
+}
+
+function projectFinalizedDay(dateStr: string, reason: string): void {
+  projectFinalizedDayProjection(dateStr, reason)
   consolidateWorkMemory(dateStr, reason)
 }
 

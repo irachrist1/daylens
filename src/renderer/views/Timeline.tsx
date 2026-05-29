@@ -1116,7 +1116,7 @@ function BlockInspector({
             onClick={() => {
               setRegenerateError(null)
               setRegeneratingLabel(true)
-              void ipc.ai.regenerateBlockLabel(block)
+              void ipc.ai.regenerateBlockLabel(block.id)
                 .then(async (insight) => {
                   setOverrideDraft(insight.label?.trim() || '')
                   await onRefresh()
