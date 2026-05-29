@@ -631,14 +631,19 @@ export default function Settings() {
   useEffect(() => {
     let cancelled = false
     const refresh = async () => {
+      if (document.hidden) return
       const next = await ipc.tracking.getDiagnostics().catch(() => null)
       if (!cancelled) setTrackingDiagnostics(next as TrackingDiagnosticsPayload | null)
     }
+    const refreshWhenVisible = () => {
+      if (!document.hidden) void refresh()
+    }
 
-    void refresh()
+    document.addEventListener('visibilitychange', refreshWhenVisible)
     const timer = window.setInterval(() => { void refresh() }, 5_000)
     return () => {
       cancelled = true
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
       window.clearInterval(timer)
     }
   }, [])
