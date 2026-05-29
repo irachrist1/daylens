@@ -231,7 +231,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
                 <Route path="/timeline" element={<ErrorBoundary name="Timeline"><Timeline /></ErrorBoundary>} />
                 <Route path="/apps" element={<ErrorBoundary name="Apps"><Apps /></ErrorBoundary>} />
                 <Route path="/ai" element={<ErrorBoundary name="AI"><Insights /></ErrorBoundary>} />
-                <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings /></ErrorBoundary>} />
+                <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings initialSettings={settings} /></ErrorBoundary>} />
               </Routes>
             </Suspense>
           </main>

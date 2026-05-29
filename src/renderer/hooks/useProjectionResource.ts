@@ -28,6 +28,14 @@ interface UseProjectionResourceState<T> {
   refresh: () => Promise<void>
 }
 
+function safeSerialize(value: unknown): string | null {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
 export function useProjectionResource<T>({
   scope,
   load,
@@ -45,6 +53,11 @@ export function useProjectionResource<T>({
   const mountedRef = useRef(true)
   const requestIdRef = useRef(0)
   const dataRef = useRef<T | null>(null)
+  // Serialized form of the last payload we committed. Poll- and invalidation-
+  // driven refreshes frequently return data identical to what is already
+  // mounted; comparing the serialized payload lets us skip setData (and the
+  // re-render of every consumer) when nothing actually changed (F28).
+  const serializedRef = useRef<string | null>(null)
   const inFlightRef = useRef<Promise<void> | null>(null)
   const pendingRefreshRef = useRef(false)
   // Callers typically pass `load` as an inline function, so its identity changes
@@ -78,9 +91,15 @@ export function useProjectionResource<T>({
     const request = loadRef.current()
       .then((next) => {
         if (!mountedRef.current || requestId !== requestIdRef.current) return
+        setError(null)
+        // Skip the commit when the refreshed payload is byte-identical to what is
+        // already mounted, keeping the existing reference so memoized consumers
+        // don't re-render. Falls through to a normal commit if serialization fails.
+        const serialized = safeSerialize(next)
+        if (serialized !== null && serialized === serializedRef.current) return
+        serializedRef.current = serialized
         dataRef.current = next
         setData(next)
-        setError(null)
       })
       .catch((err) => {
         if (!mountedRef.current || requestId !== requestIdRef.current) return
