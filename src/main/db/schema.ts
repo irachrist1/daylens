@@ -197,6 +197,11 @@ CREATE TABLE IF NOT EXISTS activity_state_events (
 
 CREATE INDEX IF NOT EXISTS idx_activity_state_events_time ON activity_state_events (event_ts);
 
+CREATE TABLE IF NOT EXISTS maintenance_runs (
+  key          TEXT PRIMARY KEY,
+  completed_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS work_context_observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   start_ts INTEGER NOT NULL,

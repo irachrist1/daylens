@@ -2,6 +2,9 @@ import type Database from 'better-sqlite3'
 import type { DerivedStateComponent } from '@shared/core'
 import { DERIVED_STATE_COMPONENT_VERSIONS, DERIVED_STATE_RESET_COMPONENTS } from '../domain/versioning'
 import { resolveCanonicalApp, resolveCanonicalBrowser, normalizeUrlForStorage, pageKeyForUrl } from '../../lib/appIdentity'
+import { hasMaintenanceRun, markMaintenanceRun } from '../../db/maintenance'
+
+const IDENTITY_COLUMNS_REPAIR_KEY = 'identity_columns_v1'
 
 function resetDerivedState(db: Database.Database, reason: string): void {
   // app_profile_cache was removed in migration v14.
@@ -109,9 +112,15 @@ export function syncDerivedStateMetadata(db: Database.Database): void {
 }
 
 export function repairStoredIdentityColumns(db: Database.Database): void {
+  if (hasMaintenanceRun(db, IDENTITY_COLUMNS_REPAIR_KEY)) return
+
   const sessionRows = db.prepare(`
     SELECT id, bundle_id, app_name
     FROM app_sessions
+    WHERE raw_app_name IS NULL
+       OR app_instance_id IS NULL
+       OR capture_source IS NULL
+       OR capture_version IS NULL
   `).all() as Array<{
     id: number
     bundle_id: string
@@ -131,6 +140,8 @@ export function repairStoredIdentityColumns(db: Database.Database): void {
   const visitRows = db.prepare(`
     SELECT id, browser_bundle_id, url
     FROM website_visits
+    WHERE (browser_bundle_id IS NOT NULL AND browser_profile_id IS NULL)
+       OR (url IS NOT NULL AND (normalized_url IS NULL OR page_key IS NULL))
   `).all() as Array<{
     id: number
     browser_bundle_id: string | null
@@ -170,4 +181,5 @@ export function repairStoredIdentityColumns(db: Database.Database): void {
   })
 
   tx()
+  markMaintenanceRun(db, IDENTITY_COLUMNS_REPAIR_KEY)
 }

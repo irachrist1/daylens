@@ -25,6 +25,7 @@ const REQUIRED_TABLES = [
   'ai_messages',
   'ai_threads',
   'website_visits',
+  'maintenance_runs',
   'schema_version',
 ]
 

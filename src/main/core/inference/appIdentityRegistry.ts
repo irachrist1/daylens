@@ -1,6 +1,9 @@
 import type Database from 'better-sqlite3'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
 import type { AppCategory } from '@shared/types'
+import { hasMaintenanceRun, markMaintenanceRun } from '../../db/maintenance'
+
+const APP_IDENTITY_OBSERVATIONS_REPAIR_KEY = 'app_identity_observations_v1'
 
 export interface AppIdentityMetadata {
   observedCategory?: AppCategory | null
@@ -209,6 +212,8 @@ export function getLatestAppIdentity(
 }
 
 export function repairStoredAppIdentityObservations(db: Database.Database): void {
+  if (hasMaintenanceRun(db, APP_IDENTITY_OBSERVATIONS_REPAIR_KEY)) return
+
   const rows = db.prepare(`
     SELECT
       bundle_id,
@@ -242,4 +247,5 @@ export function repairStoredAppIdentityObservations(db: Database.Database): void
   })
 
   tx()
+  markMaintenanceRun(db, APP_IDENTITY_OBSERVATIONS_REPAIR_KEY)
 }

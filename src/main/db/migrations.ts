@@ -1766,6 +1766,18 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 31,
+    description: 'Add startup maintenance run markers',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS maintenance_runs (
+          key TEXT PRIMARY KEY,
+          completed_at INTEGER NOT NULL
+        );
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
