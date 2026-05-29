@@ -257,12 +257,31 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
 
 export class ActiveBrowserContextTracker {
   private inFlight: InFlightBrowserContext | null = null
+  // The foreground window title (captured cheaply by the tracker) reflects the
+  // active tab's page title. While it is unchanged we reuse the in-flight tab
+  // instead of re-running the per-sample osascript / history-DB read, which is
+  // what made every 5s poll tick stutter on browser-heavy macOS use (F19).
+  private lastWindowTitle: string | null = null
 
   constructor(private readonly readTab: ActiveBrowserTabReader = readActiveBrowserTab) {}
 
   sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): void {
     if (!browserAppIdFor(snapshot)) {
       this.flush(db, snapshot.capturedAt)
+      this.lastWindowTitle = null
+      return
+    }
+
+    // Same browser window, same title → almost certainly the same active tab.
+    // Extend the current context without paying for another tab read.
+    if (
+      this.inFlight
+      && snapshot.windowTitle
+      && snapshot.windowTitle === this.lastWindowTitle
+      && snapshot.bundleId === this.inFlight.snapshot.bundleId
+    ) {
+      this.inFlight.snapshot = snapshot
+      this.inFlight.lastSeenAt = snapshot.capturedAt
       return
     }
 
@@ -270,8 +289,11 @@ export class ActiveBrowserContextTracker {
     const domain = tab ? extractDomain(tab.url) : null
     if (!tab || !domain) {
       this.flush(db, snapshot.capturedAt)
+      this.lastWindowTitle = null
       return
     }
+
+    this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
     if (this.inFlight && sameContext(this.inFlight, tab, normalizedUrl)) {

@@ -72,7 +72,7 @@ import { consumePendingNavigationRoute } from './services/dailySummaryNavigation
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
-import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
+import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { IPC } from '@shared/types'
@@ -741,15 +741,9 @@ app.whenReady()
     })
 
     initDb()
-    startProcessMonitor()
 
-    if (getSettings().mcpServerEnabled) {
-      startMcpServer()
-    }
-
-    if (getSettings().imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
-      startImessageCaptureScheduler()
-    }
+    // The Windows process monitor now starts lazily on the first diagnostics
+    // request (see getProcessMetrics), so nothing to spawn here at launch.
 
     registerDbHandlers()
     registerDebugHandlers()
@@ -779,6 +773,17 @@ app.whenReady()
     registerCommandPaletteShortcut(() => mainWindow)
 
     startBackgroundServices()
+
+    // Optional integrations spawn subprocesses / open large stores, so start
+    // them after the window is up rather than on the pre-paint critical path.
+    setTimeout(() => {
+      if (getSettings().mcpServerEnabled) {
+        startMcpServer()
+      }
+      if (getSettings().imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
+        startImessageCaptureScheduler()
+      }
+    }, 3_000)
 
     if (SMOKE_TEST && process.platform === 'linux') {
       startBrowserTracking()
