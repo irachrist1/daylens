@@ -484,11 +484,17 @@ async function downloadRemoteInstaller(onProgress: (pct: number | null) => void)
   return tmpFile
 }
 
-async function scheduleAdhocMacSwap(zipPath: string): Promise<void> {
+interface StagedAdhocMacUpdate {
+  extractDir: string
+  stagedApp: string
+  zipParent: string
+}
+
+async function stageAdhocMacUpdate(zipPath: string): Promise<StagedAdhocMacUpdate> {
   const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-extract-'))
   const extract = spawnSync('/usr/bin/ditto', ['-x', '-k', zipPath, extractDir], { encoding: 'utf8' })
   if (extract.status !== 0) {
-    throw new Error(`ditto failed to extract update: ${(extract.stderr || extract.stdout || '').trim() || `exit ${extract.status}`}`)
+    throw new Error(`Update archive could not be opened: ${(extract.stderr || extract.stdout || '').trim() || `exit ${extract.status}`}`)
   }
 
   const entries = await fs.readdir(extractDir)
@@ -503,11 +509,56 @@ async function scheduleAdhocMacSwap(zipPath: string): Promise<void> {
     throw new Error(`Daylens cannot write to ${path.dirname(targetApp)} — move the app to /Applications and try again, or download the update manually.`)
   }
 
+  return {
+    extractDir,
+    stagedApp,
+    zipParent: path.dirname(zipPath),
+  }
+}
+
+async function runBeforeInstallShutdown(): Promise<void> {
+  if (!_beforeInstall) return
+  try {
+    await _beforeInstall()
+  } catch (err) {
+    // The app is already about to quit for an update. Shutdown is best-effort:
+    // failures here should not strand the user after a valid update was staged.
+    captureException(err, {
+      tags: { process_type: 'main', reason: 'updater_shutdown_cleanup_failed' },
+    })
+  }
+}
+
+function friendlyUpdaterError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err || '')
+  const compact = message.replace(/\s+/g, ' ').trim()
+
+  if (/Database not initialised|initDb\(\)|database/i.test(compact)) {
+    return 'Daylens got into an unusual state while closing for the update. Quit Daylens completely, reopen it, then choose Install update again. Your activity history is still safe on this computer.'
+  }
+
+  if (/incomplete|archive|pkzip|zip|ditto|extract|\.app bundle/i.test(compact)) {
+    return 'The update download did not finish cleanly. Please try Install update again and Daylens will download a fresh copy.'
+  }
+
+  if (/cannot write|permission|EACCES|EPERM|Applications/i.test(compact)) {
+    return 'Daylens could not replace the app in its current location. Move Daylens to Applications, reopen it, then try the update again.'
+  }
+
+  if (/HTTP|network|ENOTFOUND|EAI_AGAIN|ECONNRESET|timed out/i.test(compact)) {
+    return 'Daylens could not finish downloading the update. Check your internet connection and try again.'
+  }
+
+  return 'Daylens could not finish the update. Please quit and reopen Daylens, then try Install update again.'
+}
+
+async function scheduleAdhocMacSwap(staged: StagedAdhocMacUpdate): Promise<void> {
+  const { extractDir, stagedApp, zipParent } = staged
   const swapId = `${Date.now()}-${process.pid}`
   const scriptPath = path.join(os.tmpdir(), `daylens-swap-${swapId}.sh`)
   const logPath = path.join(os.tmpdir(), `daylens-swap-${swapId}.log`)
   const ppid = process.pid
-  const zipParent = path.dirname(zipPath)
+  const targetApp = path.resolve(process.execPath, '..', '..', '..')
 
   // Detached helper: poll until the parent process has exited, atomically swap
   // the bundle at the original path (so dock icons / launchd refs survive),
@@ -554,6 +605,7 @@ async function performAdhocMacInstall(): Promise<boolean> {
     const zipPath = await downloadRemoteInstaller((pct) => {
       setUpdaterState({ status: 'downloading', progressPct: pct })
     })
+    const stagedUpdate = await stageAdhocMacUpdate(zipPath)
 
     setUpdaterState({ status: 'installing', progressPct: 100, errorMessage: null })
     capture(ANALYTICS_EVENT.UPDATE_INSTALL_STARTED, {
@@ -562,16 +614,14 @@ async function performAdhocMacInstall(): Promise<boolean> {
       version,
     })
 
-    await scheduleAdhocMacSwap(zipPath)
+    await runBeforeInstallShutdown()
+    await scheduleAdhocMacSwap(stagedUpdate)
+
     _installingUpdate = true
-
-    if (_beforeInstall) await _beforeInstall()
-
     setTimeout(() => app.quit(), 250)
     return true
   } catch (err) {
     _installingUpdate = false
-    const baseMessage = err instanceof Error ? err.message : 'Daylens could not finish the in-place install.'
     capture(ANALYTICS_EVENT.UPDATE_ERROR, {
       failure_kind: classifyFailureKind(err),
       result: 'error',
@@ -582,7 +632,7 @@ async function performAdhocMacInstall(): Promise<boolean> {
     })
     setUpdaterState({
       status: 'error',
-      errorMessage: `${baseMessage} You can also download the update manually from ${MANUAL_DOWNLOAD_URL}.`,
+      errorMessage: friendlyUpdaterError(err),
       progressPct: null,
       downloadUrl: MANUAL_DOWNLOAD_URL,
     })
@@ -677,9 +727,7 @@ export function initUpdater(win: BrowserWindow): void {
         version: _state.version ?? app.getVersion(),
       })
 
-      if (_beforeInstall) {
-        await _beforeInstall()
-      }
+      await runBeforeInstallShutdown()
 
       _installingUpdate = true
 
@@ -689,7 +737,6 @@ export function initUpdater(win: BrowserWindow): void {
 
       return true
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Daylens could not prepare the update install.'
       _installingUpdate = false
       capture(ANALYTICS_EVENT.UPDATE_ERROR, {
         failure_kind: classifyFailureKind(err),
@@ -704,7 +751,7 @@ export function initUpdater(win: BrowserWindow): void {
       })
       setUpdaterState({
         status: 'error',
-        errorMessage: normalizeUpdaterErrorMessage(message),
+        errorMessage: friendlyUpdaterError(err),
       })
       return false
     }
