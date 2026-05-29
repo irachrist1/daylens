@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   fetchPublishedReleases,
   findLatestMatchingReleaseAsset,
+  releaseAssetDownloadUrl,
 } from "../download/_releaseAsset";
 
 const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
@@ -82,14 +83,17 @@ export async function GET(request: NextRequest) {
         releaseName: install.release.name ?? `Daylens ${install.version}`,
         releaseNotesText: install.release.body ?? null,
         releaseDate: install.release.published_at ?? null,
-        installUrl: withBasePath(
-          request,
-          "/api/download/mac",
-          new URLSearchParams({ asset: "zip", version: install.version, ...(arch ? { arch } : {}) }),
-        ),
+        installUrl: releaseAssetDownloadUrl(install.asset) ??
+          withBasePath(
+            request,
+            "/api/download/mac",
+            new URLSearchParams({ asset: "zip", version: install.version, ...(arch ? { arch } : {}) }),
+          ),
         installFileName: install.asset.name,
+        installSizeBytes: install.asset.size ?? null,
         manualUrl: manualAsset
-          ? withBasePath(
+          ? releaseAssetDownloadUrl(manualAsset) ??
+            withBasePath(
               request,
               "/api/download/mac",
               new URLSearchParams({ asset: "dmg", version: install.version, ...(arch ? { arch } : {}) }),
@@ -129,6 +133,7 @@ export async function GET(request: NextRequest) {
       releaseDate: install.release.published_at ?? null,
       installUrl: windowsUrl,
       installFileName: install.asset.name,
+      installSizeBytes: install.asset.size ?? null,
       manualUrl: windowsUrl,
       releasePageUrl: install.release.html_url ?? null,
     });

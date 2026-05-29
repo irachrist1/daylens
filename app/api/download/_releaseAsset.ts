@@ -143,6 +143,10 @@ export function findLatestMatchingReleaseAsset(
   return null;
 }
 
+export function releaseAssetDownloadUrl(asset: ReleaseAsset): string | null {
+  return asset.browser_download_url || asset.url || null;
+}
+
 async function fetchAssetStream(asset: ReleaseAsset): Promise<Response> {
   const url = asset.url || asset.browser_download_url;
   if (!url) {
