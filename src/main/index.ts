@@ -58,7 +58,8 @@ import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { startImessageCaptureScheduler, imessageCaptureSupportedOnPlatform } from './services/imessageCapture'
-import { initDb, closeDb } from './services/database'
+import { initDb, closeDb, getDb } from './services/database'
+import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
@@ -773,6 +774,19 @@ app.whenReady()
     registerCommandPaletteShortcut(() => mainWindow)
 
     startBackgroundServices()
+
+    // A reset-triggering derived-state version bump defers its destructive wipe
+    // off the startup path (F21); run it now that the window is up. No-op unless
+    // a reset is actually pending.
+    setImmediate(() => {
+      try {
+        if (runPendingDerivedStateReset(getDb())) {
+          console.log('[derived-state] performed deferred reset after version change')
+        }
+      } catch (err) {
+        console.warn('[derived-state] deferred reset failed:', err)
+      }
+    })
 
     // Optional integrations spawn subprocesses / open large stores, so start
     // them after the window is up rather than on the pre-paint critical path.

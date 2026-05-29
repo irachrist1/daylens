@@ -75,9 +75,14 @@ export function syncDerivedStateMetadata(db: Database.Database): void {
     .filter(([component, version]) => current.get(component as DerivedStateComponent) !== version)
     .map(([component]) => component as DerivedStateComponent)
 
-  if (changed.some((component) => DERIVED_STATE_RESET_COMPONENTS.has(component))) {
-    resetDerivedState(db, `Derived state version changed: ${changed.join(', ')}`)
-  }
+  // A reset-triggering version bump no longer runs the destructive DELETE
+  // synchronously here (it blocked the window for the whole derived-state wipe
+  // on the first launch after an upgrade). Instead we record the new versions
+  // but flag the reset-components rebuild_required=1 so runPendingDerivedStateReset
+  // performs the wipe off the startup critical path. The flag — not the version —
+  // is the source of truth for "reset owed", so a crash before the deferred reset
+  // still leaves it pending for the next launch.
+  const resetPending = changed.some((component) => DERIVED_STATE_RESET_COMPONENTS.has(component))
 
   const upsert = db.prepare(`
     INSERT INTO derived_state_versions (
@@ -98,17 +103,53 @@ export function syncDerivedStateMetadata(db: Database.Database): void {
   const now = Date.now()
   const tx = db.transaction(() => {
     for (const [component, version] of Object.entries(DERIVED_STATE_COMPONENT_VERSIONS)) {
+      const comp = component as DerivedStateComponent
+      const needsReset = resetPending && DERIVED_STATE_RESET_COMPONENTS.has(comp)
       upsert.run(
         component,
         version,
-        0,
-        changed.includes(component as DerivedStateComponent) ? 'auto-synced on startup' : null,
+        needsReset ? 1 : 0,
+        needsReset
+          ? 'reset pending (deferred)'
+          : changed.includes(comp) ? 'auto-synced on startup' : null,
         now,
       )
     }
   })
 
   tx()
+}
+
+// Runs the destructive derived-state wipe that a reset-triggering version bump
+// deferred. Safe to call unconditionally at any point after the window is up;
+// it is a no-op unless syncDerivedStateMetadata flagged a reset as pending.
+// Returns true if a reset was performed. Derived rows repopulate lazily on the
+// next view read, exactly as with the previous synchronous reset.
+export function runPendingDerivedStateReset(db: Database.Database): boolean {
+  const pending = db.prepare(`
+    SELECT component FROM derived_state_versions
+    WHERE rebuild_required = 1
+  `).all() as Array<{ component: DerivedStateComponent }>
+
+  const pendingResetComponents = pending
+    .map((row) => row.component)
+    .filter((component) => DERIVED_STATE_RESET_COMPONENTS.has(component))
+
+  if (pendingResetComponents.length === 0) return false
+
+  resetDerivedState(db, `Derived state version changed: ${pendingResetComponents.join(', ')}`)
+
+  const clear = db.prepare(`
+    UPDATE derived_state_versions SET rebuild_required = 0, updated_at = ?
+    WHERE component = ?
+  `)
+  const now = Date.now()
+  const tx = db.transaction(() => {
+    for (const component of pendingResetComponents) clear.run(now, component)
+  })
+  tx()
+
+  return true
 }
 
 export function repairStoredIdentityColumns(db: Database.Database): void {

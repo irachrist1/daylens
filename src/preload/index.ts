@@ -36,7 +36,6 @@ import type {
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
   TrackingPermissionState,
-  WorkContextBlock,
   WorkContextInsight,
   WorkMemorySettingsSummary,
   WorkspaceResult,
@@ -172,8 +171,8 @@ const api = {
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
-    regenerateBlockLabel: (block: WorkContextBlock): Promise<WorkContextInsight> =>
-      ipcRenderer.invoke(IPC.AI.REGENERATE_BLOCK_LABEL, block),
+    regenerateBlockLabel: (blockId: string): Promise<WorkContextInsight> =>
+      ipcRenderer.invoke(IPC.AI.REGENERATE_BLOCK_LABEL, blockId),
     detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
     listThreads: (payload?: { includeArchived?: boolean }): Promise<AIThreadSummary[]> =>
       ipcRenderer.invoke(IPC.AI.LIST_THREADS, payload),
