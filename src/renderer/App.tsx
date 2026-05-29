@@ -183,17 +183,19 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   return (
     <>
       <UpdateBanner />
-      <CommandPalette
-        isOpen={paletteOpen}
-        platform={platform}
-        onClose={() => setPaletteOpen(false)}
-        onOpenWrapped={({ day, threadId, artifactId }) => {
-          setWrappedDay(day)
-          setWrappedThreadId(threadId)
-          setWrappedArtifactId(artifactId)
-          setWrappedOpen(true)
-        }}
-      />
+      {paletteOpen && (
+        <CommandPalette
+          isOpen={paletteOpen}
+          platform={platform}
+          onClose={() => setPaletteOpen(false)}
+          onOpenWrapped={({ day, threadId, artifactId }) => {
+            setWrappedDay(day)
+            setWrappedThreadId(threadId)
+            setWrappedArtifactId(artifactId)
+            setWrappedOpen(true)
+          }}
+        />
+      )}
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
       {wrappedOpen && wrappedDay && (
         <DayWrapped
