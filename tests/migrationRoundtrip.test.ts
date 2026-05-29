@@ -142,10 +142,13 @@ test('fresh schema and migrations include hot-path performance indexes', () => {
     runMigrations()
 
     const indexes = indexNames(db)
+    // idx_focus_sessions_start is the standalone hot-path index. (bundle_id,
+    // start_time) is covered by the UNIQUE idx_app_sessions_dedup and
+    // timeline_block_members(block_id) by that table's PRIMARY KEY, so we assert
+    // those covering indexes exist rather than the removed redundant ones.
     for (const indexName of [
-      'idx_app_sessions_bundle_start',
       'idx_focus_sessions_start',
-      'idx_timeline_block_members_block',
+      'idx_app_sessions_dedup',
     ]) {
       assert.ok(indexes.has(indexName), `missing hot-path index: ${indexName}`)
     }

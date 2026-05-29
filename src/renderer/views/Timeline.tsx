@@ -970,9 +970,19 @@ function BlockInspector({
       setClients([])
       return
     }
+    // The client roster is stable across blocks on the same day, so this only
+    // needs to fetch once when a block becomes selected (keyed on hasBlock, not
+    // block id). The cancelled guard prevents a late response from setting state
+    // after the inspector closed or switched.
+    let cancelled = false
     void ipc.attribution.listClientsDetailed()
-      .then((rows) => setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name }))))
-      .catch(() => setClients([]))
+      .then((rows) => {
+        if (!cancelled) setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name })))
+      })
+      .catch(() => {
+        if (!cancelled) setClients([])
+      })
+    return () => { cancelled = true }
   }, [hasBlock])
 
   useEffect(() => {

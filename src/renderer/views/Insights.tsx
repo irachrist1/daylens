@@ -1105,6 +1105,7 @@ function FocusReviewActionCard({
         Save a short reflection to this focus session.
       </div>
       <textarea
+        aria-label="Focus session review"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         placeholder={action.placeholder ?? 'Add a short focus review'}
