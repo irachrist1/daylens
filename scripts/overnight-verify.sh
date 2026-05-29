@@ -39,6 +39,10 @@ SAFE_TESTS=(
   tests/appsTopDomains.test.ts
   tests/wrappedFacts.test.ts
   tests/workMemory.test.ts
+  tests/peakHours.test.ts
+  tests/evidenceBackedQuery.test.ts
+  tests/derivedStateReset.test.ts
+  tests/artifactPreview.test.ts
 )
 
 fail=0
