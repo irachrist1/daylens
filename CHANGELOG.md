@@ -4,11 +4,11 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
-## v1.0.39 - 2026-05-29 — Updater Recovery
+## v1.0.40 - 2026-05-29 — Updater Recovery
 
 - macOS in-app updates validate the downloaded ZIP size and stage the replacement before closing Daylens services.
 - Update downloads show a progress bar as well as percentage text when the release feed provides byte sizes.
-- The install button no longer opens the extra cleanup confirmation sheet before downloading.
+- The install button no longer opens the extra cleanup confirmation sheet before downloading, and update failures now use plain-language recovery copy instead of internal error text.
 
 ## v1.0.38 - 2026-05-29 — Daylens 1.0 (First Stable)
 
