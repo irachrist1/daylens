@@ -43,6 +43,7 @@ SAFE_TESTS=(
   tests/evidenceBackedQuery.test.ts
   tests/derivedStateReset.test.ts
   tests/artifactPreview.test.ts
+  tests/linuxActiveWindow.test.ts
 )
 
 fail=0

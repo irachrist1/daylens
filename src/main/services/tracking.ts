@@ -141,7 +141,7 @@ function formatError(err: unknown): string {
   return String(err)
 }
 
-function execText(command: string, args: string[]): string | null {
+function execTextDefault(command: string, args: string[]): string | null {
   try {
     const output = execFileSync(command, args, {
       timeout: 1_500,
@@ -152,6 +152,13 @@ function execText(command: string, args: string[]): string | null {
   } catch {
     return null
   }
+}
+
+// Indirection so a test can feed canned window-manager output for the Linux
+// capture path without a Linux box (see __setLinuxCaptureTestHarness).
+let execTextImpl: (command: string, args: string[]) => string | null = execTextDefault
+function execText(command: string, args: string[]): string | null {
+  return execTextImpl(command, args)
 }
 
 const commandAvailabilityCache = new Map<string, boolean>()
@@ -787,7 +794,7 @@ function windowHasMeaningfulIdentity(win: ActiveWinResult | null): boolean {
   return Boolean(win.application?.trim() || win.path?.trim() || win.title?.trim())
 }
 
-function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>; win: ActiveWinResult | null; trace: string[] } | null {
+export function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>; win: ActiveWinResult | null; trace: string[] } | null {
   const trace: string[] = []
   const desktop = linuxDesktopName()
   const hyprlandSession = Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
@@ -816,6 +823,22 @@ function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'p
   }
 
   return trace.length > 0 ? { source: 'xprop', win: null, trace } : null
+}
+
+// Test seam: lets a simulation drive the Linux active-window resolver with
+// canned window-manager output (and pretend the helper commands exist) so the
+// Linux capture path can be verified without a Linux host. Pass null to restore
+// the real execFileSync-backed implementation.
+export function __setLinuxCaptureTestHarness(
+  harness: { exec: (command: string, args: string[]) => string | null; availableCommands: string[] } | null,
+): void {
+  commandAvailabilityCache.clear()
+  if (!harness) {
+    execTextImpl = execTextDefault
+    return
+  }
+  execTextImpl = harness.exec
+  for (const command of harness.availableCommands) commandAvailabilityCache.set(command, true)
 }
 
 function requireActiveWindowModule() {
