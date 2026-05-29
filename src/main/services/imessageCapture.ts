@@ -65,18 +65,29 @@ function appleDateToMs(value: number): number {
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let firstSyncTimer: ReturnType<typeof setTimeout> | null = null
 const POLL_MS = 5 * 60_000
+const FIRST_SYNC_DELAY_MS = 8_000
 
 export function startImessageCaptureScheduler(): void {
   if (!imessageCaptureSupportedOnPlatform()) return
-  if (pollTimer) return
-  // Immediate first sync, then periodic. Errors are swallowed by syncImessageCapture
-  // (returns ok:false) so a missing-permission state never crashes the scheduler.
-  void syncImessageCapture()
-  pollTimer = setInterval(() => { void syncImessageCapture() }, POLL_MS)
+  if (pollTimer || firstSyncTimer) return
+  // Defer the first sync so opening chat.db (a JOIN query that can touch a large
+  // Messages store) does not compete with first-paint work. Errors are swallowed
+  // by syncImessageCapture (returns ok:false) so a missing-permission state never
+  // crashes the scheduler.
+  firstSyncTimer = setTimeout(() => {
+    firstSyncTimer = null
+    void syncImessageCapture()
+    pollTimer = setInterval(() => { void syncImessageCapture() }, POLL_MS)
+  }, FIRST_SYNC_DELAY_MS)
 }
 
 export function stopImessageCaptureScheduler(): void {
+  if (firstSyncTimer) {
+    clearTimeout(firstSyncTimer)
+    firstSyncTimer = null
+  }
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null

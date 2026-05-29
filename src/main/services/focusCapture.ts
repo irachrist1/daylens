@@ -132,13 +132,17 @@ function normalizeHelperEvent(raw: unknown): HelperEvent | null {
   }
 }
 
-function insertEvent(ev: HelperEvent): void {
-  const db = getDb()
-  db.prepare(
-    `INSERT INTO focus_events
-       (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title, url, page_title, source, confidence, platform, schema_ver)
-     VALUES (@ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid, @window_title, @url, @page_title, @source, @confidence, @platform, @schema_ver)`
-  ).run({
+// Dense tab-switching can emit many helper events per second. Rather than one
+// prepared INSERT per line (one WAL write each), events are queued and flushed
+// in a single transaction every FOCUS_FLUSH_INTERVAL_MS or once the batch hits
+// FOCUS_FLUSH_MAX_BATCH, plus an explicit flush on shutdown.
+const FOCUS_FLUSH_INTERVAL_MS = 250
+const FOCUS_FLUSH_MAX_BATCH = 100
+let pendingEvents: HelperEvent[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+function eventParams(ev: HelperEvent): Record<string, unknown> {
+  return {
     ts_ms: ev.ts_ms,
     mono_ns: ev.mono_ns,
     event_type: ev.event_type,
@@ -152,7 +156,42 @@ function insertEvent(ev: HelperEvent): void {
     confidence: ev.confidence,
     platform: ev.platform ?? 'darwin',
     schema_ver: ev.schema_ver ?? 1,
-  })
+  }
+}
+
+function flushFocusEvents(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (pendingEvents.length === 0) return
+  const batch = pendingEvents
+  pendingEvents = []
+  try {
+    const db = getDb()
+    const stmt = db.prepare(
+      `INSERT INTO focus_events
+         (ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid, window_title, url, page_title, source, confidence, platform, schema_ver)
+       VALUES (@ts_ms, @mono_ns, @event_type, @app_bundle_id, @app_name, @pid, @window_title, @url, @page_title, @source, @confidence, @platform, @schema_ver)`
+    )
+    const insertAll = db.transaction((events: HelperEvent[]) => {
+      for (const ev of events) stmt.run(eventParams(ev))
+    })
+    insertAll(batch)
+  } catch (err) {
+    console.warn('[focusCapture] batch insert failed:', err)
+  }
+}
+
+function enqueueEvent(ev: HelperEvent): void {
+  pendingEvents.push(ev)
+  if (pendingEvents.length >= FOCUS_FLUSH_MAX_BATCH) {
+    flushFocusEvents()
+    return
+  }
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushFocusEvents, FOCUS_FLUSH_INTERVAL_MS)
+  }
 }
 
 function handleLine(line: string): void {
@@ -166,11 +205,7 @@ function handleLine(line: string): void {
   }
   const ev = normalizeHelperEvent(parsed)
   if (!ev) return
-  try {
-    insertEvent(ev)
-  } catch (err) {
-    console.warn('[focusCapture] insert failed:', err)
-  }
+  enqueueEvent(ev)
 }
 
 function scheduleRestart(): void {
@@ -246,6 +281,8 @@ export function startFocusCapture(): void {
 
 export function stopFocusCapture(): void {
   stopping = true
+  // Persist anything still queued before we tear down.
+  flushFocusEvents()
   if (restartTimer) {
     clearTimeout(restartTimer)
     restartTimer = null

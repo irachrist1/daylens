@@ -34,7 +34,7 @@ import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
-import { getLatestSnapshot } from '../services/processMonitor'
+import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
@@ -574,7 +574,7 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.TRACKING.REQUEST_SCREEN_PERMISSION, async () => requestScreenTrackingPermission())
 
   ipcMain.handle(IPC.TRACKING.GET_PROCESS_METRICS, () => {
-    return getLatestSnapshot()
+    return getProcessMetrics()
   })
 
   // ─── Attribution query resolvers ──────────────────────────────────────────

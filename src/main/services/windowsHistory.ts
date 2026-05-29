@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { getDb } from './database'
 import { insertAppSession } from '../db/queries'
@@ -103,6 +104,34 @@ function parseAppActivityId(id: string): { bundleId: string; appName: string } |
   return { bundleId: id, appName: id }
 }
 
+// ─── Backfill cursor ────────────────────────────────────────────────────────
+// The backfill runs a few seconds after every launch. insertAppSession is
+// INSERT OR IGNORE against the unique (bundle_id, start_time) index, so repeated
+// launches never create duplicates — but without a cursor each launch still
+// re-copies the cache DB and re-processes the whole 24h window. We persist the
+// last StartTime (seconds) we have already imported and only read newer rows.
+
+function cursorPath(): string {
+  return path.join(app.getPath('userData'), 'windows-backfill-cursor.json')
+}
+
+function readBackfillCursorSec(): number {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cursorPath(), 'utf8')) as { lastStartSec?: number }
+    return typeof parsed.lastStartSec === 'number' ? parsed.lastStartSec : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeBackfillCursorSec(lastStartSec: number): void {
+  try {
+    fs.writeFileSync(cursorPath(), `${JSON.stringify({ lastStartSec })}\n`, 'utf8')
+  } catch {
+    // best-effort: a write failure just means the next launch re-scans the window
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function backfillWindowsHistory(): void {
@@ -114,9 +143,12 @@ export function backfillWindowsHistory(): void {
     return
   }
 
-  const fromSec  = Math.floor((Date.now() - BACKFILL_WINDOW_MS) / 1_000)
+  const windowFloorSec = Math.floor((Date.now() - BACKFILL_WINDOW_MS) / 1_000)
+  const cursorSec = readBackfillCursorSec()
+  const fromSec  = Math.max(windowFloorSec, cursorSec)
   const mainDb   = getDb()
   let   totalImported = 0
+  let   maxStartSec = cursorSec
 
   for (const dbPath of paths) {
     const tmpPath = path.join(os.tmpdir(), `daylens_ach_${Date.now()}.db`)
@@ -156,6 +188,8 @@ export function backfillWindowsHistory(): void {
         const lower = appName.toLowerCase()
         if (NOISE_SUBSTRINGS.some((s) => lower.includes(s))) continue
 
+        if (row.StartTime > maxStartSec) maxStartSec = row.StartTime
+
         const startMs        = row.StartTime * 1_000
         const endMs          = row.EndTime > 0 ? row.EndTime * 1_000 : Date.now()
         const durationSeconds = Math.round((endMs - startMs) / 1_000)
@@ -181,6 +215,10 @@ export function backfillWindowsHistory(): void {
       try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch { /* best-effort */ }
     }
   }
+
+  // Advance the cursor past everything we have now seen so the next launch only
+  // scans newer activity rows.
+  if (maxStartSec > cursorSec) writeBackfillCursorSec(maxStartSec)
 
   if (totalImported > 0) {
     console.log(`[winhistory] backfilled ${totalImported} app sessions from ActivityCache.db`)
