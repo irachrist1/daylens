@@ -59,46 +59,59 @@ const MAIN_NAV: NavDef[] = [
   { to: '/ai',       label: 'AI',       icon: <IconAI /> },
 ]
 
+// Hoisted so the constant style fragments are not rebuilt on every render of
+// every nav item (Sidebar's parent re-renders on palette/wrapped/feedback state).
+const NAV_BASE_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '9px 12px',
+  borderRadius: 8,
+  fontSize: 13,
+  letterSpacing: '-0.01em',
+  textDecoration: 'none',
+  transition: 'all 180ms',
+}
+const NAV_ACTIVE_STYLE: React.CSSProperties = {
+  color: 'var(--color-text-primary)',
+  background: 'var(--color-surface-low)',
+  border: '1px solid var(--color-border-ghost)',
+  opacity: 1,
+}
+const NAV_HOVER_STYLE: React.CSSProperties = {
+  color: 'var(--color-text-primary)',
+  background: 'var(--color-pill-bg)',
+  border: '1px solid transparent',
+  opacity: 1,
+}
+const NAV_IDLE_STYLE: React.CSSProperties = {
+  color: 'var(--color-text-secondary)',
+  border: '1px solid transparent',
+  opacity: 0.78,
+}
+const NAV_ICON_STYLE: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexShrink: 0,
+}
+
 function NavItem({ to, label, icon }: NavDef) {
   const [hovered, setHovered] = useState(false)
   return (
     <NavLink
       to={to}
       style={({ isActive }) => ({
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '9px 12px',
-        borderRadius: 8,
-        fontSize: 13,
+        ...NAV_BASE_STYLE,
         fontWeight: isActive ? 600 : 500,
-        letterSpacing: '-0.01em',
-        textDecoration: 'none',
-        transition: 'all 180ms',
-        ...(isActive
-          ? {
-              color: 'var(--color-text-primary)',
-              background: 'var(--color-surface-low)',
-              border: '1px solid var(--color-border-ghost)',
-              opacity: 1,
-            }
-          : hovered
-            ? {
-                color: 'var(--color-text-primary)',
-                background: 'var(--color-pill-bg)',
-                border: '1px solid transparent',
-                opacity: 1,
-              }
-            : {
-                color: 'var(--color-text-secondary)',
-                border: '1px solid transparent',
-                opacity: 0.78,
-              }),
+        ...(isActive ? NAV_ACTIVE_STYLE : hovered ? NAV_HOVER_STYLE : NAV_IDLE_STYLE),
       })}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span style={{ width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <span style={NAV_ICON_STYLE}>
         {icon}
       </span>
       {label}

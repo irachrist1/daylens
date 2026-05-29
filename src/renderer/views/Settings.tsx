@@ -547,8 +547,8 @@ function UpdatesSection() {
   )
 }
 
-export default function Settings() {
-  const [settings, setSettings] = useState<AppSettings | null>(null)
+export default function Settings({ initialSettings = null }: { initialSettings?: AppSettings | null } = {}) {
+  const [settings, setSettings] = useState<AppSettings | null>(initialSettings)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null }>({ claude: null, codex: null })
   const [trackingDiagnostics, setTrackingDiagnostics] = useState<TrackingDiagnosticsPayload | null>(null)
@@ -585,7 +585,9 @@ export default function Settings() {
     // suggested name) is loaded in parallel afterwards so each section can
     // appear as soon as its own data is ready, without blocking first paint.
     void (async () => {
-      const current = await ipc.settings.get()
+      // Reuse the settings App already loaded when available, so navigating to
+      // Settings does not issue a second ipc.settings.get() round-trip (F56).
+      const current = initialSettings ?? await ipc.settings.get()
       if (cancelled) return
       setSettings(current)
 

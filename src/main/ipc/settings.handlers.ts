@@ -28,11 +28,10 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle(IPC.SETTINGS.SET, async (_e, partial: Partial<AppSettings>) => {
     const previous = await getSettingsAsync()
-    const changedKeys = sanitizeSettingsChangedKeys(
-      Object.keys(partial).filter((key) => (
-        JSON.stringify(previous[key as keyof AppSettings]) !== JSON.stringify(partial[key as keyof AppSettings])
-      )),
-    )
+    const rawChangedKeys = Object.keys(partial).filter((key) => (
+      JSON.stringify(previous[key as keyof AppSettings]) !== JSON.stringify(partial[key as keyof AppSettings])
+    ))
+    const changedKeys = sanitizeSettingsChangedKeys(rawChangedKeys)
 
     await setSettings(partial)
 
@@ -47,7 +46,11 @@ export function registerSettingsHandlers(): void {
       app.setLoginItemSettings({ openAtLogin: partial.launchOnLogin as boolean })
       await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
     }
-    if ('aiProvider' in partial || 'anthropicModel' in partial || 'openaiModel' in partial || 'googleModel' in partial) {
+    // Only reload Insights when an AI model/provider value actually changed —
+    // not merely because the key was present in the saved partial (F42). Saving
+    // unrelated settings no longer triggers a full Insights projection reload.
+    const AI_INVALIDATING_KEYS = ['aiProvider', 'anthropicModel', 'openaiModel', 'googleModel']
+    if (rawChangedKeys.some((key) => AI_INVALIDATING_KEYS.includes(key))) {
       invalidateProjectionScope('insights', 'ai_settings_changed')
     }
 

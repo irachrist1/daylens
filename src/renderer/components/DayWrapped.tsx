@@ -163,19 +163,38 @@ const IDENTITY: Partial<Record<AppCategory, string>> = {
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
+// A single shared rAF clock drives every count-up on a slide instead of each
+// useCountUp scheduling its own requestAnimationFrame loop (a Wrapped slide has
+// many numbers animating at once). The loop self-stops when no animations remain.
+interface CountUpAnim {
+  start: number
+  duration: number
+  target: number
+  set: (value: number) => void
+}
+const activeCountUps = new Set<CountUpAnim>()
+let countUpRaf: number | null = null
+
+function pumpCountUps(now: number): void {
+  for (const anim of activeCountUps) {
+    const t = Math.min((now - anim.start) / anim.duration, 1)
+    anim.set(Math.round((1 - Math.pow(1 - t, 3)) * anim.target))
+    if (t >= 1) activeCountUps.delete(anim)
+  }
+  countUpRaf = activeCountUps.size > 0 ? requestAnimationFrame(pumpCountUps) : null
+}
+
+function registerCountUp(anim: CountUpAnim): () => void {
+  activeCountUps.add(anim)
+  if (countUpRaf == null) countUpRaf = requestAnimationFrame(pumpCountUps)
+  return () => { activeCountUps.delete(anim) }
+}
+
 function useCountUp(target: number, duration = 850): number {
   const [val, setVal] = useState(0)
   useEffect(() => {
     if (target === 0) { setVal(0); return }
-    const start = performance.now()
-    let raf: number
-    function tick(now: number) {
-      const t = Math.min((now - start) / duration, 1)
-      setVal(Math.round((1 - Math.pow(1 - t, 3)) * target))
-      if (t < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    return registerCountUp({ start: performance.now(), duration, target, set: setVal })
   }, [target, duration])
   return val
 }
