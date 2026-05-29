@@ -1271,8 +1271,8 @@ export default function Insights() {
     return () => media.removeEventListener('change', sync)
   }, [])
 
-  // Hydrate thread list on mount and whenever a response completes so recent
-  // thread titles/timestamps reflect live activity.
+  // Hydrate the thread list once. Send/delete/new-chat flows refresh or patch
+  // thread metadata themselves, so this effect should not run after every turn.
   useEffect(() => {
     let cancelled = false
     ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
@@ -1281,7 +1281,7 @@ export default function Insights() {
       setActiveThreadId((current) => current ?? rows[0]?.id ?? null)
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
-  }, [messages.length])
+  }, [])
 
   // Load artifacts for the currently active thread.
   useEffect(() => {
