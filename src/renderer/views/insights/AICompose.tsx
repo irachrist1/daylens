@@ -24,12 +24,15 @@ function AIComposeImpl({ onSubmit, loading }: AIComposeProps) {
   // AI tab mounts a long conversation tree, so a second forced reflow per
   // keystroke is what makes typing feel like it freezes.
   useEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    textarea.style.height = 'auto'
-    const contentHeight = textarea.scrollHeight
-    textarea.style.height = `${Math.min(Math.max(contentHeight, 24), 140)}px`
-    textarea.style.overflowY = contentHeight > 140 ? 'auto' : 'hidden'
+    const frame = window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.style.height = 'auto'
+      const contentHeight = textarea.scrollHeight
+      textarea.style.height = `${Math.min(Math.max(contentHeight, 24), 140)}px`
+      textarea.style.overflowY = contentHeight > 140 ? 'auto' : 'hidden'
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [input])
 
   const send = () => {
