@@ -6,6 +6,6 @@ export const WINDOWS_DOWNLOAD_HREF =
   withBasePath("/api/download/windows");
 export const LINUX_STATUS_HREF = withBasePath("/linux");
 
-export const UNIFIED_DESKTOP_REPO_URL = "https://github.com/irachrist1/daylens-v1";
+export const UNIFIED_DESKTOP_REPO_URL = "https://github.com/irachrist1/daylens";
 export const UNIFIED_DESKTOP_ISSUES_URL =
   "https://github.com/irachrist1/daylens/blob/main/docs/ISSUES.md";

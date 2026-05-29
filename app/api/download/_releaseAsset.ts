@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const REPO = "irachrist1/daylens-v1";
+const REPO = "irachrist1/daylens";
 const RELEASES_API_URL = `https://api.github.com/repos/${REPO}/releases`;
 const FALLBACK_URL = `https://github.com/${REPO}/releases`;
 const GITHUB_RELEASES_TOKEN =

@@ -7,7 +7,7 @@ import {
 const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
 const PRODUCTION_BASE_PATH = "/daylens";
 const MIN_SIGNED_WINDOWS_VERSION =
-  process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.35";
+  process.env.DAYLENS_MIN_SIGNED_WINDOWS_VERSION?.trim() || "1.0.38";
 const WINDOWS_STORE_URL = process.env.DAYLENS_WINDOWS_STORE_URL?.trim() || "";
 
 function publicOrigin(request: NextRequest): string {
