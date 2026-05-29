@@ -168,6 +168,7 @@ test('searchAll merges all sources newest-first', () => {
   assert.equal(results.length, 4, 'all four sources should contribute')
   const types = results.map((r) => r.type)
   assert.deepEqual(types, ['artifact', 'browser', 'block', 'session'], 'results must be newest-first across sources')
+  db.close()
 })
 
 test('searchAll respects limit while still returning the globally newest results', () => {

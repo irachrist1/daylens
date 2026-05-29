@@ -44,6 +44,7 @@ SAFE_TESTS=(
   tests/derivedStateReset.test.ts
   tests/artifactPreview.test.ts
   tests/linuxActiveWindow.test.ts
+  tests/processMonitorParse.test.ts
 )
 
 fail=0

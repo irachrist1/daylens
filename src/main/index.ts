@@ -128,6 +128,7 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
 // Set to latest version string when a newer release is detected
 export let updateAvailable: string | null = null
@@ -433,6 +434,10 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
 }
 
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
+  if (deferredIntegrationStartup) {
+    clearTimeout(deferredIntegrationStartup)
+    deferredIntegrationStartup = null
+  }
   stopMcpServer()
   stopTracking()
   stopFocusCapture()
@@ -790,7 +795,11 @@ app.whenReady()
 
     // Optional integrations spawn subprocesses / open large stores, so start
     // them after the window is up rather than on the pre-paint critical path.
-    setTimeout(() => {
+    // Tracked + isQuitting-guarded so a quit/update inside this 3s window can't
+    // start services during teardown.
+    deferredIntegrationStartup = setTimeout(() => {
+      deferredIntegrationStartup = null
+      if (isQuitting) return
       if (getSettings().mcpServerEnabled) {
         startMcpServer()
       }

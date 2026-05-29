@@ -10,17 +10,29 @@ let monitorInterval: ReturnType<typeof setInterval> | null = null
 let latestSnapshot: ProcessSnapshot[] = []
 let refreshInFlight = false
 
-function parseWmicOutput(output: string): ProcessSnapshot[] {
+export function parseWmicOutput(output: string): ProcessSnapshot[] {
   const now = Date.now()
-  return output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '' && !line.startsWith('Node,'))
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
+
+  // WMIC /format:csv emits a header row and orders columns alphabetically (not in
+  // the requested order), always prefixed with "Node". Resolve column positions
+  // from the header instead of hardcoding indices, so parsing is correct
+  // regardless of WMIC's ordering.
+  const headerIdx = lines.findIndex((line) => line.startsWith('Node,') && /ProcessId/i.test(line))
+  if (headerIdx === -1) return []
+  const columns = lines[headerIdx].split(',').map((col) => col.trim().toLowerCase())
+  const nameIdx = columns.indexOf('name')
+  const pidIdx = columns.indexOf('processid')
+  const wssIdx = columns.indexOf('workingsetsize')
+  if (nameIdx === -1 || pidIdx === -1 || wssIdx === -1) return []
+
+  return lines
+    .slice(headerIdx + 1)
     .map((line) => {
       const parts = line.split(',')
-      const name = parts[1]?.trim() ?? 'Unknown'
-      const pid = parseInt(parts[3]?.trim() ?? '0', 10)
-      const workingSetSize = parseInt(parts[4]?.trim() ?? '0', 10)
+      const name = parts[nameIdx]?.trim() ?? 'Unknown'
+      const pid = parseInt(parts[pidIdx]?.trim() ?? '0', 10)
+      const workingSetSize = parseInt(parts[wssIdx]?.trim() ?? '0', 10)
 
       return {
         pid,

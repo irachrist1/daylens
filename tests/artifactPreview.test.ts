@@ -34,6 +34,29 @@ test('readArtifactPreview caps inline content and flags truncation', async () =>
   }
 })
 
+test('readArtifactPreview caps multibyte content by bytes, not characters', async () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  setTestDb(db)
+  try {
+    // 500 emoji = 500 chars but 2000 UTF-8 bytes. A char-based substr(1, 1000)
+    // would return all 2000 bytes; the byte-accurate cap must stay <= 1000.
+    const emoji = '\u{1F600}'.repeat(500)
+    const id = insertInlineArtifact(db, emoji)
+
+    const preview = await readArtifactPreview(id, 1_000)
+    assert.ok(preview)
+    assert.ok(
+      Buffer.byteLength(preview.content ?? '', 'utf8') <= 1_000,
+      `expected <=1000 bytes, got ${Buffer.byteLength(preview.content ?? '', 'utf8')}`,
+    )
+    assert.equal(preview.truncated, true)
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
 test('readArtifactPreview returns full small content untruncated', async () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
