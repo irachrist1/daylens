@@ -28,12 +28,11 @@ import {
   createThread,
   deleteThread,
   exportArtifact,
-  getArtifact,
   getThread,
   listArtifactsByThread,
   listThreadsLite,
   openArtifact,
-  readArtifactContent,
+  readArtifactPreview,
   renameThread,
 } from '../services/artifacts'
 import { IPC, type AIChatSendRequest, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
@@ -203,9 +202,9 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.GET_ARTIFACT, async (_e, payload: { artifactId: number }) => {
-    const record = getArtifact(payload.artifactId)
-    if (!record) return null
-    return readArtifactContent(payload.artifactId)
+    // Preview-only read: caps content to the first N KB so a large artifact is
+    // not cloned in full over IPC. Open/export read the complete artifact.
+    return readArtifactPreview(payload.artifactId)
   })
 
   ipcMain.handle(IPC.AI.OPEN_ARTIFACT, async (_e, payload: { artifactId: number }) => {

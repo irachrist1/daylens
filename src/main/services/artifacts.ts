@@ -206,6 +206,50 @@ export async function readArtifactContent(id: number): Promise<AIArtifactContent
   return { record, content: row?.content ?? null }
 }
 
+// Preview reader for the renderer. Reads only the first maxBytes so a very
+// large artifact (multi-MB report / file blob) is not structured-cloned in full
+// across IPC just to render a preview pane (F58). Open/export still use
+// readArtifactContent for the complete content.
+const ARTIFACT_PREVIEW_MAX_BYTES = 256 * 1024
+
+export async function readArtifactPreview(
+  id: number,
+  maxBytes = ARTIFACT_PREVIEW_MAX_BYTES,
+): Promise<AIArtifactContent | null> {
+  const record = getArtifact(id)
+  if (!record) return null
+
+  if (record.filePath) {
+    try {
+      const handle = await fs.open(record.filePath, 'r')
+      try {
+        const buffer = Buffer.alloc(maxBytes)
+        const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
+        return {
+          record,
+          content: buffer.toString('utf8', 0, bytesRead),
+          truncated: record.byteSize > maxBytes,
+        }
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      console.warn('[artifacts] failed to read file preview', record.filePath, error)
+      return { record, content: null }
+    }
+  }
+
+  const db = getDb()
+  const row = db
+    .prepare(`SELECT substr(inline_content, 1, ?) AS content, length(inline_content) AS len FROM ai_artifacts WHERE id = ?`)
+    .get(maxBytes, id) as { content: string | null; len: number | null } | undefined
+  return {
+    record,
+    content: row?.content ?? null,
+    truncated: (row?.len ?? 0) > maxBytes,
+  }
+}
+
 export async function deleteArtifact(id: number): Promise<void> {
   const record = getArtifact(id)
   if (!record) return

@@ -488,6 +488,9 @@ export interface AIArtifactRecord {
 export interface AIArtifactContent {
   record: AIArtifactRecord
   content: string | null
+  // Set by the preview path (GET_ARTIFACT) when content was capped to the first
+  // N bytes. Open/export read the full artifact and never set this.
+  truncated?: boolean
 }
 
 export interface AIMessageFeedbackUpdate {
