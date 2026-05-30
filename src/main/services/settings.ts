@@ -21,6 +21,7 @@ async function getStore() {
 const DEFAULTS: AppSettings = {
   analyticsOptIn: false,
   shareAIFeedbackExamples: false,
+  launchOnLogin: true,
   theme: 'system',
   onboardingComplete: false,
   onboardingState: createDefaultOnboardingState(),
@@ -66,6 +67,7 @@ export function getSettings(): AppSettings {
   return {
     analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
     shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
+    launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
     onboardingComplete,
     onboardingState,

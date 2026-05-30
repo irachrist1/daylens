@@ -747,8 +747,8 @@ app.whenReady()
     await initAnalytics()
     installApplicationMenu()
     if (app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: true })
-      await syncLinuxLaunchOnLogin(true)
+      app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
+      await syncLinuxLaunchOnLogin(reconciledSettings.launchOnLogin)
     }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)

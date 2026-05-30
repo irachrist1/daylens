@@ -952,6 +952,7 @@ export interface AppSettings {
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   analyticsOptIn: boolean       // false = no telemetry (default)
   shareAIFeedbackExamples: boolean // legacy setting; cloud feedback upload is disabled in local-only builds
+  launchOnLogin: boolean
   theme: AppTheme
   onboardingComplete: boolean
   onboardingState: OnboardingState
