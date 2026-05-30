@@ -206,10 +206,16 @@ function buildAppNameMap(db: ReturnType<typeof getDb>, bundleIds: string[]): Map
   const unresolvedBundleIds = uniqueBundleIds.filter((bundleId) => !map.has(bundleId))
   if (unresolvedBundleIds.length > 0) {
     const legacyRows = db.prepare(`
-      SELECT bundle_id, app_name
-      FROM app_sessions
-      WHERE bundle_id IN (${placeholders(unresolvedBundleIds)})
-      ORDER BY start_time DESC
+      SELECT sessions.bundle_id, sessions.app_name
+      FROM app_sessions sessions
+      JOIN (
+        SELECT bundle_id, MAX(start_time) AS latest_start
+        FROM app_sessions
+        WHERE bundle_id IN (${placeholders(unresolvedBundleIds)})
+        GROUP BY bundle_id
+      ) latest
+        ON latest.bundle_id = sessions.bundle_id
+       AND latest.latest_start = sessions.start_time
     `).all(...unresolvedBundleIds) as Array<{ bundle_id: string; app_name: string }>
     for (const r of legacyRows) {
       if (!map.has(r.bundle_id)) map.set(r.bundle_id, r.app_name)
