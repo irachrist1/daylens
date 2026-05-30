@@ -45,6 +45,8 @@ SAFE_TESTS=(
   tests/artifactPreview.test.ts
   tests/linuxActiveWindow.test.ts
   tests/processMonitorParse.test.ts
+  tests/linuxPackageScripts.test.ts
+  tests/settingsApiKeyOverride.test.ts
 )
 
 fail=0

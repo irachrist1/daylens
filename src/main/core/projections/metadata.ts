@@ -159,6 +159,7 @@ export function repairStoredIdentityColumns(db: Database.Database): void {
     SELECT id, bundle_id, app_name
     FROM app_sessions
     WHERE raw_app_name IS NULL
+       OR canonical_app_id IS NULL
        OR app_instance_id IS NULL
        OR capture_source IS NULL
        OR capture_version IS NULL
@@ -181,7 +182,7 @@ export function repairStoredIdentityColumns(db: Database.Database): void {
   const visitRows = db.prepare(`
     SELECT id, browser_bundle_id, url
     FROM website_visits
-    WHERE (browser_bundle_id IS NOT NULL AND browser_profile_id IS NULL)
+    WHERE (browser_bundle_id IS NOT NULL AND (canonical_browser_id IS NULL OR browser_profile_id IS NULL))
        OR (url IS NOT NULL AND (normalized_url IS NULL OR page_key IS NULL))
   `).all() as Array<{
     id: number

@@ -119,6 +119,21 @@ test('startup identity repairs are marked and skipped after first completion', (
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run('com.todesktop.cursor', 'Cursor', 1_000, 2_000, 1, 'development', 1)
   db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id,
+      app_name,
+      raw_app_name,
+      app_instance_id,
+      capture_source,
+      capture_version,
+      start_time,
+      end_time,
+      duration_sec,
+      category,
+      is_focused
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('com.todesktop.cursor', 'Cursor', 'Cursor', 'com.todesktop.cursor', 'foreground_poll', 1, 3_000, 4_000, 1, 'development', 1)
+  db.prepare(`
     INSERT INTO website_visits (
       domain,
       page_title,
@@ -128,27 +143,64 @@ test('startup identity repairs are marked and skipped after first completion', (
       browser_bundle_id
     ) VALUES (?, ?, ?, ?, ?, ?)
   `).run('github.com', 'Repo', 'https://github.com/daylens/app?utm_source=test#readme', 1_500, 1_500_000, 'com.google.Chrome')
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain,
+      page_title,
+      url,
+      normalized_url,
+      page_key,
+      visit_time,
+      visit_time_us,
+      browser_bundle_id,
+      browser_profile_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'github.com',
+    'Repo',
+    'https://github.com/daylens/app?utm_source=test#readme',
+    'https://github.com/daylens/app',
+    'github.com/daylens/app',
+    3_500,
+    3_500_000,
+    'com.google.Chrome',
+    'default',
+  )
 
   repairStoredIdentityColumns(db)
   repairStoredAppIdentityObservations(db)
 
   const session = db.prepare(`
-    SELECT raw_app_name AS rawAppName, app_instance_id AS appInstanceId, capture_source AS captureSource
+    SELECT raw_app_name AS rawAppName, canonical_app_id AS canonicalAppId, app_instance_id AS appInstanceId, capture_source AS captureSource
     FROM app_sessions
-    LIMIT 1
-  `).get() as { rawAppName: string | null; appInstanceId: string | null; captureSource: string | null }
+    ORDER BY start_time
+  `).get() as { rawAppName: string | null; canonicalAppId: string | null; appInstanceId: string | null; captureSource: string | null }
   assert.equal(session.rawAppName, 'Cursor')
+  assert.ok(session.canonicalAppId)
   assert.equal(session.appInstanceId, 'com.todesktop.cursor')
   assert.equal(session.captureSource, 'foreground_poll')
+  const canonicalOnlySession = db.prepare(`
+    SELECT canonical_app_id AS canonicalAppId
+    FROM app_sessions
+    WHERE start_time = 3000
+  `).get() as { canonicalAppId: string | null }
+  assert.ok(canonicalOnlySession.canonicalAppId)
 
   const visit = db.prepare(`
-    SELECT browser_profile_id AS browserProfileId, normalized_url AS normalizedUrl, page_key AS pageKey
+    SELECT canonical_browser_id AS canonicalBrowserId, browser_profile_id AS browserProfileId, normalized_url AS normalizedUrl, page_key AS pageKey
     FROM website_visits
-    LIMIT 1
-  `).get() as { browserProfileId: string | null; normalizedUrl: string | null; pageKey: string | null }
+    ORDER BY visit_time
+  `).get() as { canonicalBrowserId: string | null; browserProfileId: string | null; normalizedUrl: string | null; pageKey: string | null }
+  assert.ok(visit.canonicalBrowserId)
   assert.equal(visit.browserProfileId, 'default')
   assert.equal(visit.normalizedUrl, 'https://github.com/daylens/app')
   assert.equal(visit.pageKey, 'github.com/daylens/app')
+  const canonicalOnlyVisit = db.prepare(`
+    SELECT canonical_browser_id AS canonicalBrowserId
+    FROM website_visits
+    WHERE visit_time = 3500
+  `).get() as { canonicalBrowserId: string | null }
+  assert.ok(canonicalOnlyVisit.canonicalBrowserId)
 
   const identityCount = db.prepare(`SELECT COUNT(*) AS count FROM app_identities`).get() as { count: number }
   assert.equal(identityCount.count, 1)

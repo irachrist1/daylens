@@ -18,7 +18,7 @@ INSTALL_DIR='/opt/Daylens'
 EXECUTABLE='daylens'
 
 # Link the executable onto the PATH (default electron-builder behaviour).
-ln -sf "${INSTALL_DIR}/${EXECUTABLE}" "/usr/bin/${EXECUTABLE}"
+ln -sf "$INSTALL_DIR/$EXECUTABLE" "/usr/bin/$EXECUTABLE"
 
 # Refresh MIME / desktop databases so the App Center identifies the package correctly.
 if command -v update-mime-database >/dev/null 2>&1; then
@@ -30,7 +30,7 @@ fi
 
 # SUID chrome-sandbox for Electron. Chromium refuses to start without sandboxing
 # unless this helper is owned by root and carries mode 4755.
-sandbox="${INSTALL_DIR}/chrome-sandbox"
+sandbox="$INSTALL_DIR/chrome-sandbox"
 if [ -f "$sandbox" ]; then
     # Do not swallow these — if hardening fails the app cannot launch, so the
     # install should surface a clear error rather than complete silently.
