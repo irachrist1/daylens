@@ -278,6 +278,7 @@ async function runSmokeValidation(win: BrowserWindow): Promise<void> {
     await shutdownApp()
     app.exit(0)
   } catch (err) {
+    console.error('[smoke] validation failed:', err)
     writeSmokeReport({
       ok: false,
       stage: 'smoke-runtime',
@@ -548,7 +549,6 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.show()
-    maybeRunLinuxSmokeValidation()
   })
   win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)
   if (SMOKE_TEST && process.platform === 'linux') {
