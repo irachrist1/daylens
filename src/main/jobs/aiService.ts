@@ -5088,11 +5088,14 @@ async function processCleanupQueue(): Promise<void> {
   // Breaker: while rate-limited, leave the queue intact and re-check after the
   // cooldown rather than chewing through the batch as no-ops.
   if (isBackgroundAIOnCooldown()) {
-    cleanupQueueTimer = setTimeout(() => {
-      cleanupQueueTimer = null
-      void processCleanupQueue()
-    }, Math.max(CLEANUP_BATCH_PAUSE_MS, aiBackgroundCooldownUntil - Date.now()))
-    return
+    const cooldownDelayMs = aiBackgroundCooldownUntil - Date.now()
+    if (cooldownDelayMs > 0) {
+      cleanupQueueTimer = setTimeout(() => {
+        cleanupQueueTimer = null
+        void processCleanupQueue()
+      }, cooldownDelayMs)
+      return
+    }
   }
 
   try {
