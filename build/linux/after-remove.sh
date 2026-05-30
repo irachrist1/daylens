@@ -16,8 +16,8 @@ EXECUTABLE='daylens'
 # real removal, "upgrade" otherwise).
 case "${1:-}" in
   0|remove|purge)
-    if [ -L "/usr/bin/${EXECUTABLE}" ]; then
-        rm -f "/usr/bin/${EXECUTABLE}"
+    if [ -L "/usr/bin/$EXECUTABLE" ]; then
+        rm -f "/usr/bin/$EXECUTABLE"
     fi
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database /usr/share/applications >/dev/null 2>&1 || true

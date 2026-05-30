@@ -202,6 +202,11 @@ export default function ConnectAI({
         tone: validation.status === 'unsupported_format' ? 'neutral' : 'error',
         message: validation.message,
       })
+    } catch (error) {
+      setFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       setBusy(false)
     }

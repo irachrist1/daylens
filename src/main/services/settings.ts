@@ -177,6 +177,13 @@ function envApiKeyOverride(provider: AIProviderMode): string | null {
   return value && value.trim() ? value.trim() : null
 }
 
+function assertApiKeyWritable(provider: AIProviderMode, action: string): void {
+  if (!envApiKeyOverride(provider)) return
+  throw new Error(
+    `${action} is disabled because DAYLENS_${provider.toUpperCase()}_API_KEY is set for this process.`,
+  )
+}
+
 export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return true
   if (envApiKeyOverride(provider)) return true
@@ -202,6 +209,7 @@ export async function getApiKey(provider: AIProviderMode): Promise<string | null
 
 export async function setApiKey(provider: AIProviderMode, key: string): Promise<void> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return
+  assertApiKeyWritable(provider, `Saving the ${provider} API key`)
   try {
     const keytar = ensureSecureStore(`Saving the ${provider} API key`)
     await keytar.setPassword(KEYTAR_SERVICE, keytarAccount(provider), key)
@@ -213,6 +221,7 @@ export async function setApiKey(provider: AIProviderMode, key: string): Promise<
 
 export async function clearApiKey(provider: AIProviderMode): Promise<void> {
   if (provider === 'claude-cli' || provider === 'codex-cli') return
+  assertApiKeyWritable(provider, `Clearing the ${provider} API key`)
   try {
     const keytar = getSecureStore()
     if (!keytar) return
