@@ -80,6 +80,25 @@ test('an unchanged registry neither wipes nor flags anything', () => {
   db.close()
 })
 
+test('an already pending derived-state reset survives metadata sync after a crash', () => {
+  const db = freshDb()
+  seedBlock(db)
+  seedStoredVersions(db, {}) // all current, but prior launch crashed before deferred reset ran.
+  db.prepare(`
+    UPDATE derived_state_versions
+    SET rebuild_required = 1, notes = 'reset pending (deferred)'
+    WHERE component = 'app_normalization'
+  `).run()
+
+  syncDerivedStateMetadata(db)
+
+  assert.equal(blockCount(db), 1, 'sync must not run the destructive reset synchronously')
+  assert.equal(rebuildRequired(db, 'app_normalization'), 1, 'pending reset flag must survive metadata sync')
+  assert.equal(runPendingDerivedStateReset(db), true, 'deferred reset must still run after the next launch')
+  assert.equal(blockCount(db), 0)
+  db.close()
+})
+
 test('a fresh install (empty registry) populates versions without resetting', () => {
   const db = freshDb()
   seedBlock(db)

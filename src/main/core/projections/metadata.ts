@@ -43,9 +43,9 @@ function resetDerivedState(db: Database.Database, reason: string): void {
 
 export function syncDerivedStateMetadata(db: Database.Database): void {
   const rows = db.prepare(`
-    SELECT component, version
+    SELECT component, version, rebuild_required
     FROM derived_state_versions
-  `).all() as Array<{ component: DerivedStateComponent; version: string }>
+  `).all() as Array<{ component: DerivedStateComponent; version: string; rebuild_required: number }>
 
   // If the table is empty this is a fresh install or fresh table from the v13 migration.
   // Do NOT treat an empty registry as "all versions changed" — that would nuke derived
@@ -71,6 +71,7 @@ export function syncDerivedStateMetadata(db: Database.Database): void {
   }
 
   const current = new Map(rows.map((row) => [row.component, row.version]))
+  const alreadyPending = new Map(rows.map((row) => [row.component, row.rebuild_required === 1]))
   const changed = Object.entries(DERIVED_STATE_COMPONENT_VERSIONS)
     .filter(([component, version]) => current.get(component as DerivedStateComponent) !== version)
     .map(([component]) => component as DerivedStateComponent)
@@ -105,11 +106,12 @@ export function syncDerivedStateMetadata(db: Database.Database): void {
     for (const [component, version] of Object.entries(DERIVED_STATE_COMPONENT_VERSIONS)) {
       const comp = component as DerivedStateComponent
       const needsReset = resetPending && DERIVED_STATE_RESET_COMPONENTS.has(comp)
+      const resetOwed = needsReset || alreadyPending.get(comp) === true
       upsert.run(
         component,
         version,
-        needsReset ? 1 : 0,
-        needsReset
+        resetOwed ? 1 : 0,
+        resetOwed
           ? 'reset pending (deferred)'
           : changed.includes(comp) ? 'auto-synced on startup' : null,
         now,
