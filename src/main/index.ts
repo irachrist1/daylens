@@ -535,18 +535,6 @@ function createWindow(): BrowserWindow {
     show: false,
   })
 
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
-    // DevTools on demand — Ctrl+Shift+I / Cmd+Option+I.
-    // Auto-open was spawning a stray window on every reload.
-  } else {
-    const rendererPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
-    void win.loadFile(rendererPath).catch((err) => {
-      showFatalStartupError('Daylens failed to load', err)
-      app.quit()
-    })
-  }
-
   let smokeValidationStarted = false
   const maybeRunLinuxSmokeValidation = () => {
     if (!SMOKE_TEST || process.platform !== 'linux') return
@@ -560,6 +548,18 @@ function createWindow(): BrowserWindow {
     maybeRunLinuxSmokeValidation()
   })
   win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)
+
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+    win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
+    // DevTools on demand — Ctrl+Shift+I / Cmd+Option+I.
+    // Auto-open was spawning a stray window on every reload.
+  } else {
+    const rendererPath = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`)
+    void win.loadFile(rendererPath).catch((err) => {
+      showFatalStartupError('Daylens failed to load', err)
+      app.quit()
+    })
+  }
 
   // Block in-window navigation to external URLs — open in system browser instead.
   // titleBarStyle: 'hidden' means no native close button, so if the Electron window
