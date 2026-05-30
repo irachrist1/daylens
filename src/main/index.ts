@@ -118,8 +118,11 @@ if (!gotTheLock) {
 app.setAppUserModelId(APP_USER_MODEL_ID)
 
 if (process.platform === 'linux' && SMOKE_TEST) {
+  app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-setuid-sandbox')
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
 }
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
