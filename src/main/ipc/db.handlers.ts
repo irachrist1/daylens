@@ -11,6 +11,7 @@ import {
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
+  getBlockLabelOverride,
   writeAIBlockLabel,
 } from '../db/queries'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
@@ -884,12 +885,19 @@ function applyAIInsightToTimelineBlock(
   insight: WorkContextInsight,
 ): boolean {
   // Day-level cleanup preserves user overrides (force = false).
+  const label = insight.label?.trim()
+  if (!label) {
+    throw new Error(`AI did not return a label for block ${block.id}.`)
+  }
   const wrote = writeAIBlockLabel(db, {
     blockId: block.id,
-    label: insight.label ?? '',
+    label,
     narrative: insight.narrative ?? null,
   })
   if (!wrote) {
+    // A user can rename the block while the AI request is in flight. That race
+    // is a valid preserve-override no-op, not an AI persistence failure.
+    if (getBlockLabelOverride(db, block.id)?.label.trim()) return false
     throw new Error(`AI label could not be persisted for block ${block.id}.`)
   }
   return true
