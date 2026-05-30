@@ -225,10 +225,11 @@ export async function readArtifactPreview(
       try {
         const buffer = Buffer.alloc(maxBytes)
         const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
+        const stat = await handle.stat()
         return {
           record,
           content: buffer.toString('utf8', 0, bytesRead),
-          truncated: record.byteSize > maxBytes,
+          truncated: stat.size > maxBytes,
         }
       } finally {
         await handle.close()

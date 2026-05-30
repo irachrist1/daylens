@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { ANALYTICS_EVENT, sanitizeSettingsChangedKeys } from '@shared/analytics'
 import {
   getSettingsAsync,
@@ -8,6 +8,7 @@ import {
   clearApiKey,
 } from '../services/settings'
 import { capture, updateAnalyticsPreference } from '../services/analytics'
+import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, startMcpServer, stopMcpServer } from '../services/mcpServer'
 import { IPC } from '@shared/types'
@@ -33,6 +34,11 @@ export function registerSettingsHandlers(): void {
 
     if (analyticsWillEnable) {
       await updateAnalyticsPreference(true)
+    }
+
+    if ('launchOnLogin' in partial && app.isPackaged) {
+      app.setLoginItemSettings({ openAtLogin: Boolean(partial.launchOnLogin) })
+      await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
     }
 
     // Only reload Insights when an AI model/provider value actually changed —
