@@ -93,6 +93,7 @@
     "hyper.exe": "hyper",
     "skype.exe": "skype", "com.skype.skype": "skype",
     "loom.exe": "loom",
+    "granola": "granola", "granola.exe": "granola", "ai.granola.app": "granola", "com.granola.desktop": "granola",
     "obs.exe": "obs", "com.obsproject.obs-studio": "obs",
     "vlc.exe": "vlc", "org.videolan.vlc": "vlc",
     "audacity.exe": "audacity",
@@ -182,6 +183,7 @@
 
     "zoom": { "displayName": "Zoom", "defaultCategory": "meetings" },
     "loom": { "displayName": "Loom", "defaultCategory": "meetings" },
+    "granola": { "displayName": "Granola", "defaultCategory": "meetings" },
 
     "notion": { "displayName": "Notion", "defaultCategory": "writing" },
     "obsidian": { "displayName": "Obsidian", "defaultCategory": "writing" },

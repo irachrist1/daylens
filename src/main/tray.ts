@@ -1,13 +1,10 @@
 import { BrowserWindow, Menu, Tray, app, nativeImage } from 'electron'
 import path from 'node:path'
-import { getSettings, setSettings } from './services/settings'
-import { syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 
 let tray: Tray | null = null
 let trayError: string | null = null
 let trayWindow: BrowserWindow | null = null
 let trayWindowSyncHandler: (() => void) | null = null
-let activeController: TrayController | null = null
 const TRAY_GUID = '4c82ef49-77d4-4f66-a5d0-4ea5c157d4fa'
 
 export interface TrayController {
@@ -57,23 +54,8 @@ function clearTrayWindowListeners(): void {
   trayWindow = null
 }
 
-async function toggleLaunchAtLogin(nextValue: boolean): Promise<void> {
-  try {
-    await setSettings({ launchOnLogin: nextValue })
-    if (app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: nextValue })
-      await syncLinuxLaunchOnLogin(nextValue)
-    }
-  } catch (err) {
-    console.warn('[tray] failed to toggle launch at login:', err)
-  } finally {
-    if (activeController) refreshTrayMenu(activeController)
-  }
-}
-
 function buildContextMenu(controller: TrayController): Electron.Menu {
   const visible = controller.isWindowVisible()
-  const settings = getSettings()
   const version = app.getVersion()
   const showLabel = visible ? 'Hide Daylens' : 'Open Daylens'
   const showAccelerator = process.platform === 'darwin' ? 'Cmd+Shift+D' : undefined
@@ -106,13 +88,6 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
     { label: 'Settings', click: () => controller.showMainWindow('/settings') },
     { type: 'separator' },
     {
-      label: 'Launch at login',
-      type: 'checkbox',
-      checked: Boolean(settings.launchOnLogin),
-      click: (item) => { void toggleLaunchAtLogin(item.checked) },
-    },
-    { type: 'separator' },
-    {
       label: 'Quit Daylens',
       accelerator: process.platform === 'darwin' ? 'Cmd+Q' : undefined,
       click: () => controller.quitApp(),
@@ -126,8 +101,6 @@ function refreshTrayMenu(controller: TrayController): void {
 }
 
 export function createTray(controller: TrayController): boolean {
-  activeController = controller
-
   if (tray && trayWindow === controller.mainWindow) {
     refreshTrayMenu(controller)
     return true
@@ -175,7 +148,6 @@ export function createTray(controller: TrayController): boolean {
   } catch (error) {
     clearTrayWindowListeners()
     tray = null
-    activeController = null
     trayError = formatError(error)
     console.warn('[tray] failed to create tray icon:', error)
     return false
@@ -186,7 +158,6 @@ export function destroyTray(): void {
   clearTrayWindowListeners()
   tray?.destroy()
   tray = null
-  activeController = null
 }
 
 export function hasTray(): boolean {

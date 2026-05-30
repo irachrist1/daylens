@@ -6,3 +6,11 @@ export function getDb() {
 }
 export function initDb() {}
 export function closeDb() {}
+export function tableExists(db, tableName) {
+  const row = db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+    LIMIT 1
+  `).get(tableName)
+  return Boolean(row)
+}

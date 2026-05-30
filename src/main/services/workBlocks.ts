@@ -1752,6 +1752,30 @@ function candidateHasFocusedPageArtifact(candidate: CandidateBlock, db?: Databas
   return Boolean(categoryForTopPageArtifact(candidatePageArtifacts(candidate, db, context)))
 }
 
+function candidateHasNoContentSignal(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  if (candidate.sessions.some((session) => usefulWindowTitle(session) !== null)) return false
+  if (db && candidatePageArtifacts(candidate, db, context).length > 0) return false
+  return true
+}
+
+// Narrow special case for the real "Safari browsing, no specific window
+// titles" fragment: a browser-only browsing candidate, between two non-meeting
+// neighbours, with no title or page artifact of its own. Other titleless short
+// activities may still be meaningful, and edge blocks are not slivers.
+function candidateIsContentlessBrowserSliver(
+  candidate: CandidateBlock,
+  left: CandidateBlock | null,
+  right: CandidateBlock | null,
+  db?: Database.Database,
+  context?: TimelineBuildContext,
+): boolean {
+  if (!left || !right) return false
+  if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  if (!candidate.sessions.every(isBrowserSession)) return false
+  if (candidateDominantCategory(candidate, db, context) !== 'browsing') return false
+  return candidateHasNoContentSignal(candidate, db, context)
+}
+
 function candidateTopAppIds(candidate: CandidateBlock): Set<string> {
   return new Set(topAppsFromSessions(candidate.sessions).map((app) => app.bundleId))
 }
@@ -1879,18 +1903,24 @@ function absorbShortCandidates(
     const left = index > 0 ? result[index - 1] : null
     const right = index < result.length - 1 ? result[index + 1] : null
     const category = candidateDominantCategory(candidate, db, context)
+    // A contentless browser sliver has no topic of its own, so the relatedness
+    // gate is dropped only for that narrow case. The gap-boundary guard and span
+    // ceiling below still apply, so it never bridges a real >15-min idle gap and
+    // never builds a runaway block.
+    const contentlessSliver = options.requireRelated && candidateIsContentlessBrowserSliver(candidate, left, right, db, context)
+    const relatednessRequired = options.requireRelated && !contentlessSliver
     const leftOk = Boolean(
       left
       && left.formation !== 'meeting'
       && !(left.boundedAfterGap && candidate.boundedBeforeGap)
-      && (!options.requireRelated || candidatesRelated(candidate, left, db, context))
+      && (!relatednessRequired || candidatesRelated(candidate, left, db, context))
       && combinedSpanMs(left, candidate) <= options.maxCombinedMs,
     )
     const rightOk = Boolean(
       right
       && right.formation !== 'meeting'
       && !(candidate.boundedAfterGap && right.boundedBeforeGap)
-      && (!options.requireRelated || candidatesRelated(candidate, right, db, context))
+      && (!relatednessRequired || candidatesRelated(candidate, right, db, context))
       && combinedSpanMs(candidate, right) <= options.maxCombinedMs,
     )
 
@@ -1898,6 +1928,7 @@ function absorbShortCandidates(
     if (leftOk && !rightOk) mergeLeft = true
     else if (!leftOk && rightOk) mergeLeft = false
     else if (!leftOk && !rightOk) continue
+    else if (contentlessSliver) mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)
     else if (candidateDominantCategory(left!, db, context) === category && candidateDominantCategory(right!, db, context) !== category) mergeLeft = true
     else if (candidateDominantCategory(right!, db, context) === category && candidateDominantCategory(left!, db, context) !== category) mergeLeft = false
     else mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)

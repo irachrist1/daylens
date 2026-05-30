@@ -96,6 +96,27 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
       },
     ],
   },
+  openrouter: {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    shortLabel: 'OpenRouter',
+    docsUrl: 'https://openrouter.ai/settings/keys',
+    keyPlaceholder: 'sk-or-...',
+    helperText: 'Use your OpenRouter API key.',
+    defaultModel: 'anthropic/claude-sonnet-4.6',
+    models: [
+      {
+        id: 'anthropic/claude-sonnet-4.6',
+        label: 'Claude Sonnet 4.6',
+        description: 'Balanced OpenRouter option for high-quality Daylens work.',
+      },
+      {
+        id: 'openai/gpt-5.4-mini',
+        label: 'GPT-5.4 mini',
+        description: 'Faster OpenRouter option for lighter Daylens jobs.',
+      },
+    ],
+  },
   'claude-cli': {
     id: 'claude-cli',
     label: 'Claude CLI',
@@ -140,12 +161,13 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
   },
 }
 
-export const AI_PROVIDERS: AIProvider[] = ['anthropic', 'openai', 'google']
+export const AI_PROVIDERS: AIProvider[] = ['anthropic', 'openai', 'google', 'openrouter']
 
 export function detectProviderFromApiKey(key: string): AIProvider | null {
   const trimmed = key.trim()
   if (!trimmed) return null
   if (trimmed.startsWith('sk-ant-')) return 'anthropic'
+  if (trimmed.startsWith('sk-or-')) return 'openrouter'
   if (trimmed.startsWith('AIza')) return 'google'
   if (trimmed.startsWith('sk-')) return 'openai'
   return null
@@ -156,6 +178,7 @@ export function getSelectedModel(settings: {
   anthropicModel: string
   openaiModel: string
   googleModel: string
+  openrouterModel: string
 }): string {
   switch (settings.aiProvider) {
     case 'openai':
@@ -163,6 +186,8 @@ export function getSelectedModel(settings: {
       return settings.openaiModel
     case 'google':
       return settings.googleModel
+    case 'openrouter':
+      return settings.openrouterModel
     case 'claude-cli':
       return settings.anthropicModel
     case 'anthropic':

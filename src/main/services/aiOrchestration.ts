@@ -4,7 +4,6 @@ import { getDb } from './database'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
-import { getConvexSiteUrl, getSessionToken } from './workspaceLinker'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -198,10 +197,6 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
   return provider === 'claude-cli' || provider === 'codex-cli'
 }
 
-function orderedUnique<T>(values: readonly T[]): T[] {
-  return values.filter((value, index) => values.indexOf(value) === index)
-}
-
 // Model tier table — what runs at each cost level per provider.
 //
 // Tier intent:
@@ -232,40 +227,25 @@ export function modelForProvider(
   strategyOrSettings: AIModelStrategy | AppSettings = getSettings(),
   settings = getSettings(),
 ): string {
-  // Accept either (provider, settings) — legacy callers — or (provider, strategy, settings).
-  let strategy: Extract<AIModelStrategy, 'economy' | 'balanced' | 'quality'>
-  let resolvedSettings: AppSettings
-
-  if (typeof strategyOrSettings === 'string') {
-    // Treat 'custom' and any unknown values as quality so they fall through to the
-    // user's configured model rather than silently picking a wrong tier.
-    strategy = (strategyOrSettings === 'economy' || strategyOrSettings === 'balanced')
-      ? strategyOrSettings
-      : 'quality'
-    resolvedSettings = settings
-  } else {
-    strategy = 'quality'
-    resolvedSettings = strategyOrSettings
-  }
+  // Simplified BYOK model: the one model the user picked for a provider is used
+  // for every job. The legacy strategy argument is still accepted for call-site
+  // compatibility, but it no longer changes the result — the user's chosen model
+  // always wins. The per-tier tables remain only as last-resort defaults.
+  const resolvedSettings: AppSettings =
+    typeof strategyOrSettings === 'string' ? settings : strategyOrSettings
 
   switch (provider) {
     case 'openai':
     case 'codex-cli':
-      return resolvedSettings.openaiModel && strategy === 'quality'
-        ? resolvedSettings.openaiModel
-        : OPENAI_TIER_MODELS[strategy]
+      return resolvedSettings.openaiModel || OPENAI_TIER_MODELS.quality
     case 'google':
-      return resolvedSettings.googleModel && strategy === 'quality'
-        ? resolvedSettings.googleModel
-        : GOOGLE_TIER_MODELS[strategy]
+      return resolvedSettings.googleModel || GOOGLE_TIER_MODELS.quality
+    case 'openrouter':
+      return resolvedSettings.openrouterModel || 'anthropic/claude-sonnet-4.6'
     case 'claude-cli':
     case 'anthropic':
     default:
-      // For quality tier, respect the user's explicit model setting if they've overridden it.
-      // The default is Sonnet — Opus is reached only via providerModelOverride on specific jobs.
-      return resolvedSettings.anthropicModel && strategy === 'quality'
-        ? resolvedSettings.anthropicModel
-        : ANTHROPIC_TIER_MODELS[strategy]
+      return resolvedSettings.anthropicModel || ANTHROPIC_TIER_MODELS.quality
   }
 }
 
@@ -275,6 +255,8 @@ export function providerLabel(provider: AIProviderMode): string {
       return 'OpenAI'
     case 'google':
       return 'Google Gemini'
+    case 'openrouter':
+      return 'OpenRouter'
     case 'claude-cli':
       return 'Claude CLI'
     case 'codex-cli':
@@ -285,27 +267,15 @@ export function providerLabel(provider: AIProviderMode): string {
   }
 }
 
-function fallbackProviders(settings: AppSettings): AIProviderMode[] {
-  return orderedUnique((settings.aiFallbackOrder?.length
-    ? settings.aiFallbackOrder
-    : ['anthropic', 'openai', 'google']) as AIProviderMode[])
+// Simplified BYOK routing: every job runs on the single provider the user picked
+// in AI settings. No per-job provider overrides, no cross-provider fallback —
+// predictable and matching exactly what the settings panel shows.
+function preferredProviderForJob(_jobType: AIJobType, settings: AppSettings): AIProviderMode {
+  return settings.aiProvider ?? 'anthropic'
 }
 
-function preferredProviderForJob(jobType: AIJobType, settings: AppSettings): AIProviderMode {
-  const job = JOB_DEFINITIONS[jobType]
-  return settings[job.providerPreferenceKey]
-    ?? settings.aiProvider
-    ?? 'anthropic'
-}
-
-function applyStrategyProviderFallback(
-  preferred: AIProviderMode,
-  settings: AppSettings,
-): AIProviderMode[] {
-  if (providerUsesCLI(preferred)) {
-    return [preferred]
-  }
-  return orderedUnique([preferred, ...fallbackProviders(settings)])
+function applyStrategyProviderFallback(preferred: AIProviderMode): AIProviderMode[] {
+  return [preferred]
 }
 
 function isQuotaOrAuthError(error: unknown): boolean {
@@ -367,7 +337,7 @@ async function resolveProviderConfigsForJob(
   preferredProviderOverride?: AIProviderMode | null,
 ): Promise<ResolvedProviderConfig[]> {
   const preferredProvider = preferredProviderOverride ?? preferredProviderForJob(jobType, settings)
-  const orderedProviders = applyStrategyProviderFallback(preferredProvider, settings)
+  const orderedProviders = applyStrategyProviderFallback(preferredProvider)
   const definition = JOB_DEFINITIONS[jobType]
   const configs: ResolvedProviderConfig[] = []
 
@@ -388,55 +358,6 @@ async function resolveProviderConfigsForJob(
   }
 
   return configs
-}
-
-// R6: surfaces eligible for server-side generation. These are self-contained
-// (the desktop builds the full prompt locally), so they can run through the
-// workspace key without a local provider. Chat and report generation are
-// deliberately excluded — they carry thread/agentic semantics the simple
-// surface endpoint does not model.
-const REMOTE_AI_ELIGIBLE_JOBS = new Set<AIJobType>(['day_summary', 'week_review', 'app_narrative'])
-
-// Attempt server-side generation against the linked workspace. Returns the
-// generated text, or null when remote AI is off, the workspace is not linked,
-// the job is not eligible, or the request fails — every null falls back to the
-// local provider path so a transient remote failure never blocks a summary.
-async function tryRemoteSurfaceSummary(
-  jobType: AIJobType,
-  settings: AppSettings,
-  systemPrompt: string,
-  userMessage: string,
-  maxOutputTokens: number,
-): Promise<string | null> {
-  if (settings.useRemoteAI === false) return null
-  if (!REMOTE_AI_ELIGIBLE_JOBS.has(jobType)) return null
-
-  const siteUrl = getConvexSiteUrl()
-  const sessionToken = await getSessionToken()
-  if (!siteUrl || !sessionToken) return null
-
-  try {
-    const res = await fetch(`${siteUrl}/remote/aiSurfaceSummary`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      // Model is intentionally omitted: the server picks its allowed default,
-      // which avoids a model_not_allowed rejection from desktop tier names.
-      body: JSON.stringify({ system: systemPrompt, userContent: userMessage, maxTokens: maxOutputTokens }),
-    })
-    if (!res.ok) {
-      console.warn(`[ai] remote surface summary failed for ${jobType}: ${res.status}`)
-      return null
-    }
-    const data = (await res.json()) as { text?: unknown }
-    const text = typeof data.text === 'string' ? data.text.trim() : ''
-    return text.length > 0 ? text : null
-  } catch (error) {
-    console.warn(`[ai] remote surface summary error for ${jobType}:`, error instanceof Error ? error.message : error)
-    return null
-  }
 }
 
 export async function executeTextAIJob(
@@ -477,48 +398,6 @@ export async function executeTextAIJob(
     role: message.role,
     content: redactAIText(message.content, settings),
   }))
-
-  // R6: try the linked workspace's server key first for eligible surfaces, so a
-  // user without a local provider key still gets summaries. Any failure falls
-  // through to the local provider loop below.
-  const remoteText = await tryRemoteSurfaceSummary(
-    payload.jobType,
-    settings,
-    systemPrompt,
-    userMessage,
-    executionOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-  )
-  if (remoteText !== null) {
-    startAIUsageEvent(getDb(), {
-      id: eventId,
-      jobType: payload.jobType,
-      screen: payload.screen ?? definition.screen,
-      triggerSource: payload.triggerSource,
-      provider: 'anthropic',
-      model: 'remote-workspace',
-      startedAt,
-    })
-    const completedAt = Date.now()
-    finishAIUsageEvent(getDb(), {
-      id: eventId,
-      provider: 'anthropic',
-      model: 'remote-workspace',
-      success: true,
-      completedAt,
-      latencyMs: completedAt - startedAt,
-      inputTokens: null,
-      outputTokens: null,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      cacheHit: false,
-    })
-    return {
-      text: remoteText,
-      config: { provider: 'anthropic', apiKey: null, model: 'remote-workspace' },
-      usage: null,
-      cachePolicy: definition.cachePolicy,
-    }
-  }
 
   const configs = await resolveProviderConfigsForJob(payload.jobType, settings, payload.preferredProviderOverride)
 

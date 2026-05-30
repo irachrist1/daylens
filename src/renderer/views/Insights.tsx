@@ -1200,11 +1200,7 @@ export default function Insights() {
     scope: 'insights',
     load: async () => {
       const currentSettings = await ipc.settings.get()
-      const chatProvider = currentSettings.aiChatProvider ?? currentSettings.aiProvider
-      const providersToCheck = Array.from(new Set([
-        chatProvider,
-        ...(currentSettings.aiFallbackOrder ?? []),
-      ]))
+      const providersToCheck = [currentSettings.aiProvider]
 
       const [history, cliToolsResult, apiProviderAccessChecks, today, activeFocusSession] = await Promise.all([
         activeThreadId == null
@@ -1339,13 +1335,14 @@ export default function Insights() {
   const activeThreadLabel = activeThread && activeThread.title.trim() && activeThread.title !== 'New chat'
     ? activeThread.title
     : null
-  const activeProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
+  const activeProvider = settings ? settings.aiProvider : null
   const activeModel = settings && activeProvider
     ? getSelectedModel({
         aiProvider: activeProvider,
         anthropicModel: settings.anthropicModel,
         openaiModel: settings.openaiModel,
         googleModel: settings.googleModel,
+        openrouterModel: settings.openrouterModel,
       })
     : null
 
@@ -2164,7 +2161,7 @@ export default function Insights() {
     )
   }
 
-  const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
+  const activeChatProvider = settings.aiProvider
   const providerMeta = AI_PROVIDER_META[activeChatProvider]
   const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
   const cliMissing = activeChatProvider === 'claude-cli'

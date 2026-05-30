@@ -10,7 +10,6 @@ function buildSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     analyticsOptIn: false,
     shareAIFeedbackExamples: true,
-    launchOnLogin: true,
     theme: 'system',
     onboardingComplete: false,
     onboardingState,

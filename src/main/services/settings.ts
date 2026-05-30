@@ -20,8 +20,7 @@ async function getStore() {
 
 const DEFAULTS: AppSettings = {
   analyticsOptIn: false,
-  shareAIFeedbackExamples: true,
-  launchOnLogin: true,
+  shareAIFeedbackExamples: false,
   theme: 'system',
   onboardingComplete: false,
   onboardingState: createDefaultOnboardingState(),
@@ -30,9 +29,10 @@ const DEFAULTS: AppSettings = {
   firstLaunchDate: 0,
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
-  anthropicModel: 'claude-opus-4-6',
+  anthropicModel: 'claude-sonnet-4-6',
   openaiModel: 'gpt-5.4',
   googleModel: 'gemini-3.1-flash-lite-preview',
+  openrouterModel: 'anthropic/claude-sonnet-4.6',
   aiFallbackOrder: ['anthropic', 'openai', 'google'],
   aiModelStrategy: 'balanced',
   aiChatProvider: 'anthropic',
@@ -45,16 +45,15 @@ const DEFAULTS: AppSettings = {
   aiSpendSoftLimitUsd: 10,
   aiRedactFilePaths: false,
   aiRedactEmails: false,
-  allowThirdPartyWebsiteIconFallback: true,
+  allowThirdPartyWebsiteIconFallback: false,
   aiReportPersonalizationEnabled: false,
   dailySummaryEnabled: true,
   morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
   distractionAlertsEnabled: false,
   mcpServerEnabled: false,
-  imessageCaptureEnabled: false,
   workMemoryConsolidationEnabled: true,
-  useRemoteAI: true,
+  useRemoteAI: false,
 }
 
 export function getSettings(): AppSettings {
@@ -66,8 +65,7 @@ export function getSettings(): AppSettings {
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
   return {
     analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
-    shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', true) as boolean),
-    launchOnLogin: (_store.get('launchOnLogin', true) as boolean),
+    shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
     theme: (_store.get('theme', 'system') as AppSettings['theme']),
     onboardingComplete,
     onboardingState,
@@ -76,9 +74,10 @@ export function getSettings(): AppSettings {
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
-    anthropicModel: (_store.get('anthropicModel', 'claude-opus-4-6') as string),
+    anthropicModel: (_store.get('anthropicModel', 'claude-sonnet-4-6') as string),
     openaiModel: (_store.get('openaiModel', 'gpt-5.4') as string),
     googleModel: (_store.get('googleModel', 'gemini-3.1-flash-lite-preview') as string),
+    openrouterModel: (_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
     aiChatProvider: (_store.get('aiChatProvider', 'anthropic') as AppSettings['aiChatProvider']),
@@ -91,16 +90,15 @@ export function getSettings(): AppSettings {
     aiSpendSoftLimitUsd: (_store.get('aiSpendSoftLimitUsd', 10) as number),
     aiRedactFilePaths: (_store.get('aiRedactFilePaths', false) as boolean),
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
-    allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', true) as boolean),
+    allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', false) as boolean),
     aiReportPersonalizationEnabled: (_store.get('aiReportPersonalizationEnabled', false) as boolean),
     dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
     morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
     distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
-    imessageCaptureEnabled: (_store.get('imessageCaptureEnabled', false) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
-    useRemoteAI: (_store.get('useRemoteAI', true) as boolean),
+    useRemoteAI: (_store.get('useRemoteAI', false) as boolean),
   }
 }
 
@@ -134,10 +132,11 @@ export async function initSettings(): Promise<void> {
 
 const KEYTAR_SERVICE = 'Daylens Desktop'
 const LEGACY_KEYTAR_SERVICES = ['Daylens', 'DaylensWindows']
-const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google', string> = {
+const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google' | 'openrouter', string> = {
   anthropic: 'anthropic-api-key',
   openai: 'openai-api-key',
   google: 'google-api-key',
+  openrouter: 'openrouter-api-key',
 }
 
 function keytarAccount(provider: AIProviderMode): string {
