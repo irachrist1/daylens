@@ -543,12 +543,19 @@ function createWindow(): BrowserWindow {
     })
   }
 
+  let smokeValidationStarted = false
+  const maybeRunLinuxSmokeValidation = () => {
+    if (!SMOKE_TEST || process.platform !== 'linux') return
+    if (smokeValidationStarted) return
+    smokeValidationStarted = true
+    void runSmokeValidation(win)
+  }
+
   win.once('ready-to-show', () => {
     win.show()
-    if (SMOKE_TEST && process.platform === 'linux') {
-      void runSmokeValidation(win)
-    }
+    maybeRunLinuxSmokeValidation()
   })
+  win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)
 
   // Block in-window navigation to external URLs — open in system browser instead.
   // titleBarStyle: 'hidden' means no native close button, so if the Electron window
