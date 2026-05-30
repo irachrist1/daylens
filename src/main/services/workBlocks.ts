@@ -3663,7 +3663,7 @@ export function getBlockDetailPayload(
 ): WorkContextBlock | null {
   const persistedDate = lookupPersistedTimelineBlockDate(db, blockId)
   if (persistedDate) {
-    const payload = getTimelineDayPayload(db, persistedDate, liveSession)
+    const payload = getTimelineDayPayload(db, persistedDate, liveSession, { materialize: false })
     const match = payload.blocks.find((block) => block.id === blockId)
     if (match) return match
   }
@@ -3671,7 +3671,7 @@ export function getBlockDetailPayload(
   for (let offset = 0; offset >= -30; offset--) {
     const dateStr = localDateStringForOffset(offset)
     if (dateStr === persistedDate) continue
-    const payload = getTimelineDayPayload(db, dateStr, liveSession)
+    const payload = getTimelineDayPayload(db, dateStr, liveSession, { materialize: false })
     const match = payload.blocks.find((block) => block.id === blockId)
     if (match) return match
   }
