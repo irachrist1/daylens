@@ -1,0 +1,274 @@
+# Daylens Product And Build Contract
+
+This file is the product contract for Daylens. It defines what the product is supposed to be.
+
+For implementation status, the current code wins over any prose in this file. Do not use this file to claim that something is already shipped or validated.
+
+## What Daylens Is
+
+Daylens is a local-first desktop activity tracker for your laptop. It quietly logs what you're working on so you, and the AI tools you use, can ask grounded questions about your work history.
+
+It should help answer questions like:
+
+- "How much should I charge Client X based on how long I've been working on this for the past month?"
+- "What did I do between 2-4 pm on Wednesday?"
+- "Show me everything I touched for Project X. Why is it not working now if it worked yesterday?"
+
+Daylens is not:
+
+- an app-usage vanity dashboard
+- a client-only freelancer tool
+- a decorative AI chat wrapper
+
+## Product Goal
+
+The product works when a user can ask:
+
+> How much time did I spend on X this week, and what exactly was I doing?
+
+`X` can be a client, project, repo, class, research topic, internal initiative, document, or workstream.
+
+## Core Mental Model
+
+The user is doing work, not opening apps.
+
+Apps, tabs, files, websites, meetings, and windows are evidence.
+The primary unit of the system is a work session.
+A work session can span multiple tools and still be one coherent block of work.
+
+## Build Priorities
+
+Always build in this order:
+
+1. Tracking
+2. Persistence
+3. Timeline reconstruction
+4. AI query execution
+5. Apps surface usefulness
+6. Settings simplicity
+7. Advanced attribution
+
+If tracking or persistence is broken, stop and fix that before polishing secondary UI.
+
+## Agent Operating Discipline
+
+When the request is unclear, do not guess quietly. Ask a concise clarifying question, or use the available planning skills to sharpen the work:
+
+- use `grill-me` when the product/design direction needs stress-testing before implementation
+- use `grill-with-docs` when the plan needs to be reconciled with existing repo language, docs, or architecture decisions
+- use `to-prd` when the conversation should become an implementation-ready PRD or issue
+
+If the answer can be discovered by reading the codebase, inspect the code instead of asking the user. If the answer depends on product intent, validation scope, release risk, credentials, certificates, or a potentially destructive operation, ask before acting.
+
+Do not treat local green checks as shipped proof. Separate:
+
+- coded
+- typechecked/tested
+- dev-run
+- packaged
+- update-tested
+- provider-tested
+- real-machine validated on macOS, Windows, and Linux
+
+## Cross-Platform Parity
+
+Daylens ships as one desktop product across macOS, Windows, and Linux.
+
+Hard rules:
+
+- shared functionality should ship with cross-platform parity, not as a macOS-only idea that gets backfilled later
+- every feature in this codebase must be designed for macOS, Windows, and Linux by default
+- keyboard shortcuts, tray/menu behavior, launch-on-login, updater behavior, packaging, path handling, permissions, file opening, browser evidence, and diagnostics must all be checked for platform-specific assumptions
+- never use macOS behavior as the implicit definition of done for a shared feature
+- platform-native surfaces may differ in implementation, but should preserve parity of user value
+- if work is intentionally platform-specific, document the Windows and Linux expectation in the CHANGELOG or surface it in the next session prompt
+- do not mark a shared capability done if it only feels finished on one platform
+
+## In-App Update Contract
+
+The in-app update path is critical infrastructure. Do not break it.
+
+Any change touching releases, packaging, signing, app identity, artifact names, update feed URLs, download routes, installer targets, `latest*.yml`, release notes, version stamping, GitHub release workflows, or updater UI must preserve the ability for existing users to update from an older installed app to the next public build.
+
+Hard rules:
+
+- do not change `appId`, product identity, package identity, update provider shape, artifact names, or release tag conventions casually
+- do not remove or rename release assets that `electron-updater` expects without a migration path
+- do not publish unsigned public Windows installers; unsigned builds are internal preview artifacts only
+- do not claim update support is fixed unless an older installed build successfully finds, downloads, and applies the newer build, or the remaining validation gap is documented
+- if updater behavior cannot be validated in the current environment, mark it `implemented pending verification` in the CHANGELOG and surface it to the user
+- user-visible update notes must be short, meaningful, and user-facing; do not show internal function names, commit dumps, regex details, stop-list implementation, or scoped candidate jargon in banners or release highlights
+- if a fix risks stranding existing users on an old version, stop and ask before merging or releasing
+
+## Navigation Contract
+
+Top-level navigation stays minimal and universal:
+
+- Timeline
+- Apps
+- AI
+- Settings
+
+Do not make the product clients-first by default.
+
+## Timeline Contract
+
+The timeline is the proof surface of the product.
+
+If the timeline is empty, broken, or reset after restart, the product is broken.
+
+The timeline must:
+
+- reconstruct from persisted data on load
+- show prior tracked days and weeks
+- display coherent work blocks
+- support unattributed blocks without collapsing into blankness
+- separate active time, gaps, and breaks clearly
+- let the user drill into artifacts, apps used, and supporting evidence
+
+The timeline must not:
+
+- rely on renderer memory as the source of truth
+- disappear after relaunch
+- show raw terminal commands as the main story
+- fall back to raw app names when better work context exists
+
+### Work Block Heuristics
+
+`src/main/services/workBlocks.ts` is allowed to be heuristic, but it should stay legible and stable because it shapes the core proof surface.
+
+Current behavior to preserve unless there is a measured reason to change it:
+
+- coherent app/session clusters can remain merged as one block
+- slow-switch mixed runs can split into distinct tasks
+- standalone meetings should split out instead of being buried
+- high-context-switch developer testing flows can remain merged when splitting would create noise
+- visible labels should prefer user override, then useful AI labels, then stable evidence- or rule-based labels
+- background cleanup should revisit clearly weak legacy labels without churning already-good labels
+- low-confidence or unattributed blocks should stay visible
+
+When changing these heuristics:
+
+- protect persistence and reconstruction first
+- document material user-facing behavior changes in the CHANGELOG
+- do not make the live timeline depend on AI availability
+
+## Apps Surface Contract
+
+The Apps view is secondary. It exists to explain how tools participated in real work.
+
+It should answer:
+
+- What was I working on when I used this app?
+- Which files, tabs, docs, repos, or websites did I touch here?
+- Which other tools commonly appeared in the same work sessions?
+
+It should not prioritize:
+
+- session counts
+- vanity metrics
+- raw bundle IDs
+- generic filler summaries
+
+## AI Contract
+
+The AI surface must:
+
+- execute starter prompts correctly
+- support freeform queries
+- stream chat responses visibly in the renderer while keeping provider calls in backend orchestration
+- stay grounded in tracked local data
+- support copy, retry, and feedback controls
+- persist feedback locally and emit product telemetry for later review
+- support charts, tables, artifacts, and reports when requested
+- keep report/export generation inside the AI surface instead of growing a dedicated reports tab
+- persist local chat threads in `ai_threads` and generated artifacts in `ai_artifacts` plus `userData/artifacts/`
+
+Focus sessions, recap experiences, and report/export workflows should live inside the AI surface or be triggered from it unless there is a strong reason to create a separate entry point.
+
+Truthfulness rules:
+
+- deterministic first, AI second
+- never block Timeline, Apps, or persisted history on AI
+- keep labels stable and avoid visible churn
+- route AI through a backend orchestration layer, not ad hoc renderer calls
+- be honest that first-class structured attribution is currently strongest for clients and projects; broader workstreams may still rely on block and artifact evidence
+- do not claim cross-surface desktop-to-web AI continuity unless the desktop is actually writing shared remote AI rows
+
+## Settings Contract
+
+Settings should stay sparse, functional, and honest.
+
+Current allowed areas:
+
+- Tracking
+- Sync / workspace linking
+- AI provider / key / routing
+- Notifications
+- Privacy / export / delete
+- Launch and background behavior
+- Appearance
+- Updates
+- Sparse category overrides where they directly improve reconstruction quality
+
+Do not ship decorative settings, fake controls, membership fluff, or jargon-heavy dashboards.
+
+## Lifecycle And Data Principles
+
+The app must:
+
+- continue running when the main window closes
+- remain performant in the background
+- recover state after restart or reboot
+- preserve historical days and weeks
+- detect idle periods, sleep, wake, and likely breaks
+
+The database is the source of truth.
+
+Keep the layered model:
+
+- raw capture
+- activity segments
+- work sessions / work blocks
+- rollups and query payloads
+
+Never overwrite raw capture.
+Never make renderer state the source of truth.
+
+## Documentation And Audit Discipline
+
+When updating docs:
+
+- read code first, then docs
+- treat existing docs as hypotheses to verify or correct
+- use exact file references where helpful
+- separate code-proven behavior from inferred behavior and runtime-validated behavior
+- use language like `implemented pending verification` when code exists but runtime proof is missing
+- do not scatter status claims across docs; the source of truth is the code, the CHANGELOG names what shipped, and unfinished work is carried session-to-session via the user's prompt
+- keep remote-companion docs aligned with the actual `daylens` and `daylens-web` code, not stale summaries
+
+## What Must Never Ship
+
+Do not ship:
+
+- an empty timeline with tracking implied
+- views that reset after restart
+- dead prompt chips
+- fake summaries from thin data
+- app-centric metrics pretending to be work intelligence
+- clients-first navigation for everyone
+- decorative settings
+- desktop UI that feels like a downgraded SaaS dashboard
+
+## Definition Of Done
+
+A change is not done until all of these are true:
+
+1. Tracking works.
+2. Data persists after restart.
+3. Timeline shows real reconstructed blocks for today and prior days.
+4. AI starter prompts execute.
+5. Freeform AI questions return grounded responses.
+6. Apps explains work, not just app frequency.
+7. Settings contains only functional controls.
+8. The UI feels calmer, cleaner, and more native than before.
