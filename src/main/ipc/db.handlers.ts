@@ -884,9 +884,13 @@ function applyAIInsightToTimelineBlock(
   insight: WorkContextInsight,
 ): boolean {
   // Day-level cleanup preserves user overrides (force = false).
-  return writeAIBlockLabel(db, {
+  const wrote = writeAIBlockLabel(db, {
     blockId: block.id,
     label: insight.label ?? '',
     narrative: insight.narrative ?? null,
   })
+  if (!wrote) {
+    throw new Error(`AI label could not be persisted for block ${block.id}.`)
+  }
+  return true
 }
