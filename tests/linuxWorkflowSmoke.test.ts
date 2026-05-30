@@ -13,17 +13,17 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), workflowPath), 'utf8')
     assert.match(
       source,
-      /dbus-run-session -- xvfb-run -a env[\s\S]*?DAYLENS_SMOKE_REPORT_PATH="\$RUNNER_TEMP\/daylens-appimage-smoke\.json"/,
+      /timeout 90s dbus-run-session -- xvfb-run -a env[\s\S]*?DAYLENS_SMOKE_REPORT_PATH="\$RUNNER_TEMP\/daylens-appimage-smoke\.json"/,
       `${workflowPath} should run AppImage smoke under dbus-run-session`,
     )
     assert.match(
       source,
-      /dbus-run-session -- xvfb-run -a env[\s\S]*?DAYLENS_SMOKE_REPORT_PATH="\$RUNNER_TEMP\/daylens-deb-smoke\.json"/,
+      /timeout 90s dbus-run-session -- xvfb-run -a env[\s\S]*?DAYLENS_SMOKE_REPORT_PATH="\$RUNNER_TEMP\/daylens-deb-smoke\.json"/,
       `${workflowPath} should run deb smoke under dbus-run-session`,
     )
     assert.match(
       source,
-      /dbus-run-session -- "\$APP_PATH"[\s\S]*?DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json|DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json[\s\S]*?dbus-run-session -- "\$APP_PATH"/,
+      /timeout 90s dbus-run-session -- "\$APP_PATH"[\s\S]*?DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json|DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json[\s\S]*?timeout 90s dbus-run-session -- "\$APP_PATH"/,
       `${workflowPath} should run rpm smoke under dbus-run-session`,
     )
   }

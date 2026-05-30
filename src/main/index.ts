@@ -253,14 +253,19 @@ async function waitForRendererLoad(win: BrowserWindow): Promise<void> {
   })
 }
 
-async function runSmokeValidation(win: BrowserWindow): Promise<void> {
+type SmokeValidationTrigger = 'ready-to-show' | 'did-finish-load' | 'watchdog'
+
+async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTrigger): Promise<void> {
   try {
-    await waitForRendererLoad(win)
+    if (trigger === 'watchdog') {
+      await waitForRendererLoad(win)
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_500))
 
     writeSmokeReport({
       ok: true,
       stage: 'smoke-complete',
+      smokeTrigger: trigger,
       reportPath: SMOKE_REPORT_PATH,
       platform: process.platform,
       version: app.getVersion(),
@@ -282,6 +287,7 @@ async function runSmokeValidation(win: BrowserWindow): Promise<void> {
     writeSmokeReport({
       ok: false,
       stage: 'smoke-runtime',
+      smokeTrigger: trigger,
       reportPath: SMOKE_REPORT_PATH,
       platform: process.platform,
       version: app.getVersion(),
@@ -540,19 +546,20 @@ function createWindow(): BrowserWindow {
   })
 
   let smokeValidationStarted = false
-  const maybeRunLinuxSmokeValidation = () => {
+  const maybeRunLinuxSmokeValidation = (trigger: SmokeValidationTrigger) => {
     if (!SMOKE_TEST || process.platform !== 'linux') return
     if (smokeValidationStarted) return
     smokeValidationStarted = true
-    void runSmokeValidation(win)
+    void runSmokeValidation(win, trigger)
   }
 
   win.once('ready-to-show', () => {
     win.show()
+    maybeRunLinuxSmokeValidation('ready-to-show')
   })
-  win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)
+  win.webContents.once('did-finish-load', () => maybeRunLinuxSmokeValidation('did-finish-load'))
   if (SMOKE_TEST && process.platform === 'linux') {
-    setTimeout(maybeRunLinuxSmokeValidation, 20_000)
+    setTimeout(() => maybeRunLinuxSmokeValidation('watchdog'), 20_000)
   }
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
