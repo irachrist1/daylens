@@ -548,6 +548,9 @@ function createWindow(): BrowserWindow {
     maybeRunLinuxSmokeValidation()
   })
   win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)
+  if (SMOKE_TEST && process.platform === 'linux') {
+    setTimeout(maybeRunLinuxSmokeValidation, 20_000)
+  }
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
