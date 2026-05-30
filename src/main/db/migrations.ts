@@ -1462,6 +1462,11 @@ const migrations: Migration[] = [
     },
   },
   {
+    version: 23,
+    description: 'Reserved no-op after removing the iMessage capture table migration',
+    up: () => {},
+  },
+  {
     version: 24,
     description: 'Scrub pipe-joined tab-title soup from persisted timeline_blocks.label_current (B1/B10 backfill)',
     up: () => {
