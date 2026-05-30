@@ -170,3 +170,26 @@ test('AICompose.tsx specifically does not call useRef inside a NODE_ENV check', 
     }
   }
 })
+
+test('AICompose.tsx does not log from the render path', () => {
+  const file = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'AICompose.tsx')
+  const source = fs.readFileSync(file, 'utf8')
+  // Scope to the known render-path marker rather than banning every console.*
+  // in the file, which would trip on unrelated debug logging.
+  assert.doesNotMatch(source, /\[AICompose\]\s*render/)
+})
+
+test('AI workspace keeps local search typing state out of the parent AI view', () => {
+  const workspace = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'AIWorkspace.tsx')
+  const search = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'LocalHistorySearch.tsx')
+  const workspaceSource = fs.readFileSync(workspace, 'utf8')
+  const searchSource = fs.readFileSync(search, 'utf8')
+  const parentStart = workspaceSource.indexOf('export default function AIWorkspace()')
+  const parentEnd = parentStart >= 0
+    ? workspaceSource.slice(parentStart).search(/\n\s*return \(/) + parentStart
+    : -1
+  assert.ok(parentStart >= 0 && parentEnd > parentStart, 'could not locate AIWorkspace component body')
+  const parentPrelude = workspaceSource.slice(parentStart, parentEnd)
+  assert.doesNotMatch(parentPrelude, /\[\s*searchQuery\s*,\s*setSearchQuery\s*\]/)
+  assert.match(searchSource, /export const LocalHistorySearch = memo\(function LocalHistorySearch/)
+})

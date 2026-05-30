@@ -19,7 +19,7 @@ test('timeline does not render focus percentage or focused-time copy', () => {
 })
 
 test('ai landing summary does not render focus percentage copy', () => {
-  const source = readSource('src/renderer/views/Insights.tsx')
+  const source = readSource('src/renderer/views/insights/AIWorkspace.tsx')
 
   assert.doesNotMatch(source, /focusPct}%/)
   assert.doesNotMatch(source, /counted as focused time/)
