@@ -5214,16 +5214,6 @@ export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   // next read after the cooldown retries cleanly.
   if (isBackgroundAIOnCooldown()) return
 
-  // Block labeling is deferred until a day is complete (the evening-only
-  // summarization policy). The live day keeps its rule-based labels; its blocks
-  // are AI-labeled after rollover when the day becomes a past day. Past days are
-  // still labeled here on read and via the overnight cleanup sweep.
-  const today = currentLocalDateString()
-  if (payload.date === today) {
-    scheduleOvernightCleanup(today)
-    return
-  }
-
   // GET_TIMELINE_DAY runs on every 30s today-poll, every week-view fan-out, and
   // every Day Wrapped open. Skip the per-block scheduling when this day's blocks
   // are byte-for-byte what they were last time we scheduled them (F15).
