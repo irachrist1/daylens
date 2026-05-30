@@ -23,6 +23,11 @@ test('linux smoke workflows launch Electron inside a DBus session', () => {
     )
     assert.match(
       source,
+      /if \[ -f "\$candidate" \] && \[ -x "\$candidate" \] && \[ "\$\(basename "\$candidate"\)" = "daylens" \]/,
+      `${workflowPath} should resolve package smoke APP_PATH to an executable daylens file`,
+    )
+    assert.match(
+      source,
       /timeout 90s dbus-run-session -- "\$APP_PATH"[\s\S]*?DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json|DAYLENS_SMOKE_REPORT_PATH=\/smoke\/daylens-rpm-smoke\.json[\s\S]*?timeout 90s dbus-run-session -- "\$APP_PATH"/,
       `${workflowPath} should run rpm smoke under dbus-run-session`,
     )
