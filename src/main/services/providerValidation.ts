@@ -4,9 +4,19 @@ function detectProviderFromApiKey(key: string): AIProvider | null {
   const trimmed = key.trim()
   if (!trimmed) return null
   if (trimmed.startsWith('sk-ant-')) return 'anthropic'
+  if (trimmed.startsWith('sk-or-')) return 'openrouter'
   if (trimmed.startsWith('AIza')) return 'google'
   if (trimmed.startsWith('sk-')) return 'openai'
   return null
+}
+
+function providerDisplayName(provider: AIProvider): string {
+  switch (provider) {
+    case 'anthropic': return 'Claude'
+    case 'openai': return 'OpenAI'
+    case 'google': return 'Gemini'
+    case 'openrouter': return 'OpenRouter'
+  }
 }
 
 function unsupportedFormat(provider: AIProvider, detectedProvider: AIProvider | null): ProviderConnectionResult {
@@ -15,7 +25,7 @@ function unsupportedFormat(provider: AIProvider, detectedProvider: AIProvider | 
     provider,
     detectedProvider,
     message: detectedProvider && detectedProvider !== provider
-      ? `That looks like a ${detectedProvider === 'anthropic' ? 'Claude' : detectedProvider === 'openai' ? 'OpenAI' : 'Gemini'} key, not a ${provider === 'anthropic' ? 'Claude' : provider === 'openai' ? 'OpenAI' : 'Gemini'} key.`
+      ? `That looks like a ${providerDisplayName(detectedProvider)} key, not a ${providerDisplayName(provider)} key.`
       : 'That key format does not match the selected provider yet.',
     canSaveAnyway: false,
   }
@@ -35,6 +45,13 @@ function endpointForProvider(provider: AIProvider): { url: string; headers: Reco
       return {
         url: 'https://generativelanguage.googleapis.com/v1beta/models',
         headers: {},
+      }
+    case 'openrouter':
+      return {
+        url: 'https://openrouter.ai/api/v1/key',
+        headers: {
+          Authorization: '',
+        },
       }
     case 'openai':
     default:
@@ -81,11 +98,7 @@ export async function validateProviderConnection(provider: AIProvider, key: stri
         status: 'valid',
         provider,
         detectedProvider,
-        message: provider === 'anthropic'
-          ? 'Claude is connected and ready.'
-          : provider === 'openai'
-            ? 'OpenAI is connected and ready.'
-            : 'Gemini is connected and ready.',
+        message: `${providerDisplayName(provider)} is connected and ready.`,
         canSaveAnyway: false,
       }
     }

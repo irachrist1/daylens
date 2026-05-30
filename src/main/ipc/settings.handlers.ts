@@ -1,4 +1,4 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain } from 'electron'
 import { ANALYTICS_EVENT, sanitizeSettingsChangedKeys } from '@shared/analytics'
 import {
   getSettingsAsync,
@@ -8,15 +8,8 @@ import {
   clearApiKey,
 } from '../services/settings'
 import { capture, updateAnalyticsPreference } from '../services/analytics'
-import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, startMcpServer, stopMcpServer } from '../services/mcpServer'
-import {
-  syncImessageCapture,
-  imessageCaptureSupportedOnPlatform,
-  startImessageCaptureScheduler,
-  stopImessageCaptureScheduler,
-} from '../services/imessageCapture'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -42,10 +35,6 @@ export function registerSettingsHandlers(): void {
       await updateAnalyticsPreference(true)
     }
 
-    if ('launchOnLogin' in partial && app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: partial.launchOnLogin as boolean })
-      await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
-    }
     // Only reload Insights when an AI model/provider value actually changed —
     // not merely because the key was present in the saved partial (F42). Saving
     // unrelated settings no longer triggers a full Insights projection reload.
@@ -59,14 +48,6 @@ export function registerSettingsHandlers(): void {
         startMcpServer()
       } else {
         stopMcpServer()
-      }
-    }
-
-    if ('imessageCaptureEnabled' in partial) {
-      if (partial.imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
-        startImessageCaptureScheduler()
-      } else {
-        stopImessageCaptureScheduler()
       }
     }
 
@@ -109,20 +90,4 @@ export function registerSettingsHandlers(): void {
   })
 
   ipcMain.handle(IPC.MCP.GET_CONFIG, () => getMcpServerConfig())
-
-  ipcMain.handle(IPC.IMESSAGE.SYNC_NOW, async () => {
-    const settings = await getSettingsAsync()
-    if (!settings.imessageCaptureEnabled) {
-      return { ok: false, inserted: 0, lastSentAt: null, error: 'iMessage capture is disabled in Settings.' }
-    }
-    return syncImessageCapture()
-  })
-
-  ipcMain.handle(IPC.IMESSAGE.GET_STATUS, async () => {
-    const settings = await getSettingsAsync()
-    return {
-      enabled: Boolean(settings.imessageCaptureEnabled),
-      platformSupported: imessageCaptureSupportedOnPlatform(),
-    }
-  })
 }

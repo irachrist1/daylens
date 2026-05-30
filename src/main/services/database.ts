@@ -72,8 +72,18 @@ export function initDb(): void {
     // Synchronize versioned derived-state metadata and repair older local DBs
     // whose schema drifted before the formal metadata layer existed.
     syncDerivedStateMetadata(_db)
-    repairStoredIdentityColumns(_db)
-    repairStoredAppIdentityObservations(_db)
+    // Deferred to a background macrotask to keep cold launch instantaneous (F1 & F2 optimization)
+    setImmediate(() => {
+      try {
+        if (_db) {
+          repairStoredIdentityColumns(_db)
+          repairStoredAppIdentityObservations(_db)
+          console.log('[db] background startup repairs completed')
+        }
+      } catch (err) {
+        console.warn('[db] deferred repairs failed:', err)
+      }
+    })
 
     // Snapshot the table set after all schema/migration work so hot-path
     // `tableExists` calls resolve from memory.

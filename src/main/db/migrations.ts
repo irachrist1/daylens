@@ -1462,27 +1462,6 @@ const migrations: Migration[] = [
     },
   },
   {
-    version: 23,
-    description: 'Add imessage_events table for optional iMessage capture (macOS, opt-in)',
-    up: () => {
-      const db = getDb()
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS imessage_events (
-          rowid           INTEGER PRIMARY KEY,
-          chat_guid       TEXT,
-          chat_label      TEXT,
-          handle_id       TEXT,
-          is_from_me      INTEGER NOT NULL DEFAULT 0,
-          text            TEXT,
-          sent_at         INTEGER NOT NULL,
-          captured_at     INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_imessage_events_sent ON imessage_events (sent_at);
-        CREATE INDEX IF NOT EXISTS idx_imessage_events_handle ON imessage_events (handle_id, sent_at);
-      `)
-    },
-  },
-  {
     version: 24,
     description: 'Scrub pipe-joined tab-title soup from persisted timeline_blocks.label_current (B1/B10 backfill)',
     up: () => {

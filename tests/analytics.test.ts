@@ -17,7 +17,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     query_kind: 'report',
     reason: 'https://example.com/private/doc',
     score: 5,
-    settings_changed_keys: ['analyticsOptIn', 'launchOnLogin', 'windowTitle', 'launchOnLogin'],
+    settings_changed_keys: ['analyticsOptIn', 'windowTitle', 'theme'],
     suggestion_text: 'Summarize the repo named daylens-windows',
     surface: 'ai',
     tracked_time_bucket: '1_3h',
@@ -31,7 +31,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     has_comment: true,
     query_kind: 'report',
     score: 5,
-    settings_changed_keys: ['analyticsOptIn', 'launchOnLogin'],
+    settings_changed_keys: ['analyticsOptIn', 'theme'],
     surface: 'ai',
     tracked_time_bucket: '1_3h',
     trigger: 'freeform',
@@ -45,10 +45,9 @@ test('sanitizeSettingsChangedKeys only keeps supported settings keys', () => {
       'theme',
       'analyticsOptIn',
       'windowTitle',
-      'launchOnLogin',
       'theme',
     ]),
-    ['analyticsOptIn', 'launchOnLogin', 'theme'],
+    ['analyticsOptIn', 'theme'],
   )
 })
 

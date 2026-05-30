@@ -2,16 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
 import type Database from 'better-sqlite3'
 import type { AIMessageRating } from '@shared/types'
-import { getSettings } from './settings'
-
-declare const __DAYLENS_CONVEX_SITE_URL__: string | undefined
 
 const CLIENT_ID_KEY = 'aiFeedbackClientId'
 const USER_PROMPT_MAX_CHARS = 2_000
 const ASSISTANT_ANSWER_MAX_CHARS = 4_000
-const DEFAULT_CONVEX_SITE_URL = typeof __DAYLENS_CONVEX_SITE_URL__ === 'string'
-  ? __DAYLENS_CONVEX_SITE_URL__
-  : 'https://decisive-aardvark-847.convex.site'
 
 type StoreLike = {
   get: (key: string, defaultValue?: unknown) => unknown
@@ -236,30 +230,12 @@ export async function buildAIFeedbackUploadPayload(
 }
 
 export async function uploadRatedAIMessageFeedback(
-  db: Database.Database,
-  messageId: number,
-  rating: AIMessageRating | null,
-  deps: AIFeedbackUploadDeps = {},
+  _db: Database.Database,
+  _messageId: number,
+  _rating: AIMessageRating | null,
+  _deps: AIFeedbackUploadDeps = {},
 ): Promise<void> {
-  if (!rating) return
-  const settings = deps.getSettings?.() ?? getSettings()
-  if (!settings.shareAIFeedbackExamples) return
-
-  try {
-    const payload = await buildAIFeedbackUploadPayload(db, messageId, rating, deps)
-    if (!payload) return
-
-    const siteUrl = (deps.getSiteUrl?.() ?? DEFAULT_CONVEX_SITE_URL).replace(/\/+$/, '')
-    if (!siteUrl) return
-
-    const fetchImpl = deps.fetch ?? fetch
-    await fetchImpl(`${siteUrl}/feedback/ai-message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch (error) {
-    const warn = deps.warn ?? ((message: string, err: unknown) => console.warn(message, err))
-    warn('[ai-feedback] upload failed:', error)
-  }
+  // Cloud uploads are disabled in this offline private build.
+  // Rating remains fully persisted locally in the local SQLite 'ai_messages' table.
+  return Promise.resolve()
 }

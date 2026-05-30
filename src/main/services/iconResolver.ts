@@ -21,7 +21,7 @@ const ICON_FETCH_HEADERS = {
 }
 const WEBSITE_ICON_TTL_MS = 7 * 24 * 60 * 60 * 1_000
 const NEGATIVE_ICON_TTL_MS = 15 * 60 * 1_000
-const ICON_CACHE_VERSION = 5
+const ICON_CACHE_VERSION = 6
 const MAC_BUNDLE_THUMBNAIL_SIZE = 256
 
 type SettingsSnapshot = Pick<AppSettings, 'allowThirdPartyWebsiteIconFallback'>
@@ -65,8 +65,10 @@ type ArtifactIconRequest = Extract<IconRequest, { kind: 'artifact' }>
 
 const memoryCache = new Map<string, DiskCacheEntry>()
 const inFlightResolutions = new Map<string, Promise<ResolvedIconPayload>>()
+const ICON_DEBUG = process.env.DAYLENS_ICON_DEBUG === '1'
 
 function iconLog(message: string, details?: Record<string, unknown>): void {
+  if (!ICON_DEBUG) return
   if (details) {
     console.log(`[icons] ${message}`, details)
     return
@@ -1200,7 +1202,7 @@ function payloadToEntry(
 
 function settingsSnapshot(overrides?: IconResolverOverrides): SettingsSnapshot {
   return overrides?.settings ?? {
-    allowThirdPartyWebsiteIconFallback: getSettings().allowThirdPartyWebsiteIconFallback ?? true,
+    allowThirdPartyWebsiteIconFallback: getSettings().allowThirdPartyWebsiteIconFallback ?? false,
   }
 }
 
@@ -1482,7 +1484,12 @@ async function resolveArtifactIconUncached(
   })
   const fileIcon = overrides?.getFileIconDataUrl ?? defaultGetFileIconDataUrl
 
-  if (normalized.path) {
+  // Local OS file icons only apply to genuine on-disk artifacts. Web artifacts
+  // carry a `host` and a URL-style `path` (e.g. "skills/.../SKILL.md" on
+  // github.com); for those, `app.getFileIcon` returns a generic near-white
+  // document icon, which both looks blank and hides the real site favicon. So
+  // skip the file-icon path whenever a host is present and prefer the favicon.
+  if (normalized.path && !normalized.host) {
     const dataUrl = await fileIcon(normalized.path)
     if (dataUrl) {
       iconLog('resolve artifact icon: file hit', {

@@ -169,7 +169,6 @@ const SAFE_ARRAY_KEYS = new Set([
 ])
 
 export const TRACKING_SETTING_KEYS = [
-  'launchOnLogin',
 ] as const
 
 export const AI_SETTING_KEYS = [

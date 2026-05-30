@@ -1,5 +1,6 @@
 // Raw better-sqlite3 queries — will be typed Drizzle functions in Phase 2a
 import type Database from 'better-sqlite3'
+import crypto from 'node:crypto'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import type {
   AIConversationState,
@@ -2073,6 +2074,71 @@ export function clearBlockLabelOverride(
 ): void {
   db.prepare(`DELETE FROM block_label_overrides WHERE block_id = ?`).run(blockId)
   db.prepare(`DELETE FROM timeline_block_labels WHERE block_id = ? AND source = 'user'`).run(blockId)
+}
+
+// Single source of truth for persisting an AI block label, shared by the
+// day-level "Re-analyze with AI" path and the per-block "Regenerate label"
+// path so both write identically (docs/PERF-COHERENCE-MAP.md §5b).
+//   - force = false: preserve a user override (no-op if one exists).
+//   - force = true:  the user explicitly asked to redo this block, so drop any
+//     override and write unconditionally.
+// Returns true if a row was written.
+export function writeAIBlockLabel(
+  db: Database.Database,
+  params: {
+    blockId: string
+    label: string
+    narrative?: string | null
+    confidence?: number
+    force?: boolean
+  },
+): boolean {
+  const label = params.label.trim()
+  if (!label) return false
+  const narrative = params.narrative ?? null
+  const confidence = params.confidence ?? 0.72
+  const now = Date.now()
+
+  if (params.force) {
+    clearBlockLabelOverride(db, params.blockId)
+  }
+
+  const overrideGuard = params.force
+    ? ''
+    : 'AND NOT EXISTS (SELECT 1 FROM block_label_overrides WHERE block_id = ?)'
+  const bindings: (string | number | null)[] = params.force
+    ? [label, confidence, narrative, now, params.blockId]
+    : [label, confidence, narrative, now, params.blockId, params.blockId]
+
+  const result = db.prepare(`
+    UPDATE timeline_blocks
+    SET label_current = ?,
+        label_source = 'ai',
+        label_confidence = ?,
+        narrative_current = ?,
+        computed_at = ?
+    WHERE id = ?
+      ${overrideGuard}
+  `).run(...bindings)
+
+  if (result.changes === 0) return false
+
+  const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
+  db.prepare(`
+    INSERT OR REPLACE INTO timeline_block_labels (
+      id,
+      block_id,
+      label,
+      narrative,
+      source,
+      confidence,
+      created_at,
+      model_info_json
+    )
+    VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
+  `).run(`${params.blockId}:ai:${labelHash}`, params.blockId, label, narrative, confidence, now, null)
+
+  return true
 }
 
 export function getBlockLabelOverride(

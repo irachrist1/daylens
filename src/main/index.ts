@@ -57,7 +57,6 @@ import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
-import { startImessageCaptureScheduler, imessageCaptureSupportedOnPlatform } from './services/imessageCapture'
 import { initDb, closeDb, getDb } from './services/database'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
@@ -748,8 +747,8 @@ app.whenReady()
     await initAnalytics()
     installApplicationMenu()
     if (app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
-      await syncLinuxLaunchOnLogin(getSettings().launchOnLogin)
+      app.setLoginItemSettings({ openAtLogin: true })
+      await syncLinuxLaunchOnLogin(true)
     }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)
@@ -759,7 +758,7 @@ app.whenReady()
     }
 
     const launchSettings = getSettings()
-    const launchProvider = launchSettings.aiChatProvider ?? launchSettings.aiProvider
+    const launchProvider = launchSettings.aiProvider
     const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'codex-cli'
       ? true
       : await hasApiKey(launchProvider)
@@ -826,9 +825,6 @@ app.whenReady()
       if (isQuitting) return
       if (getSettings().mcpServerEnabled) {
         startMcpServer()
-      }
-      if (getSettings().imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
-        startImessageCaptureScheduler()
       }
     }, 3_000)
 

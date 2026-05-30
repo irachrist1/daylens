@@ -1,5 +1,4 @@
 import { ipcMain } from 'electron'
-import crypto from 'node:crypto'
 import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
@@ -12,6 +11,7 @@ import {
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
+  writeAIBlockLabel,
 } from '../db/queries'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
@@ -883,41 +883,10 @@ function applyAIInsightToTimelineBlock(
   block: WorkContextBlock,
   insight: WorkContextInsight,
 ): boolean {
-  const label = insight.label?.trim()
-  if (!label) return false
-
-  const now = Date.now()
-  const result = db.prepare(`
-    UPDATE timeline_blocks
-    SET label_current = ?,
-        label_source = 'ai',
-        label_confidence = ?,
-        narrative_current = ?,
-        computed_at = ?
-    WHERE id = ?
-      AND NOT EXISTS (
-        SELECT 1
-        FROM block_label_overrides
-        WHERE block_id = ?
-      )
-  `).run(label, 0.72, insight.narrative ?? null, now, block.id, block.id)
-
-  if (result.changes === 0) return false
-
-  const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
-  db.prepare(`
-    INSERT OR REPLACE INTO timeline_block_labels (
-      id,
-      block_id,
-      label,
-      narrative,
-      source,
-      confidence,
-      created_at,
-      model_info_json
-    )
-    VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
-  `).run(`${block.id}:ai:${labelHash}`, block.id, label, insight.narrative ?? null, 0.72, now, null)
-
-  return true
+  // Day-level cleanup preserves user overrides (force = false).
+  return writeAIBlockLabel(db, {
+    blockId: block.id,
+    label: insight.label ?? '',
+    narrative: insight.narrative ?? null,
+  })
 }

@@ -271,12 +271,6 @@ const api = {
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
   },
-  imessage: {
-    syncNow: (): Promise<{ ok: boolean; inserted: number; lastSentAt: number | null; error?: string }> =>
-      ipcRenderer.invoke(IPC.IMESSAGE.SYNC_NOW),
-    getStatus: (): Promise<{ enabled: boolean; platformSupported: boolean }> =>
-      ipcRenderer.invoke(IPC.IMESSAGE.GET_STATUS),
-  },
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>
       ipcRenderer.send('analytics:capture', event, properties),
