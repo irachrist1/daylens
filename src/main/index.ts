@@ -320,10 +320,12 @@ function startBackgroundServices(): void {
 
   startTracking()
   startFocusCapture()
-  startSync()
-  startDailySummaryNotifier(mainWindow)
-  setDistractionAlertWindow(mainWindow)
-  startDistractionAlerter()
+  if (!SMOKE_TEST) {
+    startSync()
+    startDailySummaryNotifier(mainWindow)
+    setDistractionAlertWindow(mainWindow)
+    startDistractionAlerter()
+  }
   backgroundServicesStarted = true
 
   setTimeout(() => {
@@ -342,9 +344,11 @@ function startBackgroundServices(): void {
     })
   }, 5_000)
 
-  setTimeout(() => {
-    setTimeout(() => finalizePreviousDay(), 0)
-  }, 10_000)
+  if (!SMOKE_TEST) {
+    setTimeout(() => {
+      setTimeout(() => finalizePreviousDay(), 0)
+    }, 10_000)
+  }
 }
 
 async function backupUserDataForUpdate(): Promise<void> {
