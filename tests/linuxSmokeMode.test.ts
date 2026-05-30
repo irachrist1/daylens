@@ -20,6 +20,16 @@ test('linux smoke mode does not start remote sync or startup workload timers', (
   )
 })
 
+test('linux smoke mode disables gpu-dependent renderer startup paths', () => {
+  const source = fs.readFileSync(MAIN_PROCESS_SOURCE, 'utf8')
+
+  assert.match(
+    source,
+    /if \(process\.platform === 'linux' && SMOKE_TEST\) \{[\s\S]*?app\.disableHardwareAcceleration\(\)[\s\S]*?appendSwitch\('disable-gpu'\)[\s\S]*?appendSwitch\('disable-dev-shm-usage'\)[\s\S]*?\}/,
+    'linux smoke mode should disable hardware/gpu paths before app ready',
+  )
+})
+
 test('linux smoke load fallback is registered before the renderer starts loading', () => {
   const source = fs.readFileSync(MAIN_PROCESS_SOURCE, 'utf8')
   const didFinishLoadListener = source.indexOf("win.webContents.once('did-finish-load', maybeRunLinuxSmokeValidation)")
