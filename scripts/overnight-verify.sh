@@ -47,6 +47,7 @@ SAFE_TESTS=(
   tests/processMonitorParse.test.ts
   tests/linuxPackageScripts.test.ts
   tests/linuxSmokeMode.test.ts
+  tests/linuxWorkflowSmoke.test.ts
   tests/settingsApiKeyOverride.test.ts
 )
 

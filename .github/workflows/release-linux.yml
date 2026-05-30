@@ -134,7 +134,7 @@ jobs:
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
           chmod +x "dist-release/Daylens-${VERSION}.AppImage"
-          xvfb-run -a env \
+          dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
@@ -156,7 +156,7 @@ jobs:
           sudo dpkg -i "$PACKAGE_FILE" || sudo apt-get install -f -y
           APP_PATH="$(dpkg -L "$PACKAGE_NAME" | grep '/daylens$' | head -n 1)"
           test -n "$APP_PATH"
-          xvfb-run -a env \
+          dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
             "$APP_PATH" \
@@ -193,7 +193,7 @@ jobs:
               export DISPLAY=:99
               export DAYLENS_SMOKE_TEST=1
               export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
-              "$APP_PATH" \
+              dbus-run-session -- "$APP_PATH" \
                 --no-sandbox \
                 --disable-setuid-sandbox
               node scripts/verify-linux-smoke.js \
