@@ -16,7 +16,7 @@ import os from 'node:os'
 import type Database from 'better-sqlite3'
 import { createWorkspaceThreadId } from '@daylens/remote-contract'
 import { getDb } from './database'
-import type { AIArtifactContent, AIArtifactKind, AIArtifactRecord } from '@shared/types'
+import type { AIArtifactContent, AIArtifactKind, AIArtifactRecord, AIThreadSettings } from '@shared/types'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, byteSizeBucket, type AnalyticsEventName } from '@shared/analytics'
 import { DEFAULT_THREAD_TITLE, normalizeThreadTitle } from '../lib/threadTitles'
@@ -445,6 +445,47 @@ export function touchThreadLastMessage(db: Database.Database, threadId: number, 
 export function getThread(threadId: number): ThreadRowLite | null {
   const rows = listThreadsLite({ includeArchived: true, limit: 1000 })
   return rows.find((row) => row.id === threadId) ?? null
+}
+
+// ── D4: per-thread settings, stored in ai_threads.metadata_json.settings ──────
+
+function readThreadMetadata(db: Database.Database, threadId: number): Record<string, unknown> {
+  const row = db.prepare('SELECT metadata_json FROM ai_threads WHERE id = ?').get(threadId) as { metadata_json: string | null } | undefined
+  if (!row?.metadata_json) return {}
+  try {
+    const parsed = JSON.parse(row.metadata_json)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+export function getThreadSettings(threadId: number, db: Database.Database = getDb()): AIThreadSettings {
+  const meta = readThreadMetadata(db, threadId)
+  const settings = (meta.settings ?? {}) as AIThreadSettings
+  return {
+    provider: settings.provider ?? null,
+    model: settings.model ?? null,
+    instructions: settings.instructions ?? null,
+  }
+}
+
+export function setThreadSettings(threadId: number, patch: AIThreadSettings, db: Database.Database = getDb()): AIThreadSettings {
+  const meta = readThreadMetadata(db, threadId)
+  const current = (meta.settings ?? {}) as AIThreadSettings
+  // Each field: an explicit value in the patch overrides; undefined keeps the
+  // current value. Empty strings normalize to null (= "use the global setting").
+  const provider = patch.provider !== undefined ? patch.provider : current.provider ?? null
+  const model = patch.model !== undefined ? patch.model : current.model ?? null
+  const instructionsRaw = patch.instructions !== undefined ? patch.instructions : current.instructions ?? null
+  const next: AIThreadSettings = {
+    provider: provider || null,
+    model: model || null,
+    instructions: instructionsRaw && String(instructionsRaw).trim() ? String(instructionsRaw).trim() : null,
+  }
+  db.prepare('UPDATE ai_threads SET metadata_json = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify({ ...meta, settings: next }), Date.now(), threadId)
+  return next
 }
 
 export function ensureDefaultThread(conversationId: number): number {

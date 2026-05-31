@@ -734,6 +734,7 @@ export function useAIChat() {
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
+    providerAvailability,
     analyticsContext,
   }
 }

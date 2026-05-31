@@ -466,6 +466,17 @@ export interface AIThreadSummary {
   lastSnippet?: string | null
 }
 
+// D4: per-thread overrides, stored in ai_threads.metadata_json (no migration).
+// `provider` + `model` are set together (a model picked from the catalog) and
+// take precedence over the global chat provider for this thread's turns, but
+// only when that provider actually has a key. `instructions` are appended to
+// the system prompt. Empty/absent fields fall back to the global settings.
+export interface AIThreadSettings {
+  provider?: AIProviderMode | null
+  model?: string | null
+  instructions?: string | null
+}
+
 export type AIArtifactKind =
   | 'markdown'
   | 'csv'
@@ -1276,6 +1287,8 @@ export const IPC = {
     ARCHIVE_THREAD: 'ai:archive-thread',
     RENAME_THREAD: 'ai:rename-thread',
     DELETE_THREAD: 'ai:delete-thread',
+    GET_THREAD_SETTINGS: 'ai:get-thread-settings',
+    SET_THREAD_SETTINGS: 'ai:set-thread-settings',
     LIST_ARTIFACTS: 'ai:list-artifacts',
     GET_ARTIFACT: 'ai:get-artifact',
     OPEN_ARTIFACT: 'ai:open-artifact',

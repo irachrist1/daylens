@@ -65,6 +65,7 @@ import {
   createArtifact,
   createThread,
   getThread,
+  getThreadSettings,
   listArtifactsByThread,
   renameThread,
   touchThreadLastMessage,
@@ -5605,8 +5606,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   // R2: resolve the chat provider from the same setting the UI shows
   // (aiChatProvider ?? aiProvider) so the answer, the executing provider, and
   // the "what model are you" string can never disagree.
-  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  const chatModel = modelForProvider(chatProvider, 'quality', settings)
+  // D4: a per-thread override (provider + model, set together from the catalog)
+  // wins for this thread — e.g. drop a flaky thread onto a higher-limit model
+  // without touching the global setting — but only when that provider has a key.
+  const threadSettings = getThreadSettings(threadId)
+  let chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  let chatModel = modelForProvider(chatProvider, 'quality', settings)
+  if (threadSettings.provider && threadSettings.model) {
+    const overrideHasKey = threadSettings.provider === 'claude-cli'
+      || threadSettings.provider === 'codex-cli'
+      || Boolean(await getApiKey(threadSettings.provider))
+    if (overrideHasKey) {
+      chatProvider = threadSettings.provider
+      chatModel = threadSettings.model
+    }
+  }
+  // D4: per-thread additional instructions, appended to the system prompt below.
+  const threadInstructionBlock = threadSettings.instructions
+    ? `\n\nThe user set these additional instructions for this chat. Follow them unless they conflict with grounding or honesty:\n${threadSettings.instructions}`
+    : ''
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
     : `You are Daylens, a personal productivity coach embedded in a local screen-time tracker.`
@@ -5637,7 +5655,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       USER_VISIBLE_ACTIVITY_PROSE_RULE,
       APP_VOCABULARY_HINT,
       `If asked what model is powering this chat: say you are Daylens, currently routed through ${providerLabel(chatProvider)} (${chatModel}).`,
-    ].join('\n')
+    ].join('\n') + threadInstructionBlock
 
     if (process.env.NODE_ENV === 'development') {
       console.log(`[ai:chat] tool-use path → provider=${chatProvider} model=${chatModel}`)
@@ -5717,7 +5735,8 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         : 'No activity has been recorded yet today. If the user asks about stats for today specifically, say tracking needs more time — but lifetime data above may still apply.') +
       (specificTimeContext ? `\n\nSpecific historical context:\n${specificTimeContext}` : '') +
       (attributionDayCtx ? `\n\nAttribution-layer work sessions (JSON):\n${attributionDayCtx}` : '') +
-      (attributionEntityCtx ? `\n\nClient/project attribution context (JSON):\n${attributionEntityCtx}` : '')
+      (attributionEntityCtx ? `\n\nClient/project attribution context (JSON):\n${attributionEntityCtx}` : '') +
+      threadInstructionBlock
 
     if (process.env.NODE_ENV === 'development') {
       console.log(`[ai:chat] static-context path → provider=${chatProvider} model=${chatModel}`)

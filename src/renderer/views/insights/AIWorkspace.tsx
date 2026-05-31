@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import type { AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
@@ -10,7 +11,8 @@ import { ChatActionPalette, type ChatPaletteAction } from './ChatActionPalette'
 import { ConversationSidebar } from './ConversationSidebar'
 import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
-import { IconNewChat, IconSidebar, IconSparkle } from './icons'
+import { ThreadSettingsPanel } from './ThreadSettingsPanel'
+import { IconGear, IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
 import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
@@ -59,6 +61,7 @@ export default function AIWorkspace() {
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
+    providerAvailability,
     analyticsContext,
   } = chat
 
@@ -75,6 +78,24 @@ export default function AIWorkspace() {
       return next
     })
   }, [])
+
+  // D4: per-thread settings (model override + instructions).
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [threadSettings, setThreadSettings] = useState<AIThreadSettings>({ provider: null, model: null, instructions: null })
+
+  // Load the active thread's overrides so the header subline + the panel reflect
+  // them. A brand-new (unsent) chat has no thread row yet, so settings stay empty.
+  useEffect(() => {
+    if (activeThreadId == null) {
+      setThreadSettings({ provider: null, model: null, instructions: null })
+      return
+    }
+    let cancelled = false
+    void ipc.ai.getThreadSettings(activeThreadId)
+      .then((settings) => { if (!cancelled) setThreadSettings(settings) })
+      .catch(() => { /* best-effort */ })
+    return () => { cancelled = true }
+  }, [activeThreadId])
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -234,6 +255,12 @@ export default function AIWorkspace() {
   // D2/U2: the friendly model label shown under the thread title — always the
   // real resolved model (R2), so it never disagrees with what actually ran.
   const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
+  // D4: when this thread overrides the model, the subline shows THAT model — it
+  // is what will actually run for this thread's next turn.
+  const overrideActive = Boolean(threadSettings.provider && threadSettings.model)
+  const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
+  const displayModelId = overrideActive ? threadSettings.model! : activeModel
+  const displayModelLabel = displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
   const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
   const cliMissing = activeChatProvider === 'claude-cli'
     ? !cliTools?.claude
@@ -278,7 +305,7 @@ export default function AIWorkspace() {
           </div>
           {hasApiKey && (
             <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {providerMeta.shortLabel} · {modelLabel}
+              {displayProviderMeta.shortLabel} · {displayModelLabel}{overrideActive ? ' · custom' : ''}
             </div>
           )}
         </div>
@@ -293,6 +320,17 @@ export default function AIWorkspace() {
         >
           {isMac ? '⌘K' : 'Ctrl K'}
         </button>
+        {activeThreadId != null && (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            title={overrideActive ? 'Chat settings (custom model)' : 'Chat settings'}
+            aria-label="Chat settings"
+            style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: overrideActive ? 'var(--color-accent-dim)' : 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          >
+            <IconGear />
+          </button>
+        )}
         <button
           type="button"
           onClick={onNewChat}
@@ -386,6 +424,16 @@ export default function AIWorkspace() {
       )}
       </div>
       <ChatActionPalette isOpen={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+      {settingsOpen && activeThreadId != null && (
+        <ThreadSettingsPanel
+          threadId={activeThreadId}
+          initial={threadSettings}
+          providerAvailability={providerAvailability}
+          globalLabel={`${providerMeta.shortLabel} · ${modelLabel}`}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(next) => setThreadSettings(next)}
+        />
+      )}
     </div>
   )
 }

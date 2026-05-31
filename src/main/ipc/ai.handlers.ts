@@ -28,13 +28,15 @@ import {
   deleteThread,
   exportArtifact,
   getThread,
+  getThreadSettings,
   listArtifactsByThread,
   listThreadsLite,
   openArtifact,
   readArtifactPreview,
   renameThread,
+  setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIChatSendRequest, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
+import { IPC, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -181,6 +183,15 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.DELETE_THREAD, (_e, payload: { threadId: number }) => {
     return deleteThread(payload.threadId)
+  })
+
+  // D4: per-thread model/provider override + additional instructions.
+  ipcMain.handle(IPC.AI.GET_THREAD_SETTINGS, (_e, payload: { threadId: number }): AIThreadSettings => {
+    return getThreadSettings(payload.threadId)
+  })
+
+  ipcMain.handle(IPC.AI.SET_THREAD_SETTINGS, (_e, payload: { threadId: number; settings: AIThreadSettings }): AIThreadSettings => {
+    return setThreadSettings(payload.threadId, payload.settings)
   })
 
   // ─── Artifacts ────────────────────────────────────────────────────────────

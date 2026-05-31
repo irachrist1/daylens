@@ -12,6 +12,7 @@ import type {
   AIWrappedNarrative,
   AISurfaceSummary,
   AIThreadMessage,
+  AIThreadSettings,
   AIThreadSummary,
   AIArtifactRecord,
   AIArtifactContent,
@@ -186,6 +187,10 @@ const api = {
       ipcRenderer.invoke(IPC.AI.RENAME_THREAD, { threadId, title }),
     deleteThread: (threadId: number): Promise<void> =>
       ipcRenderer.invoke(IPC.AI.DELETE_THREAD, { threadId }),
+    getThreadSettings: (threadId: number): Promise<AIThreadSettings> =>
+      ipcRenderer.invoke(IPC.AI.GET_THREAD_SETTINGS, { threadId }),
+    setThreadSettings: (threadId: number, settings: AIThreadSettings): Promise<AIThreadSettings> =>
+      ipcRenderer.invoke(IPC.AI.SET_THREAD_SETTINGS, { threadId, settings }),
     listArtifacts: (threadId: number): Promise<AIArtifactRecord[]> =>
       ipcRenderer.invoke(IPC.AI.LIST_ARTIFACTS, { threadId }),
     getArtifact: (artifactId: number): Promise<AIArtifactContent | null> =>
