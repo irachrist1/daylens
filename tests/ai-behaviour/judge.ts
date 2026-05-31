@@ -4,7 +4,7 @@
 // the run on a soft fail; treats network errors as `error`.
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { ScenarioRubric, ScenarioRecord } from './types'
+import type { ScenarioRecord } from './types'
 
 export interface JudgeVerdict {
   scenarioId: string
@@ -14,10 +14,13 @@ export interface JudgeVerdict {
   hallucinationDetected: boolean
   voiceOk: boolean
   matchesGoldShape: boolean
+  // Q3/Q4: follow-up chips are grounded + useful, and never template a
+  // meta-entity (provider/model name). True when there are no follow-ups.
+  followUpsOk: boolean
   rawJudgeOutput: string
 }
 
-const JUDGE_SYSTEM = `You are a strict QA judge for the Daylens activity-tracker AI.
+export const JUDGE_SYSTEM = `You are a strict QA judge for the Daylens activity-tracker AI.
 
 You will be given:
 - A user question
@@ -47,11 +50,13 @@ Grade the answer on these axes, in priority order:
 
 6. **Voice** — banned phrases include: "great work", "you crushed it", "let's dive in", "dive into", "elevate", "seamless", "navigate the landscape", "in today's fast-paced world", "harness the power", "you've got this", "fascinating perspective". Exclamation marks fail. Motivational filler fails. Generic openers fail. Bare refusals ("I don't know", "I can't see that") fail — surface the closest captured signal instead.
 
+7. **Follow-up suggestions** (Q3/Q4) — if follow-up chips are shown, each must be a sensible next question grounded in the answer's real content. They must NEVER template a meta-entity into a canned question — e.g. after "what model are you?", chips like "How long on Google Gemini?" or "Which files appeared in Google Gemini?" are nonsense and a FAIL. No follow-ups at all is acceptable (follow_ups_ok = true). Dumb/templated follow-ups → follow_ups_ok = false and cap the grade at "bad" (or "worse" if they reference a meta-entity as a data entity).
+
 The rubric flags are secondary signal — useful guardrails for specific failure modes, but they do not override the gold_answer_shape. An answer can pass every rubric flag and still be a fail if it doesn't reveal understanding the way the gold shape describes.
 
 Output STRICT JSON with this exact shape, no markdown, no code fence:
 
-{"grade":"good"|"bad"|"worse","reason":"one sentence pointing at the worst flaw, or what made it good","citations_found":true|false,"hallucination_detected":true|false,"voice_ok":true|false,"matches_gold_shape":true|false}
+{"grade":"good"|"bad"|"worse","reason":"one sentence pointing at the worst flaw, or what made it good","citations_found":true|false,"hallucination_detected":true|false,"voice_ok":true|false,"matches_gold_shape":true|false,"follow_ups_ok":true|false}
 
 - good = matches the gold_answer_shape, names activity not just app, hits minute precision, clean voice, cited evidence
 - bad = partial: shape mostly right but vague; voice slips; app-totals leak in; paraphrased timestamps; no outright fabrication
@@ -63,6 +68,7 @@ export async function judgeAnswer(
   groundTruthSummary: string,
   apiKey: string,
   traceSummary?: string,
+  followUps: string[] = [],
 ): Promise<JudgeVerdict> {
   const userPrompt = [
     `Question: ${scenario.question}`,
@@ -81,6 +87,9 @@ export async function judgeAnswer(
     traceSummary ? '' : null,
     'Assistant answer (verbatim):',
     assistantText,
+    '',
+    'Follow-up suggestion chips shown after this answer (grade per axis 7):',
+    followUps.length ? followUps.map((f) => `- ${f}`).join('\n') : '(none shown)',
     '',
     'Return the JSON verdict only.',
   ].filter((line): line is string => line !== null).join('\n')
@@ -110,6 +119,7 @@ export async function judgeAnswer(
         hallucinationDetected: false,
         voiceOk: false,
         matchesGoldShape: false,
+        followUpsOk: false,
         rawJudgeOutput: raw,
       }
     }
@@ -121,6 +131,7 @@ export async function judgeAnswer(
       hallucination_detected?: boolean
       voice_ok?: boolean
       matches_gold_shape?: boolean
+      follow_ups_ok?: boolean
     }
 
     return {
@@ -131,6 +142,8 @@ export async function judgeAnswer(
       hallucinationDetected: Boolean(parsed.hallucination_detected),
       voiceOk: Boolean(parsed.voice_ok),
       matchesGoldShape: Boolean(parsed.matches_gold_shape),
+      // Absent → treat as ok (no follow-ups is acceptable).
+      followUpsOk: parsed.follow_ups_ok ?? true,
       rawJudgeOutput: raw,
     }
   } catch (error) {
@@ -142,6 +155,7 @@ export async function judgeAnswer(
       hallucinationDetected: false,
       voiceOk: false,
       matchesGoldShape: false,
+      followUpsOk: false,
       rawJudgeOutput: '',
     }
   }

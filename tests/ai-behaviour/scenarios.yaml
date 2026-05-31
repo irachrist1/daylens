@@ -187,3 +187,52 @@ scenarios:
       must_admit_no_data: true
       must_not_invent_blocks: true
       voice_check: true
+
+  # ── Q2 (files ≠ pages ≠ sessions): "files" must mean artifacts/files, never
+  #    a silent substitution of browser pages.
+  - id: files_today
+    question: "Which files did I work on today?"
+    family: files
+    gold_answer_shape: >
+      Names the actual files/artifacts touched today (document names, code files,
+      spreadsheets) from window titles or artifact records. If Daylens captured no
+      file names today, says so plainly and offers the closest signal (the apps or
+      pages that were open) — it must NOT silently substitute browser pages or app
+      names for "files".
+    rubric:
+      must_distinguish_files_from_pages: true
+      must_not_invent_file_names: true
+      voice_check: true
+
+  # ── Q3 (meta): identity answer must be clean, and follow-up chips must never
+  #    template the provider/model name into a fake data question.
+  - id: what_model
+    question: "What model are you?"
+    family: meta
+    gold_answer_shape: >
+      Says it is Daylens, currently routed through the configured provider/model,
+      in one or two plain sentences. It does NOT pivot into activity data. Any
+      follow-up chips must be sensible next questions about the user's work — never
+      templated around the provider/model name (e.g. "How long on Google Gemini?"
+      or "Which files appeared in Google Gemini?" are nonsense and a fail).
+    rubric:
+      must_state_identity: true
+      follow_ups_must_not_template_meta_entity: true
+      voice_check: true
+
+  # ── Q1 (consistency): one grounded number for "time on YouTube", attributed
+  #    the same whether watched in a browser tab or the app. Guards the
+  #    3h45m-vs-25s contradiction. (Single-turn proxy; true cross-turn
+  #    consistency needs the multi-turn harness — see README.)
+  - id: youtube_time_consistency
+    question: "How much time did I spend on YouTube this week?"
+    family: consistency
+    gold_answer_shape: >
+      Gives a single, grounded total for time on YouTube this week, attributed
+      consistently whether YouTube was watched in a browser tab or the app — not
+      two contradictory figures. Cites the sessions or pages behind the number. If
+      there is no YouTube time, says so plainly rather than inventing one.
+    rubric:
+      must_cite_duration_or_say_none: true
+      must_be_internally_consistent: true
+      voice_check: true

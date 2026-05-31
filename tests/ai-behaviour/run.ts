@@ -24,6 +24,7 @@ import yaml from 'js-yaml'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy } from './realDb'
 import type { ScenarioRecord } from './types'
+import type { AIProviderMode } from '@shared/types'
 
 const ANSI = {
   reset: '\x1b[0m',
@@ -133,23 +134,47 @@ async function main(): Promise<void> {
   initDb()
   console.log(color('dim', '[setup] DB initialised against the copy'))
 
-  // 3. Load the Anthropic key from keytar (the same place Daylens stores it).
-  const { getApiKey } = await import('../../src/main/services/settings')
-  const apiKey = await getApiKey('anthropic')
-  if (!apiKey) {
-    console.error(color('red', '\n[fatal] No Anthropic API key in keytar.'))
+  // 3. Load keys from keytar (Q6 — answer-quality eval program). The JUDGE
+  //    always runs on Anthropic (a constant, reliable grader). The SUBJECT
+  //    provider under evaluation is configurable so the same set can be run
+  //    against each provider before shipping AI changes:
+  //        DAYLENS_EVAL_PROVIDER=google npm run test:behaviour
+  //    Defaults to anthropic for both (back-compat).
+  const { getApiKey, setSettings } = await import('../../src/main/services/settings')
+  const judgeApiKey = await getApiKey('anthropic')
+  if (!judgeApiKey) {
+    console.error(color('red', '\n[fatal] No Anthropic API key in keytar (the judge runs on Anthropic).'))
     console.error('Open Daylens → Settings → AI and save your Anthropic key, then re-run.')
     cleanupRealDbCopy(dbCtx)
     process.exit(2)
   }
-  process.env.ANTHROPIC_API_KEY = apiKey
-  console.log(color('dim', '[setup] Anthropic key loaded from keytar'))
+  process.env.ANTHROPIC_API_KEY = judgeApiKey
 
-  // 4. Force the chat provider to anthropic so sendMessage routes there
-  //    regardless of what the user has saved.
-  const { setSettings } = await import('../../src/main/services/settings')
+  const evalProvider = (process.env.DAYLENS_EVAL_PROVIDER ?? 'anthropic') as AIProviderMode
+  const isCliSubject = evalProvider === 'claude-cli' || evalProvider === 'codex-cli'
+  const subjectApiKey = evalProvider === 'anthropic' ? judgeApiKey : await getApiKey(evalProvider)
+  if (!subjectApiKey && !isCliSubject) {
+    console.error(color('red', `\n[fatal] No ${evalProvider} key in keytar (DAYLENS_EVAL_PROVIDER=${evalProvider}).`))
+    cleanupRealDbCopy(dbCtx)
+    process.exit(2)
+  }
+  if (evalProvider === 'google' && subjectApiKey) {
+    process.env.GOOGLE_API_KEY = subjectApiKey
+    process.env.GEMINI_API_KEY = subjectApiKey
+  }
+  if (evalProvider === 'openai' && subjectApiKey) process.env.OPENAI_API_KEY = subjectApiKey
+  console.log(color('dim', `[setup] judge=anthropic · subject=${evalProvider} (keys from keytar)`))
+
+  // 4. Pin EVERY provider preference key to the subject so chat, follow-ups,
+  //    titles, and report/export jobs all route to the provider under test.
   try {
-    await setSettings({ aiProvider: 'anthropic', aiChatProvider: 'anthropic' })
+    await setSettings({
+      aiProvider: evalProvider,
+      aiChatProvider: evalProvider,
+      aiArtifactProvider: evalProvider,
+      aiSummaryProvider: evalProvider,
+      aiBlockNamingProvider: evalProvider,
+    })
   } catch (e) {
     console.warn(color('yellow', `[setup] could not pin provider: ${e instanceof Error ? e.message : String(e)}`))
   }
@@ -212,14 +237,15 @@ async function main(): Promise<void> {
       console.log(color('yellow', `  A: ${text.replace(/\n/g, '\n     ')}`))
 
       const traceSummary = summarizeTraceForJudge(path.join(traceDir, `${scenario.id}.json`))
-      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, apiKey, traceSummary)
+      const followUps = (assistant.suggestedFollowUps ?? []).map((s) => s.text)
+      const verdict = await judgeAnswer(scenario, text, groundTruthBlob, judgeApiKey, traceSummary, followUps)
       const gradeColor: keyof typeof ANSI =
         verdict.grade === 'good' ? 'green'
         : verdict.grade === 'bad' ? 'yellow'
         : verdict.grade === 'worse' ? 'red'
         : 'magenta'
       console.log(color(gradeColor, `  VERDICT: ${verdict.grade.toUpperCase()} — ${verdict.reason}`))
-      console.log(color('dim', `  flags: gold_shape=${verdict.matchesGoldShape} citations=${verdict.citationsFound} hallucination=${verdict.hallucinationDetected} voice_ok=${verdict.voiceOk}`))
+      console.log(color('dim', `  flags: gold_shape=${verdict.matchesGoldShape} citations=${verdict.citationsFound} hallucination=${verdict.hallucinationDetected} voice_ok=${verdict.voiceOk} followups_ok=${verdict.followUpsOk}`))
 
       results.push({
         scenario,
@@ -248,6 +274,7 @@ async function main(): Promise<void> {
           hallucinationDetected: false,
           voiceOk: false,
           matchesGoldShape: false,
+          followUpsOk: false,
           rawJudgeOutput: '',
         },
         artifactsEmitted: 0,
@@ -266,17 +293,45 @@ async function main(): Promise<void> {
   console.log(`  worse: ${color('red', String(tally.worse))}`)
   console.log(`  error: ${color('magenta', String(tally.error))}`)
 
+  const total = results.length || 1
+  const score = {
+    provider: evalProvider,
+    good: tally.good,
+    bad: tally.bad,
+    worse: tally.worse,
+    error: tally.error,
+    goodPct: Math.round((tally.good / total) * 100),
+  }
+
   const outDir = path.join(process.cwd(), '.ai-behaviour')
   fs.mkdirSync(outDir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const outPath = path.join(outDir, `results-${stamp}.json`)
+  const outPath = path.join(outDir, `results-${evalProvider}-${stamp}.json`)
   fs.writeFileSync(outPath, JSON.stringify({
     generatedAt: new Date().toISOString(),
+    provider: evalProvider,
+    score,
     tally,
     groundTruth: gt,
     results,
   }, null, 2))
   console.log(color('dim', `\nWrote ${outPath}`))
+
+  // Q6: record/refresh the committed per-provider baseline when asked. The
+  // baseline is the "before shipping" reference the spec calls for — diff a new
+  // run against it to catch quality regressions per provider.
+  if (process.env.DAYLENS_EVAL_BASELINE === '1') {
+    const baselineDir = path.join(HERE, 'baselines')
+    fs.mkdirSync(baselineDir, { recursive: true })
+    const baselinePath = path.join(baselineDir, `${evalProvider}.json`)
+    fs.writeFileSync(baselinePath, JSON.stringify({
+      provider: evalProvider,
+      recordedAt: new Date().toISOString(),
+      score,
+      perScenario: results.map((r) => ({ id: r.scenario.id, family: r.scenario.family, grade: r.judge.grade })),
+    }, null, 2))
+    console.log(color('dim', `Wrote baseline ${baselinePath}`))
+  }
 
   cleanupRealDbCopy(dbCtx)
 
