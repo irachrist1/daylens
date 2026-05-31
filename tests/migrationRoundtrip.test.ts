@@ -25,12 +25,20 @@ const REQUIRED_TABLES = [
   'ai_messages',
   'ai_threads',
   'website_visits',
+  'maintenance_runs',
   'schema_version',
 ]
 
 function tableNames(db: Database.Database): Set<string> {
   const rows = db
     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+    .all() as { name: string }[]
+  return new Set(rows.map((r) => r.name))
+}
+
+function indexNames(db: Database.Database): Set<string> {
+  const rows = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`)
     .all() as { name: string }[]
   return new Set(rows.map((r) => r.name))
 }
@@ -118,6 +126,32 @@ test('migration ladder leaves the database queryable', () => {
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM website_visits').get())
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM ai_threads').get())
     assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) FROM schema_version').get())
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
+test('fresh schema and migrations include hot-path performance indexes', () => {
+  const db = new Database(':memory:')
+  db.pragma('foreign_keys = ON')
+  db.exec(SCHEMA_SQL)
+
+  setTestDb(db)
+  try {
+    runMigrations()
+
+    const indexes = indexNames(db)
+    // idx_focus_sessions_start is the standalone hot-path index. (bundle_id,
+    // start_time) is covered by the UNIQUE idx_app_sessions_dedup and
+    // timeline_block_members(block_id) by that table's PRIMARY KEY, so we assert
+    // those covering indexes exist rather than the removed redundant ones.
+    for (const indexName of [
+      'idx_focus_sessions_start',
+      'idx_app_sessions_dedup',
+    ]) {
+      assert.ok(indexes.has(indexName), `missing hot-path index: ${indexName}`)
+    }
   } finally {
     clearTestDb()
     db.close()

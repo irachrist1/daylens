@@ -4,12 +4,28 @@ import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
-import { buildTimelineBlocksFromSessions, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade } from '../src/main/services/workBlocks.ts'
+import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
+import { PROJECTION_VERSION } from '../src/main/core/projections/chunk2.ts'
 
 const TEST_DATE = '2026-04-22'
 
 function localMs(hour: number, minute = 0): number {
   return new Date(2026, 3, 22, hour, minute, 0, 0).getTime()
+}
+
+function localMsForDate(dateStr: string, hour: number, minute = 0): number {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
+}
+
+function dateStringForOffset(offsetDays: number): string {
+  const target = new Date()
+  target.setDate(target.getDate() + offsetDays)
+  const year = target.getFullYear()
+  const month = String(target.getMonth() + 1).padStart(2, '0')
+  const day = String(target.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function createDb(): Database.Database {
@@ -27,9 +43,12 @@ function insertSession(
     startMinute: number
     durationMinutes: number
     category?: AppCategory
+    dateStr?: string
   },
 ): void {
-  const startTime = localMs(9, payload.startMinute)
+  const startTime = payload.dateStr
+    ? localMsForDate(payload.dateStr, 9, payload.startMinute)
+    : localMs(9, payload.startMinute)
   const endTime = startTime + payload.durationMinutes * 60_000
   const bundleId = payload.bundleId ?? 'com.google.Chrome'
   const appName = payload.appName ?? 'Google Chrome'
@@ -101,6 +120,68 @@ function insertActivityEvent(db: Database.Database, eventType: string, ts: numbe
     INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
     VALUES (?, ?, 'test', '{}')
   `).run(ts, eventType)
+}
+
+function insertDerivedSessionDay(db: Database.Database): void {
+  const startTime = localMs(9, 0)
+  const endTime = startTime + 40 * 60_000
+  const session = db.prepare(`
+    INSERT INTO derived_sessions (
+      date,
+      start_ts_ms,
+      end_ts_ms,
+      active_seconds,
+      app_bundle_id,
+      app_name,
+      window_title,
+      url,
+      page_title,
+      confidence,
+      category,
+      is_browser,
+      domain,
+      projection_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'observed', ?, 0, NULL, ?)
+  `).run(
+    TEST_DATE,
+    startTime,
+    endTime,
+    40 * 60,
+    'com.todesktop.cursor',
+    'Cursor',
+    'router.ts - daylens - Cursor',
+    'development',
+    PROJECTION_VERSION,
+  )
+  const block = db.prepare(`
+    INSERT INTO derived_blocks (
+      date,
+      start_ts_ms,
+      end_ts_ms,
+      active_seconds,
+      label,
+      label_source,
+      dominant_category,
+      confidence,
+      projection_version,
+      finalized_at
+    ) VALUES (?, ?, ?, ?, 'Development', 'app', 'development', 'observed', ?, ?)
+  `).run(TEST_DATE, startTime, endTime, 40 * 60, PROJECTION_VERSION, endTime)
+  db.prepare(`
+    INSERT INTO derived_block_sessions (block_id, session_id)
+    VALUES (?, ?)
+  `).run(block.lastInsertRowid, session.lastInsertRowid)
+  db.prepare(`
+    INSERT INTO derived_projection_runs (
+      date,
+      projection_version,
+      events_in,
+      sessions_out,
+      blocks_out,
+      finalized_at,
+      started_at
+    ) VALUES (?, ?, 1, 1, 1, ?, ?)
+  `).run(TEST_DATE, PROJECTION_VERSION, endTime, startTime)
 }
 
 function labelsFor(db: Database.Database): string[] {
@@ -463,6 +544,60 @@ test('background upgrade finds stale unprocessed days but leaves processed days 
   `).run(`${blockId}:ai:processed`, blockId, Date.now())
 
   assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [])
+  db.close()
+})
+
+test('timeline projection reads derived days without materializing timeline blocks', () => {
+  const db = createDb()
+  insertDerivedSessionDay(db)
+
+  const payload = getTimelineDayProjection(db, TEST_DATE, null, { materialize: false })
+
+  assert.equal(payload.blocks.length, 1)
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL
+  `).get(TEST_DATE) as { count: number }
+  assert.equal(count.count, 0, 'read-only projection should not persist timeline blocks')
+  db.close()
+})
+
+test('explicit timeline materialization persists derived day blocks for block writes', () => {
+  const db = createDb()
+  insertDerivedSessionDay(db)
+
+  const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
+
+  assert.equal(payload.blocks.length, 1)
+  const count = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL
+  `).get(TEST_DATE) as { count: number }
+  assert.equal(count.count, 1)
+  db.close()
+})
+
+test('block detail lookup uses persisted block date before falling back to recent-day scans', () => {
+  const db = createDb()
+  const olderDate = dateStringForOffset(-45)
+  insertSession(db, {
+    dateStr: olderDate,
+    title: 'lookup.ts - daylens - Cursor',
+    bundleId: 'com.todesktop.cursor',
+    appName: 'Cursor',
+    category: 'development',
+    startMinute: 0,
+    durationMinutes: 35,
+  })
+
+  const [block] = getTimelineDayPayload(db, olderDate).blocks
+
+  const detail = getBlockDetailPayload(db, block.id)
+
+  assert.equal(detail?.id, block.id)
+  assert.equal(detail?.label.current, block.label.current)
   db.close()
 })
 

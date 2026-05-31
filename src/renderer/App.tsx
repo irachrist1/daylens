@@ -183,17 +183,19 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   return (
     <>
       <UpdateBanner />
-      <CommandPalette
-        isOpen={paletteOpen}
-        platform={platform}
-        onClose={() => setPaletteOpen(false)}
-        onOpenWrapped={({ day, threadId, artifactId }) => {
-          setWrappedDay(day)
-          setWrappedThreadId(threadId)
-          setWrappedArtifactId(artifactId)
-          setWrappedOpen(true)
-        }}
-      />
+      {paletteOpen && (
+        <CommandPalette
+          isOpen={paletteOpen}
+          platform={platform}
+          onClose={() => setPaletteOpen(false)}
+          onOpenWrapped={({ day, threadId, artifactId }) => {
+            setWrappedDay(day)
+            setWrappedThreadId(threadId)
+            setWrappedArtifactId(artifactId)
+            setWrappedOpen(true)
+          }}
+        />
+      )}
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
       {wrappedOpen && wrappedDay && (
         <DayWrapped
@@ -229,7 +231,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
                 <Route path="/timeline" element={<ErrorBoundary name="Timeline"><Timeline /></ErrorBoundary>} />
                 <Route path="/apps" element={<ErrorBoundary name="Apps"><Apps /></ErrorBoundary>} />
                 <Route path="/ai" element={<ErrorBoundary name="AI"><Insights /></ErrorBoundary>} />
-                <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings /></ErrorBoundary>} />
+                <Route path="/settings" element={<ErrorBoundary name="Settings"><Settings initialSettings={settings} /></ErrorBoundary>} />
               </Routes>
             </Suspense>
           </main>

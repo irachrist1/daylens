@@ -15,6 +15,7 @@ import {
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { upsertAppIdentityObservation } from '../core/inference/appIdentityRegistry'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { createLeadingTrailingThrottle } from '../lib/coalescer'
 import { getDb } from './database'
 import type {
   AppCategory,
@@ -74,6 +75,22 @@ const SNAPSHOT_PERSIST_MS = 15_000
 const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
 const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
 const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
+
+// A finished foreground session flushes on every app/window switch. Firing a
+// full-day timeline rebuild on each one is the dominant cost behind the app
+// feeling slower the longer the day runs (docs/PERF-COHERENCE-MAP.md §4).
+// Blocks are coarse and the *current* app is shown via the live-session path,
+// so coalescing the timeline/insights invalidation to a leading+trailing
+// window is safe. Explicit user actions (rebuild, label overrides, focus
+// start/stop) still invalidate immediately from their own handlers.
+const ACTIVITY_INVALIDATION_WINDOW_MS = 15_000
+const scheduleActivityProjectionInvalidation = createLeadingTrailingThrottle(
+  (date: string) => {
+    invalidateProjectionScope('timeline', 'activity_recorded', { date })
+    invalidateProjectionScope('insights', 'activity_recorded', { date })
+  },
+  ACTIVITY_INVALIDATION_WINDOW_MS,
+)
 
 interface NormalizationMap {
   aliases: Record<string, string>
@@ -141,7 +158,7 @@ function formatError(err: unknown): string {
   return String(err)
 }
 
-function execText(command: string, args: string[]): string | null {
+function execTextDefault(command: string, args: string[]): string | null {
   try {
     const output = execFileSync(command, args, {
       timeout: 1_500,
@@ -152,6 +169,13 @@ function execText(command: string, args: string[]): string | null {
   } catch {
     return null
   }
+}
+
+// Indirection so a test can feed canned window-manager output for the Linux
+// capture path without a Linux box (see __setLinuxCaptureTestHarness).
+let execTextImpl: (command: string, args: string[]) => string | null = execTextDefault
+function execText(command: string, args: string[]): string | null {
+  return execTextImpl(command, args)
 }
 
 const commandAvailabilityCache = new Map<string, boolean>()
@@ -787,7 +811,7 @@ function windowHasMeaningfulIdentity(win: ActiveWinResult | null): boolean {
   return Boolean(win.application?.trim() || win.path?.trim() || win.title?.trim())
 }
 
-function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>; win: ActiveWinResult | null; trace: string[] } | null {
+export function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'package' | 'unpacked'>; win: ActiveWinResult | null; trace: string[] } | null {
   const trace: string[] = []
   const desktop = linuxDesktopName()
   const hyprlandSession = Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || desktop.includes('hyprland')
@@ -816,6 +840,22 @@ function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSource, 'p
   }
 
   return trace.length > 0 ? { source: 'xprop', win: null, trace } : null
+}
+
+// Test seam: lets a simulation drive the Linux active-window resolver with
+// canned window-manager output (and pretend the helper commands exist) so the
+// Linux capture path can be verified without a Linux host. Pass null to restore
+// the real execFileSync-backed implementation.
+export function __setLinuxCaptureTestHarness(
+  harness: { exec: (command: string, args: string[]) => string | null; availableCommands: string[] } | null,
+): void {
+  commandAvailabilityCache.clear()
+  if (!harness) {
+    execTextImpl = execTextDefault
+    return
+  }
+  execTextImpl = harness.exec
+  for (const command of harness.availableCommands) commandAvailabilityCache.set(command, true)
 }
 
 function requireActiveWindowModule() {
@@ -1608,14 +1648,11 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
           firstSeenAt: currentSession.startTime,
           lastSeenAt: endTime,
         })
-        invalidateProjectionScope('timeline', 'activity_recorded', {
-          date: localDateString(new Date(endTime)),
-        })
+        // Timeline + insights coalesce (heavy full-day rebuild); apps stays
+        // immediate so its targeted per-app refresh keeps the canonicalAppId.
+        scheduleActivityProjectionInvalidation(localDateString(new Date(endTime)))
         invalidateProjectionScope('apps', 'activity_recorded', {
           canonicalAppId: currentSession.canonicalAppId,
-        })
-        invalidateProjectionScope('insights', 'activity_recorded', {
-          date: localDateString(new Date(endTime)),
         })
         scheduleAttributionRefreshForSession(currentSession.startTime, endTime)
       }

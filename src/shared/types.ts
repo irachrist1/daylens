@@ -488,6 +488,9 @@ export interface AIArtifactRecord {
 export interface AIArtifactContent {
   record: AIArtifactRecord
   content: string | null
+  // Set by the preview path (GET_ARTIFACT) when content was capped to the first
+  // N bytes. Open/export read the full artifact and never set this.
+  truncated?: boolean
 }
 
 export interface AIMessageFeedbackUpdate {
@@ -788,7 +791,7 @@ export interface BreakRecommendation {
   urgency: 'medium' | 'high'
 }
 
-export type AIProvider = 'anthropic' | 'openai' | 'google'
+export type AIProvider = 'anthropic' | 'openai' | 'google' | 'openrouter'
 export type AIProviderMode = AIProvider | 'claude-cli' | 'codex-cli'
 export type AIJobType =
   | 'block_label_preview'
@@ -948,7 +951,7 @@ export interface SyncStatus {
 export interface AppSettings {
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
   analyticsOptIn: boolean       // false = no telemetry (default)
-  shareAIFeedbackExamples: boolean // true = upload redacted rated AI examples
+  shareAIFeedbackExamples: boolean // legacy setting; cloud feedback upload is disabled in local-only builds
   launchOnLogin: boolean
   theme: AppTheme
   onboardingComplete: boolean
@@ -961,6 +964,7 @@ export interface AppSettings {
   anthropicModel: string
   openaiModel: string
   googleModel: string
+  openrouterModel: string
   aiFallbackOrder: AIProvider[]
   aiModelStrategy: AIModelStrategy
   aiChatProvider?: AIProviderMode
@@ -973,16 +977,15 @@ export interface AppSettings {
   aiSpendSoftLimitUsd?: number
   aiRedactFilePaths?: boolean
   aiRedactEmails?: boolean
-  allowThirdPartyWebsiteIconFallback?: boolean
+  allowThirdPartyWebsiteIconFallback?: boolean // false = keep website icons local/browser-cache only
   aiReportPersonalizationEnabled?: boolean
   dailySummaryEnabled?: boolean
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
   mcpServerEnabled?: boolean
-  imessageCaptureEnabled?: boolean   // macOS opt-in: mirrors ~/Library/Messages/chat.db into Daylens. Requires Full Disk Access.
   workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
-  useRemoteAI?: boolean   // Generate AI surfaces (app narrative, week review, day summary) via the linked workspace's server key instead of a local provider. Falls back to local on failure.
+  useRemoteAI?: boolean   // legacy setting; remote workspace AI is disabled in local-only builds.
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1331,9 +1334,5 @@ export const IPC = {
   },
   MCP: {
     GET_CONFIG: 'mcp:get-config',
-  },
-  IMESSAGE: {
-    SYNC_NOW: 'imessage:sync-now',
-    GET_STATUS: 'imessage:get-status',
   },
 } as const

@@ -101,9 +101,11 @@ test('uploadRatedAIMessageFeedback skips when disabled or rating is cleared', as
 
 test('feedback upload failure does not undo local rating persistence', async () => {
   const { db, conversationId, assistant } = setupRatedTurn()
+  const calls: string[] = []
 
   await uploadRatedAIMessageFeedback(db, assistant.id, 'down', {
-    fetch: async () => {
+    fetch: async (url: string) => {
+      calls.push(url)
       throw new Error('offline')
     },
     getSettings: () => ({ shareAIFeedbackExamples: true }),
@@ -113,5 +115,6 @@ test('feedback upload failure does not undo local rating persistence', async () 
 
   const history = getConversationMessages(db, conversationId)
   assert.equal(history.find((message) => message.id === assistant.id)?.rating, 'down')
+  assert.deepEqual(calls, [])
   db.close()
 })

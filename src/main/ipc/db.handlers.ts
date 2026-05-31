@@ -1,5 +1,4 @@
 import { ipcMain } from 'electron'
-import crypto from 'node:crypto'
 import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
@@ -12,8 +11,10 @@ import {
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
+  getBlockLabelOverride,
+  writeAIBlockLabel,
 } from '../db/queries'
-import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection } from '../core/query/projections'
+import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
@@ -32,9 +33,9 @@ import {
 import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
-import { getDb } from '../services/database'
+import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
-import { getLatestSnapshot } from '../services/processMonitor'
+import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
@@ -125,15 +126,6 @@ function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
   return mergeAppSummaryRows(rows)
 }
 
-function tableExists(db: ReturnType<typeof getDb>, tableName: string): boolean {
-  const row = db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `).get(tableName) as { name: string } | undefined
-  return Boolean(row)
-}
-
 function getWorkMemorySettingsSummary(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
   if (!tableExists(db, 'context_patterns')) {
     return { promotedCount: 0, totalOccurrences: 0, topPatterns: [] }
@@ -194,15 +186,42 @@ function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSu
 
 // ─── Work session payload helpers ────────────────────────────────────────────
 
-function buildAppNameMap(db: ReturnType<typeof getDb>): Map<string, string> {
-  const rows = db.prepare(`SELECT bundle_id, app_name FROM apps`).all() as Array<{ bundle_id: string; app_name: string }>
-  const map = new Map(rows.map(r => [r.bundle_id, r.app_name]))
-  try {
-    const legacy = db.prepare(`SELECT DISTINCT bundle_id, app_name FROM app_sessions WHERE bundle_id NOT IN (SELECT bundle_id FROM apps)`).all() as Array<{ bundle_id: string; app_name: string }>
-    for (const r of legacy) {
+function placeholders(values: readonly unknown[]): string {
+  return values.map(() => '?').join(', ')
+}
+
+function buildAppNameMap(db: ReturnType<typeof getDb>, bundleIds: string[]): Map<string, string> {
+  const uniqueBundleIds = [...new Set(bundleIds.filter(Boolean))]
+  const map = new Map<string, string>()
+  if (uniqueBundleIds.length === 0) return map
+
+  const inClause = placeholders(uniqueBundleIds)
+  const rows = db.prepare(`
+    SELECT bundle_id, app_name
+    FROM apps
+    WHERE bundle_id IN (${inClause})
+  `).all(...uniqueBundleIds) as Array<{ bundle_id: string; app_name: string }>
+  for (const r of rows) map.set(r.bundle_id, r.app_name)
+
+  const unresolvedBundleIds = uniqueBundleIds.filter((bundleId) => !map.has(bundleId))
+  if (unresolvedBundleIds.length > 0) {
+    const legacyRows = db.prepare(`
+      SELECT sessions.bundle_id, sessions.app_name
+      FROM app_sessions sessions
+      JOIN (
+        SELECT bundle_id, MAX(start_time) AS latest_start
+        FROM app_sessions
+        WHERE bundle_id IN (${placeholders(unresolvedBundleIds)})
+        GROUP BY bundle_id
+      ) latest
+        ON latest.bundle_id = sessions.bundle_id
+       AND latest.latest_start = sessions.start_time
+    `).all(...unresolvedBundleIds) as Array<{ bundle_id: string; app_name: string }>
+    for (const r of legacyRows) {
       if (!map.has(r.bundle_id)) map.set(r.bundle_id, r.app_name)
     }
-  } catch { /* app_sessions may not exist */ }
+  }
+
   return map
 }
 
@@ -226,29 +245,74 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
   const rows = db.prepare(`SELECT * FROM work_sessions ${whereClause}`).all(...params) as WsRow[]
   if (rows.length === 0) return []
 
-  const appNameMap = buildAppNameMap(db)
+  const sessionIds = rows.map((row) => row.id)
+  const sessionInClause = placeholders(sessionIds)
+
+  const memberRows = db.prepare(`
+    SELECT wss.work_session_id, wss.role, wss.contribution_ms, aseg.primary_bundle_id
+    FROM work_session_segments wss
+    JOIN activity_segments aseg ON aseg.id = wss.segment_id
+    WHERE wss.work_session_id IN (${sessionInClause})
+  `).all(...sessionIds) as Array<{
+    work_session_id: string
+    role: string
+    contribution_ms: number
+    primary_bundle_id: string
+  }>
+  const membersBySession = new Map<string, typeof memberRows>()
+  for (const member of memberRows) {
+    const existing = membersBySession.get(member.work_session_id)
+    if (existing) existing.push(member)
+    else membersBySession.set(member.work_session_id, [member])
+  }
+
+  const appNameMap = buildAppNameMap(db, memberRows.map((row) => row.primary_bundle_id))
 
   const clientIds = [...new Set(rows.map(r => r.client_id).filter(Boolean))] as string[]
   const projectIds = [...new Set(rows.map(r => r.project_id).filter(Boolean))] as string[]
   const clientMap = new Map<string, { name: string; color: string | null }>()
   const projectMap = new Map<string, string>()
 
-  for (const cid of clientIds) {
-    const row = db.prepare(`SELECT name, color FROM clients WHERE id = ?`).get(cid) as { name: string; color: string | null } | undefined
-    if (row) clientMap.set(cid, row)
+  if (clientIds.length > 0) {
+    const clientRows = db.prepare(`
+      SELECT id, name, color
+      FROM clients
+      WHERE id IN (${placeholders(clientIds)})
+    `).all(...clientIds) as Array<{ id: string; name: string; color: string | null }>
+    for (const row of clientRows) clientMap.set(row.id, { name: row.name, color: row.color })
   }
-  for (const pid of projectIds) {
-    const row = db.prepare(`SELECT name FROM projects WHERE id = ?`).get(pid) as { name: string } | undefined
-    if (row) projectMap.set(pid, row.name)
+  if (projectIds.length > 0) {
+    const projectRows = db.prepare(`
+      SELECT id, name
+      FROM projects
+      WHERE id IN (${placeholders(projectIds)})
+    `).all(...projectIds) as Array<{ id: string; name: string }>
+    for (const row of projectRows) projectMap.set(row.id, row.name)
+  }
+
+  const evidenceRows = db.prepare(`
+    SELECT work_session_id, evidence_type, evidence_value, weight
+    FROM work_session_evidence
+    WHERE work_session_id IN (${sessionInClause})
+    ORDER BY work_session_id ASC, weight DESC
+  `).all(...sessionIds) as Array<{
+    work_session_id: string
+    evidence_type: string
+    evidence_value: string
+    weight: number
+  }>
+  const evidenceBySession = new Map<string, typeof evidenceRows>()
+  for (const evidence of evidenceRows) {
+    const existing = evidenceBySession.get(evidence.work_session_id)
+    if (existing) {
+      if (existing.length < 10) existing.push(evidence)
+    } else {
+      evidenceBySession.set(evidence.work_session_id, [evidence])
+    }
   }
 
   return rows.map(ws => {
-    const members = db.prepare(`
-      SELECT wss.role, wss.contribution_ms, aseg.primary_bundle_id
-      FROM work_session_segments wss
-      JOIN activity_segments aseg ON aseg.id = wss.segment_id
-      WHERE wss.work_session_id = ?
-    `).all(ws.id) as Array<{ role: string; contribution_ms: number; primary_bundle_id: string }>
+    const members = membersBySession.get(ws.id) ?? []
 
     const appMs = new Map<string, { ms: number; role: string }>()
     for (const m of members) {
@@ -263,12 +327,7 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
         duration_ms: ms,
         role,
       }))
-
-    const evidence = db.prepare(`
-      SELECT evidence_type, evidence_value, weight
-      FROM work_session_evidence WHERE work_session_id = ?
-      ORDER BY weight DESC LIMIT 10
-    `).all(ws.id) as Array<{ evidence_type: string; evidence_value: string; weight: number }>
+    const evidence = evidenceBySession.get(ws.id) ?? []
 
     const clientInfo = ws.client_id ? clientMap.get(ws.client_id) : null
 
@@ -309,11 +368,11 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.GET_HISTORY_DAY, (_e, dateStr: string) => {
-    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
+    return getHistoryDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
   })
 
   ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
-    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr))
+    const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
     scheduleTimelineAIJobs(payload)
     return payload
   })
@@ -324,7 +383,7 @@ export function registerDbHandlers(): void {
     // only where the day is still on a deterministic floor or low-confidence
     // label, preserving curated AI labels and user overrides.
     const db = getDb()
-    const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    const payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     let changed = false
     let attempted = 0
     const failures: string[] = []
@@ -354,7 +413,7 @@ export function registerDbHandlers(): void {
       invalidateProjectionScope('insights', 'timeline-ai-reanalysis')
     }
 
-    const refreshed = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    const refreshed = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     scheduleTimelineAIJobs(refreshed)
     return refreshed
   })
@@ -453,7 +512,7 @@ export function registerDbHandlers(): void {
       const dt = new Date(todayY, todayM - 1, todayD)
       dt.setDate(dt.getDate() - offset)
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-      const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+      const payload = getTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr), { materialize: false })
       for (const block of payload.blocks) blocks.push(block)
     }
     return computeAppActivityDigest(blocks)
@@ -487,8 +546,12 @@ export function registerDbHandlers(): void {
     return getArtifactDetailProjection(getDb(), artifactId)
   })
 
-  ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; label: string; narrative?: string | null }) => {
-    setBlockLabelOverride(getDb(), payload.blockId, payload.label, payload.narrative ?? null)
+  ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }) => {
+    const db = getDb()
+    if (payload.date) {
+      materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+    }
+    setBlockLabelOverride(db, payload.blockId, payload.label, payload.narrative ?? null)
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')
@@ -518,7 +581,7 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.TRACKING.REQUEST_SCREEN_PERMISSION, async () => requestScreenTrackingPermission())
 
   ipcMain.handle(IPC.TRACKING.GET_PROCESS_METRICS, () => {
-    return getLatestSnapshot()
+    return getProcessMetrics()
   })
 
   // ─── Attribution query resolvers ──────────────────────────────────────────
@@ -676,7 +739,7 @@ export function registerDbHandlers(): void {
       ORDER BY as2.started_at ASC
     `).all(sessionId) as Array<{ id: string; started_at: number; ended_at: number; duration_ms: number; primary_bundle_id: string; class: string }>
 
-    const appNameMap = buildAppNameMap(db)
+    const appNameMap = buildAppNameMap(db, rows.map((row) => row.primary_bundle_id))
     return rows.map(r => ({
       id: r.id,
       started_at: r.started_at,
@@ -827,41 +890,21 @@ function applyAIInsightToTimelineBlock(
   block: WorkContextBlock,
   insight: WorkContextInsight,
 ): boolean {
+  // Day-level cleanup preserves user overrides (force = false).
   const label = insight.label?.trim()
-  if (!label) return false
-
-  const now = Date.now()
-  const result = db.prepare(`
-    UPDATE timeline_blocks
-    SET label_current = ?,
-        label_source = 'ai',
-        label_confidence = ?,
-        narrative_current = ?,
-        computed_at = ?
-    WHERE id = ?
-      AND NOT EXISTS (
-        SELECT 1
-        FROM block_label_overrides
-        WHERE block_id = ?
-      )
-  `).run(label, 0.72, insight.narrative ?? null, now, block.id, block.id)
-
-  if (result.changes === 0) return false
-
-  const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
-  db.prepare(`
-    INSERT OR REPLACE INTO timeline_block_labels (
-      id,
-      block_id,
-      label,
-      narrative,
-      source,
-      confidence,
-      created_at,
-      model_info_json
-    )
-    VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
-  `).run(`${block.id}:ai:${labelHash}`, block.id, label, insight.narrative ?? null, 0.72, now, null)
-
+  if (!label) {
+    throw new Error(`AI did not return a label for block ${block.id}.`)
+  }
+  const wrote = writeAIBlockLabel(db, {
+    blockId: block.id,
+    label,
+    narrative: insight.narrative ?? null,
+  })
+  if (!wrote) {
+    // A user can rename the block while the AI request is in flight. That race
+    // is a valid preserve-override no-op, not an AI persistence failure.
+    if (getBlockLabelOverride(db, block.id)?.label.trim()) return false
+    throw new Error(`AI label could not be persisted for block ${block.id}.`)
+  }
   return true
 }

@@ -12,6 +12,10 @@ import { getBrowserEntries, type BrowserEntry } from './browser'
 
 const MIN_CONTEXT_SEC = 5
 const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
+// How long the unchanged-title fast path may reuse the last tab read before a
+// re-read is forced. Caps how long two same-title tabs could be conflated while
+// still cutting the per-5s-poll osascript/history reads during steady reading.
+const TAB_CACHE_TRUST_MS = 30_000
 const CHROME_OFFSET_US = 11_644_473_600_000_000n
 
 const BROWSER_APP_IDS = new Set([
@@ -257,21 +261,51 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
 
 export class ActiveBrowserContextTracker {
   private inFlight: InFlightBrowserContext | null = null
+  // The foreground window title (captured cheaply by the tracker) reflects the
+  // active tab's page title. While it is unchanged we reuse the in-flight tab
+  // instead of re-running the per-sample osascript / history-DB read, which is
+  // what made every 5s poll tick stutter on browser-heavy macOS use (F19).
+  private lastWindowTitle: string | null = null
+  // When the last real tab read happened. The title-cache is only trusted for a
+  // bounded window so that two distinct tabs sharing a title (e.g. two "Inbox"
+  // pages) can't be merged indefinitely — we force a re-read after this.
+  private lastTabReadAt = 0
 
   constructor(private readonly readTab: ActiveBrowserTabReader = readActiveBrowserTab) {}
 
   sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): void {
     if (!browserAppIdFor(snapshot)) {
       this.flush(db, snapshot.capturedAt)
+      this.lastWindowTitle = null
+      return
+    }
+
+    // Same browser window + same title + still inside the trust window → almost
+    // certainly the same active tab, so extend the current context without
+    // paying for another tab read. The freshness cap bounds how long a
+    // same-title tab switch could go unnoticed.
+    if (
+      this.inFlight
+      && snapshot.windowTitle
+      && snapshot.windowTitle === this.lastWindowTitle
+      && snapshot.bundleId === this.inFlight.snapshot.bundleId
+      && snapshot.capturedAt - this.lastTabReadAt < TAB_CACHE_TRUST_MS
+    ) {
+      this.inFlight.snapshot = snapshot
+      this.inFlight.lastSeenAt = snapshot.capturedAt
       return
     }
 
     const tab = this.readTab(snapshot)
+    this.lastTabReadAt = snapshot.capturedAt
     const domain = tab ? extractDomain(tab.url) : null
     if (!tab || !domain) {
       this.flush(db, snapshot.capturedAt)
+      this.lastWindowTitle = null
       return
     }
+
+    this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
     if (this.inFlight && sameContext(this.inFlight, tab, normalizedUrl)) {

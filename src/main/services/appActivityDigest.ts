@@ -75,7 +75,13 @@ function labelLooksHostBlocked(block: WorkContextBlock, label: string): boolean 
   for (const c of candidates) {
     if (!c.title || !c.host) continue
     if (!isHostBlockedForAppsRail(c.host)) continue
-    if (c.title.toLowerCase() === normalizedLabel) return true
+    const normalizedTitle = c.title.toLowerCase()
+    if (normalizedTitle === normalizedLabel) return true
+    const escapedHost = c.host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const titleWithoutHost = normalizedTitle
+      .replace(new RegExp(`\\s*[-–—|]?\\s*${escapedHost}\\s*$`, 'i'), '')
+      .trim()
+    if (titleWithoutHost === normalizedLabel) return true
   }
   return false
 }

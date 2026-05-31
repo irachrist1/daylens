@@ -60,7 +60,7 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
-import { getDb } from '../services/database'
+import { getDb, tableExists } from '../services/database'
 import {
   createArtifact,
   createThread,
@@ -76,6 +76,7 @@ import { computeEnhancedFocusScore, computeFocusScoreV2 } from '../lib/focusScor
 import { getCurrentSession } from '../services/tracking'
 import type {
   AIArtifactKind,
+  AIProviderMode,
   AIChatSendRequest,
   AIChatStreamEvent,
   AIMessageArtifact,
@@ -138,7 +139,10 @@ import { VOICE_SYSTEM_PROMPT, CHAT_TOOL_USE_SYSTEM_PROMPT } from '../ai/voiceCon
 import { getCurrentTrace, maybeStartTrace, setCurrentTrace, tracingEnabled } from '../ai/trace'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
-const BLOCK_INSIGHT_TIMEOUT_MS = 12_000
+// Block labeling now runs on the user's chosen model (e.g. Sonnet), not a fixed
+// fast tier, so the budget must accommodate a frontier model answering a
+// foreground "regenerate label" click — 12s was tuned for Haiku and timed out.
+const BLOCK_INSIGHT_TIMEOUT_MS = 45_000
 
 type ConversationMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -911,7 +915,7 @@ async function sendWithAnthropic(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
-  const client = new Anthropic({ apiKey: config.apiKey ?? '' })
+  const client = new Anthropic({ apiKey: config.apiKey ?? '', maxRetries: 4 })
   const promptInput = buildAnthropicPromptInput(systemPrompt, prior, userMessage, options)
   const stream = client.messages.stream({
     model: config.model,
@@ -935,6 +939,68 @@ async function sendWithAnthropic(
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? null,
     },
   }
+}
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+
+// OpenRouter is wire-compatible with the OpenAI Chat Completions API, so we reuse
+// the OpenAI SDK pointed at OpenRouter's base URL. The ranking headers are
+// optional but recommended by OpenRouter.
+function createOpenAICompatibleClient(apiKey: string, provider: AIProviderMode): OpenAI {
+  if (provider === 'openrouter') {
+    return new OpenAI({
+      apiKey,
+      baseURL: OPENROUTER_BASE_URL,
+      defaultHeaders: {
+        'HTTP-Referer': 'https://daylens.app',
+        'X-Title': 'Daylens',
+      },
+    })
+  }
+  return new OpenAI({ apiKey })
+}
+
+// OpenRouter only implements /chat/completions (not OpenAI's Responses API), so
+// text jobs routed to OpenRouter use a streaming chat-completions call instead of
+// sendWithOpenAI's responses.create path.
+async function sendWithOpenRouter(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+  options?: AITextJobExecutionOptions,
+): Promise<ProviderTextResponse> {
+  const client = createOpenAICompatibleClient(config.apiKey ?? '', 'openrouter')
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: systemPrompt },
+    ...prior.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    { role: 'user' as const, content: userMessage },
+  ]
+  const stream = await client.chat.completions.create({
+    model: config.model,
+    messages,
+    max_tokens: options?.maxOutputTokens ?? 1024,
+    stream: true,
+    stream_options: { include_usage: true },
+  })
+  let text = ''
+  let usage: ProviderTextResponse['usage'] = null
+  for await (const chunk of stream) {
+    const delta = chunk.choices?.[0]?.delta?.content
+    if (delta) {
+      text += delta
+      await options?.onDelta?.(delta)
+    }
+    if (chunk.usage) {
+      usage = {
+        inputTokens: chunk.usage.prompt_tokens ?? null,
+        outputTokens: chunk.usage.completion_tokens ?? null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+      }
+    }
+  }
+  return { text, usage }
 }
 
 async function sendWithOpenAI(
@@ -1095,7 +1161,7 @@ async function runAnthropicToolLoop(
   onDelta: (delta: string) => void | Promise<void>,
   loopOptions: AnthropicToolLoopOptions = {},
 ): Promise<string> {
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, maxRetries: 4 })
   const intermediateMaxTokens = loopOptions.intermediateMaxTokens ?? 1024
   const finalMaxTokens = loopOptions.finalMaxTokens ?? 2048
   const effectiveMaxToolCalls = loopOptions.maxToolCalls ?? MAX_TOOL_CALLS
@@ -1415,8 +1481,9 @@ async function runOpenAIToolLoop(
   userMessage: string,
   db: ReturnType<typeof getDb>,
   onDelta: (delta: string) => void | Promise<void>,
+  provider: AIProviderMode = 'openai',
 ): Promise<string> {
-  const client = new OpenAI({ apiKey })
+  const client = createOpenAICompatibleClient(apiKey, provider)
 
   type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
   const messages: ChatMessage[] = [
@@ -1860,6 +1927,8 @@ async function sendWithProvider(
     }
     case 'openai':
       return sendWithOpenAI(config, systemPrompt, prior, userMessage, options)
+    case 'openrouter':
+      return sendWithOpenRouter(config, systemPrompt, prior, userMessage, options)
     case 'google':
       return sendWithGoogle(config, systemPrompt, prior, userMessage, options)
     case 'anthropic':
@@ -2240,12 +2309,7 @@ function buildWorkflowsContext(): string {
 
 function tableExistsForAIPrompt(tableName: string): boolean {
   try {
-    const row = getDb().prepare(`
-      SELECT name FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `).get(tableName) as { name: string } | undefined
-    return Boolean(row)
+    return tableExists(getDb(), tableName)
   } catch {
     return false
   }
@@ -4825,6 +4889,11 @@ export async function generateWorkBlockInsight(
     jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'
     triggerSource?: 'system' | 'background'
     throwOnError?: boolean
+    // When the user explicitly rejects a label and asks for a new one, pass the
+    // rejected text so the model is told not to repeat it. Without this the
+    // same evidence produces the same label and "Regenerate" feels like a
+    // no-op (docs/PERF-COHERENCE-MAP.md §5b).
+    rejectedLabel?: string
   },
 ): Promise<WorkContextInsight> {
   const systemPrompt = [
@@ -4846,7 +4915,9 @@ export async function generateWorkBlockInsight(
           screen: 'timeline_day',
           triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
           systemPrompt,
-          userMessage: workBlockPrompt(block),
+          userMessage: options?.rejectedLabel?.trim()
+            ? `${workBlockPrompt(block)}\n\nThe previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
+            : workBlockPrompt(block),
         },
         sendWithProvider,
       ),
@@ -4893,6 +4964,40 @@ const CLEANUP_BLOCK_BATCH_SIZE = 12
 const CLEANUP_BATCH_PAUSE_MS = 750
 const HISTORY_HEURISTIC_UPGRADE_BATCH_SIZE = 4
 const HISTORY_HEURISTIC_UPGRADE_PAUSE_MS = 500
+
+// Provider rate-limit circuit breaker. When a 429 is seen (foreground or
+// background), background AI labeling pauses until this timestamp so the user's
+// interactive requests win the limited request budget. It is a plain expiring
+// timestamp — never a lock — so it cannot get stuck on. Foreground work (chat,
+// user-clicked regenerate, on-demand summaries) never consults it, and the
+// deterministic evening consolidation makes no API calls at all, so neither can
+// ever be blocked by the breaker.
+const MAX_AI_COOLDOWN_MS = 60_000
+let aiBackgroundCooldownUntil = 0
+function isBackgroundAIOnCooldown(): boolean {
+  return Date.now() < aiBackgroundCooldownUntil
+}
+function noteProviderRateLimit(err: unknown): void {
+  if (!err || typeof err !== 'object') return
+  const e = err as {
+    status?: number
+    error?: { type?: string; error?: { type?: string } }
+    headers?: Record<string, string> | { get?: (k: string) => string | null }
+  }
+  const is429 = e.status === 429
+    || e.error?.type === 'rate_limit_error'
+    || e.error?.error?.type === 'rate_limit_error'
+  if (!is429) return
+  const rawRetryAfter = e.headers && typeof (e.headers as { get?: (k: string) => string | null }).get === 'function'
+    ? (e.headers as { get: (k: string) => string | null }).get('retry-after')
+    : (e.headers as Record<string, string> | undefined)?.['retry-after']
+  const seconds = rawRetryAfter ? Number(rawRetryAfter) : NaN
+  const retryAfterMs = Number.isFinite(seconds) && seconds > 0
+    ? Math.min(seconds * 1000, MAX_AI_COOLDOWN_MS)
+    : 30_000
+  aiBackgroundCooldownUntil = Date.now() + retryAfterMs
+  console.warn(`[ai] provider rate-limited; pausing background AI for ~${Math.round(retryAfterMs / 1000)}s`)
+}
 
 const cleanupQueueState: {
   active: boolean
@@ -4953,6 +5058,10 @@ async function runBlockInsightJob(
   block: WorkContextBlock,
   jobType: 'block_label_finalize' | 'block_cleanup_relabel',
 ): Promise<void> {
+  // Breaker: skip background labeling while rate-limited. The block is left
+  // untouched and re-scheduled by the next timeline read once the cooldown
+  // expires, so nothing is lost or stranded.
+  if (isBackgroundAIOnCooldown()) return
   if (queuedBlockInsightJobs.has(`${jobType}:${block.id}`)) return
   queuedBlockInsightJobs.add(`${jobType}:${block.id}`)
 
@@ -4962,6 +5071,7 @@ async function runBlockInsightJob(
     invalidateProjectionScope('apps', `ai:${jobType}`)
     invalidateProjectionScope('insights', `ai:${jobType}`)
   } catch (error) {
+    noteProviderRateLimit(error)
     console.warn(`[ai] ${jobType} failed for block ${block.id}:`, error)
   } finally {
     queuedBlockInsightJobs.delete(`${jobType}:${block.id}`)
@@ -4973,6 +5083,19 @@ async function processCleanupQueue(): Promise<void> {
   if (!getSettings().aiBackgroundEnrichment) {
     resetCleanupQueue()
     return
+  }
+
+  // Breaker: while rate-limited, leave the queue intact and re-check after the
+  // cooldown rather than chewing through the batch as no-ops.
+  if (isBackgroundAIOnCooldown()) {
+    const cooldownDelayMs = aiBackgroundCooldownUntil - Date.now()
+    if (cooldownDelayMs > 0) {
+      cleanupQueueTimer = setTimeout(() => {
+        cleanupQueueTimer = null
+        void processCleanupQueue()
+      }, cooldownDelayMs)
+      return
+    }
   }
 
   try {
@@ -5060,20 +5183,64 @@ function scheduleHistoryHeuristicUpgrade(anchorDate: string): void {
   }, 1_000)
 }
 
+const lastTimelineAIJobFingerprint = new Map<string, string>()
+
+/**
+ * Identity of the relabel-relevant state of a day's blocks. Two reads with the
+ * same fingerprint would schedule exactly the same AI jobs, so the second can be
+ * skipped. Keyed on what `backgroundRelabelDispositionForBlock` actually reads:
+ * block identity, end time, and current label/source.
+ */
+export function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
+  // Hash a structured (delimiter-free) encoding of the block fields. The old
+  // `:`/`|`-joined string collided when a label itself contained those
+  // characters, letting two different day states share a fingerprint and
+  // suppress scheduling for a changed day.
+  const shape = payload.blocks.map((block) => [
+    block.id,
+    block.endTime,
+    block.label.source,
+    block.label.current ?? '',
+  ])
+  return createHash('sha1').update(JSON.stringify(shape)).digest('hex')
+}
+
 export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
   scheduleHistoryHeuristicUpgrade(currentLocalDateString())
 
   const settings = getSettings()
   if (!settings.aiBackgroundEnrichment) return
+  // Breaker: while rate-limited, schedule nothing and do not memoize, so the
+  // next read after the cooldown retries cleanly.
+  if (isBackgroundAIOnCooldown()) return
+
+  // GET_TIMELINE_DAY runs on every 30s today-poll, every week-view fan-out, and
+  // every Day Wrapped open. Skip the per-block scheduling when this day's blocks
+  // are byte-for-byte what they were last time we scheduled them (F15).
+  const fingerprint = timelineAIJobFingerprint(payload)
+  if (lastTimelineAIJobFingerprint.get(payload.date) === fingerprint) return
 
   const now = Date.now()
+  let pendingQuietBlock = false
   for (const block of payload.blocks) {
     if (backgroundRelabelDispositionForBlock(block) !== 'relabel') continue
-    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) continue
+    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) {
+      // Eligible but still settling; it will become schedulable purely with the
+      // passage of time, without any fingerprint change.
+      pendingQuietBlock = true
+      continue
+    }
     void runBlockInsightJob(block, 'block_label_finalize')
   }
 
   scheduleOvernightCleanup(currentLocalDateString())
+
+  // Only memoize once every relabel-eligible block has actually been scheduled,
+  // so a block still inside its quiet window is re-checked on the next read
+  // instead of being stranded until the block set next changes.
+  if (!pendingQuietBlock) {
+    lastTimelineAIJobFingerprint.set(payload.date, fingerprint)
+  }
 }
 
 const APP_VOCABULARY_HINT =
@@ -5169,6 +5336,41 @@ async function routerProsePass(
   return out
 }
 
+// Translate raw provider SDK errors (e.g. a 429 JSON blob from Anthropic) into a
+// short, human message before it reaches the chat UI. Without this the renderer
+// shows the raw provider payload in the answer bubble.
+function friendlyChatError(err: unknown): Error {
+  if (!err || typeof err !== 'object') {
+    return new Error('The AI request failed. Please try again.')
+  }
+  const e = err as {
+    status?: number
+    message?: string
+    headers?: Record<string, string> | { get?: (k: string) => string | null }
+    error?: { type?: string; error?: { type?: string } }
+  }
+  const errorType = e.error?.error?.type ?? e.error?.type
+  const message = typeof e.message === 'string' ? e.message.toLowerCase() : ''
+  const retryAfter =
+    (e.headers && typeof (e.headers as { get?: (k: string) => string | null }).get === 'function'
+      ? (e.headers as { get: (k: string) => string | null }).get('retry-after')
+      : (e.headers as Record<string, string> | undefined)?.['retry-after']) ?? null
+  const waitHint = retryAfter ? ` Try again in about ${retryAfter}s.` : ' Wait a moment and try again.'
+
+  if (e.status === 429 || errorType === 'rate_limit_error' || message.includes('rate limit')) {
+    return new Error(
+      `Your AI provider's rate limit was hit — your plan only allows a few requests per minute, and a single answer makes several.${waitHint} To make this reliable, raise your provider tier (adding credit usually bumps the limit) or switch to a faster, higher-limit model in Settings.`,
+    )
+  }
+  if (errorType === 'credit_balance_too_low' || message.includes('credit balance')) {
+    return new Error('Your AI provider credit balance is too low. Top it up with the provider, or switch providers in Settings.')
+  }
+  if (e.status === 401 || e.status === 403) {
+    return new Error('Your AI provider rejected the key. Re-check or re-paste it in Settings.')
+  }
+  return err instanceof Error ? err : new Error('The AI request failed. Please try again.')
+}
+
 export async function sendMessage(payload: AIChatSendRequest, options: SendMessageOptions = {}): Promise<AIChatTurnResult> {
   const recorder = maybeStartTrace({
     scenarioId: options.traceScenarioId ?? null,
@@ -5181,10 +5383,12 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     }
     return result
   } catch (err) {
+    noteProviderRateLimit(err)
+    const friendly = friendlyChatError(err)
     if (recorder) {
-      recorder.finish(undefined, err instanceof Error ? err.message : String(err))
+      recorder.finish(undefined, friendly.message)
     }
-    throw err
+    throw friendly
   } finally {
     if (recorder) setCurrentTrace(null)
   }
@@ -5290,7 +5494,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   if (routed) {
     if (routed.kind === 'weeklyBrief') {
       const settings = getSettings()
-      const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+      const chatProvider = settings.aiProvider ?? 'anthropic'
       const chatModel = modelForProvider(chatProvider, 'quality', settings)
       let pack = routed.briefContext.evidenceKey ? weeklyBriefCache.get(routed.briefContext.evidenceKey) ?? null : null
       if (!pack) {
@@ -5393,7 +5597,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const settings = getSettings()
   const { userName } = settings
-  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  const chatProvider = settings.aiProvider ?? 'anthropic'
   const chatModel = modelForProvider(chatProvider, 'quality', settings)
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
@@ -5401,7 +5605,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   let assistantText: string
 
-  if (chatProvider === 'anthropic' || chatProvider === 'openai' || chatProvider === 'google') {
+  if (chatProvider === 'anthropic' || chatProvider === 'openai' || chatProvider === 'google' || chatProvider === 'openrouter') {
     const now = new Date()
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
@@ -5448,9 +5652,9 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
     assistantText = chatProvider === 'anthropic'
       ? await runAnthropicToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), loopOpts)
-      : chatProvider === 'openai'
-        ? await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
-        : await runGoogleToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
+      : chatProvider === 'google'
+        ? await runGoogleToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
+        : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), chatProvider)
     assistantText = assistantText.trim()
   } else {
     // Legacy static-context path — CLI providers only.

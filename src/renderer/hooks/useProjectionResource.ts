@@ -9,6 +9,14 @@ interface UseProjectionResourceOptions<T> {
   intervalMs?: number
   pauseWhenHidden?: boolean
   shouldReload?: (event: ProjectionInvalidationEvent) => boolean
+  /**
+   * Coalesce a burst of invalidation events into a single refresh. A session
+   * flush fans out several scope invalidations (timeline/apps/insights) and the
+   * attribution pass fires more ~3s later, so without a debounce every mounted
+   * view can refetch several times per flush. Only applies to invalidation-driven
+   * refreshes; mount and interval refreshes are unaffected.
+   */
+  invalidationDebounceMs?: number
   dependencies?: ReadonlyArray<unknown>
 }
 
@@ -20,6 +28,14 @@ interface UseProjectionResourceState<T> {
   refresh: () => Promise<void>
 }
 
+function safeSerialize(value: unknown): string | null {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
 export function useProjectionResource<T>({
   scope,
   load,
@@ -27,6 +43,7 @@ export function useProjectionResource<T>({
   intervalMs = 0,
   pauseWhenHidden = true,
   shouldReload,
+  invalidationDebounceMs = 250,
   dependencies = [],
 }: UseProjectionResourceOptions<T>): UseProjectionResourceState<T> {
   const [data, setData] = useState<T | null>(null)
@@ -36,6 +53,11 @@ export function useProjectionResource<T>({
   const mountedRef = useRef(true)
   const requestIdRef = useRef(0)
   const dataRef = useRef<T | null>(null)
+  // Serialized form of the last payload we committed. Poll- and invalidation-
+  // driven refreshes frequently return data identical to what is already
+  // mounted; comparing the serialized payload lets us skip setData (and the
+  // re-render of every consumer) when nothing actually changed (F28).
+  const serializedRef = useRef<string | null>(null)
   const inFlightRef = useRef<Promise<void> | null>(null)
   const pendingRefreshRef = useRef(false)
   // Callers typically pass `load` as an inline function, so its identity changes
@@ -69,9 +91,15 @@ export function useProjectionResource<T>({
     const request = loadRef.current()
       .then((next) => {
         if (!mountedRef.current || requestId !== requestIdRef.current) return
+        setError(null)
+        // Skip the commit when the refreshed payload is byte-identical to what is
+        // already mounted, keeping the existing reference so memoized consumers
+        // don't re-render. Falls through to a normal commit if serialization fails.
+        const serialized = safeSerialize(next)
+        if (serialized !== null && serialized === serializedRef.current) return
+        serializedRef.current = serialized
         dataRef.current = next
         setData(next)
-        setError(null)
       })
       .catch((err) => {
         if (!mountedRef.current || requestId !== requestIdRef.current) return
@@ -112,13 +140,26 @@ export function useProjectionResource<T>({
 
   useEffect(() => {
     if (!enabled) return
-    return ipc.projections.onInvalidated((event) => {
+    let debounceTimer: number | null = null
+    const unsubscribe = ipc.projections.onInvalidated((event) => {
       const scopeMatches = event.scope === 'all' || event.scope === scope
       if (!scopeMatches) return
       if (shouldReload && !shouldReload(event)) return
-      void refresh()
+      if (invalidationDebounceMs <= 0) {
+        void refresh()
+        return
+      }
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null
+        void refresh()
+      }, invalidationDebounceMs)
     })
-  }, [enabled, refresh, scope, shouldReload])
+    return () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer)
+      unsubscribe?.()
+    }
+  }, [enabled, refresh, scope, shouldReload, invalidationDebounceMs])
 
   useEffect(() => {
     if (!enabled || intervalMs <= 0) return

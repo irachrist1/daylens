@@ -1,4 +1,4 @@
-// Raw SQL schema — will be replaced by Drizzle in Phase 2a (see docs/next-steps.md)
+// Raw SQL schema — will be replaced by Drizzle in Phase 2a.
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_sessions (
@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_app_sessions_start ON app_sessions (start_time);
+-- (bundle_id, start_time) lookups are already served by the UNIQUE
+-- idx_app_sessions_dedup (migration v3), so no separate index is needed here.
 
 CREATE TABLE IF NOT EXISTS live_app_session_snapshot (
   singleton        INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -45,6 +47,7 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   planned_apps TEXT NOT NULL DEFAULT '[]',
   reflection_note TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_start ON focus_sessions (start_time);
 
 CREATE TABLE IF NOT EXISTS ai_conversations (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +198,11 @@ CREATE TABLE IF NOT EXISTS activity_state_events (
 
 CREATE INDEX IF NOT EXISTS idx_activity_state_events_time ON activity_state_events (event_ts);
 
+CREATE TABLE IF NOT EXISTS maintenance_runs (
+  key          TEXT PRIMARY KEY,
+  completed_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS work_context_observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   start_ts INTEGER NOT NULL,
@@ -240,6 +248,8 @@ CREATE TABLE IF NOT EXISTS timeline_block_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_timeline_block_members_member ON timeline_block_members (member_type, member_id);
+-- block_id lookups are already served by the PRIMARY KEY (block_id, member_type,
+-- member_id) leading column, so no separate block_id index is needed.
 
 CREATE TABLE IF NOT EXISTS timeline_block_labels (
   id TEXT PRIMARY KEY,

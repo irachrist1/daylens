@@ -119,8 +119,8 @@ async function tryGetWrappedTeaser(
       new Promise<null>((resolve) => setTimeout(() => resolve(null), AI_REPORT_TIMEOUT_MS)),
     ])
     if (!narrative?.lead) return null
-    // Evening wrap: pair the lead (recap) with the nudge (tomorrow posture) per
-    // PRODUCT-SPEC. Keep under ~140 chars so macOS/Windows don't truncate in
+    // Evening wrap: pair the lead (recap) with the nudge (tomorrow posture).
+    // Keep under ~140 chars so macOS/Windows don't truncate in
     // the middle of the second sentence.
     if (surface === 'evening' && narrative.nudge) {
       const combined = `${narrative.lead.trim()} ${narrative.nudge.trim()}`

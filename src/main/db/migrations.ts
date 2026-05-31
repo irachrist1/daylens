@@ -1463,24 +1463,8 @@ const migrations: Migration[] = [
   },
   {
     version: 23,
-    description: 'Add imessage_events table for optional iMessage capture (macOS, opt-in)',
-    up: () => {
-      const db = getDb()
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS imessage_events (
-          rowid           INTEGER PRIMARY KEY,
-          chat_guid       TEXT,
-          chat_label      TEXT,
-          handle_id       TEXT,
-          is_from_me      INTEGER NOT NULL DEFAULT 0,
-          text            TEXT,
-          sent_at         INTEGER NOT NULL,
-          captured_at     INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_imessage_events_sent ON imessage_events (sent_at);
-        CREATE INDEX IF NOT EXISTS idx_imessage_events_handle ON imessage_events (handle_id, sent_at);
-      `)
-    },
+    description: 'Reserved no-op after removing the iMessage capture table migration',
+    up: () => {},
   },
   {
     version: 24,
@@ -1748,6 +1732,34 @@ const migrations: Migration[] = [
           archive_markdown    TEXT NOT NULL,
           archive_json        TEXT NOT NULL,
           created_at          INTEGER NOT NULL
+        );
+      `)
+    },
+  },
+  {
+    version: 30,
+    description: 'Add hot-path index for focus session lookups',
+    up: () => {
+      // Only idx_focus_sessions_start is created here. The (bundle_id, start_time)
+      // and timeline_block_members(block_id) indexes this migration used to add
+      // were redundant: the former duplicates the UNIQUE idx_app_sessions_dedup
+      // (v3) and the latter duplicates the timeline_block_members PRIMARY KEY
+      // leading column. Existing DBs that already ran the old v30 keep those
+      // harmless extra indexes; new installs no longer create them.
+      getDb().exec(`
+        CREATE INDEX IF NOT EXISTS idx_focus_sessions_start
+          ON focus_sessions (start_time);
+      `)
+    },
+  },
+  {
+    version: 31,
+    description: 'Add startup maintenance run markers',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS maintenance_runs (
+          key TEXT PRIMARY KEY,
+          completed_at INTEGER NOT NULL
         );
       `)
     },

@@ -36,7 +36,6 @@ import type {
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
   TrackingPermissionState,
-  WorkContextBlock,
   WorkContextInsight,
   WorkMemorySettingsSummary,
   WorkspaceResult,
@@ -127,7 +126,7 @@ const api = {
     setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_CATEGORY_OVERRIDE, bundleId, category),
     clearCategoryOverride: (bundleId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_CATEGORY_OVERRIDE, bundleId),
-    setBlockLabelOverride: (payload: { blockId: string; label: string; narrative?: string | null }): Promise<void> =>
+    setBlockLabelOverride: (payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
@@ -172,8 +171,8 @@ const api = {
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
-    regenerateBlockLabel: (block: WorkContextBlock): Promise<WorkContextInsight> =>
-      ipcRenderer.invoke(IPC.AI.REGENERATE_BLOCK_LABEL, block),
+    regenerateBlockLabel: (blockId: string): Promise<WorkContextInsight> =>
+      ipcRenderer.invoke(IPC.AI.REGENERATE_BLOCK_LABEL, blockId),
     detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
     listThreads: (payload?: { includeArchived?: boolean }): Promise<AIThreadSummary[]> =>
       ipcRenderer.invoke(IPC.AI.LIST_THREADS, payload),
@@ -271,12 +270,6 @@ const api = {
   },
   mcp: {
     getConfig: (): Promise<McpServerConfig | null> => ipcRenderer.invoke(IPC.MCP.GET_CONFIG),
-  },
-  imessage: {
-    syncNow: (): Promise<{ ok: boolean; inserted: number; lastSentAt: number | null; error?: string }> =>
-      ipcRenderer.invoke(IPC.IMESSAGE.SYNC_NOW),
-    getStatus: (): Promise<{ enabled: boolean; platformSupported: boolean }> =>
-      ipcRenderer.invoke(IPC.IMESSAGE.GET_STATUS),
   },
   analytics: {
     capture: (event: string, properties: Record<string, unknown>) =>

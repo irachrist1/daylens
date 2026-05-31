@@ -60,8 +60,8 @@ interface SegmentAttributionRow {
   rank: number
 }
 
-interface WorkSessionSegmentRow {
-  segment_id: string
+interface WorkSessionAppSegmentRow {
+  primary_bundle_id: string
   role: string
   contribution_ms: number
 }
@@ -399,18 +399,18 @@ function sessionApps(
   appNameMap: Map<string, string>,
 ): SessionAppEntry[] {
   const members = db.prepare(`
-    SELECT segment_id, role, contribution_ms
-    FROM work_session_segments
-    WHERE work_session_id = ?
-  `).all(sessionId) as WorkSessionSegmentRow[]
+    SELECT
+      aseg.primary_bundle_id,
+      wss.role,
+      wss.contribution_ms
+    FROM work_session_segments wss
+    JOIN activity_segments aseg ON aseg.id = wss.segment_id
+    WHERE wss.work_session_id = ?
+  `).all(sessionId) as WorkSessionAppSegmentRow[]
 
   const appMs = new Map<string, { ms: number; role: string }>()
   for (const member of members) {
-    const seg = db.prepare(`
-      SELECT primary_bundle_id FROM activity_segments WHERE id = ?
-    `).get(member.segment_id) as { primary_bundle_id: string } | undefined
-    if (!seg) continue
-    const key = seg.primary_bundle_id
+    const key = member.primary_bundle_id
     const existing = appMs.get(key)
     if (existing) {
       existing.ms += member.contribution_ms
@@ -1106,14 +1106,22 @@ export function resolveEvidenceBackedQuery(
     return row.name
   }
 
+  // EXISTS instead of LEFT JOIN + DISTINCT: the join fanned out one row per
+  // evidence value before collapsing. The subquery resolves through
+  // idx_work_session_evidence_session (work_session_id leading) and the outer
+  // range through idx_work_sessions_time, so the substring LIKE only runs over
+  // the rows already inside the time window. Match set is unchanged.
   const sessions = db.prepare(`
-    SELECT DISTINCT ws.*
+    SELECT ws.*
     FROM work_sessions ws
-    LEFT JOIN work_session_evidence wse ON wse.work_session_id = ws.id
     WHERE ws.started_at >= ? AND ws.started_at < ?
       AND (
         LOWER(COALESCE(ws.title, '')) LIKE ?
-        OR LOWER(COALESCE(wse.evidence_value, '')) LIKE ?
+        OR EXISTS (
+          SELECT 1 FROM work_session_evidence wse
+          WHERE wse.work_session_id = ws.id
+            AND LOWER(COALESCE(wse.evidence_value, '')) LIKE ?
+        )
       )
     ORDER BY ws.started_at ASC
   `).all(fromMs, toMs, normalized, normalized) as WorkSessionRow[]

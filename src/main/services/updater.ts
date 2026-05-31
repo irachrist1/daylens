@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, net } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { spawn, spawnSync } from 'node:child_process'
-import { createWriteStream, constants as fsConstants } from 'node:fs'
+import { createWriteStream, constants as fsConstants, readFileSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -69,9 +69,44 @@ export function getUpdaterState(): UpdaterState { return { ..._state } }
 // script the responsibility of replacing /Applications/Daylens.app once the
 // running process exits.
 let _macAdhocCache: boolean | null = null
+
+// The ad-hoc signing status only changes when the bundle changes, i.e. on a new
+// version. Persist it in userData keyed by version so subsequent launches of the
+// same build skip the `codesign` subprocess entirely.
+function signingManifestPath(): string {
+  return path.join(app.getPath('userData'), 'updater-signing.json')
+}
+
+function readPersistedAdhoc(version: string): boolean | null {
+  try {
+    const raw = readFileSync(signingManifestPath(), 'utf8')
+    const parsed = JSON.parse(raw) as { version?: string; adhoc?: boolean }
+    if (parsed.version === version && typeof parsed.adhoc === 'boolean') return parsed.adhoc
+  } catch {
+    // missing or unreadable manifest — fall through to probe
+  }
+  return null
+}
+
+function writePersistedAdhoc(version: string, adhoc: boolean): void {
+  try {
+    writeFileSync(signingManifestPath(), `${JSON.stringify({ version, adhoc })}\n`, 'utf8')
+  } catch {
+    // best-effort cache; a write failure just means we probe again next launch
+  }
+}
+
 function isMacAdhocSigned(): boolean {
   if (process.platform !== 'darwin' || !app.isPackaged) return false
   if (_macAdhocCache !== null) return _macAdhocCache
+
+  const version = app.getVersion()
+  const persisted = readPersistedAdhoc(version)
+  if (persisted !== null) {
+    _macAdhocCache = persisted
+    return persisted
+  }
+
   try {
     const appBundlePath = path.resolve(process.execPath, '..', '..', '..')
     const result = spawnSync('/usr/bin/codesign', ['-dv', appBundlePath], {
@@ -82,6 +117,7 @@ function isMacAdhocSigned(): boolean {
   } catch {
     _macAdhocCache = true
   }
+  writePersistedAdhoc(version, _macAdhocCache)
   return _macAdhocCache
 }
 

@@ -1,6 +1,5 @@
 import { ipcMain } from 'electron'
-import crypto from 'node:crypto'
-import { clearBlockLabelOverride, updateAIMessageFeedback } from '../db/queries'
+import { updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
 import {
@@ -19,19 +18,20 @@ import {
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodNarrative } from '../services/wrappedPeriodNarrative'
-import { getTimelineDayPayload } from '../services/workBlocks'
+import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
 import { getCurrentSession } from '../services/tracking'
+import { materializeTimelineDayProjection } from '../core/query/projections'
+import { localDateString } from '../lib/localDate'
 import {
   archiveThread,
   createThread,
   deleteThread,
   exportArtifact,
-  getArtifact,
   getThread,
   listArtifactsByThread,
   listThreadsLite,
   openArtifact,
-  readArtifactContent,
+  readArtifactPreview,
   renameThread,
 } from '../services/artifacts'
 import { IPC, type AIChatSendRequest, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
@@ -109,41 +109,36 @@ export function registerAIHandlers(): void {
     return generateWorkBlockInsight(block)
   })
 
-  ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, block: WorkContextBlock) => {
+  ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, blockId: string) => {
+    // Load the block on the main side from its id instead of shipping the whole
+    // WorkContextBlock (nested sessions, artifacts, websites) across IPC (F44).
+    const db = getDb()
+    const block = getBlockDetailPayload(db, blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+
+    // Per-block "Regenerate" is the explicit "this label is wrong, fix it"
+    // action. Tell the model which label was rejected so it doesn't hand back
+    // the same one, then write with force so the redo overrides the existing
+    // label (docs/PERF-COHERENCE-MAP.md §5b).
+    const rejectedLabel = block.label.override?.trim() || block.label.current?.trim() || block.aiLabel?.trim()
     const insight = await generateWorkBlockInsight(
       { ...block, label: { ...block.label, override: null } },
-      { jobType: 'block_label_finalize', triggerSource: 'system', throwOnError: true },
+      { jobType: 'block_label_finalize', triggerSource: 'system', throwOnError: true, rejectedLabel },
     )
     const label = insight.label?.trim()
     if (!label) throw new Error('AI did not return a label.')
 
-    const db = getDb()
-    const now = Date.now()
-    clearBlockLabelOverride(db, block.id)
-    db.prepare(`
-      UPDATE timeline_blocks
-      SET label_current = ?,
-          label_source = 'ai',
-          label_confidence = ?,
-          narrative_current = ?,
-          computed_at = ?
-      WHERE id = ?
-    `).run(label, 0.72, insight.narrative ?? null, now, block.id)
-
-    const labelHash = crypto.createHash('sha1').update(label).digest('hex').slice(0, 8)
-    db.prepare(`
-      INSERT OR REPLACE INTO timeline_block_labels (
-        id,
-        block_id,
-        label,
-        narrative,
-        source,
-        confidence,
-        created_at,
-        model_info_json
-      )
-      VALUES (?, ?, ?, ?, 'ai', ?, ?, ?)
-    `).run(`${block.id}:ai:${labelHash}`, block.id, label, insight.narrative ?? null, 0.72, now, null)
+    const blockDate = localDateString(new Date(block.startTime))
+    materializeTimelineDayProjection(db, blockDate, blockDate === localDateString() ? getCurrentSession() : null)
+    const wrote = writeAIBlockLabel(db, {
+      blockId: block.id,
+      label,
+      narrative: insight.narrative ?? null,
+      force: true,
+    })
+    if (!wrote) {
+      throw new Error('AI label could not be persisted. Reopen the timeline and try again.')
+    }
 
     return insight
   })
@@ -194,9 +189,9 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.GET_ARTIFACT, async (_e, payload: { artifactId: number }) => {
-    const record = getArtifact(payload.artifactId)
-    if (!record) return null
-    return readArtifactContent(payload.artifactId)
+    // Preview-only read: caps content to the first N KB so a large artifact is
+    // not cloned in full over IPC. Open/export read the complete artifact.
+    return readArtifactPreview(payload.artifactId)
   })
 
   ipcMain.handle(IPC.AI.OPEN_ARTIFACT, async (_e, payload: { artifactId: number }) => {

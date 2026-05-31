@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { getStreamingSnapshot, subscribeStreaming } from './streamingStore'
 
 interface StreamingMessageProps {
@@ -14,22 +14,67 @@ interface StreamingMessageProps {
   onSnapshotUpdate?: () => void
 }
 
+type FrameHandle =
+  | { kind: 'raf'; id: number }
+  | { kind: 'timeout'; id: ReturnType<typeof globalThis.setTimeout> }
+
+function requestFrame(callback: () => void): FrameHandle {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return { kind: 'raf', id: window.requestAnimationFrame(callback) }
+  }
+  return { kind: 'timeout', id: globalThis.setTimeout(callback, 16) }
+}
+
+function cancelFrame(handle: FrameHandle): void {
+  if (handle.kind === 'raf' && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(handle.id)
+    return
+  }
+  if (handle.kind === 'timeout') {
+    globalThis.clearTimeout(handle.id)
+  }
+}
+
 export function StreamingMessage({ messageId, fallback, renderContent, onSnapshotUpdate }: StreamingMessageProps) {
   // useSyncExternalStore drives a re-render of THIS component on every
-  // snapshot push, while the parent stays untouched.
+  // snapshot push, while the parent stays untouched. The visible snapshot below
+  // advances at frame cadence so markdown parsing and scroll work are batched.
   const snapshot = useSyncExternalStore(
     (listener) => subscribeStreaming(messageId, listener),
     () => getStreamingSnapshot(messageId),
     () => '',
   )
 
+  const [visibleSnapshot, setVisibleSnapshot] = useState(snapshot)
+  const latestSnapshotRef = useRef(snapshot)
   const lastNotifiedRef = useRef<number>(0)
+  const frameRef = useRef<FrameHandle | null>(null)
+
   useEffect(() => {
-    if (snapshot.length === lastNotifiedRef.current) return
-    lastNotifiedRef.current = snapshot.length
-    onSnapshotUpdate?.()
+    latestSnapshotRef.current = snapshot
+    if (frameRef.current !== null) return
+
+    frameRef.current = requestFrame(() => {
+      frameRef.current = null
+      const next = latestSnapshotRef.current
+      setVisibleSnapshot(next)
+      if (next.length === lastNotifiedRef.current) return
+      lastNotifiedRef.current = next.length
+      onSnapshotUpdate?.()
+    })
   }, [snapshot, onSnapshotUpdate])
 
-  if (!snapshot) return <>{fallback}</>
-  return <>{renderContent(snapshot)}</>
+  useEffect(() => () => {
+    if (frameRef.current !== null) {
+      cancelFrame(frameRef.current)
+      frameRef.current = null
+    }
+  }, [])
+
+  const renderedContent = useMemo(
+    () => visibleSnapshot ? renderContent(visibleSnapshot) : fallback,
+    [fallback, renderContent, visibleSnapshot],
+  )
+
+  return <>{renderedContent}</>
 }

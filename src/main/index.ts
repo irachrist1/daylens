@@ -57,14 +57,13 @@ import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
-import { startImessageCaptureScheduler, imessageCaptureSupportedOnPlatform } from './services/imessageCapture'
-import { initDb, closeDb } from './services/database'
+import { initDb, closeDb, getDb } from './services/database'
+import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
-import { computeAllMissingSummaries } from './db/dailySummaries'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
@@ -73,7 +72,7 @@ import { consumePendingNavigationRoute } from './services/dailySummaryNavigation
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
-import { startProcessMonitor, stopProcessMonitor } from './services/processMonitor'
+import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
 import { IPC } from '@shared/types'
@@ -118,8 +117,11 @@ if (!gotTheLock) {
 app.setAppUserModelId(APP_USER_MODEL_ID)
 
 if (process.platform === 'linux' && SMOKE_TEST) {
+  app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('no-sandbox')
   app.commandLine.appendSwitch('disable-setuid-sandbox')
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-dev-shm-usage')
 }
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
@@ -128,6 +130,7 @@ declare const MAIN_WINDOW_VITE_NAME: string
 let mainWindow: BrowserWindow | null = null
 // Set to true once the user explicitly quits via tray menu
 let isQuitting = false
+let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
 // Set to latest version string when a newer release is detected
 export let updateAvailable: string | null = null
@@ -249,14 +252,19 @@ async function waitForRendererLoad(win: BrowserWindow): Promise<void> {
   })
 }
 
-async function runSmokeValidation(win: BrowserWindow): Promise<void> {
+type SmokeValidationTrigger = 'ready-to-show' | 'did-finish-load' | 'watchdog'
+
+async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTrigger): Promise<void> {
   try {
-    await waitForRendererLoad(win)
+    if (trigger === 'watchdog') {
+      await waitForRendererLoad(win)
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_500))
 
     writeSmokeReport({
       ok: true,
       stage: 'smoke-complete',
+      smokeTrigger: trigger,
       reportPath: SMOKE_REPORT_PATH,
       platform: process.platform,
       version: app.getVersion(),
@@ -274,9 +282,11 @@ async function runSmokeValidation(win: BrowserWindow): Promise<void> {
     await shutdownApp()
     app.exit(0)
   } catch (err) {
+    console.error('[smoke] validation failed:', err)
     writeSmokeReport({
       ok: false,
       stage: 'smoke-runtime',
+      smokeTrigger: trigger,
       reportPath: SMOKE_REPORT_PATH,
       platform: process.platform,
       version: app.getVersion(),
@@ -319,10 +329,12 @@ function startBackgroundServices(): void {
 
   startTracking()
   startFocusCapture()
-  startSync()
-  startDailySummaryNotifier(mainWindow)
-  setDistractionAlertWindow(mainWindow)
-  startDistractionAlerter()
+  if (!SMOKE_TEST) {
+    startSync()
+    startDailySummaryNotifier(mainWindow)
+    setDistractionAlertWindow(mainWindow)
+    startDistractionAlerter()
+  }
   backgroundServicesStarted = true
 
   setTimeout(() => {
@@ -341,10 +353,11 @@ function startBackgroundServices(): void {
     })
   }, 5_000)
 
-  setTimeout(() => {
-    try { computeAllMissingSummaries() } catch (err) { console.warn('[init] summaries:', err) }
-    setTimeout(() => finalizePreviousDay(), 0)
-  }, 10_000)
+  if (!SMOKE_TEST) {
+    setTimeout(() => {
+      setTimeout(() => finalizePreviousDay(), 0)
+    }, 10_000)
+  }
 }
 
 async function backupUserDataForUpdate(): Promise<void> {
@@ -434,6 +447,10 @@ async function recoverFromUpdateIfNeeded(): Promise<void> {
 }
 
 async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExit?: boolean }): Promise<void> {
+  if (deferredIntegrationStartup) {
+    clearTimeout(deferredIntegrationStartup)
+    deferredIntegrationStartup = null
+  }
   stopMcpServer()
   stopTracking()
   stopFocusCapture()
@@ -527,6 +544,23 @@ function createWindow(): BrowserWindow {
     show: false,
   })
 
+  let smokeValidationStarted = false
+  const maybeRunLinuxSmokeValidation = (trigger: SmokeValidationTrigger) => {
+    if (!SMOKE_TEST || process.platform !== 'linux') return
+    if (smokeValidationStarted) return
+    smokeValidationStarted = true
+    void runSmokeValidation(win, trigger)
+  }
+
+  win.once('ready-to-show', () => {
+    win.show()
+    maybeRunLinuxSmokeValidation('ready-to-show')
+  })
+  win.webContents.once('did-finish-load', () => maybeRunLinuxSmokeValidation('did-finish-load'))
+  if (SMOKE_TEST && process.platform === 'linux') {
+    setTimeout(() => maybeRunLinuxSmokeValidation('watchdog'), 20_000)
+  }
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)
     // DevTools on demand — Ctrl+Shift+I / Cmd+Option+I.
@@ -538,13 +572,6 @@ function createWindow(): BrowserWindow {
       app.quit()
     })
   }
-
-  win.once('ready-to-show', () => {
-    win.show()
-    if (SMOKE_TEST && process.platform === 'linux') {
-      void runSmokeValidation(win)
-    }
-  })
 
   // Block in-window navigation to external URLs — open in system browser instead.
   // titleBarStyle: 'hidden' means no native close button, so if the Electron window
@@ -720,8 +747,8 @@ app.whenReady()
     await initAnalytics()
     installApplicationMenu()
     if (app.isPackaged) {
-      app.setLoginItemSettings({ openAtLogin: getSettings().launchOnLogin })
-      await syncLinuxLaunchOnLogin(getSettings().launchOnLogin)
+      app.setLoginItemSettings({ openAtLogin: reconciledSettings.launchOnLogin })
+      await syncLinuxLaunchOnLogin(reconciledSettings.launchOnLogin)
     }
 
     // Set firstLaunchDate on first run (used for day-7 feedback prompt)
@@ -731,7 +758,7 @@ app.whenReady()
     }
 
     const launchSettings = getSettings()
-    const launchProvider = launchSettings.aiChatProvider ?? launchSettings.aiProvider
+    const launchProvider = launchSettings.aiProvider
     const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'codex-cli'
       ? true
       : await hasApiKey(launchProvider)
@@ -743,15 +770,9 @@ app.whenReady()
     })
 
     initDb()
-    startProcessMonitor()
 
-    if (getSettings().mcpServerEnabled) {
-      startMcpServer()
-    }
-
-    if (getSettings().imessageCaptureEnabled && imessageCaptureSupportedOnPlatform()) {
-      startImessageCaptureScheduler()
-    }
+    // The Windows process monitor now starts lazily on the first diagnostics
+    // request (see getProcessMetrics), so nothing to spawn here at launch.
 
     registerDbHandlers()
     registerDebugHandlers()
@@ -781,6 +802,31 @@ app.whenReady()
     registerCommandPaletteShortcut(() => mainWindow)
 
     startBackgroundServices()
+
+    // A reset-triggering derived-state version bump defers its destructive wipe
+    // off the startup path (F21); run it now that the window is up. No-op unless
+    // a reset is actually pending.
+    setImmediate(() => {
+      try {
+        if (runPendingDerivedStateReset(getDb())) {
+          console.log('[derived-state] performed deferred reset after version change')
+        }
+      } catch (err) {
+        console.warn('[derived-state] deferred reset failed:', err)
+      }
+    })
+
+    // Optional integrations spawn subprocesses / open large stores, so start
+    // them after the window is up rather than on the pre-paint critical path.
+    // Tracked + isQuitting-guarded so a quit/update inside this 3s window can't
+    // start services during teardown.
+    deferredIntegrationStartup = setTimeout(() => {
+      deferredIntegrationStartup = null
+      if (isQuitting) return
+      if (getSettings().mcpServerEnabled) {
+        startMcpServer()
+      }
+    }, 3_000)
 
     if (SMOKE_TEST && process.platform === 'linux') {
       startBrowserTracking()

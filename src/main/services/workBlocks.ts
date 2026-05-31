@@ -16,6 +16,7 @@ import {
   getDistractionByHour,
   getDistractionByDomain,
   getDaysTracked,
+  type WebsiteVisitRecord,
 } from '../db/queries'
 import type {
   AppDetailPayload,
@@ -117,7 +118,7 @@ const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
 const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 30 * 60_000
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
-// PRODUCT-SPEC bar: a 90-minute block titled "Daylens AI refactor — extract
+// Quality bar: a 90-minute block titled "Daylens AI refactor — extract
 // chat_answer from ai.ts" is the right answer, not three 30-minute slices
 // labelled "Cursor" / "Cursor" / "Untitled block".
 const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 180 * 60_000
@@ -1212,6 +1213,29 @@ function contextRunsFor(sessions: AppSession[]): ContextRun[] {
   return runs
 }
 
+interface TimelineBuildContext {
+  websiteVisits: WebsiteVisitRecord[]
+}
+
+function buildTimelineContext(db: Database.Database, sessions: AppSession[]): TimelineBuildContext {
+  if (sessions.length === 0) return { websiteVisits: [] }
+  const startTime = Math.min(...sessions.map((session) => session.startTime))
+  const endTime = Math.max(...sessions.map((session) => sessionEndMs(session)))
+  return {
+    websiteVisits: getWebsiteVisitsForRange(db, startTime, endTime),
+  }
+}
+
+function websiteVisitsForRange(
+  db: Database.Database,
+  startTime: number,
+  endTime: number,
+  context?: TimelineBuildContext,
+): WebsiteVisitRecord[] {
+  if (!context) return getWebsiteVisitsForRange(db, startTime, endTime)
+  return context.websiteVisits.filter((visit) => visit.visitTime >= startTime && visit.visitTime < endTime)
+}
+
 function sustainedContextShiftSplitIndex(sessions: AppSession[]): number | null {
   const runs = contextRunsFor(sessions)
   if (runs.length < 2) return null
@@ -1242,6 +1266,7 @@ function buildPageCandidates(
   db: Database.Database,
   startTime: number,
   endTime: number,
+  context?: TimelineBuildContext,
 ): ArtifactCandidate[] {
   const grouped = new Map<string, {
     canonicalKey: string
@@ -1255,7 +1280,7 @@ function buildPageCandidates(
     totalSeconds: number
   }>()
 
-  for (const visit of getWebsiteVisitsForRange(db, startTime, endTime)) {
+  for (const visit of websiteVisitsForRange(db, startTime, endTime, context)) {
     // Domain policy gate: adult-host pages are filtered at source so they
     // never become artifact candidates, never get promoted to block labels,
     // and never appear in any app's topArtifacts list. The raw visit row
@@ -1470,6 +1495,7 @@ function focusOverlapForRange(
 function buildBlockFromCandidate(
   candidate: CandidateBlock,
   db: Database.Database,
+  context?: TimelineBuildContext,
 ): WorkContextBlock {
   const effectiveSessions = effectiveSessionsFor(candidate.sessions)
   const distribution = categoryDistributionFor(effectiveSessions)
@@ -1490,7 +1516,7 @@ function buildBlockFromCandidate(
   const storedInsight = isLive ? null : getWorkContextInsightForRange(db, blockStart, blockEnd)
   const confidence = confidenceForCandidate(candidate, coherence)
   const topApps = topAppsFromSessions(candidate.sessions)
-  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd)
+  const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
   const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
   const documentRefs = windowCandidates.flatMap((candidate) => candidate.documentRef ? [candidate.documentRef] : [])
@@ -1704,25 +1730,50 @@ const NON_BRIDGEABLE_CATEGORIES = new Set<AppCategory>([
   'social',
 ])
 
-function candidateDominantCategory(candidate: CandidateBlock, db?: Database.Database): AppCategory {
+function candidateDominantCategory(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): AppCategory {
   const distribution = categoryDistributionFor(effectiveSessionsFor(candidate.sessions))
   if (!db) return dominantCategoryFromDistribution(distribution)
-  return dominantCategoryForBlock(distribution, candidatePageArtifacts(candidate, db))
+  return dominantCategoryForBlock(distribution, candidatePageArtifacts(candidate, db, context))
 }
 
-function candidatePageArtifacts(candidate: CandidateBlock, db: Database.Database): ArtifactRef[] {
+function candidatePageArtifacts(candidate: CandidateBlock, db: Database.Database, context?: TimelineBuildContext): ArtifactRef[] {
   return buildPageCandidates(
     db,
     candidate.sessions[0]?.startTime ?? 0,
     candidate.sessions.length > 0 ? sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) : 0,
+    context,
   )
     .flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
     .slice(0, 6)
 }
 
-function candidateHasFocusedPageArtifact(candidate: CandidateBlock, db?: Database.Database): boolean {
+function candidateHasFocusedPageArtifact(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
   if (!db) return false
-  return Boolean(categoryForTopPageArtifact(candidatePageArtifacts(candidate, db)))
+  return Boolean(categoryForTopPageArtifact(candidatePageArtifacts(candidate, db, context)))
+}
+
+function candidateHasNoContentSignal(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  if (candidate.sessions.some((session) => usefulWindowTitle(session) !== null)) return false
+  if (db && candidatePageArtifacts(candidate, db, context).length > 0) return false
+  return true
+}
+
+// Narrow special case for the real "Safari browsing, no specific window
+// titles" fragment: a browser-only browsing candidate, between two non-meeting
+// neighbours, with no title or page artifact of its own. Other titleless short
+// activities may still be meaningful, and edge blocks are not slivers.
+function candidateIsContentlessBrowserSliver(
+  candidate: CandidateBlock,
+  left: CandidateBlock | null,
+  right: CandidateBlock | null,
+  db?: Database.Database,
+  context?: TimelineBuildContext,
+): boolean {
+  if (!left || !right) return false
+  if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  if (!candidate.sessions.every(isBrowserSession)) return false
+  if (candidateDominantCategory(candidate, db, context) !== 'browsing') return false
+  return candidateHasNoContentSignal(candidate, db, context)
 }
 
 function candidateTopAppIds(candidate: CandidateBlock): Set<string> {
@@ -1743,20 +1794,20 @@ function combinedSpanMs(left: CandidateBlock, right: CandidateBlock): number {
   return sessionEndMs(right.sessions[right.sessions.length - 1]) - left.sessions[0].startTime
 }
 
-function candidateHasAssistedWorkCategory(candidate: CandidateBlock, db?: Database.Database): boolean {
-  const category = candidateDominantCategory(candidate, db)
+function candidateHasAssistedWorkCategory(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  const category = candidateDominantCategory(candidate, db, context)
   return category === 'aiTools' || category === 'development' || category === 'research' || category === 'productivity'
 }
 
-function candidatesAreAssistedWorkPair(left: CandidateBlock, right: CandidateBlock, db?: Database.Database): boolean {
-  if (!candidateHasAssistedWorkCategory(left, db) || !candidateHasAssistedWorkCategory(right, db)) return false
-  const categories = new Set([candidateDominantCategory(left, db), candidateDominantCategory(right, db)])
+function candidatesAreAssistedWorkPair(left: CandidateBlock, right: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  if (!candidateHasAssistedWorkCategory(left, db, context) || !candidateHasAssistedWorkCategory(right, db, context)) return false
+  const categories = new Set([candidateDominantCategory(left, db, context), candidateDominantCategory(right, db, context)])
   return categories.has('aiTools') && (
     categories.has('development')
     || categories.has('research')
     || categories.has('productivity')
-    || candidateHasFocusedPageArtifact(left, db)
-    || candidateHasFocusedPageArtifact(right, db)
+    || candidateHasFocusedPageArtifact(left, db, context)
+    || candidateHasFocusedPageArtifact(right, db, context)
   )
 }
 
@@ -1778,22 +1829,22 @@ function mergeCandidatePair(left: CandidateBlock, right: CandidateBlock): Candid
 // shift, and those are one coding session, not four blocks. For a
 // topic-sensitive category the dominant content context must also match (and we
 // require a shared top app), so two distinct browsing topics stay separate.
-function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock, db?: Database.Database): boolean {
+function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
   if (left.formation === 'meeting' || right.formation === 'meeting') return false
   if (gapBetweenCandidates(left, right) >= TIMELINE_SPLIT_GAP_THRESHOLD_MS) return false
 
-  const category = candidateDominantCategory(left, db)
-  if (category !== candidateDominantCategory(right, db)) {
-    return candidatesAreAssistedWorkPair(left, right, db)
+  const category = candidateDominantCategory(left, db, context)
+  if (category !== candidateDominantCategory(right, db, context)) {
+    return candidatesAreAssistedWorkPair(left, right, db, context)
       && combinedSpanMs(left, right) <= TIMELINE_MAX_ASSISTED_WORK_SPAN_MS
   }
 
   if (
     combinedSpanMs(left, right) > TIMELINE_MAX_BLOCK_SPAN_MS
-    && !(candidatesAreAssistedWorkPair(left, right, db) && combinedSpanMs(left, right) <= TIMELINE_MAX_ASSISTED_WORK_SPAN_MS)
+    && !(candidatesAreAssistedWorkPair(left, right, db, context) && combinedSpanMs(left, right) <= TIMELINE_MAX_ASSISTED_WORK_SPAN_MS)
   ) return false
 
-  if (candidatesAreAssistedWorkPair(left, right, db) && combinedSpanMs(left, right) <= TIMELINE_MAX_ASSISTED_WORK_SPAN_MS) {
+  if (candidatesAreAssistedWorkPair(left, right, db, context) && combinedSpanMs(left, right) <= TIMELINE_MAX_ASSISTED_WORK_SPAN_MS) {
     return true
   }
 
@@ -1813,9 +1864,9 @@ function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock, db?: Datab
 // content context. This mirrors shouldSoftMerge's relatedness test minus the
 // gap/span constraints, and is the signal used to decide which neighbour a
 // short block attaches to.
-function candidatesRelated(a: CandidateBlock, b: CandidateBlock, db?: Database.Database): boolean {
-  const category = candidateDominantCategory(a, db)
-  if (category !== candidateDominantCategory(b, db)) return candidatesAreAssistedWorkPair(a, b, db)
+function candidatesRelated(a: CandidateBlock, b: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  const category = candidateDominantCategory(a, db, context)
+  if (category !== candidateDominantCategory(b, db, context)) return candidatesAreAssistedWorkPair(a, b, db, context)
   if (!TOPIC_SENSITIVE_CATEGORIES.has(category)) return true
   const aApps = candidateTopAppIds(a)
   const sharesTopApp = [...candidateTopAppIds(b)].some((id) => aApps.has(id))
@@ -1839,6 +1890,7 @@ function absorbShortCandidates(
   maxSpanMs: number,
   options: { requireRelated: boolean; maxCombinedMs: number },
   db?: Database.Database,
+  context?: TimelineBuildContext,
 ): CandidateBlock[] {
   if (candidates.length <= 1) return candidates
 
@@ -1850,19 +1902,25 @@ function absorbShortCandidates(
 
     const left = index > 0 ? result[index - 1] : null
     const right = index < result.length - 1 ? result[index + 1] : null
-    const category = candidateDominantCategory(candidate, db)
+    const category = candidateDominantCategory(candidate, db, context)
+    // A contentless browser sliver has no topic of its own, so the relatedness
+    // gate is dropped only for that narrow case. The gap-boundary guard and span
+    // ceiling below still apply, so it never bridges a real >15-min idle gap and
+    // never builds a runaway block.
+    const contentlessSliver = options.requireRelated && candidateIsContentlessBrowserSliver(candidate, left, right, db, context)
+    const relatednessRequired = options.requireRelated && !contentlessSliver
     const leftOk = Boolean(
       left
       && left.formation !== 'meeting'
       && !(left.boundedAfterGap && candidate.boundedBeforeGap)
-      && (!options.requireRelated || candidatesRelated(candidate, left, db))
+      && (!relatednessRequired || candidatesRelated(candidate, left, db, context))
       && combinedSpanMs(left, candidate) <= options.maxCombinedMs,
     )
     const rightOk = Boolean(
       right
       && right.formation !== 'meeting'
       && !(candidate.boundedAfterGap && right.boundedBeforeGap)
-      && (!options.requireRelated || candidatesRelated(candidate, right, db))
+      && (!relatednessRequired || candidatesRelated(candidate, right, db, context))
       && combinedSpanMs(candidate, right) <= options.maxCombinedMs,
     )
 
@@ -1870,8 +1928,9 @@ function absorbShortCandidates(
     if (leftOk && !rightOk) mergeLeft = true
     else if (!leftOk && rightOk) mergeLeft = false
     else if (!leftOk && !rightOk) continue
-    else if (candidateDominantCategory(left!, db) === category && candidateDominantCategory(right!, db) !== category) mergeLeft = true
-    else if (candidateDominantCategory(right!, db) === category && candidateDominantCategory(left!, db) !== category) mergeLeft = false
+    else if (contentlessSliver) mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)
+    else if (candidateDominantCategory(left!, db, context) === category && candidateDominantCategory(right!, db, context) !== category) mergeLeft = true
+    else if (candidateDominantCategory(right!, db, context) === category && candidateDominantCategory(left!, db, context) !== category) mergeLeft = false
     else mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)
 
     if (mergeLeft) {
@@ -1892,14 +1951,14 @@ function absorbShortCandidates(
 // related neighbour so the timeline reads as continuous focused stretches.
 // Runs per coarse segment so it never merges across sleep / >15-minute idle
 // boundaries.
-function coalesceTimelineCandidates(candidates: CandidateBlock[], db: Database.Database): CandidateBlock[] {
+function coalesceTimelineCandidates(candidates: CandidateBlock[], db: Database.Database, context: TimelineBuildContext): CandidateBlock[] {
   if (candidates.length <= 1) return candidates
 
   const merged: CandidateBlock[] = [candidates[0]]
   for (let index = 1; index < candidates.length; index++) {
     const previous = merged[merged.length - 1]
     const current = candidates[index]
-    if (shouldSoftMerge(previous, current, db)) {
+    if (shouldSoftMerge(previous, current, db, context)) {
       merged[merged.length - 1] = mergeCandidatePair(previous, current)
     } else {
       merged.push(current)
@@ -1909,11 +1968,11 @@ function coalesceTimelineCandidates(candidates: CandidateBlock[], db: Database.D
   const tinyAbsorbed = absorbShortCandidates(merged, TIMELINE_MIN_BLOCK_SPAN_MS, {
     requireRelated: false,
     maxCombinedMs: Number.POSITIVE_INFINITY,
-  }, db)
+  }, db, context)
   return absorbShortCandidates(tinyAbsorbed, TIMELINE_MIN_STANDALONE_SPAN_MS, {
     requireRelated: true,
     maxCombinedMs: TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS,
-  }, db)
+  }, db, context)
 }
 
 // The single app a candidate is dominated by (most foreground time). This is
@@ -1931,7 +1990,7 @@ function dominantAppId(candidate: CandidateBlock): string | null {
 // related work and the gap stays under the bridge ceiling. Meetings never
 // bridge, and the result is capped at the coherent maximum so bridging cannot
 // build a runaway block.
-function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: Database.Database): boolean {
+function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: Database.Database, context: TimelineBuildContext): boolean {
   if (left.formation === 'meeting' || right.formation === 'meeting') return false
   if (left.boundedAfterGap && right.boundedBeforeGap) return false
   // Drift categories never bridge across a gap. Two YouTube videos or two
@@ -1942,16 +2001,16 @@ function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: D
   // runaway "watching" block whose span (and old duration) dwarfed the actual
   // tracked time (R4). Bridging is for focused work continuing past an
   // interruption, not for stitching drift together.
-  if (NON_BRIDGEABLE_CATEGORIES.has(candidateDominantCategory(left, db))) return false
+  if (NON_BRIDGEABLE_CATEGORIES.has(candidateDominantCategory(left, db, context))) return false
   const gap = gapBetweenCandidates(left, right)
   if (gap >= TIMELINE_SAME_WORK_BRIDGE_GAP_MS) return false
-  const assistedPair = candidatesAreAssistedWorkPair(left, right, db)
+  const assistedPair = candidatesAreAssistedWorkPair(left, right, db, context)
   const maxSpanMs = assistedPair ? TIMELINE_MAX_ASSISTED_WORK_SPAN_MS : TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS
   if (combinedSpanMs(left, right) > maxSpanMs) return false
   if (assistedPair && gap < TIMELINE_SPLIT_GAP_THRESHOLD_MS) return true
   const leftApp = dominantAppId(left)
   if (!leftApp || leftApp !== dominantAppId(right)) return false
-  return candidatesRelated(left, right, db)
+  return candidatesRelated(left, right, db, context)
 }
 
 // Day-level pass over the full block list (all coarse segments concatenated):
@@ -1959,14 +2018,14 @@ function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: D
 // that now has a related neighbour. This is what turns a 50-second "Terminal
 // work" sliver plus a 17-minute gap plus an hour of Ghostty into one continuous
 // coding block.
-function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Database): CandidateBlock[] {
+function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Database, context: TimelineBuildContext): CandidateBlock[] {
   if (candidates.length <= 1) return candidates
 
   const merged: CandidateBlock[] = [candidates[0]]
   for (let index = 1; index < candidates.length; index++) {
     const previous = merged[merged.length - 1]
     const current = candidates[index]
-    if (shouldBridgeSameWork(previous, current, db)) {
+    if (shouldBridgeSameWork(previous, current, db, context)) {
       merged[merged.length - 1] = mergeCandidatePair(previous, current)
     } else {
       merged.push(current)
@@ -1976,18 +2035,19 @@ function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Dat
   return absorbShortCandidates(merged, TIMELINE_MIN_STANDALONE_SPAN_MS, {
     requireRelated: true,
     maxCombinedMs: TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS,
-  }, db)
+  }, db, context)
 }
 
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[]): WorkContextBlock[] {
+  const context = buildTimelineContext(db, sessions)
   const candidates = coarseSegmentsFromSessions(db, sessions)
     .flatMap((segment) => {
       const segmentCandidates = analyzeSessions(segment.sessions, segment.boundedBeforeGap, segment.boundedAfterGap)
         .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
-      return coalesceTimelineCandidates(segmentCandidates, db)
+      return coalesceTimelineCandidates(segmentCandidates, db, context)
     })
-  return bridgeSameWorkCandidates(candidates, db)
-    .map((candidate) => buildBlockFromCandidate(candidate, db))
+  return bridgeSameWorkCandidates(candidates, db, context)
+    .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
 // Build the timeline blocks for a set of sessions through the one canonical
@@ -2420,6 +2480,7 @@ export function persistTimelineDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
+  options: { finalized?: boolean } = {},
 ): void {
   const validIds = blocks.filter((block) => !block.isLive).map((block) => block.id)
   const persist = db.transaction(() => {
@@ -2440,7 +2501,7 @@ export function persistTimelineDay(
 
     for (const rawBlock of blocks) {
       if (rawBlock.isLive) continue
-      const block = finalizedLabelForBlock(db, rawBlock)
+      const block = options.finalized ? rawBlock : finalizedLabelForBlock(db, rawBlock)
       db.prepare(`
         INSERT INTO timeline_blocks (
           id,
@@ -2591,6 +2652,104 @@ export function persistTimelineDay(
   persist()
 }
 
+const timelineMaterializationFingerprints = new Map<string, string>()
+
+type PersistedBlockLabelRow = { block_id: string; label: string; source: string }
+type PersistedBlockMemberRow = { block_id: string; member_id: string; weight_seconds: number }
+
+function sqlPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+function persistedBlockLabelsByBlockId(
+  db: Database.Database,
+  blockIds: string[],
+): Map<string, PersistedBlockLabelRow[]> {
+  const labelsByBlock = new Map<string, PersistedBlockLabelRow[]>()
+  if (blockIds.length === 0) return labelsByBlock
+
+  const rows = db.prepare(`
+    SELECT block_id, label, source
+    FROM timeline_block_labels
+    WHERE block_id IN (${sqlPlaceholders(blockIds.length)})
+    ORDER BY block_id ASC, created_at ASC, id ASC
+  `).all(...blockIds) as PersistedBlockLabelRow[]
+
+  for (const row of rows) {
+    const labels = labelsByBlock.get(row.block_id)
+    if (labels) labels.push(row)
+    else labelsByBlock.set(row.block_id, [row])
+  }
+  return labelsByBlock
+}
+
+function persistedBlockMembersByBlockId(
+  db: Database.Database,
+  blockIds: string[],
+  memberType: 'app_session' | 'focus_session',
+): Map<string, PersistedBlockMemberRow[]> {
+  const membersByBlock = new Map<string, PersistedBlockMemberRow[]>()
+  if (blockIds.length === 0) return membersByBlock
+
+  const rows = db.prepare(`
+    SELECT block_id, member_id, weight_seconds
+    FROM timeline_block_members
+    WHERE member_type = ? AND block_id IN (${sqlPlaceholders(blockIds.length)})
+    ORDER BY block_id ASC, start_time ASC, member_id ASC
+  `).all(memberType, ...blockIds) as PersistedBlockMemberRow[]
+
+  for (const row of rows) {
+    const members = membersByBlock.get(row.block_id)
+    if (members) members.push(row)
+    else membersByBlock.set(row.block_id, [row])
+  }
+  return membersByBlock
+}
+
+function validPersistedTimelineBlockCount(db: Database.Database, dateStr: string): number {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM timeline_blocks
+    WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+  `).get(dateStr) as { count: number } | undefined
+  return row?.count ?? 0
+}
+
+function timelineMaterializationFingerprint(
+  dateStr: string,
+  sessions: AppSession[],
+  blocks: WorkContextBlock[],
+): string {
+  const hash = crypto.createHash('sha1')
+  hash.update(dateStr)
+  hash.update(TIMELINE_HEURISTIC_VERSION)
+  for (const session of sessions) {
+    hash.update(`s:${session.id}:${session.startTime}:${session.endTime ?? ''}:${session.durationSeconds}:${session.bundleId}:${session.category};`)
+  }
+  for (const block of blocks) {
+    hash.update(`b:${block.id}:${block.startTime}:${block.endTime}:${block.label.current}:${block.label.source}:${block.heuristicVersion};`)
+  }
+  return hash.digest('hex')
+}
+
+function persistTimelineDayIfChanged(
+  db: Database.Database,
+  dateStr: string,
+  sessions: AppSession[],
+  blocks: WorkContextBlock[],
+  force = false,
+): void {
+  const fingerprint = timelineMaterializationFingerprint(dateStr, sessions, blocks)
+  const cacheKey = dateStr
+  const hasPersistedBlocks = validPersistedTimelineBlockCount(db, dateStr) > 0
+  if (!force && hasPersistedBlocks && timelineMaterializationFingerprints.get(cacheKey) === fingerprint) {
+    return
+  }
+
+  persistTimelineDay(db, dateStr, blocks, { finalized: true })
+  timelineMaterializationFingerprints.set(cacheKey, fingerprint)
+}
+
 function loadPersistedTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -2636,6 +2795,9 @@ function loadPersistedTimelineBlocksForDay(
 
   const blockIds = rows.map((row) => row.id)
   const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+  const labelsByBlock = persistedBlockLabelsByBlockId(db, blockIds)
+  const appSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'app_session')
+  const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
 
   const blocks: WorkContextBlock[] = []
 
@@ -2653,11 +2815,7 @@ function loadPersistedTimelineBlocksForDay(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 6)
 
-    const labelRows = db.prepare(`
-      SELECT label, source
-      FROM timeline_block_labels
-      WHERE block_id = ?
-    `).all(row.id) as Array<{ label: string; source: string }>
+    const labelRows = labelsByBlock.get(row.id) ?? []
 
     let categoryDistribution: Partial<Record<AppCategory, number>> = {}
     try {
@@ -2671,11 +2829,7 @@ function loadPersistedTimelineBlocksForDay(
     const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
     const overrideRow = labelRows.find(r => r.source === 'user')
 
-    const memberRows = db.prepare(`
-      SELECT member_id
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'app_session'
-    `).all(row.id) as Array<{ member_id: string }>
+    const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
     const blockSessions = sessions.filter((s) => sessionIds.has(s.id))
@@ -2689,11 +2843,7 @@ function loadPersistedTimelineBlocksForDay(
       .filter((title, index, titles) => titles.indexOf(title) === index)
       .slice(0, 4)
 
-    const focusRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'focus_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const focusRows = focusSessionMembersByBlock.get(row.id) ?? []
 
     const focusSessionIds = focusRows.map((r) => Number(r.member_id))
     const focusTotalSeconds = focusRows[0]?.weight_seconds ?? 0
@@ -2816,12 +2966,16 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
-function buildTimelineBlocksForDay(
+export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
+  options: { materialize?: boolean } = {},
 ): WorkContextBlock[] {
+  const shouldMaterialize = options.materialize ?? true
   const todayStr = localDateString()
+  let forceMaterialize = false
+
   if (dateStr < todayStr) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
     if (persisted && persisted.length > 0) {
@@ -2833,11 +2987,18 @@ function buildTimelineBlocksForDay(
       if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
         return persisted
       }
+      forceMaterialize = true
+    } else {
+      forceMaterialize = true
     }
+  } else if (validPersistedTimelineBlockCount(db, dateStr) === 0) {
+    forceMaterialize = true
   }
 
   const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
-  persistTimelineDay(db, dateStr, computed)
+  if (shouldMaterialize) {
+    persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
+  }
   return computed
 }
 
@@ -3095,11 +3256,12 @@ export function getTimelineDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
   const [fromMs, toMs] = localDayBounds(dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions)
+  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
@@ -3132,8 +3294,9 @@ export function getHistoryDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { materialize?: boolean } = {},
 ): HistoryDayPayload {
-  return getTimelineDayPayload(db, dateStr, liveSession)
+  return getTimelineDayPayload(db, dateStr, liveSession, options)
 }
 
 function emptyLightweightDayPayload(dateStr: string): DayTimelinePayload {
@@ -3205,6 +3368,9 @@ function getLightweightDayPayload(
 
   const blockIds = rows.map((row) => row.id)
   const workflowsByBlock = workflowRefsByBlockId(db, blockIds)
+  const labelsByBlock = persistedBlockLabelsByBlockId(db, blockIds)
+  const appSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'app_session')
+  const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
 
   const blocks: WorkContextBlock[] = []
 
@@ -3225,11 +3391,7 @@ function getLightweightDayPayload(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 6)
 
-    const labelRows = db.prepare(`
-      SELECT label, source
-      FROM timeline_block_labels
-      WHERE block_id = ?
-    `).all(row.id) as Array<{ label: string; source: string }>
+    const labelRows = labelsByBlock.get(row.id) ?? []
 
     let categoryDistribution: Partial<Record<AppCategory, number>> = {}
     try {
@@ -3242,11 +3404,7 @@ function getLightweightDayPayload(
     const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
     const overrideRow = labelRows.find(r => r.source === 'user')
 
-    const memberRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'app_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
     const blockSessions = sessions.filter((session) => sessionIds.has(session.id))
@@ -3269,11 +3427,7 @@ function getLightweightDayPayload(
       .filter((title, index, titles) => titles.indexOf(title) === index)
       .slice(0, 4)
 
-    const focusRows = db.prepare(`
-      SELECT member_id, weight_seconds
-      FROM timeline_block_members
-      WHERE block_id = ? AND member_type = 'focus_session'
-    `).all(row.id) as Array<{ member_id: string; weight_seconds: number }>
+    const focusRows = focusSessionMembersByBlock.get(row.id) ?? []
 
     const focusSessionIds = focusRows.map((r) => Number(r.member_id))
     const focusTotalSeconds = focusRows.reduce((sum, r) => sum + r.weight_seconds, 0)
@@ -3398,6 +3552,18 @@ function localDateStringForOffset(offsetDays: number): string {
   return `${year}-${month}-${day}`
 }
 
+function lookupPersistedTimelineBlockDate(db: Database.Database, blockId: string): string | null {
+  const row = db.prepare(`
+    SELECT date
+    FROM timeline_blocks
+    WHERE id = ?
+      AND invalidated_at IS NULL
+    LIMIT 1
+  `).get(blockId) as { date: string } | undefined
+
+  return row?.date ?? null
+}
+
 const APP_DETAIL_FALLBACK_MERGE_GAP_MS = 5 * 60_000
 
 function dominantCategoryForSessions(sessions: AppSession[]): AppCategory {
@@ -3495,8 +3661,17 @@ export function getBlockDetailPayload(
   blockId: string,
   liveSession?: LiveSession | null,
 ): WorkContextBlock | null {
+  const persistedDate = lookupPersistedTimelineBlockDate(db, blockId)
+  if (persistedDate) {
+    const payload = getTimelineDayPayload(db, persistedDate, liveSession, { materialize: false })
+    const match = payload.blocks.find((block) => block.id === blockId)
+    if (match) return match
+  }
+
   for (let offset = 0; offset >= -30; offset--) {
-    const payload = getTimelineDayPayload(db, localDateStringForOffset(offset), liveSession)
+    const dateStr = localDateStringForOffset(offset)
+    if (dateStr === persistedDate) continue
+    const payload = getTimelineDayPayload(db, dateStr, liveSession, { materialize: false })
     const match = payload.blocks.find((block) => block.id === blockId)
     if (match) return match
   }

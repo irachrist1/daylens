@@ -1,4 +1,4 @@
-// Voice-contract drift guard. PRODUCT-SPEC rule:
+// Voice-contract drift guard:
 //   "A single system prompt fragment, reused across every chat job, enforcing
 //    voice and banned vocabulary."
 //

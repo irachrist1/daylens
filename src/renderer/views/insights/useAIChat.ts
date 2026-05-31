@@ -1,58 +1,62 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { ANALYTICS_EVENT, blockCountBucket, classifyAIOutputIntent, trackedTimeBucket } from '@shared/analytics'
+import { ANALYTICS_EVENT, classifyAIOutputIntent } from '@shared/analytics'
 import type {
   AIChatTurnResult,
   AIMessageAction,
-  AIThreadMessage,
   AIThreadSummary,
   AppSettings,
-  DayTimelinePayload,
   FocusSession,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
-import { todayString } from '../../lib/format'
 import { getSelectedModel } from '../../lib/aiProvider'
 import { sanitizeForRender } from '../../../shared/aiSanitize'
-import type { DaylensSearchResult } from '../../../preload/index'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
-import { threadMessagesFromHistory } from './messageUtils'
-import type { ActionFeedbackEntry, MessageAction, MessageActionStateEntry, ThreadMessage } from './types'
-import { actionFeedbackKey } from './types'
-import { messageActionKey } from './messageUtils'
+import {
+  actionFeedbackKey,
+  messageActionKey,
+  threadMessagesFromHistory,
+  type ActionFeedbackEntry,
+  type MessageAction,
+  type MessageActionStateEntry,
+  type ThreadMessage,
+} from './types'
+
+type SendOptions = {
+  contextOverride?: ThreadMessage['contextSnapshot']
+  trigger?: 'freeform' | 'suggested' | 'retry'
+}
+
+function isCliProvider(provider: string | undefined | null): boolean {
+  return provider === 'claude-cli' || provider === 'codex-cli'
+}
 
 export function useAIChat() {
   const location = useLocation()
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [loading, setLoading] = useState(false)
-  const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
-  const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
-  const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null } | null>(null)
-  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
-  const [threadPickerOpen, setThreadPickerOpen] = useState(false)
+  const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
+  const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [reducedMotion, setReducedMotion] = useState(false)
-  const [hoveredThreadId, setHoveredThreadId] = useState<number | null>(null)
-  const [threadDeleteConfirm, setThreadDeleteConfirm] = useState<number | null>(null)
-  const [threadPickerFocusIdx, setThreadPickerFocusIdx] = useState(0)
-  const [analyticsToday, setAnalyticsToday] = useState<DayTimelinePayload | null>(null)
-  const threadPickerRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const routedReportKeyRef = useRef<string | null>(null)
+
   const loadingRef = useRef(false)
-  const historyHydratedThreadRef = useRef<number | null | undefined>(undefined)
+  loadingRef.current = loading
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
-  loadingRef.current = loading
+  const routedReportKeyRef = useRef<string | null>(null)
+  const threadsHydratedRef = useRef(false)
 
-  const insightsResource = useProjectionResource<{
-    historyThreadId: number | null
-    history: AIThreadMessage[]
+  // Provider + environment load. Deliberately NOT keyed on activeThreadId and
+  // deliberately free of the today-timeline rebuild + recap range the old tab
+  // pulled on mount — those are the expensive projections the perf map flags.
+  // CLI detection (which spawns child processes) only runs when a CLI provider
+  // is actually selected.
+  const providerResource = useProjectionResource<{
     settings: AppSettings
     cliTools: { claude: string | null; codex: string | null }
     hasProviderAccess: boolean
@@ -61,18 +65,23 @@ export function useAIChat() {
     scope: 'insights',
     load: async () => {
       const currentSettings = await ipc.settings.get()
-      const providersToCheck = [currentSettings.aiProvider]
+      const chatProvider = currentSettings.aiChatProvider ?? currentSettings.aiProvider
+      const providersToCheck = Array.from(new Set([
+        chatProvider,
+        ...(currentSettings.aiFallbackOrder ?? []),
+      ]))
+      const needsCliDetection = providersToCheck.some(isCliProvider)
 
-      const [history, cliToolsResult, apiProviderAccessChecks, activeFocusSession] = await Promise.all([
-        activeThreadId == null
-          ? Promise.resolve([])
-          : ipc.ai.getHistory({ threadId: activeThreadId }).catch(() => []),
-        ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })),
+      const [cliToolsResult, apiProviderAccessChecks, activeFocusSession] = await Promise.all([
+        needsCliDetection
+          ? ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null }))
+          : Promise.resolve({ claude: null, codex: null }),
         Promise.all(providersToCheck
-          .filter((provider) => provider !== 'claude-cli' && provider !== 'codex-cli')
+          .filter((provider) => !isCliProvider(provider))
           .map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
         ipc.focus.getActive().catch(() => null),
       ])
+
       const providerAccess = providersToCheck.some((provider) => (
         provider === 'claude-cli'
           ? !!cliToolsResult.claude
@@ -82,59 +91,52 @@ export function useAIChat() {
       ))
 
       return {
-        historyThreadId: activeThreadId,
-        history: history as AIThreadMessage[],
         settings: currentSettings,
         cliTools: cliToolsResult as { claude: string | null; codex: string | null },
         hasProviderAccess: providerAccess,
         activeFocusSession: activeFocusSession as FocusSession | null,
       }
     },
-    dependencies: [activeThreadId],
+    dependencies: [],
   })
 
-  useEffect(() => {
-    let cancelled = false
-    void ipc.db.getTimelineDay(todayString()).then((payload) => {
-      if (!cancelled) setAnalyticsToday(payload)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
+  const settings = providerResource.data?.settings ?? null
+  const cliTools = providerResource.data?.cliTools ?? null
+  const hasApiKey = providerResource.data ? providerResource.data.hasProviderAccess : null
+  const activeFocusSession = providerResource.data?.activeFocusSession ?? null
+  // `refresh` is stable across renders (useProjectionResource memoizes it), so
+  // handlers can depend on it without churning their own identity each render.
+  const refreshProvider = providerResource.refresh
 
-  useEffect(() => {
-    if (!insightsResource.data) return
-    setSettings(insightsResource.data.settings)
-    setCliTools(insightsResource.data.cliTools)
-    setHasApiKey(insightsResource.data.hasProviderAccess)
-    if (insightsResource.data.historyThreadId !== activeThreadId) return
-    if (historyHydratedThreadRef.current !== insightsResource.data.historyThreadId && !loadingRef.current) {
-      setMessages(threadMessagesFromHistory(insightsResource.data.history))
-      historyHydratedThreadRef.current = insightsResource.data.historyThreadId
-    }
-  }, [activeThreadId, insightsResource.data])
+  const activeProvider = settings ? (settings.aiChatProvider ?? settings.aiProvider) : null
+  const activeModel = settings && activeProvider
+    ? getSelectedModel({
+        aiProvider: activeProvider,
+        anthropicModel: settings.anthropicModel,
+        openaiModel: settings.openaiModel,
+        googleModel: settings.googleModel,
+        openrouterModel: settings.openrouterModel,
+      })
+    : null
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: messages.length > 0 ? 'smooth' : 'auto' })
-  }, [messages.length, loading])
+  const activeThread = useMemo(
+    () => threads.find((thread) => thread.id === activeThreadId) ?? null,
+    [threads, activeThreadId],
+  )
+  const activeThreadLabel = activeThread && activeThread.title.trim() && activeThread.title !== 'New chat'
+    ? activeThread.title
+    : null
 
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const sync = () => setReducedMotion(media.matches)
-    sync()
-    media.addEventListener('change', sync)
-    return () => media.removeEventListener('change', sync)
-  }, [])
+  const analyticsContext = useCallback((extra: Record<string, unknown> = {}) => ({
+    has_ai_provider: Boolean(hasApiKey),
+    ...(activeModel ? { model: activeModel } : {}),
+    ...(activeProvider ? { provider: activeProvider } : {}),
+    surface: 'ai',
+    ...extra,
+  }), [hasApiKey, activeModel, activeProvider])
 
-  useEffect(() => {
-    let cancelled = false
-    ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
-      if (cancelled) return
-      setThreads(rows)
-      setActiveThreadId((current) => current ?? rows[0]?.id ?? null)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
-
+  // ── Streaming: snapshots flow into a per-message store; only <StreamingMessage>
+  // re-renders on a chunk, never this hook's consumers or the composer.
   useEffect(() => {
     return ipc.ai.onStream((event) => {
       const { text: safeSnapshot, report } = sanitizeForRender(event.snapshot ?? '')
@@ -151,71 +153,76 @@ export function useAIChat() {
   }, [])
 
   useEffect(() => {
-    return () => {
-      for (const timeout of Object.values(actionFeedbackTimeoutsRef.current)) {
-        window.clearTimeout(timeout)
-      }
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const sync = () => setReducedMotion(media.matches)
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  }, [])
+
+  useEffect(() => () => {
+    for (const timeout of Object.values(actionFeedbackTimeoutsRef.current)) {
+      window.clearTimeout(timeout)
     }
   }, [])
 
-  const activeFocusSession = insightsResource.data?.activeFocusSession ?? null
-  const activeThread = useMemo(
-    () => threads.find((thread) => thread.id === activeThreadId) ?? null,
-    [threads, activeThreadId],
-  )
-  const activeProvider = settings?.aiProvider ?? null
-  const activeModel = settings && activeProvider
-    ? getSelectedModel({
-        aiProvider: activeProvider,
-        anthropicModel: settings.anthropicModel,
-        openaiModel: settings.openaiModel,
-        googleModel: settings.googleModel,
-      })
-    : null
+  const loadThread = useCallback(async (threadId: number) => {
+    setActiveThreadId(threadId)
+    try {
+      const detail = await ipc.ai.getThread(threadId)
+      if (!loadingRef.current) setMessages(threadMessagesFromHistory(detail.messages))
+    } catch {
+      // best-effort; keep the current UI if the lookup fails
+    }
+  }, [])
 
-  const analyticsContext = useCallback((extra: Record<string, unknown> = {}) => ({
-    block_count_bucket: blockCountBucket(analyticsToday?.blocks.length ?? 0),
-    has_ai_provider: Boolean(hasApiKey),
-    ...(activeModel ? { model: activeModel } : {}),
-    ...(activeProvider ? { provider: activeProvider } : {}),
-    surface: 'ai',
-    tracked_time_bucket: trackedTimeBucket(analyticsToday?.totalSeconds ?? 0),
-    ...extra,
-  }), [activeModel, activeProvider, analyticsToday, hasApiKey])
+  // Hydrate the thread list once and adopt the most recent thread — unless the
+  // tab was opened via a deep link (/ai?threadId=…), in which case the deep-link
+  // effect below owns which thread loads and we must not race it.
+  useEffect(() => {
+    if (threadsHydratedRef.current) return
+    threadsHydratedRef.current = true
+    const deepLinkThreadId = Number(new URLSearchParams(location.search).get('threadId'))
+    const hasDeepLink = Number.isFinite(deepLinkThreadId) && deepLinkThreadId > 0
+    let cancelled = false
+    ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
+      if (cancelled) return
+      setThreads(rows)
+      const first = rows[0]
+      if (first && !hasDeepLink) void loadThread(first.id)
+    }).catch(() => { /* best-effort */ })
+    return () => { cancelled = true }
+  }, [loadThread, location.search])
 
-  const latestCompletedAssistantId = [...messages]
-    .reverse()
-    .find((message) => message.role === 'assistant' && message.state === 'complete')?.id
-
+  // Screen-open analytics once provider state is known.
   useEffect(() => {
     if (!settings || hasApiKey === null || aiScreenTrackedRef.current) return
     aiScreenTrackedRef.current = true
-    track(ANALYTICS_EVENT.AI_SCREEN_OPENED, analyticsContext({
-      trigger: 'navigation',
-      view: 'ai',
-    }))
-  }, [analyticsContext, hasApiKey, settings])
+    track(ANALYTICS_EVENT.AI_SCREEN_OPENED, analyticsContext({ trigger: 'navigation', view: 'ai' }))
+  }, [hasApiKey, settings, analyticsContext])
 
+  const latestCompletedAssistantId = useMemo(() => (
+    [...messages].reverse().find((m) => m.role === 'assistant' && m.state === 'complete')?.id
+  ), [messages])
+
+  // Suggested-question impression analytics.
   useEffect(() => {
-    const latestAssistant = [...messages]
-      .reverse()
-      .find((message) => (
-        message.role === 'assistant'
-        && message.state === 'complete'
-        && message.id === latestCompletedAssistantId
-        && (message.suggestedFollowUps?.length ?? 0) >= 2
-      ))
-
-    if (!latestAssistant) return
-    const key = String(latestAssistant.id)
+    const latest = [...messages].reverse().find((message) => (
+      message.role === 'assistant'
+      && message.state === 'complete'
+      && message.id === latestCompletedAssistantId
+      && (message.suggestedFollowUps?.length ?? 0) >= 2
+    ))
+    if (!latest) return
+    const key = String(latest.id)
     if (suggestionImpressionsRef.current[key]) return
     suggestionImpressionsRef.current[key] = true
     track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_IMPRESSION, analyticsContext({
-      answer_kind: latestAssistant.answerKind ?? null,
-      suggestion_count: latestAssistant.suggestedFollowUps?.length ?? 0,
+      answer_kind: latest.answerKind ?? null,
+      suggestion_count: latest.suggestedFollowUps?.length ?? 0,
       source: 'followup',
     }))
-  }, [analyticsContext, latestCompletedAssistantId, messages])
+  }, [latestCompletedAssistantId, messages, analyticsContext])
 
   const triggerActionFeedback = useCallback((
     messageId: string | number,
@@ -224,20 +231,14 @@ export function useAIChat() {
   ) => {
     const key = actionFeedbackKey(messageId, action)
     const success = Boolean(options?.successMs)
-
     if (actionFeedbackTimeoutsRef.current[key]) {
       window.clearTimeout(actionFeedbackTimeoutsRef.current[key])
       delete actionFeedbackTimeoutsRef.current[key]
     }
-
     setActionFeedback((current) => ({
       ...current,
-      [key]: {
-        pulseNonce: (current[key]?.pulseNonce ?? 0) + 1,
-        success,
-      },
+      [key]: { pulseNonce: (current[key]?.pulseNonce ?? 0) + 1, success },
     }))
-
     if (options?.successMs) {
       actionFeedbackTimeoutsRef.current[key] = window.setTimeout(() => {
         setActionFeedback((current) => {
@@ -250,15 +251,9 @@ export function useAIChat() {
     }
   }, [])
 
-  const handleSend = useCallback(async (
-    text?: string,
-    options?: {
-      contextOverride?: ThreadMessage['contextSnapshot']
-      trigger?: 'freeform' | 'suggested' | 'retry'
-    },
-  ) => {
+  const handleSend = useCallback(async (text?: string, options?: SendOptions) => {
     const prompt = (text ?? '').trim()
-    if (!prompt || loading || !hasApiKey) return
+    if (!prompt || loadingRef.current || !hasApiKey) return
     const trigger = options?.trigger ?? 'freeform'
     const queryKind = classifyAIOutputIntent(prompt)
 
@@ -287,23 +282,19 @@ export function useAIChat() {
         threadId: activeThreadId,
       }) as AIChatTurnResult
 
+      // sendMessage auto-creates a thread server-side when none is passed.
+      // Refresh the list and adopt the newest row so follow-up turns stay linked.
       try {
         const refreshed = await ipc.ai.listThreads({ includeArchived: false })
         setThreads(refreshed)
-        if (activeThreadId == null) {
-          const newest = refreshed[0]
-          if (newest) {
-            setActiveThreadId(newest.id)
-            historyHydratedThreadRef.current = newest.id
-          }
-        }
+        if (activeThreadId == null && refreshed[0]) setActiveThreadId(refreshed[0].id)
       } catch { /* best-effort */ }
 
-      setMessages((current) => current.map((message) => {
-        if (message.id !== assistantId) return message
-        return { ...response.assistantMessage, state: 'complete' } as ThreadMessage
-      }))
-
+      setMessages((current) => current.map((message) => (
+        message.id === assistantId
+          ? { ...response.assistantMessage, state: 'complete' as const }
+          : message
+      )))
       track(ANALYTICS_EVENT.AI_QUERY_ANSWERED, analyticsContext({
         answer_kind: response.assistantMessage.answerKind ?? null,
         query_kind: queryKind,
@@ -312,80 +303,66 @@ export function useAIChat() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setMessages((current) => current.map((entry) => (
-        entry.id === assistantId
-          ? { ...entry, content: message, state: 'error' }
-          : entry
+        entry.id === assistantId ? { ...entry, content: message, state: 'error' as const } : entry
       )))
     } finally {
       setLoading(false)
       clearStreamingSnapshot(assistantId)
     }
-  }, [activeThreadId, analyticsContext, hasApiKey, loading])
+  }, [activeThreadId, hasApiKey, analyticsContext])
 
-  const submitMessage = useCallback((text: string) => {
-    void handleSend(text)
-  }, [handleSend])
-
-  const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'auto' })
-  }, [])
+  // Stable submit reference for the memoized composer: its only re-render
+  // trigger should be `loading`, not a fresh callback identity each render.
+  const handleSendRef = useRef(handleSend)
+  handleSendRef.current = handleSend
+  const submitMessage = useCallback((text: string) => { void handleSendRef.current(text) }, [])
 
   const handleRetry = useCallback(async (index: number, message: ThreadMessage) => {
     if (message.id !== latestCompletedAssistantId) return
     triggerActionFeedback(message.id, 'retry')
-    track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({
-      answer_kind: message.answerKind ?? null,
-      trigger: 'retry',
-    }))
+    track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({ answer_kind: message.answerKind ?? null, trigger: 'retry' }))
     const historyUpToMessage = messages.slice(0, index)
-    const previousUser = [...historyUpToMessage].reverse().find((entry) => entry.role === 'user')
+    const previousUser = [...historyUpToMessage].reverse().find((m) => m.role === 'user')
     if (!previousUser) return
-    await handleSend(previousUser.content, {
-      contextOverride: message.contextSnapshot ?? null,
-      trigger: 'retry',
-    })
-  }, [analyticsContext, handleSend, latestCompletedAssistantId, messages, triggerActionFeedback])
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+  }, [latestCompletedAssistantId, messages, triggerActionFeedback, analyticsContext, handleSend])
 
   const handleCopy = useCallback(async (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => {
     try {
       await navigator.clipboard.writeText(content)
       triggerActionFeedback(messageId, 'copy', { successMs: 900 })
-      track(ANALYTICS_EVENT.AI_ANSWER_COPIED, analyticsContext({
-        answer_kind: answerKind ?? null,
-        trigger: 'copy',
-      }))
+      track(ANALYTICS_EVENT.AI_ANSWER_COPIED, analyticsContext({ answer_kind: answerKind ?? null, trigger: 'copy' }))
     } catch { /* clipboard unsupported */ }
-  }, [analyticsContext, triggerActionFeedback])
+  }, [triggerActionFeedback, analyticsContext])
 
   const handleRate = useCallback(async (message: ThreadMessage, rating: 'up' | 'down' | null) => {
     if (typeof message.id !== 'number') return
-
     const previousRating = message.rating ?? null
     const previousRatingUpdatedAt = message.ratingUpdatedAt ?? null
-
     setMessages((current) => current.map((entry) => (
-      entry.id === message.id
-        ? { ...entry, rating, ratingUpdatedAt: rating ? Date.now() : null }
-        : entry
+      entry.id === message.id ? { ...entry, rating, ratingUpdatedAt: rating ? Date.now() : null } : entry
     )))
-
+    // Pulse the button that was actually clicked. When toggling a rating off,
+    // `rating` is null, so fall back to the rating being cleared (message.rating).
+    triggerActionFeedback(message.id, (rating ?? previousRating) === 'down' ? 'down' : 'up')
+    track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
+      answer_kind: message.answerKind ?? null,
+      rating: rating ?? 'cleared',
+      trigger: 'manual',
+    }))
     try {
       const persisted = await ipc.ai.setMessageFeedback({ messageId: message.id, rating })
       if (persisted) {
         setMessages((current) => current.map((entry) => (
-          entry.id === message.id
-            ? { ...entry, ...persisted, state: entry.state }
-            : entry
+          entry.id === message.id ? { ...entry, ...persisted, state: entry.state } : entry
         )))
       }
     } catch {
       setMessages((current) => current.map((entry) => (
-        entry.id === message.id
-          ? { ...entry, rating: previousRating, ratingUpdatedAt: previousRatingUpdatedAt }
-          : entry
+        entry.id === message.id ? { ...entry, rating: previousRating, ratingUpdatedAt: previousRatingUpdatedAt } : entry
       )))
     }
-  }, [])
+  }, [triggerActionFeedback, analyticsContext])
 
   const handleMessageAction = useCallback(async (
     messageId: string | number,
@@ -393,205 +370,140 @@ export function useAIChat() {
     options?: { reviewNote?: string },
   ) => {
     const key = messageActionKey(messageId, action)
-    setMessageActionState((current) => ({
-      ...current,
-      [key]: { busy: true, error: null, successLabel: null },
-    }))
-
+    setMessageActionState((current) => ({ ...current, [key]: { busy: true, error: null, successLabel: null } }))
     try {
       if (action.kind === 'start_focus_session') {
         await ipc.focus.start(action.payload)
-        setMessageActionState((current) => ({
-          ...current,
-          [key]: { busy: false, error: null, successLabel: 'Focus session started.' },
-        }))
+        setMessageActionState((current) => ({ ...current, [key]: { busy: false, error: null, successLabel: 'Focus session started.' } }))
       } else if (action.kind === 'stop_focus_session') {
         await ipc.focus.stop(action.sessionId)
-        setMessageActionState((current) => ({
-          ...current,
-          [key]: { busy: false, error: null, successLabel: 'Focus session stopped.' },
-        }))
+        setMessageActionState((current) => ({ ...current, [key]: { busy: false, error: null, successLabel: 'Focus session stopped.' } }))
       } else {
         const draft = (options?.reviewNote ?? action.suggestedNote ?? '').trim()
         if (!draft) {
-          setMessageActionState((current) => ({
-            ...current,
-            [key]: { busy: false, error: 'Add a short review before saving it.', successLabel: null },
-          }))
+          setMessageActionState((current) => ({ ...current, [key]: { busy: false, error: 'Add a short review before saving it.', successLabel: null } }))
           return
         }
         await ipc.focus.saveReflection({ sessionId: action.sessionId, note: draft })
-        setMessageActionState((current) => ({
-          ...current,
-          [key]: { busy: false, error: null, successLabel: 'Focus review saved.' },
-        }))
+        setMessageActionState((current) => ({ ...current, [key]: { busy: false, error: null, successLabel: 'Focus review saved.' } }))
       }
-      await insightsResource.refresh()
+      await refreshProvider()
     } catch (error) {
       setMessageActionState((current) => ({
         ...current,
-        [key]: {
-          busy: false,
-          error: error instanceof Error ? error.message : String(error),
-          successLabel: null,
-        },
+        [key]: { busy: false, error: error instanceof Error ? error.message : String(error), successLabel: null },
       }))
     }
-  }, [insightsResource])
+  }, [refreshProvider])
 
-  const resetThreadComposerState = useCallback((threadId: number | null) => {
-    setMessages([])
+  const clearFeedback = useCallback(() => {
     setActionFeedback({})
     setMessageActionState({})
     suggestionImpressionsRef.current = {}
-    historyHydratedThreadRef.current = threadId
   }, [])
 
-  const loadThread = useCallback(async (threadId: number, options?: { keepPickerOpen?: boolean }) => {
-    if (!options?.keepPickerOpen) setThreadPickerOpen(false)
-    setActiveThreadId(threadId)
-    try {
-      const detail = await ipc.ai.getThread(threadId)
-      setMessages(threadMessagesFromHistory(detail.messages))
-      historyHydratedThreadRef.current = threadId
-    } catch { /* keep current UI */ }
-  }, [])
+  const resetComposerState = useCallback(() => {
+    setMessages([])
+    clearFeedback()
+  }, [clearFeedback])
 
-  const restoreThreadPickerAfterUpdate = useCallback((shouldRestore: boolean) => {
-    if (!shouldRestore) return
-    window.requestAnimationFrame(() => setThreadPickerOpen(true))
-  }, [])
+  // Instant new chat: reset to an empty draft synchronously. No createThread
+  // round-trip — the server auto-creates the thread on the first send.
+  const handleNewChat = useCallback(() => {
+    if (loadingRef.current) return
+    if (messages.length === 0 && activeThreadId == null) return
+    setActiveThreadId(null)
+    resetComposerState()
+  }, [messages.length, activeThreadId, resetComposerState])
 
-  const handleDeleteThreadConfirmed = useCallback(async (thread: AIThreadSummary) => {
-    const pickerWasOpen = threadPickerOpen
-    setThreadDeleteConfirm(null)
+  const selectThread = useCallback((threadId: number) => {
+    if (threadId === activeThreadId) return
+    // Clear per-message UI state but keep the current messages on screen until
+    // the new thread's history arrives — switching shouldn't flash an empty view.
+    clearFeedback()
+    void loadThread(threadId)
+  }, [activeThreadId, clearFeedback, loadThread])
+
+  const deleteThread = useCallback(async (thread: AIThreadSummary) => {
     try {
       await ipc.ai.deleteThread(thread.id)
       const refreshed = await ipc.ai.listThreads({ includeArchived: false })
       setThreads(refreshed)
-      restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
-      const nextActiveId = thread.id === activeThreadId
-        ? refreshed[0]?.id ?? null
-        : activeThreadId !== null && !refreshed.some((entry) => entry.id === activeThreadId)
-          ? refreshed[0]?.id ?? null
-          : activeThreadId
-      if (nextActiveId == null) {
-        setActiveThreadId(null)
-        resetThreadComposerState(null)
-        setThreadPickerOpen(false)
-        return
-      }
-      if (nextActiveId !== activeThreadId || thread.id === activeThreadId) {
-        await loadThread(nextActiveId, { keepPickerOpen: pickerWasOpen })
-        restoreThreadPickerAfterUpdate(pickerWasOpen && refreshed.length > 0)
+      if (thread.id === activeThreadId) {
+        const next = refreshed[0]
+        if (next) {
+          resetComposerState()
+          void loadThread(next.id)
+        } else {
+          setActiveThreadId(null)
+          resetComposerState()
+        }
       }
     } catch (error) {
       console.error('[ai] failed to delete thread', error)
     }
-  }, [activeThreadId, loadThread, resetThreadComposerState, restoreThreadPickerAfterUpdate, threadPickerOpen])
+  }, [activeThreadId, resetComposerState, loadThread])
 
-  const handleNewChat = useCallback(() => {
-    const activeThreadIsDraft = Boolean(activeThread && activeThread.messageCount === 0)
-    if (activeThreadIsDraft) {
-      setThreadPickerOpen(false)
-      return
-    }
-
-    const reusableDraft = threads.find((thread) => thread.messageCount === 0)
-    if (reusableDraft) {
-      resetThreadComposerState(reusableDraft.id)
-      setActiveThreadId(reusableDraft.id)
-      setThreadPickerOpen(false)
-      void loadThread(reusableDraft.id)
-      return
-    }
-
-    resetThreadComposerState(null)
-    setActiveThreadId(null)
-    setThreadPickerOpen(false)
-
-    void ipc.ai.createThread(null).then((thread) => {
-      setActiveThreadId(thread.id)
-      setThreads((prev) => [thread, ...prev.filter((entry) => entry.id !== thread.id)])
-      historyHydratedThreadRef.current = thread.id
-    }).catch((error) => {
-      console.error('[ai] failed to create thread', error)
-    })
-  }, [activeThread, loadThread, resetThreadComposerState, threads])
-
+  // Deep link from Day Wrapped / notifications: /ai?threadId=…&artifactId=…
   useEffect(() => {
     const params = new URLSearchParams(location.search)
     const threadId = Number(params.get('threadId'))
+    const artifactId = Number(params.get('artifactId'))
     if (!Number.isFinite(threadId) || threadId <= 0) return
-
-    const routeKey = String(threadId)
+    const routeKey = `${threadId}:${Number.isFinite(artifactId) && artifactId > 0 ? artifactId : 'none'}`
     if (routedReportKeyRef.current === routeKey) return
     routedReportKeyRef.current = routeKey
 
     void (async () => {
       const refreshed = await ipc.ai.listThreads({ includeArchived: false }).catch(() => null)
       if (refreshed) setThreads(refreshed)
+      resetComposerState()
       await loadThread(threadId)
+      if (Number.isFinite(artifactId) && artifactId > 0) {
+        void ipc.ai.openArtifact(artifactId).catch(() => { /* best-effort */ })
+      }
     })()
-  }, [loadThread, location.search])
+  }, [location.search, loadThread, resetComposerState])
 
-  const handleSearchResultClick = useCallback((result: DaylensSearchResult) => {
-    if (result.type === 'artifact') {
-      void ipc.ai.openArtifact(result.id)
-      return
-    }
-    if (result.type === 'browser' && result.url) {
-      ipc.shell.openExternal(result.url)
-      return
-    }
-    window.location.hash = `/timeline?view=day&date=${encodeURIComponent(result.date)}`
-  }, [])
-
-  const recentThreadPrompts = useMemo(
-    () => threads
-      .filter((thread) => thread.messageCount > 0 && thread.title.trim() && thread.title !== 'New chat')
-      .slice(0, 6),
-    [threads],
-  )
+  const handlePromptChipClick = useCallback((prompt: string, source: string) => {
+    if (!hasApiKey) return
+    track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({ source, trigger: 'suggested' }))
+    void handleSend(prompt, { trigger: 'suggested' })
+  }, [hasApiKey, analyticsContext, handleSend])
 
   return {
+    // state
     messages,
     loading,
+    threads,
+    activeThreadId,
+    activeThreadLabel,
     settings,
     cliTools,
     hasApiKey,
-    threads,
-    activeThreadId,
-    activeThread,
-    threadPickerOpen,
-    setThreadPickerOpen,
-    threadDeleteConfirm,
-    setThreadDeleteConfirm,
-    threadPickerFocusIdx,
-    setThreadPickerFocusIdx,
-    hoveredThreadId,
-    setHoveredThreadId,
-    threadPickerRef,
-    bottomRef,
-    reducedMotion,
+    activeFocusSession,
     actionFeedback,
     messageActionState,
-    activeFocusSession,
-    insightsResource,
+    reducedMotion,
     latestCompletedAssistantId,
-    analyticsContext,
+    // resource status (for the load gate + ConnectAI refresh)
+    initialLoading: providerResource.loading && !providerResource.data,
+    loadError: providerResource.error,
+    refreshProvider,
+    // actions
     submitMessage,
-    scrollToBottom,
     handleSend,
     handleRetry,
     handleCopy,
     handleRate,
     handleMessageAction,
     handleNewChat,
-    loadThread,
-    handleDeleteThreadConfirmed,
-    handleSearchResultClick,
-    recentThreadPrompts,
+    selectThread,
+    deleteThread,
     triggerActionFeedback,
+    handlePromptChipClick,
+    analyticsContext,
   }
 }
+
+export type UseAIChat = ReturnType<typeof useAIChat>

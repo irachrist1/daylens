@@ -24,3 +24,6 @@ tests/ai-bench/.last-results.json
 
 # Claude Code local permissions (per-user, not shared)
 .claude/settings.local.json
+
+# overnight verification runtime logs
+logs/

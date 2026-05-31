@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { ensureSearchSchema } from '../src/main/db/migrations.ts'
 import {
+  searchAll,
   searchArtifacts,
   searchBlocks,
   searchBrowser,
@@ -151,5 +152,46 @@ test('each search function queries real SQLite FTS tables', () => {
   assert.equal(searchBlocks(db, 'prototype').length, 1)
   assert.equal(searchBrowser(db, 'browser').length, 1)
   assert.equal(searchArtifacts(db, 'Inline').length, 1)
+  db.close()
+})
+
+test('searchAll merges all sources newest-first', () => {
+  const db = setupDb()
+  const base = localMs(2026, 4, 24, 9)
+  // Stagger one match per source so the recency order is unambiguous.
+  insertSession(db, { windowTitle: 'Figma session match', startTime: base + 1_000 })
+  insertBlock(db, 'b1', 'Figma block match', base + 2_000)
+  insertVisit(db, 'Figma visit match', base + 3_000)
+  insertArtifact(db, 'Figma artifact match', 'Figma report body', base + 4_000)
+
+  const results = searchAll(db, 'Figma', { limit: 10 })
+  assert.equal(results.length, 4, 'all four sources should contribute')
+  const types = results.map((r) => r.type)
+  assert.deepEqual(types, ['artifact', 'browser', 'block', 'session'], 'results must be newest-first across sources')
+  db.close()
+})
+
+test('searchAll respects limit while still returning the globally newest results', () => {
+  const db = setupDb()
+  const base = localMs(2026, 4, 24, 9)
+  // Two old sessions and one very recent browser visit. With limit 2 the newest
+  // two overall (visit + the newer session) must win, even though the lower-yield
+  // browser table is searched after sessions — the cutoff pruning must not drop it.
+  insertSession(db, { windowTitle: 'Figma old one', startTime: base + 1_000 })
+  insertSession(db, { windowTitle: 'Figma old two', startTime: base + 2_000 })
+  insertVisit(db, 'Figma newest visit', base + 9_000)
+
+  const results = searchAll(db, 'Figma', { limit: 2 })
+  assert.equal(results.length, 2)
+  assert.equal(results[0].type, 'browser', 'newest overall is the browser visit')
+  assert.equal(results[0].startTime, base + 9_000)
+  assert.equal(results[1].startTime, base + 2_000, 'second is the newer of the two sessions')
+  db.close()
+})
+
+test('searchAll returns nothing for an empty query', () => {
+  const db = setupDb()
+  insertSession(db, { windowTitle: 'Figma anything' })
+  assert.deepEqual(searchAll(db, '   ', { limit: 5 }), [])
   db.close()
 })

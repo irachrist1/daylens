@@ -4,6 +4,13 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
+## v1.0.41 - 2026-05-30 — Timeline Coherence
+
+- Timeline and insights refreshes from foreground app switches are throttled to reduce repeated full-day rebuilds.
+- AI block relabel writes now use one persistence path, and per-block Regenerate tells the model which label was rejected.
+- Titleless, artifactless browser slivers between work stretches are absorbed without loosening distinct-topic or real-gap guards.
+- AI provider settings support the branch's BYOK/OpenRouter cleanup.
+
 ## v1.0.40 - 2026-05-29 — Updater Recovery
 
 - macOS in-app updates validate the downloaded ZIP size and stage the replacement before closing Daylens services.

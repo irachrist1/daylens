@@ -70,7 +70,7 @@ jobs:
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           chmod +x "dist-release/Daylens-${VERSION}.AppImage"
-          xvfb-run -a env \
+          timeout 90s dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-appimage-smoke.json" \
             APPIMAGE_EXTRACT_AND_RUN=1 \
@@ -90,9 +90,14 @@ jobs:
           PACKAGE_FILE="dist-release/Daylens-${VERSION}.deb"
           PACKAGE_NAME="$(dpkg-deb -f "$PACKAGE_FILE" Package)"
           sudo dpkg -i "$PACKAGE_FILE" || sudo apt-get install -f -y
-          APP_PATH="$(dpkg -L "$PACKAGE_NAME" | grep '/daylens$' | head -n 1)"
+          APP_PATH="$(dpkg -L "$PACKAGE_NAME" | while IFS= read -r candidate; do
+            if [ -f "$candidate" ] && [ -x "$candidate" ] && [ "$(basename "$candidate")" = "daylens" ]; then
+              printf '%s\n' "$candidate"
+              break
+            fi
+          done)"
           test -n "$APP_PATH"
-          xvfb-run -a env \
+          timeout 90s dbus-run-session -- xvfb-run -a env \
             DAYLENS_SMOKE_TEST=1 \
             DAYLENS_SMOKE_REPORT_PATH="$RUNNER_TEMP/daylens-deb-smoke.json" \
             "$APP_PATH" \
@@ -121,7 +126,12 @@ jobs:
               PACKAGE_FILE="dist-release/Daylens-'"${VERSION}"'.rpm"
               dnf install --nogpgcheck -y "$PACKAGE_FILE"
               PACKAGE_NAME="$(rpm -qp --queryformat "%{NAME}" "$PACKAGE_FILE")"
-              APP_PATH="$(rpm -ql "$PACKAGE_NAME" | grep "/daylens$" | head -n 1)"
+              APP_PATH="$(rpm -ql "$PACKAGE_NAME" | while IFS= read -r candidate; do
+                if [ -f "$candidate" ] && [ -x "$candidate" ] && [ "$(basename "$candidate")" = "daylens" ]; then
+                  printf "%s\n" "$candidate"
+                  break
+                fi
+              done)"
               test -n "$APP_PATH"
               Xvfb :99 -screen 0 1280x720x24 >/tmp/daylens-xvfb.log 2>&1 &
               XVFB_PID=$!
@@ -129,7 +139,7 @@ jobs:
               export DISPLAY=:99
               export DAYLENS_SMOKE_TEST=1
               export DAYLENS_SMOKE_REPORT_PATH=/smoke/daylens-rpm-smoke.json
-              "$APP_PATH" \
+              timeout 90s dbus-run-session -- "$APP_PATH" \
                 --no-sandbox \
                 --disable-setuid-sandbox
               node scripts/verify-linux-smoke.js \

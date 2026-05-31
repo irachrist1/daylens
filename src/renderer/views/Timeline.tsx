@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
@@ -390,16 +390,14 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
   )
 }
 
-function TimelineRow({
+const TimelineRow = memo(function TimelineRow({
   segment,
   block,
   isSelected,
-  onSelect,
 }: {
   segment: TimelineSegment
   block: WorkContextBlock | null
   isSelected: boolean
-  onSelect: () => void
 }) {
   const duration = formatDuration(segmentDurationSeconds(segment))
 
@@ -439,7 +437,6 @@ function TimelineRow({
     <button
       type="button"
       data-timeline-block-id={block.id}
-      onClick={onSelect}
       style={{
         display: 'grid',
         gridTemplateColumns: '104px minmax(0, 1fr)',
@@ -547,7 +544,7 @@ function TimelineRow({
       </div>
     </button>
   )
-}
+})
 
 function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { kind: 'gap_group' }> }) {
   const duration = formatDuration(Math.max(1, Math.round((segment.endTime - segment.startTime) / 1000)))
@@ -960,6 +957,7 @@ function BlockInspector({
   const [clientDraft, setClientDraft] = useState('')
   const [clientSaving, setClientSaving] = useState(false)
   const [clientStatus, setClientStatus] = useState<string | null>(null)
+  const hasBlock = Boolean(block)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
@@ -968,10 +966,24 @@ function BlockInspector({
   }, [block?.id, block?.label.current, block?.label.override])
 
   useEffect(() => {
+    if (!hasBlock) {
+      setClients([])
+      return
+    }
+    // The client roster is stable across blocks on the same day, so this only
+    // needs to fetch once when a block becomes selected (keyed on hasBlock, not
+    // block id). The cancelled guard prevents a late response from setting state
+    // after the inspector closed or switched.
+    let cancelled = false
     void ipc.attribution.listClientsDetailed()
-      .then((rows) => setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name }))))
-      .catch(() => setClients([]))
-  }, [block?.id])
+      .then((rows) => {
+        if (!cancelled) setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name })))
+      })
+      .catch(() => {
+        if (!cancelled) setClients([])
+      })
+    return () => { cancelled = true }
+  }, [hasBlock])
 
   useEffect(() => {
     setClientDraft('')
@@ -1063,6 +1075,7 @@ function BlockInspector({
               setOverrideSaving(true)
               void ipc.db.setBlockLabelOverride({
                 blockId: block.id,
+                date: payload.date,
                 label,
                 narrative: block.label.narrative,
               }).finally(() => setOverrideSaving(false))
@@ -1113,7 +1126,7 @@ function BlockInspector({
             onClick={() => {
               setRegenerateError(null)
               setRegeneratingLabel(true)
-              void ipc.ai.regenerateBlockLabel(block)
+              void ipc.ai.regenerateBlockLabel(block.id)
                 .then(async (insight) => {
                   setOverrideDraft(insight.label?.trim() || '')
                   await onRefresh()
@@ -2097,11 +2110,6 @@ export default function Timeline() {
                             segment={segment}
                             block={segment.kind === 'work_block' ? blockMap.get(segment.blockId) ?? null : null}
                             isSelected={segment.kind === 'work_block' && selectedBlockId === segment.blockId}
-                            onSelect={() => {
-                              if (segment.kind === 'work_block') {
-                                setSelectedBlockId(segment.blockId)
-                              }
-                            }}
                           />
                         )
                       ))}
