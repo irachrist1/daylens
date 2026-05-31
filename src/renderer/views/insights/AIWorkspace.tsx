@@ -52,6 +52,7 @@ export default function AIWorkspace() {
     selectThread,
     deleteThread,
     handlePromptChipClick,
+    switchProviderAndRetry,
     analyticsContext,
   } = chat
 
@@ -262,6 +263,7 @@ export default function AIWorkspace() {
                 onRate={handleRate}
                 onRetry={handleRetry}
                 onErrorRetry={handleErrorRetry}
+                onSwitchProvider={switchProviderAndRetry}
                 onMessageAction={handleMessageAction}
                 onFollowUpClick={onFollowUpClick}
                 scrollToBottom={scrollToBottom}

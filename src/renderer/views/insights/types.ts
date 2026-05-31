@@ -1,4 +1,10 @@
-import type { AIMessageAction, AIThreadMessage } from '@shared/types'
+import type { AIMessageAction, AIProviderMode, AIThreadMessage } from '@shared/types'
+import type { AIProviderErrorCode } from '@shared/aiProviderError'
+
+export interface AltProvider {
+  provider: AIProviderMode
+  label: string
+}
 
 // A chat message as held in renderer state. `id` may be a synthetic string
 // while a turn is in flight (`user:<reqId>` / `assistant:<reqId>`) and becomes
@@ -7,8 +13,16 @@ export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
   state: 'pending' | 'complete' | 'error'
   // R4: classified error context for the branded error card (Retry + rate-limit
-  // auto-retry hint). Present only when state === 'error'.
-  errorInfo?: { isRateLimit: boolean; retryAfterSeconds: number | null; autoRetryScheduled: boolean }
+  // auto-retry hint + switch-provider on a hard wall). Present only when
+  // state === 'error'.
+  errorInfo?: {
+    isRateLimit: boolean
+    retryAfterSeconds: number | null
+    autoRetryScheduled: boolean
+    code: AIProviderErrorCode
+    // Other configured providers to offer as a one-tap switch on a hard wall.
+    alternateProviders?: AltProvider[]
+  }
 }
 
 export type MessageAction = 'copy' | 'up' | 'down' | 'retry'

@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
-import type { AIMessageAction, FocusSession } from '@shared/types'
+import type { AIMessageAction, AIProviderMode, FocusSession } from '@shared/types'
+import type { AIProviderErrorCode } from '@shared/aiProviderError'
 import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
 import { StreamingMessage } from './StreamingMessage'
@@ -72,9 +73,19 @@ export interface MessageListProps {
   onRate: (message: ThreadMessage, rating: 'up' | 'down' | null) => void
   onRetry: (index: number, message: ThreadMessage) => void
   onErrorRetry: (message: ThreadMessage) => void
+  onSwitchProvider: (message: ThreadMessage, provider: AIProviderMode) => void
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
+}
+
+// R4: branded header label per error class — never a raw provider/channel string.
+const ERROR_HEADER: Record<AIProviderErrorCode, string> = {
+  transient_rate_limit: 'Provider busy',
+  quota_exhausted: 'Limit reached',
+  credit_exhausted: 'Credit low',
+  auth: 'Key rejected',
+  unknown: 'Couldn’t complete that',
 }
 
 function MessageListImpl({
@@ -88,6 +99,7 @@ function MessageListImpl({
   onRate,
   onRetry,
   onErrorRetry,
+  onSwitchProvider,
   onMessageAction,
   onFollowUpClick,
   scrollToBottom,
@@ -124,7 +136,7 @@ function MessageListImpl({
               ) : message.state === 'error' ? (
                 <>
                   <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>
-                    {message.errorInfo?.isRateLimit ? 'Rate limit' : 'Couldn’t complete that'}
+                    {ERROR_HEADER[message.errorInfo?.code ?? 'unknown']}
                   </div>
                   <MarkdownMessage content={message.content} />
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
@@ -135,6 +147,18 @@ function MessageListImpl({
                     >
                       <IconRetry /> Retry
                     </button>
+                    {/* R2: on a hard wall, offer a one-tap switch to another
+                        configured provider instead of looping on the dead one. */}
+                    {message.errorInfo?.alternateProviders?.map((alt) => (
+                      <button
+                        key={alt.provider}
+                        type="button"
+                        onClick={() => onSwitchProvider(message, alt.provider)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Try on {alt.label}
+                      </button>
+                    ))}
                     {message.errorInfo?.autoRetryScheduled && (
                       <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Retrying automatically…</span>
                     )}

@@ -38,7 +38,12 @@ export function withProviderCallCount<T>(fn: (getCount: () => number) => Promise
 
 function recordProviderCall(): void {
   const counter = callCounterStore.getStore()
-  if (counter) counter.count += 1
+  if (counter) {
+    counter.count += 1
+    // Opt-in diagnostic: prints the running per-turn call count so a failing
+    // turn's fan-out is visible even when it throws (R1 investigation).
+    if (process.env.DAYLENS_AI_DEBUG_CALLS) console.log(`[ai:calls] provider call #${counter.count}`)
+  }
 }
 
 // ── Rate-limit detection ────────────────────────────────────────────────────
@@ -156,6 +161,10 @@ export async function withProviderRateLimit<T>(
     try {
       return await fn()
     } catch (error) {
+      if (process.env.DAYLENS_AI_DEBUG_CALLS) {
+        const e = error as MaybeProviderError
+        console.log(`[ai:rawerr] provider=${provider} status=${e.status ?? e.error?.code ?? '?'} msg=${(e.message ?? e.error?.message ?? '').slice(0, 600)}`)
+      }
       if (!isRateLimitError(error) || attempt >= maxAttempts) throw error
       const retryAfterMs = extractRetryAfterMs(error)
       const backoff = retryAfterMs ?? Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** (attempt - 1))

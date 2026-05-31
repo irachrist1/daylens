@@ -4,6 +4,7 @@ import { ANALYTICS_EVENT, classifyAIOutputIntent } from '@shared/analytics'
 import type {
   AIChatTurnResult,
   AIMessageAction,
+  AIProviderMode,
   AIThreadSummary,
   AppSettings,
   FocusSession,
@@ -11,7 +12,7 @@ import type {
 import { useProjectionResource } from '../../hooks/useProjectionResource'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
-import { getSelectedModel } from '../../lib/aiProvider'
+import { AI_PROVIDER_META, getSelectedModel } from '../../lib/aiProvider'
 import { sanitizeIpcError } from '../../lib/ipcError'
 import { sanitizeForRender } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
@@ -20,10 +21,16 @@ import {
   messageActionKey,
   threadMessagesFromHistory,
   type ActionFeedbackEntry,
+  type AltProvider,
   type MessageAction,
   type MessageActionStateEntry,
   type ThreadMessage,
 } from './types'
+
+// Providers we can offer as a one-tap switch on a hard wall. CLI providers are
+// only surfaced when actually detected on the machine (see the load probe).
+const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'codex-cli']
+const API_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter']
 
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
@@ -73,6 +80,9 @@ export function useAIChat() {
     settings: AppSettings
     cliTools: { claude: string | null; codex: string | null }
     hasProviderAccess: boolean
+    // Per-provider key/tool availability, so the error card can offer a
+    // concrete one-tap switch on a hard wall (R2).
+    providerAvailability: Partial<Record<AIProviderMode, boolean>>
     activeFocusSession: FocusSession | null
   }>({
     scope: 'insights',
@@ -85,28 +95,29 @@ export function useAIChat() {
       ]))
       const needsCliDetection = providersToCheck.some(isCliProvider)
 
-      const [cliToolsResult, apiProviderAccessChecks, activeFocusSession] = await Promise.all([
+      // Probe every API provider's key once (cheap keytar reads) so we know
+      // which alternates we can offer; CLI detection still only runs when a CLI
+      // provider is actually in play (it spawns child processes).
+      const [cliToolsResult, apiKeyResults, activeFocusSession] = await Promise.all([
         needsCliDetection
           ? ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null }))
           : Promise.resolve({ claude: null, codex: null }),
-        Promise.all(providersToCheck
-          .filter((provider) => !isCliProvider(provider))
-          .map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
+        Promise.all(API_PROVIDERS.map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
         ipc.focus.getActive().catch(() => null),
       ])
 
-      const providerAccess = providersToCheck.some((provider) => (
-        provider === 'claude-cli'
-          ? !!cliToolsResult.claude
-          : provider === 'codex-cli'
-            ? !!cliToolsResult.codex
-            : apiProviderAccessChecks.shift() ?? false
-      ))
+      const providerAvailability: Partial<Record<AIProviderMode, boolean>> = {}
+      API_PROVIDERS.forEach((provider, index) => { providerAvailability[provider] = apiKeyResults[index] })
+      providerAvailability['claude-cli'] = !!cliToolsResult.claude
+      providerAvailability['codex-cli'] = !!cliToolsResult.codex
+
+      const providerAccess = providersToCheck.some((provider) => providerAvailability[provider] ?? false)
 
       return {
         settings: currentSettings,
         cliTools: cliToolsResult as { claude: string | null; codex: string | null },
         hasProviderAccess: providerAccess,
+        providerAvailability,
         activeFocusSession: activeFocusSession as FocusSession | null,
       }
     },
@@ -131,6 +142,18 @@ export function useAIChat() {
         openrouterModel: settings.openrouterModel,
       })
     : null
+
+  // R2: other configured providers we can offer as a one-tap switch when the
+  // selected one hits a hard wall (quota/credit/auth). Never auto-routed.
+  const providerAvailability = providerResource.data?.providerAvailability ?? {}
+  const alternateProviders = useMemo<AltProvider[]>(() => {
+    if (!activeProvider) return []
+    return SWITCHABLE_PROVIDERS
+      .filter((provider) => provider !== activeProvider && (providerAvailability[provider] ?? false))
+      .map((provider) => ({ provider, label: AI_PROVIDER_META[provider].shortLabel }))
+  }, [activeProvider, providerAvailability])
+  const alternateProvidersRef = useRef<AltProvider[]>([])
+  alternateProvidersRef.current = alternateProviders
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
@@ -357,10 +380,16 @@ export function useAIChat() {
         error,
         timedOut ? 'That took longer than expected. Tap retry to run it again.' : undefined,
       )
-      // R4: ride out a rate limit automatically, once, after a short backoff.
-      // The backend already retried transient 429s; this waits for the
-      // per-minute window before giving up to a manual Retry.
-      const willAutoRetry = sanitized.isRateLimit && autoRetryCount < 1
+      // R4: ride out a *transient* per-minute limit automatically, once, after a
+      // short backoff. A hard wall (daily/free-tier quota gone, credit, auth)
+      // is NOT auto-retried — retrying just fails again; instead the card offers
+      // switch-provider (R2). This is the fix for the misdiagnosed Gemini
+      // free-tier case found in R1 verification.
+      const isTransient = sanitized.code === 'transient_rate_limit'
+      const isHardWall = sanitized.code === 'quota_exhausted'
+        || sanitized.code === 'credit_exhausted'
+        || sanitized.code === 'auth'
+      const willAutoRetry = isTransient && autoRetryCount < 1
       setMessages((current) => current.map((entry) => (
         entry.id === assistantId
           ? {
@@ -368,9 +397,13 @@ export function useAIChat() {
             content: sanitized.message,
             state: 'error' as const,
             errorInfo: {
-              isRateLimit: sanitized.isRateLimit,
+              isRateLimit: isTransient,
               retryAfterSeconds: sanitized.retryAfterSeconds,
               autoRetryScheduled: willAutoRetry,
+              code: sanitized.code,
+              alternateProviders: isHardWall && alternateProvidersRef.current.length > 0
+                ? alternateProvidersRef.current
+                : undefined,
             },
           }
           : entry
@@ -432,6 +465,35 @@ export function useAIChat() {
     setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
   }, [messages, analyticsContext, handleSend])
+
+  // R2: explicit, user-initiated provider switch from a hard-wall error card.
+  // Persists the chat provider (never silent/auto), refreshes the header model,
+  // then re-runs the turn on the new provider in place of the errored one.
+  const switchProviderAndRetry = useCallback(async (message: ThreadMessage, provider: AIProviderMode) => {
+    if (loadingRef.current) return
+    const key = String(message.id)
+    if (autoRetryTimeoutsRef.current[key]) {
+      window.clearTimeout(autoRetryTimeoutsRef.current[key])
+      delete autoRetryTimeoutsRef.current[key]
+    }
+    const index = messages.findIndex((m) => m.id === message.id)
+    if (index < 0) return
+    const previousUser = [...messages.slice(0, index)].reverse().find((m) => m.role === 'user')
+    if (!previousUser) return
+    try {
+      await ipc.settings.set({ aiChatProvider: provider })
+      await refreshProvider()
+    } catch {
+      return // leave the error card intact if the switch could not be saved
+    }
+    track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({
+      answer_kind: message.answerKind ?? null,
+      trigger: 'switch_provider',
+      provider,
+    }))
+    setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+  }, [messages, refreshProvider, analyticsContext, handleSend])
 
   const handleCopy = useCallback(async (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => {
     try {
@@ -618,6 +680,8 @@ export function useAIChat() {
     deleteThread,
     triggerActionFeedback,
     handlePromptChipClick,
+    switchProviderAndRetry,
+    alternateProviders,
     analyticsContext,
   }
 }

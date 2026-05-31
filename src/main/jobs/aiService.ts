@@ -114,6 +114,7 @@ import {
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
 import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
+import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
 import { anthropicTools, openaiTools, googleTools, executeTool, type ToolName } from '../services/aiTools'
 import {
@@ -5351,39 +5352,16 @@ async function routerProsePass(
   return out
 }
 
-// Translate raw provider SDK errors (e.g. a 429 JSON blob from Anthropic) into a
-// short, human message before it reaches the chat UI. Without this the renderer
-// shows the raw provider payload in the answer bubble.
-function friendlyChatError(err: unknown): Error {
-  if (!err || typeof err !== 'object') {
-    return new Error('The AI request failed. Please try again.')
-  }
-  const e = err as {
-    status?: number
-    message?: string
-    headers?: Record<string, string> | { get?: (k: string) => string | null }
-    error?: { type?: string; error?: { type?: string } }
-  }
-  const errorType = e.error?.error?.type ?? e.error?.type
-  const message = typeof e.message === 'string' ? e.message.toLowerCase() : ''
-  const retryAfter =
-    (e.headers && typeof (e.headers as { get?: (k: string) => string | null }).get === 'function'
-      ? (e.headers as { get: (k: string) => string | null }).get('retry-after')
-      : (e.headers as Record<string, string> | undefined)?.['retry-after']) ?? null
-  const waitHint = retryAfter ? ` Try again in about ${retryAfter}s.` : ' Wait a moment and try again.'
-
-  if (e.status === 429 || errorType === 'rate_limit_error' || message.includes('rate limit')) {
-    return new Error(
-      `Your AI provider's rate limit was hit — your plan only allows a few requests per minute, and a single answer makes several.${waitHint} To make this reliable, raise your provider tier (adding credit usually bumps the limit) or switch to a faster, higher-limit model in Settings.`,
-    )
-  }
-  if (errorType === 'credit_balance_too_low' || message.includes('credit balance')) {
-    return new Error('Your AI provider credit balance is too low. Top it up with the provider, or switch providers in Settings.')
-  }
-  if (e.status === 401 || e.status === 403) {
-    return new Error('Your AI provider rejected the key. Re-check or re-paste it in Settings.')
-  }
-  return err instanceof Error ? err : new Error('The AI request failed. Please try again.')
+// Translate raw provider SDK errors (e.g. a 429 JSON blob from Gemini) into a
+// short, branded, *accurately classified* message before it reaches the chat
+// UI (R4 + R2). Delegates to the shared classifier so a transient per-minute
+// 429 reads (and behaves) differently from a hard quota/credit/auth wall, and
+// so the structured code rides along for the renderer (auto-retry vs
+// switch-provider). The default label is the chat provider the UI shows.
+function friendlyChatError(err: unknown, label?: string): Error {
+  const resolvedLabel = label
+    ?? providerLabel(getSettings().aiChatProvider ?? getSettings().aiProvider ?? 'anthropic')
+  return friendlyProviderError(err, resolvedLabel)
 }
 
 export async function sendMessage(payload: AIChatSendRequest, options: SendMessageOptions = {}): Promise<AIChatTurnResult> {

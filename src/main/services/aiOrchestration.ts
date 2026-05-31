@@ -4,6 +4,7 @@ import { getDb } from './database'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
+import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -308,24 +309,12 @@ function isQuotaOrAuthError(error: unknown): boolean {
     || (typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
 }
 
+// Delegate to the shared classifier (R4 + R2) so every AI surface — chat,
+// timeline re-analyze (T1), regenerate label (T2), reports — distinguishes a
+// transient per-minute 429 from a hard quota/credit/auth wall, with branded
+// copy and a structured code the renderer can act on.
 function friendlyProviderError(error: unknown, label: string): Error {
-  if (!error || typeof error !== 'object') {
-    return new Error(`${label} request failed. Please try again.`)
-  }
-  const maybeError = error as { status?: number; message?: string; error?: { code?: number; status?: string; type?: string } }
-  if (
-    maybeError.error?.type === 'credit_balance_too_low'
-    || (maybeError.status === 400 && typeof maybeError.message === 'string' && maybeError.message.toLowerCase().includes('credit balance'))
-  ) {
-    return new Error(`${label} credit balance is too low. Top up that provider or change the routing in Settings.`)
-  }
-  if ((maybeError.status ?? maybeError.error?.code) === 429 || maybeError.error?.status === 'RESOURCE_EXHAUSTED') {
-    return new Error(`${label} quota exceeded. Change providers, lower cost settings, or try again later.`)
-  }
-  if ((maybeError.status ?? maybeError.error?.code) === 401 || (maybeError.status ?? maybeError.error?.code) === 403) {
-    return new Error(`${label} rejected the configured credentials. Check the key or switch providers in Settings.`)
-  }
-  return new Error(`${label} request failed. Please try again.`)
+  return friendlyProviderErrorClassified(error, label)
 }
 
 export function promptCachingPolicyForJob(jobType: AIJobType): AIJobDefinition['cachePolicy'] {
