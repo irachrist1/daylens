@@ -179,17 +179,30 @@ test('AICompose.tsx does not log from the render path', () => {
   assert.doesNotMatch(source, /\[AICompose\]\s*render/)
 })
 
-test('Insights keeps local search typing state out of the parent AI view', () => {
-  const file = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'Insights.tsx')
+test('local history search keeps its typing state in an isolated memoized component', () => {
+  // The AI tab was rebuilt as modular components (see src/renderer/views/insights).
+  // The original perf bug this guards against: search typing state living in the
+  // big parent AI view, so every keystroke re-rendered the whole conversation.
+  // The search must own its own query state inside a React.memo component so
+  // typing there never re-renders the chat (and vice-versa).
+  const searchFile = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'HistorySearch.tsx')
+  const searchSource = fs.readFileSync(searchFile, 'utf8')
+  assert.match(searchSource, /export const HistorySearch = memo\(function HistorySearch/)
+  assert.match(searchSource, /const \[query, setQuery\] = useState/)
+
+  // The workspace shell (the parent) must NOT own the search query state.
+  const workspaceFile = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'AIWorkspace.tsx')
+  const workspaceSource = fs.readFileSync(workspaceFile, 'utf8')
+  assert.doesNotMatch(workspaceSource, /setQuery\(/)
+})
+
+test('composer keeps its input state isolated and does no per-keystroke layout read', () => {
+  // The typing-lag bug was a `scrollHeight` read on every keystroke (a forced
+  // synchronous reflow of the whole conversation). The composer now auto-grows
+  // with CSS field-sizing and owns its input locally so a keystroke re-renders
+  // only the composer.
+  const file = path.resolve(__dirname, '..', 'src', 'renderer', 'views', 'insights', 'AICompose.tsx')
   const source = fs.readFileSync(file, 'utf8')
-  const parentStart = source.indexOf('export default function Insights()')
-  // Match the component's top-level `return (` tolerant of indentation, so a
-  // formatting-only edit doesn't silently break the boundary detection.
-  const parentEnd = parentStart >= 0
-    ? source.slice(parentStart).search(/\n\s*return \(/) + parentStart
-    : -1
-  assert.ok(parentStart >= 0 && parentEnd > parentStart, 'could not locate Insights component body')
-  const parentPrelude = source.slice(parentStart, parentEnd)
-  assert.doesNotMatch(parentPrelude, /\[\s*searchQuery\s*,\s*setSearchQuery\s*\]/)
-  assert.match(source, /const LocalHistorySearch = memo\(function LocalHistorySearch/)
+  assert.match(source, /const \[input, setInput\] = useState/)
+  assert.doesNotMatch(source, /scrollHeight/)
 })
