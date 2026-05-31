@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
@@ -6,6 +6,7 @@ import { AI_PROVIDER_META } from '../../lib/aiProvider'
 import ConnectAI from '../../components/ConnectAI'
 import type { DaylensSearchResult } from '../../../preload/index'
 import { AICompose, type AIComposeHandle } from './AICompose'
+import { ChatActionPalette, type ChatPaletteAction } from './ChatActionPalette'
 import { ConversationSidebar } from './ConversationSidebar'
 import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
@@ -56,6 +57,7 @@ export default function AIWorkspace() {
     archiveThread,
     handlePromptChipClick,
     switchProviderAndRetry,
+    alternateProviders,
     analyticsContext,
   } = chat
 
@@ -97,6 +99,89 @@ export default function AIWorkspace() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
+
+  // ── D3: ⌘K action palette + direct accelerators on the focused message ──────
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const isMac = useMemo(() => navigator.platform.toLowerCase().includes('mac'), [])
+  const accel = useCallback(
+    (key: string, shift = false) => (isMac ? `${shift ? '⇧' : ''}⌘${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`),
+    [isMac],
+  )
+
+  const copyChat = useCallback(async () => {
+    const text = messages
+      .filter((m) => m.state !== 'pending')
+      .map((m) => `${m.role === 'user' ? 'You' : 'Daylens'}: ${m.content}`)
+      .join('\n\n')
+    if (!text.trim()) return
+    try { await navigator.clipboard.writeText(text) } catch { /* clipboard unsupported */ }
+  }, [messages])
+
+  // The "focused message" the palette acts on is the latest completed answer.
+  const latestAssistant = useMemo(() => {
+    const index = messages.findIndex((m) => m.id === latestCompletedAssistantId)
+    return index >= 0 ? { message: messages[index], index } : null
+  }, [messages, latestCompletedAssistantId])
+
+  const paletteActions = useMemo<ChatPaletteAction[]>(() => {
+    const list: ChatPaletteAction[] = []
+    const target = latestAssistant
+    if (target) {
+      list.push({ id: 'copy-response', label: 'Copy Response', accelerator: accel('C', true), perform: () => handleCopy(target.message.id, target.message.content, target.message.answerKind) })
+    }
+    list.push({ id: 'copy-chat', label: 'Copy Chat', hint: 'Copy the whole conversation', perform: () => copyChat() })
+    if (target) {
+      list.push({ id: 'regenerate', label: 'Regenerate', accelerator: accel('R'), perform: () => handleRetry(target.index, target.message) })
+      // "Regenerate with Model" (⇧⌘R) — one entry per other configured provider
+      // (reuses R2's switch-provider path; useful for the rate-limit story).
+      alternateProviders.forEach((alt, i) => {
+        list.push({
+          id: `regen-${alt.provider}`,
+          label: `Regenerate with ${alt.label}`,
+          hint: 'Switch provider and rerun',
+          accelerator: i === 0 ? accel('R', true) : undefined,
+          perform: () => switchProviderAndRetry(target.message, alt.provider),
+        })
+      })
+      list.push({ id: 'good', label: 'Good Response', accelerator: accel('=', true), perform: () => handleRate(target.message, target.message.rating === 'up' ? null : 'up') })
+      list.push({ id: 'bad', label: 'Bad Response', accelerator: accel('-', true), perform: () => handleRate(target.message, target.message.rating === 'down' ? null : 'down') })
+    }
+    return list
+  }, [latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, copyChat])
+
+  // Read the latest action context from a ref so the global key listener binds
+  // once instead of rebinding every render.
+  const accelStateRef = useRef({ hasApiKey, paletteOpen, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry })
+  accelStateRef.current = { hasApiKey, paletteOpen, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const state = accelStateRef.current
+      if (!state.hasApiKey) return
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (!event.shiftKey && key === 'k') { event.preventDefault(); setPaletteOpen((open) => !open); return }
+      if (state.paletteOpen) return // the palette owns its keys while open
+      const target = state.latestAssistant
+      // preventDefault only when we actually act, so an empty chat still allows
+      // the platform default (e.g. ⌘R reload during development).
+      if (!event.shiftKey && key === 'r') { if (target) { event.preventDefault(); void state.handleRetry(target.index, target.message) } return }
+      if (event.shiftKey && key === 'r') {
+        if (target) {
+          event.preventDefault()
+          const alt = state.alternateProviders[0]
+          if (alt) void state.switchProviderAndRetry(target.message, alt.provider)
+          else void state.handleRetry(target.index, target.message)
+        }
+        return
+      }
+      if (event.shiftKey && key === 'c') { if (target) { event.preventDefault(); void state.handleCopy(target.message.id, target.message.content, target.message.answerKind) } return }
+      if (event.shiftKey && (event.code === 'Equal' || key === '=' || key === '+')) { if (target) { event.preventDefault(); void state.handleRate(target.message, target.message.rating === 'up' ? null : 'up') } return }
+      if (event.shiftKey && (event.code === 'Minus' || key === '-' || key === '_')) { if (target) { event.preventDefault(); void state.handleRate(target.message, target.message.rating === 'down' ? null : 'down') } return }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const onSelectThread = useCallback((threadId: number) => {
     selectThread(threadId)
@@ -196,6 +281,15 @@ export default function AIWorkspace() {
         <HistorySearch onResultClick={handleSearchResultClick} />
         <button
           type="button"
+          onClick={() => setPaletteOpen(true)}
+          title="Chat actions"
+          aria-label="Chat actions"
+          style={{ height: 34, padding: '0 10px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', fontSize: 11.5, fontWeight: 700, flexShrink: 0, letterSpacing: '0.02em' }}
+        >
+          {isMac ? '⌘K' : 'Ctrl K'}
+        </button>
+        <button
+          type="button"
           onClick={onNewChat}
           title="New chat (⌘N)"
           aria-label="New chat"
@@ -285,6 +379,7 @@ export default function AIWorkspace() {
         </div>
       )}
       </div>
+      <ChatActionPalette isOpen={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
     </div>
   )
 }
