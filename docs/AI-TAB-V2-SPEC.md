@@ -455,12 +455,36 @@ providers/models/limits intrudes unless invoked.
 - **Target/criteria:** as T1; inline retry on the block label editor.
 - **Pointers:** `ai.handlers.ts` (regenerate-block-label), `Timeline.tsx`.
 
-#### T3 — (Product decision) discretion in block labels
-- **Severity:** P3 · **Area:** labeling/policy
-- **Observation:** Timeline blocks/summaries surface sensitive labels bluntly:
-  "Video streaming and **adult content**", "**pornography sites** (19m)" [Img 29,
-  30]. Decide a policy: neutral/discreet phrasing, a privacy toggle, or leave as-is.
-  Flagging for an explicit product call, not assuming.
+#### T3 — Tracking Controls: let users choose what gets tracked
+- **Severity:** P1 · **Area:** capture + settings + onboarding
+- **What it is:** Every user should be able to control what Daylens records. Some
+  apps and sites are personal or private, and a private/incognito browser window
+  should never be tracked at all. Today the timeline can surface page/app titles a
+  user would rather keep out of their history and out of AI answers.
+- **Target behavior:**
+  1. **Per-app and per-site exclusions.** A user-managed list of apps and websites
+     that Daylens does not record (and retroactively hides/redacts from existing
+     history). Excluded items never appear in the timeline, Apps view, AI answers,
+     or search.
+  2. **Never track private/incognito windows.** Detect incognito/private browsing
+     (browsers expose this state, e.g. the browser watcher's `incognito` flag) and
+     skip capture entirely — no URL, no page title, no session.
+  3. **A quick "pause tracking" toggle** in the menu bar / header for ad-hoc privacy.
+  4. **Delete from history.** Let users delete or redact already-recorded
+     apps/sites/blocks so the data is gone, not just hidden.
+  5. **Onboarding step.** During onboarding, let the user pick apps/sites they don't
+     want tracked, with incognito-excluded on by default.
+  6. The existing domain classifier (`src/shared/domainPolicy.ts`) should fold into
+     this user-controlled exclusion model rather than relying on a hard-coded seed
+     list shipped in source.
+- **Acceptance criteria:**
+  - [ ] A user can add an app or site to an exclusion list; it disappears from the
+        timeline/Apps/AI/search and stops being recorded going forward.
+  - [ ] Incognito/private browser windows produce no captured rows.
+  - [ ] A "pause tracking" control exists and works.
+  - [ ] Onboarding offers the exclusion choice; incognito is excluded by default.
+- **Pointers:** `focusCapture.ts`, `browserContext.ts` (`incognito`), `tracking.ts`,
+  `domainPolicy.ts`, `Settings.tsx`, `Onboarding.tsx`, history-delete IPC.
 
 #### T4 — (Cross-ref) focus score correctness
 - The focus score (e.g. "Score 43 / Focused 56m / Drift 8h 2m" [Img 29]) was
@@ -506,12 +530,13 @@ providers/models/limits intrudes unless invoked.
 1. **Phase 0 — Make it reliable (P0):** R1 (call fan-out + throttle/retry), R2
    (single provider source), R3 (no stuck Thinking + timeout), R4 (friendly errors
    + retry). After this, the app *always answers or clearly recovers.*
-2. **Phase 1 — Make it correct (P1):** Q1/Q2 (grounding & intent), Q3/Q4
-   (follow-ups in-answer), Q5 (cheap good titles), U1 (history loads), U2 (header),
-   then Q6 (eval program to lock it in).
+2. **Phase 1 — Make it correct + private (P1):** T3 (Tracking Controls: exclusions,
+   no incognito capture, onboarding), Q1/Q2 (grounding & intent), Q3/Q4 (follow-ups
+   in-answer), Q5 (cheap good titles), U1 (history loads), U2 (header), then Q6
+   (eval program to lock it in).
 3. **Phase 2 — Make it powerful & beautiful (P2):** D1–D6 (Raycast patterns), S1
    (natural-language search), T1/T2 (timeline actions), M1 (models).
-4. **Phase 3 — Polish:** U3 (icon), D6 transforms, T3 (label discretion), C1
+4. **Phase 3 — Polish:** U3 (icon), D6 transforms, C1
    (signing).
 
 Phase 0 is the difference between "should not have shipped" and "solid." Do it
@@ -555,7 +580,7 @@ first and ship a 1.0.42 that is *reliable* before adding surface area.
     (24/25), tool-use "Read page" + summary formatting (26), send/stop (27),
     auto-title "Friendly Greeting" + minimal answer (28). → D1–D6, U2/U3.
 29. Timeline "Re-analyze with AI" → "db:rebuild-timeline-day … Gemini quota
-    exceeded"; sensitive labels; focus score 43. → T1, T3, T4, R4.
+    exceeded"; a private page surfaced in a label; focus score 43. → T1, T3, T4, R4.
 30. Timeline "Regenerate label" → "ai:regenerate-block-label … Gemini request
     failed". → T2, R4.
 

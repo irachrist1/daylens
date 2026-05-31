@@ -14,7 +14,7 @@ What actually happened, per layer:
 
 1. **AI tab "Rendered more hooks than during the previous render."** I wrote `useRef(0)` inside `if (process.env.NODE_ENV === 'development') { ... }` in `AICompose.tsx`. That is a Rules of Hooks violation. Tests passed because there are zero React-component tests in the suite (Agent 2). Lint did not catch it because there is no `react-hooks/rules-of-hooks` rule configured (Agent 2). React StrictMode is enabled but does not catch hook-order violations. Already fixed in [AICompose.tsx](src/renderer/views/insights/AICompose.tsx) — but this is the canonical proof that the test+lint gates as configured cannot detect a renderer crash.
 
-2. **Apps view: VS Code & Ghostty rows headlined with the porno video title.** My digest fix in `appActivityDigest.ts` correctly stopped *artifacts* from leaking across apps. It did NOT touch the path the symptom actually flows through: the **block label**. A query on the live DB shows blocks with `dominant_category = 'development'` and `label_current = '[redacted] … Pornhub.com'`, `label_source = 'artifact'`. The label is contaminated upstream — `preferredArtifactLabel` at `workBlocks.ts:1505-1513` picks the loudest artifact regardless of category — and my digest propagates that label to every app in `block.topApps` without filtering by who contributed to it (Agent 1).
+2. **Apps view: VS Code & Ghostty rows headlined with the excluded video title.** My digest fix in `appActivityDigest.ts` correctly stopped *artifacts* from leaking across apps. It did NOT touch the path the symptom actually flows through: the **block label**. A query on the live DB shows blocks with `dominant_category = 'development'` and `label_current = '[excluded sensitive page]'`, `label_source = 'artifact'`. The label is contaminated upstream — `preferredArtifactLabel` at `workBlocks.ts:1505-1513` picks the loudest artifact regardless of category — and my digest propagates that label to every app in `block.topApps` without filtering by who contributed to it (Agent 1).
 
 3. **Tests passed, UI broke.** My `appActivityDigest.test.ts` used hand-crafted `WorkContextBlock` fixtures with clean ownership chains. Real DB rows from the legacy capture path have nulls in the ownership columns. The fixtures didn't reflect reality (Agent 2).
 
@@ -22,19 +22,19 @@ The lesson is structural, not just "be more careful." The verification loop ends
 
 ---
 
-## 1. The two-layer bug behind the porno-title-on-VS-Code symptom
+## 1. The two-layer bug behind the excluded-title-on-VS-Code symptom
 
 Trace, with file:line, from Agent 1's audit:
 
-1. `tracking.ts` → captures Dia's foreground tab title `"Cutie ... Pornhub.com"` into `app_sessions.window_title`.
-2. `browser.ts` → reads Dia history → `website_visits` row for `pornhub.com/view_video.php?viewkey=…`, `canonical_browser_id = 'dia'`. **Both fields present.**
-3. `workBlocks.ts:1006-1092 buildPageCandidates` → derives a `PageRef` for that visit, with `displayTitle = "Cutie ..."` and `canonicalBrowserId = 'dia'`.
-4. `workBlocks.ts:1220-1342 buildBlockFromCandidate` → constructs a block whose `topApps = [VS Code (foreground 21m), Codex (4m), Dia (background 5m)]` and whose `topArtifacts` includes the porno page (from Dia background activity).
+1. `tracking.ts` → captures Dia's foreground tab title `"[excluded sensitive page]"` into `app_sessions.window_title`.
+2. `browser.ts` → reads Dia history → `website_visits` row for `excluded-host.example/view_video.php?viewkey=…`, `canonical_browser_id = 'dia'`. **Both fields present.**
+3. `workBlocks.ts:1006-1092 buildPageCandidates` → derives a `PageRef` for that visit, with `displayTitle = "[excluded …]"` and `canonicalBrowserId = 'dia'`.
+4. `workBlocks.ts:1220-1342 buildBlockFromCandidate` → constructs a block whose `topApps = [VS Code (foreground 21m), Codex (4m), Dia (background 5m)]` and whose `topArtifacts` includes the excluded page (from Dia background activity).
 5. `workBlocks.ts:1541-1590 finalizedLabelForBlock` → priority cascade: override → **artifact** → workflow → AI → rule → fallback. Calls `preferredArtifactLabel(block)`.
-6. `workBlocks.ts:1505-1513 preferredArtifactLabel` → returns `block.documentRefs[0]?.displayTitle` first, else `block.pageRefs[0]?.displayTitle`. **No category check, no app-ownership check, no content filter.** Picks the porno page title.
-7. Block persisted with `label_current = "Cutie ..."`, `label_source = 'artifact'`, `dominant_category = 'development'`.
+6. `workBlocks.ts:1505-1513 preferredArtifactLabel` → returns `block.documentRefs[0]?.displayTitle` first, else `block.pageRefs[0]?.displayTitle`. **No category check, no app-ownership check, no content filter.** Picks the excluded page title.
+7. Block persisted with `label_current = "[excluded …]"`, `label_source = 'artifact'`, `dominant_category = 'development'`.
 8. `appActivityDigest.ts:81-95` → for every app in `block.topApps` (VS Code, Codex, Dia), the block label gets attached unconditionally as `topBlock.label`. **My recent patch fixed `topArtifacts` ownership but left `block.label` propagation untouched** — I documented this as intentional ("labels describe the whole block") and that reasoning is wrong for artifact-sourced labels.
-9. `Apps.tsx:432` renders `digest.topBlockLabel || digest.topArtifactTitle` as the row headline. VS Code and Codex rows show "Cutie ..." in the DEVELOPMENT category.
+9. `Apps.tsx:432` renders `digest.topBlockLabel || digest.topArtifactTitle` as the row headline. VS Code and Codex rows show "[excluded …]" in the DEVELOPMENT category.
 
 Two distinct fixes:
 
@@ -98,7 +98,7 @@ From Agent 2, ordered:
 
 2. **`tests/smoke.electron.test.ts`** — Playwright Electron test. Boot the real app against a seeded DB; click each of Timeline / Apps / AI tabs; assert no React error boundary fires and no console error contains `Error:` or `Warning:`. ~80 lines + Playwright config. Slow (~10s), gated behind `npm run test:smoke`. **Single highest-value test in the proposed suite** — would have caught the AI tab crash AND would catch any future render-time regression.
 
-3. **`tests/appActivityDigest.live-shape.test.ts`** — load a snapshot of the user's anonymized live DB (committed as `tests/fixtures/live-snapshot.sql.gz`), run `getTimelineDayProjection` for a known date, run `computeAppActivityDigest`, assert: no non-browser app row has a `topBlockLabel` whose source is a browser-only page artifact. This would have caught the porno-title-on-VS-Code bug.
+3. **`tests/appActivityDigest.live-shape.test.ts`** — load a snapshot of the user's anonymized live DB (committed as `tests/fixtures/live-snapshot.sql.gz`), run `getTimelineDayProjection` for a known date, run `computeAppActivityDigest`, assert: no non-browser app row has a `topBlockLabel` whose source is a browser-only page artifact. This would have caught the excluded-title-on-VS-Code bug.
 
 4. **`tests/blockLabel.contract.test.ts`** — for each combination of `(dominant_category, top_artifact_type)`, assert the chosen label is "category-coherent" (development blocks prefer file-shaped artifacts, browsing blocks prefer page-shaped, etc.). Drives the `preferredArtifactLabel` rewrite.
 
@@ -126,7 +126,7 @@ From Agent 4, ordered by ROI:
 
 ### Roadmap (ordered, opinionated)
 
-1. **Site allow/deny list at L3 read.** New table `domain_classification (domain TEXT PRIMARY KEY, attention_class TEXT, hidden INTEGER)`. Three classes: `tracked`, `background_noise`, `hidden`. `hidden` domains are dropped from `website_visits` reads in the digest, the Timeline narrative, and the AI tool output. Default seed list bundles obvious adult/social/streaming. Settings UI: domain → toggle. **This is what closes the porno-title problem at the *user-control* layer, after the architectural fix at §2 closes it at the data layer.** Effort: 6–10 hr.
+1. **Site allow/deny list at L3 read.** New table `domain_classification (domain TEXT PRIMARY KEY, attention_class TEXT, hidden INTEGER)`. Three classes: `tracked`, `background_noise`, `hidden`. `hidden` domains are dropped from `website_visits` reads in the digest, the Timeline narrative, and the AI tool output. Default seed list bundles obvious adult/social/streaming. Settings UI: domain → toggle. **This is what closes the excluded-title problem at the *user-control* layer, after the architectural fix at §2 closes it at the data layer.** Effort: 6–10 hr.
 
 2. **Per-app title extractors for the top 4 apps** (VS Code/Cursor, Ghostty/Warp, Slack desktop, Notion desktop). Extends the model already in [src/main/lib/windowTitleFilenames.ts](src/main/lib/windowTitleFilenames.ts). Outputs structured `{ project, file, channel, document }` fields. Stored alongside the raw title. Effort: 1–2 days. **Closes ~70% of "VS Code was open but I have no idea what for."**
 
@@ -207,9 +207,9 @@ Numbered, ordered by "what closes the most user-visible pain per hour spent." Ea
 
 ### Phase A — stop the bleeding (immediate; ~1 day total)
 
-1. **Patch the digest's block-label propagation** to respect label provenance (`label_source === 'artifact'` → owner-only). Closes the porno-title symptom on the Apps tab for *new* derivations. (~1 hr.)
+1. **Patch the digest's block-label propagation** to respect label provenance (`label_source === 'artifact'` → owner-only). Closes the excluded-title-title symptom on the Apps tab for *new* derivations. (~1 hr.)
 2. **Add ESLint `react-hooks/rules-of-hooks` rule** + wire to CI. Prevents the next AI-tab-crash class of bug. (~1 hr.)
-3. **Force-invalidate the `apps` and `timeline` projection scopes once** so the porno-titled blocks re-derive with the patched labeler. (~30 min.)
+3. **Force-invalidate the `apps` and `timeline` projection scopes once** so the excluded-titled blocks re-derive with the patched labeler. (~30 min.)
 4. **Sanitize `block.label.narrative` at render time** in Timeline detail panel. Closes the OAuth-URL-in-narrative leak for already-persisted narratives. (~30 min.)
 
 ### Phase B — restructure the labeler (1–2 days)
@@ -229,7 +229,7 @@ Numbered, ordered by "what closes the most user-visible pain per hour spent." Ea
 11. **`tests/smoke.electron.test.ts`** with Playwright Electron — the single test that would have caught the AI hooks crash.
 12. **`tests/aiCompose.hooks.test.ts`** — React Testing Library + jsdom for hook-order regressions.
 13. **`tests/fixtures/live-snapshot.sql.gz`** — one-time anonymized export from the live DB.
-14. **`tests/integration.real-db.test.ts`** — runs the digest + Apps IPC against the live snapshot, asserts no porno-style cross-contamination.
+14. **`tests/integration.real-db.test.ts`** — runs the digest + Apps IPC against the live snapshot, asserts no excluded-title cross-contamination.
 15. **Delete the tautological pure-regex tests** from `aiSanitize.test.ts`; keep the integration version.
 
 ### Phase E — capture richness (1–2 weeks, post-rescue)

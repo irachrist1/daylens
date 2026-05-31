@@ -13,25 +13,17 @@ import {
 // removed). Tests are statements of user-observable invariants, not
 // statements about the regex corpus.
 
-test('exact-host adult sites are policy=adult', () => {
-  assert.equal(policyForHost('pornhub.com'), 'adult')
-  assert.equal(policyForHost('www.pornhub.com'), 'adult')
-  assert.equal(policyForHost('xvideos.com'), 'adult')
-})
-
-test('subdomain adult sites are policy=adult', () => {
-  assert.equal(policyForHost('de.pornhub.com'), 'adult')
-  assert.equal(policyForHost('m.xvideos.com'), 'adult')
-})
-
 test('adult TLDs hit the suffix rule', () => {
   assert.equal(policyForHost('something.xxx'), 'adult')
   assert.equal(policyForHost('a.b.porn'), 'adult')
+  assert.equal(policyForHost('example.adult'), 'adult')
+  assert.equal(policyForHost('example.sex'), 'adult')
 })
 
 test('adult stem patterns match anchored to dot/dash', () => {
   assert.equal(policyForHost('free-porn-tube.com'), 'adult')
   assert.equal(policyForHost('nsfw-archive.com'), 'adult')
+  assert.equal(policyForHost('some-hentai-site.com'), 'adult')
 })
 
 test('innocent hosts containing adult substrings are NOT flagged', () => {
@@ -62,7 +54,7 @@ test('null / empty / non-string hosts return null safely', () => {
 })
 
 test('isHostBlockedForLabel is strict-adult-only', () => {
-  assert.equal(isHostBlockedForLabel('pornhub.com'), true)
+  assert.equal(isHostBlockedForLabel('example.adult'), true)
   // Social feeds can still label a browsing block — they're suppressed in
   // the apps rail but not in block labels (where "Twitter" is at least
   // accurate even if low-signal).
@@ -71,19 +63,19 @@ test('isHostBlockedForLabel is strict-adult-only', () => {
 })
 
 test('isHostBlockedForAppsRail covers adult + social + entertainment', () => {
-  assert.equal(isHostBlockedForAppsRail('pornhub.com'), true)
+  assert.equal(isHostBlockedForAppsRail('example.adult'), true)
   assert.equal(isHostBlockedForAppsRail('twitter.com'), true)
   assert.equal(isHostBlockedForAppsRail('notion.so'), false)
 })
 
 test('isHostFilteredFromArtifacts is adult-only (source-side gate)', () => {
-  assert.equal(isHostFilteredFromArtifacts('pornhub.com'), true)
+  assert.equal(isHostFilteredFromArtifacts('example.adult'), true)
   // Twitter visits still produce artifacts; they just don't surface in apps rail.
   assert.equal(isHostFilteredFromArtifacts('twitter.com'), false)
 })
 
 test('isAdultHost helper agrees with policy lookup', () => {
-  assert.equal(isAdultHost('pornhub.com'), true)
+  assert.equal(isAdultHost('example.adult'), true)
   assert.equal(isAdultHost('twitter.com'), false)
   assert.equal(isAdultHost(null), false)
 })

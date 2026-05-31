@@ -31,7 +31,7 @@ This also resolves the performance work: today should not be expensively rebuilt
 
 This is the core problem and the hardest. "Where does a block get to be a block" is the open question.
 
-- Now: `buildBlocksForSessions` (workBlocks.ts) splits on time gaps and app switches. That is what shreds the day. Real example from 2026-05-30: one video activity became three blocks ("Video consumption and quick research," "Video streaming and adult content," "Video streaming and research"); one architecture-review thread became four ("Codebase architecture review," "Engineering skills reference," "Safari browsing," and a live block).
+- Now: `buildBlocksForSessions` (workBlocks.ts) splits on time gaps and app switches. That is what shreds the day. Real example from 2026-05-30: one video activity became three blocks ("Video consumption and quick research," "Video streaming," "Video streaming and research"); one architecture-review thread became four ("Codebase architecture review," "Engineering skills reference," "Safari browsing," and a live block).
 - Target: cluster the day's segments into intents. Merge adjacent and nearby segments that share dominant category + entity + artifacts, absorbing sub-threshold interruptions. A hard boundary is forced only by a real gap.
 - This is **full-day clustering, not a streaming gap-splitter**. Hence evening.
 - Data: available now (`activity_segments` with class/attention, categories, entities, artifacts). No capture gap.
@@ -52,7 +52,7 @@ This is the core problem and the hardest. "Where does a block get to be a block"
 ## Secondary issues visible in the 2026-05-30 screenshots
 
 - Focus/Drift scoring is the static-category problem (`lib/focusScore.ts`). It should follow attention and learned patterns, not a fixed category list. Tracked as P2 in PERF-COHERENCE-MAP.
-- Dignity/tone. "Video streaming and adult content … pornography 19m" was headlined in the narrative and in "What Mattered." A partner is discreet. Sensitive categories should be neutralized in labels, kept out of top billing, still counted in totals.
+- Dignity/tone. A sensitive-category block was headlined verbatim in the narrative and in "What Mattered." A partner is discreet. Sensitive or user-excluded categories should be neutralized in labels, kept out of top billing, still counted in totals.
 
 ## We are not starting from zero
 
@@ -77,7 +77,7 @@ Already built and reusable: the raw attention capture (`raw_window_sessions`), t
 - **Hard boundary = idle/off ≥ 15 min.** A new block starts only after the machine was off or the user was idle/away for 15+ minutes. Everything in between is merged by intent. Short interruptions are absorbed.
 - **Distant same-intent spans stay separate, named consistently.** YouTube in the morning and again at night are two blocks at their real times, both named "Watching YouTube." The timeline stays a truthful chronological calendar; near spans (within the 15-min rule) merge, distant ones do not.
 - **Sensitive content is a user-controlled privacy feature, not a label tweak.** This is its own track:
-  - The user defines a private list (sites/apps, e.g. pornhub.com).
+  - The user defines a private exclusion list (sites/apps they don't want tracked or surfaced).
   - Two modes per entry: (a) **never tracked** — excluded from capture entirely, or (b) **vault** — tracked but locked behind a password; only the unlocked user sees time spent there.
   - Default-private categories (adult) should prompt the user to choose a mode rather than silently logging and headlining them.
   - Implications: capture-layer exclusion (mode a), an encrypted/locked store + auth gate for the vault (mode b), and settings UI to manage the list. Totals: a vault entry counts in private totals only; a never-tracked entry never exists. Spec this separately before building; it touches capture, storage, and settings.

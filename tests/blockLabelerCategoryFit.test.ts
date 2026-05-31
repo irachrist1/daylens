@@ -1,7 +1,8 @@
 // Regression test for the v1 ship-blocker: a development-dominant block
-// was being labeled with a pornhub page title because preferredArtifactLabel
-// took pageRefs[0] regardless of dominantCategory. The labeler is now
-// category-aware and the domain policy filters adult hosts at source.
+// was being labeled with an excluded (adult-category) page title because
+// preferredArtifactLabel took pageRefs[0] regardless of dominantCategory.
+// The labeler is now category-aware and the domain policy filters adult
+// hosts at source.
 //
 // Layered through the real production paths:
 //   - real schema (SCHEMA_SQL + ensureSearchSchema)
@@ -10,7 +11,7 @@
 //   - real labeler (finalizedLabelForBlock → preferredArtifactLabel)
 //
 // What we assert is the user-observable invariant: a development block
-// must NOT carry a porn/social/entertainment page title as its label,
+// must NOT carry an excluded/social/entertainment page title as its label,
 // even when such a visit was captured during the block's time window.
 
 import test from 'node:test'
@@ -25,11 +26,11 @@ function ms(date: string, hour: number, minute = 0): number {
   return new Date(y, m - 1, d, hour, minute, 0, 0).getTime()
 }
 
-function seedDevSessionWithStrayPornVisit(db: Database.Database, date: string) {
-  // 60 min Cursor (development) block; user briefly opens Dia and visits
-  // pornhub for 90 seconds in the middle. Pre-fix, this 90s page title
-  // would beat the 58-min dev label because preferredArtifactLabel took
-  // pageRefs[0] unconditionally.
+function seedDevSessionWithStrayExcludedVisit(db: Database.Database, date: string) {
+  // 60 min Cursor (development) block; user briefly opens Dia and visits an
+  // excluded (adult-category) host for 90 seconds in the middle. Pre-fix,
+  // this 90s page title would beat the 58-min dev label because
+  // preferredArtifactLabel took pageRefs[0] unconditionally.
   const blockStart = ms(date, 9, 0)
   const cursorEnd = ms(date, 10, 0)
 
@@ -48,13 +49,15 @@ function seedDevSessionWithStrayPornVisit(db: Database.Database, date: string) {
     'development', 1, 'insightsQueryRouter.ts — daylens', 'Cursor',
   )
 
-  // Stray 90s Dia browser session in the middle.
+  // Stray 90s Dia browser session in the middle, on an excluded (adult-
+  // category) host. `private-video.adult` classifies as adult via the
+  // domain policy's `.adult` TLD suffix rule — no real site is referenced.
   const diaStart = ms(date, 9, 30)
   const diaEnd = diaStart + 90 * 1000
   insertSession.run(
     'company.thebrowser.dia', 'Dia',
     diaStart, diaEnd, 90,
-    'browsing', 0, 'Pornhub - some title', 'Dia',
+    'browsing', 0, 'Some Video Title — private-video.adult', 'Dia',
   )
 
   // Website visit row matching the stray browser session.
@@ -66,10 +69,10 @@ function seedDevSessionWithStrayPornVisit(db: Database.Database, date: string) {
   `).run(
     'company.thebrowser.dia', 'dia',
     diaStart, 90,
-    'https://www.pornhub.com/view_video.php?viewkey=abc123',
-    'https://www.pornhub.com/view_video.php',
-    'pornhub.com',
-    '[redacted example page]',
+    'https://www.private-video.adult/view_video.php?viewkey=abc123',
+    'https://www.private-video.adult/view_video.php',
+    'private-video.adult',
+    'Some Video Title — private-video.adult',
   )
 }
 
@@ -83,7 +86,7 @@ function setupDb(): Database.Database {
 test('development block does NOT inherit adult-host page title as label', () => {
   const db = setupDb()
   const date = '2026-05-16'
-  seedDevSessionWithStrayPornVisit(db, date)
+  seedDevSessionWithStrayExcludedVisit(db, date)
 
   const payload = getTimelineDayPayload(db, date)
   assert.ok(payload.blocks.length > 0, 'expected at least one block')
@@ -92,19 +95,19 @@ test('development block does NOT inherit adult-host page title as label', () => 
   assert.ok(devBlock, 'expected a development-dominant block')
 
   const label = devBlock.label.current.toLowerCase()
-  assert.ok(!label.includes('pornhub'), `dev block label leaked adult title: ${devBlock.label.current}`)
-  assert.ok(!label.includes('cutie'), `dev block label leaked adult title: ${devBlock.label.current}`)
+  assert.ok(!label.includes('.adult'), `dev block label leaked excluded title: ${devBlock.label.current}`)
+  assert.ok(!label.includes('private-video'), `dev block label leaked excluded title: ${devBlock.label.current}`)
 
-  // The adult visit must not have produced any artifact at all —
+  // The excluded visit must not have produced any artifact at all —
   // buildPageCandidates filters at source.
-  const pornArtifact = devBlock.topArtifacts.find((artifact) =>
-    (artifact.host ?? '').includes('pornhub') || artifact.displayTitle.toLowerCase().includes('pornhub'),
+  const excludedArtifact = devBlock.topArtifacts.find((artifact) =>
+    (artifact.host ?? '').includes('.adult') || artifact.displayTitle.toLowerCase().includes('.adult'),
   )
-  assert.equal(pornArtifact, undefined, 'adult host page must not appear in topArtifacts')
+  assert.equal(excludedArtifact, undefined, 'excluded host page must not appear in topArtifacts')
 
-  // No pageRef from the adult host either.
-  const pornPage = devBlock.pageRefs.find((page) => page.domain?.includes('pornhub'))
-  assert.equal(pornPage, undefined, 'adult host must not appear in pageRefs')
+  // No pageRef from the excluded host either.
+  const excludedPage = devBlock.pageRefs.find((page) => page.domain?.includes('.adult'))
+  assert.equal(excludedPage, undefined, 'excluded host must not appear in pageRefs')
 
   db.close()
 })

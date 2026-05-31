@@ -55,28 +55,30 @@ const resolve = (bundleId: string): { canonicalAppId: string | null } => {
   return { canonicalAppId: null }
 }
 
-test('legacy block label sourced from an adult-host page does not propagate to any app', () => {
+test('legacy block label sourced from an excluded-host page does not propagate to any app', () => {
   // Simulates a persisted row from before the domain policy shipped:
-  // label.current matches a pornhub page artifact title that co-occurred
-  // in this block. The digest must refuse to attach that label to the
-  // co-occurring VS Code app even though it nominally belongs to the block.
-  const pornPage: PageRef = {
-    id: 'page-porn',
+  // label.current matches an excluded (sensitive-category) page artifact
+  // title that co-occurred in this block. The digest must refuse to attach
+  // that label to the co-occurring VS Code app even though it nominally
+  // belongs to the block. `excluded-nsfw.example` classifies as an excluded
+  // host via the domain policy's stem patterns.
+  const excludedPage: PageRef = {
+    id: 'page-excluded',
     artifactType: 'page',
-    displayTitle: '[redacted example page]',
-    pageTitle: '[redacted example page]',
-    domain: 'pornhub.com',
-    host: 'pornhub.com',
+    displayTitle: 'Some Video Title — excluded-nsfw.example',
+    pageTitle: 'Some Video Title — excluded-nsfw.example',
+    domain: 'excluded-nsfw.example',
+    host: 'excluded-nsfw.example',
     totalSeconds: 90,
     confidence: 0.5,
     canonicalBrowserId: 'dia',
     browserBundleId: 'company.thebrowser.dia',
-    openTarget: { kind: 'external_url', value: 'https://pornhub.com/' },
+    openTarget: { kind: 'external_url', value: 'https://excluded-nsfw.example/' },
   } as PageRef
 
   const block = makeBlock({
     label: {
-      current: '[redacted example page]',
+      current: 'Some Video Title — excluded-nsfw.example',
       source: 'artifact',
       confidence: 0.88,
       narrative: null,
@@ -88,8 +90,8 @@ test('legacy block label sourced from an adult-host page does not propagate to a
       { bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', totalSeconds: 3600, sessionCount: 1, isBrowser: false },
       { bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'browsing', totalSeconds: 90, sessionCount: 1, isBrowser: true },
     ],
-    pageRefs: [pornPage],
-    topArtifacts: [pornPage],
+    pageRefs: [excludedPage],
+    topArtifacts: [excludedPage],
   })
 
   const digest = computeAppActivityDigest([block], resolve)
@@ -98,13 +100,13 @@ test('legacy block label sourced from an adult-host page does not propagate to a
 
   assert.ok(vscode, 'vscode row should exist')
   // The contaminated label must be cleared by labelLooksHostBlocked.
-  assert.equal(vscode!.topBlockLabel, null, 'adult-host-sourced label must not propagate to VS Code')
-  assert.equal(vscode!.topArtifactTitle, null, 'VS Code must not get the porn page as its artifact either')
+  assert.equal(vscode!.topBlockLabel, null, 'excluded-host-sourced label must not propagate to VS Code')
+  assert.equal(vscode!.topArtifactTitle, null, 'VS Code must not get the excluded page as its artifact either')
 
   // Dia row: the page IS owned by Dia, so it could in theory surface there,
-  // but isHostBlockedForAppsRail keeps adult hosts out of the apps view entirely.
+  // but isHostBlockedForAppsRail keeps excluded hosts out of the apps view entirely.
   assert.ok(dia, 'dia row should exist')
-  assert.equal(dia!.topArtifactTitle, null, 'adult host page must not headline Dia in the apps rail')
+  assert.equal(dia!.topArtifactTitle, null, 'excluded host page must not headline Dia in the apps rail')
 })
 
 test('social-feed page does not headline a co-occurring non-browser app', () => {
