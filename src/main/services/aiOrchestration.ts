@@ -192,6 +192,18 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
+  // S1: interpret a natural-language search query into FTS terms + a one-line
+  // intent. Uses the chat provider (so search rides the same key the user
+  // chose), the cheapest model tier, and a single short call (R1 throttled).
+  search_intent: {
+    jobType: 'search_intent',
+    screen: 'ai_chat',
+    foreground: true,
+    timeoutMs: 8_000,
+    providerPreferenceKey: 'aiChatProvider',
+    cachePolicy: 'off',
+    modelStrategy: 'economy',
+  },
 }
 
 function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {

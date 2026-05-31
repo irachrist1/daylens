@@ -108,6 +108,15 @@ export type DaylensSearchResult =
       excerpt: string
     }
 
+// S1: natural-language search response — ranked results plus the interpreted
+// intent + the terms that produced them (the "why it matched" signal).
+export interface DaylensNaturalSearchResult {
+  results: DaylensSearchResult[]
+  intent: string | null
+  terms: string[]
+  usedProvider: boolean
+}
+
 // Typed IPC surface exposed to the renderer — NO Node/electron APIs leak through
 const api = {
   // Window controls — used by the custom TitleBar (needed on Windows frameless)
@@ -211,6 +220,8 @@ const api = {
       ipcRenderer.invoke('search:browser', { query, opts }),
     artifacts: (query: string, opts?: SearchOptions): Promise<Extract<DaylensSearchResult, { type: 'artifact' }>[]> =>
       ipcRenderer.invoke('search:artifacts', { query, opts }),
+    natural: (query: string, opts?: SearchOptions): Promise<DaylensNaturalSearchResult> =>
+      ipcRenderer.invoke('search:natural', { query, opts }),
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.SETTINGS.GET),

@@ -71,6 +71,10 @@ export const HistorySearch = memo(function HistorySearch({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [focused, setFocused] = useState(false)
+  // S1: when a query is interpreted by the provider, surface the intent + the
+  // terms it searched as the "why these matched" signal.
+  const [intent, setIntent] = useState<string | null>(null)
+  const [matchTerms, setMatchTerms] = useState<string[]>([])
 
   useEffect(() => {
     const trimmed = query.trim()
@@ -78,15 +82,34 @@ export const HistorySearch = memo(function HistorySearch({
       setResults([])
       setLoading(false)
       setError(null)
+      setIntent(null)
+      setMatchTerms([])
       return
     }
+
+    // S1: short/literal queries stay on the instant keyword path (no provider).
+    // Longer or question-shaped queries route through natural-language search.
+    const tokenCount = trimmed.split(/\s+/).filter(Boolean).length
+    const isNatural = tokenCount >= 4 || trimmed.includes('?')
 
     let cancelled = false
     setLoading(true)
     setError(null)
     const timer = window.setTimeout(() => {
-      ipc.search.all(trimmed, { limit: 30 })
-        .then((nextResults) => { if (!cancelled) setResults(nextResults) })
+      const run = isNatural
+        ? ipc.search.natural(trimmed, { limit: 30 }).then((response) => {
+            if (cancelled) return
+            setResults(response.results)
+            setIntent(response.intent)
+            setMatchTerms(response.terms)
+          })
+        : ipc.search.all(trimmed, { limit: 30 }).then((nextResults) => {
+            if (cancelled) return
+            setResults(nextResults)
+            setIntent(null)
+            setMatchTerms([])
+          })
+      run
         .catch((searchError) => {
           if (!cancelled) {
             setResults([])
@@ -94,7 +117,7 @@ export const HistorySearch = memo(function HistorySearch({
           }
         })
         .finally(() => { if (!cancelled) setLoading(false) })
-    }, 180)
+    }, isNatural ? 420 : 180)
 
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [query])
@@ -125,7 +148,7 @@ export const HistorySearch = memo(function HistorySearch({
           // Delay blur so a click on a result still registers.
           onBlur={() => window.setTimeout(() => setFocused(false), 120)}
           onKeyDown={(event) => { if (event.key === 'Escape') { setQuery(''); event.currentTarget.blur() } }}
-          placeholder="Search your history…"
+          placeholder="Search history — or ask in plain language…"
           aria-label="Search local Daylens history"
           style={{
             flex: 1,
@@ -160,6 +183,22 @@ export const HistorySearch = memo(function HistorySearch({
             display: 'grid',
             gap: 6,
           }}>
+            {(intent || matchTerms.length > 0) && (
+              <div style={{ padding: '2px 8px 4px', display: 'grid', gap: 6 }}>
+                {intent && (
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                    Interpreted as <span style={{ color: 'var(--color-text-secondary)' }}>{intent}</span>
+                  </div>
+                )}
+                {matchTerms.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {matchTerms.map((term) => (
+                      <span key={term} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 999, background: 'var(--color-surface-high)', color: 'var(--color-text-secondary)' }}>{term}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {error && (
               <div style={{ fontSize: 12.5, color: '#f87171', lineHeight: 1.5, padding: '6px 8px' }}>
                 Search failed: {error}

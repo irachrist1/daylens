@@ -5365,6 +5365,44 @@ function friendlyChatError(err: unknown, label?: string): Error {
   return friendlyProviderError(err, resolvedLabel)
 }
 
+// S1: interpret a natural-language search query into FTS keywords + a one-line
+// intent, using the chat provider (cheapest tier, one throttled call). Returns
+// null when no provider is configured or the call/parse fails, so search can
+// fall back to deterministic term extraction and never hard-fails offline.
+export async function interpretSearchIntent(query: string): Promise<{ terms: string[]; intent: string | null } | null> {
+  const trimmed = query.trim()
+  if (!trimmed) return null
+  const systemPrompt = [
+    "You turn a user's natural-language search into keywords for a LOCAL full-text search over their tracked activity (app + window titles, web page titles and domains, timeline block labels, saved AI artifacts).",
+    'Return STRICT JSON only — no prose, no code fence:',
+    '{"terms":["..."],"intent":"<one short clause>"}',
+    'Rules:',
+    '- terms: 1-6 short lowercase keywords/phrases — the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
+    '- Never invent specific names the query does not imply.',
+    '- intent: a short human clause like "the autoencoders project" or "anything about the hackathon".',
+  ].join('\n')
+  try {
+    const { text } = await executeTextAIJob(
+      { jobType: 'search_intent', screen: 'ai_chat', triggerSource: 'user', systemPrompt, userMessage: trimmed },
+      sendWithProvider,
+    )
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    const parsed = JSON.parse(match[0]) as { terms?: unknown; intent?: unknown }
+    const terms = Array.isArray(parsed.terms)
+      ? parsed.terms
+          .filter((term): term is string => typeof term === 'string' && term.trim().length > 0)
+          .map((term) => term.trim().toLowerCase())
+          .slice(0, 6)
+      : []
+    if (terms.length === 0) return null
+    const intent = typeof parsed.intent === 'string' && parsed.intent.trim() ? parsed.intent.trim() : null
+    return { terms, intent }
+  } catch {
+    return null
+  }
+}
+
 export async function sendMessage(payload: AIChatSendRequest, options: SendMessageOptions = {}): Promise<AIChatTurnResult> {
   const recorder = maybeStartTrace({
     scenarioId: options.traceScenarioId ?? null,

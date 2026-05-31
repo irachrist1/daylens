@@ -8,6 +8,7 @@ import {
   searchSessions,
   type SearchOptions,
 } from '../db/queries'
+import { searchNatural } from '../services/naturalSearch'
 
 const SEARCH_CHANNELS = {
   ALL: 'search:all',
@@ -15,6 +16,7 @@ const SEARCH_CHANNELS = {
   BLOCKS: 'search:blocks',
   BROWSER: 'search:browser',
   ARTIFACTS: 'search:artifacts',
+  NATURAL: 'search:natural',
 } as const
 
 function normalizePayload(payload: { query?: string; opts?: SearchOptions } | string): {
@@ -54,5 +56,11 @@ export function registerSearchHandlers(): void {
   ipcMain.handle(SEARCH_CHANNELS.ARTIFACTS, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
     const { query, opts } = normalizePayload(payload)
     return searchArtifacts(getDb(), query, opts)
+  })
+
+  // S1: natural-language search (provider-interpreted terms over FTS).
+  ipcMain.handle(SEARCH_CHANNELS.NATURAL, (_event, payload: { query?: string; opts?: SearchOptions } | string) => {
+    const { query, opts } = normalizePayload(payload)
+    return searchNatural(query, opts)
   })
 }

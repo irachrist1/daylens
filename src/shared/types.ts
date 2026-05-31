@@ -821,6 +821,7 @@ export type AIJobType =
   | 'attribution_assist'
   | 'wrapped_narrative'
   | 'wrapped_period_narrative'
+  | 'search_intent'
 
 export interface AIWrappedNarrative {
   /** 1-sentence opening, used as the morning/evening lead. */
