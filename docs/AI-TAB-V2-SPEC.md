@@ -112,8 +112,13 @@ many surface bugs at once.
   works, then fails, then works again, unpredictably.
 - **Evidence:** [Img 6] ("Summarize my last 7 days by project" → PROVIDER ERROR),
   [Img 11] (follow-up failed), [Img 19] ("what's trending… analyse my entire
-  week?" → rate limit again). The error literally states the cause: *a single
-  answer makes several requests.*
+  week?" → rate limit again), and the worst case [Img 31] — the **very first
+  message of a brand-new chat** ("in detail tell me everything i did on this
+  laptop") fails immediately with the rate-limit error, before the user has seen
+  a single working answer. Broad "tell me everything" prompts fan out hardest
+  (more tool calls to gather full-day/-week data), so the heaviest queries are the
+  most likely to fail, including on a cold first impression. The error literally
+  states the cause: *a single answer makes several requests.*
 - **Root cause:** Per-turn call fan-out (Theme A). `MAX_TOOL_CALLS = 7`
   (`aiService.ts:1114`) + `generateSuggestedFollowUps` (`:3171`) + title gen
   (`maybeRenameWeakThread`, `:3332/:5414`). Free-tier Gemini RPM is small.
@@ -135,6 +140,9 @@ many surface bugs at once.
   - [ ] Instrument and log calls-per-turn; median ≤ 2 for question-type prompts.
   - [ ] A transient `429` is retried automatically and the user never sees it
         unless all retries fail.
+  - [ ] The first message of a brand-new chat — including a broad "tell me
+        everything I did" prompt — returns a real answer, never a rate-limit error
+        as the user's first experience.
 - **Pointers:** `aiService.ts` (`MAX_TOOL_CALLS`, `generateSuggestedFollowUps`,
   `maybeRenameWeakThread`, `sendMessage` ~5400+), `aiOrchestration.ts`
   (`isQuotaOrAuthError` `:281`, add a throttle/queue here). Cross-ref
@@ -583,6 +591,10 @@ first and ship a 1.0.42 that is *reliable* before adding surface area.
     exceeded"; a private page surfaced in a label; focus score 43. → T1, T3, T4, R4.
 30. Timeline "Regenerate label" → "ai:regenerate-block-label … Gemini request
     failed". → T2, R4.
+31. **First message of a brand-new chat** ("in detail tell me everything i did on
+    this laptop") → immediate PROVIDER ERROR rate-limit, before any working answer.
+    Worst-case cold first impression; broad "tell me everything" prompts fan out
+    hardest. → R1 (and R4 for the raw error text).
 
 ## Appendix B — Key files
 
