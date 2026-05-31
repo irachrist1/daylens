@@ -12,7 +12,7 @@ import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
 import { IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
-import type { ThreadMessage } from './types'
+import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
 const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
 
@@ -58,6 +58,7 @@ export default function AIWorkspace() {
     handlePromptChipClick,
     switchProviderAndRetry,
     alternateProviders,
+    transformAnswer,
     analyticsContext,
   } = chat
 
@@ -145,9 +146,13 @@ export default function AIWorkspace() {
       })
       list.push({ id: 'good', label: 'Good Response', accelerator: accel('=', true), perform: () => handleRate(target.message, target.message.rating === 'up' ? null : 'up') })
       list.push({ id: 'bad', label: 'Bad Response', accelerator: accel('-', true), perform: () => handleRate(target.message, target.message.rating === 'down' ? null : 'down') })
+      // D6: transforms in the palette as well as the inline "Turn into…" menu.
+      for (const transform of ANSWER_TRANSFORMS) {
+        list.push({ id: `transform-${transform.kind}`, label: transform.label, hint: 'Transform the answer', perform: () => transformAnswer(transform.kind) })
+      }
     }
     return list
-  }, [latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, copyChat])
+  }, [latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, copyChat, transformAnswer])
 
   // Read the latest action context from a ref so the global key listener binds
   // once instead of rebinding every render.
@@ -330,6 +335,7 @@ export default function AIWorkspace() {
                 onRetry={handleRetry}
                 onErrorRetry={handleErrorRetry}
                 onSwitchProvider={switchProviderAndRetry}
+                onTransform={transformAnswer}
                 onMessageAction={handleMessageAction}
                 onFollowUpClick={onFollowUpClick}
                 scrollToBottom={scrollToBottom}

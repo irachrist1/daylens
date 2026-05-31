@@ -22,10 +22,20 @@ import {
   threadMessagesFromHistory,
   type ActionFeedbackEntry,
   type AltProvider,
+  type AnswerTransform,
   type MessageAction,
   type MessageActionStateEntry,
   type ThreadMessage,
 } from './types'
+
+// D6: each transform is a canned instruction the model applies to its previous
+// answer (thread memory holds it), so transforms ride the normal send path.
+const TRANSFORM_PROMPTS: Record<AnswerTransform, string> = {
+  shorter: 'Rewrite your previous answer as a shorter, tighter version — keep the key facts and numbers, drop the preamble.',
+  checklist: 'Reformat your previous answer as a concise checklist of action items, one per line, no preamble.',
+  bullets: 'Reformat your previous answer as a tight bulleted summary, leading with the most important point.',
+  report: 'Expand your previous answer into a short shareable report: a heading, a few labelled sections, and the supporting numbers. No filler.',
+}
 
 // Providers we can offer as a one-tap switch on a hard wall. CLI providers are
 // only surfaced when actually detected on the machine (see the load probe).
@@ -674,6 +684,17 @@ export function useAIChat() {
     void handleSend(prompt, { trigger: 'suggested' })
   }, [hasApiKey, analyticsContext, handleSend])
 
+  // D6: re-prompt the model to transform its previous answer (shorter,
+  // checklist, bullets, report). No new main-process call shape — it is a
+  // normal turn that leans on thread memory.
+  const transformAnswer = useCallback((kind: AnswerTransform) => {
+    if (!hasApiKey || loadingRef.current) return
+    const prompt = TRANSFORM_PROMPTS[kind]
+    if (!prompt) return
+    track(ANALYTICS_EVENT.AI_OUTPUT_REQUESTED, analyticsContext({ export_type: kind, trigger: 'transform' }))
+    void handleSend(prompt, { trigger: 'suggested' })
+  }, [hasApiKey, analyticsContext, handleSend])
+
   return {
     // state
     messages,
@@ -712,6 +733,7 @@ export function useAIChat() {
     handlePromptChipClick,
     switchProviderAndRetry,
     alternateProviders,
+    transformAnswer,
     analyticsContext,
   }
 }

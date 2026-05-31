@@ -27,6 +27,17 @@ export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
 
 export type MessageAction = 'copy' | 'up' | 'down' | 'retry'
 
+// D6: post-answer transforms. Implemented as canned re-prompts through the
+// normal send pipeline (thread memory already holds the answer being
+// transformed), so there is no new main-process surface.
+export type AnswerTransform = 'shorter' | 'checklist' | 'bullets' | 'report'
+export const ANSWER_TRANSFORMS: { kind: AnswerTransform; label: string }[] = [
+  { kind: 'shorter', label: 'Make it shorter' },
+  { kind: 'checklist', label: 'Turn into a checklist' },
+  { kind: 'bullets', label: 'Turn into bullets' },
+  { kind: 'report', label: 'Turn into a report' },
+]
+
 export interface ActionFeedbackEntry {
   pulseNonce: number
   success: boolean

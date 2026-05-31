@@ -16,7 +16,9 @@ import {
 import {
   actionFeedbackKey,
   messageActionKey,
+  ANSWER_TRANSFORMS,
   type ActionFeedbackEntry,
+  type AnswerTransform,
   type MessageActionStateEntry,
   type ThreadMessage,
 } from './types'
@@ -74,9 +76,50 @@ export interface MessageListProps {
   onRetry: (index: number, message: ThreadMessage) => void
   onErrorRetry: (message: ThreadMessage) => void
   onSwitchProvider: (message: ThreadMessage, provider: AIProviderMode) => void
+  onTransform: (kind: AnswerTransform) => void
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
+}
+
+// D6: "Turn into…" — post-answer transforms on the latest answer (Raycast Img
+// 21/22). Each runs a canned re-prompt; the menu is a small hover-light popover.
+function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Turn this answer into…"
+        style={{ height: 30, padding: '0 10px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: open ? 'var(--color-accent-dim)' : 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+      >
+        Turn into…
+      </button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 19 }} onClick={() => setOpen(false)} />
+          <div role="menu" style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 20, minWidth: 180, background: 'var(--color-surface)', border: '1px solid var(--color-border-ghost)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.16)', padding: 5 }}>
+            {ANSWER_TRANSFORMS.map((transform) => (
+              <button
+                key={transform.kind}
+                role="menuitem"
+                type="button"
+                onClick={() => { setOpen(false); onTransform(transform.kind) }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', border: 'none', borderRadius: 6, background: 'transparent', color: 'var(--color-text-primary)', fontSize: 12.5, cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-muted)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+              >
+                {transform.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // R4: branded header label per error class — never a raw provider/channel string.
@@ -100,6 +143,7 @@ function MessageListImpl({
   onRetry,
   onErrorRetry,
   onSwitchProvider,
+  onTransform,
   onMessageAction,
   onFollowUpClick,
   scrollToBottom,
@@ -300,6 +344,7 @@ function MessageListImpl({
                         <IconRetry />
                       </IconActionButton>
                     )}
+                    {message.id === latestCompletedAssistantId && <TransformMenu onTransform={onTransform} />}
                   </div>
                 </>
               )}
