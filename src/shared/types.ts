@@ -1002,6 +1002,13 @@ export interface AppSettings {
   mcpServerEnabled?: boolean
   workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
   useRemoteAI?: boolean   // legacy setting; remote workspace AI is disabled in local-only builds.
+  // T3 — Tracking Controls (opt-in, OFF by default). When disabled and not
+  // paused, capture is unchanged. See src/shared/trackingControls.ts.
+  trackingControlsEnabled?: boolean
+  trackingExcludedApps?: string[]   // bundle ids and/or app names
+  trackingExcludedSites?: string[]  // hosts/domains
+  trackingSkipIncognito?: boolean   // effective only when controls enabled; defaults on
+  trackingPaused?: boolean          // ad-hoc pause; blocks capture regardless of the master switch
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1315,6 +1322,9 @@ export const IPC = {
     GET_PROCESS_METRICS: 'tracking:get-process-metrics',
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
+    // T3: delete already-captured history for an excluded app/site.
+    DELETE_APP_HISTORY: 'tracking:delete-app-history',
+    DELETE_SITE_HISTORY: 'tracking:delete-site-history',
   },
   APP: {
     RELAUNCH: 'app:relaunch',

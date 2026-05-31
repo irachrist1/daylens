@@ -40,19 +40,26 @@ looks like, and how to verify it.*
   errors. **M1** — model tier-fallback aligned to the offered catalog + dated
   review marker.
 
-**Deferred (out of scope for a reliability release — each needs its own PR):**
-- **D1** time-grouped sidebar, **D3** ⌘K action palette, **D4** per-chat
-  settings, **D5** `@`/`/` composer, **D6** response transforms — large UI work.
-- **S1** natural-language/semantic search — needs an embedding index + product
-  decisions.
-- **T3** tracking controls — **UNBLOCKED (owner decided 2026-05-31): build it,
-  opt-in, OFF by default; incognito-skip defaults ON once enabled.** See the T3
-  section for the full decision and acceptance criteria. Ready to build.
-- **Q6** answer-quality eval program — scaffolding only; running it bills the
-  live API.
-- **M1 (catalog refresh)** — confirming current GA model ids (e.g. Gemini 3.5)
-  needs live keys; only the code-consistency half is done here.
-- **C1** signing — tracked separately.
+**Shipped after the reliability pass (stacked PRs on `ai-tab-v2`):**
+- **#24** error classification (transient 429 vs hard wall) + one-tap switch-provider.
+- **#25 Q6** per-provider eval program. **#26 D1** time-grouped sidebar.
+  **#27 D3** ⌘K action palette. **#28 D6** response transforms. **#29 D4** per-chat
+  settings. **#30 D5** `@`/`/` composer. **#31 S1** natural-language search
+  (FTS-backed; embedding/vector index still deferred).
+- **#32 M1** — model catalog refreshed to verified GA ids (Gemini 3.5 Flash,
+  GPT-5.5, Opus 4.8); dead `gemini-3.1-flash-lite-preview` default replaced + migrated.
+- **T3** Tracking Controls — opt-in (off by default), pure capture-gate
+  (`src/shared/trackingControls.ts`) wired into the app + website capture paths;
+  per-app/per-site exclusions, incognito-skip (window-title heuristic), pause
+  toggle (Settings + tray), delete-from-history on exclude, onboarding opt-in.
+
+**Still deferred (each needs its own PR / a device step):**
+- **M1 live answer test** — per-provider answer quality needs API keys.
+- **S1** embedding/vector index. **D4** reasoning-effort. **D5** attachments/dictation.
+- **Q6** baseline scores (authorized live per-provider run). **C1** signing.
+- **T3 follow-ups:** structured incognito signal (vs the title heuristic) and a
+  query-time hide for surfaces beyond the timeline if delete-on-exclude proves
+  insufficient.
 
 > How to read this doc
 > - Each item has a stable **ID** (`R1`, `Q3`, `D4`, …). Assign agents by ID.

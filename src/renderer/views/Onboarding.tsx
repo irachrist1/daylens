@@ -102,6 +102,9 @@ export default function Onboarding({
   const [settings, setSettings] = useState(initialSettings)
   const [goals, setGoals] = useState<Set<string>>(new Set(initialSettings.userGoals))
   const [nameDraft, setNameDraft] = useState(initialSettings.userName)
+  // T3: opt-in to Tracking Controls during onboarding. Off by default —
+  // declining (the default) changes nothing about capture.
+  const [trackingOptIn, setTrackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
   const [defaultUserName, setDefaultUserName] = useState('')
   const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
   const [busy, setBusy] = useState(false)
@@ -331,6 +334,7 @@ export default function Onboarding({
         onboardingState: nextOnboardingState,
         userName: nameDraft.trim(),
         userGoals: Array.from(goals),
+        trackingControlsEnabled: trackingOptIn,
       })
       await ipc.app.completeOnboarding()
       track(ANALYTICS_EVENT.ONBOARDING_COMPLETED, {
@@ -572,6 +576,31 @@ export default function Onboarding({
                 )
               })}
             </div>
+            <button
+              type="button"
+              onClick={() => setTrackingOptIn((v) => !v)}
+              aria-pressed={trackingOptIn}
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10, textAlign: 'left',
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
+                border: `1px solid ${trackingOptIn ? 'rgba(90,179,255,0.45)' : 'rgba(173,198,255,0.18)'}`,
+                background: trackingOptIn ? 'rgba(90,179,255,0.10)' : 'rgba(255,255,255,0.02)',
+                color: 'inherit',
+              }}
+            >
+              <span style={{
+                flexShrink: 0, marginTop: 1, width: 18, height: 18, borderRadius: 5,
+                border: `1.5px solid ${trackingOptIn ? '#5ab3ff' : 'rgba(173,198,255,0.4)'}`,
+                background: trackingOptIn ? '#5ab3ff' : 'transparent',
+                display: 'grid', placeItems: 'center', color: '#07090f', fontSize: 12, fontWeight: 900,
+              }}>{trackingOptIn ? '✓' : ''}</span>
+              <span style={{ display: 'grid', gap: 2 }}>
+                <span style={{ fontSize: 13.5, fontWeight: 650 }}>Keep private apps and sites out of Daylens</span>
+                <span style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
+                  Optional. Lets you exclude specific apps and websites and skip incognito windows. You can add them now or later in Settings. Off skips nothing.
+                </span>
+              </span>
+            </button>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
                 {busy ? 'Opening Timeline…' : 'Open Daylens'}

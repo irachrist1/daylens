@@ -1,5 +1,6 @@
 import { BrowserWindow, Menu, Tray, app, nativeImage } from 'electron'
 import path from 'node:path'
+import { getSettings, setSettings } from './services/settings'
 
 let tray: Tray | null = null
 let trayError: string | null = null
@@ -59,6 +60,9 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
   const version = app.getVersion()
   const showLabel = visible ? 'Hide Daylens' : 'Open Daylens'
   const showAccelerator = process.platform === 'darwin' ? 'Cmd+Shift+D' : undefined
+  // T3: quick ad-hoc pause from the menu bar / tray (works regardless of the
+  // Tracking Controls master switch). The capture gate reads this on each poll.
+  const paused = getSettings().trackingPaused ?? false
 
   return Menu.buildFromTemplate([
     {
@@ -66,7 +70,7 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
       enabled: false,
     },
     {
-      label: `Tracking quietly · v${version}`,
+      label: paused ? `Tracking paused · v${version}` : `Tracking quietly · v${version}`,
       enabled: false,
     },
     { type: 'separator' },
@@ -79,6 +83,14 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
           return
         }
         controller.showMainWindow()
+      },
+    },
+    {
+      label: 'Pause tracking',
+      type: 'checkbox',
+      checked: paused,
+      click: () => {
+        void setSettings({ trackingPaused: !paused }).then(() => refreshTrayMenu(controller))
       },
     },
     { type: 'separator' },

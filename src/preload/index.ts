@@ -237,6 +237,10 @@ const api = {
     getDiagnostics: (): Promise<TrackingDiagnosticsPayload> => ipcRenderer.invoke(IPC.TRACKING.GET_DIAGNOSTICS),
     getPermissionState: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_STATE),
     requestScreenPermission: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.REQUEST_SCREEN_PERMISSION),
+    deleteAppHistory: (payload: { bundleId?: string | null; appName?: string | null }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
+      ipcRenderer.invoke(IPC.TRACKING.DELETE_APP_HISTORY, payload),
+    deleteSiteHistory: (payload: { domain: string }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
+      ipcRenderer.invoke(IPC.TRACKING.DELETE_SITE_HISTORY, payload),
   },
   focus: {
     start: (payload?: FocusStartPayload | string | null): Promise<number> => ipcRenderer.invoke(IPC.FOCUS.START, payload),

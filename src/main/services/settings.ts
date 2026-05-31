@@ -55,6 +55,12 @@ const DEFAULTS: AppSettings = {
   mcpServerEnabled: false,
   workMemoryConsolidationEnabled: true,
   useRemoteAI: false,
+  // T3 — opt-in, off by default; incognito-skip on once enabled.
+  trackingControlsEnabled: false,
+  trackingExcludedApps: [],
+  trackingExcludedSites: [],
+  trackingSkipIncognito: true,
+  trackingPaused: false,
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -115,6 +121,11 @@ export function getSettings(): AppSettings {
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
     useRemoteAI: (_store.get('useRemoteAI', false) as boolean),
+    trackingControlsEnabled: (_store.get('trackingControlsEnabled', false) as boolean),
+    trackingExcludedApps: (_store.get('trackingExcludedApps', []) as string[]),
+    trackingExcludedSites: (_store.get('trackingExcludedSites', []) as string[]),
+    trackingSkipIncognito: (_store.get('trackingSkipIncognito', true) as boolean),
+    trackingPaused: (_store.get('trackingPaused', false) as boolean),
   }
 }
 

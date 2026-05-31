@@ -32,6 +32,8 @@ import { localDateString, localDayBounds } from '../lib/localDate'
 import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
+import { getSettings } from './settings'
+import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { runAttributionForRange } from './attribution'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1527,6 +1529,21 @@ async function poll(): Promise<void> {
     })
     if (exclusionReason) {
       if (currentSession) flushCurrent(undefined, exclusionReason)
+      flushActiveBrowserContext(getDb())
+      clearPersistedLiveSnapshot()
+      return
+    }
+
+    // T3: user Tracking Controls. When OFF and not paused this is a passthrough
+    // (capture unchanged). Otherwise a paused tracker, an excluded app, or an
+    // incognito window (by title) is dropped exactly like the exclusions above —
+    // no app session AND no browser context for this foreground window.
+    const trackingDecision = decideAppCapture(
+      trackingControlsStateFromSettings(getSettings()),
+      { bundleId, appName, windowTitle: resolvedWindowTitle },
+    )
+    if (!trackingDecision.capture) {
+      if (currentSession) flushCurrent(undefined, `tracking_controls:${trackingDecision.reason}`)
       flushActiveBrowserContext(getDb())
       clearPersistedLiveSnapshot()
       return

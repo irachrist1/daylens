@@ -488,6 +488,156 @@ function UpdatesSection() {
   )
 }
 
+// T3 — Tracking Controls. Opt-in, off by default. Pause works regardless of the
+// master switch. Adding an exclusion also deletes that app/site's existing
+// history so it disappears from the timeline/Apps/AI/search.
+function ExclusionEditor({
+  label,
+  placeholder,
+  values,
+  onAdd,
+  onRemove,
+  busy,
+}: {
+  label: string
+  placeholder: string
+  values: string[]
+  onAdd: (value: string) => void
+  onRemove: (value: string) => void
+  busy: boolean
+}) {
+  const [draft, setDraft] = useState('')
+  const submit = () => {
+    const value = draft.trim()
+    if (!value) return
+    onAdd(value)
+    setDraft('')
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>{label}</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit() } }}
+          placeholder={placeholder}
+          disabled={busy}
+          style={{ flex: 1, minWidth: 0, height: 34, padding: '0 12px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, outline: 'none' }}
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || !draft.trim()}
+          style={{ height: 34, padding: '0 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: busy || !draft.trim() ? 'default' : 'pointer', opacity: busy || !draft.trim() ? 0.6 : 1 }}
+        >
+          Add
+        </button>
+      </div>
+      {values.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {values.map((value) => (
+            <span key={value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 10px', borderRadius: 999, background: 'var(--color-surface-muted)', border: '1px solid var(--color-border-ghost)', fontSize: 12, color: 'var(--color-text-secondary)' }}>
+              {value}
+              <button
+                type="button"
+                onClick={() => onRemove(value)}
+                aria-label={`Remove ${value}`}
+                style={{ width: 18, height: 18, borderRadius: '50%', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', fontSize: 14, lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TrackingControlsSection({
+  settings,
+  persist,
+}: {
+  settings: AppSettings
+  persist: (partial: Partial<AppSettings>) => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const enabled = settings.trackingControlsEnabled ?? false
+  const excludedApps = settings.trackingExcludedApps ?? []
+  const excludedSites = settings.trackingExcludedSites ?? []
+
+  const normalizeSite = (raw: string) => raw.trim().toLowerCase()
+    .replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, '')
+
+  const addApp = async (value: string) => {
+    if (excludedApps.some((a) => a.toLowerCase() === value.toLowerCase())) return
+    setBusy(true)
+    try {
+      await persist({ trackingExcludedApps: [...excludedApps, value] })
+      // Remove what was already captured so it disappears from history, not just future capture.
+      await ipc.tracking.deleteAppHistory({ bundleId: value, appName: value }).catch(() => {})
+    } finally {
+      setBusy(false)
+    }
+  }
+  const removeApp = (value: string) => void persist({ trackingExcludedApps: excludedApps.filter((a) => a !== value) })
+
+  const addSite = async (raw: string) => {
+    const value = normalizeSite(raw)
+    if (!value || excludedSites.some((s) => s.toLowerCase() === value)) return
+    setBusy(true)
+    try {
+      await persist({ trackingExcludedSites: [...excludedSites, value] })
+      await ipc.tracking.deleteSiteHistory({ domain: value }).catch(() => {})
+    } finally {
+      setBusy(false)
+    }
+  }
+  const removeSite = (value: string) => void persist({ trackingExcludedSites: excludedSites.filter((s) => s !== value) })
+
+  return (
+    <SettingsSection title="Tracking controls">
+      <SettingsRow
+        first
+        title="Pause tracking"
+        description="Temporarily stop recording all activity. Stays paused until you turn it back on, even after a restart."
+        control={<Toggle checked={settings.trackingPaused ?? false} onChange={(value) => void persist({ trackingPaused: value })} />}
+      />
+      <SettingsRow
+        title="Limit what's tracked"
+        description="Off by default — Daylens records everything. Turn this on to keep specific apps, sites, and private windows out of your history and AI answers."
+        control={<Toggle checked={enabled} onChange={(value) => void persist({ trackingControlsEnabled: value })} />}
+      />
+      {enabled && (
+        <>
+          <SettingsRow
+            title="Skip private / incognito windows"
+            description="When on, Daylens records nothing from a browser's incognito or private window — no URL, page title, or session."
+            control={<Toggle checked={settings.trackingSkipIncognito ?? true} onChange={(value) => void persist({ trackingSkipIncognito: value })} />}
+          />
+          <ExclusionEditor
+            label="Excluded apps"
+            placeholder="App name (e.g. Messages) or bundle id"
+            values={excludedApps}
+            onAdd={(value) => void addApp(value)}
+            onRemove={removeApp}
+            busy={busy}
+          />
+          <ExclusionEditor
+            label="Excluded sites"
+            placeholder="Domain (e.g. youtube.com)"
+            values={excludedSites}
+            onAdd={(value) => void addSite(value)}
+            onRemove={removeSite}
+            busy={busy}
+          />
+        </>
+      )}
+    </SettingsSection>
+  )
+}
+
 export default function Settings({ initialSettings = null }: { initialSettings?: AppSettings | null } = {}) {
   const [settings, setSettings] = useState<AppSettings | null>(initialSettings)
   const [hasApiKey, setHasApiKey] = useState(false)
@@ -1337,6 +1487,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             )}
           </div>
         </SettingsSection>
+
+        <TrackingControlsSection settings={settings} persist={persist} />
 
         <SettingsSection
           title="Privacy"

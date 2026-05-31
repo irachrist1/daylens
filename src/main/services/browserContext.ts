@@ -9,6 +9,8 @@ import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCano
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
+import { getSettings } from './settings'
+import { decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 
 const MIN_CONTEXT_SEC = 5
 const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
@@ -332,6 +334,14 @@ export class ActiveBrowserContextTracker {
 
     const domain = extractDomain(context.tab.url)
     if (!domain) return false
+
+    // T3: drop this website visit when the user excluded the site, paused
+    // tracking, or it's an incognito window (by title) and skip-incognito is on.
+    // Passthrough when Tracking Controls is off — the browser app session is
+    // gated separately upstream in tracking.ts.
+    if (!decideSiteCapture(trackingControlsStateFromSettings(getSettings()), { domain, windowTitle: context.snapshot.windowTitle }).capture) {
+      return false
+    }
 
     const effectiveEnd = Math.max(endTime, context.lastSeenAt)
     const durationSec = Math.round((effectiveEnd - context.startedAt) / 1000)
