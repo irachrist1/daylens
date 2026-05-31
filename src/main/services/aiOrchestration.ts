@@ -156,8 +156,8 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     // long-form structured output (tables, charts, formatted exports) in an agentic
     // multi-step pattern where the extra capability pays for itself.
     providerModelOverride: {
-      anthropic: 'claude-opus-4-6',
-      'claude-cli': 'claude-opus-4-6',
+      anthropic: 'claude-opus-4-8',
+      'claude-cli': 'claude-opus-4-8',
     },
     maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
   },
@@ -220,14 +220,13 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
 // Opus is NOT in this table. It is only reached via providerModelOverride on specific
 // jobs (currently: report_generation) where structured agentic output justifies the cost.
 //
-// M1 — models reviewed: 2026-05-31. This table is a LAST-RESORT fallback: under
-// BYOK the user's chosen model (settings.<provider>Model) always wins
-// (see modelForProvider). The ids here must therefore stay a subset of what the
-// Settings catalog (src/renderer/lib/aiProvider.ts AI_PROVIDER_META) offers, so
-// the fallback can never resolve to a model the UI doesn't list. (Previously the
-// Google fallback pointed at gemini-2.0-flash-lite / gemini-3.1-flash, neither of
-// which is offered — fixed.) A live-key GA-catalog refresh (e.g. Gemini 3.5)
-// still needs verification against each provider before changing the offered ids.
+// models reviewed: 2026-05-31 — ids verified against each provider's public
+// docs. This table is a LAST-RESORT fallback: under BYOK the user's chosen model
+// (settings.<provider>Model) always wins (see modelForProvider). The ids here
+// stay a subset of what the Settings catalog (AI_PROVIDER_META) offers, so the
+// fallback can never resolve to a model the UI doesn't list. The Google entries
+// previously pointed at gemini-3.1-flash-lite-preview, which was SHUT DOWN
+// 2026-05-25 — replaced with the GA gemini-3.1-flash-lite / gemini-3.5-flash.
 const ANTHROPIC_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'claude-haiku-4-5-20251001',   // Fast and cheap — block labels, previews
   balanced: 'claude-haiku-4-5-20251001',  // Summaries are fine with Haiku
@@ -236,12 +235,12 @@ const ANTHROPIC_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> 
 const OPENAI_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'gpt-5.4-mini',
   balanced: 'gpt-5.4-mini',
-  quality: 'gpt-5.4',
+  quality: 'gpt-5.5',
 }
 const GOOGLE_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
-  economy: 'gemini-3.1-flash-lite-preview',   // Cheapest/highest-RPM offered — keeps R1 budget low
-  balanced: 'gemini-3.1-flash-lite-preview',
-  quality: 'gemini-3-flash-preview',
+  economy: 'gemini-3.1-flash-lite',   // GA, cheapest/highest-RPM — keeps R1 budget low
+  balanced: 'gemini-3.1-flash-lite',
+  quality: 'gemini-3.5-flash',        // GA flagship
 }
 
 export function modelForProvider(

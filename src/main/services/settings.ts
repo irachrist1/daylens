@@ -31,8 +31,8 @@ const DEFAULTS: AppSettings = {
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
   anthropicModel: 'claude-sonnet-4-6',
-  openaiModel: 'gpt-5.4',
-  googleModel: 'gemini-3.1-flash-lite-preview',
+  openaiModel: 'gpt-5.5',
+  googleModel: 'gemini-3.1-flash-lite',
   openrouterModel: 'anthropic/claude-sonnet-4.6',
   aiFallbackOrder: ['anthropic', 'openai', 'google'],
   aiModelStrategy: 'balanced',
@@ -57,6 +57,20 @@ const DEFAULTS: AppSettings = {
   useRemoteAI: false,
 }
 
+// M1: model ids that have been shut down at the provider and now 404. Existing
+// users may have one persisted as their selected model, so remap it to the GA
+// replacement on read — otherwise every call fails before R1's retry can help.
+// Only confirmed-dead ids belong here; superseded-but-working ids are left
+// alone so we never silently change a user's model (or its cost) without intent.
+const DEPRECATED_MODEL_REMAP: Record<string, string> = {
+  // gemini-3.1-flash-lite-preview was deprecated and shut down 2026-05-25.
+  'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite',
+}
+
+function liveModelId(stored: string): string {
+  return DEPRECATED_MODEL_REMAP[stored] ?? stored
+}
+
 export function getSettings(): AppSettings {
   if (!_store) {
     // Synchronous fallback before async init — return defaults
@@ -76,10 +90,10 @@ export function getSettings(): AppSettings {
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
-    anthropicModel: (_store.get('anthropicModel', 'claude-sonnet-4-6') as string),
-    openaiModel: (_store.get('openaiModel', 'gpt-5.4') as string),
-    googleModel: (_store.get('googleModel', 'gemini-3.1-flash-lite-preview') as string),
-    openrouterModel: (_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
+    anthropicModel: liveModelId(_store.get('anthropicModel', 'claude-sonnet-4-6') as string),
+    openaiModel: liveModelId(_store.get('openaiModel', 'gpt-5.5') as string),
+    googleModel: liveModelId(_store.get('googleModel', 'gemini-3.1-flash-lite') as string),
+    openrouterModel: liveModelId(_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
     aiChatProvider: (_store.get('aiChatProvider', 'anthropic') as AppSettings['aiChatProvider']),

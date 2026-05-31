@@ -17,11 +17,17 @@ export interface AIProviderMeta {
   models: AIModelOption[]
 }
 
-// M1 — models reviewed: 2026-05-31 (code-consistency pass). The main-process
-// tier fallback (services/aiOrchestration.ts) is kept a subset of these ids.
-// A GA-catalog refresh against live keys is still owed — notably the Gemini 3.5
-// flash series and the newest OpenAI/Anthropic ids — and must be verified to
-// resolve before being set as a default (a wrong default strands BYOK users).
+// models reviewed: 2026-05-31 — ids verified against each provider's public
+// model docs (ai.google.dev, platform.openai.com, Anthropic). Notable changes:
+//   - Google: gemini-3.1-flash-lite-preview was SHUT DOWN 2026-05-25; replaced
+//     with the GA gemini-3.1-flash-lite (cheapest/highest-RPM → the default,
+//     which directly helps R1). Added GA gemini-3.5-flash; dropped the
+//     gemini-3-flash-preview offering.
+//   - OpenAI: flagship gpt-5.4 → gpt-5.5 (GA 2026-04-23); mini/nano stay 5.4.
+//   - Anthropic: flagship opus 4.6 → 4.8 (current); Sonnet 4.6 / Haiku 4.5 hold.
+// The main-process tier fallback (services/aiOrchestration.ts) is kept a subset
+// of these ids. settings.ts read-time-migrates the dead flash-lite-preview id.
+// Live answer-quality testing per provider is a separate device step (needs keys).
 export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
   anthropic: {
     id: 'anthropic',
@@ -30,17 +36,17 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://console.anthropic.com/settings/keys',
     keyPlaceholder: 'sk-ant-…',
     helperText: 'Use your Claude API key.',
-    defaultModel: 'claude-opus-4-6',
+    defaultModel: 'claude-opus-4-8',
     models: [
       {
-        id: 'claude-opus-4-6',
-        label: 'Claude Opus 4.6',
+        id: 'claude-opus-4-8',
+        label: 'Claude Opus 4.8',
         description: 'Latest flagship for the hardest coding and reasoning work.',
       },
       {
         id: 'claude-sonnet-4-6',
         label: 'Claude Sonnet 4.6',
-        description: 'Latest balanced Claude for speed plus high quality.',
+        description: 'Balanced Claude for speed plus high quality.',
       },
       {
         id: 'claude-haiku-4-5',
@@ -56,11 +62,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://platform.openai.com/api-keys',
     keyPlaceholder: 'sk-…',
     helperText: 'Use your OpenAI API key.',
-    defaultModel: 'gpt-5.4',
+    defaultModel: 'gpt-5.5',
     models: [
       {
-        id: 'gpt-5.4',
-        label: 'GPT-5.4',
+        id: 'gpt-5.5',
+        label: 'GPT-5.5',
         description: 'Latest flagship for complex reasoning, coding, and agentic work.',
       },
       {
@@ -82,22 +88,22 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://aistudio.google.com/apikey',
     keyPlaceholder: 'AIza…',
     helperText: 'Use your Gemini Developer API key from AI Studio.',
-    defaultModel: 'gemini-3.1-flash-lite-preview',
+    defaultModel: 'gemini-3.1-flash-lite',
     models: [
       {
+        id: 'gemini-3.1-flash-lite',
+        label: 'Gemini 3.1 Flash-Lite',
+        description: 'Fastest, lowest-cost Gemini with the highest rate limits. The safest Daylens default.',
+      },
+      {
+        id: 'gemini-3.5-flash',
+        label: 'Gemini 3.5 Flash',
+        description: 'Latest GA Gemini — most intelligent for agentic and coding work.',
+      },
+      {
         id: 'gemini-3.1-pro-preview',
-        label: 'Gemini 3.1 Pro Preview',
-        description: 'Latest advanced Gemini model for deep reasoning and coding.',
-      },
-      {
-        id: 'gemini-3-flash-preview',
-        label: 'Gemini 3 Flash Preview',
-        description: 'Latest fast frontier Gemini model with strong multimodal and tool support.',
-      },
-      {
-        id: 'gemini-3.1-flash-lite-preview',
-        label: 'Gemini 3.1 Flash-Lite Preview',
-        description: 'Newest lower-cost Gemini option for fast straightforward tasks. This is the safest Daylens default right now.',
+        label: 'Gemini 3.1 Pro (Preview)',
+        description: 'Advanced Gemini for the deepest reasoning. Preview — higher cost, lower limits.',
       },
     ],
   },
@@ -129,11 +135,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://docs.anthropic.com',
     keyPlaceholder: '',
     helperText: 'Uses the locally installed Claude CLI instead of an API key.',
-    defaultModel: 'claude-opus-4-6',
+    defaultModel: 'claude-opus-4-8',
     models: [
       {
-        id: 'claude-opus-4-6',
-        label: 'Claude Opus 4.6',
+        id: 'claude-opus-4-8',
+        label: 'Claude Opus 4.8',
         description: 'Uses your local Claude CLI install and Anthropic account.',
       },
       {
@@ -150,11 +156,11 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
     docsUrl: 'https://platform.openai.com/docs',
     keyPlaceholder: '',
     helperText: 'Uses the locally installed Codex CLI instead of an API key.',
-    defaultModel: 'gpt-5.4',
+    defaultModel: 'gpt-5.5',
     models: [
       {
-        id: 'gpt-5.4',
-        label: 'GPT-5.4',
+        id: 'gpt-5.5',
+        label: 'GPT-5.5',
         description: 'Uses your local Codex CLI install and OpenAI account.',
       },
       {
