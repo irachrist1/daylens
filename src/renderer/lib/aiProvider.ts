@@ -17,6 +17,11 @@ export interface AIProviderMeta {
   models: AIModelOption[]
 }
 
+// M1 — models reviewed: 2026-05-31 (code-consistency pass). The main-process
+// tier fallback (services/aiOrchestration.ts) is kept a subset of these ids.
+// A GA-catalog refresh against live keys is still owed — notably the Gemini 3.5
+// flash series and the newest OpenAI/Anthropic ids — and must be verified to
+// resolve before being set as a default (a wrong default strands BYOK users).
 export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
   anthropic: {
     id: 'anthropic',

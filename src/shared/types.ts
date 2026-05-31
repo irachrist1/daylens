@@ -432,6 +432,10 @@ export interface AIThreadMessage {
 export interface AIChatTurnResult {
   assistantMessage: AIThreadMessage
   conversationState: AIConversationState | null
+  // R1 instrumentation: number of provider HTTP calls this turn made
+  // (tool-loop roundtrips + retries + prose pass). Used to keep the per-turn
+  // median low; absent for deterministic turns that made no provider call.
+  providerCallCount?: number
 }
 
 export interface AIChatSendRequest {

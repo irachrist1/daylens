@@ -10,6 +10,50 @@ yet reliable. This document is the hand-off backlog. It is written so any agent 
 developer can pick up a single item and know *what is wrong, why, what "right"
 looks like, and how to verify it.*
 
+---
+
+## Implementation status — 2026-05-31 (branch `ai-tab-v2`, reliability pass)
+
+**Shipped in this pass** (Phase 0 + tractable Phase 1/2 — typechecked, unit-tested):
+- **R1** — per-provider throttle + 429 backoff/retry honoring `Retry-After`
+  (`src/main/services/aiRateLimiter.ts`) wrapping every provider call; follow-ups
+  are now deterministic (zero extra provider calls); tool-roundtrip cap lowered
+  for low-RPM models; calls-per-turn instrumented.
+- **R2** — single-sourced provider: `preferredProviderForJob` honors each job's
+  `providerPreferenceKey`; chat resolves `aiChatProvider ?? aiProvider` for the
+  answer, the executing provider, and the "what model are you" string alike.
+- **R3** — no stuck "Thinking": the answer flips to complete *before* the
+  thread-list refresh; a hard 90s client timeout turns a stuck turn into a
+  retryable error.
+- **R4** — branded, channel-name-free errors (`src/renderer/lib/ipcError.ts`)
+  with a working Retry on error cards + one automatic rate-limit retry; applied
+  to chat **and** timeline (T1/T2).
+- **Q3/Q4** — follow-ups grounded in the answer's real entities, meta-entity
+  stoplist (kills "How long on Google Gemini?"), identity-answer suppression,
+  deterministic presence (≥2 or none).
+- **Q5** — Raycast-style title word cap. **Q1/Q2** — prompt-level entity-intent
+  and cross-turn consistency rules (deeper tool normalization noted below).
+- **U1** — History selection reliably loads a thread's messages (loading state +
+  error surfacing). **U2/D2** — header shows thread title + real model subline;
+  centered floating label removed. **U3** — clearer new-chat icon + tooltip + ⌘N.
+- **T1/T2** — timeline AI actions inherit the throttle/retry and show friendly
+  errors. **M1** — model tier-fallback aligned to the offered catalog + dated
+  review marker.
+
+**Deferred (out of scope for a reliability release — each needs its own PR):**
+- **D1** time-grouped sidebar, **D3** ⌘K action palette, **D4** per-chat
+  settings, **D5** `@`/`/` composer, **D6** response transforms — large UI work.
+- **S1** natural-language/semantic search — needs an embedding index + product
+  decisions.
+- **T3** tracking controls / privacy subsystem — touches the capture path and
+  carries a product-direction tension (`AI-PRODUCT-DIRECTION.md` D6: "privacy is
+  not the priority"); needs sign-off on the default before building.
+- **Q6** answer-quality eval program — scaffolding only; running it bills the
+  live API.
+- **M1 (catalog refresh)** — confirming current GA model ids (e.g. Gemini 3.5)
+  needs live keys; only the code-consistency half is done here.
+- **C1** signing — tracked separately.
+
 > How to read this doc
 > - Each item has a stable **ID** (`R1`, `Q3`, `D4`, …). Assign agents by ID.
 > - **Severity:** P0 (blocks core use) → P3 (polish).

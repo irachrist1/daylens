@@ -4,7 +4,9 @@ import {
   buildDeterministicFollowUpCandidates,
   buildFollowUpSuggestionPrompts,
   classifyQuestionShape,
+  extractAnswerEntities,
   filterFollowUpCandidatesWithReport,
+  isIdentityAnswer,
   parseFollowUpSuggestions,
 } from '../src/main/lib/followUpSuggestions.ts'
 import type { FollowUpSuggestion } from '../src/shared/types.ts'
@@ -163,6 +165,35 @@ test('filter keeps at most one chip per shape', () => {
   ], 'time')
   assert.equal(report.suggestions.length, 1)
   assert.equal(report.rejectedByRule.shape, 1)
+})
+
+// ── Q3: meta-entity stoplist + identity suppression ────────────────────────
+
+test('isIdentityAnswer flags "what model are you" answers', () => {
+  assert.equal(isIdentityAnswer('You are Daylens, currently routed through Google Gemini (gemini-3.1-flash-lite-preview).'), true)
+  assert.equal(isIdentityAnswer('You spent 2h 10m in Cursor today.'), false)
+})
+
+test('extractAnswerEntities never returns a provider/model name', () => {
+  const entities = extractAnswerEntities('You are Daylens, routed through Google Gemini (gemini-3.1-flash-lite-preview).')
+  assert.equal(entities.length, 0)
+})
+
+test('extractAnswerEntities pulls real apps/domains but drops meta-entities', () => {
+  const entities = extractAnswerEntities('You used Cursor and Slack, plus youtube.com — not Gemini.')
+  assert.ok(entities.includes('Cursor'))
+  assert.ok(entities.includes('Slack'))
+  assert.ok(entities.includes('youtube.com'))
+  assert.ok(!entities.some((e) => /gemini/i.test(e)))
+})
+
+test('deterministic candidates never template a model name (Q3 "Google Gemini" bug)', () => {
+  const result = buildDeterministicFollowUpCandidates(
+    'freeform_chat',
+    null,
+    'You are Daylens, currently routed through Google Gemini (gemini-3.1-flash-lite-preview).',
+  )
+  assert.ok(!result.some((s) => /gemini|how long on google/i.test(s.text)), 'must not produce "How long on Google Gemini?"')
 })
 
 test('question shape classifier covers the five taxonomy families', () => {

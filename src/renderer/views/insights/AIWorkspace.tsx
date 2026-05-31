@@ -9,7 +9,7 @@ import type { DaylensSearchResult } from '../../../preload/index'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
-import { IconChevronDown, IconCompose, IconSparkle, relativeTime } from './icons'
+import { IconChevronDown, IconNewChat, IconSparkle, relativeTime } from './icons'
 import { useAIChat } from './useAIChat'
 import type { ThreadMessage } from './types'
 
@@ -25,9 +25,11 @@ export default function AIWorkspace() {
   const {
     messages,
     loading,
+    threadLoading,
     threads,
     activeThreadId,
     activeThreadLabel,
+    activeModel,
     settings,
     cliTools,
     hasApiKey,
@@ -42,6 +44,7 @@ export default function AIWorkspace() {
     submitMessage,
     handleSend,
     handleRetry,
+    handleErrorRetry,
     handleCopy,
     handleRate,
     handleMessageAction,
@@ -72,6 +75,18 @@ export default function AIWorkspace() {
     setDeleteConfirmId(null)
     composerRef.current?.focus()
   }, [handleNewChat])
+
+  // U3: ⌘N / Ctrl+N starts a new chat while the AI tab is open.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        onNewChat()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onNewChat])
 
   const onSelectThread = useCallback((threadId: number) => {
     selectThread(threadId)
@@ -118,6 +133,9 @@ export default function AIWorkspace() {
 
   const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
   const providerMeta = AI_PROVIDER_META[activeChatProvider]
+  // D2/U2: the friendly model label shown under the thread title — always the
+  // real resolved model (R2), so it never disagrees with what actually ran.
+  const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
   const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
   const cliMissing = activeChatProvider === 'claude-cli'
     ? !cliTools?.claude
@@ -128,14 +146,21 @@ export default function AIWorkspace() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* ── Top bar: local-history search (left) + thread controls (right) ── */}
-      <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
-        <HistorySearch onResultClick={handleSearchResultClick} />
-        <div style={{ flex: 1, minWidth: 0, textAlign: 'center', overflow: 'hidden' }}>
-          <span style={{ fontSize: 12.5, fontWeight: 650, color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', maxWidth: '100%' }}>
-            {activeThreadLabel ?? 'Ask Daylens'}
-          </span>
+      {/* ── Top bar: thread title + model subline (left, U2/D2), search +
+            thread controls (right). No centered floating label. ── */}
+      <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
+        <div style={{ minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
+          <div style={{ fontSize: 13, fontWeight: 680, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeThreadLabel ?? 'New chat'}
+          </div>
+          {hasApiKey && (
+            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {providerMeta.shortLabel} · {modelLabel}
+            </div>
+          )}
         </div>
+        <div style={{ flex: 1, minWidth: 8 }} />
+        <HistorySearch onResultClick={handleSearchResultClick} />
         <div style={{ position: 'relative', display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
           {threads.length > 0 && (
             <button
@@ -153,11 +178,11 @@ export default function AIWorkspace() {
           <button
             type="button"
             onClick={onNewChat}
-            title="New chat"
+            title="New chat (⌘N)"
             aria-label="New chat"
             style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           >
-            <IconCompose />
+            <IconNewChat />
           </button>
 
           {historyOpen && threads.length > 0 && (
@@ -236,12 +261,17 @@ export default function AIWorkspace() {
                 onCopy={handleCopy}
                 onRate={handleRate}
                 onRetry={handleRetry}
+                onErrorRetry={handleErrorRetry}
                 onMessageAction={handleMessageAction}
                 onFollowUpClick={onFollowUpClick}
                 scrollToBottom={scrollToBottom}
               />
               <div ref={bottomRef} />
             </>
+          ) : threadLoading ? (
+            <div style={{ margin: 'auto 0', textAlign: 'center' }}>
+              <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading conversation…</p>
+            </div>
           ) : (
             <div style={{ margin: 'auto 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--gradient-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-primary-contrast)' }}>

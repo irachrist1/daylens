@@ -55,11 +55,13 @@ export function IconSparkle({ size = 16 }: { size?: number }) {
   )
 }
 
-export function IconCompose() {
+// U3: a clearer "new chat" affordance than the bare pencil — a compose square
+// with a plus, which reads unambiguously as "start a new chat".
+export function IconNewChat() {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M11 2.5L13.5 5L5.5 13H3v-2.5L11 2.5Z" />
-      <path d="M9.5 4l2.5 2.5" />
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13.5 8.6V12A1.5 1.5 0 0 1 12 13.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5h3.4" />
+      <path d="M11.2 1.7v4.2M9.1 3.8h4.2" />
     </svg>
   )
 }

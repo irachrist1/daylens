@@ -34,6 +34,29 @@ const ENTITY_STOP_WORDS = new Set([
   'found', 'local', 'evidence', 'data',
 ])
 
+// Q3: provider / model / product names must never be templated into a
+// "How long on X?" data-entity chip (the "How long on Google Gemini?" bug).
+// These are meta-entities, not things the user did.
+const META_ENTITIES = new Set([
+  'daylens', 'gemini', 'google gemini', 'google', 'anthropic', 'claude',
+  'openai', 'gpt', 'chatgpt', 'openrouter', 'codex', 'copilot', 'llm', 'ai',
+])
+
+const META_ENTITY_RE = /\b(gemini|gpt|chatgpt|claude|opus|sonnet|haiku|openrouter|codex|llama|mistral|flash[-\s]?lite|flash)\b/i
+
+function isMetaEntity(name: string): boolean {
+  const lower = name.trim().toLowerCase()
+  if (META_ENTITIES.has(lower)) return true
+  return META_ENTITY_RE.test(lower)
+}
+
+// Q3: an identity / "what model are you" answer has no data entities worth
+// templating — return no chips rather than dumb ones.
+export function isIdentityAnswer(answerText: string): boolean {
+  const lower = answerText.toLowerCase()
+  return /\brouted through\b|\bi am daylens\b|\bi'm daylens\b|powering this chat|which model|language model|powered by|\bmodel\b.*\bdaylens\b|\bdaylens\b.*\bmodel\b/.test(lower)
+}
+
 function normalizeSuggestion(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
@@ -215,34 +238,41 @@ function candidate(text: string, affordance: FollowUpAffordance): FollowUpSugges
   return { text, source: 'deterministic', affordance }
 }
 
-function answerEntity(answerText: string | null | undefined): string | null {
-  if (!answerText) return null
-  // Require ≥2 chars on both sides of the dot to avoid matching abbreviations
-  // like "e.g" or "i.e" that look like filename tokens.
-  const filename = answerText.match(/\b\w{2,}\.\w{2,8}\b/)?.[0]
-  if (filename && !ENTITY_STOP_WORDS.has(filename.toLowerCase())) return filename
-
-  const matches = answerText.match(/\b[A-Z][A-Za-z0-9][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9][A-Za-z0-9_-]*){0,2}\b/g) ?? []
-  for (const match of matches) {
-    const normalized = match.trim()
-    if (normalized.length < 4) continue
-    if (ENTITY_STOP_WORDS.has(normalized.toLowerCase())) continue
-    // Reject multi-word matches where any word is a stop word (e.g. "Hey Tonny")
-    if (normalized.includes(' ') && normalized.split(' ').some((w) => ENTITY_STOP_WORDS.has(w.toLowerCase()))) continue
-    return normalized
+// Pull up to `max` distinct, real (non-meta, non-stop-word) entities from the
+// answer — apps, domains, files, proper nouns. Drives grounded follow-up chips
+// without a provider call (R1).
+export function extractAnswerEntities(answerText: string | null | undefined, max = 3): string[] {
+  if (!answerText) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (raw: string): void => {
+    const value = raw.trim()
+    const key = value.toLowerCase()
+    if (value.length < 3 || seen.has(key)) return
+    if (ENTITY_STOP_WORDS.has(key)) return
+    if (key.includes(' ') && value.split(' ').some((w) => ENTITY_STOP_WORDS.has(w.toLowerCase()))) return
+    if (isMetaEntity(value)) return
+    seen.add(key)
+    out.push(value)
   }
-  return null
+  // Filenames first (e.g. index.ts, schema.sql) — ≥2 chars each side of the dot.
+  for (const filename of answerText.match(/\b\w{2,}\.\w{2,8}\b/g) ?? []) push(filename)
+  // Then capitalized proper nouns (apps, projects, people).
+  for (const match of answerText.match(/\b[A-Z][A-Za-z0-9][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9][A-Za-z0-9_-]*){0,2}\b/g) ?? []) push(match)
+  return out.slice(0, max)
 }
 
-function scopedCandidates(entity: string, _state: AIConversationState | null): FollowUpSuggestion[] {
+function scopedCandidates(entities: string[]): FollowUpSuggestion[] {
   // One chip per question shape so the uniqueness filter does not collapse
   // them, and no temporal words so the temporal-reject regex does not strip
-  // them. Each chip names the entity explicitly.
+  // them. Each chip names a real entity explicitly; when several entities are
+  // present we spread them across the shapes so the chips feel less templated.
+  const [e1, e2, e3] = entities
   return [
-    candidate(`How long on ${entity}?`, 'narrow'),               // time
-    candidate(`Which files appeared in ${entity}?`, 'expand'),   // specific_work
-    candidate(`Compare ${entity} across sessions`, 'compare'),   // cross_cutting
-    candidate(`Draft a short note on ${entity}`, 'deepen'),      // generative
+    candidate(`How long on ${e1}?`, 'narrow'),                       // time
+    candidate(`Which files appeared in ${e2 ?? e1}?`, 'expand'),     // specific_work
+    candidate(`Compare ${e3 ?? e1} across sessions`, 'compare'),     // cross_cutting
+    candidate(`Draft a short note on ${e1}`, 'deepen'),              // generative
   ]
 }
 
@@ -268,8 +298,11 @@ export function buildDeterministicFollowUpCandidates(
     && !TOPIC_STOP_WORDS.has(rawTopic.toLowerCase())
     && !(rawTopic.includes(' ') && rawTopic.split(' ').some((w) => TOPIC_STOP_WORDS.has(w.toLowerCase())))
   ) ? rawTopic : null
-  const topic = titleCaseTopic(validatedTopic) ?? answerEntity(answerText)
-  if (topic) return dedupeSuggestions(scopedCandidates(topic, state)).slice(0, 4)
+  const topicEntity = titleCaseTopic(validatedTopic)
+  const entities = topicEntity && !isMetaEntity(topicEntity)
+    ? [topicEntity]
+    : extractAnswerEntities(answerText)
+  if (entities.length > 0) return dedupeSuggestions(scopedCandidates(entities)).slice(0, 4)
 
   const rangeLabel = state?.dateRange?.label?.toLowerCase().includes('last week') ? 'last week' : 'this week'
   const suggestions: FollowUpSuggestion[] = []
@@ -282,7 +315,6 @@ export function buildDeterministicFollowUpCandidates(
         candidate('What was active work vs reading?', 'narrow'),
         candidate(rangeLabel === 'last week' ? 'Compare this with this week' : 'Compare this with last week', 'compare'),
       )
-      if (topic) suggestions.unshift(candidate(`Go deeper on ${topic}`, 'deepen'))
       break
     case 'weekly_literal_list':
       suggestions.push(

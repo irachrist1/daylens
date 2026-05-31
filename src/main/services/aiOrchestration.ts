@@ -206,6 +206,15 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
 //
 // Opus is NOT in this table. It is only reached via providerModelOverride on specific
 // jobs (currently: report_generation) where structured agentic output justifies the cost.
+//
+// M1 — models reviewed: 2026-05-31. This table is a LAST-RESORT fallback: under
+// BYOK the user's chosen model (settings.<provider>Model) always wins
+// (see modelForProvider). The ids here must therefore stay a subset of what the
+// Settings catalog (src/renderer/lib/aiProvider.ts AI_PROVIDER_META) offers, so
+// the fallback can never resolve to a model the UI doesn't list. (Previously the
+// Google fallback pointed at gemini-2.0-flash-lite / gemini-3.1-flash, neither of
+// which is offered — fixed.) A live-key GA-catalog refresh (e.g. Gemini 3.5)
+// still needs verification against each provider before changing the offered ids.
 const ANTHROPIC_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   economy: 'claude-haiku-4-5-20251001',   // Fast and cheap — block labels, previews
   balanced: 'claude-haiku-4-5-20251001',  // Summaries are fine with Haiku
@@ -217,9 +226,9 @@ const OPENAI_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
   quality: 'gpt-5.4',
 }
 const GOOGLE_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
-  economy: 'gemini-2.0-flash-lite',
-  balanced: 'gemini-3.1-flash',
-  quality: 'gemini-3.1-flash',
+  economy: 'gemini-3.1-flash-lite-preview',   // Cheapest/highest-RPM offered — keeps R1 budget low
+  balanced: 'gemini-3.1-flash-lite-preview',
+  quality: 'gemini-3-flash-preview',
 }
 
 export function modelForProvider(
@@ -267,11 +276,16 @@ export function providerLabel(provider: AIProviderMode): string {
   }
 }
 
-// Simplified BYOK routing: every job runs on the single provider the user picked
-// in AI settings. No per-job provider overrides, no cross-provider fallback —
-// predictable and matching exactly what the settings panel shows.
-function preferredProviderForJob(_jobType: AIJobType, settings: AppSettings): AIProviderMode {
-  return settings.aiProvider ?? 'anthropic'
+// BYOK routing (R2): each job resolves to the provider its definition declares
+// via `providerPreferenceKey` — for chat that is `aiChatProvider`, which is
+// exactly what the chat UI shows — falling back to the global `aiProvider`.
+// This closes the latent seam where orchestration always ran on `aiProvider`
+// while the chat surface displayed `aiChatProvider ?? aiProvider`. Still no
+// cross-provider fallback (see applyStrategyProviderFallback): we never
+// silently route to a provider the user did not choose.
+function preferredProviderForJob(jobType: AIJobType, settings: AppSettings): AIProviderMode {
+  const preferenceKey = JOB_DEFINITIONS[jobType].providerPreferenceKey
+  return settings[preferenceKey] ?? settings.aiProvider ?? 'anthropic'
 }
 
 function applyStrategyProviderFallback(preferred: AIProviderMode): AIProviderMode[] {

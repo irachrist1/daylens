@@ -71,6 +71,7 @@ export interface MessageListProps {
   onCopy: (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => void
   onRate: (message: ThreadMessage, rating: 'up' | 'down' | null) => void
   onRetry: (index: number, message: ThreadMessage) => void
+  onErrorRetry: (message: ThreadMessage) => void
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
@@ -86,6 +87,7 @@ function MessageListImpl({
   onCopy,
   onRate,
   onRetry,
+  onErrorRetry,
   onMessageAction,
   onFollowUpClick,
   scrollToBottom,
@@ -119,13 +121,27 @@ function MessageListImpl({
                   renderContent={(text) => <><MarkdownMessage content={text} /><span className="ai-caret" /></>}
                   onSnapshotUpdate={scrollToBottom}
                 />
+              ) : message.state === 'error' ? (
+                <>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>
+                    {message.errorInfo?.isRateLimit ? 'Rate limit' : 'Couldn’t complete that'}
+                  </div>
+                  <MarkdownMessage content={message.content} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => onErrorRetry(message)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      <IconRetry /> Retry
+                    </button>
+                    {message.errorInfo?.autoRetryScheduled && (
+                      <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Retrying automatically…</span>
+                    )}
+                  </div>
+                </>
               ) : (
                 <>
-                  {message.state === 'error' && (
-                    <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#f87171', marginBottom: 8 }}>
-                      Provider error
-                    </div>
-                  )}
                   <MarkdownMessage content={message.content} />
 
                   {(message.actions?.length ?? 0) > 0 && (

@@ -12,6 +12,7 @@ import { useProjectionResource } from '../../hooks/useProjectionResource'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { getSelectedModel } from '../../lib/aiProvider'
+import { sanitizeIpcError } from '../../lib/ipcError'
 import { sanitizeForRender } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
 import {
@@ -27,7 +28,13 @@ import {
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
   trigger?: 'freeform' | 'suggested' | 'retry'
+  // R4: bounds the rate-limit auto-retry so it fires at most once per turn.
+  autoRetryCount?: number
 }
+
+// R3: a turn that never resolves must still leave "Thinking" — convert a stuck
+// pending row into a retryable error after this ceiling.
+const SEND_TIMEOUT_MS = 90_000
 
 function isCliProvider(provider: string | undefined | null): boolean {
   return provider === 'claude-cli' || provider === 'codex-cli'
@@ -37,6 +44,7 @@ export function useAIChat() {
   const location = useLocation()
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [loading, setLoading] = useState(false)
+  const [threadLoading, setThreadLoading] = useState(false)
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
@@ -45,6 +53,11 @@ export function useAIChat() {
 
   const loadingRef = useRef(false)
   loadingRef.current = loading
+  // U1: track the most recently requested thread so a slow getThread response
+  // for a thread the user already navigated away from never clobbers the view.
+  const latestRequestedThreadRef = useRef<number | null>(null)
+  // R4: pending rate-limit auto-retry timers, cleared on unmount / new sends.
+  const autoRetryTimeoutsRef = useRef<Record<string, number>>({})
   const actionFeedbackTimeoutsRef = useRef<Record<string, number>>({})
   const suggestionImpressionsRef = useRef<Record<string, boolean>>({})
   const aiScreenTrackedRef = useRef(false)
@@ -164,15 +177,31 @@ export function useAIChat() {
     for (const timeout of Object.values(actionFeedbackTimeoutsRef.current)) {
       window.clearTimeout(timeout)
     }
+    for (const timeout of Object.values(autoRetryTimeoutsRef.current)) {
+      window.clearTimeout(timeout)
+    }
   }, [])
 
   const loadThread = useCallback(async (threadId: number) => {
+    // U1: selecting a thread must load ITS messages, not just update the header.
+    // The old guard dropped the fetched messages whenever a send was in flight,
+    // which is exactly the "header changes, body stays empty" bug. Instead we
+    // stale-guard by thread id: only the latest requested thread may write.
     setActiveThreadId(threadId)
+    latestRequestedThreadRef.current = threadId
+    setThreadLoading(true)
     try {
       const detail = await ipc.ai.getThread(threadId)
-      if (!loadingRef.current) setMessages(threadMessagesFromHistory(detail.messages))
-    } catch {
-      // best-effort; keep the current UI if the lookup fails
+      if (latestRequestedThreadRef.current !== threadId) return
+      setMessages(threadMessagesFromHistory(detail.messages))
+    } catch (error) {
+      // Surface the failure as an inline error rather than silently keeping a
+      // mismatched view (R4 — no raw IPC text).
+      if (latestRequestedThreadRef.current !== threadId) return
+      const { message } = sanitizeIpcError(error, "Couldn't load this conversation. Try again.")
+      setMessages([{ id: `thread-error:${threadId}`, role: 'assistant', content: message, createdAt: Date.now(), state: 'error' }])
+    } finally {
+      if (latestRequestedThreadRef.current === threadId) setThreadLoading(false)
     }
   }, [])
 
@@ -251,10 +280,21 @@ export function useAIChat() {
     }
   }, [])
 
+  const refreshThreadsAfterTurn = useCallback(async () => {
+    // sendMessage auto-creates a thread server-side when none is passed. Adopt
+    // the newest row so follow-up turns (and retries) stay linked to it.
+    try {
+      const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+      setThreads(refreshed)
+      setActiveThreadId((current) => current ?? refreshed[0]?.id ?? null)
+    } catch { /* best-effort */ }
+  }, [])
+
   const handleSend = useCallback(async (text?: string, options?: SendOptions) => {
     const prompt = (text ?? '').trim()
     if (!prompt || loadingRef.current || !hasApiKey) return
     const trigger = options?.trigger ?? 'freeform'
+    const autoRetryCount = options?.autoRetryCount ?? 0
     const queryKind = classifyAIOutputIntent(prompt)
 
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -267,6 +307,10 @@ export function useAIChat() {
       track(ANALYTICS_EVENT.AI_OUTPUT_REQUESTED, analyticsContext({ export_type: queryKind, trigger }))
     }
 
+    // A fresh send supersedes any scheduled rate-limit auto-retry.
+    for (const handle of Object.values(autoRetryTimeoutsRef.current)) window.clearTimeout(handle)
+    autoRetryTimeoutsRef.current = {}
+
     setLoading(true)
     setMessages((current) => [
       ...current,
@@ -274,22 +318,28 @@ export function useAIChat() {
       { id: assistantId, role: 'assistant', content: '', createdAt, state: 'pending' },
     ])
 
+    // R3: race the turn against a hard timeout so a stuck request always
+    // resolves the pending row to a retryable error — never an eternal spinner.
+    let timedOut = false
+    let timeoutHandle: number | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = window.setTimeout(() => { timedOut = true; reject(new Error('timeout')) }, SEND_TIMEOUT_MS)
+    })
+
     try {
-      const response = await ipc.ai.sendMessage({
-        message: prompt,
-        contextOverride: options?.contextOverride ?? null,
-        clientRequestId: requestId,
-        threadId: activeThreadId,
-      }) as AIChatTurnResult
+      const response = await Promise.race([
+        ipc.ai.sendMessage({
+          message: prompt,
+          contextOverride: options?.contextOverride ?? null,
+          clientRequestId: requestId,
+          threadId: activeThreadId,
+        }),
+        timeoutPromise,
+      ]) as AIChatTurnResult
 
-      // sendMessage auto-creates a thread server-side when none is passed.
-      // Refresh the list and adopt the newest row so follow-up turns stay linked.
-      try {
-        const refreshed = await ipc.ai.listThreads({ includeArchived: false })
-        setThreads(refreshed)
-        if (activeThreadId == null && refreshed[0]) setActiveThreadId(refreshed[0].id)
-      } catch { /* best-effort */ }
-
+      // R3: flip the pending row to the final answer FIRST. The visible
+      // completion must not be gated on the thread-list refresh that follows —
+      // that ordering was why answers only appeared after navigating away.
       setMessages((current) => current.map((message) => (
         message.id === assistantId
           ? { ...response.assistantMessage, state: 'complete' as const }
@@ -299,17 +349,54 @@ export function useAIChat() {
         answer_kind: response.assistantMessage.answerKind ?? null,
         query_kind: queryKind,
         trigger,
+        provider_calls: response.providerCallCount ?? null,
       }))
+      void refreshThreadsAfterTurn()
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const sanitized = sanitizeIpcError(
+        error,
+        timedOut ? 'That took longer than expected. Tap retry to run it again.' : undefined,
+      )
+      // R4: ride out a rate limit automatically, once, after a short backoff.
+      // The backend already retried transient 429s; this waits for the
+      // per-minute window before giving up to a manual Retry.
+      const willAutoRetry = sanitized.isRateLimit && autoRetryCount < 1
       setMessages((current) => current.map((entry) => (
-        entry.id === assistantId ? { ...entry, content: message, state: 'error' as const } : entry
+        entry.id === assistantId
+          ? {
+            ...entry,
+            content: sanitized.message,
+            state: 'error' as const,
+            errorInfo: {
+              isRateLimit: sanitized.isRateLimit,
+              retryAfterSeconds: sanitized.retryAfterSeconds,
+              autoRetryScheduled: willAutoRetry,
+            },
+          }
+          : entry
       )))
+      // Keep the (server-created) thread linked so a retry continues it rather
+      // than spawning a duplicate.
+      void refreshThreadsAfterTurn()
+      if (willAutoRetry) {
+        const waitMs = Math.min(45, Math.max(8, sanitized.retryAfterSeconds ?? 20)) * 1000
+        autoRetryTimeoutsRef.current[assistantId] = window.setTimeout(() => {
+          delete autoRetryTimeoutsRef.current[assistantId]
+          // Replace the errored turn in place rather than appending a duplicate.
+          setMessages((current) => current.filter((m) => m.id !== assistantId && m.id !== userId))
+          void handleSendRef.current(prompt, {
+            contextOverride: options?.contextOverride ?? null,
+            trigger: 'retry',
+            autoRetryCount: autoRetryCount + 1,
+          })
+        }, waitMs)
+      }
     } finally {
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle)
       setLoading(false)
       clearStreamingSnapshot(assistantId)
     }
-  }, [activeThreadId, hasApiKey, analyticsContext])
+  }, [activeThreadId, hasApiKey, analyticsContext, refreshThreadsAfterTurn])
 
   // Stable submit reference for the memoized composer: its only re-render
   // trigger should be `loading`, not a fresh callback identity each render.
@@ -326,6 +413,25 @@ export function useAIChat() {
     if (!previousUser) return
     await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
   }, [latestCompletedAssistantId, messages, triggerActionFeedback, analyticsContext, handleSend])
+
+  // R4: retry a turn that ended in an error card. Cancels any pending
+  // auto-retry for that row, then re-sends the user message that preceded it.
+  const handleErrorRetry = useCallback(async (message: ThreadMessage) => {
+    if (loadingRef.current) return
+    const key = String(message.id)
+    if (autoRetryTimeoutsRef.current[key]) {
+      window.clearTimeout(autoRetryTimeoutsRef.current[key])
+      delete autoRetryTimeoutsRef.current[key]
+    }
+    const index = messages.findIndex((m) => m.id === message.id)
+    if (index < 0) return
+    const previousUser = [...messages.slice(0, index)].reverse().find((m) => m.role === 'user')
+    if (!previousUser) return
+    track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({ answer_kind: message.answerKind ?? null, trigger: 'retry' }))
+    // Replace the errored turn in place rather than appending a duplicate.
+    setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+  }, [messages, analyticsContext, handleSend])
 
   const handleCopy = useCallback(async (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => {
     try {
@@ -412,6 +518,12 @@ export function useAIChat() {
   const handleNewChat = useCallback(() => {
     if (loadingRef.current) return
     if (messages.length === 0 && activeThreadId == null) return
+    // Cancel a scheduled auto-retry and invalidate any in-flight thread load so
+    // neither writes into the fresh chat.
+    for (const handle of Object.values(autoRetryTimeoutsRef.current)) window.clearTimeout(handle)
+    autoRetryTimeoutsRef.current = {}
+    latestRequestedThreadRef.current = null
+    setThreadLoading(false)
     setActiveThreadId(null)
     resetComposerState()
   }, [messages.length, activeThreadId, resetComposerState])
@@ -475,9 +587,12 @@ export function useAIChat() {
     // state
     messages,
     loading,
+    threadLoading,
     threads,
     activeThreadId,
     activeThreadLabel,
+    activeModel,
+    activeProvider,
     settings,
     cliTools,
     hasApiKey,
@@ -494,6 +609,7 @@ export function useAIChat() {
     submitMessage,
     handleSend,
     handleRetry,
+    handleErrorRetry,
     handleCopy,
     handleRate,
     handleMessageAction,

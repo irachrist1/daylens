@@ -10,6 +10,9 @@ export interface ThreadTitleContext {
 export const DEFAULT_THREAD_TITLE = 'New chat'
 
 const MAX_THREAD_TITLE_LENGTH = 60
+// Q5: Raycast-style thread titles are short (2–5 words). Cap the word count so a
+// long first message produces a crisp title, not a 60-character clause.
+const MAX_THREAD_TITLE_WORDS = 6
 
 const GENERIC_TITLES = new Set([
   'new chat',
@@ -58,6 +61,15 @@ function titleCase(value: string): string {
 
 function trimTitle(value: string): string {
   const normalized = collapseWhitespace(stripTrailingPunctuation(value))
+
+  // Q5: cap the word count first so a long first message yields a short, clean
+  // title. The trailing ellipsis keeps it detectable as weak (isWeakThreadTitle)
+  // so a later, cleaner message can upgrade it.
+  const allWords = normalized.split(' ')
+  if (allWords.length > MAX_THREAD_TITLE_WORDS) {
+    return `${allWords.slice(0, MAX_THREAD_TITLE_WORDS).join(' ')}…`
+  }
+
   if (normalized.length <= MAX_THREAD_TITLE_LENGTH) return normalized
 
   const words = normalized.split(' ')

@@ -36,10 +36,10 @@ import { routeInsightsQuestion, shouldUseRouter, type EntityContext, type Tempor
 import { resolveFollowUp } from '../lib/followUpResolver'
 import {
   buildDeterministicFollowUpCandidates,
-  buildFollowUpSuggestionPrompts,
   classifyQuestionShape,
   filterFollowUpCandidatesWithReport,
-  parseFollowUpSuggestions,
+  isIdentityAnswer,
+  type QuestionShape,
 } from '../lib/followUpSuggestions'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
@@ -70,8 +70,8 @@ import {
   touchThreadLastMessage,
 } from '../services/artifacts'
 import { capture } from '../services/analytics'
-import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
-import { getApiKey, getSettings, hasApiKey } from '../services/settings'
+import { ANALYTICS_EVENT } from '@shared/analytics'
+import { getApiKey, getSettings } from '../services/settings'
 import { computeEnhancedFocusScore, computeFocusScoreV2 } from '../lib/focusScore'
 import { getCurrentSession } from '../services/tracking'
 import type {
@@ -113,6 +113,7 @@ import {
   type ProviderTextResponse,
   type ResolvedProviderConfig,
 } from '../services/aiOrchestration'
+import { withProviderCallCount, withProviderRateLimit } from '../services/aiRateLimiter'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
 import { anthropicTools, openaiTools, googleTools, executeTool, type ToolName } from '../services/aiTools'
 import {
@@ -925,7 +926,9 @@ async function sendWithAnthropic(
   stream.on('text', (delta) => {
     void options?.onDelta?.(delta)
   })
-  const response = await stream.finalMessage()
+  // maxAttempts:1 — the Anthropic SDK owns the 429 backoff; this records the
+  // call for per-turn instrumentation and honors the shared cooldown gate.
+  const response = await withProviderRateLimit('anthropic', () => stream.finalMessage(), { label: 'text job' })
 
   return {
     text: response.content
@@ -976,13 +979,17 @@ async function sendWithOpenRouter(
     ...prior.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     { role: 'user' as const, content: userMessage },
   ]
-  const stream = await client.chat.completions.create({
-    model: config.model,
-    messages,
-    max_tokens: options?.maxOutputTokens ?? 1024,
-    stream: true,
-    stream_options: { include_usage: true },
-  })
+  const stream = await withProviderRateLimit(
+    'openrouter',
+    () => client.chat.completions.create({
+      model: config.model,
+      messages,
+      max_tokens: options?.maxOutputTokens ?? 1024,
+      stream: true,
+      stream_options: { include_usage: true },
+    }),
+    { label: 'text job' },
+  )
   let text = ''
   let usage: ProviderTextResponse['usage'] = null
   for await (const chunk of stream) {
@@ -1011,17 +1018,21 @@ async function sendWithOpenAI(
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
   const client = new OpenAI({ apiKey: config.apiKey ?? '' })
-  const responseStream = await client.responses.create({
-    model: config.model,
-    instructions: systemPrompt,
-    input: openAIInputFromHistory([
-      ...prior,
-      { role: 'user', content: userMessage },
-    ]),
-    max_output_tokens: options?.maxOutputTokens ?? 1024,
-    store: false,
-    stream: true,
-  })
+  const responseStream = await withProviderRateLimit(
+    'openai',
+    () => client.responses.create({
+      model: config.model,
+      instructions: systemPrompt,
+      input: openAIInputFromHistory([
+        ...prior,
+        { role: 'user', content: userMessage },
+      ]),
+      max_output_tokens: options?.maxOutputTokens ?? 1024,
+      store: false,
+      stream: true,
+    }),
+    { label: 'text job' },
+  )
   let text = ''
   let usage: ProviderTextResponse['usage'] = null
 
@@ -1084,7 +1095,7 @@ async function sendWithGoogle(
     history: googleHistoryFromMessages(prior),
   })
 
-  const response = await chat.sendMessageStream({ message: userMessage })
+  const response = await withProviderRateLimit('google', () => chat.sendMessageStream({ message: userMessage }), { label: 'text job' })
   let text = ''
   for await (const chunk of response) {
     let nextText = ''
@@ -1115,6 +1126,24 @@ const MAX_TOOL_CALLS = 7
 const MAX_TOOL_RESULT_TOKENS = 8000
 // 1 token ≈ 4 chars — rough budget for tool result JSON payloads
 const MAX_TOOL_RESULT_CHARS = MAX_TOOL_RESULT_TOKENS * 4
+
+// R1: a low-RPM model (free-tier Gemini flash/flash-lite, Haiku, mini/nano)
+// sustains only a few requests per minute, so the worst-case per-turn tool
+// fan-out is what tips a single answer into a 429. Detect these by id and cap
+// their roundtrips tighter than the high-tier default.
+function isLowRpmModel(model: string): boolean {
+  return /flash|haiku|mini|nano|gemini-2/i.test(model)
+}
+
+function toolCallCapForQuestion(shape: QuestionShape, lowRpm: boolean): number {
+  const base = shape === 'generative'
+    ? 10
+    : shape === 'reflective' || shape === 'cross_cutting'
+      ? 9
+      : 7
+  if (!lowRpm) return base
+  return Math.min(base, shape === 'generative' ? 6 : 5)
+}
 
 function estimateChars(messages: { role?: string; content?: unknown }[]): number {
   return messages.reduce((n, m) => n + JSON.stringify(m.content ?? '').length, 0)
@@ -1162,6 +1191,11 @@ async function runAnthropicToolLoop(
   loopOptions: AnthropicToolLoopOptions = {},
 ): Promise<string> {
   const client = new Anthropic({ apiKey, maxRetries: 4 })
+  // R1: route every create through the shared throttle for calls-per-turn
+  // instrumentation and the cross-provider cooldown gate. The Anthropic SDK
+  // owns the 429 backoff (maxRetries above), so the wrapper stays single-pass.
+  const create = (params: Anthropic.MessageCreateParamsNonStreaming) =>
+    withProviderRateLimit('anthropic', () => client.messages.create(params), { label: 'chat' })
   const intermediateMaxTokens = loopOptions.intermediateMaxTokens ?? 1024
   const finalMaxTokens = loopOptions.finalMaxTokens ?? 2048
   const effectiveMaxToolCalls = loopOptions.maxToolCalls ?? MAX_TOOL_CALLS
@@ -1196,7 +1230,7 @@ async function runAnthropicToolLoop(
         missing_entity_count: timestampCheck.suspect.length,
       })
       try {
-        const retry = await client.messages.create({
+        const retry = await create({
           model,
           max_tokens: finalMaxTokens,
           system: systemPrompt,
@@ -1243,7 +1277,7 @@ async function runAnthropicToolLoop(
         `Your previous answer referenced ${citationCheck.missingEntities.join(', ')}, but that text does not appear in the tool results. ` +
         'Answer only from entities present in the tool results, or say you cannot see evidence for the claim.'
       try {
-        const retry = await client.messages.create({
+        const retry = await create({
           model,
           max_tokens: finalMaxTokens,
           system: systemPrompt,
@@ -1291,7 +1325,7 @@ async function runAnthropicToolLoop(
 
   while (true) {
     const trimmed = truncateOldestToolResults(messages, systemChars)
-    const response = await client.messages.create({
+    const response = await create({
       model,
       max_tokens: intermediateMaxTokens,
       system: systemPrompt,
@@ -1341,7 +1375,7 @@ async function runAnthropicToolLoop(
           tool_call_count: toolCallCount,
         })
         try {
-          const retry = await client.messages.create({
+          const retry = await create({
             model,
             max_tokens: finalMaxTokens,
             system: systemPrompt,
@@ -1442,7 +1476,7 @@ async function runAnthropicToolLoop(
 
     if (toolCallCount >= effectiveMaxToolCalls) {
       // Force a final answer without tools
-      const finalResponse = await client.messages.create({
+      const finalResponse = await create({
         model,
         max_tokens: finalMaxTokens,
         system: systemPrompt,
@@ -1482,8 +1516,13 @@ async function runOpenAIToolLoop(
   db: ReturnType<typeof getDb>,
   onDelta: (delta: string) => void | Promise<void>,
   provider: AIProviderMode = 'openai',
+  loopOptions: AnthropicToolLoopOptions = {},
 ): Promise<string> {
   const client = createOpenAICompatibleClient(apiKey, provider)
+  const effectiveMaxToolCalls = loopOptions.maxToolCalls ?? MAX_TOOL_CALLS
+  // R1: instrumentation + cooldown gate; the OpenAI SDK owns 429 backoff.
+  const create = (params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming) =>
+    withProviderRateLimit(provider, () => client.chat.completions.create(params), { label: 'chat' })
 
   type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
   const messages: ChatMessage[] = [
@@ -1508,7 +1547,7 @@ async function runOpenAIToolLoop(
       }
     }
 
-    const response = await client.chat.completions.create({
+    const response = await create({
       model,
       max_tokens: 1024,
       tools: openaiTools,
@@ -1534,7 +1573,7 @@ async function runOpenAIToolLoop(
         const retryPrompt =
           `Your previous answer referenced ${citationCheck.missingEntities.join(', ')}, but that text does not appear in the tool results. ` +
           'Answer only from entities present in the tool results, or say you cannot see evidence for the claim.'
-        const retry = await client.chat.completions.create({
+        const retry = await create({
           model,
           max_tokens: 1024,
           messages: [...messages, { role: 'user', content: retryPrompt }],
@@ -1559,7 +1598,7 @@ async function runOpenAIToolLoop(
     }
 
     for (const tc of toolCalls) {
-      if (toolCallCount >= MAX_TOOL_CALLS) break
+      if (toolCallCount >= effectiveMaxToolCalls) break
       if (tc.type !== 'function') continue
       toolCallCount++
       let result: unknown
@@ -1577,9 +1616,9 @@ async function runOpenAIToolLoop(
       messages.push({ role: 'tool', tool_call_id: tc.id, content: resultText })
     }
 
-    if (toolCallCount >= MAX_TOOL_CALLS) {
+    if (toolCallCount >= effectiveMaxToolCalls) {
       // Force final answer without tools
-      const finalResponse = await client.chat.completions.create({
+      const finalResponse = await create({
         model,
         max_tokens: 1024,
         messages,
@@ -1638,7 +1677,9 @@ async function runGoogleToolLoop(
   userMessage: string,
   db: ReturnType<typeof getDb>,
   onDelta: (delta: string) => void | Promise<void>,
+  loopOptions: AnthropicToolLoopOptions = {},
 ): Promise<string> {
+  const effectiveMaxToolCalls = loopOptions.maxToolCalls ?? MAX_TOOL_CALLS
   const client = new GoogleGenAI({
     apiKey,
     httpOptions: {
@@ -1647,6 +1688,12 @@ async function runGoogleToolLoop(
       },
     },
   })
+
+  // R1: Google's SDK does not auto-retry 429/RESOURCE_EXHAUSTED, so every
+  // generateContent in the loop goes through the shared throttle (spacing +
+  // backoff retry). This is what keeps a free-tier key from failing mid-answer.
+  const generate = (params: Parameters<typeof client.models.generateContent>[0]) =>
+    withProviderRateLimit('google', () => client.models.generateContent(params), { label: 'chat tool-loop' })
 
   const contents: GoogleContent[] = [
     ...googleHistoryFromMessages(prior),
@@ -1690,7 +1737,7 @@ async function runGoogleToolLoop(
 
   while (true) {
     const trimmed = truncateOldestGoogleFunctionResponses(contents, systemChars)
-    const response = await client.models.generateContent({
+    const response = await generate({
       model,
       contents: trimmed,
       config: {
@@ -1713,7 +1760,7 @@ async function runGoogleToolLoop(
         const retryPrompt =
           `Your previous answer referenced ${citationCheck.missingEntities.join(', ')}, but that text does not appear in the tool results. ` +
           'Answer only from entities present in the tool results, or say you cannot see evidence for the claim.'
-        const retryResponse = await client.models.generateContent({
+        const retryResponse = await generate({
           model,
           contents: [...contents, { role: 'user', parts: [{ text: retryPrompt }] }],
           config: {
@@ -1748,7 +1795,7 @@ async function runGoogleToolLoop(
     const functionResponseParts: GooglePart[] = []
     for (const fc of functionCalls) {
       let result: unknown
-      if (toolCallCount < MAX_TOOL_CALLS) {
+      if (toolCallCount < effectiveMaxToolCalls) {
         toolCallCount++
         try {
           result = executeTool(fc.name as ToolName, fc.args, db)
@@ -1772,8 +1819,8 @@ async function runGoogleToolLoop(
     }
     contents.push({ role: 'user', parts: functionResponseParts })
 
-    if (toolCallCount >= MAX_TOOL_CALLS) {
-      const finalResponse = await client.models.generateContent({
+    if (toolCallCount >= effectiveMaxToolCalls) {
+      const finalResponse = await generate({
         model,
         contents: truncateOldestGoogleFunctionResponses(contents, systemChars),
         config: {
@@ -3168,64 +3215,32 @@ function inferFollowUpAffordances(answerKind: AIAnswerKind): AIConversationState
   }
 }
 
-async function generateSuggestedFollowUps(
+// Follow-up chips are fully deterministic and grounded in the answer's own
+// named entities. This is a deliberate three-in-one fix:
+//   • R1  — no extra provider call per turn (this used to fire 1–2 calls, and
+//           even cross-routed to Anthropic, competing with the answer for the
+//           per-minute budget).
+//   • Q3  — never templates a meta-entity ("How long on Google Gemini?") and
+//           shows nothing for identity/meta answers, rather than dumb chips.
+//   • Q4  — the same answer always yields the same chips: entities present →
+//           grounded chips; none → no chips. Presence is no longer a coin flip
+//           that depended on a rate-limited side call succeeding.
+function generateSuggestedFollowUps(
   userQuestion: string,
   answerText: string,
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
-): Promise<FollowUpSuggestion[]> {
+): FollowUpSuggestion[] {
+  if (answerKind === 'error') return []
+  if (isIdentityAnswer(answerText)) return []
   const justAnsweredShape = classifyQuestionShape(userQuestion)
-  const fallbackReport = filterFollowUpCandidatesWithReport(
+  const report = filterFollowUpCandidatesWithReport(
     answerText,
     buildDeterministicFollowUpCandidates(answerKind, state, answerText),
     justAnsweredShape,
   )
-  const fallback = fallbackReport.suggestions
-  if (fallback.length < 2 || answerKind === 'error') return fallback.slice(0, 4)
-
-  const preferredProviderOverride = await hasApiKey('anthropic') ? 'anthropic' as const : null
-  const { systemPrompt, userPrompt } = buildFollowUpSuggestionPrompts(userQuestion, answerText, state, fallback)
-
-  const runOnce = async (): Promise<FollowUpSuggestion[]> => {
-    const { text } = await withTimeout(
-      executeTextAIJob(
-        {
-          jobType: 'chat_followup_suggestions',
-          screen: 'ai_chat',
-          triggerSource: 'system',
-          systemPrompt,
-          userMessage: userPrompt,
-          preferredProviderOverride,
-        },
-        sendWithProvider,
-      ),
-      6_000,
-      'Follow-up suggestion generation timed out',
-    )
-    const parsed = parseFollowUpSuggestions(text, fallback)
-    return filterFollowUpCandidatesWithReport(answerText, parsed, justAnsweredShape).suggestions
-  }
-
-  try {
-    let results = await runOnce()
-    // Retry once if every result is deterministic — model output had no named-entity suggestions
-    if (results.every((s) => s.source === 'deterministic')) {
-      results = await runOnce()
-    }
-    return results.slice(0, 4)
-  } catch (error) {
-    capture(ANALYTICS_EVENT.AI_FOLLOWUP_SUGGESTIONS_FALLBACK, {
-      failure_kind: classifyFailureKind(error),
-      answer_kind: answerKind,
-      provider: preferredProviderOverride ?? 'anthropic',
-      suggestion_count: fallback.length,
-      rejected_temporal_count: fallbackReport.rejectedByRule.temporal,
-      rejected_generic_count: fallbackReport.rejectedByRule.generic,
-      rejected_entity_count: fallbackReport.rejectedByRule.entity,
-      rejected_shape_count: fallbackReport.rejectedByRule.shape,
-    })
-    return fallback.slice(0, 4)
-  }
+  // Q3: show ≥2 grounded chips or none — never a single stray chip.
+  return report.suggestions.length >= 2 ? report.suggestions.slice(0, 4) : []
 }
 
 function conversationContextKey(conversationId: number, threadId: number | null): string {
@@ -5377,7 +5392,16 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     tag: 'sendMessage',
   })
   try {
-    const result = await sendMessageInner(payload, options)
+    // R1: count every provider call this turn makes (tool-loop roundtrips,
+    // retries, prose pass) so we can keep the per-turn median low and prove it.
+    const result = await withProviderCallCount(async (getProviderCallCount) => {
+      const inner = await sendMessageInner(payload, options)
+      const providerCalls = getProviderCallCount()
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[ai:chat] turn used ${providerCalls} provider call(s)`)
+      }
+      return { ...inner, providerCallCount: providerCalls }
+    })
     if (recorder) {
       recorder.finish(result.assistantMessage?.content)
     }
@@ -5494,7 +5518,10 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   if (routed) {
     if (routed.kind === 'weeklyBrief') {
       const settings = getSettings()
-      const chatProvider = settings.aiProvider ?? 'anthropic'
+      // R2: single source of truth — the chat surface (and the model string we
+      // show the user) must use the same provider the chat UI shows, which is
+      // aiChatProvider when set, else aiProvider.
+      const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
       const chatModel = modelForProvider(chatProvider, 'quality', settings)
       let pack = routed.briefContext.evidenceKey ? weeklyBriefCache.get(routed.briefContext.evidenceKey) ?? null : null
       if (!pack) {
@@ -5597,7 +5624,10 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const settings = getSettings()
   const { userName } = settings
-  const chatProvider = settings.aiProvider ?? 'anthropic'
+  // R2: resolve the chat provider from the same setting the UI shows
+  // (aiChatProvider ?? aiProvider) so the answer, the executing provider, and
+  // the "what model are you" string can never disagree.
+  const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
   const chatModel = modelForProvider(chatProvider, 'quality', settings)
   const persona = userName
     ? `You are Daylens, a personal productivity coach helping ${userName} understand their time.`
@@ -5642,19 +5672,17 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     const questionShape = classifyQuestionShape(effectiveUserMessage)
     // Generative drafts need many lookups to gather context. Reflective
     // questions ("when am I most focused?") need multi-day exploration —
-    // give them headroom too so they don't hit the cap.
-    const loopOpts: AnthropicToolLoopOptions =
-      questionShape === 'generative'
-        ? { maxToolCalls: 10 }
-        : questionShape === 'reflective' || questionShape === 'cross_cutting'
-          ? { maxToolCalls: 9 }
-          : {}
+    // give them headroom too so they don't hit the cap. R1: on a low-RPM model
+    // (free-tier Gemini flash, Haiku, mini/nano) the worst-case fan-out is the
+    // thing most likely to exhaust a few-per-minute budget mid-answer, so cap
+    // roundtrips tighter for those while keeping headroom on higher-tier models.
+    const loopOpts: AnthropicToolLoopOptions = { maxToolCalls: toolCallCapForQuestion(questionShape, isLowRpmModel(chatModel)) }
 
     assistantText = chatProvider === 'anthropic'
       ? await runAnthropicToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), loopOpts)
       : chatProvider === 'google'
-        ? await runGoogleToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta))
-        : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), chatProvider)
+        ? await runGoogleToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), loopOpts)
+        : await runOpenAIToolLoop(resolvedApiKey, chatModel, systemPrompt, prior, effectiveUserMessage, db, (delta) => stream.push(delta), chatProvider, loopOpts)
     assistantText = assistantText.trim()
   } else {
     // Legacy static-context path — CLI providers only.

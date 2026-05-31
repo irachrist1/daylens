@@ -10,6 +10,7 @@ import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
 import { ipc } from '../lib/ipc'
+import { sanitizeIpcError } from '../lib/ipcError'
 import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, formatFullDate, todayString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
@@ -710,9 +711,10 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
       await onRefresh?.()
       setReanalyzeStatus('AI labels refreshed')
     } catch (error) {
-      const message = error instanceof Error && error.message.trim()
-        ? error.message.trim()
-        : 'AI re-analysis failed'
+      // T1/R4: strip the IPC scaffolding so the user never sees the channel name
+      // ("db:rebuild-timeline-day"); the throttle/retry (R1) already rode out
+      // any transient rate limit before we got here.
+      const { message } = sanitizeIpcError(error, 'AI re-analysis failed. Try again in a moment.')
       setReanalyzeStatus(message)
     } finally {
       setReanalyzing(false)
@@ -1132,7 +1134,8 @@ function BlockInspector({
                   await onRefresh()
                 })
                 .catch((error) => {
-                  setRegenerateError(error instanceof Error ? error.message : String(error))
+                  // T2/R4: friendly, channel-name-free message.
+                  setRegenerateError(sanitizeIpcError(error, "Couldn't regenerate the label. Try again in a moment.").message)
                 })
                 .finally(() => setRegeneratingLabel(false))
             }}

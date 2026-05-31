@@ -6,6 +6,9 @@ import type { AIMessageAction, AIThreadMessage } from '@shared/types'
 export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
   state: 'pending' | 'complete' | 'error'
+  // R4: classified error context for the branded error card (Retry + rate-limit
+  // auto-retry hint). Present only when state === 'error'.
+  errorInfo?: { isRateLimit: boolean; retryAfterSeconds: number | null; autoRetryScheduled: boolean }
 }
 
 export type MessageAction = 'copy' | 'up' | 'down' | 'retry'
