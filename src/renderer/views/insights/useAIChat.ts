@@ -32,6 +32,12 @@ import {
 const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'codex-cli']
 const API_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter']
 
+// D1: the thread list now includes archived threads (the sidebar shows an
+// Archive section), so "adopt a thread" must skip archived ones.
+function firstActiveThreadId(rows: AIThreadSummary[]): number | null {
+  return rows.find((row) => !row.archived)?.id ?? null
+}
+
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
   trigger?: 'freeform' | 'suggested' | 'retry'
@@ -237,11 +243,11 @@ export function useAIChat() {
     const deepLinkThreadId = Number(new URLSearchParams(location.search).get('threadId'))
     const hasDeepLink = Number.isFinite(deepLinkThreadId) && deepLinkThreadId > 0
     let cancelled = false
-    ipc.ai.listThreads({ includeArchived: false }).then((rows) => {
+    ipc.ai.listThreads({ includeArchived: true }).then((rows) => {
       if (cancelled) return
       setThreads(rows)
-      const first = rows[0]
-      if (first && !hasDeepLink) void loadThread(first.id)
+      const firstId = firstActiveThreadId(rows)
+      if (firstId != null && !hasDeepLink) void loadThread(firstId)
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [loadThread, location.search])
@@ -307,9 +313,9 @@ export function useAIChat() {
     // sendMessage auto-creates a thread server-side when none is passed. Adopt
     // the newest row so follow-up turns (and retries) stay linked to it.
     try {
-      const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+      const refreshed = await ipc.ai.listThreads({ includeArchived: true })
       setThreads(refreshed)
-      setActiveThreadId((current) => current ?? refreshed[0]?.id ?? null)
+      setActiveThreadId((current) => current ?? firstActiveThreadId(refreshed))
     } catch { /* best-effort */ }
   }, [])
 
@@ -601,13 +607,13 @@ export function useAIChat() {
   const deleteThread = useCallback(async (thread: AIThreadSummary) => {
     try {
       await ipc.ai.deleteThread(thread.id)
-      const refreshed = await ipc.ai.listThreads({ includeArchived: false })
+      const refreshed = await ipc.ai.listThreads({ includeArchived: true })
       setThreads(refreshed)
       if (thread.id === activeThreadId) {
-        const next = refreshed[0]
-        if (next) {
+        const nextId = firstActiveThreadId(refreshed)
+        if (nextId != null) {
           resetComposerState()
-          void loadThread(next.id)
+          void loadThread(nextId)
         } else {
           setActiveThreadId(null)
           resetComposerState()
@@ -615,6 +621,29 @@ export function useAIChat() {
       }
     } catch (error) {
       console.error('[ai] failed to delete thread', error)
+    }
+  }, [activeThreadId, resetComposerState, loadThread])
+
+  // D1: archive / unarchive a thread. Archiving the active thread moves focus
+  // to the next active one (like delete), so the body never strands on a thread
+  // the user just tucked away.
+  const archiveThread = useCallback(async (thread: AIThreadSummary, archived: boolean) => {
+    try {
+      await ipc.ai.archiveThread(thread.id, archived)
+      const refreshed = await ipc.ai.listThreads({ includeArchived: true })
+      setThreads(refreshed)
+      if (archived && thread.id === activeThreadId) {
+        const nextId = firstActiveThreadId(refreshed)
+        if (nextId != null) {
+          resetComposerState()
+          void loadThread(nextId)
+        } else {
+          setActiveThreadId(null)
+          resetComposerState()
+        }
+      }
+    } catch (error) {
+      console.error('[ai] failed to archive thread', error)
     }
   }, [activeThreadId, resetComposerState, loadThread])
 
@@ -629,7 +658,7 @@ export function useAIChat() {
     routedReportKeyRef.current = routeKey
 
     void (async () => {
-      const refreshed = await ipc.ai.listThreads({ includeArchived: false }).catch(() => null)
+      const refreshed = await ipc.ai.listThreads({ includeArchived: true }).catch(() => null)
       if (refreshed) setThreads(refreshed)
       resetComposerState()
       await loadThread(threadId)
@@ -678,6 +707,7 @@ export function useAIChat() {
     handleNewChat,
     selectThread,
     deleteThread,
+    archiveThread,
     triggerActionFeedback,
     handlePromptChipClick,
     switchProviderAndRetry,

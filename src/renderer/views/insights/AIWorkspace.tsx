@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
@@ -7,11 +6,14 @@ import { AI_PROVIDER_META } from '../../lib/aiProvider'
 import ConnectAI from '../../components/ConnectAI'
 import type { DaylensSearchResult } from '../../../preload/index'
 import { AICompose, type AIComposeHandle } from './AICompose'
+import { ConversationSidebar } from './ConversationSidebar'
 import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
-import { IconChevronDown, IconNewChat, IconSparkle, relativeTime } from './icons'
+import { IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
 import type { ThreadMessage } from './types'
+
+const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
 
 const STARTER_PROMPTS = [
   'What did I work on today?',
@@ -51,6 +53,7 @@ export default function AIWorkspace() {
     handleNewChat,
     selectThread,
     deleteThread,
+    archiveThread,
     handlePromptChipClick,
     switchProviderAndRetry,
     analyticsContext,
@@ -58,9 +61,17 @@ export default function AIWorkspace() {
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<AIComposeHandle>(null)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [hoveredThreadId, setHoveredThreadId] = useState<number | null>(null)
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' } catch { return false }
+  })
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed
+      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }, [])
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -72,8 +83,6 @@ export default function AIWorkspace() {
 
   const onNewChat = useCallback(() => {
     handleNewChat()
-    setHistoryOpen(false)
-    setDeleteConfirmId(null)
     composerRef.current?.focus()
   }, [handleNewChat])
 
@@ -91,8 +100,6 @@ export default function AIWorkspace() {
 
   const onSelectThread = useCallback((threadId: number) => {
     selectThread(threadId)
-    setHistoryOpen(false)
-    setDeleteConfirmId(null)
     composerRef.current?.focus()
   }, [selectThread])
 
@@ -146,10 +153,35 @@ export default function AIWorkspace() {
   const hasMessages = messages.length > 0
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* ── Top bar: thread title + model subline (left, U2/D2), search +
-            thread controls (right). No centered floating label. ── */}
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      {/* ── D1: time-grouped, searchable conversation list with Archive. ── */}
+      {hasApiKey && !sidebarCollapsed && (
+        <ConversationSidebar
+          threads={threads}
+          activeThreadId={activeThreadId}
+          onSelect={onSelectThread}
+          onNewChat={onNewChat}
+          onDelete={deleteThread}
+          onArchive={archiveThread}
+          onCollapse={toggleSidebar}
+        />
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
+      {/* ── Top bar: sidebar toggle + thread title + model subline (U2/D2),
+            search + new chat. No centered floating label. ── */}
       <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
+        {hasApiKey && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? 'Show chat list' : 'Hide chat list'}
+            aria-label={sidebarCollapsed ? 'Show chat list' : 'Hide chat list'}
+            aria-pressed={!sidebarCollapsed}
+            style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: sidebarCollapsed ? 'var(--color-surface)' : 'var(--color-surface-high)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          >
+            <IconSidebar />
+          </button>
+        )}
         <div style={{ minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
           <div style={{ fontSize: 13, fontWeight: 680, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {activeThreadLabel ?? 'New chat'}
@@ -162,75 +194,15 @@ export default function AIWorkspace() {
         </div>
         <div style={{ flex: 1, minWidth: 8 }} />
         <HistorySearch onResultClick={handleSearchResultClick} />
-        <div style={{ position: 'relative', display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          {threads.length > 0 && (
-            <button
-              type="button"
-              onClick={() => { setHistoryOpen((v) => !v); setDeleteConfirmId(null) }}
-              aria-haspopup="listbox"
-              aria-expanded={historyOpen}
-              title="Recent chats"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 34, padding: '0 10px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: historyOpen ? 'var(--color-surface-high)' : 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-            >
-              History
-              <IconChevronDown />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onNewChat}
-            title="New chat (⌘N)"
-            aria-label="New chat"
-            style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-          >
-            <IconNewChat />
-          </button>
-
-          {historyOpen && threads.length > 0 && (
-            <>
-              <div style={{ position: 'fixed', inset: 0, zIndex: 19 }} onClick={() => { setHistoryOpen(false); setDeleteConfirmId(null) }} />
-              <div role="listbox" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 20, width: 320, maxHeight: 380, overflowY: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-border-ghost)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 6 }}>
-                {threads.map((thread) => (
-                  <div
-                    key={thread.id}
-                    role="option"
-                    aria-selected={thread.id === activeThreadId}
-                    onMouseEnter={() => setHoveredThreadId(thread.id)}
-                    onMouseLeave={() => setHoveredThreadId(null)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 4, borderRadius: 6, background: thread.id === activeThreadId ? 'var(--color-surface-muted)' : 'transparent', marginBottom: 2 }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelectThread(thread.id)}
-                      style={{ display: 'block', flex: 1, minWidth: 0, textAlign: 'left', padding: '9px 10px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)', fontSize: 12.5, cursor: 'pointer' }}
-                    >
-                      <div style={{ fontWeight: 680, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{thread.title}</div>
-                      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>{relativeTime(thread.lastMessageAt)}</div>
-                    </button>
-                    {deleteConfirmId === thread.id ? (
-                      <button
-                        type="button"
-                        onClick={() => { void deleteThread(thread); setDeleteConfirmId(null) }}
-                        style={{ flexShrink: 0, padding: '4px 8px', marginRight: 4, border: 'none', borderRadius: 4, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}
-                      >
-                        Delete?
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmId(thread.id)}
-                        aria-label={`Delete ${thread.title}`}
-                        style={{ width: 28, flexShrink: 0, marginRight: 4, border: 'none', borderRadius: 5, background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 4, opacity: hoveredThreadId === thread.id ? 1 : 0, transition: 'opacity 100ms ease' }}
-                      >
-                        <Trash2 size={13} strokeWidth={1.9} aria-hidden="true" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={onNewChat}
+          title="New chat (⌘N)"
+          aria-label="New chat"
+          style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <IconNewChat />
+        </button>
       </header>
 
       {/* ── Conversation ──────────────────────────────────────────────────── */}
@@ -312,6 +284,7 @@ export default function AIWorkspace() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

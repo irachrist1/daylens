@@ -83,6 +83,26 @@ export function IconSearch({ size = 14 }: { size?: number }) {
   )
 }
 
+// D1: sidebar toggle — a panel with a divider, reads as "show/hide the list".
+export function IconSidebar({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="11" rx="2" />
+      <path d="M6.2 2.7v10.6" />
+    </svg>
+  )
+}
+
+export function IconArchive({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="3" rx="1" />
+      <path d="M3 5.5v6A1.5 1.5 0 0 0 4.5 13h7A1.5 1.5 0 0 0 13 11.5v-6" />
+      <path d="M6.5 8h3" />
+    </svg>
+  )
+}
+
 export function IconExternal() {
   return (
     <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
