@@ -342,7 +342,9 @@ export function useAIChat() {
     setMessages((current) => current.map((entry) => (
       entry.id === message.id ? { ...entry, rating, ratingUpdatedAt: rating ? Date.now() : null } : entry
     )))
-    triggerActionFeedback(message.id, rating === 'down' ? 'down' : 'up')
+    // Pulse the button that was actually clicked. When toggling a rating off,
+    // `rating` is null, so fall back to the rating being cleared (message.rating).
+    triggerActionFeedback(message.id, (rating ?? previousRating) === 'down' ? 'down' : 'up')
     track(ANALYTICS_EVENT.AI_ANSWER_RATED, analyticsContext({
       answer_kind: message.answerKind ?? null,
       rating: rating ?? 'cleared',
