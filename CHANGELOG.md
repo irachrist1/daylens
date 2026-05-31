@@ -4,8 +4,10 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
-## v1.0.41 - 2026-05-30 — Timeline Coherence
+## v1.0.41 - 2026-05-31 — Timeline Coherence + AI Tab Rewrite
 
+- The AI tab is rebuilt as a faster, minimal chat: the composer auto-grows with no per-keystroke layout work, new chat is instant, and the message list, composer, and history search render in isolation so typing, streaming, and searching no longer re-render each other.
+- Local-history search is preserved at the top of the AI tab; the recap panel, hero day-summary, and separate files browser were removed in favor of inline artifact cards.
 - Timeline and insights refreshes from foreground app switches are throttled to reduce repeated full-day rebuilds.
 - AI block relabel writes now use one persistence path, and per-block Regenerate tells the model which label was rejected.
 - Titleless, artifactless browser slivers between work stretches are absorbed without loosening distinct-topic or real-gap guards.

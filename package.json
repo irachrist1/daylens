@@ -1,7 +1,7 @@
 {
   "name": "daylens",
   "productName": "Daylens",
-  "version": "1.0.40",
+  "version": "1.0.41",
   "description": "Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.",
   "main": ".vite/build/main.js",
   "scripts": {
