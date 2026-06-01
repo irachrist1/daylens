@@ -319,6 +319,44 @@ a[href], button.link-style {
   field-sizing: content;
 }
 
+/* FB11: the contenteditable composer. White-space pre-wrap so Shift+Enter
+   newlines render; placeholder shown only when truly empty. */
+.dl-composer:empty::before,
+.dl-composer[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+.dl-composer:focus { outline: none; }
+
+/* FB11: Notion-style inline mention chip — used both in the composer
+   (contenteditable, inserted as a non-editable span) and in the sent message. */
+.dl-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 4px;
+  margin: 0 1px;
+  border-radius: 6px;
+  background: var(--color-accent-dim);
+  color: var(--color-text-primary);
+  font-weight: 560;
+  font-size: 0.94em;
+  line-height: 1.45;
+  white-space: nowrap;
+  vertical-align: baseline;
+  user-select: none;
+}
+.dl-mention > img,
+.dl-mention > svg { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; display: block; }
+.dl-mention .dl-mention-dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; }
+.dl-mention .dl-mention-fallback {
+  width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 800;
+  background: var(--color-surface-high); color: var(--color-text-secondary);
+}
+
 @keyframes aiMessageIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }

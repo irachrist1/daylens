@@ -36,11 +36,14 @@ import { routeInsightsQuestion, shouldUseRouter, type EntityContext, type Tempor
 import { resolveFollowUp } from '../lib/followUpResolver'
 import {
   buildDeterministicFollowUpCandidates,
+  buildFollowUpSuggestionPrompts,
   classifyQuestionShape,
   filterFollowUpCandidatesWithReport,
   isIdentityAnswer,
+  parseFollowUpSuggestions,
   type QuestionShape,
 } from '../lib/followUpSuggestions'
+import { transformInstruction, transformLabel } from '@shared/answerTransforms'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
   fallbackGeneratedReportContent,
@@ -83,6 +86,7 @@ import type {
   AIMessageArtifact,
   AIMessageAction,
   AIAnswerKind,
+  AIAnswerTransformKind,
   AIChatTurnResult,
   AIConversationDateRange,
   AIConversationSourceKind,
@@ -3227,22 +3231,53 @@ function inferFollowUpAffordances(answerKind: AIAnswerKind): AIConversationState
 //   • Q4  — the same answer always yields the same chips: entities present →
 //           grounded chips; none → no chips. Presence is no longer a coin flip
 //           that depended on a rate-limited side call succeeding.
-function generateSuggestedFollowUps(
+// FB10: follow-ups are genuinely good or absent. A real model call (cheap
+// economy tier — the `chat_followup_suggestions` job) generates them grounded in
+// the answer's actual entities/numbers, then the two-stage filter enforces the
+// bar (real answer token, varied shapes, no temporal/generic/header-word chips).
+// The deterministic candidates are passed only as shape SEEDS — never templated
+// into "How long on ${stray noun}?". If <2 survive, we show none.
+async function generateSuggestedFollowUps(
   userQuestion: string,
   answerText: string,
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
-): FollowUpSuggestion[] {
+): Promise<FollowUpSuggestion[]> {
   if (answerKind === 'error') return []
   if (isIdentityAnswer(answerText)) return []
+  // Greetings / one-liners have nothing worth following up on — don't spend a call.
+  if (answerText.trim().length < 80) return []
+
   const justAnsweredShape = classifyQuestionShape(userQuestion)
-  const report = filterFollowUpCandidatesWithReport(
-    answerText,
-    buildDeterministicFollowUpCandidates(answerKind, state, answerText),
-    justAnsweredShape,
-  )
-  // Q3: show ≥2 grounded chips or none — never a single stray chip.
-  return report.suggestions.length >= 2 ? report.suggestions.slice(0, 4) : []
+  const seeds = buildDeterministicFollowUpCandidates(answerKind, state, answerText)
+
+  try {
+    const { systemPrompt, userPrompt } = buildFollowUpSuggestionPrompts(userQuestion, answerText, state, seeds)
+    const { text } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'chat_followup_suggestions',
+          screen: 'ai_chat',
+          triggerSource: 'system',
+          systemPrompt,
+          userMessage: userPrompt,
+          prior: [],
+        },
+        sendWithProvider,
+      ),
+      9_000,
+      'Follow-up generation timed out',
+    )
+    const parsed = parseFollowUpSuggestions(text, [])
+    const report = filterFollowUpCandidatesWithReport(answerText, parsed, justAnsweredShape)
+    // Show ≥2 grounded chips or none — never a single stray chip.
+    return report.suggestions.length >= 2 ? report.suggestions.slice(0, 4) : []
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[ai] follow-up generation failed; showing none:', error instanceof Error ? error.message : error)
+    }
+    return []
+  }
 }
 
 function conversationContextKey(conversationId: number, threadId: number | null): string {
@@ -4688,6 +4723,87 @@ async function maybeGenerateRequestedOutput(params: {
   }
 }
 
+// FB7: transforms rewrite the SPECIFIC prior answer (with its grounded numbers)
+// into the requested form via a real model call — no re-analysis, no generic day
+// bundle. The instructions + labels live in shared/answerTransforms so the
+// renderer (menu + retry) and this generation path can never drift.
+function latestAssistantAnswer(history: AIThreadMessage[]): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index]
+    if (message.role === 'assistant' && (message.content ?? '').trim() && message.answerKind !== 'error') {
+      return message.content
+    }
+  }
+  return null
+}
+
+async function runAnswerTransform(params: {
+  kind: AIAnswerTransformKind
+  sourceAnswer: string
+  stream: ReturnType<typeof createChatStreamAccumulator>
+  restoredState: AIConversationState | null
+  previousContext: TemporalContext | null
+}): Promise<AnswerEnvelope> {
+  const { kind, sourceAnswer, restoredState, previousContext } = params
+  const systemPrompt = [
+    VOICE_SYSTEM_PROMPT,
+    transformInstruction(kind),
+    USER_VISIBLE_ACTIVITY_PROSE_RULE,
+    'Do not use emoji in any part of your response.',
+  ].join('\n')
+  const userMessage = `Reformat the answer below. Use only what it contains.\n\nANSWER:\n${sourceAnswer.trim()}`
+
+  const trace = getCurrentTrace()
+  if (trace) trace.addEvent({ kind: 'prose_pass', input: `[transform:${kind}]\n${userMessage.slice(0, 2000)}`, output: '(pending)' })
+
+  const { text: rawText } = await withTimeout(
+    executeTextAIJob(
+      { jobType: 'chat_answer', screen: 'ai_chat', triggerSource: 'user', systemPrompt, userMessage, prior: [] },
+      sendWithProvider,
+      { onDelta: (delta) => params.stream.push(delta) },
+    ),
+    60_000,
+    'Transform timed out',
+  )
+  const text = rawText.trim()
+  if (trace) trace.addEvent({ kind: 'prose_pass', input: '[transform_raw_output]', output: text })
+  if (!text) throw new Error('The AI returned an empty response. Please try again.')
+  await params.stream.streamText(text)
+
+  const resolvedTemporalContext = previousContext ?? null
+
+  if (kind === 'report') {
+    const titleMatch = /^#\s+(.+)$/m.exec(text)
+    const reportTitle = (titleMatch ? titleMatch[1] : 'Daylens report').trim()
+    const artifacts = await writeGeneratedArtifacts(reportTitle, [{
+      kind: 'report',
+      title: 'shareable-report',
+      format: 'markdown',
+      extension: 'md',
+      subtitle: reportTitle,
+      contents: `${text}\n\nGenerated by Daylens.`,
+    }])
+    const conversationState = buildConversationState(
+      'generated_report',
+      'freeform',
+      resolvedTemporalContext,
+      inferFollowUpAffordances('generated_report'),
+      {
+        dateRange: restoredState?.dateRange ?? null,
+        lastIntent: restoredState?.lastIntent ?? null,
+        topic: restoredState?.topic ?? null,
+        responseMode: restoredState?.responseMode ?? null,
+        evidenceKey: restoredState?.evidenceKey ?? null,
+      },
+    )
+    return { assistantText: text, answerKind: 'generated_report', sourceKind: 'freeform', resolvedTemporalContext, conversationState, suggestedFollowUps: [], artifacts }
+  }
+
+  const answerKind: AIAnswerKind = 'freeform_chat'
+  const suggestedFollowUps = await generateSuggestedFollowUps(transformLabel(kind), text, answerKind, restoredState)
+  return { assistantText: text, answerKind, sourceKind: 'freeform', resolvedTemporalContext, conversationState: restoredState, suggestedFollowUps }
+}
+
 function weeklyBriefPrompts(
   userMessage: string,
   briefContext: WeeklyBriefContext,
@@ -5503,6 +5619,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   }
 
   const prior = sanitizeConversationHistory(history)
+
+  // FB7: an explicit "Turn into…" transform rewrites the SPECIFIC prior answer.
+  // It bypasses the router + generic report bundle so the output is a faithful
+  // transform of that answer's real content, not a fresh generic day shell.
+  if (payload.transform) {
+    const sourceAnswer = latestAssistantAnswer(history)
+    if (sourceAnswer) {
+      const transformEnvelope = await runAnswerTransform({
+        kind: payload.transform,
+        sourceAnswer,
+        stream,
+        restoredState,
+        previousContext,
+      })
+      return persistChatTurn(db, conversationId, userMessage, transformEnvelope, threadId)
+    }
+    // No prior answer to transform — fall through to normal handling.
+  }
+
   const directReportEnvelope = await maybeGenerateRequestedOutput({
     question: effectiveUserMessage,
     restoredState,

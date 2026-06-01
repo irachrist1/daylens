@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { ANALYTICS_EVENT, classifyAIOutputIntent } from '@shared/analytics'
+import { transformKindFromLabel, transformLabel } from '@shared/answerTransforms'
 import type {
   AIChatTurnResult,
   AIMessageAction,
@@ -28,14 +29,6 @@ import {
   type ThreadMessage,
 } from './types'
 
-// D6: each transform is a canned instruction the model applies to its previous
-// answer (thread memory holds it), so transforms ride the normal send path.
-const TRANSFORM_PROMPTS: Record<AnswerTransform, string> = {
-  shorter: 'Rewrite your previous answer as a shorter, tighter version — keep the key facts and numbers, drop the preamble.',
-  checklist: 'Reformat your previous answer as a concise checklist of action items, one per line, no preamble.',
-  bullets: 'Reformat your previous answer as a tight bulleted summary, leading with the most important point.',
-  report: 'Expand your previous answer into a short shareable report: a heading, a few labelled sections, and the supporting numbers. No filler.',
-}
 
 // Providers we can offer as a one-tap switch on a hard wall. CLI providers are
 // only surfaced when actually detected on the machine (see the load probe).
@@ -53,6 +46,8 @@ type SendOptions = {
   trigger?: 'freeform' | 'suggested' | 'retry'
   // R4: bounds the rate-limit auto-retry so it fires at most once per turn.
   autoRetryCount?: number
+  // FB7: when set, the main process rewrites the prior answer into this form.
+  transform?: AnswerTransform | null
 }
 
 // R3: a turn that never resolves must still leave "Thinking" — convert a stuck
@@ -372,6 +367,7 @@ export function useAIChat() {
           contextOverride: options?.contextOverride ?? null,
           clientRequestId: requestId,
           threadId: activeThreadId,
+          transform: options?.transform ?? null,
         }),
         timeoutPromise,
       ]) as AIChatTurnResult
@@ -437,6 +433,7 @@ export function useAIChat() {
             contextOverride: options?.contextOverride ?? null,
             trigger: 'retry',
             autoRetryCount: autoRetryCount + 1,
+            transform: options?.transform ?? null,
           })
         }, waitMs)
       }
@@ -460,7 +457,7 @@ export function useAIChat() {
     const historyUpToMessage = messages.slice(0, index)
     const previousUser = [...historyUpToMessage].reverse().find((m) => m.role === 'user')
     if (!previousUser) return
-    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [latestCompletedAssistantId, messages, triggerActionFeedback, analyticsContext, handleSend])
 
   // R4: retry a turn that ended in an error card. Cancels any pending
@@ -479,7 +476,7 @@ export function useAIChat() {
     track(ANALYTICS_EVENT.AI_ANSWER_RETRIED, analyticsContext({ answer_kind: message.answerKind ?? null, trigger: 'retry' }))
     // Replace the errored turn in place rather than appending a duplicate.
     setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
-    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [messages, analyticsContext, handleSend])
 
   // R2: explicit, user-initiated provider switch from a hard-wall error card.
@@ -508,7 +505,7 @@ export function useAIChat() {
       provider,
     }))
     setMessages((current) => current.filter((m) => m.id !== message.id && m.id !== previousUser.id))
-    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry' })
+    await handleSend(previousUser.content, { contextOverride: message.contextSnapshot ?? null, trigger: 'retry', transform: transformKindFromLabel(previousUser.content) })
   }, [messages, refreshProvider, analyticsContext, handleSend])
 
   const handleCopy = useCallback(async (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => {
@@ -684,15 +681,16 @@ export function useAIChat() {
     void handleSend(prompt, { trigger: 'suggested' })
   }, [hasApiKey, analyticsContext, handleSend])
 
-  // D6: re-prompt the model to transform its previous answer (shorter,
-  // checklist, bullets, report). No new main-process call shape — it is a
-  // normal turn that leans on thread memory.
+  // FB7: transform the previous answer (shorter / checklist / bullets / report).
+  // The concise label is the user-visible message; `transform` tells the main
+  // process to rewrite the SPECIFIC prior answer faithfully (real numbers, no
+  // generic day shell).
   const transformAnswer = useCallback((kind: AnswerTransform) => {
     if (!hasApiKey || loadingRef.current) return
-    const prompt = TRANSFORM_PROMPTS[kind]
-    if (!prompt) return
+    const label = transformLabel(kind)
+    if (!label) return
     track(ANALYTICS_EVENT.AI_OUTPUT_REQUESTED, analyticsContext({ export_type: kind, trigger: 'transform' }))
-    void handleSend(prompt, { trigger: 'suggested' })
+    void handleSend(label, { trigger: 'suggested', transform: kind })
   }, [hasApiKey, analyticsContext, handleSend])
 
   return {

@@ -5,15 +5,6 @@ import type {
   FollowUpSuggestion,
 } from '@shared/types'
 
-function titleCaseTopic(topic: string | null): string | null {
-  if (!topic) return null
-  return topic
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 const ENTITY_STOP_WORDS = new Set([
   'a', 'an', 'the', 'this', 'that', 'these', 'those',
   'it', 'its', 'my', 'your', 'our', 'his', 'her', 'their',
@@ -262,48 +253,18 @@ export function extractAnswerEntities(answerText: string | null | undefined, max
   return out.slice(0, max)
 }
 
-function scopedCandidates(entities: string[]): FollowUpSuggestion[] {
-  // One chip per question shape so the uniqueness filter does not collapse
-  // them, and no temporal words so the temporal-reject regex does not strip
-  // them. Each chip names a real entity explicitly; when several entities are
-  // present we spread them across the shapes so the chips feel less templated.
-  const [e1, e2, e3] = entities
-  return [
-    candidate(`How long on ${e1}?`, 'narrow'),                       // time
-    candidate(`Which files appeared in ${e2 ?? e1}?`, 'expand'),     // specific_work
-    candidate(`Compare ${e3 ?? e1} across sessions`, 'compare'),     // cross_cutting
-    candidate(`Draft a short note on ${e1}`, 'deepen'),              // generative
-  ]
-}
-
-// Minimal stop-word list for router-set topics (state.topic).
-// Narrower than ENTITY_STOP_WORDS because the router sets topics deliberately —
-// we only want to reject obvious grammar words, not product terms like "AI".
-const TOPIC_STOP_WORDS = new Set([
-  'a', 'an', 'the', 'this', 'that', 'these', 'those',
-  'it', 'my', 'your', 'our', 'his', 'her', 'their',
-  'i', 'we', 'he', 'she', 'they', 'you',
-  'hi', 'hey', 'hello', 'ok', 'okay', 'yes', 'no', 'sure',
-])
-
+// FB10: the deterministic builder no longer templates entity nouns into
+// "How long on ${X}?" chips — that stray-noun templating is exactly what produced
+// "How long on Top?" (Top was a section-header word). It now returns generic,
+// shape-varied SEEDS only. They guide the model follow-up generator; the
+// grounding filter drops them as final output, so a turn shows real
+// model-generated follow-ups or none.
 export function buildDeterministicFollowUpCandidates(
   answerKind: AIAnswerKind,
   state: AIConversationState | null,
   answerText?: string | null,
 ): FollowUpSuggestion[] {
-  const rawTopic = state?.topic?.trim() ?? null
-  const validatedTopic = (
-    rawTopic
-    && rawTopic.length >= 2
-    && !TOPIC_STOP_WORDS.has(rawTopic.toLowerCase())
-    && !(rawTopic.includes(' ') && rawTopic.split(' ').some((w) => TOPIC_STOP_WORDS.has(w.toLowerCase())))
-  ) ? rawTopic : null
-  const topicEntity = titleCaseTopic(validatedTopic)
-  const entities = topicEntity && !isMetaEntity(topicEntity)
-    ? [topicEntity]
-    : extractAnswerEntities(answerText)
-  if (entities.length > 0) return dedupeSuggestions(scopedCandidates(entities)).slice(0, 4)
-
+  void answerText
   const rangeLabel = state?.dateRange?.label?.toLowerCase().includes('last week') ? 'last week' : 'this week'
   const suggestions: FollowUpSuggestion[] = []
 
@@ -374,20 +335,22 @@ RULES
 3. Every suggestion must reference a specific named entity that appears in the answer — an app (Cursor, Chrome, Notion), a file, a page title, a person, a project, or a domain. Do not invent names; pull them from the answer text.
 4. Vary the question type across suggestions: one about time/duration, one about specific content (windows, pages, files), one about comparison or trend, one about cause or breakdown.
 5. Ground each suggestion in what the answer actually said. Do not ask about something the answer did not mention.
-6. Forbidden phrases (never use): "Tell me more", "What stood out", "Go deeper", "What else", "Can you explain", "What evidence", "Say more", "Expand on", "Be more specific", "Continue".
-7. Forbidden patterns: fragment suggestions like "What drove The?" or "Which windows mention Hey?" — these indicate a stop-word leaked into the entity slot. If you cannot name a real entity, return [].
+6. Prefer the WORK as the subject — a project, page, file, task, person, or a specific number / time range from the answer ("Break down the 4h 8m repo session", "Which days was Coursera my main focus?"). Never make a bare app / provider / model name the subject of a "how long on X" question, and never template from a section-header word ("Top work threads" must not become "How long on Top?").
+7. Forbidden phrases (never use): "Tell me more", "What stood out", "Go deeper", "What else", "Can you explain", "What evidence", "Say more", "Expand on", "Be more specific", "Continue".
+8. Forbidden patterns: fragment suggestions like "What drove The?" or "Which windows mention Hey?" — these indicate a stop-word or header word leaked into the entity slot. If you cannot name a real entity, number, or timeframe from the answer, return [].
 
 GOOD EXAMPLES
-"How much time in Cursor today?"
-"Which Notion pages appeared most?"
-"Compare Slack with yesterday"
-"What drove Chrome usage this week?"
-"Show Coursera time by day"
-"Which files opened in VS Code?"
+"Which days was Coursera my main focus?"
+"Break down the 4h 8m Daylens repo session."
+"How does this week's 31% focus compare to last week?"
+"Export this 7-day summary as a CSV."
+"What pulled me off task on May 31?"
+"What was the Study Planner page about?"
 
 BAD EXAMPLES (never produce these)
+"How long on Top?" — section-header word, not a real entity
 "What drove The?" — stop word in entity slot
-"Which windows mention Hey Tonny?" — proper name extracted from greeting
+"Draft a short note on Notion" — treats the tool as the subject
 "Tell me more about that" — generic filler
 "What else happened?" — vague`
 

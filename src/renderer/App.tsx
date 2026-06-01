@@ -7,6 +7,7 @@ import UpdateBanner from './components/UpdateBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DayWrapped from './components/DayWrapped'
 import CommandPalette from './components/CommandPalette'
+import { registerCommandPaletteOpener } from './lib/commandSurface'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
 import { todayString } from './lib/format'
@@ -92,6 +93,10 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   useEffect(() => {
     return ipc.palette.onToggle(() => setPaletteOpen((open) => !open))
   }, [])
+
+  // FB1: the one palette. Any view (e.g. the AI header ⌘K button) opens it
+  // through this registered opener instead of mounting its own surface.
+  useEffect(() => registerCommandPaletteOpener(() => setPaletteOpen(true)), [])
 
   // In-app shortcut: Cmd+K (mac) / Ctrl+K (win/linux) toggles the palette.
   useEffect(() => {

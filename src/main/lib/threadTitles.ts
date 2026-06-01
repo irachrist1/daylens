@@ -41,11 +41,40 @@ const WEAK_TITLE_PREFIXES = [
 ]
 
 const FILLER_PREFIXES = [
+  // FB6: strip "in detail" / "in full" lead-ins before the real verb.
+  /^(?:please\s+)?in\s+(?:full\s+)?detail[,:]?\s+/i,
+  /^(?:please\s+)?in\s+full[,:]?\s+/i,
   /^(?:please\s+)?(?:can|could|would|will)\s+you\s+/i,
   /^(?:please\s+)?(?:show|tell|give|help|summarize|sum up|explain|compare|review|create|make|draft|turn|generate|write|export)\s+(?:me\s+)?/i,
   /^(?:please\s+)?i\s+(?:want|need|would like)\s+(?:to\s+)?/i,
   /^(?:please\s+)?let(?:'s| us)\s+/i,
 ]
+
+// FB6: a title must never be a bare stopword/timeframe ("today", "the week").
+// If a derived title collapses to only these, fall back to a topic phrase.
+const BARE_WEAK_WORDS = new Set([
+  'today', 'yesterday', 'tomorrow', 'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years',
+  'this', 'that', 'last', 'next', 'the', 'a', 'an', 'my', 'me', 'i', 'it', 'all', 'everything',
+  'stuff', 'things', 'thing', 'now', 'recent', 'recently',
+  'morning', 'afternoon', 'evening', 'night',
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+])
+
+function isBareWeakPhrase(value: string): boolean {
+  const words = collapseWhitespace(value).toLowerCase().replace(/['’?.!,…]/g, '').split(' ').filter(Boolean)
+  if (words.length === 0) return true
+  return words.every((word) => BARE_WEAK_WORDS.has(word))
+}
+
+function timeframeWordCased(normalized: string): string | null {
+  if (/\btoday\b/.test(normalized)) return 'Today'
+  if (/\byesterday\b/.test(normalized)) return 'Yesterday'
+  if (/\bthis week\b/.test(normalized)) return 'This week'
+  if (/\blast week\b/.test(normalized)) return 'Last week'
+  if (/\bthis month\b/.test(normalized)) return 'This month'
+  if (/\blast month\b/.test(normalized)) return 'Last month'
+  return null
+}
 
 function collapseWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, ' ')
@@ -56,7 +85,9 @@ function stripTrailingPunctuation(value: string): string {
 }
 
 function titleCase(value: string): string {
-  return value.replace(/\b([a-z])/g, (_, letter: string) => letter.toUpperCase())
+  // Capitalize the first letter of each space-separated word only — never after
+  // an apostrophe/hyphen, so "today's work" → "Today's Work", not "Today'S Work".
+  return value.replace(/(^|\s)([a-z])/g, (_, lead: string, letter: string) => `${lead}${letter.toUpperCase()}`)
 }
 
 function trimTitle(value: string): string {
@@ -130,6 +161,24 @@ function intentTitleFromPrompt(message: string): string | null {
     return 'Focus session'
   }
 
+  // FB6: "what did I work on / do <timeframe>" must become a real topic phrase
+  // ("Today's work"), never the bare timeframe word ("today").
+  if (
+    /\bwork(?:ed)?\s+on\b/.test(normalized)
+    || /\b(?:get|got)\s+done\b/.test(normalized)
+    || /\baccomplish/.test(normalized)
+    || /\bwhat\s+did\s+i\s+do\b/.test(normalized)
+  ) {
+    const tf = timeframeWordCased(normalized)
+    if (tf) return `${tf}'s work`
+  }
+
+  // FB6: "when was I most focused this week" → "This week focus", not a clipped clause.
+  if (/\bfocused\b|\bdeep work\b/.test(normalized)) {
+    const tf = timeframeWordCased(normalized)
+    if (tf) return `${tf} focus`
+  }
+
   if (/\bexport\b|\bdownload\b/.test(normalized)) {
     return prefix ? `${prefix} export` : 'Export'
   }
@@ -166,6 +215,8 @@ function extractSubjectTitle(message: string): string | null {
   }
 
   const specificPatterns: Array<[RegExp, (match: RegExpMatchArray) => string]> = [
+    // FB6: "everything I did/touched on this laptop" → "Everything I did".
+    [/\beverything i (?:did|touched|worked on|got done)\b(?!\s+for\b)/i, () => 'Everything I did'],
     [/\beverything i touched for\s+(.+?)(?:\b(?:today|yesterday|this week|last week|this month|last month)\b|[?.!]|$)/i, (match) => match[1] ?? ''],
     [/\b(?:time|hours?) (?:did i spend|i spent|spent)\s+on\s+(.+?)(?:\b(?:today|yesterday|this week|last week|this month|last month)\b|[?.!,]|$)/i, (match) => `Time on ${match[1] ?? ''}`],
     [/\b(?:my\s+)?time on\s+(.+?)(?:\b(?:today|yesterday|this week|last week|this month|last month)\b|[?.!,]|$)/i, (match) => `Time on ${match[1] ?? ''}`],
@@ -181,13 +232,15 @@ function extractSubjectTitle(message: string): string | null {
   }
 
   cleaned = cleaned
-    .replace(/^(?:a|an|the)\s+/i, '')
+    .replace(/^(?:my|a|an|the)\s+/i, '')
     .replace(/^(?:short|quick|brief|shareable)\s+/i, '')
     .replace(/^(?:report|summary|recap)\s+(?:about|of)\s+/i, '')
 
   const firstClause = cleaned.split(/[.?!]/, 1)[0] ?? cleaned
   const candidate = trimTitle(firstClause)
-  return candidate || null
+  if (!candidate) return null
+  // Capitalize the leading word so "last 7 days by project" → "Last 7 days by project".
+  return candidate.charAt(0).toUpperCase() + candidate.slice(1)
 }
 
 export function normalizeThreadTitle(title: string | null | undefined, fallback = DEFAULT_THREAD_TITLE): string {
@@ -200,6 +253,8 @@ export function isWeakThreadTitle(title: string | null | undefined): boolean {
   if (!normalized) return true
   if (GENERIC_TITLES.has(normalized.toLowerCase())) return true
   if (normalized.endsWith('…')) return true
+  // FB6: a bare stopword/timeframe ("today", "the week") is a weak title.
+  if (isBareWeakPhrase(normalized)) return true
   return WEAK_TITLE_PREFIXES.some((pattern) => pattern.test(normalized))
 }
 
@@ -215,7 +270,11 @@ export function deriveTitleFromMessage(message: string, context?: ThreadTitleCon
   if (intentTitle) return trimTitle(titleCase(intentTitle))
 
   const extracted = extractSubjectTitle(normalized)
-  if (extracted) return extracted
+  if (extracted && !isBareWeakPhrase(extracted)) return extracted
 
-  return trimTitle(normalized)
+  // FB6: never title a thread with a bare stopword/timeframe — keep the default
+  // so a later, more specific message can rename it.
+  const whole = trimTitle(normalized)
+  if (isBareWeakPhrase(whole)) return DEFAULT_THREAD_TITLE
+  return whole
 }

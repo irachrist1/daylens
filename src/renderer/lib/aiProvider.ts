@@ -172,6 +172,48 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
   },
 }
 
+// FB8: per-model capability metadata for the Raycast-style model selector
+// (speed/intelligence bars, context window, capability badges). Display hints
+// for the picker card — BYOK still runs whatever model the id resolves to.
+export interface AIModelCapabilities {
+  speed: 1 | 2 | 3 | 4 | 5
+  intelligence: 1 | 2 | 3 | 4 | 5
+  contextTokens: number
+  vision: boolean
+  toolUse: boolean
+  reasoning: boolean
+}
+
+// Keyed by model id (ids are shared across API + CLI variants, distinct on
+// OpenRouter). Reviewed alongside the catalog on 2026-05-31.
+export const AI_MODEL_CAPABILITIES: Record<string, AIModelCapabilities> = {
+  'claude-opus-4-8': { speed: 3, intelligence: 5, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
+  'claude-sonnet-4-6': { speed: 4, intelligence: 4, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
+  'claude-haiku-4-5': { speed: 5, intelligence: 3, contextTokens: 200_000, vision: true, toolUse: true, reasoning: false },
+  'gpt-5.5': { speed: 3, intelligence: 5, contextTokens: 400_000, vision: true, toolUse: true, reasoning: true },
+  'gpt-5.4-mini': { speed: 4, intelligence: 4, contextTokens: 400_000, vision: true, toolUse: true, reasoning: true },
+  'gpt-5.4-nano': { speed: 5, intelligence: 2, contextTokens: 400_000, vision: false, toolUse: true, reasoning: false },
+  'gemini-3.1-flash-lite': { speed: 5, intelligence: 3, contextTokens: 1_000_000, vision: true, toolUse: true, reasoning: false },
+  'gemini-3.5-flash': { speed: 4, intelligence: 4, contextTokens: 1_000_000, vision: true, toolUse: true, reasoning: true },
+  'gemini-3.1-pro-preview': { speed: 2, intelligence: 5, contextTokens: 1_000_000, vision: true, toolUse: true, reasoning: true },
+  'anthropic/claude-sonnet-4.6': { speed: 4, intelligence: 4, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
+  'openai/gpt-5.4-mini': { speed: 4, intelligence: 4, contextTokens: 400_000, vision: true, toolUse: true, reasoning: true },
+}
+
+export function modelCapabilities(modelId: string | null | undefined): AIModelCapabilities | null {
+  if (!modelId) return null
+  return AI_MODEL_CAPABILITIES[modelId] ?? null
+}
+
+// "150k words | 200k" — words estimated at ~0.75 words/token, tokens compacted.
+export function contextWindowLabel(tokens: number): string {
+  const words = Math.round((tokens * 0.75) / 1000)
+  const tokenLabel = tokens >= 1_000_000
+    ? `${Number((tokens / 1_000_000).toFixed(1)).toString()}M`
+    : `${Math.round(tokens / 1000)}k`
+  return `${words}k words | ${tokenLabel}`
+}
+
 export const AI_PROVIDERS: AIProvider[] = ['anthropic', 'openai', 'google', 'openrouter']
 
 export function detectProviderFromApiKey(key: string): AIProvider | null {

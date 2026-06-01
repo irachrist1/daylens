@@ -3,6 +3,7 @@ import type { AIMessageAction, AIProviderMode, FocusSession } from '@shared/type
 import type { AIProviderErrorCode } from '@shared/aiProviderError'
 import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
+import { MentionText } from './mentions'
 import { StreamingMessage } from './StreamingMessage'
 import {
   IconActionButton,
@@ -82,8 +83,9 @@ export interface MessageListProps {
   scrollToBottom: () => void
 }
 
-// D6: "Turn into…" — post-answer transforms on the latest answer (Raycast Img
-// 21/22). Each runs a canned re-prompt; the menu is a small hover-light popover.
+// FB7: "Turn into…" — post-answer transforms on the latest answer. Each runs a
+// real model call that rewrites THIS answer's grounded content into the chosen
+// form (see request.transform); the menu is a small hover-light popover.
 function TransformMenu({ onTransform }: { onTransform: (kind: AnswerTransform) => void }) {
   const [open, setOpen] = useState(false)
   return (
@@ -154,7 +156,7 @@ function MessageListImpl({
         message.role === 'user' ? (
           <div key={message.id} className="ai-message-in" style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <div style={{ maxWidth: '76%', borderRadius: '14px 14px 6px 14px', background: 'var(--color-accent-dim)', color: 'var(--color-primary)', padding: '11px 14px', fontSize: 13, fontWeight: 550, whiteSpace: 'pre-wrap' }}>
-              {message.content}
+              <MentionText text={message.content} />
             </div>
           </div>
         ) : (

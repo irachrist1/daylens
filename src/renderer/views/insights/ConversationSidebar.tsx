@@ -1,26 +1,34 @@
 import { memo, useMemo, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { FileText, Trash2 } from 'lucide-react'
 import type { AIThreadSummary } from '@shared/types'
-import { IconArchive, IconNewChat, IconSearch, IconSidebar, relativeTime } from './icons'
+import { IconArchive, IconSearch } from './icons'
 
 // D1: a proper conversation list — grouped by recency, searchable, with an
-// Archive section and the current chat highlighted. Replaces the old History
-// dropdown. Collapsible to preserve the minimal feel at rest.
+// Archive section and the current chat highlighted. FB3: the new-chat affordance
+// and the collapse toggle live in the app header now (the sidebar is hidden by
+// default), so this is just the list. FB5: Notion-style section headers + subtle
+// active/hover rows. FB6: auto Day-report threads read as reports, not chats.
 
 export interface ConversationSidebarProps {
   threads: AIThreadSummary[]
   activeThreadId: number | null
   onSelect: (id: number) => void
-  onNewChat: () => void
   onDelete: (thread: AIThreadSummary) => void
   onArchive: (thread: AIThreadSummary, archived: boolean) => void
-  onCollapse: () => void
 }
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 Days', 'Previous 30 Days', 'Older'] as const
 type GroupLabel = (typeof GROUP_ORDER)[number]
 
 const DAY_MS = 86_400_000
+
+// FB6: auto-generated day reports are titled "Day report YYYY-MM-DD". Detect them
+// so they read as generated reports, not conversations.
+const DAY_REPORT_RE = /^Day report \d{4}-\d{2}-\d{2}$/
+
+export function isDayReportThread(thread: Pick<AIThreadSummary, 'title'>): boolean {
+  return DAY_REPORT_RE.test(thread.title.trim())
+}
 
 function recencyGroupOf(ms: number): GroupLabel {
   const now = new Date()
@@ -61,23 +69,31 @@ function ThreadRow({
   onRequestDelete: () => void
   onConfirmDelete: () => void
 }) {
+  const isReport = isDayReportThread(thread)
   return (
     <div
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 2, borderRadius: 7, background: active ? 'var(--color-surface-muted)' : 'transparent', marginBottom: 1 }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 2, borderRadius: 8, marginBottom: 1,
+        background: active ? 'var(--color-surface-high)' : hovered ? 'var(--color-surface-muted)' : 'transparent',
+      }}
     >
       <button
         type="button"
         onClick={onSelect}
         aria-current={active ? 'true' : undefined}
         title={thread.title}
-        style={{ display: 'block', flex: 1, minWidth: 0, textAlign: 'left', padding: '7px 9px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)', fontSize: 12.5, cursor: 'pointer' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, textAlign: 'left', padding: '6px 9px', border: 'none', background: 'transparent', color: 'var(--color-text-primary)', fontSize: 12.5, cursor: 'pointer' }}
       >
-        <div style={{ fontWeight: active ? 700 : 560, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: archived ? 0.75 : 1 }}>
+        {isReport && (
+          <span style={{ display: 'inline-flex', flexShrink: 0, color: 'var(--color-text-tertiary)' }}>
+            <FileText size={13} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        )}
+        <span style={{ flex: 1, minWidth: 0, fontWeight: active ? 650 : 520, color: active ? 'var(--color-text-primary)' : 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: archived ? 0.7 : 1 }}>
           {thread.title || 'New chat'}
-        </div>
-        <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginTop: 1 }}>{relativeTime(thread.lastMessageAt)}</div>
+        </span>
       </button>
       {confirmingDelete ? (
         <button
@@ -117,10 +133,8 @@ function ConversationSidebarImpl({
   threads,
   activeThreadId,
   onSelect,
-  onNewChat,
   onDelete,
   onArchive,
-  onCollapse,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState('')
   const [hoveredId, setHoveredId] = useState<number | null>(null)
@@ -166,29 +180,7 @@ function ConversationSidebarImpl({
       style={{ flexShrink: 0, width: 248, display: 'flex', flexDirection: 'column', height: '100%', borderRight: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}
       aria-label="Conversations"
     >
-      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, padding: '12px 10px 8px' }}>
-        <button
-          type="button"
-          onClick={onCollapse}
-          title="Hide chat list"
-          aria-label="Hide chat list"
-          style={{ width: 30, height: 30, padding: 0, borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
-        >
-          <IconSidebar />
-        </button>
-        <div style={{ flex: 1, fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-secondary)' }}>Chats</div>
-        <button
-          type="button"
-          onClick={onNewChat}
-          title="New chat (⌘N)"
-          aria-label="New chat"
-          style={{ width: 30, height: 30, padding: 0, borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
-        >
-          <IconNewChat />
-        </button>
-      </div>
-
-      <div style={{ flexShrink: 0, padding: '0 10px 8px' }}>
+      <div style={{ flexShrink: 0, padding: '12px 10px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, height: 32, padding: '0 9px', borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)' }}>
           <span style={{ color: 'var(--color-text-tertiary)', display: 'inline-flex', flexShrink: 0 }}><IconSearch size={13} /></span>
           <input
@@ -210,8 +202,8 @@ function ConversationSidebarImpl({
           <div style={{ padding: '14px 8px', fontSize: 12, color: 'var(--color-text-tertiary)' }}>No matches.</div>
         ) : (
           groups.map((group) => (
-            <div key={group.label} style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', padding: '2px 9px 4px' }}>
+            <div key={group.label} style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', padding: '0 9px 5px' }}>
                 {group.label}
               </div>
               {group.items.map((thread) => renderRow(thread, false))}
@@ -220,17 +212,17 @@ function ConversationSidebarImpl({
         )}
 
         {archived.length > 0 && (
-          <div style={{ marginTop: 12, borderTop: '1px solid var(--color-border-ghost)', paddingTop: 8 }}>
+          <div style={{ marginTop: 16, borderTop: '1px solid var(--color-border-ghost)', paddingTop: 10 }}>
             <button
               type="button"
               onClick={() => setArchiveOpen((v) => !v)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '4px 9px', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '4px 9px', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}
             >
               <IconArchive size={12} />
               Archived ({archived.length})
               <span style={{ marginLeft: 'auto', fontSize: 11 }}>{archiveOpen ? '–' : '+'}</span>
             </button>
-            {archiveOpen && <div style={{ marginTop: 2 }}>{archived.map((thread) => renderRow(thread, true))}</div>}
+            {archiveOpen && <div style={{ marginTop: 4 }}>{archived.map((thread) => renderRow(thread, true))}</div>}
           </div>
         )}
       </div>

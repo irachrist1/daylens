@@ -99,14 +99,19 @@ test('rejects "What happened this Morning?" — time-of-day in entity slot', () 
   assert.ok(result.every((s) => s.source === 'deterministic'), 'time-of-day words must not pass as entities')
 })
 
-test('deterministic fallback suggestions name an answer entity', () => {
+test('deterministic candidates are shape seeds, never stray-noun templates (FB10)', () => {
+  // "Top" is a section-header word, not an entity. The old builder templated it
+  // into "How long on Top?"; the new one must never template entity nouns.
   const result = buildDeterministicFollowUpCandidates(
     'deterministic_stats',
     null,
-    'From your app sessions today, Cursor accounted for 2h 10m.',
+    'Top work threads: Coursera coursework (3h), Daylens repo review (4h 8m).',
   )
-  assert.ok(result.length >= 2)
-  assert.ok(result.every((suggestion) => suggestion.text.includes('Cursor')))
+  assert.ok(
+    !result.some((s) => /how long on (top|coursera|daylens)\b/i.test(s.text)),
+    'must not template a stray/header noun into "How long on X?"',
+  )
+  assert.ok(result.every((s) => s.source === 'deterministic'))
 })
 
 // ── Two-stage P0 filter ───────────────────────────────────────────────────

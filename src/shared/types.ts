@@ -438,11 +438,17 @@ export interface AIChatTurnResult {
   providerCallCount?: number
 }
 
+// FB7: post-answer transforms. The renderer signals the transform explicitly so
+// the main process rewrites the SPECIFIC prior answer (with its grounded numbers)
+// instead of mis-routing a disguised English prompt to the generic report bundle.
+export type AIAnswerTransformKind = 'shorter' | 'checklist' | 'bullets' | 'report'
+
 export interface AIChatSendRequest {
   message: string
   contextOverride?: AIConversationState | null
   clientRequestId?: string | null
   threadId?: number | null
+  transform?: AIAnswerTransformKind | null
 }
 
 export interface AIDailyReportPreparationResult {

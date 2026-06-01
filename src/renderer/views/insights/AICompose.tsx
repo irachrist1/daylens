@@ -1,7 +1,8 @@
 import type { ForwardedRef } from 'react'
-import { forwardRef, memo, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../lib/ipc'
 import { IconSend } from './icons'
+import { buildMentionChipElement, MentionRowIcon, type MentionItem, type MentionKind } from './mentions'
 
 export interface AIComposeHandle {
   focus: () => void
@@ -13,17 +14,17 @@ interface AIComposeProps {
   placeholder?: string
 }
 
-// D5: composer affordances — `/` commands and `@` entity mentions.
+// D5: composer affordances — `/` commands and `@` entity mentions. FB11: mentions
+// insert as inline icon chips (contenteditable), like Notion/Raycast.
 type SlashCommand = { id: string; label: string; hint: string; prompt: string }
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: 'today', label: '/today', hint: "What I worked on today", prompt: 'What did I work on today?' },
+  { id: 'today', label: '/today', hint: 'What I worked on today', prompt: 'What did I work on today?' },
   { id: 'week', label: '/week', hint: 'Summarise the last 7 days by project', prompt: 'Summarize my last 7 days by project.' },
   { id: 'focus', label: '/focus', hint: 'When I was most focused this week', prompt: 'When was I most focused this week?' },
   { id: 'report', label: '/report', hint: 'A weekly report to share', prompt: 'Generate a weekly report I can share with my manager.' },
   { id: 'export', label: '/export', hint: "Export today's sessions as CSV", prompt: "Export today's work sessions as CSV." },
 ]
 
-// `@` day mentions are generated locally (no query needed).
 const DAY_MENTIONS: { label: string; insert: string }[] = [
   { label: 'today', insert: 'today' },
   { label: 'yesterday', insert: 'yesterday' },
@@ -32,44 +33,48 @@ const DAY_MENTIONS: { label: string; insert: string }[] = [
   { label: 'last 30 days', insert: 'the last 30 days' },
 ]
 
-type AtItem = { id: string; label: string; insert: string; kind: 'App' | 'Client' | 'Day' }
-type MenuState = { kind: 'slash' | 'at'; query: string; start: number; end: number }
+type MenuState = { kind: 'slash' | 'at'; query: string }
 
-// Find an active `/` (line-initial) or `@` (token-initial) trigger ending at the
-// caret, with no whitespace between the trigger and the caret.
-function detectTrigger(value: string, caret: number): MenuState | null {
-  if (value.startsWith('/')) {
-    const upto = value.slice(0, caret)
-    if (caret >= 1 && !/\s/.test(upto)) return { kind: 'slash', query: value.slice(1, caret), start: 0, end: caret }
+// Serialize the contenteditable to the plain message string: text as-is, mention
+// chips as their stored insert value, <br>/<div> as newlines.
+function serializeEditor(el: HTMLElement): string {
+  let out = ''
+  const walk = (parent: Node) => {
+    parent.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out += node.textContent ?? ''
+      } else if (node instanceof HTMLElement) {
+        if (node.dataset.mentionInsert != null) out += node.dataset.mentionInsert
+        else if (node.tagName === 'BR') out += '\n'
+        else {
+          if (node.tagName === 'DIV' && out && !out.endsWith('\n')) out += '\n'
+          walk(node)
+        }
+      }
+    })
   }
-  const before = value.slice(0, caret)
-  const at = before.lastIndexOf('@')
-  if (at >= 0) {
-    const precededByBoundary = at === 0 || /\s/.test(before[at - 1])
-    const token = before.slice(at + 1)
-    if (precededByBoundary && !/\s/.test(token)) return { kind: 'at', query: token, start: at, end: caret }
-  }
-  return null
+  walk(el)
+  return out
 }
 
 function AIComposeImpl(
   { onSubmit, loading, placeholder }: AIComposeProps,
   ref: ForwardedRef<AIComposeHandle>,
 ) {
-  const [input, setInput] = useState('')
+  const editorRef = useRef<HTMLDivElement>(null)
+  const [empty, setEmpty] = useState(true)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [menuIndex, setMenuIndex] = useState(0)
-  // Entity candidates for `@`, fetched lazily the first time the menu opens.
-  const [entities, setEntities] = useState<{ apps: string[]; clients: string[] }>({ apps: [], clients: [] })
+  const [entities, setEntities] = useState<{ apps: string[]; clients: { name: string; color: string | null }[] }>({ apps: [], clients: [] })
   const entitiesLoadedRef = useRef(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const pendingCaretRef = useRef<number | null>(null)
+  // The @-trigger text range to replace on selection (null while a slash menu is open).
+  const triggerRangeRef = useRef<{ node: Text; start: number; end: number } | null>(null)
 
-  useImperativeHandle(ref, () => ({
-    focus: () => textareaRef.current?.focus(),
-  }), [])
+  useImperativeHandle(ref, () => ({ focus: () => editorRef.current?.focus() }), [])
 
-  const loadEntities = () => {
+  useEffect(() => { editorRef.current?.focus() }, [])
+
+  const loadEntities = useCallback(() => {
     if (entitiesLoadedRef.current) return
     entitiesLoadedRef.current = true
     void Promise.all([
@@ -78,16 +83,16 @@ function AIComposeImpl(
     ]).then(([apps, clients]) => {
       setEntities({
         apps: apps.slice(0, 8).map((app) => app.appName).filter(Boolean),
-        clients: clients.map((client) => client.name).filter(Boolean),
+        clients: clients.map((client) => ({ name: client.name, color: client.color })).filter((c) => c.name),
       })
     })
-  }
+  }, [])
 
-  const atItems = useMemo<AtItem[]>(() => {
-    const all: AtItem[] = [
-      ...entities.apps.map((name, i) => ({ id: `app-${i}`, label: name, insert: name, kind: 'App' as const })),
-      ...entities.clients.map((name, i) => ({ id: `client-${i}`, label: name, insert: name, kind: 'Client' as const })),
-      ...DAY_MENTIONS.map((day, i) => ({ id: `day-${i}`, label: day.label, insert: day.insert, kind: 'Day' as const })),
+  const atItems = useMemo<MentionItem[]>(() => {
+    const all: MentionItem[] = [
+      ...entities.apps.map((name, i) => ({ id: `app-${i}`, label: name, insert: name, kind: 'App' as MentionKind })),
+      ...entities.clients.map((client, i) => ({ id: `client-${i}`, label: client.name, insert: client.name, kind: 'Client' as MentionKind, color: client.color })),
+      ...DAY_MENTIONS.map((day, i) => ({ id: `day-${i}`, label: day.label, insert: day.insert, kind: 'Day' as MentionKind })),
     ]
     const q = (menu?.kind === 'at' ? menu.query : '').toLowerCase()
     return (q ? all.filter((item) => item.label.toLowerCase().includes(q)) : all).slice(0, 8)
@@ -100,76 +105,134 @@ function AIComposeImpl(
 
   const menuItemCount = menu?.kind === 'slash' ? slashItems.length : menu?.kind === 'at' ? atItems.length : 0
 
-  const syncMenu = (value: string) => {
-    const caret = textareaRef.current?.selectionStart ?? value.length
-    const next = detectTrigger(value, caret)
-    setMenu(next)
-    setMenuIndex(0)
-    if (next?.kind === 'at') loadEntities()
-  }
+  const syncState = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const serialized = serializeEditor(editor)
+    const isEmpty = serialized.replace(/ /g, '').trim() === '' && editor.querySelector('.dl-mention') == null
+    setEmpty(isEmpty)
+    editor.dataset.empty = isEmpty ? 'true' : 'false'
 
-  const onChange = (value: string) => {
-    setInput(value)
-    syncMenu(value)
-  }
+    // Detect an active `/` (whole-input) or `@` (token-initial) trigger.
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) { setMenu(null); triggerRangeRef.current = null; return }
 
-  const applyCaret = (caret: number) => {
-    pendingCaretRef.current = caret
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el && pendingCaretRef.current != null) {
-        el.focus()
-        el.setSelectionRange(pendingCaretRef.current, pendingCaretRef.current)
-        pendingCaretRef.current = null
+    const slashMatch = /^\/(\S*)$/.exec(serialized)
+    if (slashMatch) {
+      triggerRangeRef.current = null
+      setMenu((prev) => (prev?.kind === 'slash' && prev.query === slashMatch[1] ? prev : { kind: 'slash', query: slashMatch[1] }))
+      return
+    }
+
+    const focusNode = selection.focusNode
+    if (focusNode && focusNode.nodeType === Node.TEXT_NODE && editor.contains(focusNode)) {
+      const textNode = focusNode as Text
+      const offset = selection.focusOffset
+      const before = textNode.data.slice(0, offset)
+      const at = before.lastIndexOf('@')
+      if (at >= 0) {
+        const boundaryOk = at === 0 || /\s/.test(before[at - 1])
+        const token = before.slice(at + 1)
+        if (boundaryOk && !/\s/.test(token)) {
+          triggerRangeRef.current = { node: textNode, start: at, end: offset }
+          loadEntities()
+          setMenu((prev) => (prev?.kind === 'at' && prev.query === token ? prev : { kind: 'at', query: token }))
+          setMenuIndex((i) => (menu?.kind === 'at' ? i : 0))
+          return
+        }
       }
-    })
-  }
-
-  const selectSlash = (cmd: SlashCommand) => {
-    if (!menu) return
-    const next = cmd.prompt + input.slice(menu.end)
-    setInput(next)
+    }
     setMenu(null)
-    applyCaret(cmd.prompt.length)
-  }
+    triggerRangeRef.current = null
+  }, [loadEntities, menu])
 
-  const selectAt = (item: AtItem) => {
-    if (!menu) return
-    const insert = `${item.insert} `
-    const next = input.slice(0, menu.start) + insert + input.slice(menu.end)
-    setInput(next)
+  const selectSlash = useCallback((cmd: SlashCommand) => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.textContent = cmd.prompt
+    editor.focus()
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
     setMenu(null)
-    applyCaret(menu.start + insert.length)
-  }
+    triggerRangeRef.current = null
+    syncState()
+  }, [syncState])
 
-  const send = () => {
-    const text = input.trim()
+  const selectAt = useCallback((item: MentionItem) => {
+    const editor = editorRef.current
+    const trigger = triggerRangeRef.current
+    if (!editor || !trigger) return
+    editor.focus()
+    const range = document.createRange()
+    try {
+      range.setStart(trigger.node, Math.min(trigger.start, trigger.node.length))
+      range.setEnd(trigger.node, Math.min(trigger.end, trigger.node.length))
+    } catch { return }
+    range.deleteContents()
+    const chip = buildMentionChipElement(item)
+    const space = document.createTextNode(' ')
+    range.insertNode(space)
+    range.insertNode(chip)
+    const after = document.createRange()
+    after.setStartAfter(space)
+    after.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(after)
+    setMenu(null)
+    triggerRangeRef.current = null
+    syncState()
+  }, [syncState])
+
+  const send = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const text = serializeEditor(editor).replace(/ /g, ' ').trim()
     if (!text || loading) return
     onSubmit(text)
-    setInput('')
+    editor.innerHTML = ''
+    editor.dataset.empty = 'true'
+    setEmpty(true)
     setMenu(null)
-    textareaRef.current?.focus()
-  }
+    triggerRangeRef.current = null
+    editor.focus()
+  }, [loading, onSubmit])
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (menu && menuItemCount > 0) {
       if (event.key === 'ArrowDown') { event.preventDefault(); setMenuIndex((i) => Math.min(menuItemCount - 1, i + 1)); return }
       if (event.key === 'ArrowUp') { event.preventDefault(); setMenuIndex((i) => Math.max(0, i - 1)); return }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault()
-        if (menu.kind === 'slash') selectSlash(slashItems[menuIndex])
-        else selectAt(atItems[menuIndex])
+        if (menu.kind === 'slash') { const cmd = slashItems[menuIndex]; if (cmd) selectSlash(cmd) }
+        else { const item = atItems[menuIndex]; if (item) selectAt(item) }
         return
       }
-      if (event.key === 'Escape') { event.preventDefault(); setMenu(null); return }
+      if (event.key === 'Escape') { event.preventDefault(); setMenu(null); triggerRangeRef.current = null; return }
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       send()
+      return
     }
-  }
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault()
+      document.execCommand('insertText', false, '\n')
+      syncState()
+    }
+  }, [menu, menuItemCount, slashItems, atItems, menuIndex, selectSlash, selectAt, send, syncState])
 
-  const trimmed = input.trim()
+  const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const text = event.clipboardData.getData('text/plain')
+    if (text) document.execCommand('insertText', false, text)
+    syncState()
+  }, [syncState])
+
   const showMenu = Boolean(menu) && menuItemCount > 0
 
   return (
@@ -178,7 +241,7 @@ function AIComposeImpl(
         <div
           role="listbox"
           aria-label={menu?.kind === 'slash' ? 'Commands' : 'Mentions'}
-          style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, right: 0, maxHeight: 240, overflowY: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-border-ghost)', borderRadius: 12, boxShadow: '0 12px 32px rgba(0,0,0,0.18)', padding: 5, zIndex: 30 }}
+          style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, right: 0, maxHeight: 260, overflowY: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-border-ghost)', borderRadius: 12, boxShadow: 'var(--color-shadow-floating)', padding: 5, zIndex: 30 }}
         >
           {menu?.kind === 'slash'
             ? slashItems.map((cmd, idx) => (
@@ -189,7 +252,7 @@ function AIComposeImpl(
                 aria-selected={idx === menuIndex}
                 onMouseEnter={() => setMenuIndex(idx)}
                 onMouseDown={(e) => { e.preventDefault(); selectSlash(cmd) }}
-                style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 7, background: idx === menuIndex ? 'var(--color-surface-muted)' : 'transparent', color: 'var(--color-text-primary)', cursor: 'pointer', fontSize: 12.5 }}
+                style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 8, background: idx === menuIndex ? 'var(--color-surface-high)' : 'transparent', color: 'var(--color-text-primary)', cursor: 'pointer', fontSize: 12.5 }}
               >
                 <span style={{ fontWeight: 700 }}>{cmd.label}</span>
                 <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{cmd.hint}</span>
@@ -203,9 +266,10 @@ function AIComposeImpl(
                 aria-selected={idx === menuIndex}
                 onMouseEnter={() => setMenuIndex(idx)}
                 onMouseDown={(e) => { e.preventDefault(); selectAt(item) }}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderRadius: 7, background: idx === menuIndex ? 'var(--color-surface-muted)' : 'transparent', color: 'var(--color-text-primary)', cursor: 'pointer', fontSize: 12.5 }}
+                style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '7px 10px', border: 'none', borderRadius: 8, background: idx === menuIndex ? 'var(--color-surface-high)' : 'transparent', color: 'var(--color-text-primary)', cursor: 'pointer', fontSize: 12.5 }}
               >
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+                <MentionRowIcon item={item} size={18} />
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
                 <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', flexShrink: 0 }}>{item.kind}</span>
               </button>
             ))}
@@ -220,19 +284,24 @@ function AIComposeImpl(
         background: 'var(--color-surface)',
         padding: '8px 8px 8px 16px',
         boxShadow: 'var(--color-shadow-floating)',
+        opacity: loading ? 0.75 : 1,
       }}>
-        <textarea
-          ref={textareaRef}
-          className="ai-composer-input"
-          value={input}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={onKeyDown}
-          onBlur={() => setMenu(null)}
-          disabled={loading}
-          rows={1}
-          autoFocus
+        <div
+          ref={editorRef}
+          className="dl-composer"
+          contentEditable={!loading}
+          suppressContentEditableWarning
+          role="textbox"
+          aria-multiline="true"
           aria-label="Ask Daylens about your work history"
-          placeholder={placeholder ?? 'Ask anything — / for commands, @ to mention…'}
+          data-placeholder={placeholder ?? 'Ask anything — / for commands, @ to mention…'}
+          data-empty="true"
+          onInput={syncState}
+          onKeyUp={syncState}
+          onClick={syncState}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          onBlur={() => { window.setTimeout(() => setMenu(null), 120) }}
           style={{
             flex: 1,
             minHeight: 24,
@@ -244,14 +313,14 @@ function AIComposeImpl(
             color: 'var(--color-text-primary)',
             fontSize: 13.5,
             lineHeight: '22px',
-            resize: 'none',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
             padding: '6px 0',
-            display: 'block',
           }}
         />
         <button
           onClick={send}
-          disabled={loading || !trimmed}
+          disabled={loading || empty}
           type="button"
           aria-label="Send message"
           style={{
@@ -260,9 +329,9 @@ function AIComposeImpl(
             padding: 0,
             borderRadius: 999,
             border: 'none',
-            cursor: loading || !trimmed ? 'default' : 'pointer',
-            background: trimmed && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
-            color: trimmed && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
+            cursor: loading || empty ? 'default' : 'pointer',
+            background: !empty && !loading ? 'var(--gradient-primary)' : 'var(--color-surface-high)',
+            color: !empty && !loading ? 'var(--color-primary-contrast)' : 'var(--color-text-tertiary)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -277,7 +346,7 @@ function AIComposeImpl(
   )
 }
 
-// React.memo so chunk-driven parent re-renders skip the composer entirely.
-// `onSubmit` is a useRef-stable callback from the parent, so the composer's
-// only real re-render trigger is the `loading` prop.
+// React.memo so chunk-driven parent re-renders skip the composer. The
+// contenteditable is uncontrolled (DOM-owned), so typing never re-renders React —
+// the only re-render triggers are `loading` and the open dropdown's own state.
 export const AICompose = memo(forwardRef<AIComposeHandle, AIComposeProps>(AIComposeImpl))

@@ -1,18 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Copy, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
-import type { AIThreadSettings } from '@shared/types'
+import type { AIProviderMode, AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
+import {
+  clearCommandSurfaceActions,
+  openCommandPalette,
+  setCommandSurfaceActions,
+  type CommandSurfaceAction,
+} from '../../lib/commandSurface'
 import ConnectAI from '../../components/ConnectAI'
-import type { DaylensSearchResult } from '../../../preload/index'
 import { AICompose, type AIComposeHandle } from './AICompose'
-import { ChatActionPalette, type ChatPaletteAction } from './ChatActionPalette'
 import { ConversationSidebar } from './ConversationSidebar'
-import { HistorySearch } from './HistorySearch'
 import { MessageList } from './MessageList'
+import { ModelSelector } from './ModelSelector'
 import { ThreadSettingsPanel } from './ThreadSettingsPanel'
-import { IconGear, IconNewChat, IconSidebar, IconSparkle } from './icons'
+import { IconChevronDown, IconNewChat, IconSidebar, IconSparkle } from './icons'
 import { useAIChat } from './useAIChat'
 import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
@@ -24,6 +29,17 @@ const STARTER_PROMPTS = [
   'When was I most focused this week?',
   "Export today's work sessions as CSV.",
 ]
+
+// Map a chat provider to the settings key holding its chosen model, so picking a
+// model for a brand-new (thread-less) chat updates the right global default.
+const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel' | 'googleModel' | 'openrouterModel'> = {
+  anthropic: 'anthropicModel',
+  'claude-cli': 'anthropicModel',
+  openai: 'openaiModel',
+  'codex-cli': 'openaiModel',
+  google: 'googleModel',
+  openrouter: 'openrouterModel',
+}
 
 export default function AIWorkspace() {
   const chat = useAIChat()
@@ -68,7 +84,8 @@ export default function AIWorkspace() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<AIComposeHandle>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' } catch { return false }
+    // FB4: hidden by default — only an explicit "open" choice persists as '0'.
+    try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) !== '0' } catch { return true }
   })
 
   const toggleSidebar = useCallback(() => {
@@ -81,6 +98,7 @@ export default function AIWorkspace() {
 
   // D4: per-thread settings (model override + instructions).
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
   const [threadSettings, setThreadSettings] = useState<AIThreadSettings>({ provider: null, model: null, instructions: null })
 
   // Load the active thread's overrides so the header subline + the panel reflect
@@ -92,7 +110,7 @@ export default function AIWorkspace() {
     }
     let cancelled = false
     void ipc.ai.getThreadSettings(activeThreadId)
-      .then((settings) => { if (!cancelled) setThreadSettings(settings) })
+      .then((next) => { if (!cancelled) setThreadSettings(next) })
       .catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [activeThreadId])
@@ -122,11 +140,9 @@ export default function AIWorkspace() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
 
-  // ── D3: ⌘K action palette + direct accelerators on the focused message ──────
-  const [paletteOpen, setPaletteOpen] = useState(false)
   const isMac = useMemo(() => navigator.platform.toLowerCase().includes('mac'), [])
   const accel = useCallback(
-    (key: string, shift = false) => (isMac ? `${shift ? '⇧' : ''}⌘${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`),
+    (key: string, shift = false) => (isMac ? `${shift ? '⇧ ' : ''}⌘ ${key}` : `Ctrl ${shift ? 'Shift ' : ''}${key}`),
     [isMac],
   )
 
@@ -145,40 +161,45 @@ export default function AIWorkspace() {
     return index >= 0 ? { message: messages[index], index } : null
   }, [messages, latestCompletedAssistantId])
 
-  const paletteActions = useMemo<ChatPaletteAction[]>(() => {
-    const list: ChatPaletteAction[] = []
+  // FB1: publish this view's contextual actions into the ONE global palette
+  // (message actions when a message is focused, plus chat actions). The palette
+  // renders them under "Actions for this message" and "Chat".
+  useEffect(() => {
+    if (!hasApiKey) { clearCommandSurfaceActions(); return }
+    const list: CommandSurfaceAction[] = []
     const target = latestAssistant
+    const small = (node: ReactNode) => node
     if (target) {
-      list.push({ id: 'copy-response', label: 'Copy Response', accelerator: accel('C', true), perform: () => handleCopy(target.message.id, target.message.content, target.message.answerKind) })
-    }
-    list.push({ id: 'copy-chat', label: 'Copy Chat', hint: 'Copy the whole conversation', perform: () => copyChat() })
-    if (target) {
-      list.push({ id: 'regenerate', label: 'Regenerate', accelerator: accel('R'), perform: () => handleRetry(target.index, target.message) })
-      // "Regenerate with Model" (⇧⌘R) — one entry per other configured provider
-      // (reuses R2's switch-provider path; useful for the rate-limit story).
+      list.push({ id: 'msg-copy', group: 'message', label: 'Copy response', accelerator: accel('C', true), icon: small(<Copy size={15} strokeWidth={1.8} />), perform: () => handleCopy(target.message.id, target.message.content, target.message.answerKind) })
+      list.push({ id: 'msg-regenerate', group: 'message', label: 'Regenerate', accelerator: accel('R'), icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => handleRetry(target.index, target.message) })
       alternateProviders.forEach((alt, i) => {
-        list.push({
-          id: `regen-${alt.provider}`,
-          label: `Regenerate with ${alt.label}`,
-          hint: 'Switch provider and rerun',
-          accelerator: i === 0 ? accel('R', true) : undefined,
-          perform: () => switchProviderAndRetry(target.message, alt.provider),
-        })
+        list.push({ id: `msg-regen-${alt.provider}`, group: 'message', label: `Regenerate with ${alt.label}`, hint: 'Switch provider and rerun', accelerator: i === 0 ? accel('R', true) : undefined, icon: small(<RefreshCw size={15} strokeWidth={1.8} />), perform: () => switchProviderAndRetry(target.message, alt.provider) })
       })
-      list.push({ id: 'good', label: 'Good Response', accelerator: accel('=', true), perform: () => handleRate(target.message, target.message.rating === 'up' ? null : 'up') })
-      list.push({ id: 'bad', label: 'Bad Response', accelerator: accel('-', true), perform: () => handleRate(target.message, target.message.rating === 'down' ? null : 'down') })
-      // D6: transforms in the palette as well as the inline "Turn into…" menu.
+      list.push({ id: 'msg-good', group: 'message', label: 'Good response', accelerator: accel('=', true), icon: small(<ThumbsUp size={15} strokeWidth={1.8} />), perform: () => handleRate(target.message, target.message.rating === 'up' ? null : 'up') })
+      list.push({ id: 'msg-bad', group: 'message', label: 'Bad response', accelerator: accel('-', true), icon: small(<ThumbsDown size={15} strokeWidth={1.8} />), perform: () => handleRate(target.message, target.message.rating === 'down' ? null : 'down') })
       for (const transform of ANSWER_TRANSFORMS) {
-        list.push({ id: `transform-${transform.kind}`, label: transform.label, hint: 'Transform the answer', perform: () => transformAnswer(transform.kind) })
+        list.push({ id: `msg-transform-${transform.kind}`, group: 'message', label: transform.label, hint: 'Transform the answer', icon: small(<Wand2 size={15} strokeWidth={1.8} />), perform: () => transformAnswer(transform.kind) })
       }
     }
-    return list
-  }, [latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, copyChat, transformAnswer])
+    list.push({ id: 'chat-new', group: 'chat', label: 'New chat', accelerator: accel('N'), icon: small(<IconNewChat />), perform: onNewChat })
+    list.push({ id: 'chat-model', group: 'chat', label: 'Change model…', hint: 'Pick the model for this chat', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setModelSelectorOpen(true) })
+    if (messages.length > 0) {
+      list.push({ id: 'chat-copy-all', group: 'chat', label: 'Copy chat', hint: 'Copy the whole conversation', icon: small(<Copy size={15} strokeWidth={1.8} />), perform: () => copyChat() })
+    }
+    if (activeThreadId != null) {
+      list.push({ id: 'chat-settings', group: 'chat', label: 'Chat settings…', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setSettingsOpen(true) })
+    }
+    setCommandSurfaceActions(list)
+  }, [hasApiKey, latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, transformAnswer, onNewChat, copyChat, activeThreadId, messages.length])
 
-  // Read the latest action context from a ref so the global key listener binds
-  // once instead of rebinding every render.
-  const accelStateRef = useRef({ hasApiKey, paletteOpen, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry })
-  accelStateRef.current = { hasApiKey, paletteOpen, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry }
+  // Drop our actions when the AI view unmounts so the palette doesn't show stale
+  // chat actions from another tab.
+  useEffect(() => () => clearCommandSurfaceActions(), [])
+
+  // Direct accelerators on the focused message (⌘R, ⇧⌘C, etc.). ⌘K is owned by
+  // the app shell (App.tsx) — it always opens the one palette, never a chat.
+  const accelStateRef = useRef({ hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry })
+  accelStateRef.current = { hasApiKey, latestAssistant, alternateProviders, handleCopy, handleRetry, handleRate, switchProviderAndRetry }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -186,11 +207,7 @@ export default function AIWorkspace() {
       if (!state.hasApiKey) return
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
       const key = event.key.toLowerCase()
-      if (!event.shiftKey && key === 'k') { event.preventDefault(); setPaletteOpen((open) => !open); return }
-      if (state.paletteOpen) return // the palette owns its keys while open
       const target = state.latestAssistant
-      // preventDefault only when we actually act, so an empty chat still allows
-      // the platform default (e.g. ⌘R reload during development).
       if (!event.shiftKey && key === 'r') { if (target) { event.preventDefault(); void state.handleRetry(target.index, target.message) } return }
       if (event.shiftKey && key === 'r') {
         if (target) {
@@ -223,11 +240,28 @@ export default function AIWorkspace() {
     void handleSend(text, { trigger: 'suggested' })
   }, [analyticsContext, handleSend])
 
-  const handleSearchResultClick = useCallback((result: DaylensSearchResult) => {
-    if (result.type === 'artifact') { void ipc.ai.openArtifact(result.id); return }
-    if (result.type === 'browser' && result.url) { ipc.shell.openExternal(result.url); return }
-    window.location.hash = `/timeline?view=day&date=${encodeURIComponent(result.date)}`
-  }, [])
+  // FB8: apply a model choice. For an existing thread → per-chat override (D4).
+  // For a brand-new (thread-less) chat → set the global chat model so the first
+  // turn uses it. Clearing the override only applies to a thread.
+  const onApplyModel = useCallback(async (provider: AIProviderMode | null, model: string | null) => {
+    if (activeThreadId != null) {
+      try {
+        const next = await ipc.ai.setThreadSettings(activeThreadId, {
+          provider,
+          model,
+          instructions: threadSettings.instructions ?? null,
+        })
+        setThreadSettings(next)
+      } catch { /* leave settings as-is on failure */ }
+      return
+    }
+    if (provider && model) {
+      try {
+        await ipc.settings.set({ aiChatProvider: provider, [PROVIDER_MODEL_KEY[provider]]: model })
+        await refreshProvider()
+      } catch { /* best-effort */ }
+    }
+  }, [activeThreadId, threadSettings.instructions, refreshProvider])
 
   // ── Load gate ──────────────────────────────────────────────────────────────
   if (settings == null || hasApiKey == null) {
@@ -252,11 +286,8 @@ export default function AIWorkspace() {
 
   const activeChatProvider = settings.aiChatProvider ?? settings.aiProvider
   const providerMeta = AI_PROVIDER_META[activeChatProvider]
-  // D2/U2: the friendly model label shown under the thread title — always the
-  // real resolved model (R2), so it never disagrees with what actually ran.
   const modelLabel = providerMeta.models.find((m) => m.id === activeModel)?.label ?? activeModel ?? providerMeta.shortLabel
-  // D4: when this thread overrides the model, the subline shows THAT model — it
-  // is what will actually run for this thread's next turn.
+  // D4: when this thread overrides the model, the subline shows THAT model.
   const overrideActive = Boolean(threadSettings.provider && threadSettings.model)
   const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
   const displayModelId = overrideActive ? threadSettings.model! : activeModel
@@ -271,21 +302,30 @@ export default function AIWorkspace() {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* ── D1: time-grouped, searchable conversation list with Archive. ── */}
-      {hasApiKey && !sidebarCollapsed && (
-        <ConversationSidebar
-          threads={threads}
-          activeThreadId={activeThreadId}
-          onSelect={onSelectThread}
-          onNewChat={onNewChat}
-          onDelete={deleteThread}
-          onArchive={archiveThread}
-          onCollapse={toggleSidebar}
-        />
+      {/* ── D1: time-grouped, searchable conversation list with Archive.
+            FB4: always mounted, width-animated so open/close slides smoothly. ── */}
+      {hasApiKey && (
+        <div
+          style={{
+            flexShrink: 0,
+            width: sidebarCollapsed ? 0 : 248,
+            overflow: 'hidden',
+            transition: 'width 200ms cubic-bezier(0.22, 0.61, 0.36, 1)',
+          }}
+          aria-hidden={sidebarCollapsed}
+        >
+          <ConversationSidebar
+            threads={threads}
+            activeThreadId={activeThreadId}
+            onSelect={onSelectThread}
+            onDelete={deleteThread}
+            onArchive={archiveThread}
+          />
+        </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
-      {/* ── Top bar: sidebar toggle + thread title + model subline (U2/D2),
-            search + new chat. No centered floating label. ── */}
+      {/* ── Top bar: sidebar toggle + thread title + model subline (U2/D2/FB8),
+            ⌘K (opens the one palette), chat settings, new chat. ── */}
       <header style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '12px 24px', borderBottom: '1px solid var(--color-border-ghost)' }}>
         {hasApiKey && (
           <button
@@ -304,21 +344,30 @@ export default function AIWorkspace() {
             {activeThreadLabel ?? 'New chat'}
           </div>
           {hasApiKey && (
-            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {displayProviderMeta.shortLabel} · {displayModelLabel}{overrideActive ? ' · custom' : ''}
-            </div>
+            <button
+              type="button"
+              onClick={() => setModelSelectorOpen(true)}
+              title="Change the model for this chat"
+              className="ai-model-subline"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 1, padding: '1px 5px', marginLeft: -5, borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, cursor: 'pointer', maxWidth: '100%', overflow: 'hidden' }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {displayProviderMeta.shortLabel} · {displayModelLabel}{overrideActive ? ' · custom' : ''}
+              </span>
+              <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.8 }}><IconChevronDown /></span>
+            </button>
           )}
         </div>
         <div style={{ flex: 1, minWidth: 8 }} />
-        <HistorySearch onResultClick={handleSearchResultClick} />
         <button
           type="button"
-          onClick={() => setPaletteOpen(true)}
-          title="Chat actions"
-          aria-label="Chat actions"
-          style={{ height: 34, padding: '0 10px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', fontSize: 11.5, fontWeight: 700, flexShrink: 0, letterSpacing: '0.02em' }}
+          onClick={() => openCommandPalette()}
+          title="Search and commands"
+          aria-label="Open command palette"
+          style={{ height: 34, padding: '0 11px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, flexShrink: 0 }}
         >
-          {isMac ? '⌘K' : 'Ctrl K'}
+          <span style={{ display: 'inline-flex', color: 'var(--color-text-tertiary)' }}><IconSparkleSearch /></span>
+          <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em' }}>{isMac ? '⌘K' : 'Ctrl K'}</span>
         </button>
         {activeThreadId != null && (
           <button
@@ -328,7 +377,7 @@ export default function AIWorkspace() {
             aria-label="Chat settings"
             style={{ width: 34, height: 34, padding: 0, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: overrideActive ? 'var(--color-accent-dim)' : 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
           >
-            <IconGear />
+            <SlidersHorizontal size={16} strokeWidth={1.8} aria-hidden="true" />
           </button>
         )}
         <button
@@ -423,7 +472,17 @@ export default function AIWorkspace() {
         </div>
       )}
       </div>
-      <ChatActionPalette isOpen={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+      {modelSelectorOpen && (
+        <ModelSelector
+          providerAvailability={providerAvailability}
+          currentProvider={displayProviderMeta.id}
+          currentModel={displayModelId}
+          isOverride={overrideActive}
+          defaultLabel={`${providerMeta.shortLabel} · ${modelLabel}`}
+          onApply={onApplyModel}
+          onClose={() => setModelSelectorOpen(false)}
+        />
+      )}
       {settingsOpen && activeThreadId != null && (
         <ThreadSettingsPanel
           threadId={activeThreadId}
@@ -435,5 +494,15 @@ export default function AIWorkspace() {
         />
       )}
     </div>
+  )
+}
+
+// A search-glyph for the header ⌘K affordance (search now lives in the palette).
+function IconSparkleSearch() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.5" />
+      <path d="M10.5 10.5 14 14" />
+    </svg>
   )
 }
