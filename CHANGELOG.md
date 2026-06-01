@@ -4,6 +4,14 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
+## v1.0.43 - 2026-06-01 — AI Tab Polish
+
+- One command palette: ⌘K now holds every chat and message action plus history search, so there is a single place to find things instead of a separate search box and action menu.
+- "Turn into" actions are real: shortening, a checklist, bullets, or a report now faithfully rewrite the specific answer you ran them on instead of regenerating a generic day summary.
+- Follow-up suggestions are grounded in the answer you just got, not templated from app names, so they read like real next questions.
+- New Raycast-style model picker in the composer, with each model's capabilities shown inline.
+- Compose with mentions: typing `@` inserts an app, project, or day as an inline chip with its icon, and chat titles no longer collapse to a bare word like "today".
+
 ## v1.0.42 - 2026-06-01 — Gemini Fix + AI Tab Upgrades
 
 - Gemini works again. The default Gemini model was pointing at a version Google retired, so Gemini chats stopped responding. Daylens now uses the current Gemini model and quietly moves anyone who was stranded on the old one.
