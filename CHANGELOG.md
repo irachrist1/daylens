@@ -4,6 +4,14 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
+## v1.0.42 - 2026-06-01 — Gemini Fix + AI Tab Upgrades
+
+- Gemini works again. The default Gemini model was pointing at a version Google retired, so Gemini chats stopped responding. Daylens now uses the current Gemini model and quietly moves anyone who was stranded on the old one.
+- The AI tab is more capable and more reliable: chats survive rate limits with automatic retries and clearer errors, the conversation history has a searchable, time-grouped sidebar with archive, and a ⌘K command palette puts common actions a keystroke away.
+- New ways to work with answers: turn any response into a shorter version, a checklist, bullets, or a report, and set a per-chat model and custom instructions.
+- Faster composing: type `@` to reference your apps and projects or `/` for quick commands, and search your history in plain language instead of exact keywords.
+- New optional tracking controls, off by default so nothing changes unless you turn them on: exclude specific apps or websites, automatically skip private/incognito windows, and pause tracking from Settings or the tray.
+
 ## v1.0.41 - 2026-05-31 — Timeline Coherence + AI Tab Rewrite
 
 - The AI tab is rebuilt as a faster, minimal chat: the composer auto-grows with no per-keystroke layout work, new chat is instant, and the message list, composer, and history search render in isolation so typing, streaming, and searching no longer re-render each other.
