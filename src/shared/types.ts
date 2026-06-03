@@ -1331,6 +1331,7 @@ export const IPC = {
     // T3: delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',
     DELETE_SITE_HISTORY: 'tracking:delete-site-history',
+    DELETE_ACTIVITY: 'tracking:delete-activity',
   },
   APP: {
     RELAUNCH: 'app:relaunch',

@@ -10,6 +10,7 @@ import { getWrappedNarrative } from './wrappedNarrative'
 import { getCurrentSession } from './tracking'
 import { getTimelineDayPayload } from './workBlocks'
 import {
+  buildEveningWrapRoute,
   buildDailyReportRoute,
   openDailySummaryRoute,
   setDailySummaryNavigationWindow,
@@ -173,13 +174,12 @@ async function checkDailySummary(): Promise<void> {
   dailySummaryPreparing = true
   try {
     const teaser = await tryGetWrappedTeaser(today, 'evening')
-    const ai = await tryPrepareAIReport(today)
-    const route = ai?.route ?? `/wrapped?date=${today}&source=daily-summary`
+    const route = buildEveningWrapRoute(today)
     // Evening fallback body: grounded in the day having real activity (the
     // scheduler already filtered for `todaySecondsTracked > 0`), but neutral
     // enough to stay truthful when the AI teaser is unavailable.
     const body = teaser ?? 'Your day is in. Open the recap.'
-    notifyWithNavigation('Daylens', body, route)
+    notifyWithNavigation('Evening Wrap is ready', body, route)
     writeState({ ...state, lastDailySummaryDate: today })
   } finally {
     dailySummaryPreparing = false
@@ -237,10 +237,10 @@ export async function fireTestDailyNotification(): Promise<{ ok: boolean; reason
 
   try {
     const teaser = await tryGetWrappedTeaser(targetDate, isMorning ? 'morning' : 'evening')
-    const ai = await tryPrepareAIReport(targetDate)
-    const route = ai?.route ?? `/wrapped?date=${targetDate}&source=daily-summary`
 
     if (isMorning) {
+      const ai = await tryPrepareAIReport(targetDate)
+      const route = ai?.route ?? `/wrapped?date=${targetDate}&source=daily-summary`
       notifyWithNavigation(
         'Yesterday\'s recap is ready',
         teaser ?? 'Carry yesterday\'s thread into today.',
@@ -248,7 +248,11 @@ export async function fireTestDailyNotification(): Promise<{ ok: boolean; reason
         { actionText: 'Open' },
       )
     } else {
-      notifyWithNavigation('Daylens', teaser ?? 'Your day is in. Open the recap.', route)
+      notifyWithNavigation(
+        'Evening Wrap is ready',
+        teaser ?? 'Your day is in. Open the recap.',
+        buildEveningWrapRoute(targetDate),
+      )
     }
     return { ok: true }
   } catch (err) {

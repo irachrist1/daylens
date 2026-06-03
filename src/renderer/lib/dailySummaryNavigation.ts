@@ -40,7 +40,9 @@ export async function handleDailySummaryNavigation(
   deps: DailySummaryNavigationDeps,
 ): Promise<boolean> {
   const url = new URL(route, 'http://x')
-  if (url.searchParams.get('source') !== 'daily-summary') {
+  const source = url.searchParams.get('source')
+  const opensWrapped = url.pathname === '/wrapped' || source === 'daily-summary' || source === 'evening-wrap'
+  if (!opensWrapped) {
     deps.navigate(route)
     return false
   }

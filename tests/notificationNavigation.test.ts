@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { handleDailySummaryNavigation } from '../src/renderer/lib/dailySummaryNavigation.ts'
-import { buildDailyReportRoute, openDailySummaryRoute } from '../src/main/services/dailySummaryNavigation.ts'
+import { buildDailyReportRoute, buildEveningWrapRoute, openDailySummaryRoute } from '../src/main/services/dailySummaryNavigation.ts'
 
 function makeEmptyDay(date: string) {
   return {
@@ -43,6 +43,48 @@ test('daily summary navigation opens Day Wrapped for the date in the route even 
   assert.deepEqual(fetchedDates, ['2026-04-29'])
   assert.deepEqual(openedDates, ['2026-04-29'])
   assert.deepEqual(navigatedRoutes, [])
+})
+
+test('Evening Wrap route opens Day Wrapped without report handoff ids', async () => {
+  const opened: Array<{ date: string; threadId: number | null; artifactId: number | null }> = []
+  const navigatedRoutes: string[] = []
+
+  await handleDailySummaryNavigation('/wrapped?date=2026-05-12&source=evening-wrap', {
+    getTimelineDay: async (date) => makeEmptyDay(date),
+    openWrapped: ({ day, threadId, artifactId }) => {
+      opened.push({ date: day.date, threadId, artifactId })
+    },
+    navigate: (route) => {
+      navigatedRoutes.push(route)
+    },
+    todayString: () => '2026-05-13',
+  })
+
+  assert.deepEqual(opened, [{ date: '2026-05-12', threadId: null, artifactId: null }])
+  assert.deepEqual(navigatedRoutes, [])
+})
+
+test('standalone wrapped route opens the Wrapped overlay', async () => {
+  const openedDates: string[] = []
+  const navigatedRoutes: string[] = []
+
+  await handleDailySummaryNavigation('/wrapped?date=2026-05-12', {
+    getTimelineDay: async (date) => makeEmptyDay(date),
+    openWrapped: ({ day }) => {
+      openedDates.push(day.date)
+    },
+    navigate: (route) => {
+      navigatedRoutes.push(route)
+    },
+    todayString: () => '2026-05-13',
+  })
+
+  assert.deepEqual(openedDates, ['2026-05-12'])
+  assert.deepEqual(navigatedRoutes, [])
+})
+
+test('Evening Wrap notification route targets the Wrapped surface', () => {
+  assert.equal(buildEveningWrapRoute('2026-05-12'), '/wrapped?date=2026-05-12&source=evening-wrap')
 })
 
 test('daily report route includes the report date for Morning Brief click-through', () => {

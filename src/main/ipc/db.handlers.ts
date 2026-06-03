@@ -35,7 +35,7 @@ import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
-import { deleteHistoryForApp, deleteHistoryForSite } from '../services/trackingHistory'
+import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
@@ -591,6 +591,18 @@ export function registerDbHandlers(): void {
   })
   ipcMain.handle(IPC.TRACKING.DELETE_SITE_HISTORY, (_e, payload: { domain: string }) => {
     return deleteHistoryForSite(payload ?? { domain: '' })
+  })
+  ipcMain.handle(IPC.TRACKING.DELETE_ACTIVITY, (_e, payload: {
+    appSessionIds?: number[] | null
+    derivedSessionIds?: number[] | null
+    bundleId?: string | null
+    canonicalAppId?: string | null
+    appName?: string | null
+    startTime?: number | null
+    endTime?: number | null
+    date?: string | null
+  }) => {
+    return deleteTrackedActivity(payload ?? {})
   })
 
   // ─── Attribution query resolvers ──────────────────────────────────────────

@@ -241,6 +241,17 @@ const api = {
       ipcRenderer.invoke(IPC.TRACKING.DELETE_APP_HISTORY, payload),
     deleteSiteHistory: (payload: { domain: string }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
       ipcRenderer.invoke(IPC.TRACKING.DELETE_SITE_HISTORY, payload),
+    deleteActivity: (payload: {
+      appSessionIds?: number[] | null
+      derivedSessionIds?: number[] | null
+      bundleId?: string | null
+      canonicalAppId?: string | null
+      appName?: string | null
+      startTime?: number | null
+      endTime?: number | null
+      date?: string | null
+    }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
+      ipcRenderer.invoke(IPC.TRACKING.DELETE_ACTIVITY, payload),
   },
   focus: {
     start: (payload?: FocusStartPayload | string | null): Promise<number> => ipcRenderer.invoke(IPC.FOCUS.START, payload),

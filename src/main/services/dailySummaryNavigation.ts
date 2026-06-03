@@ -70,3 +70,10 @@ export function buildDailyReportRoute(report: Pick<AIDailyReportPreparationResul
   const query = params.toString()
   return query ? `/ai?${query}` : '/ai'
 }
+
+export function buildEveningWrapRoute(date: string): string {
+  const params = new URLSearchParams()
+  params.set('date', date)
+  params.set('source', 'evening-wrap')
+  return `/wrapped?${params.toString()}`
+}

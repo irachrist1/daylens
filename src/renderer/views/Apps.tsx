@@ -128,6 +128,15 @@ function formatAppsDateLabel(dateStr: string): string {
   return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(y, m - 1, d))
 }
 
+function appRangeBounds(dateStr: string, days: number): { startTime: number; endTime: number } {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dayStart = new Date(y, m - 1, d).getTime()
+  return {
+    startTime: dayStart - (Math.max(1, days) - 1) * 86_400_000,
+    endTime: dayStart + 86_400_000,
+  }
+}
+
 export default function Apps() {
   // days === 1 enables the date switcher (today raw OR a past day). 7d/30d
   // are range modes that ignore selectedDate.
@@ -361,6 +370,8 @@ export default function Apps() {
     | { kind: 'no-bundle' }
     | { kind: 'error'; message: string }
   const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
+  const [deletingAppActivity, setDeletingAppActivity] = useState(false)
+  const [deleteAppActivityError, setDeleteAppActivityError] = useState<string | null>(null)
   const isUserGenerating = expectedNarrativeScopeKey
     ? activeGenerationScopes.has(expectedNarrativeScopeKey)
     : false
@@ -415,6 +426,32 @@ export default function Apps() {
         next.delete(scopeKey)
         return next
       })
+    }
+  }
+
+  const handleDeleteSelectedAppActivity = async () => {
+    if (!selectedSummary) return
+    const label = formatDisplayAppName(selectedSummary.appName)
+    const confirmed = window.confirm(`Delete ${label}'s tracked activity for ${selectedRangeLabel}? This removes the local activity records from this range.`)
+    if (!confirmed) return
+
+    setDeletingAppActivity(true)
+    setDeleteAppActivityError(null)
+    const range = appRangeBounds(isAppsPastDay ? selectedDate : todayString(), isAppsPastDay ? 1 : days)
+    try {
+      await ipc.tracking.deleteActivity({
+        bundleId: selectedSummary.bundleId,
+        canonicalAppId: selectedSummary.canonicalAppId ?? selectedSummary.bundleId,
+        appName: selectedSummary.appName,
+        date: dateMode ? selectedDate : null,
+        ...range,
+      })
+      setSelectedAppId(null)
+      await appsResource.refresh()
+    } catch (error) {
+      setDeleteAppActivityError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDeletingAppActivity(false)
     }
   }
 
@@ -833,11 +870,34 @@ export default function Apps() {
                         {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
                       </button>
                     )}
+                    <button
+                      type="button"
+                      disabled={deletingAppActivity || selectedSummary.totalSeconds <= 0}
+                      onClick={() => { void handleDeleteSelectedAppActivity() }}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 8,
+                        border: '1px solid rgba(248, 113, 113, 0.35)',
+                        background: 'rgba(248, 113, 113, 0.08)',
+                        color: '#ef4444',
+                        fontSize: 11.5,
+                        fontWeight: 700,
+                        cursor: deletingAppActivity || selectedSummary.totalSeconds <= 0 ? 'default' : 'pointer',
+                        opacity: deletingAppActivity || selectedSummary.totalSeconds <= 0 ? 0.6 : 1,
+                      }}
+                    >
+                      {deletingAppActivity ? 'Deleting…' : 'Delete activity'}
+                    </button>
                   </div>
                   <>
                     <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
                       {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
                     </p>
+                    {deleteAppActivityError && (
+                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
+                        Could not delete activity: {deleteAppActivityError}
+                      </div>
+                    )}
                     {isUserGenerating && (
                       <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
                         Generating a stronger app narrative…

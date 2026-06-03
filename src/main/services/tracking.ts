@@ -942,6 +942,47 @@ function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundle
   return { ...win, bundleId, appName }
 }
 
+function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): ActiveWinResult | null {
+  if (process.platform !== 'darwin') return null
+  try {
+    const row = getDb().prepare(`
+      SELECT ts_ms, app_bundle_id, app_name, pid, window_title
+      FROM focus_events
+      WHERE source = 'nsworkspace_event'
+        AND event_type IN ('app_activated', 'space_changed')
+        AND (app_bundle_id IS NOT NULL OR app_name IS NOT NULL)
+      ORDER BY ts_ms DESC, id DESC
+      LIMIT 1
+    `).get() as {
+      ts_ms: number
+      app_bundle_id: string | null
+      app_name: string | null
+      pid: number | null
+      window_title: string | null
+    } | undefined
+
+    if (!row || Date.now() - row.ts_ms > maxAgeMs) return null
+    const application = row.app_name?.trim() || row.app_bundle_id?.trim() || 'Unknown app'
+    const bundleId = row.app_bundle_id?.trim() || application
+    const matchingCurrentSession = currentSession
+      && (
+        currentSession.bundleId === bundleId
+        || currentSession.appName === application
+        || currentSession.rawAppName === application
+      )
+    const stablePath = matchingCurrentSession && currentSession ? currentSession.bundleId : bundleId
+    return {
+      title: row.window_title?.trim() || application,
+      application,
+      path: stablePath,
+      pid: row.pid ?? 0,
+      icon: '',
+    }
+  } catch {
+    return null
+  }
+}
+
 // ─── OS noise filter ─────────────────────────────────────────────────────────
 // System processes that appear as "frontmost app" but are not user-initiated.
 // Writing these to the DB creates junk sessions that inflate totals and
@@ -1031,6 +1072,12 @@ function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: s
 function looksLikeBrowserApp(bundleId: string, appName: string): boolean {
   const lower = `${bundleId} ${appName}`.toLowerCase()
   return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(lower)
+}
+
+function looksLikePassiveMediaSession(session: InFlightSession): boolean {
+  if (session.category === 'entertainment') return true
+  const haystack = `${session.bundleId} ${session.appName} ${session.rawAppName} ${session.windowTitle ?? ''}`.toLowerCase()
+  return /\b(netflix|youtube|youtu\.be|hulu|disney|prime video|amazon video|plex|twitch|vimeo|vlc|quicktime|music|spotify)\b/.test(haystack)
 }
 
 function trackedForegroundSessionExclusionReason(
@@ -1365,20 +1412,30 @@ async function poll(): Promise<void> {
     // ── Idle detection ───────────────────────────────────────────────────────
     const idleSec = powerMonitor.getSystemIdleTime()
     if (idleSec >= AWAY_THRESHOLD_SEC) {
-      if (idleState !== 'away' && currentSession) {
-        const idleStartMs = provisionalIdleStart ?? (Date.now() - Math.round(idleSec) * 1_000)
-        if (idleState !== 'provisional_idle') {
-          recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
+      if (currentSession && looksLikePassiveMediaSession(currentSession)) {
+        if (idleState === 'active') {
+          provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
+          idleState = 'provisional_idle'
+          recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
+          console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`)
         }
-        flushCurrent(idleStartMs, 'away')
-        flushActiveBrowserContext(getDb(), idleStartMs)
-        console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
-        lastMeaningfulCaptureAt = idleStartMs
+        lastPresenceOverride = 'active'
+      } else {
+        if (idleState !== 'away' && currentSession) {
+          const idleStartMs = provisionalIdleStart ?? (Date.now() - Math.round(idleSec) * 1_000)
+          if (idleState !== 'provisional_idle') {
+            recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
+          }
+          flushCurrent(idleStartMs, 'away')
+          flushActiveBrowserContext(getDb(), idleStartMs)
+          console.log(`[tracking] user away ${Math.round(idleSec)}s — session flushed`)
+          lastMeaningfulCaptureAt = idleStartMs
+        }
+        lastPresenceOverride = 'idle'
+        idleState = 'away'
+        provisionalIdleStart = null
+        return
       }
-      lastPresenceOverride = 'idle'
-      idleState = 'away'
-      provisionalIdleStart = null
-      return
     } else if (idleSec >= IDLE_THRESHOLD_SEC) {
       if (idleState === 'active') {
         provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
@@ -1463,22 +1520,41 @@ async function poll(): Promise<void> {
     } else {
       const awMod = getActiveWindowModule()
       if (!awMod) {
-        flushActiveBrowserContext(getDb())
-        return
+        win = recentMacFocusEventWindow()
+        backend = win ? 'focus_events' : backend
+        if (!win) {
+          flushActiveBrowserContext(getDb())
+          return
+        }
       }
 
-      try {
-        win = awMod.getActiveWindow() as ActiveWinResult | null
-      } catch (err) {
-        flushActiveBrowserContext(getDb())
-        trackingStatus.pollError = formatError(err)
-        captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
-          failure_kind: classifyFailureKind(err),
-          reason: 'poll',
-          status: 'error',
-          surface: 'tracking',
-        })
-        return
+      if (awMod) {
+        try {
+          win = awMod.getActiveWindow() as ActiveWinResult | null
+          if (!windowHasMeaningfulIdentity(win)) {
+            const fallback = recentMacFocusEventWindow()
+            if (fallback) {
+              win = fallback
+              backend = 'focus_events'
+            }
+          }
+        } catch (err) {
+          const fallback = recentMacFocusEventWindow()
+          if (fallback) {
+            win = fallback
+            backend = 'focus_events'
+          } else {
+            flushActiveBrowserContext(getDb())
+            trackingStatus.pollError = formatError(err)
+            captureRateLimited(ANALYTICS_EVENT.TRACKING_ENGINE_HEALTH, 'tracking:get-active-window', {
+              failure_kind: classifyFailureKind(err),
+              reason: 'poll',
+              status: 'error',
+              surface: 'tracking',
+            })
+            return
+          }
+        }
       }
     }
 

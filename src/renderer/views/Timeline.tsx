@@ -959,6 +959,8 @@ function BlockInspector({
   const [clientDraft, setClientDraft] = useState('')
   const [clientSaving, setClientSaving] = useState(false)
   const [clientStatus, setClientStatus] = useState<string | null>(null)
+  const [deletingActivity, setDeletingActivity] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const hasBlock = Boolean(block)
 
   useEffect(() => {
@@ -990,6 +992,8 @@ function BlockInspector({
   useEffect(() => {
     setClientDraft('')
     setClientStatus(null)
+    setDeleteError(null)
+    setDeletingActivity(false)
   }, [block?.id])
 
   if (!block) {
@@ -1263,6 +1267,60 @@ function BlockInspector({
         {clientStatus && (
           <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
             {clientStatus}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
+        <button
+          type="button"
+          disabled={deletingActivity || block.isLive}
+          onClick={() => {
+            if (block.isLive) return
+            const label = userVisibleBlockLabel(block)
+            const confirmed = window.confirm(`Delete "${label}" from your tracked activity? This removes the underlying local activity records for this block.`)
+            if (!confirmed) return
+            const appSessionIds = block.sessions
+              .filter((session) => session.id > 0 && session.captureSource !== 'focus_events')
+              .map((session) => session.id)
+            const derivedSessionIds = block.sessions
+              .filter((session) => session.id > 0 && session.captureSource === 'focus_events')
+              .map((session) => session.id)
+            setDeletingActivity(true)
+            setDeleteError(null)
+            void ipc.tracking.deleteActivity({
+              appSessionIds,
+              derivedSessionIds,
+              startTime: block.startTime,
+              endTime: block.endTime,
+              date: payload.date,
+            })
+              .then(async () => {
+                await onRefresh()
+              })
+              .catch((error) => {
+                setDeleteError(sanitizeIpcError(error, "Couldn't delete this activity. Try again in a moment.").message)
+              })
+              .finally(() => setDeletingActivity(false))
+          }}
+          style={{
+            width: '100%',
+            height: 36,
+            borderRadius: 9,
+            border: '1px solid rgba(248, 113, 113, 0.35)',
+            background: 'rgba(248, 113, 113, 0.08)',
+            color: '#ef4444',
+            fontSize: 12,
+            fontWeight: 750,
+            cursor: deletingActivity || block.isLive ? 'default' : 'pointer',
+            opacity: deletingActivity || block.isLive ? 0.55 : 1,
+          }}
+        >
+          {deletingActivity ? 'Deleting…' : block.isLive ? 'Delete after session ends' : 'Delete activity'}
+        </button>
+        {deleteError && (
+          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>
+            {deleteError}
           </div>
         )}
       </div>
