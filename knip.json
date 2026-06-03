@@ -3,6 +3,8 @@
   "entry": [
     "src/main/index.ts",
     "src/preload/index.ts",
+    "src/renderer/index.html",
+    "src/renderer/main.tsx",
     "packages/mcp-server/src/index.ts",
     "packages/remote-contract/index.ts",
     "forge.config.ts",
