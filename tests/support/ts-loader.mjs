@@ -17,9 +17,14 @@ const BUILD_DEFINES = {
 }
 
 function buildDefineShim(source) {
+  // Emit each define as a const that prefers a globalThis override when present,
+  // falling back to the build default. Tests that need a non-empty value (e.g.
+  // analytics.service.test.ts setting __POSTHOG_KEY__) assign globalThis.<name>
+  // before importing the module under test; without this a hardcoded const would
+  // shadow that global and the value would always be the empty-string default.
   return Object.entries(BUILD_DEFINES)
     .filter(([name]) => source.includes(name))
-    .map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`)
+    .map(([name, value]) => `const ${name} = globalThis.${name} !== undefined ? globalThis.${name} : ${JSON.stringify(value)};`)
 }
 
 function tryFile(basePath) {
@@ -68,6 +73,13 @@ export async function resolve(specifier, context, defaultResolve) {
   if (specifier === 'electron-store') {
     return {
       url: pathToFileURL(path.resolve(projectRoot, 'tests/support/electron-store-stub.mjs')).href,
+      shortCircuit: true,
+    }
+  }
+
+  if (specifier === 'electron-updater') {
+    return {
+      url: pathToFileURL(path.resolve(projectRoot, 'tests/support/electron-updater-stub.mjs')).href,
       shortCircuit: true,
     }
   }

@@ -27,9 +27,13 @@ const BUILD_DEFINES = {
 }
 
 function buildDefineShim(source) {
+  // Emit each define as a const that prefers a globalThis override when present,
+  // falling back to the build default. Tests that need a non-empty value assign
+  // globalThis.<name> before importing the module under test; without this a
+  // hardcoded const would shadow that global.
   return Object.entries(BUILD_DEFINES)
     .filter(([name]) => source.includes(name))
-    .map(([name, value]) => `const ${name} = ${JSON.stringify(value)};`)
+    .map(([name, value]) => `const ${name} = globalThis.${name} !== undefined ? globalThis.${name} : ${JSON.stringify(value)};`)
 }
 
 function tryFile(basePath) {

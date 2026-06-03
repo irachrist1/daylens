@@ -36,3 +36,27 @@ jobs:
       - name: knip (report-only)
         run: npm run knip
         continue-on-error: true
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # The suite runs under Electron-as-node and uses real better-sqlite3, so
+      # the Electron binary's shared libraries and the native modules must be
+      # present. Mirror the proven setup in verify-linux-runtime.yml.
+      - name: Install Electron runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth dbus-x11
+      - run: npm ci --ignore-scripts
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+      # ELECTRON_RUN_AS_NODE means no display is needed, but wrap in xvfb-run so
+      # the Electron binary never trips on a missing X server during startup.
+      - name: Run hermetic test suite
+        run: xvfb-run -a npm test
