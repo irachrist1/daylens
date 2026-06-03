@@ -7,7 +7,7 @@ export type MentionSegment =
   | { type: 'text'; value: string }
   | { type: 'mention'; name: string }
 
-const MENTION_TOKEN_RE = /(^|[\s(])@([A-Za-z0-9][\w.\-]*)/g
+const MENTION_TOKEN_RE = /(^|[\s(])@([A-Za-z0-9][\w.-]*)/g
 
 export function splitMentionSegments(text: string): MentionSegment[] {
   const segments: MentionSegment[] = []

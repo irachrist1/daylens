@@ -12,7 +12,7 @@ function nextProofState(stage: OnboardingStage, current: ProofState): ProofState
 export async function reconcileOnboardingState(): Promise<AppSettings> {
   const settings = await getSettingsAsync()
   let changed = false
-  let onboardingState = { ...settings.onboardingState }
+  const onboardingState = { ...settings.onboardingState }
 
   if (settings.onboardingComplete && onboardingState.stage !== 'complete') {
     onboardingState.stage = 'complete'

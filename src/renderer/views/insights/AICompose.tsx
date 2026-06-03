@@ -109,7 +109,7 @@ function AIComposeImpl(
     const editor = editorRef.current
     if (!editor) return
     const serialized = serializeEditor(editor)
-    const isEmpty = serialized.replace(/ /g, '').trim() === '' && editor.querySelector('.dl-mention') == null
+    const isEmpty = serialized.replace(/\u00A0/g, '').trim() === '' && editor.querySelector('.dl-mention') == null
     setEmpty(isEmpty)
     editor.dataset.empty = isEmpty ? 'true' : 'false'
 
@@ -191,7 +191,7 @@ function AIComposeImpl(
   const send = useCallback(() => {
     const editor = editorRef.current
     if (!editor) return
-    const text = serializeEditor(editor).replace(/ /g, ' ').trim()
+    const text = serializeEditor(editor).replace(/\u00A0/g, ' ').trim()
     if (!text || loading) return
     onSubmit(text)
     editor.innerHTML = ''

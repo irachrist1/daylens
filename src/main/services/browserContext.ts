@@ -164,7 +164,7 @@ function copyHistoryDb(historyPath: string, prefix: string): { dbPath: string; w
 
 function cleanupHistoryCopy(paths: { dbPath: string; walPath: string; shmPath: string }): void {
   for (const target of [paths.dbPath, paths.walPath, paths.shmPath]) {
-    try { if (fs.existsSync(target)) fs.unlinkSync(target) } catch {}
+    try { if (fs.existsSync(target)) fs.unlinkSync(target) } catch { /* best-effort: temp file may already be gone */ }
   }
 }
 

@@ -273,7 +273,7 @@ export function largestRemainderPercentages(values: number[]): number[] {
   if (total <= 0) return values.map(() => 0)
   const raw = values.map((value) => (Math.max(0, value) / total) * 100)
   const floors = raw.map(Math.floor)
-  let remaining = 100 - floors.reduce((a, b) => a + b, 0)
+  const remaining = 100 - floors.reduce((a, b) => a + b, 0)
   const order = raw
     .map((value, index) => [value - Math.floor(value), index] as [number, number])
     .sort((a, b) => b[0] - a[0] || a[1] - b[1])

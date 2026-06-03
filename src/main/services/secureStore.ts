@@ -92,7 +92,7 @@ export function getSecureStore(): KeytarModule | null {
   keytarLoadAttempted = true
   try {
     ensureLinuxSessionBusAddress()
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     keytarModule = require('keytar') as KeytarModule
     keytarLoadError = null
   } catch (error) {

@@ -1,0 +1,9 @@
+.vite/
+dist/
+dist-release/
+out/
+build/
+coverage/
+node_modules/
+package-lock.json
+src/main/services/bip39wordlist.ts
