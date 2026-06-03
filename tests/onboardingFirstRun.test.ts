@@ -58,7 +58,7 @@ test('tracking startup stays blocked on mac until permission is granted', () => 
       trackingPermissionState: 'missing',
     },
   })
-  assert.equal(shouldStartTrackingForSettings(settings), false)
+  assert.equal(shouldStartTrackingForSettings(settings, 'macos'), false)
 })
 
 test('provider validation catches mismatched key formats before network work', async () => {

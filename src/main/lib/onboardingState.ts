@@ -65,7 +65,7 @@ export function normalizeOnboardingState(raw: unknown, legacyComplete: boolean):
   }
 }
 
-export function shouldStartTrackingForSettings(settings: AppSettings): boolean {
-  if (process.platform !== 'darwin') return true
+export function shouldStartTrackingForSettings(settings: AppSettings, platform = currentOnboardingPlatform()): boolean {
+  if (platform !== 'macos') return true
   return settings.onboardingState.trackingPermissionState === 'granted'
 }
