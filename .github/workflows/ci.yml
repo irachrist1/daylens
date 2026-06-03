@@ -54,6 +54,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth dbus-x11
       - run: npm ci --ignore-scripts
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
       # ELECTRON_RUN_AS_NODE means no display is needed, but wrap in xvfb-run so
