@@ -1,6 +1,6 @@
 // Per-provider request throttle + retry, and per-turn call instrumentation.
 //
-// THEME A (docs/AI-TAB-V2-SPEC.md R1): a single chat question used to fan out
+// A single chat question used to fan out
 // into many provider HTTP calls with no coordination, so a free/low-tier key
 // (a handful of requests per minute) would 429 mid-answer — "works, then fails,
 // then works." This module is the choke point that makes every provider call:

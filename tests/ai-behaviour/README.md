@@ -2,7 +2,7 @@
 
 Tests the AI the way a user actually uses it: real DB (read-only copy), real provider key from keytar, real `sendMessage` pipeline, real provider call, real LLM judge.
 
-This is NOT a unit test. It's a black-box behavioural runner — the answer-quality eval program from `docs/AI-TAB-V2-SPEC.md` (Q6). Its job is to surface bad answers — hallucinations, refusals when data exists, voice slips, templated follow-ups, timeouts, broken artifacts — that hermetic tests miss, and to do it **per provider** before shipping AI changes.
+This is NOT a unit test. It's a black-box behavioural runner — the answer-quality eval program. Its job is to surface bad answers — hallucinations, refusals when data exists, voice slips, templated follow-ups, timeouts, broken artifacts — that hermetic tests miss, and to do it **per provider** before shipping AI changes.
 
 ## Run
 

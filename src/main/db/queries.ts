@@ -2078,7 +2078,7 @@ export function clearBlockLabelOverride(
 
 // Single source of truth for persisting an AI block label, shared by the
 // day-level "Re-analyze with AI" path and the per-block "Regenerate label"
-// path so both write identically (docs/PERF-COHERENCE-MAP.md §5b).
+// path so both write identically.
 //   - force = false: preserve a user override (no-op if one exists).
 //   - force = true:  the user explicitly asked to redo this block, so drop any
 //     override and write unconditionally.

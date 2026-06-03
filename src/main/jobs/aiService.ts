@@ -5025,7 +5025,7 @@ export async function generateWorkBlockInsight(
     // When the user explicitly rejects a label and asks for a new one, pass the
     // rejected text so the model is told not to repeat it. Without this the
     // same evidence produces the same label and "Regenerate" feels like a
-    // no-op (docs/PERF-COHERENCE-MAP.md §5b).
+    // no-op.
     rejectedLabel?: string
   },
 ): Promise<WorkContextInsight> {
@@ -5495,7 +5495,7 @@ export async function interpretSearchIntent(query: string): Promise<{ terms: str
     'Rules:',
     '- terms: 1-6 short lowercase keywords/phrases — the concrete nouns/entities the user means (project names, apps, topics, people, domains). Expand obvious synonyms/abbreviations (e.g. "autoencoders" also "autoencoder"). Drop stopwords and question words.',
     '- Never invent specific names the query does not imply.',
-    '- intent: a short human clause like "the autoencoders project" or "anything about the hackathon".',
+    '- intent: a short human clause like "the autoencoders project" or "anything about the migration".',
   ].join('\n')
   try {
     const { text } = await executeTextAIJob(

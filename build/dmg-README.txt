@@ -83,6 +83,6 @@
   to a server.
 
   Learn more:  github.com/irachrist1/daylens
-  Help:        github.com/irachrist1/daylens/blob/main/docs/INSTALL.md
+  Help:        github.com/irachrist1/daylens#getting-started
 
 ═══════════════════════════════════════════════════════════

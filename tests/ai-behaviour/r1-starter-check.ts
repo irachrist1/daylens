@@ -1,4 +1,4 @@
-// R1 gate (docs/AI-TAB-V2-SPEC.md §R1): run the 4 AI-tab starter prompts
+// R1 gate: run the 4 AI-tab starter prompts
 // back-to-back against the REAL Gemini key in keytar, each as the first message
 // of a brand-new chat (threadId: null) — the worst case for the per-minute
 // budget. Proves the reliability pass holds on a free/low-tier Gemini key:

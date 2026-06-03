@@ -121,7 +121,7 @@ export function registerAIHandlers(): void {
     // Per-block "Regenerate" is the explicit "this label is wrong, fix it"
     // action. Tell the model which label was rejected so it doesn't hand back
     // the same one, then write with force so the redo overrides the existing
-    // label (docs/PERF-COHERENCE-MAP.md §5b).
+    // label.
     const rejectedLabel = block.label.override?.trim() || block.label.current?.trim() || block.aiLabel?.trim()
     const insight = await generateWorkBlockInsight(
       { ...block, label: { ...block.label, override: null } },

@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # Native modules are not needed for a type-only check, so skip the
+      # postinstall electron-rebuild step to keep CI fast and reliable.
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck

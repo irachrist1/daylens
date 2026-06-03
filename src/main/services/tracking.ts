@@ -80,7 +80,7 @@ const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
 
 // A finished foreground session flushes on every app/window switch. Firing a
 // full-day timeline rebuild on each one is the dominant cost behind the app
-// feeling slower the longer the day runs (docs/PERF-COHERENCE-MAP.md §4).
+// feeling slower the longer the day runs.
 // Blocks are coarse and the *current* app is shown via the live-session path,
 // so coalescing the timeline/insights invalidation to a leading+trailing
 // window is safe. Explicit user actions (rebuild, label overrides, focus

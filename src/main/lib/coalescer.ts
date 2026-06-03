@@ -4,9 +4,9 @@
 // at the end of the window, keeping only the most recent arguments.
 //
 // Used to stop a burst of capture flushes (one per app/window switch) from
-// triggering a full-day timeline rebuild on every switch. See
-// docs/PERF-COHERENCE-MAP.md §4. The clock and scheduler are injectable so the
-// behaviour is unit-testable without real timers.
+// triggering a full-day timeline rebuild on every switch. The clock and
+// scheduler are injectable so the behaviour is unit-testable without real
+// timers.
 
 export interface Coalescer<A extends unknown[]> {
   (...args: A): void

@@ -15,7 +15,7 @@ test('deterministicTerms keeps entities and drops stopwords + question words', (
 })
 
 test('deterministicTerms reduces a vague NL query to its content word', () => {
-  assert.deepEqual(deterministicTerms('show me everything about the hackathon'), ['hackathon'])
+  assert.deepEqual(deterministicTerms('show me everything about the migration'), ['migration'])
 })
 
 test('deterministicTerms dedupes and caps at 6', () => {
