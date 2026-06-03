@@ -1,2 +1,0 @@
-export { suggestAppCategory } from './aiService'
-
