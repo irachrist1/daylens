@@ -513,7 +513,7 @@ function pollChromium(
     })
   } finally {
     for (const f of [tmpDb, tmpWal, tmpShm]) {
-      try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {}
+      try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch { /* best-effort: temp file may already be gone */ }
     }
   }
 
@@ -612,7 +612,7 @@ function pollFirefox(
     })
   } finally {
     for (const f of [tmpDb, tmpWal, tmpShm]) {
-      try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch {}
+      try { if (fs.existsSync(f)) fs.unlinkSync(f) } catch { /* best-effort: temp file may already be gone */ }
     }
   }
 

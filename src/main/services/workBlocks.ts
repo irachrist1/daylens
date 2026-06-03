@@ -1156,7 +1156,7 @@ function looksLikeShellPromptTitle(title: string): boolean {
   // page titles ("Inbox", "Daylens") would still match this shape — but
   // those are filtered earlier by titleLooksUseful + appName/rawAppName
   // checks below; terminal-prompt noise is what slips through.
-  if (lower.length <= 14 && !/[\s\/\\.\-:]/.test(lower)) {
+  if (lower.length <= 14 && !/[\s/\\.\-:]/.test(lower)) {
     // Allow it through only if it looks like camelCase or contains digits —
     // a clue that it's a real entity rather than a shell username.
     if (!/[A-Z0-9]/.test(title)) return true

@@ -91,10 +91,10 @@ const HOST_SUFFIX_RULES: Array<{ suffix: string; category: DomainPolicyCategory 
 // a substring of a longer word. We anchor on dots/dashes to avoid false
 // positives on words like "essex".
 const ADULT_STEM_PATTERNS: RegExp[] = [
-  /(^|[.\-])porn([.\-]|$)/i,
-  /(^|[.\-])xxx([.\-]|$)/i,
-  /(^|[.\-])nsfw([.\-]|$)/i,
-  /(^|[.\-])hentai([.\-]|$)/i,
+  /(^|[.-])porn([.-]|$)/i,
+  /(^|[.-])xxx([.-]|$)/i,
+  /(^|[.-])nsfw([.-]|$)/i,
+  /(^|[.-])hentai([.-]|$)/i,
 ]
 
 function normalizeHost(host: string | null | undefined): string | null {

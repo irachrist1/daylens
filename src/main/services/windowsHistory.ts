@@ -85,7 +85,7 @@ function parseAppActivityId(id: string): { bundleId: string; appName: string } |
   }
 
   // Win32 with GUID prefix: "{GUID}\path\to\app.exe"
-  const guidMatch = /^\{[0-9A-Fa-f-]{36}\}[\\\/](.+)/.exec(id)
+  const guidMatch = /^\{[0-9A-Fa-f-]{36}\}[\\/](.+)/.exec(id)
   if (guidMatch) {
     const filePath = guidMatch[1]
     const exeName  = path.win32.basename(filePath)

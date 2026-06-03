@@ -26,7 +26,7 @@ const PATTERNS: Pattern[] = [
   // 3. Provider-specific token shapes.
   { name: 'openai_key', regex: /sk-[A-Za-z0-9_-]{20,}/g },
   { name: 'slack_token', regex: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
-  { name: 'google_oauth', regex: /ya29\.[A-Za-z0-9_.\-]+/g },
+  { name: 'google_oauth', regex: /ya29\.[A-Za-z0-9_.-]+/g },
   { name: 'github_pat', regex: /gh[pousr]_[A-Za-z0-9]{30,}/g },
   { name: 'aws_access_key', regex: /\bAKIA[0-9A-Z]{16}\b/g },
 

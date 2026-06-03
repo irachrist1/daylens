@@ -19,3 +19,20 @@ jobs:
       # postinstall electron-rebuild step to keep CI fast and reliable.
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # knip requires node >=20.19; 22 LTS satisfies eslint, knip, and tseslint.
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      # Dead-code report starts advisory; tighten to a hard gate once triaged.
+      - name: knip (report-only)
+        run: npm run knip
+        continue-on-error: true

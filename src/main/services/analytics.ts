@@ -161,7 +161,7 @@ function getPosthog(): PostHogClient | null {
 
   if (!posthogClient) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { PostHog } = require('posthog-node') as typeof import('posthog-node')
       posthogClient = new PostHog(__POSTHOG_KEY__, {
         disableGeoip: true,
@@ -249,7 +249,7 @@ function getSentry(): SentryMain | null {
 
   if (!sentryMain) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Sentry = require('@sentry/electron/main') as SentryMain
       Sentry.init({
         beforeBreadcrumb: () => null,

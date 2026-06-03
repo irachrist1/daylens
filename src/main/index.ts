@@ -5,7 +5,7 @@ process.on('uncaughtException', (err) => {
     const {
       capture: analyticsCapture,
       captureException: analyticsCaptureException,
-    } = require('./services/analytics') as typeof import('./services/analytics')
+    } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
     analyticsCapture('app_crashed', {
       process_type: 'main',
       reason: 'uncaught_exception',
@@ -18,7 +18,7 @@ process.on('uncaughtException', (err) => {
     })
   } catch { /* analytics may not be ready */ }
   try {
-    const { dialog: d } = require('electron') as typeof import('electron')
+    const { dialog: d } = require('electron') as typeof import('electron') // eslint-disable-line @typescript-eslint/no-require-imports
     d.showErrorBox('Daylens crashed', `${err.name}: ${err.message}\n\nPlease restart Daylens.`)
   } catch { /* dialog may not be ready */ }
 })
@@ -29,7 +29,7 @@ process.on('unhandledRejection', (reason) => {
     const {
       capture: analyticsCapture,
       captureException: analyticsCaptureException,
-    } = require('./services/analytics') as typeof import('./services/analytics')
+    } = require('./services/analytics') as typeof import('./services/analytics') // eslint-disable-line @typescript-eslint/no-require-imports
     analyticsCapture('app_crashed', {
       process_type: 'main',
       reason: 'unhandled_rejection',
@@ -133,7 +133,7 @@ let isQuitting = false
 let deferredIntegrationStartup: ReturnType<typeof setTimeout> | null = null
 let backgroundServicesStarted = false
 // Set to latest version string when a newer release is detected
-export let updateAvailable: string | null = null
+export const updateAvailable: string | null = null
 
 function navigateMainWindow(route?: string): void {
   if (!mainWindow || mainWindow.isDestroyed() || !route) return
@@ -693,7 +693,8 @@ ipcMain.handle('shell:open-path', async (_e, targetPath: string) => {
 ipcMain.on('window:minimize', () => mainWindow?.minimize())
 ipcMain.on('window:maximize', () => {
   if (!mainWindow) return
-  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize()
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  else mainWindow.maximize()
 })
 ipcMain.on('window:close', () => {
   if (!mainWindow) return

@@ -863,7 +863,7 @@ export function __setLinuxCaptureTestHarness(
 function requireActiveWindowModule() {
   try {
     trackingStatus.moduleSource = 'package'
-    return require('@paymoapp/active-window')
+    return require('@paymoapp/active-window') // eslint-disable-line @typescript-eslint/no-require-imports
   } catch (packageErr) {
     if (!app.isPackaged) throw packageErr
 
@@ -879,7 +879,7 @@ function requireActiveWindowModule() {
 
     try {
       trackingStatus.moduleSource = 'unpacked'
-      return require(unpackedEntry)
+      return require(unpackedEntry) // eslint-disable-line @typescript-eslint/no-require-imports
     } catch (unpackedErr) {
       const combined = new Error(
         [
@@ -902,7 +902,6 @@ function getActiveWindowModule(): typeof import('@paymoapp/active-window').defau
       return null
     }
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = requireActiveWindowModule()
       const ActiveWindow = mod.default ?? mod
       ActiveWindow.initialize()

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/main/index.ts",
+    "src/preload/index.ts",
+    "packages/mcp-server/src/index.ts",
+    "packages/remote-contract/index.ts",
+    "forge.config.ts",
+    "vite.*.config.ts",
+    "electron-builder.config.js",
+    "scripts/*.{mjs,js}",
+    "tests/**/*.test.{ts,mjs}",
+    "tests/**/run.ts",
+    "tests/**/show-timeline.ts",
+    "tests/**/show-trace.ts",
+    "tests/**/runner.bench.ts",
+    "tests/routerHardPromptBenchmark.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "packages/**/*.ts", "scripts/**/*.{mjs,js}"],
+  "ignore": ["src/main/services/bip39wordlist.ts"]
+}
