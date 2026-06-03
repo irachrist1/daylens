@@ -37,6 +37,15 @@ Daylens bridges this gap by acting as a personal context retriever. Your knowled
 - **Data & System Layer**: SQLite (`better-sqlite3`), a macOS Swift native capture probe, `keytar`
 - **Integration**: Model Context Protocol (MCP), Sentry, PostHog
 
+## Platform support
+
+Daylens runs on macOS, Windows, and X11-based Linux sessions. Activity tracking
+depends on the OS exposing the focused window. On **GNOME Wayland (Mutter)** —
+the default on Ubuntu 24.04+ — the compositor does not expose the active window
+by design, so window-level tracking does not work there yet. Sessions running
+under X11, Sway, Hyprland, or KDE are unaffected. See
+[issue #35](https://github.com/irachrist1/daylens/issues/35) for status.
+
 ## Getting Started
 
 ### Prerequisites
