@@ -222,3 +222,41 @@ export async function proxyLatestMatchingAsset(
     );
   }
 }
+
+export async function redirectLatestMatchingAsset(
+  matches: (asset: ReleaseAsset) => boolean,
+  options?: { version?: string | null; minVersion?: string | null },
+): Promise<NextResponse> {
+  try {
+    const releases = await fetchPublishedReleases();
+    const match = findLatestMatchingReleaseAsset(releases, matches, options);
+    if (!match) {
+      return NextResponse.json(
+        { error: "No published download is available for this platform right now." },
+        { status: 404 },
+      );
+    }
+
+    const downloadUrl = releaseAssetDownloadUrl(match.asset);
+    if (!downloadUrl) {
+      return NextResponse.json(
+        { error: `Release asset ${match.asset.name} is missing a download URL.` },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.redirect(downloadUrl, 302);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Daylens could not reach the release service.";
+    return NextResponse.json(
+      {
+        error: message,
+        fallbackUrl: FALLBACK_URL,
+      },
+      { status: 503 },
+    );
+  }
+}

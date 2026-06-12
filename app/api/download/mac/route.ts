@@ -1,12 +1,12 @@
 import type { NextRequest } from "next/server";
-import { proxyLatestMatchingAsset } from "../_releaseAsset";
+import { redirectLatestMatchingAsset } from "../_releaseAsset";
 
 export async function GET(request: NextRequest) {
   const assetKind = request.nextUrl.searchParams.get("asset") ?? "dmg";
   const arch = (request.nextUrl.searchParams.get("arch") ?? "").toLowerCase();
   const version = request.nextUrl.searchParams.get("version");
 
-  return proxyLatestMatchingAsset((asset) => {
+  return redirectLatestMatchingAsset((asset) => {
     const name = asset.name.toLowerCase();
     const archMatches = !arch || name.includes(`-${arch}.`);
 

@@ -4,6 +4,9 @@ const basePath = process.env.NODE_ENV === "production" ? "/daylens" : "";
 
 const nextConfig: NextConfig = {
   basePath,
+  images: {
+    qualities: [75, 95],
+  },
   skipTrailingSlashRedirect: true,
   async redirects() {
     return [

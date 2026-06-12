@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { proxyLatestMatchingAsset } from "../_releaseAsset";
+import { redirectLatestMatchingAsset } from "../_releaseAsset";
 
 // Floor version for Windows downloads. The Windows release workflow builds unsigned
 // installers when no Authenticode certificate secrets are configured (SmartScreen warns
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   }
 
   const version = request.nextUrl.searchParams.get("version");
-  return proxyLatestMatchingAsset(
+  return redirectLatestMatchingAsset(
     (asset) => /Setup\.exe$/i.test(asset.name) || asset.name.endsWith(".exe"),
     { version, minVersion: MIN_WINDOWS_VERSION },
   );

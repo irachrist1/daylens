@@ -124,10 +124,14 @@ function Button({
       ? "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
       : "border border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-transparent dark:text-zinc-100 dark:hover:bg-zinc-900";
   const cls = `${base} ${styles} ${className}`;
+  // Plain <a> rather than next/link: these hrefs are downloads, external links,
+  // and in-page hash scrolls — none need client-side routing. Using next/link
+  // here would re-apply the configured basePath on top of hrefs that already
+  // carry it (via withBasePath), producing /daylens/daylens/... 404s.
   return href ? (
-    <Link href={href} target={target} rel={rel} className={cls} {...props}>
+    <a href={href} target={target} rel={rel} className={cls} {...props}>
       {children}
-    </Link>
+    </a>
   ) : (
     <button className={cls} {...props}>
       {children}
@@ -262,16 +266,16 @@ export function HackathonLanding() {
             </div>
           </section>
 
-          <div className="relative w-full lg:-mx-24 lg:w-[calc(100%+12rem)] max-w-none">
+          <div className="relative mx-auto w-full max-w-6xl overflow-hidden rounded-xl border border-zinc-200 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.12)] dark:border-zinc-800 dark:shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)] lg:rounded-[2rem]">
             <Image
               src={assetPath("/hackathon/01-timeline-day.png")}
               alt="Daylens today view — a reconstructed timeline of your work"
-              width={1280}
-              height={800}
+              width={2538}
+              height={1802}
               priority
               quality={95}
-              sizes="(max-width: 768px) 100vw, 1440px"
-              className="h-auto w-full rounded-xl border border-zinc-200 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.12)] dark:border-zinc-800 dark:shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)] lg:rounded-[2rem]"
+              sizes="(max-width: 768px) calc(100vw - 2rem), (max-width: 1280px) calc(100vw - 2rem), 1152px"
+              className="h-auto w-full"
               style={{
                 imageRendering: "-webkit-optimize-contrast",
               }}
