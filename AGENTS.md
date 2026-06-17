@@ -24,6 +24,11 @@ marks Done.
 
 ## 2. The loop (how you run for hours, unattended)
 
+0. **Branch check — do this FIRST, every run, before writing anything.** Run
+   `git fetch origin`, then create your working branch from the latest `origin/main`:
+   `git checkout -B agent/<packet-id> origin/main`. Confirm with `git branch --show-current`
+   that you are on that branch — NOT on `main`, NOT on a stale branch. Never commit to `main`
+   directly. If you are not on a fresh branch off `main`, stop and fix it before continuing.
 1. Open `AGENT-EXECUTION-PLAN.md`. Find the **lowest-numbered packet that is not yet merged
    and whose dependencies are merged**. That is your packet.
 2. Confirm you are the assigned model/engine for it. If not, stop — the right agent takes it.
@@ -47,15 +52,16 @@ merge chaos. One packet in flight per surface.
 - A large standalone architectural rewrite (e.g. the block-fact contract, corrections
   system, chat-state rewrite) may be its own packet — those are substantial enough alone.
 
-## 4. Branching & PRs (the founder is a 1–3 branch person)
+## 4. Branching & PRs (the founder is a 1–3 branch person, main-centric)
 
-- **Base branch is `v2`.** All work targets `v2`. Never push to `main` directly (it is
-  protected: PR + typecheck required).
-- One packet → one PR. Keep the number of live branches tiny; delete your working branch
-  after merge.
-- **Merge to `main` happens per phase, as one PR**, after the founder has tested that
-  phase on `v2`. Do not open `main` PRs for individual packets.
+- **Base branch is `main`.** Branch from the latest `origin/main` per packet
+  (`agent/<packet-id>`) and open your PR back into `main`. Never push to `main` directly —
+  it is protected (PR + typecheck required).
+- **One packet → one PR** into `main`. Each PR is a whole testable feature, never a lone
+  micro-fix. Delete your branch after merge so live branches stay near zero.
 - **Tag `/bugbot` on every PR** and resolve its findings before requesting test.
+- The founder tests your branch on their Mac, then merges. That merge is the only thing
+  that lands on `main`.
 
 ## 5. Quality gate — nothing reaches the founder broken
 
