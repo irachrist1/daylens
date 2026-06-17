@@ -1,0 +1,17 @@
+{
+  "fixtureId": "founder-real-jun16-week",
+  "day": {
+    "date": "2026-06-16",
+    "trackedMinutes": 361,
+    "toleranceMinutes": 15,
+    "source": "Manual live-app observation: docs/plans/screenshots/p0-truth-baseline-jun16-live.png (6h 1m tracked on June 16). Founder confirmation remains the DEV-17 acceptance step."
+  },
+  "week": {
+    "startDate": "2026-06-15",
+    "endDate": "2026-06-21",
+    "capturedThrough": "2026-06-17T23:28:45",
+    "trackedMinutes": 1207,
+    "toleranceMinutes": 15,
+    "source": "Manual screenshot transcription: docs/plans/screenshots/timeline-week-jun15-21-review-hours-mismatch.png (20h 7m week card; review incorrectly claimed 20h 53m)."
+  }
+}
