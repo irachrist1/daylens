@@ -24,7 +24,9 @@ import type {
   AppProfile,
   AppSession,
   ArtifactRef,
+  BlockBoundary,
   BlockConfidence,
+  BoundaryReason,
   DayTimelinePayload,
   DistractionCostPayload,
   DocumentRef,
@@ -33,16 +35,24 @@ import type {
   PageRef,
   TimelineEvidenceSummary,
   TimelineSegment,
+  TimelineBlockReview,
+  TimelineBlockReviewState,
+  TimelineBlockReviewUpdate,
   WorkflowPattern,
   WorkflowRef,
   WorkContextAppSummary,
   WorkContextBlock,
   LabelSource,
+  WorkIntentRole,
   WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
+import { inferWorkIntent } from '@shared/workIntent'
+import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
+import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { localDayBounds, localDateString } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import {
@@ -84,6 +94,7 @@ function sanitizeBlockLabel(label: string | null | undefined): string | null {
 }
 
 const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
+const RUNAWAY_GAP_THRESHOLD_MS = 40 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
@@ -163,6 +174,10 @@ interface CandidateBlock {
   boundedBeforeGap: boolean
   boundedAfterGap: boolean
   forcedLabel?: string
+  // Set by the boundary-scoring reconciliation pass: why this candidate's
+  // start and end edges were cut. Projected onto the block as `boundary`.
+  startReasons?: BoundaryReason[]
+  endReasons?: BoundaryReason[]
 }
 
 interface CategoryRun {
@@ -541,7 +556,13 @@ function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[
     const previous = sessions[index - 1]
     const current = sessions[index]
     const previousEnd = sessionEndMs(previous)
-    if (current.startTime - previousEnd > IDLE_GAP_THRESHOLD_MS && gapHasHardActivityBoundary(db, previousEnd, current.startTime)) {
+    const gap = current.startTime - previousEnd
+    // A logged sleep/lock/away event makes a >15-min gap a hard boundary. But a
+    // long quiet stretch with no logged event is still idle — runaway guard: a
+    // 40-min+ gap is treated as idle on its own so a browser session left open
+    // across an afternoon cannot stretch one episode over an 8-hour span.
+    const isRunawayGap = gap >= RUNAWAY_GAP_THRESHOLD_MS
+    if (gap > IDLE_GAP_THRESHOLD_MS && (isRunawayGap || gapHasHardActivityBoundary(db, previousEnd, current.startTime))) {
       segments.push({
         sessions: sessions.slice(startIndex, index),
         boundedBeforeGap: startIndex > 0,
@@ -1109,9 +1130,380 @@ function artifactIdFor(canonicalKey: string): string {
 }
 
 function blockIdFor(blockStart: number, blockEnd: number, sessionIds: number[], isLive: boolean): string {
-  const signature = `${blockStart}:${blockEnd}:${sessionIds.join(',')}:${TIMELINE_HEURISTIC_VERSION}`
+  // The live block is re-derived on every refresh tick: its end advances each
+  // second and new sessions flush onto its tail. Hashing those volatile inputs
+  // churns its id constantly, which drops the user's selection (the id leaves
+  // blockMap, the inspector closes) and breaks merge lookups (the id the
+  // renderer sent no longer exists by the time the handler re-materializes).
+  // Anchor the live id on its start alone — there is only ever one live block
+  // and its start is stable as it grows — so it keeps a single identity.
+  const signature = isLive
+    ? `live:${blockStart}`
+    : `${blockStart}:${blockEnd}:${sessionIds.join(',')}:${TIMELINE_HEURISTIC_VERSION}`
   const prefix = isLive ? 'live' : 'blk'
   return `${prefix}_${sha1(signature).slice(0, 16)}`
+}
+
+function reviewEvidenceKeyForBlock(block: WorkContextBlock): string {
+  const sessionIds = block.sessions
+    .map((session) => session.id)
+    .filter((id) => id >= 0)
+    .sort((left, right) => left - right)
+  if (sessionIds.length > 0) {
+    return `sessions:${sessionIds.join(',')}`
+  }
+
+  const artifactKeys = block.topArtifacts
+    .map((artifact) => artifact.canonicalKey ?? artifact.id)
+    .filter(Boolean)
+    .sort()
+    .slice(0, 8)
+  const appKeys = block.topApps
+    .map((app) => app.bundleId)
+    .filter(Boolean)
+    .sort()
+    .slice(0, 8)
+  return `span:${block.startTime}:${block.endTime}:apps:${appKeys.join(',')}:artifacts:${artifactKeys.join(',')}`
+}
+
+function defaultReviewStateForBlock(block: WorkContextBlock): TimelineBlockReviewState {
+  if (block.isLive) return 'pending'
+  if (block.label.source === 'user' || block.label.override?.trim()) return 'corrected'
+  if (block.confidence === 'low' || block.label.confidence < 0.58) return 'pending'
+  if (block.label.source === 'rule') return 'pending'
+  return 'auto-approved'
+}
+
+function originalReviewSnapshotForBlock(block: WorkContextBlock): Record<string, unknown> {
+  const intent = inferWorkIntent(block)
+  return {
+    blockId: block.id,
+    startTime: block.startTime,
+    endTime: block.endTime,
+    dominantCategory: block.dominantCategory,
+    label: block.label.current,
+    labelSource: block.label.source,
+    labelConfidence: block.label.confidence,
+    ruleBasedLabel: block.ruleBasedLabel,
+    aiLabel: block.aiLabel,
+    intentRole: intent.role,
+    intentSubject: intent.subject,
+    confidence: block.confidence,
+    heuristicVersion: block.heuristicVersion,
+    sessionIds: block.sessions.map((session) => session.id).filter((id) => id >= 0),
+    appBundles: block.topApps.slice(0, 6).map((app) => app.bundleId),
+    artifactIds: block.topArtifacts.slice(0, 8).map((artifact) => artifact.id),
+  }
+}
+
+function parseReviewJson(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function intentRoleValue(value: unknown): WorkIntentRole | null {
+  if (typeof value !== 'string') return null
+  return ([
+    'execution',
+    'research',
+    'communication',
+    'review',
+    'coordination',
+    'ambient',
+    'ambiguous',
+  ] as WorkIntentRole[]).includes(value as WorkIntentRole)
+    ? value as WorkIntentRole
+    : null
+}
+
+interface PersistedReviewRow {
+  id: string
+  block_id: string
+  date: string
+  evidence_key: string
+  review_state: string
+  original_block_json: string
+  correction_json: string
+  updated_at: number
+}
+
+function reviewFromRow(
+  row: PersistedReviewRow | null,
+  source: TimelineBlockReview['source'],
+  fallbackState: TimelineBlockReviewState,
+): TimelineBlockReview {
+  if (!row || !isTimelineBlockReviewState(row.review_state)) {
+    return {
+      ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+      state: fallbackState,
+    }
+  }
+
+  const original = parseReviewJson(row.original_block_json)
+  const correction = parseReviewJson(row.correction_json)
+  return {
+    state: row.review_state,
+    source,
+    originalBlockId: stringValue(original.blockId) ?? row.block_id,
+    originalLabel: stringValue(original.label),
+    originalIntentRole: intentRoleValue(original.intentRole),
+    originalIntentSubject: stringValue(original.intentSubject),
+    correctedLabel: stringValue(correction.label),
+    correctedIntentRole: intentRoleValue(correction.intentRole),
+    correctedIntentSubject: stringValue(correction.intentSubject),
+    updatedAt: row.updated_at,
+  }
+}
+
+function compareReviewRows(left: PersistedReviewRow, right: PersistedReviewRow): number {
+  const stateRank = (state: string): number => {
+    switch (state) {
+      case 'corrected': return 5
+      case 'ignored': return 4
+      case 'approved': return 3
+      case 'pending': return 2
+      case 'auto-approved': return 1
+      default: return 0
+    }
+  }
+  const rankDiff = stateRank(right.review_state) - stateRank(left.review_state)
+  if (rankDiff !== 0) return rankDiff
+  return right.updated_at - left.updated_at
+}
+
+function findReviewRowForBlock(
+  db: Database.Database,
+  dateStr: string,
+  block: WorkContextBlock,
+): { row: PersistedReviewRow | null; source: TimelineBlockReview['source'] } {
+  const evidenceKey = reviewEvidenceKeyForBlock(block)
+  const rows = db.prepare(`
+    SELECT
+      id,
+      block_id,
+      date,
+      evidence_key,
+      review_state,
+      original_block_json,
+      correction_json,
+      updated_at
+    FROM timeline_block_reviews
+    WHERE block_id = ?
+       OR (date = ? AND evidence_key = ?)
+    ORDER BY updated_at DESC
+  `).all(block.id, dateStr, evidenceKey) as PersistedReviewRow[]
+
+  const blockRow = rows
+    .filter((row) => row.block_id === block.id)
+    .sort(compareReviewRows)[0] ?? null
+  if (blockRow) return { row: blockRow, source: 'stored_block' }
+
+  const evidenceRow = rows
+    .filter((row) => row.evidence_key === evidenceKey)
+    .sort(compareReviewRows)[0] ?? null
+  return { row: evidenceRow, source: evidenceRow ? 'stored_evidence' : 'default' }
+}
+
+function reviewForBlock(db: Database.Database, dateStr: string, block: WorkContextBlock): TimelineBlockReview {
+  const fallbackState = defaultReviewStateForBlock(block)
+  const { row, source } = findReviewRowForBlock(db, dateStr, block)
+  const review = reviewFromRow(row, source, fallbackState)
+  if (review.state === 'corrected' && !review.correctedLabel && block.label.override?.trim()) {
+    return {
+      ...review,
+      correctedLabel: block.label.override.trim(),
+    }
+  }
+  return review
+}
+
+function applyReviewToBlock(block: WorkContextBlock, review: TimelineBlockReview): WorkContextBlock {
+  if (review.state === 'corrected' && review.correctedLabel) {
+    return {
+      ...block,
+      review,
+      label: {
+        ...block.label,
+        current: review.correctedLabel,
+        source: 'user',
+        confidence: 1,
+        override: review.correctedLabel,
+      },
+    }
+  }
+  return {
+    ...block,
+    review,
+  }
+}
+
+function ensureDefaultReviewRowForBlock(db: Database.Database, dateStr: string, block: WorkContextBlock): void {
+  const evidenceKey = reviewEvidenceKeyForBlock(block)
+  const existing = findReviewRowForBlock(db, dateStr, block).row
+  if (existing) return
+
+  const now = Date.now()
+  const state = defaultReviewStateForBlock(block)
+  db.prepare(`
+    INSERT OR IGNORE INTO timeline_block_reviews (
+      id,
+      block_id,
+      date,
+      evidence_key,
+      review_state,
+      original_block_json,
+      correction_json,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+  `).run(
+    `review_${sha1(`${block.id}:${evidenceKey}`).slice(0, 18)}`,
+    block.id,
+    dateStr,
+    evidenceKey,
+    state,
+    JSON.stringify(originalReviewSnapshotForBlock(block)),
+    now,
+    now,
+  )
+}
+
+export function writeTimelineBlockReview(
+  db: Database.Database,
+  dateStr: string,
+  block: WorkContextBlock,
+  update: Omit<TimelineBlockReviewUpdate, 'blockId' | 'date'>,
+): void {
+  const state = update.state
+  const evidenceKey = reviewEvidenceKeyForBlock(block)
+  const existing = findReviewRowForBlock(db, dateStr, block).row
+  const now = Date.now()
+  const existingCorrection = existing ? parseReviewJson(existing.correction_json) : {}
+  const nextCorrection: Record<string, unknown> = { ...existingCorrection }
+
+  if (update.correctedLabel !== undefined) {
+    const label = update.correctedLabel?.trim() ?? ''
+    if (label) nextCorrection.label = label
+    else delete nextCorrection.label
+  }
+  if (update.correctedIntentRole !== undefined) {
+    if (update.correctedIntentRole) nextCorrection.intentRole = update.correctedIntentRole
+    else delete nextCorrection.intentRole
+  }
+  if (update.correctedIntentSubject !== undefined) {
+    const subject = update.correctedIntentSubject?.trim() ?? ''
+    if (subject) nextCorrection.intentSubject = subject
+    else delete nextCorrection.intentSubject
+  }
+
+  const originalJson = existing?.original_block_json && existing.original_block_json !== '{}'
+    ? existing.original_block_json
+    : JSON.stringify(originalReviewSnapshotForBlock(block))
+
+  if (existing) {
+    db.prepare(`
+      UPDATE timeline_block_reviews
+      SET block_id = ?,
+          date = ?,
+          evidence_key = ?,
+          review_state = ?,
+          original_block_json = ?,
+          correction_json = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      block.id,
+      dateStr,
+      evidenceKey,
+      state,
+      originalJson,
+      JSON.stringify(nextCorrection),
+      now,
+      existing.id,
+    )
+    return
+  }
+
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id,
+      block_id,
+      date,
+      evidence_key,
+      review_state,
+      original_block_json,
+      correction_json,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    `review_${sha1(`${block.id}:${evidenceKey}`).slice(0, 18)}`,
+    block.id,
+    dateStr,
+    evidenceKey,
+    state,
+    originalJson,
+    JSON.stringify(nextCorrection),
+    now,
+    now,
+  )
+}
+
+// Persist a user merge correction keyed by the two sessions straddling the
+// boundary, so it survives a rebuild and feeds back into the boundary scorer as
+// the highest-weight "user correction memory" signal. A pair is unique, and a
+// later correction on the same pair overwrites the earlier one.
+function writeBoundaryCorrection(
+  db: Database.Database,
+  dateStr: string,
+  leftSessionId: number,
+  rightSessionId: number,
+): void {
+  if (leftSessionId < 0 || rightSessionId < 0) {
+    throw new Error('Cannot record a boundary correction without persisted session evidence.')
+  }
+  const now = Date.now()
+  const id = `bnd_${sha1(`${leftSessionId}:${rightSessionId}`).slice(0, 18)}`
+  db.prepare(`
+    INSERT INTO timeline_boundary_corrections (id, date, left_session_id, right_session_id, kind, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'merge', ?, ?)
+    ON CONFLICT(left_session_id, right_session_id)
+    DO UPDATE SET kind = excluded.kind, date = excluded.date, updated_at = excluded.updated_at
+  `).run(id, dateStr, leftSessionId, rightSessionId, now, now)
+}
+
+// Merge two adjacent episodes into one: record a forced join between the last
+// session of the earlier block and the first session of the later block.
+export function mergeTimelineEpisodes(
+  db: Database.Database,
+  dateStr: string,
+  firstBlock: WorkContextBlock,
+  secondBlock: WorkContextBlock,
+): void {
+  const [earlier, later] = firstBlock.startTime <= secondBlock.startTime
+    ? [firstBlock, secondBlock]
+    : [secondBlock, firstBlock]
+  const leftLast = [...earlier.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime).pop()
+  const rightFirst = [...later.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime)[0]
+  if (!leftLast || !rightFirst) {
+    // A boundary correction is keyed by two persisted sessions. The live block
+    // holds only its in-flight session until the tracker flushes it, so a merge
+    // touching a just-started episode has nothing to anchor on yet.
+    throw new Error('This episode is still live — give it a moment to settle, then merge.')
+  }
+  writeBoundaryCorrection(db, dateStr, leftLast.id, rightFirst.id)
+  invalidateTimelineDay(db, dateStr)
 }
 
 function workflowIdFor(signatureKey: string): string {
@@ -1215,15 +1607,112 @@ function contextRunsFor(sessions: AppSession[]): ContextRun[] {
 
 interface TimelineBuildContext {
   websiteVisits: WebsiteVisitRecord[]
+  // Per-session work/leisure/personal kind, keyed by session identity. Resolved
+  // once from category + (for browser sessions) the dominant domain in the
+  // session's window. This is what makes a `kind` change a hard segmentation
+  // boundary — coding can never be absorbed into a video block.
+  sessionKind: Map<AppSession, WorkKind>
+}
+
+function browserBundleMatchesSession(visit: WebsiteVisitRecord, session: AppSession): boolean {
+  if (!visit.browserBundleId && !visit.canonicalBrowserId) return true
+  return visit.browserBundleId === session.bundleId
+    || visit.canonicalBrowserId === session.bundleId
+    || (session.canonicalAppId != null && visit.canonicalBrowserId === session.canonicalAppId)
+}
+
+// Resolve one session's kind, or null when it is neutral (bare browsing with no
+// domain signal) and should inherit a neighbour's kind. Browser sessions take
+// the kind of the domains they actually sat on (youtube → leisure, github →
+// work); native app sessions trust their category.
+function resolveSessionKindRaw(session: AppSession, visits: WebsiteVisitRecord[]): WorkKind | null {
+  if (!isBrowserSession(session)) {
+    const native = resolveKind({ category: session.category, isBrowser: false })
+    return native.neutral ? null : native.kind
+  }
+  const start = session.startTime
+  const end = sessionEndMs(session)
+  const byDomain = new Map<string, number>()
+  for (const visit of visits) {
+    if (visit.visitTime < start || visit.visitTime >= end) continue
+    if (!browserBundleMatchesSession(visit, session)) continue
+    byDomain.set(visit.domain, (byDomain.get(visit.domain) ?? 0) + Math.max(1, visit.durationSec))
+  }
+  const domains = [...byDomain.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([domain]) => domain)
+  const resolution = resolveKind({ category: session.category, isBrowser: true, domains })
+  return resolution.neutral ? null : resolution.kind
 }
 
 function buildTimelineContext(db: Database.Database, sessions: AppSession[]): TimelineBuildContext {
-  if (sessions.length === 0) return { websiteVisits: [] }
+  if (sessions.length === 0) return { websiteVisits: [], sessionKind: new Map() }
   const startTime = Math.min(...sessions.map((session) => session.startTime))
   const endTime = Math.max(...sessions.map((session) => sessionEndMs(session)))
-  return {
-    websiteVisits: getWebsiteVisitsForRange(db, startTime, endTime),
+  const websiteVisits = getWebsiteVisitsForRange(db, startTime, endTime)
+
+  // Resolve raw kinds, then let neutral (bare-browsing) sessions inherit the
+  // nearest concrete neighbour so a contentless tab-flip never forces a kind
+  // boundary inside an otherwise-continuous episode.
+  const raw = sessions.map((session) => resolveSessionKindRaw(session, websiteVisits))
+  const sessionKind = new Map<AppSession, WorkKind>()
+  sessions.forEach((session, index) => {
+    if (raw[index]) {
+      sessionKind.set(session, raw[index]!)
+      return
+    }
+    let inherited: WorkKind | null = null
+    for (let j = index - 1; j >= 0 && !inherited; j--) inherited = raw[j]
+    for (let j = index + 1; j < raw.length && !inherited; j++) inherited = raw[j]
+    sessionKind.set(session, inherited ?? 'personal')
+  })
+
+  return { websiteVisits, sessionKind }
+}
+
+// The kind of a session as seen by the build context; falls back to a
+// category-only resolution when the session predates the context map (live
+// sessions spliced in after the fact).
+function sessionKindFor(session: AppSession, context?: TimelineBuildContext): WorkKind {
+  const cached = context?.sessionKind.get(session)
+  if (cached) return cached
+  return resolveKind({ category: session.category, isBrowser: isBrowserSession(session) }).kind
+}
+
+// The dominant kind across a candidate's sessions, weighted by active time.
+function candidateKind(candidate: CandidateBlock, context?: TimelineBuildContext): WorkKind {
+  const weighted = candidate.sessions.map((session) => ({
+    kind: sessionKindFor(session, context),
+    seconds: session.durationSeconds,
+  }))
+  return dominantKind(weighted)
+}
+
+// Two candidates may only be merged when they belong to the same kind. A
+// work↔leisure (or any kind) change is a hard boundary, never erased.
+function candidatesShareKind(left: CandidateBlock, right: CandidateBlock, context?: TimelineBuildContext): boolean {
+  return candidateKind(left, context) === candidateKind(right, context)
+}
+
+// Split a run of sessions into maximal same-kind runs so no candidate is ever
+// built across a kind boundary.
+function splitSessionsByKind(sessions: AppSession[], context?: TimelineBuildContext): AppSession[][] {
+  if (sessions.length === 0) return []
+  const runs: AppSession[][] = []
+  let current: AppSession[] = [sessions[0]]
+  let currentKind = sessionKindFor(sessions[0], context)
+  for (let index = 1; index < sessions.length; index++) {
+    const kind = sessionKindFor(sessions[index], context)
+    if (kind === currentKind) {
+      current.push(sessions[index])
+      continue
+    }
+    runs.push(current)
+    current = [sessions[index]]
+    currentKind = kind
   }
+  runs.push(current)
+  return runs
 }
 
 function websiteVisitsForRange(
@@ -1569,7 +2058,12 @@ function buildBlockFromCandidate(
     computedAt,
     switchCount,
     confidence,
+    review: {
+      ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+      state: confidence === 'low' ? 'pending' : 'auto-approved',
+    },
     isLive,
+    kind: candidateKind(candidate, context),
   }
 
   const normalizedBlock = {
@@ -1606,6 +2100,11 @@ function buildBlockFromCandidate(
     artifactKeys: workflowArtifactKeys,
   }
 
+  const boundary: BlockBoundary = {
+    startReasons: candidate.startReasons && candidate.startReasons.length > 0 ? candidate.startReasons : ['day-start'],
+    endReasons: candidate.endReasons && candidate.endReasons.length > 0 ? candidate.endReasons : ['day-end'],
+  }
+
   return {
     ...normalizedBlock,
     label: {
@@ -1614,6 +2113,7 @@ function buildBlockFromCandidate(
       ruleBased: normalizedBlock.ruleBasedLabel,
     },
     workflowRefs: workflowApps.length > 0 ? [workflowRef] : [],
+    boundary,
   }
 }
 
@@ -1831,6 +2331,7 @@ function mergeCandidatePair(left: CandidateBlock, right: CandidateBlock): Candid
 // require a shared top app), so two distinct browsing topics stay separate.
 function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
   if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  if (!candidatesShareKind(left, right, context)) return false
   if (gapBetweenCandidates(left, right) >= TIMELINE_SPLIT_GAP_THRESHOLD_MS) return false
 
   const category = candidateDominantCategory(left, db, context)
@@ -1865,6 +2366,7 @@ function shouldSoftMerge(left: CandidateBlock, right: CandidateBlock, db?: Datab
 // gap/span constraints, and is the signal used to decide which neighbour a
 // short block attaches to.
 function candidatesRelated(a: CandidateBlock, b: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): boolean {
+  if (!candidatesShareKind(a, b, context)) return false
   const category = candidateDominantCategory(a, db, context)
   if (category !== candidateDominantCategory(b, db, context)) return candidatesAreAssistedWorkPair(a, b, db, context)
   if (!TOPIC_SENSITIVE_CATEGORIES.has(category)) return true
@@ -1912,6 +2414,7 @@ function absorbShortCandidates(
     const leftOk = Boolean(
       left
       && left.formation !== 'meeting'
+      && candidatesShareKind(candidate, left, context)
       && !(left.boundedAfterGap && candidate.boundedBeforeGap)
       && (!relatednessRequired || candidatesRelated(candidate, left, db, context))
       && combinedSpanMs(left, candidate) <= options.maxCombinedMs,
@@ -1919,6 +2422,7 @@ function absorbShortCandidates(
     const rightOk = Boolean(
       right
       && right.formation !== 'meeting'
+      && candidatesShareKind(candidate, right, context)
       && !(candidate.boundedAfterGap && right.boundedBeforeGap)
       && (!relatednessRequired || candidatesRelated(candidate, right, db, context))
       && combinedSpanMs(candidate, right) <= options.maxCombinedMs,
@@ -1992,6 +2496,7 @@ function dominantAppId(candidate: CandidateBlock): string | null {
 // build a runaway block.
 function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: Database.Database, context: TimelineBuildContext): boolean {
   if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  if (!candidatesShareKind(left, right, context)) return false
   if (left.boundedAfterGap && right.boundedBeforeGap) return false
   // Drift categories never bridge across a gap. Two YouTube videos or two
   // X sessions separated by a 17-minute lull are not "the same work resuming" —
@@ -2038,15 +2543,362 @@ function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Dat
   }, db, context)
 }
 
-function buildBlocksForSessions(db: Database.Database, sessions: AppSession[]): WorkContextBlock[] {
+// ── Boundary-scoring reconciliation ─────────────────────────────────────────
+//
+// The passes above (analyze → normalize → coalesce → bridge) PROPOSE
+// boundaries from a cascade of single-signal hard splits. They reliably
+// over-split: a brief same-subject research peek inside an implementation
+// stretch, one research thread spread across several sources, or a string of
+// short admin tasks each become their own block. This pass is the final
+// arbiter: it scores every proposed boundary from the full signal set and
+// keeps the boundary only when the score clears the cut threshold. A boundary
+// that does not clear it is erased and the two runs become one episode. The
+// upstream heuristics are inputs to the score, not the decision.
+//
+// The score is intentionally coarse-grained and additive so its behaviour is
+// predictable: hard signals (a meeting edge, a real idle gap) force a cut;
+// soft cut signals (category shift, topic change, a research→execution
+// handoff, a detour) push the score up; continuity signals (the same app
+// carrying across, one research thread, a brief peek, a short-admin run) pull
+// it down. A user split forces a cut; a user merge forces a join — that is the
+// "user correction memory" signal feeding back into the model.
+
+const BOUNDARY_CUT_THRESHOLD = 1
+const BOUNDARY_HARD_SCORE = 100
+const BRIEF_PEEK_MAX_ACTIVE_MS = 12 * 60_000
+
+// ── User correction memory for boundaries ───────────────────────────────────
+//
+// When the user splits an episode at a chosen point they assert "there IS a
+// boundary here"; a merge asserts "there is NOT". Both are persisted in the
+// review ledger (timeline_boundary_corrections) keyed by the two sessions that
+// straddle the boundary, so they survive rebuilds and feed back into the
+// scorer as the highest-weight signal. The key is evidence-based (session ids),
+// matching Agent B's correction lineage, so a re-cut day re-attaches them.
+function boundaryKeyForSessionIds(leftLastId: number, rightFirstId: number): string {
+  return `${leftLastId}:${rightFirstId}`
+}
+
+function boundaryKeyForCandidates(left: CandidateBlock, right: CandidateBlock): string | null {
+  const leftLast = left.sessions[left.sessions.length - 1]
+  const rightFirst = right.sessions[0]
+  if (!leftLast || !rightFirst || leftLast.id < 0 || rightFirst.id < 0) return null
+  return boundaryKeyForSessionIds(leftLast.id, rightFirst.id)
+}
+
+interface BoundaryCorrections {
+  merges: Set<string>
+  lookup(left: CandidateBlock, right: CandidateBlock): 'merge' | null
+}
+
+const EMPTY_BOUNDARY_CORRECTIONS: BoundaryCorrections = {
+  merges: new Set(),
+  lookup: () => null,
+}
+
+function makeBoundaryCorrections(merges: Set<string>): BoundaryCorrections {
+  return {
+    merges,
+    lookup(left, right) {
+      const key = boundaryKeyForCandidates(left, right)
+      if (!key) return null
+      if (merges.has(key)) return 'merge'
+      return null
+    },
+  }
+}
+
+function boundaryCorrectionsTableExists(db: Database.Database): boolean {
+  const row = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_boundary_corrections' LIMIT 1`,
+  ).get() as { name: string } | undefined
+  return Boolean(row)
+}
+
+function loadBoundaryCorrections(db: Database.Database, dateStr?: string): BoundaryCorrections {
+  if (!dateStr || !boundaryCorrectionsTableExists(db)) return EMPTY_BOUNDARY_CORRECTIONS
+  const rows = db.prepare(`
+    SELECT left_session_id AS leftId, right_session_id AS rightId, kind
+    FROM timeline_boundary_corrections
+    WHERE date = ?
+  `).all(dateStr) as Array<{ leftId: number; rightId: number; kind: string }>
+  const merges = new Set<string>()
+  for (const row of rows) {
+    const key = boundaryKeyForSessionIds(row.leftId, row.rightId)
+    if (row.kind === 'merge') merges.add(key)
+  }
+  return makeBoundaryCorrections(merges)
+}
+
+type RunMode = 'execution' | 'research' | 'browse' | 'admin' | 'drift' | 'meeting'
+
+const EXECUTION_RUN_CATEGORIES = new Set<AppCategory>(['development', 'writing', 'design'])
+// Research is genuine investigation (research-categorised sources + AI tools).
+// Plain `browsing` is its OWN topic-sensitive mode: two unrelated browsing
+// topics are two different things, so browsing must not coalesce as one
+// "research thread" the way research/AI sources do.
+const RESEARCH_RUN_CATEGORIES = new Set<AppCategory>(['research', 'aiTools'])
+const ADMIN_RUN_CATEGORIES = new Set<AppCategory>(['email', 'communication', 'productivity'])
+const DRIFT_RUN_CATEGORIES = new Set<AppCategory>(['social', 'entertainment'])
+
+// "Session-run-level intent": the coarse role/subject/app signals derived for a
+// run of sessions BEFORE it is a finished block, so a shift in any of them can
+// be weighed as a boundary signal rather than discovered post-hoc as a label.
+interface RunSignals {
+  mode: RunMode
+  dominantCategory: AppCategory
+  dominantApp: string | null
+  contentContext: string
+  activeMs: number
+  isAdmin: boolean
+}
+
+function runModeFor(dominantCategory: AppCategory, isMeeting: boolean): RunMode {
+  if (isMeeting || dominantCategory === 'meetings') return 'meeting'
+  if (EXECUTION_RUN_CATEGORIES.has(dominantCategory)) return 'execution'
+  if (DRIFT_RUN_CATEGORIES.has(dominantCategory)) return 'drift'
+  if (RESEARCH_RUN_CATEGORIES.has(dominantCategory)) return 'research'
+  if (dominantCategory === 'browsing') return 'browse'
+  if (ADMIN_RUN_CATEGORIES.has(dominantCategory)) return 'admin'
+  return 'admin'
+}
+
+function runSignalsFor(candidate: CandidateBlock, db: Database.Database, context: TimelineBuildContext): RunSignals {
+  const dominantCategory = candidateDominantCategory(candidate, db, context)
+  const isMeeting = candidate.formation === 'meeting'
+  const mode = runModeFor(dominantCategory, isMeeting)
+  return {
+    mode,
+    dominantCategory,
+    dominantApp: dominantAppId(candidate),
+    contentContext: dominantContentContext(candidate.sessions),
+    activeMs: candidateActiveMs(candidate),
+    isAdmin: mode === 'admin' && candidateActiveMs(candidate) < TIMELINE_MIN_STANDALONE_SPAN_MS,
+  }
+}
+
+// A short administrative slice — an email check, a calendar glance, a Slack
+// reply, a checklist tick. A run of these belongs to one "triage" episode, not
+// six separate blocks.
+function isShortAdminRun(left: RunSignals, right: RunSignals): boolean {
+  return left.isAdmin && right.isAdmin
+}
+
+// Two runs are one research thread when both sit in the research family and are
+// effectively contiguous — the user is gathering context across sources (Rize,
+// then Toggl, then ChatGPT) on one investigation, even though each source has
+// its own page title.
+function isOneResearchThread(left: RunSignals, right: RunSignals, gapMs: number): boolean {
+  return left.mode === 'research' && right.mode === 'research' && gapMs < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
+}
+
+// Score a single proposed boundary. Positive ⇒ lean cut, negative ⇒ lean merge.
+// Reasons accumulate the signals that argued for a cut; they survive only if
+// the boundary is ultimately kept.
+function scoreBoundary(
+  left: CandidateBlock,
+  right: CandidateBlock,
+  leftSig: RunSignals,
+  rightSig: RunSignals,
+  db: Database.Database,
+  context: TimelineBuildContext,
+  corrections: BoundaryCorrections,
+): { score: number; reasons: BoundaryReason[] } {
+  const reasons: BoundaryReason[] = []
+  // A user merge erases this boundary and overrides every heuristic below it,
+  // including a kind change — the user's intent always wins over segmentation.
+  if (corrections.lookup(left, right) === 'merge') return { score: -BOUNDARY_HARD_SCORE, reasons: [] }
+
+  // Hard cuts — never erased.
+  // A kind change (work↔leisure↔personal) is the hardest boundary of all: it is
+  // the fix for coding being absorbed into a video block. Watching and shipping
+  // are never one episode no matter how small the gap between them.
+  if (candidateKind(left, context) !== candidateKind(right, context)) {
+    return { score: BOUNDARY_HARD_SCORE, reasons: ['kind-shift'] }
+  }
+  if (leftSig.mode === 'meeting') return { score: BOUNDARY_HARD_SCORE, reasons: ['meeting-end'] }
+  if (rightSig.mode === 'meeting') return { score: BOUNDARY_HARD_SCORE, reasons: ['meeting-start'] }
+  const gapMs = gapBetweenCandidates(left, right)
+  if ((left.boundedAfterGap && right.boundedBeforeGap) || gapMs >= TIMELINE_SAME_WORK_BRIDGE_GAP_MS) {
+    return { score: BOUNDARY_HARD_SCORE, reasons: ['idle-gap'] }
+  }
+
+  // A merge can never build a runaway block; respect the same span ceiling the
+  // upstream passes use. If joining would exceed it, the boundary stays.
+  const assistedPair = candidatesAreAssistedWorkPair(left, right, db, context)
+  const ceilingMs = assistedPair ? TIMELINE_MAX_ASSISTED_WORK_SPAN_MS : TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS
+  if (combinedSpanMs(left, right) > ceilingMs) {
+    return { score: BOUNDARY_HARD_SCORE, reasons: ['idle-gap'] }
+  }
+
+  let score = 0
+
+  // A detour (a short social/entertainment dip between work) is its own thing.
+  if (leftSig.mode !== 'drift' && rightSig.mode === 'drift') {
+    score += 6
+    reasons.push('detour-start')
+  } else if (leftSig.mode === 'drift' && rightSig.mode !== 'drift') {
+    score += 6
+    reasons.push('detour-end')
+  }
+
+  // Topic change inside plain browsing — two unrelated browsing subjects are
+  // two different things even in the same browser. (A research thread, by
+  // contrast, legitimately spans topics across sources and is held together by
+  // the continuity pulls below.)
+  if (leftSig.mode === 'browse' && rightSig.mode === 'browse' && leftSig.contentContext !== rightSig.contentContext) {
+    score += 6
+    reasons.push('subject-change')
+  }
+
+  // A work-mode shift (e.g. coding → writing, research → admin).
+  if (leftSig.mode !== rightSig.mode && leftSig.mode !== 'drift' && rightSig.mode !== 'drift') {
+    score += 2
+    reasons.push('category-shift')
+    if (leftSig.mode === 'research' && rightSig.mode === 'execution') {
+      score += 1
+      reasons.push('research-to-execution')
+    }
+  }
+
+  // A repo/project change is a stronger artifact change than a page swap.
+  if (leftSig.dominantApp && leftSig.dominantApp === rightSig.dominantApp
+    && leftSig.contentContext !== rightSig.contentContext
+    && leftSig.mode === 'execution' && rightSig.mode === 'execution') {
+    score += 1
+    reasons.push('artifact-change')
+  }
+
+  // A visible (sub-idle) gap is a mild boundary signal.
+  if (gapMs >= TIMELINE_SPLIT_GAP_THRESHOLD_MS) {
+    score += 1
+    if (!reasons.includes('idle-gap')) reasons.push('idle-gap')
+  }
+
+  // ── Continuity pulls (merge) ──
+  // Drift (entertainment/social) never gets a continuity pull: two videos in
+  // the same browser across a lull are two separate detours, not one runaway
+  // "watching" block (R4). Only the gap/detour signals decide drift edges.
+  const eitherDrift = leftSig.mode === 'drift' || rightSig.mode === 'drift'
+  if (!eitherDrift) {
+    // The same app carrying straight across is the single strongest "same
+    // session" signal — it overrides a category shift (a research tab followed
+    // by a notes tab in the same browser is one synthesis session).
+    if (leftSig.dominantApp && leftSig.dominantApp === rightSig.dominantApp) {
+      score -= 4
+    }
+    if (isOneResearchThread(leftSig, rightSig, gapMs)) score -= 4
+    if (isShortAdminRun(leftSig, rightSig)) score -= 5
+  }
+
+  return { score, reasons }
+}
+
+// Brief same-subject research peek inside execution: a < ~12-minute
+// research/browse that sits between two execution runs on the same app (look
+// up a PR, then back to the editor). It is part of the implementation episode,
+// not a boundary of its own. Fold it into the preceding run first so the two
+// execution runs can then merge on app continuity.
+function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, context: TimelineBuildContext): CandidateBlock[] {
+  if (candidates.length < 3) return candidates
+  const signals = candidates.map((c) => runSignalsFor(c, db, context))
+  const result: CandidateBlock[] = []
+  const sig: RunSignals[] = []
+  for (let index = 0; index < candidates.length; index++) {
+    const current = candidates[index]
+    const left = result[result.length - 1]
+    const leftSig = sig[sig.length - 1]
+    const right = candidates[index + 1]
+    const rightSig = signals[index + 1]
+    const isPeek =
+      left && right
+      && current.formation !== 'meeting'
+      && candidatesShareKind(left, current, context)
+      && signals[index].mode === 'research'
+      && signals[index].activeMs < BRIEF_PEEK_MAX_ACTIVE_MS
+      && leftSig?.mode === 'execution'
+      && rightSig?.mode === 'execution'
+      && leftSig.dominantApp != null
+      && leftSig.dominantApp === rightSig.dominantApp
+      && gapBetweenCandidates(left, current) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
+      && gapBetweenCandidates(current, right) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
+    if (isPeek) {
+      result[result.length - 1] = mergeCandidatePair(left, current)
+      sig[sig.length - 1] = runSignalsFor(result[result.length - 1], db, context)
+      continue
+    }
+    result.push(current)
+    sig.push(signals[index])
+  }
+  return result
+}
+
+// The reconciliation pass: fold brief peeks, then walk the proposed boundaries
+// and keep only those that clear the cut threshold. Records the surviving
+// reasons on each resulting candidate's edges so every block can explain why it
+// started and stopped.
+function reconcileBoundaries(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  context: TimelineBuildContext,
+  corrections: BoundaryCorrections,
+): CandidateBlock[] {
+  if (candidates.length === 0) return candidates
+  const folded = foldBriefPeeks(candidates, db, context)
+
+  const result: CandidateBlock[] = [{ ...folded[0], startReasons: ['day-start'], endReasons: ['day-end'] }]
+  let prevSig = runSignalsFor(folded[0], db, context)
+  if (folded[0].boundedBeforeGap) result[0].startReasons = ['day-start', 'idle-gap']
+
+  for (let index = 1; index < folded.length; index++) {
+    const previous = result[result.length - 1]
+    const current = folded[index]
+    const currentSig = runSignalsFor(current, db, context)
+    const { score, reasons } = scoreBoundary(previous, current, prevSig, currentSig, db, context, corrections)
+
+    if (score < BOUNDARY_CUT_THRESHOLD) {
+      // Erase the boundary: the two runs are one episode.
+      const mergedReasons = previous.startReasons ?? ['day-start']
+      const joined = mergeCandidatePair(previous, current)
+      result[result.length - 1] = { ...joined, startReasons: mergedReasons, endReasons: ['day-end'] }
+      prevSig = runSignalsFor(result[result.length - 1], db, context)
+      continue
+    }
+
+    const cutReasons: BoundaryReason[] = reasons.length > 0 ? reasons : ['category-shift']
+    previous.endReasons = cutReasons
+    result.push({ ...current, startReasons: cutReasons, endReasons: ['day-end'] })
+    prevSig = currentSig
+  }
+
+  if (folded[folded.length - 1]?.boundedAfterGap) {
+    const last = result[result.length - 1]
+    last.endReasons = last.endReasons && !last.endReasons.includes('idle-gap')
+      ? [...last.endReasons.filter((r) => r !== 'day-end'), 'idle-gap']
+      : last.endReasons
+  }
+  return result
+}
+
+function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
+  const corrections = loadBoundaryCorrections(db, dateStr)
   const candidates = coarseSegmentsFromSessions(db, sessions)
     .flatMap((segment) => {
-      const segmentCandidates = analyzeSessions(segment.sessions, segment.boundedBeforeGap, segment.boundedAfterGap)
-        .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
+      // A kind change (work↔leisure↔personal) is a hard boundary: split the
+      // segment into same-kind runs before analysis so coding is never built
+      // into the same candidate as a video block.
+      const kindRuns = splitSessionsByKind(segment.sessions, context)
+      const segmentCandidates = kindRuns.flatMap((run, index) => {
+        const boundedBeforeGap = index === 0 ? segment.boundedBeforeGap : false
+        const boundedAfterGap = index === kindRuns.length - 1 ? segment.boundedAfterGap : false
+        return analyzeSessions(run, boundedBeforeGap, boundedAfterGap)
+          .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
+      })
       return coalesceTimelineCandidates(segmentCandidates, db, context)
     })
-  return bridgeSameWorkCandidates(candidates, db, context)
+  const bridged = bridgeSameWorkCandidates(candidates, db, context)
+  return reconcileBoundaries(bridged, db, context, corrections)
     .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
@@ -2295,6 +3147,7 @@ export function backgroundRelabelDispositionForBlock(block: WorkContextBlock): B
 function finalizedLabelForBlock(
   db: Database.Database,
   block: WorkContextBlock,
+  dateStr: string = localDateKeyForTimestamp(block.startTime),
 ): WorkContextBlock {
   const override = getBlockLabelOverride(db, block.id)
   // Work-memory labels ("<project> development", learned work patterns) only
@@ -2356,7 +3209,7 @@ function finalizedLabelForBlock(
                 ? 'rule'
                 : 'rule'
 
-  return {
+  const finalized: WorkContextBlock = {
     ...block,
     label: {
       current: chosen,
@@ -2378,6 +3231,8 @@ function finalizedLabelForBlock(
       override: override?.label ?? null,
     },
   }
+
+  return applyReviewToBlock(finalized, reviewForBlock(db, dateStr, finalized))
 }
 
 function upsertArtifact(db: Database.Database, artifact: ArtifactRef, block: WorkContextBlock): void {
@@ -2501,7 +3356,7 @@ export function persistTimelineDay(
 
     for (const rawBlock of blocks) {
       if (rawBlock.isLive) continue
-      const block = options.finalized ? rawBlock : finalizedLabelForBlock(db, rawBlock)
+      const block = options.finalized ? rawBlock : finalizedLabelForBlock(db, rawBlock, dateStr)
       db.prepare(`
         INSERT INTO timeline_blocks (
           id,
@@ -2616,6 +3471,8 @@ export function persistTimelineDay(
         block.computedAt,
         null,
       )
+
+      ensureDefaultReviewRowForBlock(db, dateStr, block)
 
       for (const artifact of block.topArtifacts) {
         upsertArtifact(db, artifact, block)
@@ -2895,6 +3752,10 @@ function loadPersistedTimelineBlocksForDay(
         boundedBeforeGap: false,
         boundedAfterGap: false,
       }, coherenceScore(categoryDistribution)),
+      review: {
+        ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+        state: 'pending',
+      },
       isLive: false,
     })
   }
@@ -2907,7 +3768,7 @@ function loadPersistedTimelineBlocksForDay(
   // AI-labeled block used to freeze in place for a whole day. Stored user
   // overrides and AI suggestions are read back inside the finalizer, so curated
   // labels still win.
-  return blocks.map((block) => finalizedLabelForBlock(db, block))
+  return blocks.map((block) => finalizedLabelForBlock(db, block, dateStr))
 }
 
 // A day is "processed" once any of its persisted blocks carries an AI,
@@ -2995,7 +3856,7 @@ export function buildTimelineBlocksForDay(
     forceMaterialize = true
   }
 
-  const computed = buildBlocksForSessions(db, sessions).map((block) => finalizedLabelForBlock(db, block))
+  const computed = buildBlocksForSessions(db, sessions, dateStr).map((block) => finalizedLabelForBlock(db, block, dateStr))
   if (shouldMaterialize) {
     persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
   }
@@ -3172,14 +4033,64 @@ function mergeLiveSession(sessions: AppSession[], liveSession?: LiveSession | nu
   ].sort((left, right) => left.startTime - right.startTime)
 }
 
+// Leisure/personal blocks are named by their activity, derived from the
+// domains they sat on — "Watching YouTube & Netflix", "On X" — never the raw
+// video/page title and never an inferred work label.
+function leisureLabelForBlock(block: WorkContextBlock): string {
+  const leisureDomains = block.websites
+    .filter((site) => kindForDomain(site.domain) === 'leisure')
+    .map((site) => site.domain)
+  if (leisureDomains.length > 0) return leisureActivityTitle(leisureDomains)
+  // No leisure domain captured (titleless browsing): fall back to the top
+  // domains, still activity-shaped.
+  return leisureActivityTitle(block.websites.map((site) => site.domain))
+}
+
 export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?: string | null): string {
-  const preferred = overrideLabel ?? block.aiLabel
+  // A user rename always wins, verbatim.
+  if (overrideLabel && overrideLabel.trim() && !GENERIC_LABELS.has(overrideLabel.trim())) {
+    return overrideLabel.trim()
+  }
+  if (block.review?.correctedLabel?.trim()) {
+    return block.review.correctedLabel.trim()
+  }
+
+  if (effectiveBlockKind(block) !== 'work') {
+    return leisureLabelForBlock(block)
+  }
+
+  return humanizeTitle(rawWorkLabelForBlock(block)) ?? rawWorkLabelForBlock(block)
+}
+
+function rawWorkLabelForBlock(block: WorkContextBlock): string {
+  const preferred = block.aiLabel
   if (preferred && preferred.trim() && !GENERIC_LABELS.has(preferred.trim())) {
     return preferred.trim()
   }
 
+  // The finalized label (artifact / workflow / memory / corrected) is the name
+  // the work earned — "timeline-eval/run.ts", "Design critique", "Budget
+  // tracker" — and is strictly better than the rule-based floor it supersedes.
+  // Prefer it whenever it is a real, specific label rather than a generic
+  // category floor. This is what lets earlier intent name the block instead of
+  // the block reading "Development" / "Writing" / "Productivity".
+  const current = block.label.current?.trim()
+  if (current && !GENERIC_LABELS.has(current) && current !== 'Untitled block') {
+    return current
+  }
+
   if (block.ruleBasedLabel.trim() && !GENERIC_LABELS.has(block.ruleBasedLabel.trim())) {
     return block.ruleBasedLabel.trim()
+  }
+
+  // Subject-driven fallback: when the deterministic label is only a category
+  // floor, the inferred intent subject (the document/page/issue the user was
+  // actually on) names the work far better than the bare category. This is the
+  // "subject should drive the label" rule — a browser-hosted productivity block
+  // reads "Roadmap board", not "Productivity".
+  const intentSubject = inferWorkIntent(block).subject?.trim()
+  if (intentSubject && !GENERIC_LABELS.has(intentSubject)) {
+    return intentSubject
   }
 
   // Browser site names are only an honest label when a page could own the
@@ -3489,6 +4400,10 @@ function getLightweightDayPayload(
         boundedBeforeGap: false,
         boundedAfterGap: false,
       }, coherenceScore(categoryDistribution)),
+      review: {
+        ...DEFAULT_TIMELINE_BLOCK_REVIEW,
+        state: 'pending',
+      },
       isLive: false,
     })
   }
@@ -3496,7 +4411,7 @@ function getLightweightDayPayload(
   // Derive labels through the same finalizer as the timeline so recap surfaces
   // never show the stale "<x> development" strings either (see the persisted
   // loader). Grouping stays as persisted; only the label is recomputed.
-  const finalizedBlocks = blocks.map((block) => finalizedLabelForBlock(db, block))
+  const finalizedBlocks = blocks.map((block) => finalizedLabelForBlock(db, block, dateStr))
   blocks.length = 0
   blocks.push(...finalizedBlocks)
 

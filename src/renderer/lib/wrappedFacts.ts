@@ -2,6 +2,7 @@
 // No React dependencies — extracted so this logic can be unit-tested.
 import type { AppCategory, AppSession, WebsiteSummary, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
 
 // ─── Data quality ──────────────────────────────────────────────────────────────
 
@@ -402,6 +403,7 @@ export interface WrappedPeakBlock {
 
 export function selectPeakBlock(blocks: WorkContextBlock[]): WrappedPeakBlock | null {
   const candidates = blocks
+    .filter(isTrustedTimelineBlock)
     .map((block) => {
       const durationSeconds = blockActiveSeconds(block)
       const label = block.label.current.trim()

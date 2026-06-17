@@ -1,0 +1,122 @@
+{
+  "id": "coding-day",
+  "name": "Coding day",
+  "date": "2026-04-13",
+  "description": "A mostly continuous implementation morning with a short Slack interruption, one meeting, and a later wrap-polish pass.",
+  "sessions": [
+    {
+      "start": "09:00",
+      "end": "09:35",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "timeline-eval/run.ts - daylens - Cursor"
+    },
+    {
+      "start": "09:35",
+      "end": "09:42",
+      "bundleId": "dev.warp.Warp-Stable",
+      "appName": "Warp",
+      "category": "development",
+      "title": "npm test timeline-eval - daylens - zsh"
+    },
+    {
+      "start": "09:42",
+      "end": "09:50",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "Fix timeline segmentation pull request - Google Chrome"
+    },
+    {
+      "start": "09:50",
+      "end": "10:30",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "timeline-eval/run.ts - daylens - Cursor"
+    },
+    {
+      "start": "10:30",
+      "end": "10:34",
+      "bundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack",
+      "category": "communication",
+      "title": "standup - Daylens - Slack"
+    },
+    {
+      "start": "10:34",
+      "end": "11:10",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "workBlocks.ts - daylens - Cursor"
+    },
+    {
+      "start": "11:10",
+      "end": "11:50",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Meet",
+      "category": "meetings",
+      "title": "Engineering sync - Google Meet"
+    },
+    {
+      "start": "12:10",
+      "end": "12:45",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "wrappedNarrative.ts - daylens - Cursor"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "09:42",
+      "durationMinutes": 8,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "github.com",
+      "url": "https://github.com/daylens/daylens/pull/42",
+      "title": "Fix timeline segmentation"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "implementation",
+      "start": "09:00",
+      "end": "11:10",
+      "label": "Timeline eval harness implementation",
+      "labelIncludes": ["timeline-eval", "workBlocks", "daylens"],
+      "category": "development",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["timeline-eval", "workBlocks", "daylens"]
+    },
+    {
+      "id": "engineering-sync",
+      "start": "11:10",
+      "end": "11:50",
+      "label": "Engineering sync",
+      "labelIncludes": ["Meet", "Meeting", "Call", "Engineering sync"],
+      "category": "meetings",
+      "intentRole": "coordination"
+    },
+    {
+      "id": "wrap-polish",
+      "start": "12:10",
+      "end": "12:45",
+      "label": "Wrapped narrative polish",
+      "labelIncludes": ["wrappedNarrative", "daylens"],
+      "category": "development",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["wrappedNarrative", "daylens"]
+    }
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "dominantCategory": "development",
+    "topAppIncludes": "Cursor",
+    "topDomain": "github.com",
+    "matteredSubjectIncludes": "run.ts",
+    "needsReviewCount": 1,
+    "carryoverSubjectIncludes": "wrappedNarrative"
+  }
+}

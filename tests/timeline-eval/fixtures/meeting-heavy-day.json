@@ -1,0 +1,140 @@
+{
+  "id": "meeting-heavy-day",
+  "name": "Meeting-heavy day",
+  "date": "2026-04-15",
+  "description": "Several meetings with short coordination and note-taking blocks between them.",
+  "sessions": [
+    {
+      "start": "09:00",
+      "end": "09:35",
+      "bundleId": "us.zoom.xos",
+      "appName": "Zoom",
+      "category": "meetings",
+      "title": "Design critique - Zoom Meeting"
+    },
+    {
+      "start": "09:35",
+      "end": "09:50",
+      "bundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack",
+      "category": "communication",
+      "title": "Design critique follow-up - Slack"
+    },
+    {
+      "start": "10:00",
+      "end": "10:50",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Meet",
+      "category": "meetings",
+      "title": "Product planning - Google Meet"
+    },
+    {
+      "start": "10:50",
+      "end": "11:05",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "productivity",
+      "title": "Roadmap board - Linear"
+    },
+    {
+      "start": "11:15",
+      "end": "11:50",
+      "bundleId": "com.microsoft.teams2",
+      "appName": "Microsoft Teams",
+      "category": "meetings",
+      "title": "Customer interview - Microsoft Teams"
+    },
+    {
+      "start": "12:00",
+      "end": "12:25",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Docs",
+      "category": "writing",
+      "title": "Customer interview notes - Google Docs"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "10:50",
+      "durationMinutes": 15,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "linear.app",
+      "url": "https://linear.app/daylens/roadmap",
+      "title": "Roadmap board"
+    },
+    {
+      "at": "12:00",
+      "durationMinutes": 25,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "docs.google.com",
+      "url": "https://docs.google.com/document/d/customer-interview/edit",
+      "title": "Customer interview notes"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "design-critique",
+      "start": "09:00",
+      "end": "09:35",
+      "label": "Design critique",
+      "labelIncludes": ["Zoom", "Design critique", "Meeting", "Call"],
+      "category": "meetings",
+      "intentRole": "coordination"
+    },
+    {
+      "id": "critique-followup",
+      "start": "09:35",
+      "end": "09:50",
+      "label": "Design critique follow-up",
+      "labelIncludes": ["Design critique", "Communication", "Slack"],
+      "category": "communication",
+      "intentRole": "communication"
+    },
+    {
+      "id": "product-planning",
+      "start": "10:00",
+      "end": "10:50",
+      "label": "Product planning",
+      "labelIncludes": ["Google Meet", "Product planning", "Meeting", "Call"],
+      "category": "meetings",
+      "intentRole": "coordination"
+    },
+    {
+      "id": "roadmap-board",
+      "start": "10:50",
+      "end": "11:05",
+      "label": "Roadmap board",
+      "labelIncludes": ["Roadmap", "Linear"],
+      "category": "productivity",
+      "intentRole": "coordination",
+      "intentSubjectIncludes": ["Roadmap", "Linear"]
+    },
+    {
+      "id": "customer-interview",
+      "start": "11:15",
+      "end": "11:50",
+      "label": "Customer interview",
+      "labelIncludes": ["Teams", "Customer interview", "Meeting", "Call"],
+      "category": "meetings",
+      "intentRole": "coordination"
+    },
+    {
+      "id": "interview-notes",
+      "start": "12:00",
+      "end": "12:25",
+      "label": "Customer interview notes",
+      "labelIncludes": ["Customer interview notes"],
+      "category": "writing",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["Customer interview notes"]
+    }
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "dominantCategory": "meetings",
+    "topDomain": "docs.google.com",
+    "matteredSubjectIncludes": "Design critique",
+    "needsReviewCount": 3,
+    "carryoverSubjectIncludes": "Customer interview notes"
+  }
+}

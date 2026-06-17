@@ -37,7 +37,7 @@ import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
@@ -55,9 +55,11 @@ import type {
   ProjectSummary,
   RollupEntry,
   DayWorkSessionsPayload,
+  DayTimelinePayload,
   WorkContextBlock,
   WorkContextInsight,
   TimelineWorkSession,
+  TimelineBlockReviewUpdate,
   WorkMemorySettingsSummary,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
@@ -88,6 +90,11 @@ function shiftLocalDate(dateStr: string, offset: number): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   const next = new Date(y, m - 1, d + offset)
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+function localDateStringForTimestamp(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function mergeAppSummaryRows(rows: AppUsageSummary[]): AppUsageSummary[] {
@@ -549,9 +556,18 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, (_e, payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }) => {
     const db = getDb()
+    let block: WorkContextBlock | null = null
     if (payload.date) {
-      materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+      const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+      block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
     }
+    block = block ?? getBlockDetailPayload(db, payload.blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+    const dateStr = payload.date ?? localDateStringForTimestamp(block.startTime)
+    writeTimelineBlockReview(db, dateStr, block, {
+      state: 'corrected',
+      correctedLabel: payload.label,
+    })
     setBlockLabelOverride(db, payload.blockId, payload.label, payload.narrative ?? null)
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
@@ -563,6 +579,50 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')
+  })
+
+  ipcMain.handle(IPC.DB.SET_BLOCK_REVIEW, (_e, payload: TimelineBlockReviewUpdate) => {
+    const db = getDb()
+    let block: WorkContextBlock | null = null
+    if (payload.date) {
+      const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+      block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
+    }
+    block = block ?? getBlockDetailPayload(db, payload.blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+
+    const dateStr = payload.date ?? localDateStringForTimestamp(block.startTime)
+    writeTimelineBlockReview(db, dateStr, block, {
+      state: payload.state,
+      correctedLabel: payload.correctedLabel,
+      correctedIntentRole: payload.correctedIntentRole,
+      correctedIntentSubject: payload.correctedIntentSubject,
+    })
+
+    if (payload.state === 'corrected' && payload.correctedLabel?.trim()) {
+      setBlockLabelOverride(db, payload.blockId, payload.correctedLabel, block.label.narrative)
+    }
+
+    invalidateProjectionScope('timeline', 'block_review')
+    invalidateProjectionScope('apps', 'block_review')
+    invalidateProjectionScope('insights', 'block_review')
+  })
+
+  ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {
+    const db = getDb()
+    const initialDate = payload.date ?? null
+    const dayPayload = initialDate
+      ? materializeTimelineDayProjection(db, initialDate, getLiveSessionForDate(initialDate))
+      : null
+    const first = resolveTimelineBlockForEdit(db, payload.blockIds[0], dayPayload)
+    const second = resolveTimelineBlockForEdit(db, payload.blockIds[1], dayPayload)
+    if (!first || !second) throw new Error('Both blocks must exist to merge.')
+    const dateStr = initialDate ?? localDateStringForTimestamp(first.startTime)
+    mergeTimelineEpisodes(db, dateStr, first, second)
+    invalidateProjectionScope('timeline', 'episode_boundary')
+    invalidateProjectionScope('apps', 'episode_boundary')
+    invalidateProjectionScope('insights', 'episode_boundary')
+    return materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
   })
 
   ipcMain.handle(IPC.DB.GET_DISTRACTION_COST, () => {
@@ -598,6 +658,8 @@ export function registerDbHandlers(): void {
     bundleId?: string | null
     canonicalAppId?: string | null
     appName?: string | null
+    domain?: string | null
+    url?: string | null
     startTime?: number | null
     endTime?: number | null
     date?: string | null
@@ -884,6 +946,26 @@ function getLiveSessionForDate(dateStr: string) {
   const liveEnd = Date.now()
   if (liveEnd <= from || live.startTime >= to) return null
   return live
+}
+
+// Resolve a block the renderer asked to split/merge. The live (in-flight) block
+// is the awkward case: its id embeds its end time (= now), which advances every
+// second, so the id the renderer captured at render time has already drifted by
+// the time this handler re-materializes the day — an exact id lookup misses and
+// the user sees "Both blocks must exist to merge." Fall back to matching the
+// live block by its flag; there is at most one per day.
+function resolveTimelineBlockForEdit(
+  db: ReturnType<typeof getDb>,
+  blockId: string,
+  dayPayload: DayTimelinePayload | null,
+): WorkContextBlock | null {
+  const exact = dayPayload?.blocks.find((candidate) => candidate.id === blockId)
+    ?? getBlockDetailPayload(db, blockId, getCurrentSession())
+  if (exact) return exact
+  if (blockId.startsWith('live_')) {
+    return dayPayload?.blocks.find((candidate) => candidate.isLive) ?? null
+  }
+  return null
 }
 
 function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSession[] {

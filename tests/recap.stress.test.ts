@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { ArtifactRef, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import { buildRecapSummaries, getMonthStart, shiftDate } from '../src/renderer/lib/recap.ts'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 function makeArtifact(title: string, totalSeconds: number): ArtifactRef {
   return {
@@ -49,6 +50,7 @@ function makeBlock(label: string, startTime: number, durationSeconds: number, op
     computedAt: startTime,
     switchCount: options?.switchCount ?? 0,
     confidence: 'high',
+    review: DEFAULT_TIMELINE_BLOCK_REVIEW,
     isLive: false,
   }
 }

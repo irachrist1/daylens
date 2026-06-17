@@ -110,6 +110,7 @@ import type {
 } from '@shared/types'
 import { DISTRACTION_DOMAINS } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import {
   executeTextAIJob,
   modelForProvider,
@@ -2303,13 +2304,13 @@ function buildTodayBlocksContext(): string {
     const payload = getTimelineDayPayload(db, dateStr, null)
 
     // Only non-trivial blocks (>= 3 min). If nothing non-trivial, still show a short line.
-    const blocks = payload.blocks.filter((b) => b.endTime - b.startTime >= 3 * 60_000)
+    const blocks = payload.blocks.filter((b) => isTrustedTimelineBlock(b) && b.endTime - b.startTime >= 3 * 60_000)
     if (blocks.length === 0) return ''
 
     const lines = blocks.slice(0, 12).map((block) => {
       const minutes = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
       const label = userVisibleLabelForBlock(block)
-      const intent = inferWorkIntent(block)
+      const intent = reviewedWorkIntent(block)
       const timeRange = `${formatClock(block.startTime)}-${formatClock(block.endTime)}`
       const topApps = block.topApps
         .filter((app) => app.category !== 'system')
@@ -3138,9 +3139,18 @@ function namedEvidenceForSummary(block: WorkContextBlock): string[] {
   ], 3)
 }
 
+function reviewedWorkIntent(block: WorkContextBlock): ReturnType<typeof inferWorkIntent> {
+  const intent = inferWorkIntent(block)
+  return {
+    ...intent,
+    role: block.review?.correctedIntentRole ?? intent.role,
+    subject: block.review?.correctedIntentSubject ?? intent.subject,
+  }
+}
+
 function leadSentenceForIntent(block: WorkContextBlock): string {
   const duration = formatDuration(blockDurationSeconds(block))
-  const intent = inferWorkIntent(block)
+  const intent = reviewedWorkIntent(block)
 
   switch (intent.role) {
     case 'execution':
@@ -3176,10 +3186,10 @@ function leadSentenceForIntent(block: WorkContextBlock): string {
 }
 
 function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkContextBlock[]): string | null {
-  const primaryIntent = inferWorkIntent(primary)
+  const primaryIntent = reviewedWorkIntent(primary)
   const supporting = rankedBlocks
     .slice(1)
-    .map((block) => ({ block, intent: inferWorkIntent(block) }))
+    .map((block) => ({ block, intent: reviewedWorkIntent(block) }))
     .find(({ intent }) => intent.role !== primaryIntent.role)
 
   if (!supporting) return null
@@ -3455,14 +3465,15 @@ function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
     }
   }
 
-  const rankedBlocks = [...payload.blocks]
+  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const rankedBlocks = [...trustedBlocks]
     .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
     .slice(0, 3)
   const primary = rankedBlocks[0]
   const evidence = primary ? namedEvidenceForSummary(primary) : []
 
   const summaryParts = [
-    `You tracked ${formatDuration(payload.totalSeconds)} across ${payload.blocks.length} block${payload.blocks.length === 1 ? '' : 's'} today.`,
+    `You tracked ${formatDuration(payload.totalSeconds)} across ${trustedBlocks.length} trusted block${trustedBlocks.length === 1 ? '' : 's'} today.`,
     primary ? leadSentenceForIntent(primary) : null,
     evidence.length > 0 ? `Strongest evidence included ${evidence.join(', ')}.` : null,
     primary ? supportingIntentSentence(primary, rankedBlocks) : null,
@@ -3480,16 +3491,21 @@ function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
 }
 
 function daySummaryCacheKey(payload: DayTimelinePayload): string {
+  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
   return JSON.stringify({
     date: payload.date,
     totalSeconds: payload.totalSeconds,
     focusSeconds: payload.focusSeconds,
     focusPct: payload.focusPct,
-    blockCount: payload.blocks.length,
-    blocks: payload.blocks.map((block) => ({
+    blockCount: trustedBlocks.length,
+    ignoredBlockIds: payload.blocks.filter((block) => !isTrustedTimelineBlock(block)).map((block) => block.id),
+    blocks: trustedBlocks.map((block) => ({
       id: block.id,
       label: block.label.current,
       narrative: block.label.narrative,
+      reviewState: block.review.state,
+      correctedIntentRole: block.review.correctedIntentRole,
+      correctedIntentSubject: block.review.correctedIntentSubject,
       startTime: block.startTime,
       endTime: block.endTime,
       dominantCategory: block.dominantCategory,
@@ -3507,18 +3523,20 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
 }
 
 function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
-  const dominantBlocks = [...payload.blocks]
+  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const dominantBlocks = [...trustedBlocks]
     .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
     .slice(0, 4)
     .map((block) => ({
       label: block.label.current,
       timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
       duration: formatDuration(blockDurationSeconds(block)),
-      workIntent: inferWorkIntent(block),
+      reviewState: block.review.state,
+      workIntent: reviewedWorkIntent(block),
       supportingEvidence: namedEvidenceForSummary(block),
     }))
 
-  const topCategories = Array.from(payload.blocks.reduce<Map<string, number>>((map, block) => {
+  const topCategories = Array.from(trustedBlocks.reduce<Map<string, number>>((map, block) => {
     const durationSeconds = blockDurationSeconds(block)
     map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + durationSeconds)
     return map
@@ -3527,14 +3545,15 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     .slice(0, 4)
     .map(([category, seconds]) => ({ category, duration: formatDuration(seconds) }))
 
-  const blocks = payload.blocks.slice(0, 8).map((block) => ({
+  const blocks = trustedBlocks.slice(0, 8).map((block) => ({
     label: block.label.current,
     narrative: block.label.narrative,
     timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
     duration: formatDuration(blockDurationSeconds(block)),
     dominantCategory: block.dominantCategory,
     confidence: block.confidence,
-    workIntent: inferWorkIntent(block),
+    reviewState: block.review.state,
+    workIntent: reviewedWorkIntent(block),
     topApps: block.topApps.slice(0, 3).map((app) => ({
       appName: app.appName,
       duration: formatDuration(app.totalSeconds),
@@ -3562,7 +3581,8 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
       tracked: formatDuration(payload.totalSeconds),
       focus: formatDuration(payload.focusSeconds),
       focusPct: payload.focusPct,
-      blockCount: payload.blocks.length,
+      blockCount: trustedBlocks.length,
+      ignoredBlockCount: payload.blocks.length - trustedBlocks.length,
       appCount: payload.appCount,
       siteCount: payload.siteCount,
     },

@@ -1550,7 +1550,12 @@ export default function DayWrapped({
   const d = useMemo(() => deriveData(data), [data])
   const isMorning = useMemo(() => isPastLocalDate(data.date), [data.date])
   const hasReport = threadId != null && artifactId != null
-  const showMorningNudge = Boolean(d.peakBlock && d.peakBlock.durationSeconds > 45 * 60)
+  // The morning "resume" slide carries the narrative nudge — yesterday's open
+  // thread (facts.carryover) surfaced as what to pick back up. Show it on any
+  // substantial day, not just ones with a single long peak block, so fragmented
+  // days with a real carryover thread still get the resume prompt. Kept on
+  // synchronous data so the slide count stays stable when the narrative loads in.
+  const showMorningNudge = d.quality === 'full' || Boolean(d.peakBlock && d.peakBlock.durationSeconds > 45 * 60)
   const morningVideoUrl = useMemo(() => MORNING_VIDEO_URLS[dateVariant(data.date, MORNING_VIDEO_URLS.length)], [data.date])
   // Wrapped opens instantly with deterministic copy; the AI-enriched narrative
   // loads asynchronously and overlays the relevant slides once validated.
@@ -1651,7 +1656,13 @@ export default function DayWrapped({
 
     return () => { cancelled = true }
   }, [weekSummary, data.date])
-  const hasDistractionData = !isMorning && distractionCost !== null && distractionCost.totalDistractionSeconds > 0
+  // Wave 2: the distraction-cost / peak / trend slides are deleted. They were
+  // guilt framing and invented extrapolations ("35h lost to distractions", "14
+  // books you didn't read", "peak distraction hour") — exactly what a calm,
+  // non-judgmental wrap must never say. The fetch is kept harmless; the slides
+  // never render.
+  const hasDistractionData = false
+  void distractionCost
 
   const distractionSlides = hasDistractionData ? 3 : 0
   const weekSlides = !isMorning && isExtended && weekSummary ? 3 : 0

@@ -1,0 +1,110 @@
+{
+  "id": "mixed-work-leisure-day",
+  "name": "Mixed work + leisure day",
+  "date": "2026-06-03",
+  "description": "The 2026-06-03 worked example: under an hour of coding on a malaria notebook, then an afternoon of YouTube/Netflix. Coding must be its own work episode, never absorbed into the video block; the watching episodes are leisure, named by activity, and carry no work intent.",
+  "sessions": [
+    {
+      "start": "08:07",
+      "end": "08:30",
+      "bundleId": "com.mitchellh.ghostty",
+      "appName": "Ghostty",
+      "category": "development",
+      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb — Ghostty"
+    },
+    {
+      "start": "08:30",
+      "end": "08:45",
+      "bundleId": "com.openai.codex",
+      "appName": "Codex",
+      "category": "aiTools",
+      "title": "codex — malaria notebook"
+    },
+    {
+      "start": "08:45",
+      "end": "08:59",
+      "bundleId": "com.mitchellh.ghostty",
+      "appName": "Ghostty",
+      "category": "development",
+      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb — Ghostty"
+    },
+    {
+      "start": "09:00",
+      "end": "10:30",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "I spent $200 to try Opus 4.8, was it worth it? - YouTube"
+    },
+    {
+      "start": "10:30",
+      "end": "12:00",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "Divided States of America Part 1 - Netflix"
+    },
+    {
+      "start": "13:00",
+      "end": "15:00",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "Jubilee - YouTube"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "09:05",
+      "durationMinutes": 80,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "youtube.com",
+      "url": "https://www.youtube.com/watch?v=abc123",
+      "title": "I spent $200 to try Opus 4.8, was it worth it?"
+    },
+    {
+      "at": "10:35",
+      "durationMinutes": 80,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "netflix.com",
+      "url": "https://www.netflix.com/watch/80994695",
+      "title": "Divided States of America Part 1"
+    },
+    {
+      "at": "13:05",
+      "durationMinutes": 110,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "youtube.com",
+      "url": "https://www.youtube.com/watch?v=def456",
+      "title": "Jubilee"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "coding",
+      "start": "08:07",
+      "end": "08:59",
+      "label": "malaria notebook",
+      "labelIncludes": ["malaria", "notebook", "ResNet"],
+      "kind": "work",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["malaria", "notebook", "ResNet"]
+    },
+    {
+      "id": "watching-morning",
+      "start": "09:00",
+      "end": "12:00",
+      "label": "Watching YouTube & Netflix",
+      "labelIncludes": ["Watching"],
+      "kind": "leisure"
+    },
+    {
+      "id": "watching-afternoon",
+      "start": "13:00",
+      "end": "15:00",
+      "label": "Watching YouTube",
+      "labelIncludes": ["Watching"],
+      "kind": "leisure"
+    }
+  ]
+}

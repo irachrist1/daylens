@@ -34,6 +34,7 @@ import type {
   ProviderConnectionResult,
   ResolvedIconPayload,
   SyncStatus,
+  TimelineBlockReviewUpdate,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
   TrackingPermissionState,
@@ -139,6 +140,10 @@ const api = {
     setBlockLabelOverride: (payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_LABEL_OVERRIDE, payload),
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
+    setBlockReview: (payload: TimelineBlockReviewUpdate): Promise<void> =>
+      ipcRenderer.invoke(IPC.DB.SET_BLOCK_REVIEW, payload),
+    mergeTimelineEpisodes: (payload: { blockIds: [string, string]; date?: string | null }): Promise<DayTimelinePayload> =>
+      ipcRenderer.invoke(IPC.DB.MERGE_TIMELINE_EPISODES, payload),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>
@@ -247,6 +252,8 @@ const api = {
       bundleId?: string | null
       canonicalAppId?: string | null
       appName?: string | null
+      domain?: string | null
+      url?: string | null
       startTime?: number | null
       endTime?: number | null
       date?: string | null

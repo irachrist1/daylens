@@ -2074,6 +2074,13 @@ export function clearBlockLabelOverride(
 ): void {
   db.prepare(`DELETE FROM block_label_overrides WHERE block_id = ?`).run(blockId)
   db.prepare(`DELETE FROM timeline_block_labels WHERE block_id = ? AND source = 'user'`).run(blockId)
+  db.prepare(`
+    UPDATE timeline_block_reviews
+    SET review_state = 'pending',
+        correction_json = '{}',
+        updated_at = ?
+    WHERE block_id = ?
+  `).run(Date.now(), blockId)
 }
 
 // Single source of truth for persisting an AI block label, shared by the

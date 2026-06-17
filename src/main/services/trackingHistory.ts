@@ -22,6 +22,8 @@ export interface DeleteTrackedActivityInput {
   bundleId?: string | null
   canonicalAppId?: string | null
   appName?: string | null
+  domain?: string | null
+  url?: string | null
   startTime?: number | null
   endTime?: number | null
   date?: string | null
@@ -227,6 +229,39 @@ export function deleteTrackedActivity(input: DeleteTrackedActivityInput): PurgeR
         AND ts_ms >= ?
         AND ts_ms < ?
     `).run(...focusEventAppWhere.params, explicitStartTime, explicitEndTime).changes
+  }
+
+  const domain = (input.domain ?? '').trim().toLowerCase().replace(/^www\./, '')
+  const url = (input.url ?? '').trim()
+  if (hasValidExplicitRange && (domain || url)) {
+    const clauses: string[] = []
+    const params: unknown[] = []
+    if (domain) {
+      clauses.push('(lower(domain) = ? OR lower(domain) LIKE ?)')
+      params.push(domain, `%.${domain}`)
+    }
+    if (url) {
+      clauses.push('url = ?')
+      params.push(url)
+    }
+
+    const where = clauses.join(' OR ')
+    const rows = db.prepare(`
+      SELECT visit_time
+      FROM website_visits
+      WHERE (${where})
+        AND visit_time >= ?
+        AND visit_time < ?
+    `).all(...params, explicitStartTime, explicitEndTime) as { visit_time: number }[]
+
+    for (const row of rows) affectedDates.add(localDateString(new Date(row.visit_time)))
+
+    deletedRows += db.prepare(`
+      DELETE FROM website_visits
+      WHERE (${where})
+        AND visit_time >= ?
+        AND visit_time < ?
+    `).run(...params, explicitStartTime, explicitEndTime).changes
   }
 
   const dates = [...affectedDates]

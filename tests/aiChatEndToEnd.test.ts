@@ -112,10 +112,16 @@ test('sendMessage gate: "what did I do today at 4 p.m., exactly?" takes the dete
   assert.equal(routed.kind, 'answer')
   if (routed.kind !== 'answer') throw new Error('unreachable')
   const answer = routed.answer.toLowerCase()
-  assert.ok(answer.includes('cursor'), `expected the answer to name Cursor, got: ${routed.answer}`)
+  // The covering block is now named by its finalized work label (the project /
+  // artifact the user was in — "daylens"), not the raw app name. Either the
+  // covering work or the moment is acceptable; both reference the 4pm stretch.
   assert.ok(
-    /4:00 pm|4:0?0 ?pm|16:00/.test(answer) || answer.includes('cursor'),
-    'expected the answer to reference the moment or the covering app',
+    /daylens|cursor/.test(answer),
+    `expected the answer to name the covering work, got: ${routed.answer}`,
+  )
+  assert.ok(
+    /4:00 pm|4:0?0 ?pm|16:00/.test(answer) || /daylens|cursor/.test(answer),
+    'expected the answer to reference the moment or the covering work',
   )
   db.close()
 })

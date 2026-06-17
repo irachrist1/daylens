@@ -1,9 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { ArrowDown, ArrowUp, EyeOff } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineBlockReviewState, TimelineGapSegment, TimelineSegment, WorkContextBlock, WorkIntentRole } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
+import { effectiveBlockKind } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -145,6 +148,25 @@ function categoryLabel(category: AppCategory): string {
   return category
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+// Human-readable phrasing for why an episode started or stopped.
+function boundaryButtonStyle(disabled: boolean): CSSProperties {
+  return {
+    height: 30,
+    padding: '0 10px',
+    borderRadius: 8,
+    border: '1px solid var(--color-border-ghost)',
+    background: 'var(--color-surface)',
+    color: 'var(--color-text-secondary)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.55 : 1,
+  }
 }
 
 function shortDomainLabel(domain: string): string {
@@ -428,6 +450,12 @@ const TimelineRow = memo(function TimelineRow({
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
+  const ignored = block.review.state === 'ignored'
+  // Leisure / personal rows are muted so the eye finds work first. Work is
+  // full-strength; everything else recedes. This is the whole point of the
+  // `kind` axis on the surface.
+  const blockKind = effectiveBlockKind(block)
+  const muted = blockKind !== 'work'
   const artifactLine = artifactSubtitle(block)
   const appsLine = block.topApps
     .slice(0, 3)
@@ -467,6 +495,7 @@ const TimelineRow = memo(function TimelineRow({
         transition: 'border-color 120ms, background 120ms',
         overflow: 'hidden',
         minWidth: 0,
+        opacity: ignored ? 0.5 : muted ? 0.72 : 1,
       }}>
         <div style={{
           position: 'absolute',
@@ -739,14 +768,16 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
   // Focused + Drift past the day's tracked total (R3/R4). blockActiveSeconds is
   // the summed session time clamped to span, so these totals stay within the
   // tracked total shown in the header.
-  const focusedTotal = payload.blocks
+  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const trustedTotal = trustedBlocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
+  const focusedTotal = trustedBlocks
     .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
     .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const detourTotal = payload.blocks
+  const detourTotal = trustedBlocks
     .filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
     .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const score = productivityScore(payload.totalSeconds, focusedTotal, detourTotal)
-  const themes = buildDayThemes(payload.blocks)
+  const score = productivityScore(trustedTotal, focusedTotal, detourTotal)
+  const themes = buildDayThemes(trustedBlocks)
   const topThemes = themes.slice(0, 4)
   // The "clustered around" claim is about the day's focused work; the "drift" is
   // the non-focused time. Keep them disjoint so the same theme never appears as
@@ -767,9 +798,9 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
   // data-driven (no wall-clock), so a genuinely heavy morning qualifies and a
   // thin all-day trickle does not. The factual stat tiles below are always safe
   // to show; only the narrative sentence is gated.
-  const substantiveBlocks = payload.blocks.filter((block) => blockActiveSeconds(block) >= 5 * 60)
+  const substantiveBlocks = trustedBlocks.filter((block) => blockActiveSeconds(block) >= 5 * 60)
   const hasEnoughForShape =
-    payload.totalSeconds >= SHAPE_OF_DAY_MIN_TRACKED_SECONDS
+    trustedTotal >= SHAPE_OF_DAY_MIN_TRACKED_SECONDS
     && substantiveBlocks.length >= SHAPE_OF_DAY_MIN_BLOCKS
     && topThemes.length > 0
 
@@ -953,48 +984,22 @@ function BlockInspector({
 }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
-  const [regeneratingLabel, setRegeneratingLabel] = useState(false)
-  const [regenerateError, setRegenerateError] = useState<string | null>(null)
-  const [clients, setClients] = useState<{ id: string; name: string }[]>([])
-  const [clientDraft, setClientDraft] = useState('')
-  const [clientSaving, setClientSaving] = useState(false)
-  const [clientStatus, setClientStatus] = useState<string | null>(null)
-  const [deletingActivity, setDeletingActivity] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const hasBlock = Boolean(block)
+  const [reviewSaving, setReviewSaving] = useState<TimelineBlockReviewState | 'intent' | null>(null)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const [boundarySaving, setBoundarySaving] = useState<'merge-prev' | 'merge-next' | null>(null)
+  const [boundaryError, setBoundaryError] = useState<string | null>(null)
+  // The entire correction surface lives behind this one disclosure — invisible
+  // by default, revealed only when the user disagrees.
+  const [notRight, setNotRight] = useState(false)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
-    setRegenerateError(null)
-    setRegeneratingLabel(false)
+    setReviewError(null)
+    setReviewSaving(null)
+    setBoundarySaving(null)
+    setBoundaryError(null)
+    setNotRight(false)
   }, [block?.id, block?.label.current, block?.label.override])
-
-  useEffect(() => {
-    if (!hasBlock) {
-      setClients([])
-      return
-    }
-    // The client roster is stable across blocks on the same day, so this only
-    // needs to fetch once when a block becomes selected (keyed on hasBlock, not
-    // block id). The cancelled guard prevents a late response from setting state
-    // after the inspector closed or switched.
-    let cancelled = false
-    void ipc.attribution.listClientsDetailed()
-      .then((rows) => {
-        if (!cancelled) setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name })))
-      })
-      .catch(() => {
-        if (!cancelled) setClients([])
-      })
-    return () => { cancelled = true }
-  }, [hasBlock])
-
-  useEffect(() => {
-    setClientDraft('')
-    setClientStatus(null)
-    setDeleteError(null)
-    setDeletingActivity(false)
-  }, [block?.id])
 
   if (!block) {
     return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
@@ -1002,6 +1007,47 @@ function BlockInspector({
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   const hasOverride = Boolean(block.label.override?.trim())
+  const saveReviewState = async (
+    state: TimelineBlockReviewState,
+    corrections?: {
+      correctedLabel?: string | null
+      correctedIntentRole?: WorkIntentRole | null
+      correctedIntentSubject?: string | null
+    },
+  ) => {
+    setReviewSaving(corrections?.correctedIntentRole !== undefined || corrections?.correctedIntentSubject !== undefined ? 'intent' : state)
+    setReviewError(null)
+    try {
+      await ipc.db.setBlockReview({
+        blockId: block.id,
+        date: payload.date,
+        state,
+        ...corrections,
+      })
+      await onRefresh()
+    } catch (error) {
+      setReviewError(sanitizeIpcError(error, "Couldn't save the review state. Try again in a moment.").message)
+    } finally {
+      setReviewSaving(null)
+    }
+  }
+  const sortedDayBlocks = [...payload.blocks].sort((a, b) => a.startTime - b.startTime)
+  const blockIndex = sortedDayBlocks.findIndex((candidate) => candidate.id === block.id)
+  const previousBlock = blockIndex > 0 ? sortedDayBlocks[blockIndex - 1] : null
+  const nextBlock = blockIndex >= 0 && blockIndex < sortedDayBlocks.length - 1 ? sortedDayBlocks[blockIndex + 1] : null
+
+  const mergeEpisodeWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
+    setBoundarySaving(side)
+    setBoundaryError(null)
+    try {
+      await ipc.db.mergeTimelineEpisodes({ blockIds: [block.id, other.id], date: payload.date })
+      await onRefresh()
+    } catch (error) {
+      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these episodes. Try again in a moment.").message)
+    } finally {
+      setBoundarySaving(null)
+    }
+  }
 
   return (
     <div data-timeline-inspector="true" className="timeline-summary-inspector" style={{
@@ -1041,289 +1087,94 @@ function BlockInspector({
         </div>
       </div>
 
+      {/* The whole correction surface — invisible until the user disagrees. */}
+      {!notRight ? (
+        <button
+          type="button"
+          onClick={() => setNotRight(true)}
+          style={{ marginBottom: 18, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0, textDecorationLine: 'underline', textUnderlineOffset: 3 }}
+        >
+          Not right?
+        </button>
+      ) : (
+        <div style={{ marginBottom: 18, display: 'grid', gap: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', padding: '12px 13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11.5, fontWeight: 760, color: 'var(--color-text-secondary)' }}>Fix this episode</span>
+            <button type="button" onClick={() => setNotRight(false)} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer' }}>Done</button>
+          </div>
+
+          {/* Rename */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename episode</label>
+            <input
+              id="timeline-block-label-override"
+              type="text"
+              value={overrideDraft}
+              onChange={(event) => setOverrideDraft(event.target.value)}
+              placeholder={userVisibleBlockLabel(block)}
+              style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
+            />
+            <button
+              type="button"
+              disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+              onClick={() => {
+                const label = overrideDraft.trim()
+                if (!label) return
+                setOverrideSaving(true)
+                setReviewError(null)
+                void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
+                  .then(() => onRefresh())
+                  .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
+                  .finally(() => setOverrideSaving(false))
+              }}
+              style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+            >
+              {overrideSaving ? 'Saving…' : 'Rename'}
+            </button>
+            {hasOverride && (
+              <button
+                type="button"
+                disabled={overrideSaving}
+                onClick={() => {
+                  setOverrideSaving(true)
+                  setReviewError(null)
+                  void ipc.db.clearBlockLabelOverride(block.id).then(() => onRefresh()).catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't reset this rename. Try again in a moment.").message)).finally(() => setOverrideSaving(false))
+                }}
+                style={{ height: 32, padding: '0 12px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          {/* Merge up/down · Hide */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {previousBlock && (
+              <button type="button" title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={boundaryButtonStyle(boundarySaving !== null)}>
+                <ArrowUp size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge up'}
+              </button>
+            )}
+            {nextBlock && (
+              <button type="button" title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={boundaryButtonStyle(boundarySaving !== null)}>
+                <ArrowDown size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge down'}
+              </button>
+            )}
+            <button type="button" title="Hide this episode from summaries" disabled={reviewSaving !== null || block.review.state === 'ignored'} onClick={() => { void saveReviewState('ignored') }} style={boundaryButtonStyle(reviewSaving !== null || block.review.state === 'ignored')}>
+              <EyeOff size={13} strokeWidth={2} aria-hidden="true" />{block.review.state === 'ignored' ? 'Hidden' : 'Hide'}
+            </button>
+          </div>
+
+          {(reviewError || boundaryError) && (
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{reviewError || boundaryError}</div>
+          )}
+        </div>
+      )}
+
       {blockNarrative(block) && (
         <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
           {blockNarrative(block)}
         </p>
       )}
-
-      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
-        <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
-          Block label
-        </label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <input
-            id="timeline-block-label-override"
-            type="text"
-            value={overrideDraft}
-            onChange={(event) => setOverrideDraft(event.target.value)}
-            placeholder={userVisibleBlockLabel(block)}
-            disabled={regeneratingLabel}
-            style={{
-              flex: 1,
-              minWidth: 160,
-              height: 34,
-              borderRadius: 9,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-primary)',
-              padding: '0 12px',
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
-          <button
-            type="button"
-            disabled={overrideSaving || regeneratingLabel || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
-            onClick={() => {
-              const label = overrideDraft.trim()
-              if (!label) return
-              setOverrideSaving(true)
-              void ipc.db.setBlockLabelOverride({
-                blockId: block.id,
-                date: payload.date,
-                label,
-                narrative: block.label.narrative,
-              }).finally(() => setOverrideSaving(false))
-            }}
-            style={{
-              height: 34,
-              padding: '0 14px',
-              borderRadius: 9,
-              border: 'none',
-              background: 'var(--gradient-primary)',
-              color: 'var(--color-primary-contrast)',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: overrideSaving ? 'default' : 'pointer',
-              opacity: overrideSaving || regeneratingLabel || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1,
-            }}
-          >
-            {overrideSaving ? 'Saving…' : 'Save'}
-          </button>
-          {hasOverride && (
-            <button
-              type="button"
-              disabled={overrideSaving || regeneratingLabel}
-              onClick={() => {
-                setOverrideSaving(true)
-                void ipc.db.clearBlockLabelOverride(block.id)
-                  .finally(() => setOverrideSaving(false))
-              }}
-              style={{
-                height: 34,
-                padding: '0 12px',
-                borderRadius: 9,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-high)',
-                color: 'var(--color-text-secondary)',
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: overrideSaving || regeneratingLabel ? 'default' : 'pointer',
-                opacity: overrideSaving || regeneratingLabel ? 0.6 : 1,
-              }}
-            >
-              Reset
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={overrideSaving || regeneratingLabel}
-            onClick={() => {
-              setRegenerateError(null)
-              setRegeneratingLabel(true)
-              void ipc.ai.regenerateBlockLabel(block.id)
-                .then(async (insight) => {
-                  setOverrideDraft(insight.label?.trim() || '')
-                  await onRefresh()
-                })
-                .catch((error) => {
-                  // T2/R4: friendly, channel-name-free message.
-                  setRegenerateError(sanitizeIpcError(error, "Couldn't regenerate the label. Try again in a moment.").message)
-                })
-                .finally(() => setRegeneratingLabel(false))
-            }}
-            style={{
-              height: 34,
-              padding: '0 12px',
-              borderRadius: 9,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'transparent',
-              color: 'var(--color-text-secondary)',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: overrideSaving || regeneratingLabel ? 'default' : 'pointer',
-              opacity: overrideSaving || regeneratingLabel ? 0.6 : 1,
-            }}
-          >
-            {regeneratingLabel ? 'Generating…' : 'Regenerate label'}
-          </button>
-        </div>
-        {regenerateError && (
-          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>
-            {regenerateError}
-          </div>
-        )}
-      </div>
-
-      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
-        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
-          Attribute to client
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <input
-            type="text"
-            list={`timeline-client-options-${block.id}`}
-            value={clientDraft}
-            placeholder="Type a client name…"
-            onChange={(event) => setClientDraft(event.target.value)}
-            disabled={clientSaving}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              height: 34,
-              borderRadius: 9,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-primary)',
-              padding: '0 12px',
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
-          <datalist id={`timeline-client-options-${block.id}`}>
-            {clients.map((client) => <option key={client.id} value={client.name} />)}
-          </datalist>
-          <button
-            type="button"
-            disabled={clientSaving || !clientDraft.trim()}
-            onClick={() => {
-              const name = clientDraft.trim()
-              if (!name) return
-              setClientSaving(true)
-              setClientStatus(null)
-              const existing = clients.find((client) => client.name.toLowerCase() === name.toLowerCase())
-              const requestPayload = existing
-                ? { fromMs: block.startTime, toMs: block.endTime, clientId: existing.id }
-                : { fromMs: block.startTime, toMs: block.endTime, clientName: name }
-              void ipc.attribution.reassignRange(requestPayload)
-                .then((result) => {
-                  setClientStatus(result.sessionsUpdated === 0
-                    ? `No work sessions in this block to attribute.`
-                    : `Attributed ${result.sessionsUpdated} session${result.sessionsUpdated === 1 ? '' : 's'} to ${name}${existing ? '' : ' (new client)'}.`)
-                  if (!existing) {
-                    void ipc.attribution.listClientsDetailed()
-                      .then((rows) => setClients(rows.filter((row) => row.status === 'active').map((row) => ({ id: row.id, name: row.name }))))
-                      .catch(() => {})
-                  }
-                })
-                .catch((err) => setClientStatus(err instanceof Error ? err.message : String(err)))
-                .finally(() => setClientSaving(false))
-            }}
-            style={{
-              height: 34,
-              padding: '0 14px',
-              borderRadius: 9,
-              border: 'none',
-              background: 'var(--gradient-primary)',
-              color: 'var(--color-primary-contrast)',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: clientSaving || !clientDraft.trim() ? 'default' : 'pointer',
-              opacity: clientSaving || !clientDraft.trim() ? 0.6 : 1,
-            }}
-          >
-            {clientSaving ? 'Saving…' : 'Attribute'}
-          </button>
-          <button
-            type="button"
-            disabled={clientSaving}
-            onClick={() => {
-              setClientSaving(true)
-              setClientStatus(null)
-              void ipc.attribution.reassignRange({ fromMs: block.startTime, toMs: block.endTime, clientId: null })
-                .then((result) => setClientStatus(result.sessionsUpdated === 0
-                  ? 'No work sessions in this block.'
-                  : `Cleared attribution on ${result.sessionsUpdated} session${result.sessionsUpdated === 1 ? '' : 's'}.`))
-                .catch((err) => setClientStatus(err instanceof Error ? err.message : String(err)))
-                .finally(() => setClientSaving(false))
-            }}
-            style={{
-              height: 34,
-              padding: '0 12px',
-              borderRadius: 9,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-secondary)',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: clientSaving ? 'default' : 'pointer',
-              opacity: clientSaving ? 0.6 : 1,
-            }}
-          >
-            Clear
-          </button>
-        </div>
-        {clientStatus && (
-          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
-            {clientStatus}
-          </div>
-        )}
-      </div>
-
-      <div style={{ marginBottom: 20, display: 'grid', gap: 8 }}>
-        <button
-          type="button"
-          disabled={deletingActivity || block.isLive}
-          onClick={() => {
-            if (block.isLive) return
-            const label = userVisibleBlockLabel(block)
-            const confirmed = window.confirm(`Delete "${label}" from your tracked activity? This removes the underlying local activity records for this block.`)
-            if (!confirmed) return
-            const appSessionIds = block.sessions
-              .filter((session) => session.id > 0 && session.captureSource !== 'focus_events')
-              .map((session) => session.id)
-            const derivedSessionIds = block.sessions
-              .filter((session) => session.id > 0 && session.captureSource === 'focus_events')
-              .map((session) => session.id)
-            setDeletingActivity(true)
-            setDeleteError(null)
-            void ipc.tracking.deleteActivity({
-              appSessionIds,
-              derivedSessionIds,
-              startTime: block.startTime,
-              endTime: block.endTime,
-              date: payload.date,
-            })
-              .then(async () => {
-                await onRefresh()
-              })
-              .catch((error) => {
-                setDeleteError(sanitizeIpcError(error, "Couldn't delete this activity. Try again in a moment.").message)
-              })
-              .finally(() => setDeletingActivity(false))
-          }}
-          style={{
-            width: '100%',
-            height: 36,
-            borderRadius: 9,
-            border: '1px solid rgba(248, 113, 113, 0.35)',
-            background: 'rgba(248, 113, 113, 0.08)',
-            color: '#ef4444',
-            fontSize: 12,
-            fontWeight: 750,
-            cursor: deletingActivity || block.isLive ? 'default' : 'pointer',
-            opacity: deletingActivity || block.isLive ? 0.55 : 1,
-          }}
-        >
-          {deletingActivity ? 'Deleting…' : block.isLive ? 'Delete after session ends' : 'Delete activity'}
-        </button>
-        {deleteError && (
-          <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>
-            {deleteError}
-          </div>
-        )}
-      </div>
 
       <div style={{ display: 'grid', gap: 18 }}>
         <section>
@@ -1355,69 +1206,81 @@ function BlockInspector({
               Key artifacts
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
-              {block.topArtifacts.slice(0, 6).map((artifact) => (
-                <button
-                  key={artifact.id}
-                  type="button"
-                  onClick={() => void openArtifact(artifact)}
-                  disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'start',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    padding: 0,
-                    border: 'none',
-                    background: 'transparent',
-                    textAlign: 'left',
-                    cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
-                  }}
-                >
-                  <div style={{ display: 'flex', gap: 10, minWidth: 0 }}>
-                    <EntityIcon
-                      artifactType={artifact.artifactType}
-                      canonicalAppId={artifact.canonicalAppId}
-                      ownerBundleId={artifact.ownerBundleId}
-                      ownerAppName={artifact.ownerAppName}
-                      ownerAppInstanceId={artifact.ownerAppInstanceId}
-                      title={artifact.displayTitle}
-                      path={artifact.path}
-                      domain={artifact.host}
-                      url={artifact.url}
-                      size={28}
-                    />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div
+              {block.topArtifacts.slice(0, 6).map((artifact) => {
+                return (
+                  <div
+                    key={artifact.id}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'start',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void openArtifact(artifact)}
+                      disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: 'flex',
+                        alignItems: 'start',
+                        gap: 10,
+                        padding: 0,
+                        border: 'none',
+                        background: 'transparent',
+                        textAlign: 'left',
+                        cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
+                      }}
+                    >
+                      <EntityIcon
+                        artifactType={artifact.artifactType}
+                        canonicalAppId={artifact.canonicalAppId}
+                        ownerBundleId={artifact.ownerBundleId}
+                        ownerAppName={artifact.ownerAppName}
+                        ownerAppInstanceId={artifact.ownerAppInstanceId}
                         title={artifact.displayTitle}
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: 'var(--color-text-primary)',
-                          lineHeight: 1.35,
-                          display: '-webkit-box',
-                          WebkitBoxOrient: 'vertical',
-                          WebkitLineClamp: 2,
-                          overflow: 'hidden',
-                          overflowWrap: 'break-word',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {artifact.displayTitle}
+                        path={artifact.path}
+                        domain={artifact.host}
+                        url={artifact.url}
+                        size={28}
+                      />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div
+                          title={artifact.displayTitle}
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: 'var(--color-text-primary)',
+                            lineHeight: 1.35,
+                            display: '-webkit-box',
+                            WebkitBoxOrient: 'vertical',
+                            WebkitLineClamp: 2,
+                            overflow: 'hidden',
+                            overflowWrap: 'break-word',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {artifact.displayTitle}
+                        </div>
+                        {(artifact.subtitle || artifact.host || artifact.path) && (
+                          <InlineRevealText
+                            text={artifact.subtitle || artifact.host || artifact.path || ''}
+                            style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
+                          />
+                        )}
                       </div>
-                      {(artifact.subtitle || artifact.host || artifact.path) && (
-                        <InlineRevealText
-                          text={artifact.subtitle || artifact.host || artifact.path || ''}
-                          style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
-                        />
-                      )}
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                        {formatDuration(artifact.totalSeconds)}
+                      </div>
                     </div>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                    {formatDuration(artifact.totalSeconds)}
-                  </div>
-                </button>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}
@@ -1436,7 +1299,7 @@ function BlockInspector({
                     alignItems: 'center',
                     gap: 8,
                     borderRadius: 999,
-                    padding: '6px 10px',
+                    padding: '6px 8px 6px 10px',
                     background: 'var(--color-surface-low)',
                     color: 'var(--color-text-secondary)',
                     fontSize: 12,
@@ -1499,18 +1362,20 @@ function WeekView({
       const days = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date)))
       return days.map((payload) => {
         const categories = new Map<AppCategory, number>()
-        for (const block of payload.blocks) {
+        const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+        for (const block of trustedBlocks) {
           categories.set(block.dominantCategory, (categories.get(block.dominantCategory) ?? 0) + blockDurationSeconds(block))
         }
+        const trustedTotalSeconds = trustedBlocks.reduce((sum, block) => sum + blockDurationSeconds(block), 0)
         return {
           date: payload.date,
-          totalSeconds: payload.totalSeconds,
+          totalSeconds: trustedTotalSeconds,
           categories: [...categories.entries()]
             .sort((left, right) => right[1] - left[1])
             .map(([category, seconds]) => ({ category, seconds })),
-          blockCount: payload.blocks.length,
+          blockCount: trustedBlocks.length,
           topLabels: [...new Set(
-            payload.blocks
+            trustedBlocks
               .slice(0, 5)
               .map((block) => userVisibleBlockLabel(block))
               .filter(Boolean)

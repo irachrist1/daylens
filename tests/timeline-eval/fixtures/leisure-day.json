@@ -1,0 +1,76 @@
+{
+  "id": "leisure-day",
+  "name": "Pure leisure day",
+  "date": "2026-05-30",
+  "description": "A rest day: YouTube, Netflix, and some X scrolling, no work at all. Must read as leisure end-to-end — no work episodes, no focus scoring, no work intent, no raw video titles as labels.",
+  "sessions": [
+    {
+      "start": "10:00",
+      "end": "11:30",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "The Comedy Lineup - YouTube"
+    },
+    {
+      "start": "11:30",
+      "end": "13:00",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "Stranger Things - Netflix"
+    },
+    {
+      "start": "14:00",
+      "end": "15:15",
+      "bundleId": "com.apple.Safari",
+      "appName": "Safari",
+      "category": "browsing",
+      "title": "Home / X"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "10:05",
+      "durationMinutes": 85,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "youtube.com",
+      "url": "https://www.youtube.com/watch?v=xyz",
+      "title": "The Comedy Lineup"
+    },
+    {
+      "at": "11:35",
+      "durationMinutes": 85,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "netflix.com",
+      "url": "https://www.netflix.com/watch/80100172",
+      "title": "Stranger Things"
+    },
+    {
+      "at": "14:05",
+      "durationMinutes": 70,
+      "browserBundleId": "com.apple.Safari",
+      "domain": "x.com",
+      "url": "https://x.com/home",
+      "title": "Home / X"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "watching-am",
+      "start": "10:00",
+      "end": "13:00",
+      "label": "Watching",
+      "labelIncludes": ["Watching"],
+      "kind": "leisure"
+    },
+    {
+      "id": "scrolling",
+      "start": "14:00",
+      "end": "15:15",
+      "label": "On X",
+      "labelIncludes": ["On X", "X"],
+      "kind": "leisure"
+    }
+  ]
+}

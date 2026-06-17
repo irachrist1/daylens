@@ -2,11 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildFallbackNarrative,
+  buildWrappedFactsFromPayload,
   buildWrappedPrompts,
   computeFactsHash,
   validateWrappedNarrativeResponse,
   type WrappedFacts,
 } from '../src/main/lib/wrappedNarrative.ts'
+import type {
+  AppCategory,
+  DayTimelinePayload,
+  TimelineBlockReviewState,
+  WorkContextBlock,
+} from '../src/shared/types.ts'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -41,6 +49,44 @@ function fullFacts(overrides: Partial<WrappedFacts> = {}): WrappedFacts {
       classification: 'codePlatform',
       isWorkRelevant: true,
     },
+    mattered: [
+      {
+        label: 'Wrapped narrative service',
+        category: 'development',
+        intentRole: 'execution',
+        intentSubject: 'wrappedNarrative.ts',
+        durationSeconds: 80 * 60,
+        startClock: '10:12 AM',
+        endClock: '11:32 AM',
+        reviewState: 'auto-approved',
+        confidence: 'high',
+      },
+    ],
+    needsReview: {
+      count: 1,
+      items: [
+        { label: 'Slack triage', durationSeconds: 12 * 60, startClock: '9:00 AM', endClock: '9:12 AM' },
+      ],
+    },
+    carryover: [
+      {
+        label: 'Wrapped narrative service',
+        intentRole: 'execution',
+        intentSubject: 'wrappedNarrative.ts',
+        startClock: '10:12 AM',
+        endClock: '11:32 AM',
+        reason: 'open-thread',
+      },
+    ],
+    kindBreakdown: {
+      work: 5 * 3600 + 24 * 60,
+      leisure: 0,
+      personal: 0,
+      idle: 0,
+      dominant: 'work',
+      topLeisure: [],
+      isLeisureDay: false,
+    },
     ...overrides,
   }
 }
@@ -60,6 +106,13 @@ function emptyFacts(): WrappedFacts {
     peakBlock: null,
     topApp: null,
     topDomain: null,
+    mattered: [],
+    needsReview: { count: 0, items: [] },
+    carryover: [],
+    kindBreakdown: {
+      work: 0, leisure: 0, personal: 0, idle: 0,
+      dominant: 'personal', topLeisure: [], isLeisureDay: false,
+    },
   }
 }
 
@@ -308,15 +361,17 @@ test('validate: drops slide lines containing banned vocabulary', () => {
   assert.equal(result!.slides.scale, null, 'banned phrase should be stripped to null')
 })
 
-test('fallback: full day produces slide narration for every slot', () => {
+test('fallback: full work day fills the earned cards, drops the padding', () => {
   const facts = fullFacts()
   const result = buildFallbackNarrative(facts, 'h')
+  // Earned cards: where-the-time-went (scale), what-you-worked-on (topApp), close.
   assert.ok(result.slides.scale)
-  assert.ok(result.slides.focus)
   assert.ok(result.slides.topApp)
-  assert.ok(result.slides.switching)
-  assert.ok(result.slides.identity)
+  assert.ok(result.slides.focus)
   assert.ok(result.slides.closing)
+  // Switching / identity are redundant padding under the earn-each-slide rule.
+  assert.equal(result.slides.switching, null)
+  assert.equal(result.slides.identity, null)
 })
 
 test('fallback: empty quality leaves all slide slots null', () => {
@@ -340,4 +395,197 @@ test('prompt: user message embeds the facts JSON verbatim', () => {
   const { userMessage } = buildWrappedPrompts(facts)
   assert.match(userMessage, /"date": "2026-05-12"/)
   assert.match(userMessage, /"dominantCategory": "development"/)
+})
+
+test('prompt: system prompt describes the reconciled kind spine and bans homework', () => {
+  const { systemPrompt } = buildWrappedPrompts(fullFacts())
+  assert.match(systemPrompt, /facts\.mattered/)
+  assert.match(systemPrompt, /facts\.carryover/)
+  assert.match(systemPrompt, /facts\.kindBreakdown/)
+  // The redesign forbids the "needs review" homework closing and 100% claims.
+  assert.match(systemPrompt, /no "needs review"/i)
+  assert.match(systemPrompt, /never say "100%"/i)
+})
+
+// ─── Review-grounded derivation (Wraps V2) ────────────────────────────────────
+
+function makeBlock(opts: {
+  label: string
+  start: number
+  durationSeconds: number
+  category?: AppCategory
+  reviewState?: TimelineBlockReviewState
+}): WorkContextBlock {
+  const category: AppCategory = opts.category ?? 'development'
+  return {
+    id: `b:${opts.label}:${opts.start}`,
+    startTime: opts.start,
+    endTime: opts.start + opts.durationSeconds * 1000,
+    dominantCategory: category,
+    categoryDistribution: { [category]: opts.durationSeconds },
+    ruleBasedLabel: opts.label,
+    aiLabel: null,
+    sessions: [],
+    topApps: [],
+    websites: [],
+    keyPages: [],
+    pageRefs: [],
+    documentRefs: [],
+    topArtifacts: [],
+    workflowRefs: [],
+    label: {
+      current: opts.label,
+      source: 'rule',
+      confidence: 0.92,
+      narrative: null,
+      ruleBased: opts.label,
+      aiSuggested: null,
+      override: null,
+    },
+    focusOverlap: { totalSeconds: opts.durationSeconds, pct: 100, sessionIds: [] },
+    evidenceSummary: { apps: [], pages: [], documents: [], domains: [] },
+    heuristicVersion: 'test',
+    computedAt: opts.start,
+    switchCount: 0,
+    confidence: 'high',
+    review: { ...DEFAULT_TIMELINE_BLOCK_REVIEW, state: opts.reviewState ?? 'auto-approved' },
+    isLive: false,
+  }
+}
+
+function makeDayPayload(blocks: WorkContextBlock[], totalSeconds: number): DayTimelinePayload {
+  return {
+    date: '2026-05-12',
+    sessions: [],
+    websites: [],
+    blocks,
+    segments: [],
+    focusSessions: [],
+    computedAt: Date.now(),
+    version: 'test',
+    totalSeconds,
+    focusSeconds: totalSeconds,
+    focusPct: 100,
+    appCount: 0,
+    siteCount: 0,
+  }
+}
+
+test('derive: decided blocks are mattered, pending blocks are needs-review', () => {
+  const base = new Date('2026-05-12T09:00:00').getTime()
+  const facts = buildWrappedFactsFromPayload(makeDayPayload([
+    makeBlock({ label: 'Auth refactor', start: base, durationSeconds: 30 * 60, reviewState: 'approved' }),
+    makeBlock({ label: 'Slack triage', start: base + 40 * 60_000, durationSeconds: 10 * 60, reviewState: 'pending' }),
+  ], 40 * 60))
+  assert.equal(facts.mattered.length, 1)
+  assert.equal(facts.mattered[0].label, 'Auth refactor')
+  assert.notEqual(facts.mattered[0].reviewState, 'pending')
+  assert.equal(facts.needsReview.count, 1)
+  assert.equal(facts.needsReview.items[0].label, 'Slack triage')
+})
+
+test('derive: ignored blocks are excluded from mattered and needs-review', () => {
+  const base = new Date('2026-05-12T09:00:00').getTime()
+  const facts = buildWrappedFactsFromPayload(makeDayPayload([
+    makeBlock({ label: 'Ignored noise', start: base, durationSeconds: 30 * 60, reviewState: 'ignored' }),
+    makeBlock({ label: 'Pending thing', start: base + 40 * 60_000, durationSeconds: 20 * 60, reviewState: 'pending' }),
+  ], 50 * 60))
+  assert.ok(!facts.mattered.some((m) => m.label === 'Ignored noise'))
+  assert.ok(!facts.needsReview.items.some((i) => i.label === 'Ignored noise'))
+  assert.equal(facts.needsReview.count, 1)
+})
+
+test('derive: sub-5-minute pending blocks are below the needs-review floor', () => {
+  const base = new Date('2026-05-12T09:00:00').getTime()
+  const facts = buildWrappedFactsFromPayload(makeDayPayload([
+    makeBlock({ label: 'Quick peek', start: base, durationSeconds: 3 * 60, reviewState: 'pending' }),
+  ], 3 * 60))
+  assert.equal(facts.needsReview.count, 0)
+})
+
+// ─── Fallback narrative grounding ─────────────────────────────────────────────
+
+test('fallback: lead names the work subject on a working day', () => {
+  const result = buildFallbackNarrative(fullFacts(), 'h')
+  assert.match(result.lead, /working day/i)
+  assert.match(result.lead, /mostly on wrappedNarrative\.ts/i)
+})
+
+test('fallback: nudge surfaces the carryover thread to resume', () => {
+  const result = buildFallbackNarrative(fullFacts(), 'h')
+  assert.ok(result.nudge)
+  assert.match(result.nudge!, /wrappedNarrative\.ts/)
+  assert.match(result.nudge!, /pick/i)
+})
+
+test('fallback: closing is a quiet sign-off, never review homework', () => {
+  // Even with a pending pile, the close assigns no homework.
+  const result = buildFallbackNarrative(fullFacts(), 'h') // needsReview.count = 1
+  assert.ok(result.slides.closing)
+  assert.doesNotMatch(result.slides.closing!, /review/i)
+  assert.doesNotMatch(result.slides.closing!, /need/i)
+})
+
+test('fallback: nudge is absent when there is no real carryover thread', () => {
+  // No invented homework — when nothing carried over, there is no nudge.
+  const result = buildFallbackNarrative(fullFacts({ carryover: [] }), 'h')
+  assert.equal(result.nudge, null)
+})
+
+// ─── Hash sensitivity to review state (cache-honesty) ─────────────────────────
+
+test('hash: clearing the needs-review pile changes the hash', () => {
+  // Approving a pending block leaves totals untouched but must regenerate the
+  // narrative — otherwise the wrap keeps claiming "N need review" forever.
+  assert.notEqual(
+    computeFactsHash(fullFacts()),
+    computeFactsHash(fullFacts({ needsReview: { count: 0, items: [] } })),
+  )
+})
+
+test('hash: changing what mattered changes the hash', () => {
+  const a = fullFacts()
+  const b = fullFacts({ mattered: [{ ...a.mattered[0], intentSubject: 'something-else.ts' }] })
+  assert.notEqual(computeFactsHash(a), computeFactsHash(b))
+})
+
+test('hash: changing the carryover thread changes the hash', () => {
+  assert.notEqual(
+    computeFactsHash(fullFacts()),
+    computeFactsHash(fullFacts({ carryover: [] })),
+  )
+})
+
+// ─── Review-count claim validation ────────────────────────────────────────────
+
+test('validate: rejects a review-count claim that contradicts the pending count', () => {
+  const facts = fullFacts() // needsReview.count = 1
+  const raw = JSON.stringify({
+    lead: 'Steady development throughout, and 3 stretches still need a quick review before close.',
+    peakInsight: null,
+    nudge: null,
+  })
+  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
+})
+
+test('validate: rejects review homework even when it matches the pending count', () => {
+  // The redesign deletes the "needs review" closing entirely — any review-nudge
+  // is homework and must be rejected regardless of the count.
+  const facts = fullFacts() // needsReview.count = 1
+  const raw = JSON.stringify({
+    lead: 'Most of the day held steady, though 1 stretch still needs a quick review before close.',
+    peakInsight: null,
+    nudge: null,
+  })
+  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
+})
+
+test('validate: rejects a "needs review" claim when nothing is pending', () => {
+  const facts = fullFacts({ needsReview: { count: 0, items: [] } })
+  const raw = JSON.stringify({
+    lead: 'A solid development day, but a few stretches still need a quick review tonight.',
+    peakInsight: null,
+    nudge: null,
+  })
+  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
 })

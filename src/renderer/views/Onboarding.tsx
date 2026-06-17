@@ -601,6 +601,23 @@ export default function Onboarding({
                 </span>
               </span>
             </button>
+            <div style={{
+              display: 'grid', gap: 6, textAlign: 'left',
+              padding: '12px 14px', borderRadius: 12,
+              border: '1px solid rgba(173,198,255,0.18)',
+              background: 'rgba(255,255,255,0.02)',
+            }}>
+              <span style={{ fontSize: 13.5, fontWeight: 650 }}>Give your AI everything Daylens sees</span>
+              <span style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
+                TARS turns what Daylens captures into context for Claude or ChatGPT, so your AI preps
+                from what you actually did — not your memory. Optional, in your terminal:
+              </span>
+              <code style={{
+                fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                padding: '6px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.35)',
+                border: '1px solid rgba(173,198,255,0.14)', userSelect: 'all', justifySelf: 'start',
+              }}>npx tars-chief-of-staff</code>
+            </div>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
                 {busy ? 'Opening Timeline…' : 'Open Daylens'}

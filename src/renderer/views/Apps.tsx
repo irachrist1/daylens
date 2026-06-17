@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
 import type { AISurfaceSummary, AppActivityDigest, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
 import EntityIcon from '../components/EntityIcon'
@@ -135,6 +136,42 @@ function appRangeBounds(dateStr: string, days: number): { startTime: number; end
     startTime: dayStart - (Math.max(1, days) - 1) * 86_400_000,
     endTime: dayStart + 86_400_000,
   }
+}
+
+function DeleteIconButton({
+  label,
+  busy,
+  onClick,
+}: {
+  label: string
+  busy: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={busy}
+      onClick={onClick}
+      style={{
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        border: '1px solid rgba(248, 113, 113, 0.28)',
+        background: busy ? 'rgba(248, 113, 113, 0.12)' : 'transparent',
+        color: '#ef4444',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: busy ? 'default' : 'pointer',
+        opacity: busy ? 0.55 : 0.82,
+        flexShrink: 0,
+      }}
+    >
+      <Trash2 size={14} strokeWidth={1.9} aria-hidden="true" />
+    </button>
+  )
 }
 
 export default function Apps() {
@@ -370,8 +407,8 @@ export default function Apps() {
     | { kind: 'no-bundle' }
     | { kind: 'error'; message: string }
   const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
-  const [deletingAppActivity, setDeletingAppActivity] = useState(false)
-  const [deleteAppActivityError, setDeleteAppActivityError] = useState<string | null>(null)
+  const [deletingActivityKey, setDeletingActivityKey] = useState<string | null>(null)
+  const [deleteActivityError, setDeleteActivityError] = useState<string | null>(null)
   const isUserGenerating = expectedNarrativeScopeKey
     ? activeGenerationScopes.has(expectedNarrativeScopeKey)
     : false
@@ -429,29 +466,28 @@ export default function Apps() {
     }
   }
 
-  const handleDeleteSelectedAppActivity = async () => {
-    if (!selectedSummary) return
-    const label = formatDisplayAppName(selectedSummary.appName)
-    const confirmed = window.confirm(`Delete ${label}'s tracked activity for ${selectedRangeLabel}? This removes the local activity records from this range.`)
+  const handleDeleteWebsiteActivity = async (target: { domain: string; url?: string | null; title?: string | null }) => {
+    const label = target.title?.trim() || target.domain
+    const confirmed = window.confirm(`Delete tracked activity for ${label} in ${selectedRangeLabel}? This removes only this website entry from the selected range.`)
     if (!confirmed) return
 
-    setDeletingAppActivity(true)
-    setDeleteAppActivityError(null)
+    const key = target.url ? `url:${target.url}` : `domain:${target.domain}`
+    setDeletingActivityKey(key)
+    setDeleteActivityError(null)
     const range = appRangeBounds(isAppsPastDay ? selectedDate : todayString(), isAppsPastDay ? 1 : days)
     try {
       await ipc.tracking.deleteActivity({
-        bundleId: selectedSummary.bundleId,
-        canonicalAppId: selectedSummary.canonicalAppId ?? selectedSummary.bundleId,
-        appName: selectedSummary.appName,
+        domain: target.domain,
+        url: target.url ?? null,
         date: dateMode ? selectedDate : null,
         ...range,
       })
-      setSelectedAppId(null)
       await appsResource.refresh()
+      await detailResource.refresh()
     } catch (error) {
-      setDeleteAppActivityError(error instanceof Error ? error.message : String(error))
+      setDeleteActivityError(error instanceof Error ? error.message : String(error))
     } finally {
-      setDeletingAppActivity(false)
+      setDeletingActivityKey(null)
     }
   }
 
@@ -870,32 +906,14 @@ export default function Apps() {
                         {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
                       </button>
                     )}
-                    <button
-                      type="button"
-                      disabled={deletingAppActivity || selectedSummary.totalSeconds <= 0}
-                      onClick={() => { void handleDeleteSelectedAppActivity() }}
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid rgba(248, 113, 113, 0.35)',
-                        background: 'rgba(248, 113, 113, 0.08)',
-                        color: '#ef4444',
-                        fontSize: 11.5,
-                        fontWeight: 700,
-                        cursor: deletingAppActivity || selectedSummary.totalSeconds <= 0 ? 'default' : 'pointer',
-                        opacity: deletingAppActivity || selectedSummary.totalSeconds <= 0 ? 0.6 : 1,
-                      }}
-                    >
-                      {deletingAppActivity ? 'Deleting…' : 'Delete activity'}
-                    </button>
                   </div>
                   <>
                     <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
                       {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
                     </p>
-                    {deleteAppActivityError && (
+                    {deleteActivityError && (
                       <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
-                        Could not delete activity: {deleteAppActivityError}
+                        Could not delete activity: {deleteActivityError}
                       </div>
                     )}
                     {isUserGenerating && (
@@ -1129,6 +1147,11 @@ export default function Apps() {
                                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
                                   {formatDuration(entry.totalSeconds)}
                                 </div>
+                                <DeleteIconButton
+                                  label={`Delete activity for ${entry.domain}`}
+                                  busy={deletingActivityKey === `domain:${entry.domain}`}
+                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
+                                />
                               </div>
                             ))}
                           </div>
@@ -1142,43 +1165,58 @@ export default function Apps() {
                           </div>
                           <div style={{ display: 'grid', gap: 12 }}>
                             {detail.topPages.slice(0, 8).map((page) => (
-                              <button
+                              <div
                                 key={page.id}
-                                type="button"
-                                onClick={() => void openArtifact(page)}
-                                disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
                                 style={{
                                   display: 'flex',
                                   alignItems: 'start',
                                   gap: 10,
                                   width: '100%',
-                                  padding: 0,
-                                  border: 'none',
-                                  background: 'transparent',
-                                  textAlign: 'left',
-                                  cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
                                 }}
                               >
-                                <EntityIcon
-                                  artifactType="page"
-                                  domain={page.domain}
-                                  url={page.url}
-                                  size={28}
-                                />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={page.displayTitle}
-                                    style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                                <button
+                                  type="button"
+                                  onClick={() => void openArtifact(page)}
+                                  disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'start',
+                                    gap: 10,
+                                    flex: 1,
+                                    minWidth: 0,
+                                    padding: 0,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    textAlign: 'left',
+                                    cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  <EntityIcon
+                                    artifactType="page"
+                                    domain={page.domain}
+                                    url={page.url}
+                                    size={28}
                                   />
-                                  <InlineRevealText
-                                    text={page.domain}
-                                    style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
-                                  />
-                                </div>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <InlineRevealText
+                                      text={page.displayTitle}
+                                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                                    />
+                                    <InlineRevealText
+                                      text={page.domain}
+                                      style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
+                                    />
+                                  </div>
+                                </button>
                                 <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
                                   {formatDuration(page.totalSeconds)}
                                 </div>
-                              </button>
+                                <DeleteIconButton
+                                  label={`Delete activity for ${page.displayTitle}`}
+                                  busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
+                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
+                                />
+                              </div>
                             ))}
                           </div>
                         </section>

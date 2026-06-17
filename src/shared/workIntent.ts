@@ -9,10 +9,13 @@ import type {
   WorkIntentSummary,
 } from './types'
 
+import { effectiveBlockKind } from './workKind'
+import { humanizeTitle } from './humanize'
+
 type BlockLike = Pick<
   WorkContextBlock,
   'dominantCategory' | 'topApps' | 'websites' | 'pageRefs' | 'documentRefs' | 'topArtifacts' | 'workflowRefs' | 'switchCount'
->
+> & { kind?: WorkContextBlock['kind'] }
 
 interface PageSignal {
   label: string
@@ -423,7 +426,12 @@ function chooseSubject(block: BlockLike, role: WorkIntentRole, pages: PageSignal
 
   if (role === 'communication' || role === 'coordination') {
     return pageCandidates.find((page) => page.kind === 'chat' || page.kind === 'mailbox' || page.kind === 'meeting' || page.kind === 'calendar' || page.kind === 'issue')
+      // A coordination episode is often anchored on the board/sheet/doc being
+      // worked through (a budget spreadsheet, a planning doc), so name it from
+      // that artifact rather than dropping to a bare category floor.
+      ?? pageCandidates.find((page) => page.kind === 'sheet' || page.kind === 'doc' || page.kind === 'slide')
       ?? documentCandidate
+      ?? nonSocialPageCandidate
       ?? (workflowCandidate ? { label: workflowCandidate, source: 'workflow' } : null)
   }
 
@@ -478,6 +486,17 @@ function roleFromSignals(block: BlockLike, pages: PageSignal[]): WorkIntentRole 
   const browserDominated = browserSeconds > executionSeconds * 1.1
 
   if (block.dominantCategory === 'meetings') return 'coordination'
+
+  // A productivity-dominant block with no execution anchor is coordination work
+  // by nature — calendars, task boards, password vaults, checklists, triage.
+  // This must win over an incidental communication anchor (a Slack reply inside
+  // an admin-triage episode) and over review pages (a Linear board), so a
+  // coalesced admin episode reads as "coordination", not "communication" or
+  // "review". A productivity block that is genuinely execution carries an
+  // execution anchor (a writing/dev app) and is handled below.
+  if (!hasExecutionAnchor && block.dominantCategory === 'productivity') {
+    return 'coordination'
+  }
 
   if (!hasExecutionAnchor && (block.dominantCategory === 'communication' || block.dominantCategory === 'email' || hasCommunicationAnchor)) {
     return 'communication'
@@ -598,15 +617,34 @@ function rationaleFor(
 }
 
 export function inferWorkIntent(block: BlockLike): WorkIntentSummary {
+  // Leisure / personal / idle episodes carry no intent role and no subject —
+  // watching a documentary is never "execution on Free Movies". They are named
+  // by the activity ("Watching YouTube"), not by an inferred work intent.
+  const kind = effectiveBlockKind(block)
+  if (kind !== 'work') {
+    return {
+      role: 'ambient',
+      subject: null,
+      confidence: 0.4,
+      summary: kind === 'leisure' ? 'Leisure / entertainment' : kind === 'personal' ? 'Personal' : 'Idle',
+      rationale: [],
+      pageKinds: [],
+    }
+  }
+
   const pages = block.pageRefs.map((page) => classifyPage(page))
   const role = roleFromSignals(block, pages)
   const subject = chooseSubject(block, role, pages)
+  // The subject feeds the wrap's "what mattered" and carryover lines, so it
+  // must never be a raw filename/URL. Humanize it the same way every other
+  // user-facing string is humanized.
+  const humanizedSubject = subject ? (humanizeTitle(subject.label) ?? subject.label) : null
 
   return {
     role,
-    subject: subject?.label ?? null,
+    subject: humanizedSubject,
     confidence: confidenceFor(role, block, subject, pages),
-    summary: summaryFor(role, subject?.label ?? null),
+    summary: summaryFor(role, humanizedSubject),
     rationale: rationaleFor(role, block, subject, pages),
     pageKinds: topUnique(pages.map((page) => page.kind), 4),
   }

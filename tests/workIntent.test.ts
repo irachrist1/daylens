@@ -10,6 +10,7 @@ import type {
   WebsiteSummary,
 } from '../src/shared/types.ts'
 import { inferWorkIntent } from '../src/shared/workIntent.ts'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 function makeApp(appName: string, category: WorkContextAppSummary['category'], totalSeconds: number, isBrowser = false): WorkContextAppSummary {
   return {
@@ -124,11 +125,15 @@ function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock 
     computedAt: overrides.computedAt ?? Date.now(),
     switchCount: overrides.switchCount ?? 1,
     confidence: overrides.confidence ?? 'medium',
+    review: overrides.review ?? DEFAULT_TIMELINE_BLOCK_REVIEW,
     isLive: overrides.isLive ?? false,
   }
 }
 
-test('generic X home feed reads as ambient browsing rather than a workstream', () => {
+test('generic X home feed reads as leisure with no work subject', () => {
+  // Post-redesign, a lone X home feed is leisure (the `kind` axis), so it
+  // carries no work intent role and no subject — never "ambient browsing on
+  // X" as if it were a workstream.
   const block = makeBlock({
     dominantCategory: 'browsing',
     topApps: [makeApp('Arc', 'browsing', 3600, true)],
@@ -140,7 +145,7 @@ test('generic X home feed reads as ambient browsing rather than a workstream', (
 
   assert.equal(intent.role, 'ambient')
   assert.equal(intent.subject, null)
-  assert.match(intent.summary, /Ambient browsing/)
+  assert.match(intent.summary, /Leisure/)
 })
 
 test('coding plus generic X context still reads as execution on the named artifact', () => {
@@ -228,12 +233,12 @@ test('mixed browser blocks prefer concrete project pages over workflow app-pair 
       makeApp('Warp', 'development', 240),
     ],
     websites: [
-      makeWebsite('x.com', 1800, 'X (Twitter)'),
-      makeWebsite('localhost', 300, 'Daylens — Searchable work history for your laptop'),
+      makeWebsite('localhost', 1800, 'Daylens — Searchable work history for your laptop'),
+      makeWebsite('x.com', 600, 'X (Twitter)'),
     ],
     pageRefs: [
-      makePage({ title: 'X (Twitter)', domain: 'x.com', url: 'https://x.com/home' }),
       makePage({ title: 'Daylens — Searchable work history for your laptop', domain: 'localhost', url: 'http://localhost:3000/daylens' }),
+      makePage({ title: 'X (Twitter)', domain: 'x.com', url: 'https://x.com/home' }),
     ],
     workflowRefs: [makeWorkflow('Dia + Warp')],
   })

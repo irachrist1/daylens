@@ -50,6 +50,11 @@ export interface AppActivityDigest {
 
 export type BlockConfidence = 'high' | 'medium' | 'low'
 
+// The `kind` axis — orthogonal to AppCategory — answers "is this work at all?".
+// Resolved from category + domain + app in src/shared/workKind.ts. This is the
+// distinction that makes leisure first-class: a video is never a "work session".
+export type WorkKind = 'work' | 'leisure' | 'personal' | 'idle'
+
 export type WorkIntentRole =
   | 'execution'
   | 'research'
@@ -86,6 +91,79 @@ export interface WorkIntentSummary {
   summary: string
   rationale: string[]
   pageKinds: WorkIntentPageKind[]
+}
+
+// Why an intent episode begins or ends. Segmentation scores every candidate
+// boundary from these signals; the winning reason(s) are recorded on the
+// episode so each block can explain why it started and stopped. `day-start` /
+// `day-end` are the implicit edges of the day; `none` is the placeholder for an
+// edge that was never cut (kept here only for internal completeness).
+export type BoundaryReason =
+  | 'day-start'
+  | 'day-end'
+  | 'idle-gap'
+  | 'meeting-start'
+  | 'meeting-end'
+  | 'artifact-change'
+  | 'repo-change'
+  | 'category-shift'
+  | 'kind-shift'
+  | 'research-to-execution'
+  | 'detour-start'
+  | 'detour-end'
+  | 'subject-change'
+  | 'user-merge'
+
+// The boundary reasons that opened and closed a block/episode. Always
+// populated (at minimum the day edges), so every block can explain itself.
+export interface BlockBoundary {
+  startReasons: BoundaryReason[]
+  endReasons: BoundaryReason[]
+}
+
+// Internal segmentation model: an intent episode is the unit Daylens actually
+// builds — a contiguous run of work with a single inferred role/subject and an
+// ordered list of boundary reasons on each edge. Episodes are projected to
+// WorkContextBlock for the timeline, wraps, review ledger, recap, and the eval;
+// IntentEpisode itself never crosses the IPC boundary.
+export interface IntentEpisode {
+  startTime: number
+  endTime: number
+  kind: WorkKind
+  role: WorkIntentRole
+  subject: string | null
+  confidence: number
+  evidence: string[]
+  boundary: BlockBoundary
+}
+
+export type TimelineBlockReviewState =
+  | 'auto-approved'
+  | 'pending'
+  | 'approved'
+  | 'corrected'
+  | 'ignored'
+
+export interface TimelineBlockReview {
+  state: TimelineBlockReviewState
+  source: 'default' | 'stored_block' | 'stored_evidence'
+  originalBlockId: string | null
+  originalLabel: string | null
+  originalIntentRole: WorkIntentRole | null
+  originalIntentSubject: string | null
+  correctedLabel: string | null
+  correctedIntentRole: WorkIntentRole | null
+  correctedIntentSubject: string | null
+  updatedAt: number | null
+}
+
+export interface TimelineBlockReviewUpdate {
+  blockId: string
+  date?: string | null
+  state: TimelineBlockReviewState
+  correctedLabel?: string | null
+  correctedIntentRole?: WorkIntentRole | null
+  correctedIntentSubject?: string | null
 }
 
 export interface FocusScoreBreakdown {
@@ -127,7 +205,16 @@ export interface WorkContextBlock {
   computedAt: number
   switchCount: number
   confidence: BlockConfidence
+  review: TimelineBlockReview
   isLive: boolean
+  // The work/leisure/personal/idle axis for this block, resolved from
+  // category + domain + app. Additive — older persisted/derived blocks that
+  // predate the field fall back to a computed default (resolveBlockKind).
+  kind?: WorkKind
+  // Why this block started and stopped. Projected from the IntentEpisode the
+  // block was built from; always non-empty (day edges at minimum). Additive —
+  // older persisted/derived blocks fall back to a computed default.
+  boundary?: BlockBoundary
 }
 
 export type TimelineBlock = WorkContextBlock
@@ -1262,6 +1349,8 @@ export const IPC = {
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
     SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
     CLEAR_BLOCK_LABEL_OVERRIDE: 'db:clear-block-label-override',
+    SET_BLOCK_REVIEW: 'db:set-block-review',
+    MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',
   },

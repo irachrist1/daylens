@@ -13,10 +13,57 @@ import {
 import type {
   AIWrappedNarrative,
   AppCategory,
+  BlockConfidence,
   DayTimelinePayload,
+  TimelineBlockReviewState,
   WebsiteSummary,
+  WorkContextBlock,
+  WorkIntentRole,
 } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
+import { inferWorkIntent } from '@shared/workIntent'
+import { effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
+import { friendlyDomain } from '@shared/humanize'
+
+// ─── Review-grounded facts (Wraps V2) ─────────────────────────────────────────
+// The wrap's three-part spine — what mattered, what needs review, what carries
+// into tomorrow — is derived from the per-block review state that the timeline
+// review pass writes. "Mattered" is trusted, decided work; "needsReview" is the
+// pending pile; "carryover" is the open thread to resume. These are what the
+// morning/evening narrative is allowed to speak from.
+
+/** A substantial, trusted, non-pending block — work we can stand behind. */
+export interface WrappedMatteredItem {
+  label: string
+  category: AppCategory
+  intentRole: WorkIntentRole | null
+  intentSubject: string | null
+  durationSeconds: number
+  startClock: string
+  endClock: string
+  reviewState: TimelineBlockReviewState
+  confidence: BlockConfidence
+}
+
+/** A pending block the user has not yet confirmed — the review pile. */
+export interface WrappedReviewItem {
+  label: string
+  durationSeconds: number
+  startClock: string
+  endClock: string
+}
+
+/** An unresolved thread worth resuming. `open-thread` was still on screen at
+ *  day's end; `recurring` spanned multiple blocks. */
+export interface WrappedCarryoverItem {
+  label: string
+  intentRole: WorkIntentRole
+  intentSubject: string | null
+  startClock: string
+  endClock: string
+  reason: 'open-thread' | 'recurring'
+}
 
 // ─── Facts shape passed to the AI ─────────────────────────────────────────────
 // Compact on purpose: every key has to earn its prompt-token cost. Anything
@@ -51,6 +98,31 @@ export interface WrappedFacts {
     classification: DomainClass
     isWorkRelevant: boolean
   } | null
+  // ── Review-grounded spine (Wraps V2) ──
+  /** Top trusted, decided (non-pending) WORK blocks — never leisure. */
+  mattered: WrappedMatteredItem[]
+  /** Pending blocks awaiting confirmation. count is the headline number. */
+  needsReview: { count: number; items: WrappedReviewItem[] }
+  /** Unresolved WORK threads to carry into tomorrow / resume in the morning. */
+  carryover: WrappedCarryoverItem[]
+  // ── One reconciled kind breakdown (Wraps V2.1) ──
+  // Computed once from the trusted blocks and fed to every card, so no two cards
+  // can contradict (the "100% entertainment" vs "72% browsing" bug). Percentages
+  // live only in the "where the time went" card, derived from these seconds.
+  kindBreakdown: KindBreakdown
+}
+
+export interface KindBreakdown {
+  work: number
+  leisure: number
+  personal: number
+  idle: number
+  /** The kind with the most active seconds. */
+  dominant: WorkKind
+  /** Friendly top leisure surfaces ("YouTube", "Netflix"), most time first. */
+  topLeisure: string[]
+  /** Whether the day is mostly leisure (leisure ≥ work and ≥ a real share). */
+  isLeisureDay: boolean
 }
 
 // ─── Facts construction ───────────────────────────────────────────────────────
@@ -73,26 +145,184 @@ function formatClock(ms: number): string {
   })
 }
 
+// ─── Review-grounded derivation ────────────────────────────────────────────────
+
+const MATTERED_MIN_SECONDS = 10 * 60
+const NEEDS_REVIEW_MIN_SECONDS = 5 * 60
+const CARRYOVER_MIN_SECONDS = 10 * 60
+const MAX_MATTERED = 3
+const MAX_NEEDS_REVIEW_ITEMS = 3
+// Roles that imply an ongoing deliverable worth resuming. Ambient/ambiguous
+// (idle, scattered) and bare communication are not threads you "pick back up".
+const CARRYOVER_DOING_ROLES: ReadonlySet<WorkIntentRole> = new Set<WorkIntentRole>([
+  'execution', 'research', 'review', 'coordination',
+])
+
+function isSubstantiveCategory(category: AppCategory): boolean {
+  return category !== 'system' && category !== 'uncategorized'
+}
+
+// Prefer an explicit user correction over the generated value. Mirrors
+// reviewedWorkIntent() in aiService and userVisibleLabelForBlock in workBlocks,
+// re-stated here so this module stays free of the DB/orchestration layer.
+function effectiveLabel(block: WorkContextBlock): string {
+  const corrected = block.review?.correctedLabel?.trim()
+  if (corrected) return corrected
+  return block.label.current.trim()
+}
+
+function effectiveIntent(block: WorkContextBlock): { role: WorkIntentRole; subject: string | null } {
+  const intent = inferWorkIntent(block)
+  return {
+    role: block.review?.correctedIntentRole ?? intent.role,
+    subject: block.review?.correctedIntentSubject ?? intent.subject,
+  }
+}
+
+function isResumableSubject(subject: string | null): subject is string {
+  return subject != null && subject.trim().length >= 3
+}
+
+// "What mattered": the longest trusted blocks the user has decided on (or that
+// the system auto-approved) — never the pending pile.
+function deriveMattered(blocks: WorkContextBlock[]): WrappedMatteredItem[] {
+  return blocks
+    .filter((b) => b.review.state !== 'pending'
+      && effectiveBlockKind(b) === 'work'
+      && isSubstantiveCategory(b.dominantCategory)
+      && blockActiveSeconds(b) >= MATTERED_MIN_SECONDS)
+    .sort((a, b) => blockActiveSeconds(b) - blockActiveSeconds(a))
+    .slice(0, MAX_MATTERED)
+    .map((b) => {
+      const intent = effectiveIntent(b)
+      return {
+        label: effectiveLabel(b).slice(0, 60),
+        category: b.dominantCategory,
+        intentRole: intent.role,
+        intentSubject: intent.subject,
+        durationSeconds: Math.round(blockActiveSeconds(b)),
+        startClock: formatClock(b.startTime),
+        endClock: formatClock(b.endTime),
+        reviewState: b.review.state,
+        confidence: b.confidence,
+      }
+    })
+}
+
+// "What needs review": substantial pending blocks. The count is the load-bearing
+// claim the wrap surfaces; items give the narrative something concrete to name.
+function deriveNeedsReview(blocks: WorkContextBlock[]): WrappedFacts['needsReview'] {
+  const pending = blocks
+    .filter((b) => b.review.state === 'pending' && blockActiveSeconds(b) >= NEEDS_REVIEW_MIN_SECONDS)
+    .sort((a, b) => blockActiveSeconds(b) - blockActiveSeconds(a))
+  return {
+    count: pending.length,
+    items: pending.slice(0, MAX_NEEDS_REVIEW_ITEMS).map((b) => ({
+      label: effectiveLabel(b).slice(0, 60),
+      durationSeconds: Math.round(blockActiveSeconds(b)),
+      startClock: formatClock(b.startTime),
+      endClock: formatClock(b.endTime),
+    })),
+  }
+}
+
+// "What carries into tomorrow": the open thread still on screen at day's end,
+// plus one recurring thread that spanned the day. Each must trace to a real
+// trusted block with a concrete subject — no inventing follow-ups.
+function deriveCarryover(blocks: WorkContextBlock[]): WrappedCarryoverItem[] {
+  const candidates = blocks
+    .map((b) => ({ block: b, intent: effectiveIntent(b), active: blockActiveSeconds(b) }))
+    .filter(({ block, intent, active }) =>
+      effectiveBlockKind(block) === 'work'
+      && active >= CARRYOVER_MIN_SECONDS
+      && isResumableSubject(intent.subject)
+      && CARRYOVER_DOING_ROLES.has(intent.role))
+  if (candidates.length === 0) return []
+
+  const toItem = (c: { block: WorkContextBlock; intent: { role: WorkIntentRole; subject: string | null } }, reason: WrappedCarryoverItem['reason']): WrappedCarryoverItem => ({
+    label: effectiveLabel(c.block).slice(0, 60),
+    intentRole: c.intent.role,
+    intentSubject: c.intent.subject,
+    startClock: formatClock(c.block.startTime),
+    endClock: formatClock(c.block.endTime),
+    reason,
+  })
+
+  // Open thread: the substantial thread still running latest in the day.
+  const openThread = candidates.reduce((latest, c) => (c.block.endTime > latest.block.endTime ? c : latest))
+  const openSubjectKey = (openThread.intent.subject ?? '').toLowerCase()
+  const items: WrappedCarryoverItem[] = [toItem(openThread, 'open-thread')]
+
+  // Recurring thread: a different subject that showed up across >= 2 blocks.
+  const bySubject = new Map<string, { candidate: typeof candidates[number]; count: number; seconds: number }>()
+  for (const c of candidates) {
+    const key = (c.intent.subject ?? '').toLowerCase()
+    const prev = bySubject.get(key)
+    if (prev) { prev.count += 1; prev.seconds += c.active }
+    else bySubject.set(key, { candidate: c, count: 1, seconds: c.active })
+  }
+  const recurring = [...bySubject.values()]
+    .filter((e) => e.count >= 2 && (e.candidate.intent.subject ?? '').toLowerCase() !== openSubjectKey)
+    .sort((a, b) => b.seconds - a.seconds)[0]
+  if (recurring) items.push(toItem(recurring.candidate, 'recurring'))
+
+  return items
+}
+
+// The single reconciled split of the day by kind. Every card reads from this,
+// so the shape sentence, the breakdown, and "what you worked on" can never
+// disagree. Active seconds (not span) keep it honest against idle stretches.
+function deriveKindBreakdown(blocks: WorkContextBlock[]): KindBreakdown {
+  const totals: Record<WorkKind, number> = { work: 0, leisure: 0, personal: 0, idle: 0 }
+  const leisureByDomain = new Map<string, number>()
+  for (const block of blocks) {
+    const kind = effectiveBlockKind(block)
+    const seconds = blockActiveSeconds(block)
+    totals[kind] += seconds
+    if (kind === 'leisure') {
+      for (const site of block.websites) {
+        if (kindForDomain(site.domain) !== 'leisure') continue
+        const name = friendlyDomain(site.domain)
+        if (name) leisureByDomain.set(name, (leisureByDomain.get(name) ?? 0) + site.totalSeconds)
+      }
+    }
+  }
+  const dominant = (Object.entries(totals) as Array<[WorkKind, number]>)
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'personal'
+  const topLeisure = [...leisureByDomain.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([name]) => name)
+  // A leisure day: leisure is the dominant kind and clears a real share, so a
+  // few minutes of background video on a coding day never flips the verdict.
+  const tracked = totals.work + totals.leisure + totals.personal
+  const isLeisureDay = tracked > 0 && totals.leisure >= totals.work && totals.leisure / tracked >= 0.5
+
+  return { ...totals, dominant, topLeisure, isLeisureDay }
+}
+
 export function buildWrappedFactsFromPayload(payload: DayTimelinePayload): WrappedFacts {
   const totalSeconds = Math.max(0, payload.totalSeconds)
   const quality = qualityForSeconds(totalSeconds)
 
-  const blocks = payload.blocks
+  const hasTimelineBlocks = payload.blocks.length > 0
+  const blocks = payload.blocks.filter(isTrustedTimelineBlock)
   const totalSwitches = blocks.reduce((sum, b) => sum + (b.switchCount ?? 0), 0)
   const hoursTracked = totalSeconds / 3600
   const switchesPerHour = hoursTracked > 0 ? Math.round(totalSwitches / hoursTracked) : 0
 
-  // Dominant category from sessions, falling back to blocks.
+  // Dominant category from trusted blocks, falling back to sessions when there
+  // is no reviewed timeline graph yet.
   const byCategory = new Map<AppCategory, number>()
-  if (payload.sessions.length > 0) {
-    for (const session of payload.sessions) {
-      if (session.category === 'system' || session.category === 'uncategorized') continue
-      byCategory.set(session.category, (byCategory.get(session.category) ?? 0) + Math.max(0, session.durationSeconds))
-    }
-  } else {
+  if (blocks.length > 0) {
     for (const block of blocks) {
       const seconds = blockActiveSeconds(block)
       byCategory.set(block.dominantCategory, (byCategory.get(block.dominantCategory) ?? 0) + seconds)
+    }
+  } else if (!hasTimelineBlocks && payload.sessions.length > 0) {
+    for (const session of payload.sessions) {
+      if (session.category === 'system' || session.category === 'uncategorized') continue
+      byCategory.set(session.category, (byCategory.get(session.category) ?? 0) + Math.max(0, session.durationSeconds))
     }
   }
   const categoryEntries = [...byCategory.entries()].sort((a, b) => b[1] - a[1])
@@ -126,19 +356,38 @@ export function buildWrappedFactsFromPayload(payload: DayTimelinePayload): Wrapp
   for (const b of blocks) {
     for (const a of b.topApps) browserFlags.set(a.appName, a.isBrowser)
   }
-  for (const session of payload.sessions) {
-    if (session.category === 'system') continue
-    const entry = appMap.get(session.appName)
-    const isBrowser = browserFlags.get(session.appName) ?? (session.category === 'browsing')
-    if (entry) {
-      entry.durationSeconds += Math.max(0, session.durationSeconds)
-    } else {
-      appMap.set(session.appName, {
-        appName: session.appName,
-        durationSeconds: Math.max(0, session.durationSeconds),
-        category: session.category,
-        isBrowser,
-      })
+  if (blocks.length > 0) {
+    for (const block of blocks) {
+      for (const app of block.topApps) {
+        if (app.category === 'system') continue
+        const entry = appMap.get(app.appName)
+        if (entry) {
+          entry.durationSeconds += Math.max(0, app.totalSeconds)
+        } else {
+          appMap.set(app.appName, {
+            appName: app.appName,
+            durationSeconds: Math.max(0, app.totalSeconds),
+            category: app.category,
+            isBrowser: app.isBrowser,
+          })
+        }
+      }
+    }
+  } else if (!hasTimelineBlocks) {
+    for (const session of payload.sessions) {
+      if (session.category === 'system') continue
+      const entry = appMap.get(session.appName)
+      const isBrowser = browserFlags.get(session.appName) ?? (session.category === 'browsing')
+      if (entry) {
+        entry.durationSeconds += Math.max(0, session.durationSeconds)
+      } else {
+        appMap.set(session.appName, {
+          appName: session.appName,
+          durationSeconds: Math.max(0, session.durationSeconds),
+          category: session.category,
+          isBrowser,
+        })
+      }
     }
   }
   const topApp = appMap.size > 0
@@ -146,7 +395,20 @@ export function buildWrappedFactsFromPayload(payload: DayTimelinePayload): Wrapp
     : null
 
   // Top domain.
-  const sortedWebsites: WebsiteSummary[] = [...payload.websites].sort((a, b) => b.totalSeconds - a.totalSeconds)
+  const trustedWebsiteSeconds = new Map<string, WebsiteSummary>()
+  for (const block of blocks) {
+    for (const site of block.websites) {
+      const existing = trustedWebsiteSeconds.get(site.domain)
+      if (existing) {
+        existing.totalSeconds += site.totalSeconds
+        existing.visitCount += site.visitCount
+      } else {
+        trustedWebsiteSeconds.set(site.domain, { ...site })
+      }
+    }
+  }
+  const sortedWebsites: WebsiteSummary[] = (trustedWebsiteSeconds.size > 0 || hasTimelineBlocks ? [...trustedWebsiteSeconds.values()] : [...payload.websites])
+    .sort((a, b) => b.totalSeconds - a.totalSeconds)
   const topSite = sortedWebsites[0] ?? null
   const topDomain = topSite ? {
     domain: topSite.domain,
@@ -169,6 +431,10 @@ export function buildWrappedFactsFromPayload(payload: DayTimelinePayload): Wrapp
     peakBlock: peak,
     topApp: topApp ? { ...topApp, durationSeconds: Math.round(topApp.durationSeconds) } : null,
     topDomain,
+    mattered: deriveMattered(blocks),
+    needsReview: deriveNeedsReview(blocks),
+    carryover: deriveCarryover(blocks),
+    kindBreakdown: deriveKindBreakdown(blocks),
   }
 }
 
@@ -204,6 +470,26 @@ export function computeFactsHash(facts: WrappedFacts): string {
       d: bucket(facts.topDomain.totalSeconds),
       cls: facts.topDomain.classification,
     } : null,
+    // Review-grounded spine must bust the cache: approving a pending block, or
+    // correcting a label/intent, changes mattered/needsReview/carryover without
+    // moving the totals — the narrative has to regenerate to stay honest.
+    mattered: facts.mattered.map((m) => ({
+      l: m.label.toLowerCase(),
+      d: bucket(m.durationSeconds),
+      r: m.intentRole,
+      s: m.intentSubject?.toLowerCase() ?? null,
+      st: m.reviewState,
+    })),
+    needsReview: {
+      n: facts.needsReview.count,
+      items: facts.needsReview.items.map((i) => i.label.toLowerCase()),
+    },
+    carryover: facts.carryover.map((c) => ({
+      l: c.label.toLowerCase(),
+      r: c.intentRole,
+      s: c.intentSubject?.toLowerCase() ?? null,
+      why: c.reason,
+    })),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
 }
@@ -223,19 +509,20 @@ export function buildWrappedPrompts(facts: WrappedFacts): { systemPrompt: string
     'No prose outside the JSON. No code fences. No emoji. No markdown.',
     'Voice: dry, direct, second-person, a colleague who has been paying attention. No motivational filler. No "great work", no "you crushed it", no "let\'s dive in", no exclamation marks. Specific over generic.',
     'Each string is one sentence, 24-170 characters. Never two sentences. Never ask the user a question.',
-    'lead: the headline read on the day. Concrete and grounded in facts.',
-    'peakInsight: 1 sentence about the peak block\'s time range or category. null if facts.peakBlock is null.',
-    'nudge: 1 forward-looking sentence — one small carry-forward or protect-this idea. null if facts.quality is "partial".',
-    'slides.scale: narrates the shape and span of the day given totalSeconds, blockCount, and dominant category. Avoid restating raw hours — the slide already shows them.',
-    'slides.focus: narrates the focus signal (focusPct, focusSeconds) — what kind of focus day this was. null if focusSeconds is 0.',
-    'slides.topApp: narrates what the top app helped accomplish (use topApp.appName + category context). null if facts.topApp is null. Never use ChatGPT/YouTube/Outlook/Mail as the subject — describe the activity.',
-    'slides.switching: narrates the switching pattern (totalSwitches, switchesPerHour) — fragmented vs steady — without restating the raw count.',
-    'slides.identity: one line that sums up the day\'s shape given the dominant category and topApp.',
-    'slides.closing: a 1-sentence sign-off that earns the return visit. Forward-looking, specific, no filler.',
-    'Never invent a duration. If a line claims hours, the number must match facts.totalSeconds / 3600 within one hour.',
-    'Never invent app, domain, or project names that are not present in the facts JSON.',
+    'The day has a kind split in facts.kindBreakdown: work, leisure, personal seconds. This ONE breakdown is the truth; every line must agree with it. Leisure is first-class and stated plainly without judgment — watching is never "work", never "focus", never "what mattered".',
+    'lead — Shape (always): one honest sentence on the real split. If facts.kindBreakdown.isLeisureDay, say it was mostly rest (e.g. "Mostly a rest day — Xh watching, Ym of work"); otherwise lead on the work and, when facts.mattered is non-empty, name facts.mattered[0]. Never say "100%". Never score focus on a rest day.',
+    'peakInsight: 1 sentence on the peak WORK stretch\'s time range. null if facts.peakBlock is null or it was a leisure day.',
+    'nudge — Open thread: only when facts.carryover is non-empty, name facts.carryover[0] (its intentSubject, or label) as the work thread to pick up tomorrow. null if facts.carryover is empty, quality is "partial", or it was a rest day. Never invent a follow-up.',
+    'slides.scale — Where the time went (always): the single reconciled breakdown from facts.kindBreakdown (e.g. "Work 52m (subject) · Leisure 3h 51m (YouTube, Netflix)"). This is the ONLY line allowed to carry the split; nothing else may restate percentages.',
+    'slides.topApp — What you worked on: only when facts.kindBreakdown.work is a real amount and facts.mattered is non-empty, name facts.mattered[0]\'s subject and time. null on a pure-leisure day.',
+    'slides.focus: null whenever facts.kindBreakdown.isLeisureDay is true or facts.kindBreakdown.work is 0; otherwise a brief, non-numeric note on how the working time held together.',
+    'slides.switching: null. slides.identity: null. These are redundant padding — do not fill them.',
+    'slides.closing — Close (always): a quiet factual sign-off. No motivation, no homework, no "needs review", no nudge to the timeline. "That\'s the day." is a fine default.',
+    'Never invent a duration. Any hours claimed must match facts.totalSeconds/3600 or one of the kindBreakdown sub-totals within one hour.',
+    'Never invent app, domain, or project names not present in the facts JSON. Only name a subject that appears in facts.mattered or facts.carryover.',
+    'Never assign homework, never tell the user to review anything, never scold. No "distraction", no "books you didn\'t read", no extrapolation, no monthly comparison.',
     'Never describe yourself or the model. Never say "as an AI" or similar.',
-    'If facts.quality is "partial", be modest across all slides — acknowledge the short window rather than overclaim, and set "nudge" to null.',
+    'If facts.quality is "partial", be modest across all slides and set "nudge" to null.',
   ].join(' ')
 
   const userMessage = [
@@ -349,7 +636,27 @@ function isFieldValid(value: string, allowQuestion: boolean, facts: WrappedFacts
   if (/^\s*\{/.test(value)) return false
   if (!claimedHoursAreConsistent(value, facts)) return false
   if (mentionsUngroundedDomainOrApp(value, facts)) return false
+  if (mentionsHomeworkOrGuilt(value)) return false
+  // No card may claim a "100%" share — that was the Wave 1 contradiction.
+  if (/\b100\s*%/.test(value)) return false
+  // No focus scoring on a rest day.
+  if (facts.kindBreakdown?.isLeisureDay && (/\d+\s*%/.test(value) || /\bfocus(?:ed)?\b/i.test(value))) return false
   return true
+}
+
+// Homework / guilt / extrapolation the wrap must never speak. Mirrors the eval's
+// WRAP_GUILT_PATTERNS so the AI path is held to the same bar as the fallback.
+const HOMEWORK_GUILT_PATTERNS = [
+  /needs?\b[^.]{0,24}\breview\b/i,
+  /review in the timeline/i,
+  /\bdistraction(?:s)?\b/i,
+  /books you (?:didn'?t|did not)/i,
+  /\blost to\b/i,
+  /extrapolat/i,
+]
+
+function mentionsHomeworkOrGuilt(text: string): boolean {
+  return HOMEWORK_GUILT_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 function claimedHoursAreConsistent(text: string, facts: WrappedFacts): boolean {
@@ -414,100 +721,98 @@ export function buildFallbackNarrative(facts: WrappedFacts, factsHash: string): 
     }
   }
 
-  const hours = Math.floor(facts.totalSeconds / 3600)
-  const minutes = Math.floor((facts.totalSeconds % 3600) / 60)
-  const durationLabel = hours > 0
-    ? `${hours}h${minutes > 0 ? ` ${minutes}m` : ''}`
-    : `${Math.max(1, minutes)}m`
+  const kb = facts.kindBreakdown ?? { work: facts.totalSeconds, leisure: 0, personal: 0, idle: 0, dominant: 'work' as WorkKind, topLeisure: [], isLeisureDay: false }
+  const workLabel = durationPhrase(kb.work)
+  const matteredSubject = facts.mattered.find((m) => m.intentSubject)?.intentSubject
+    ?? facts.mattered[0]?.label
+    ?? null
 
+  // Card 1 — Shape (always). One honest sentence on the real split; never
+  // "100%", never focus framing on a rest day.
   let lead: string
-  if (facts.focusPct >= 60 && facts.quality === 'full') {
-    lead = `You held the line — ${durationLabel} tracked with focus running at ${facts.focusPct}% of the day.`
-  } else if (facts.switchesPerHour >= 18) {
-    lead = `A scattered day — ${facts.switchesPerHour} context switches per hour across ${durationLabel} of tracked time.`
-  } else if (facts.topDomain && !facts.topDomain.isWorkRelevant) {
-    lead = `${durationLabel} tracked, and the browser leaned hard on ${facts.topDomain.domain} today.`
-  } else if (facts.dominantCategory !== 'unknown') {
-    lead = `${durationLabel} tracked, with ${facts.dominantCategoryPct}% of it sitting in ${humanCategory(facts.dominantCategory)}.`
+  if (kb.isLeisureDay) {
+    const watchLabel = durationPhrase(kb.leisure)
+    lead = kb.work > 0
+      ? `Mostly a rest day — ${watchLabel} watching, ${workLabel} of work.`
+      : `A rest day — ${watchLabel} of watching and browsing.`
+  } else if (kb.work > 0) {
+    lead = matteredSubject
+      ? `A working day — ${workLabel} of work, mostly on ${matteredSubject}.`
+      : `A working day — ${workLabel} of focused work.`
   } else {
-    lead = `${durationLabel} tracked across ${facts.blockCount} block${facts.blockCount === 1 ? '' : 's'}.`
+    lead = `A quiet day — ${durationPhrase(facts.totalSeconds)} tracked, no clear work thread.`
   }
 
-  let peakInsight: string | null = null
-  if (facts.peakBlock) {
-    peakInsight = `Your clearest stretch ran ${facts.peakBlock.startClock} to ${facts.peakBlock.endClock} — ${humanCategory(facts.peakBlock.category)}.`
-  }
-
+  // Card 4 — Open thread (only a real unfinished WORK thread). On a leisure day
+  // with no work carryover this is simply absent — no invented homework.
   let nudge: string | null = null
   if (facts.quality !== 'partial') {
-    if (facts.peakBlock) {
-      nudge = `Try to protect a stretch like ${facts.peakBlock.startClock}–${facts.peakBlock.endClock} again tomorrow.`
-    } else if (facts.switchesPerHour >= 18) {
-      nudge = 'Tomorrow, pick one block to defend from interruptions and let the rest stay loose.'
-    } else if (facts.topDomain && facts.topDomain.isWorkRelevant) {
-      nudge = `${facts.topDomain.domain} carried the work today — worth keeping it on the path again tomorrow.`
-    } else {
-      nudge = 'Carry one specific intention from today into tomorrow rather than restarting from scratch.'
+    const carry = facts.carryover[0] ?? null
+    if (carry) {
+      const what = carry.intentSubject ?? carry.label
+      nudge = `${what} was still open at ${carry.endClock} — worth picking it up tomorrow.`
     }
   }
+
+  // peakInsight is a work-only nicety; never narrate a "peak" on a leisure day.
+  const peakInsight = (!kb.isLeisureDay && facts.peakBlock && kb.work > 0)
+    ? `The clearest stretch ran ${facts.peakBlock.startClock} to ${facts.peakBlock.endClock}.`
+    : null
 
   const slides = buildFallbackSlides(facts)
   return { lead, peakInsight, nudge, slides, source: 'fallback', factsHash }
 }
 
+// Exact, humane duration: "3h 51m", "52m". Never rounded to a bare hour, so the
+// breakdown numbers always match what the cards display.
+function durationPhrase(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds / 60))
+  if (total < 60) return `${Math.max(1, total)}m`
+  const hours = Math.floor(total / 60)
+  const minutes = total % 60
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+}
+
 function buildFallbackSlides(facts: WrappedFacts): AIWrappedNarrative['slides'] {
-  const catLabel = humanCategory(facts.dominantCategory)
-  const scale = facts.dominantCategory === 'unknown'
-    ? `A mixed day across ${facts.blockCount} work session${facts.blockCount === 1 ? '' : 's'}.`
-    : `The day leaned into ${catLabel} — ${facts.dominantCategoryPct}% of the tracked time sat there.`
+  const kb = facts.kindBreakdown ?? { work: facts.totalSeconds, leisure: 0, personal: 0, idle: 0, dominant: 'work' as WorkKind, topLeisure: [], isLeisureDay: false }
 
-  const focus = facts.focusSeconds > 0
+  // Card 3 — Where the time went (always). The ONE reconciled breakdown; the
+  // only place numbers for the split live, so nothing can contradict it.
+  const parts: string[] = []
+  if (kb.work > 0) {
+    const subject = facts.mattered.find((m) => m.intentSubject)?.intentSubject ?? facts.mattered[0]?.label
+    parts.push(`Work ${durationPhrase(kb.work)}${subject ? ` (${subject})` : ''}`)
+  }
+  if (kb.leisure > 0) {
+    const surfaces = kb.topLeisure.slice(0, 2).join(', ')
+    parts.push(`Leisure ${durationPhrase(kb.leisure)}${surfaces ? ` (${surfaces})` : ''}`)
+  }
+  if (kb.personal >= 5 * 60) {
+    parts.push(`Personal ${durationPhrase(kb.personal)}`)
+  }
+  const scale = parts.length > 0 ? `${parts.join(' · ')}.` : null
+
+  // Card 2 — What you worked on (only if there is real work). Omitted entirely
+  // on a pure-leisure day.
+  const topApp = (kb.work >= 15 * 60 && facts.mattered.length > 0)
+    ? `${facts.mattered[0].intentSubject ?? facts.mattered[0].label} took the most of the working time — ${durationPhrase(facts.mattered[0].durationSeconds)}.`
+    : null
+
+  // Focus framing is for work days only — never score a rest day for focus.
+  const focus = (!kb.isLeisureDay && facts.focusSeconds > 0 && kb.work > 0)
     ? (facts.focusPct >= 60
-        ? `Focus held — ${facts.focusPct}% of the day matched a real signal.`
-        : facts.focusPct >= 30
-          ? `Focus came in pieces — ${facts.focusPct}% of the day matched a clean signal.`
-          : `Focus stayed thin today — most of the time read as exploratory rather than deep.`)
+        ? `Focus held for much of the working time.`
+        : `Focus came in pieces across the working time.`)
     : null
 
-  const topApp = facts.topApp
-    ? (facts.topApp.isBrowser
-        ? `The browser carried the most weight today, especially ${facts.topApp.appName.toLowerCase().replace(/\s+/g, '-')} time.`
-        : `${facts.topApp.appName} was the anchor — most of the ${humanCategory(facts.topApp.category)} ran through it.`)
-    : null
+  // switching / identity are redundant padding under the earn-each-slide rule.
+  const switching = null
+  const identity = null
 
-  const switching = facts.switchesPerHour >= 18
-    ? `A scattered shape — context jumped ${facts.switchesPerHour} times an hour on average.`
-    : facts.switchesPerHour >= 8
-      ? `A reasonably steady rhythm with ${facts.switchesPerHour} switches per hour.`
-      : `You held context well — under ${Math.max(1, facts.switchesPerHour)} switches an hour across the day.`
-
-  const identity = facts.dominantCategory === 'unknown'
-    ? 'No single mode took over — the day stayed mixed.'
-    : facts.dominantCategoryPct >= 60
-      ? `A clear ${catLabel} day — most of the time landed there.`
-      : `The shape leaned ${catLabel}, with the rest of the day mixed in.`
-
-  const closing = facts.peakBlock
-    ? `The clearest stretch ran ${facts.peakBlock.startClock} to ${facts.peakBlock.endClock} — worth defending again tomorrow.`
-    : 'Carry one specific thread into tomorrow rather than restarting from scratch.'
+  // Card 5 — Close (always). A quiet factual sign-off. No homework, no review
+  // nudge, no motivation.
+  const closing = "That's the day."
 
   return { scale, focus, topApp, switching, identity, closing }
 }
 
-function humanCategory(category: AppCategory | 'unknown'): string {
-  switch (category) {
-    case 'development': return 'development work'
-    case 'aiTools': return 'AI-assisted work'
-    case 'productivity': return 'admin and productivity'
-    case 'writing': return 'writing'
-    case 'design': return 'design work'
-    case 'research': return 'research'
-    case 'browsing': return 'browser activity'
-    case 'communication': return 'communication'
-    case 'email': return 'email'
-    case 'entertainment': return 'entertainment'
-    case 'social': return 'social browsing'
-    case 'meetings': return 'meetings'
-    default: return 'mixed activity'
-  }
-}

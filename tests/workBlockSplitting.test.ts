@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
-import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade, mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { PROJECTION_VERSION } from '../src/main/core/projections/chunk2.ts'
 
@@ -547,6 +547,46 @@ test('background upgrade finds stale unprocessed days but leaves processed days 
   db.close()
 })
 
+test('timeline block review state survives reload from persisted blocks', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.ok(block)
+
+  writeTimelineBlockReview(db, TEST_DATE, block, { state: 'ignored' })
+
+  const reloaded = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.equal(reloaded.review.state, 'ignored')
+  const reviewRows = db.prepare(`SELECT COUNT(*) AS count FROM timeline_block_reviews WHERE review_state = 'ignored'`).get() as { count: number }
+  assert.equal(reviewRows.count, 1)
+  db.close()
+})
+
+test('timeline block correction survives rebuild through evidence lineage', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.ok(block)
+  writeTimelineBlockReview(db, TEST_DATE, block, {
+    state: 'corrected',
+    correctedLabel: 'Router refactor',
+  })
+
+  db.prepare(`UPDATE timeline_block_reviews SET block_id = 'retired-block-id' WHERE block_id = ?`).run(block.id)
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+
+  const rebuilt = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.equal(rebuilt.label.current, 'Router refactor')
+  assert.equal(rebuilt.label.source, 'user')
+  assert.equal(rebuilt.review.state, 'corrected')
+  assert.equal(rebuilt.review.source, 'stored_evidence')
+  assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale day should rebuild while preserving correction')
+  db.close()
+})
+
 test('timeline projection reads derived days without materializing timeline blocks', () => {
   const db = createDb()
   insertDerivedSessionDay(db)
@@ -598,6 +638,59 @@ test('block detail lookup uses persisted block date before falling back to recen
 
   assert.equal(detail?.id, block.id)
   assert.equal(detail?.label.current, block.label.current)
+  db.close()
+})
+
+test('every block carries a non-empty boundary reason on both edges', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const [block] = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.ok(block.boundary, 'block must expose a boundary')
+  assert.ok((block.boundary?.startReasons.length ?? 0) > 0, 'start reason must be non-empty')
+  assert.ok((block.boundary?.endReasons.length ?? 0) > 0, 'end reason must be non-empty')
+  db.close()
+})
+
+test('a user merge erases a boundary that survives a rebuild', () => {
+  const db = createDb()
+  // Two distinct browsing topics split into two blocks by default.
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2, 'distinct browsing topics should be two blocks before the merge')
+
+  mergeTimelineEpisodes(db, TEST_DATE, before[0], before[1])
+
+  const afterMerge = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterMerge.length, 1, 'the user merge should collapse the two episodes into one')
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterRebuild.length, 1, 'the merge must survive a rebuild')
+  db.close()
+})
+
+test('a user merge overrides a kind-shift hard cut (work absorbs leisure)', () => {
+  const db = createDb()
+  // Coding then YouTube, back to back. A kind change is normally the hardest
+  // boundary of all, so these are two blocks by default. A manual merge is the
+  // strongest signal there is and must win even over kind-shift.
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+  insertSession(db, { title: 'How Israel Won the War - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 40, durationMinutes: 15 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2, 'a kind change should hard-cut work from leisure by default')
+
+  mergeTimelineEpisodes(db, TEST_DATE, before[0], before[1])
+
+  const afterMerge = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterMerge.length, 1, 'a user merge must override the kind-shift cut')
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterRebuild.length, 1, 'the cross-kind merge must survive a rebuild')
   db.close()
 })
 

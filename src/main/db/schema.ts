@@ -325,6 +325,45 @@ CREATE TABLE IF NOT EXISTS block_label_overrides (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS timeline_block_reviews (
+  id TEXT PRIMARY KEY,
+  block_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  evidence_key TEXT NOT NULL,
+  review_state TEXT NOT NULL CHECK(review_state IN ('auto-approved', 'pending', 'approved', 'corrected', 'ignored')),
+  original_block_json TEXT NOT NULL DEFAULT '{}',
+  correction_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_block_reviews_block
+  ON timeline_block_reviews (block_id);
+CREATE INDEX IF NOT EXISTS idx_timeline_block_reviews_evidence
+  ON timeline_block_reviews (date, evidence_key, updated_at);
+CREATE INDEX IF NOT EXISTS idx_timeline_block_reviews_state
+  ON timeline_block_reviews (review_state, updated_at);
+
+-- User corrections to episode boundaries. A 'split' asserts "there IS a
+-- boundary between these two sessions"; a 'merge' asserts "there is NOT". Keyed
+-- by the evidence (the two sessions straddling the boundary) so the correction
+-- re-attaches after a rebuild even when block IDs change — the same lineage
+-- approach as timeline_block_reviews.
+CREATE TABLE IF NOT EXISTS timeline_boundary_corrections (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  left_session_id INTEGER NOT NULL,
+  right_session_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('split', 'merge')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_boundary_corrections_pair
+  ON timeline_boundary_corrections (left_session_id, right_session_id);
+CREATE INDEX IF NOT EXISTS idx_timeline_boundary_corrections_date
+  ON timeline_boundary_corrections (date);
+
 CREATE TABLE IF NOT EXISTS app_identities (
   app_instance_id TEXT PRIMARY KEY,
   bundle_id TEXT NOT NULL,

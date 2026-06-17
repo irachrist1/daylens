@@ -1,0 +1,111 @@
+{
+  "id": "mixed-browser-ai-day",
+  "name": "Mixed browser/AI day",
+  "date": "2026-04-17",
+  "description": "AI planning, issue research, implementation, AI review, browser lookup, and resumed implementation on one harness task.",
+  "sessions": [
+    {
+      "start": "09:00",
+      "end": "09:25",
+      "bundleId": "com.openai.chat",
+      "appName": "ChatGPT",
+      "category": "aiTools",
+      "title": "Daylens timeline eval ideas - ChatGPT"
+    },
+    {
+      "start": "09:25",
+      "end": "09:45",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "Timeline segmentation issue #128 - Google Chrome"
+    },
+    {
+      "start": "09:45",
+      "end": "10:20",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "timelineEval.ts - daylens - Cursor"
+    },
+    {
+      "start": "10:20",
+      "end": "10:35",
+      "bundleId": "com.anthropic.claude",
+      "appName": "Claude",
+      "category": "aiTools",
+      "title": "Review harness scoring - Claude"
+    },
+    {
+      "start": "10:35",
+      "end": "10:50",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "Stack Overflow normalizing labels - Google Chrome"
+    },
+    {
+      "start": "10:50",
+      "end": "11:20",
+      "bundleId": "com.todesktop.cursor",
+      "appName": "Cursor",
+      "category": "development",
+      "title": "timelineEval.ts - daylens - Cursor"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "09:00",
+      "durationMinutes": 25,
+      "browserBundleId": "com.openai.chat",
+      "domain": "chatgpt.com",
+      "url": "https://chatgpt.com/c/timeline-eval",
+      "title": "Daylens timeline eval ideas"
+    },
+    {
+      "at": "09:25",
+      "durationMinutes": 20,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "github.com",
+      "url": "https://github.com/daylens/daylens/issues/128",
+      "title": "Timeline segmentation issue #128"
+    },
+    {
+      "at": "10:20",
+      "durationMinutes": 15,
+      "browserBundleId": "com.anthropic.claude",
+      "domain": "claude.ai",
+      "url": "https://claude.ai/chat/harness-scoring",
+      "title": "Review harness scoring"
+    },
+    {
+      "at": "10:35",
+      "durationMinutes": 15,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "stackoverflow.com",
+      "url": "https://stackoverflow.com/questions/normalize-labels",
+      "title": "Normalizing labels"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "ai-assisted-implementation",
+      "start": "09:00",
+      "end": "11:20",
+      "label": "AI-assisted timeline eval implementation",
+      "labelIncludes": ["timelineEval", "timeline eval", "Daylens timeline eval", "Review harness"],
+      "category": "development",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["timelineEval", "Daylens timeline eval", "Timeline segmentation"]
+    }
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "dominantCategory": "development",
+    "topAppIncludes": "Cursor",
+    "topDomain": "chatgpt.com",
+    "matteredSubjectIncludes": "timelineEval",
+    "needsReviewCount": 0,
+    "carryoverSubjectIncludes": "timelineEval"
+  }
+}

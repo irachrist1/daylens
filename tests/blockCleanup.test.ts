@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import type { WorkContextBlock } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 import {
   listPendingWorkContextCleanupDates,
   upsertWorkContextCleanupReview,
@@ -55,6 +56,7 @@ function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock 
     computedAt: overrides.computedAt ?? Date.now(),
     switchCount: overrides.switchCount ?? 0,
     confidence: overrides.confidence ?? 'medium',
+    review: overrides.review ?? DEFAULT_TIMELINE_BLOCK_REVIEW,
     isLive: overrides.isLive ?? false,
   }
 }

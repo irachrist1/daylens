@@ -1,0 +1,168 @@
+{
+  "id": "scattered-admin-day",
+  "name": "Scattered admin day",
+  "date": "2026-04-16",
+  "description": "Short email, calendar, Slack, password, checklist, issue-triage, social detour, and budget tasks.",
+  "sessions": [
+    {
+      "start": "09:00",
+      "end": "09:12",
+      "bundleId": "com.google.Chrome",
+      "appName": "Gmail",
+      "category": "email",
+      "title": "Inbox - Gmail"
+    },
+    {
+      "start": "09:12",
+      "end": "09:28",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Calendar",
+      "category": "productivity",
+      "title": "Calendar - Google Calendar"
+    },
+    {
+      "start": "09:28",
+      "end": "09:38",
+      "bundleId": "com.tinyspeck.slackmacgap",
+      "appName": "Slack",
+      "category": "communication",
+      "title": "Ops questions - Slack"
+    },
+    {
+      "start": "09:38",
+      "end": "09:48",
+      "bundleId": "com.1password.1password",
+      "appName": "1Password",
+      "category": "productivity",
+      "title": "Vendor login - 1Password"
+    },
+    {
+      "start": "09:48",
+      "end": "10:02",
+      "bundleId": "notion.id",
+      "appName": "Notion",
+      "category": "productivity",
+      "title": "Weekly checklist - Notion"
+    },
+    {
+      "start": "10:02",
+      "end": "10:16",
+      "bundleId": "com.google.Chrome",
+      "appName": "Gmail",
+      "category": "email",
+      "title": "Expense receipts - Gmail"
+    },
+    {
+      "start": "10:16",
+      "end": "10:26",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "productivity",
+      "title": "Triage - Linear"
+    },
+    {
+      "start": "10:26",
+      "end": "10:34",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "social",
+      "title": "X (Twitter)"
+    },
+    {
+      "start": "10:34",
+      "end": "10:48",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Sheets",
+      "category": "productivity",
+      "title": "Budget tracker - Google Sheets"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "09:00",
+      "durationMinutes": 12,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "mail.google.com",
+      "url": "https://mail.google.com/mail/u/0/#inbox",
+      "title": "Inbox"
+    },
+    {
+      "at": "09:12",
+      "durationMinutes": 16,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "calendar.google.com",
+      "url": "https://calendar.google.com/calendar/u/0/r/week",
+      "title": "Calendar"
+    },
+    {
+      "at": "10:02",
+      "durationMinutes": 14,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "mail.google.com",
+      "url": "https://mail.google.com/mail/u/0/#search/receipts",
+      "title": "Expense receipts"
+    },
+    {
+      "at": "10:16",
+      "durationMinutes": 10,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "linear.app",
+      "url": "https://linear.app/daylens/inbox",
+      "title": "Triage"
+    },
+    {
+      "at": "10:26",
+      "durationMinutes": 8,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "x.com",
+      "url": "https://x.com/home",
+      "title": "X (Twitter)"
+    },
+    {
+      "at": "10:34",
+      "durationMinutes": 14,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "docs.google.com",
+      "url": "https://docs.google.com/spreadsheets/d/budget-tracker/edit",
+      "title": "Budget tracker"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "admin-triage",
+      "start": "09:00",
+      "end": "10:26",
+      "label": "Admin triage",
+      "labelIncludes": ["Inbox", "Calendar", "Weekly checklist", "Triage", "Communication", "Productivity"],
+      "category": "productivity",
+      "intentRole": "coordination"
+    },
+    {
+      "id": "social-detour",
+      "start": "10:26",
+      "end": "10:34",
+      "label": "X detour",
+      "labelIncludes": ["X", "Twitter", "Social"],
+      "category": "social",
+      "intentRole": "ambient"
+    },
+    {
+      "id": "budget-tracker",
+      "start": "10:34",
+      "end": "10:48",
+      "label": "Budget tracker",
+      "labelIncludes": ["Budget tracker"],
+      "category": "productivity",
+      "intentRole": "coordination",
+      "intentSubjectIncludes": ["Budget tracker"]
+    }
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "dominantCategory": "productivity",
+    "topDomain": "mail.google.com",
+    "matteredSubjectIncludes": "Weekly checklist",
+    "needsReviewCount": 1,
+    "carryoverSubjectIncludes": "Budget tracker"
+  }
+}

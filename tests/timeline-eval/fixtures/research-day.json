@@ -1,0 +1,138 @@
+{
+  "id": "research-day",
+  "name": "Research day",
+  "date": "2026-04-14",
+  "description": "Competitive research across several sources, followed by synthesis in notes and a second evidence pass.",
+  "sessions": [
+    {
+      "start": "08:50",
+      "end": "09:20",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "Rize AI time tracking - Google Chrome"
+    },
+    {
+      "start": "09:20",
+      "end": "09:50",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "Toggl auto-tracker docs - Google Chrome"
+    },
+    {
+      "start": "09:50",
+      "end": "10:15",
+      "bundleId": "com.openai.chat",
+      "appName": "ChatGPT",
+      "category": "aiTools",
+      "title": "Time tracking competitive research - ChatGPT"
+    },
+    {
+      "start": "10:15",
+      "end": "10:45",
+      "bundleId": "notion.id",
+      "appName": "Notion",
+      "category": "writing",
+      "title": "Time tracking competitive matrix - Notion"
+    },
+    {
+      "start": "11:00",
+      "end": "11:35",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Chrome",
+      "category": "research",
+      "title": "ActivityWatch docs - Google Chrome"
+    },
+    {
+      "start": "11:35",
+      "end": "12:05",
+      "bundleId": "com.google.Chrome",
+      "appName": "Google Docs",
+      "category": "writing",
+      "title": "Competitive research notes - Google Docs"
+    }
+  ],
+  "browserEvidence": [
+    {
+      "at": "08:50",
+      "durationMinutes": 30,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "rize.io",
+      "url": "https://rize.io/features/ai-time-tracking",
+      "title": "Rize AI Time Tracking"
+    },
+    {
+      "at": "09:20",
+      "durationMinutes": 30,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "toggl.com",
+      "url": "https://toggl.com/track/features/auto-tracker/",
+      "title": "Toggl Track Auto-tracker"
+    },
+    {
+      "at": "09:50",
+      "durationMinutes": 25,
+      "browserBundleId": "com.openai.chat",
+      "domain": "chatgpt.com",
+      "url": "https://chatgpt.com/c/time-tracking-research",
+      "title": "Time tracking competitive research"
+    },
+    {
+      "at": "11:00",
+      "durationMinutes": 35,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "activitywatch.net",
+      "url": "https://docs.activitywatch.net/en/latest/introduction.html",
+      "title": "ActivityWatch documentation"
+    },
+    {
+      "at": "11:35",
+      "durationMinutes": 30,
+      "browserBundleId": "com.google.Chrome",
+      "domain": "docs.google.com",
+      "url": "https://docs.google.com/document/d/research-notes/edit",
+      "title": "Competitive research notes"
+    }
+  ],
+  "expectedEpisodes": [
+    {
+      "id": "source-scan",
+      "start": "08:50",
+      "end": "10:15",
+      "label": "Time tracking competitive research",
+      "labelIncludes": ["Rize", "Toggl", "Time tracking", "competitive"],
+      "category": "research",
+      "intentRole": "research",
+      "intentSubjectIncludes": ["Rize", "Toggl", "Time tracking", "competitive"]
+    },
+    {
+      "id": "matrix-synthesis",
+      "start": "10:15",
+      "end": "10:45",
+      "label": "Competitive research matrix",
+      "labelIncludes": ["Time tracking competitive matrix", "Competitive research"],
+      "category": "writing",
+      "intentRole": "execution",
+      "intentSubjectIncludes": ["matrix", "competitive"]
+    },
+    {
+      "id": "second-pass-notes",
+      "start": "11:00",
+      "end": "12:05",
+      "label": "ActivityWatch and notes synthesis",
+      "labelIncludes": ["ActivityWatch", "Competitive research notes"],
+      "category": "research",
+      "intentRole": "research",
+      "intentSubjectIncludes": ["ActivityWatch", "Competitive research notes"]
+    }
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "dominantCategory": "research",
+    "topDomain": "activitywatch.net",
+    "matteredSubjectIncludes": "competitive research",
+    "needsReviewCount": 0,
+    "carryoverSubjectIncludes": "Competitive research notes"
+  }
+}
