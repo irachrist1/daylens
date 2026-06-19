@@ -730,13 +730,15 @@ function BlockInspector({
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [boundarySaving, setBoundarySaving] = useState<'merge-prev' | 'merge-next' | null>(null)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
+  const inspectedBlockId = block?.id ?? null
+  const inspectedBlockLabel = block?.label.override ?? block?.label.current ?? ''
 
   useEffect(() => {
-    setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
+    setOverrideDraft(inspectedBlockLabel)
     setReviewError(null)
     setBoundarySaving(null)
     setBoundaryError(null)
-  }, [block?.id, block?.label.current, block?.label.override])
+  }, [inspectedBlockId, inspectedBlockLabel])
 
   if (!block) {
     return <DaySummaryInspector payload={payload} blocks={blocks} onRefresh={onRefresh} />
@@ -1371,7 +1373,7 @@ export default function Timeline() {
   const isToday = date === todayString()
 
   useEffect(() => {
-    const next = timelineNavStateFromParams(searchParams)
+    const next = timelineNavStateFromParams(new URLSearchParams(searchSignature))
     setNavState((current) => (
       current.view === next.view && current.date === next.date
         ? current
