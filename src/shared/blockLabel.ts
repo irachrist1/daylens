@@ -72,7 +72,7 @@ export function naturalizeLabel(value: string): string {
   cleaned = cleaned.replace(/\s*-\s*(?:Google Chrome|Safari|Arc|Firefox|Brave|Microsoft Edge|Chrome)$/i, '')
 
   // 2. Clean trailing pipe-soup or dash-soup (domain names, app names, etc.)
-  const splitters = [/\s*\|\s*/, /\s*—\s*/, /\s*-\s*/]
+  const splitters = [/\s*\|\s*/, /\s*—\s*/, /\s+-\s+/]
   for (const splitter of splitters) {
     if (splitter.test(cleaned)) {
       const segments = cleaned.split(splitter).map(s => s.trim()).filter(Boolean)

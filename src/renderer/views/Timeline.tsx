@@ -221,7 +221,7 @@ function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockActiveSeconds(block))
   const label = timelineBlockLabel(block).trim()
   const naturalized = label.charAt(0).toLowerCase() + label.slice(1)
-  const startsWithActivityVerb = /^(?:attending|authorizing|building|checking|completing|configuring|creating|developing|discussing|drafting|evaluating|generating|managing|planning|preparing|reading|researching|reviewing|streaming|taking|testing|watching|working|writing)\b/i.test(label)
+  const startsWithActivityVerb = /^(?:attending|authorizing|building|checking|communicating|completing|configuring|creating|developing|discussing|drafting|evaluating|generating|managing|on|planning|preparing|reading|researching|reviewing|streaming|taking|testing|watching|working|writing)\b/i.test(label)
   return startsWithActivityVerb
     ? `Spent ${duration} ${naturalized}.`
     : `Spent ${duration} on ${naturalized}.`
@@ -404,7 +404,7 @@ const TimelineRow = memo(function TimelineRow({
       <div style={{ paddingTop: 6 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>{formatClockTime(block.startTime)}</div>
         <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-          {duration}
+          {duration} tracked
         </div>
       </div>
       <div style={{
@@ -499,7 +499,7 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
     return map
   }, new Map())
 
-  const chips = (['machine_off', 'away'] as const)
+  const chips = (['machine_off', 'away', 'idle_gap'] as const)
     .filter((kind) => totals.has(kind))
     .map((kind) => ({
       kind,
@@ -799,7 +799,7 @@ function BlockInspector({
           {timelineBlockLabel(block)}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
+          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))} tracked
         </div>
       </div>
 

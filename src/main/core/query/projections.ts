@@ -331,11 +331,15 @@ export function getTimelineDayProjection(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
+  const canonical = getTimelineDayPayload(db, dateStr, liveSession, options)
+  if (canonical.sessions.length > 0) {
+    return projectGapReasons(db, dateStr, canonical)
+  }
   if (!liveSession) {
     const derived = getDerivedDayTimelinePayload(db, dateStr, options)
     if (derived) return projectGapReasons(db, dateStr, derived)
   }
-  return projectGapReasons(db, dateStr, getTimelineDayPayload(db, dateStr, liveSession, options))
+  return projectGapReasons(db, dateStr, canonical)
 }
 
 export function getHistoryDayProjection(
@@ -344,11 +348,13 @@ export function getHistoryDayProjection(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean } = {},
 ): HistoryDayPayload {
+  const canonical = getHistoryDayPayload(db, dateStr, liveSession, options)
+  if (canonical.sessions.length > 0) return canonical
   if (!liveSession) {
     const derived = getDerivedDayTimelinePayload(db, dateStr, options)
     if (derived) return derived
   }
-  return getHistoryDayPayload(db, dateStr, liveSession, options)
+  return canonical
 }
 
 export function materializeTimelineDayProjection(
