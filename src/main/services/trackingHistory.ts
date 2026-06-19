@@ -233,7 +233,7 @@ export function deleteTrackedActivity(input: DeleteTrackedActivityInput): PurgeR
 
   const domain = (input.domain ?? '').trim().toLowerCase().replace(/^www\./, '')
   const url = (input.url ?? '').trim()
-  if (hasValidExplicitRange && (domain || url)) {
+  if (domain || url) {
     const clauses: string[] = []
     const params: unknown[] = []
     if (domain) {
@@ -246,22 +246,25 @@ export function deleteTrackedActivity(input: DeleteTrackedActivityInput): PurgeR
     }
 
     const where = clauses.join(' OR ')
+    // With an explicit range the delete is scoped to that window (Timeline
+    // block edits). With no range it is global — it removes the page/domain
+    // everywhere it appears, which is what the Apps view "delete this site /
+    // page" affordance needs (spec apps.md §4.4: permanent, everywhere).
+    const rangeClause = hasValidExplicitRange ? ' AND visit_time >= ? AND visit_time < ?' : ''
+    const rangeParams = hasValidExplicitRange ? [explicitStartTime, explicitEndTime] : []
+
     const rows = db.prepare(`
       SELECT visit_time
       FROM website_visits
-      WHERE (${where})
-        AND visit_time >= ?
-        AND visit_time < ?
-    `).all(...params, explicitStartTime, explicitEndTime) as { visit_time: number }[]
+      WHERE (${where})${rangeClause}
+    `).all(...params, ...rangeParams) as { visit_time: number }[]
 
     for (const row of rows) affectedDates.add(localDateString(new Date(row.visit_time)))
 
     deletedRows += db.prepare(`
       DELETE FROM website_visits
-      WHERE (${where})
-        AND visit_time >= ?
-        AND visit_time < ?
-    `).run(...params, explicitStartTime, explicitEndTime).changes
+      WHERE (${where})${rangeClause}
+    `).run(...params, ...rangeParams).changes
   }
 
   const dates = [...affectedDates]

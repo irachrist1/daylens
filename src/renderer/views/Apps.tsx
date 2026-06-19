@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
+import { kindForDomain } from '@shared/workKind'
 import type { AISurfaceSummary, AppActivityDigest, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -32,6 +33,23 @@ const CATEGORY_LABELS: Record<AppCategory, string> = {
 
 function categoryLabel(category: AppCategory): string {
   return CATEGORY_LABELS[category] ?? category
+}
+
+// Invariant 7: work surfaces before leisure. Streaming and social (YouTube,
+// Netflix, X) are honest and still counted, but collected in a quieter "Off to
+// the side" group so they never crowd out the work a developer came to see.
+// Order within each group is preserved (callers pass time-sorted lists).
+function splitWorkFirst<T>(
+  items: readonly T[],
+  getDomain: (item: T) => string | null | undefined,
+): { work: T[]; leisure: T[] } {
+  const work: T[] = []
+  const leisure: T[] = []
+  for (const item of items) {
+    if (kindForDomain(getDomain(item)) === 'leisure') leisure.push(item)
+    else work.push(item)
+  }
+  return { work, leisure }
 }
 
 function liveAwareSummaries(
@@ -86,21 +104,26 @@ function detailSummary(detail: AppDetailPayload, selectedAppName: string): strin
     .filter((label) => normalizedActivityLabel(label) !== normalizedActivityLabel(selectedAppName))
     .filter((label, index, labels) => labels.indexOf(label) === index)
 
+  // Invariant 9: an artifact is named once. Dedup case-insensitively so the
+  // recap never reads "Netflix, Netflix". Spec 4.5: never name co-used apps.
+  const seenArtifacts = new Set<string>()
   const artifacts = detail.topArtifacts
-    .slice(0, 3)
     .map((artifact) => artifact.displayTitle)
     .filter(Boolean)
-
-  const paired = detail.pairedApps
+    .filter((title) => {
+      const key = normalizedActivityLabel(title)
+      if (!key || seenArtifacts.has(key)) return false
+      seenArtifacts.add(key)
+      return true
+    })
     .slice(0, 3)
-    .map((app) => app.displayName)
-    .filter(Boolean)
 
   const parts: string[] = []
   if (blockLabels.length > 0) parts.push(`Most often part of ${blockLabels.join(', ')}`)
   if (artifacts.length > 0) parts.push(`Key artifacts include ${artifacts.join(', ')}`)
-  if (paired.length > 0) parts.push(`Often used alongside ${paired.join(', ')}`)
-  return parts.join('. ') || 'Daylens needs more context to describe this tool.'
+  // Spec 4.3: when an app has too little signal, state its time honestly and
+  // say so plainly — never beg for "more context".
+  return parts.join('. ') || 'A quiet surface with little to describe beyond the time above.'
 }
 
 function appMetricSentence(totalSeconds: number, sessionCount?: number): string {
@@ -127,15 +150,6 @@ function shiftAppsDate(dateStr: string, delta: number): string {
 function formatAppsDateLabel(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(y, m - 1, d))
-}
-
-function appRangeBounds(dateStr: string, days: number): { startTime: number; endTime: number } {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const dayStart = new Date(y, m - 1, d).getTime()
-  return {
-    startTime: dayStart - (Math.max(1, days) - 1) * 86_400_000,
-    endTime: dayStart + 86_400_000,
-  }
 }
 
 function DeleteIconButton({
@@ -468,22 +482,32 @@ export default function Apps() {
 
   const handleDeleteWebsiteActivity = async (target: { domain: string; url?: string | null; title?: string | null }) => {
     const label = target.title?.trim() || target.domain
-    const confirmed = window.confirm(`Delete tracked activity for ${label} in ${selectedRangeLabel}? This removes only this website entry from the selected range.`)
+    // Invariant 10 / spec §4.4: deletion is permanent and removes the records
+    // everywhere they appear — not just the period you're looking at. The
+    // confirmation must say plainly that it can't be undone.
+    const confirmed = window.confirm(
+      `Permanently delete all tracked activity for "${label}"? This removes it from every period in Daylens and cannot be undone.`,
+    )
     if (!confirmed) return
 
-    const key = target.url ? `url:${target.url}` : `domain:${target.domain}`
+    const hasUrl = !!target.url
+    const key = hasUrl ? `url:${target.url}` : `domain:${target.domain}`
     setDeletingActivityKey(key)
     setDeleteActivityError(null)
-    const range = appRangeBounds(isAppsPastDay ? selectedDate : todayString(), isAppsPastDay ? 1 : days)
     try {
-      await ipc.tracking.deleteActivity({
-        domain: target.domain,
-        url: target.url ?? null,
-        date: dateMode ? selectedDate : null,
-        ...range,
-      })
+      // Delete globally (no range): a page row removes only that URL; a domain
+      // row removes the whole domain. Passing both would OR them and wipe the
+      // entire domain on a single-page delete, so target exactly one.
+      await ipc.tracking.deleteActivity(
+        hasUrl ? { url: target.url } : { domain: target.domain },
+      )
+      // rematerializeAndNotify on the main side invalidates apps/timeline/
+      // insights, which auto-reloads these resources; the changed evidence
+      // signature regenerates any recap built on the deleted entry. Refresh
+      // explicitly too so the panel updates without waiting on the event.
       await appsResource.refresh()
       await detailResource.refresh()
+      await narrativeResource.refresh()
     } catch (error) {
       setDeleteActivityError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -711,9 +735,13 @@ export default function Apps() {
                     const selected = key === selectedAppId
                     const digest = digestByApp.get(summary.canonicalAppId ?? summary.bundleId)
                       ?? digestByApp.get(summary.bundleId)
+                    // Invariant 1: the bold title is ALWAYS the real app name —
+                    // never the category, never a block/page/video title. The
+                    // "what you did" headline, when present, is a quiet line
+                    // below the name, and the category rides in the meta line.
                     const activityHeadline = digest?.topBlockLabel || digest?.topArtifactTitle || null
                     const appName = formatDisplayAppName(summary.appName)
-                    const minutesLine = `${appName} · ${formatDuration(summary.totalSeconds)}${summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}`
+                    const metaLine = `${categoryLabel(summary.category)} · ${formatDuration(summary.totalSeconds)}${summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}`
                     return (
                       <button
                         key={key}
@@ -731,25 +759,16 @@ export default function Apps() {
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                           <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={30} />
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            {activityHeadline ? (
-                              <>
-                                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>
-                                  {activityHeadline}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 4, lineHeight: 1.3 }}>
-                                  {minutesLine}
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3 }}>
-                                  {appName}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
-                                  {formatDuration(summary.totalSeconds)}
-                                  {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
-                                </div>
-                              </>
+                            <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {appName}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
+                              {metaLine}
+                            </div>
+                            {activityHeadline && (
+                              <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 4, lineHeight: 1.3, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>
+                                {activityHeadline}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1114,137 +1133,154 @@ export default function Apps() {
                         </section>
                       )}
 
-                      {detail.topDomains && detail.topDomains.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Time by domain
-                          </div>
-                          <div style={{ display: 'grid', gap: 10 }}>
-                            {detail.topDomains.slice(0, 8).map((entry) => (
-                              <div
-                                key={entry.domain}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 10,
-                                }}
-                              >
-                                <EntityIcon
-                                  artifactType="page"
-                                  domain={entry.domain}
-                                  size={26}
-                                />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={entry.domain}
-                                    style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                  />
-                                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                                    {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
-                                    {entry.topTitle ? ` · ${entry.topTitle.slice(0, 60)}` : ''}
-                                  </div>
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(entry.totalSeconds)}
-                                </div>
-                                <DeleteIconButton
-                                  label={`Delete activity for ${entry.domain}`}
-                                  busy={deletingActivityKey === `domain:${entry.domain}`}
-                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
-                                />
+                      {detail.topDomains && detail.topDomains.length > 0 && (() => {
+                        const renderDomainRow = (entry: NonNullable<AppDetailPayload['topDomains']>[number]) => (
+                          <div
+                            key={entry.domain}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                            }}
+                          >
+                            <EntityIcon
+                              artifactType="page"
+                              domain={entry.domain}
+                              size={26}
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <InlineRevealText
+                                text={entry.domain}
+                                style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                              />
+                              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                                {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
+                                {entry.topTitle ? ` · ${entry.topTitle.slice(0, 60)}` : ''}
                               </div>
-                            ))}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                              {formatDuration(entry.totalSeconds)}
+                            </div>
+                            <DeleteIconButton
+                              label={`Delete activity for ${entry.domain}`}
+                              busy={deletingActivityKey === `domain:${entry.domain}`}
+                              onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
+                            />
                           </div>
-                        </section>
-                      )}
+                        )
+                        const { work, leisure } = splitWorkFirst((detail.topDomains ?? []).slice(0, 8), (d) => d.domain)
+                        // When everything is leisure (a pure-streaming browser),
+                        // show it plainly under the main header rather than an
+                        // empty "work" list with everything pushed to the side.
+                        const mainRows = work.length > 0 ? work : leisure
+                        const sideRows = work.length > 0 ? leisure : []
+                        return (
+                          <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
+                            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+                              Time by domain
+                            </div>
+                            <div style={{ display: 'grid', gap: 10 }}>
+                              {mainRows.map(renderDomainRow)}
+                            </div>
+                            {sideRows.length > 0 && (
+                              <>
+                                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', margin: '18px 0 12px' }}>
+                                  Off to the side
+                                </div>
+                                <div style={{ display: 'grid', gap: 10, opacity: 0.72 }}>
+                                  {sideRows.map(renderDomainRow)}
+                                </div>
+                              </>
+                            )}
+                          </section>
+                        )
+                      })()}
 
-                      {detail.topPages.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Pages visited
-                          </div>
-                          <div style={{ display: 'grid', gap: 12 }}>
-                            {detail.topPages.slice(0, 8).map((page) => (
-                              <div
-                                key={page.id}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'start',
-                                  gap: 10,
-                                  width: '100%',
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => void openArtifact(page)}
-                                  disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'start',
-                                    gap: 10,
-                                    flex: 1,
-                                    minWidth: 0,
-                                    padding: 0,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    textAlign: 'left',
-                                    cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
-                                  }}
-                                >
-                                  <EntityIcon
-                                    artifactType="page"
-                                    domain={page.domain}
-                                    url={page.url}
-                                    size={28}
-                                  />
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <InlineRevealText
-                                      text={page.displayTitle}
-                                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                    />
-                                    <InlineRevealText
-                                      text={page.domain}
-                                      style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
-                                    />
-                                  </div>
-                                </button>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(page.totalSeconds)}
-                                </div>
-                                <DeleteIconButton
-                                  label={`Delete activity for ${page.displayTitle}`}
-                                  busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
-                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
+                      {detail.topPages.length > 0 && (() => {
+                        const renderPageRow = (page: AppDetailPayload['topPages'][number]) => (
+                          <div
+                            key={page.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'start',
+                              gap: 10,
+                              width: '100%',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void openArtifact(page)}
+                              disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'start',
+                                gap: 10,
+                                flex: 1,
+                                minWidth: 0,
+                                padding: 0,
+                                border: 'none',
+                                background: 'transparent',
+                                textAlign: 'left',
+                                cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
+                              }}
+                            >
+                              <EntityIcon
+                                artifactType="page"
+                                domain={page.domain}
+                                url={page.url}
+                                size={28}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <InlineRevealText
+                                  text={page.displayTitle}
+                                  style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                                />
+                                <InlineRevealText
+                                  text={page.domain}
+                                  style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
                                 />
                               </div>
-                            ))}
+                            </button>
+                            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                              {formatDuration(page.totalSeconds)}
+                            </div>
+                            <DeleteIconButton
+                              label={`Delete activity for ${page.displayTitle}`}
+                              busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
+                              onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
+                            />
                           </div>
-                        </section>
-                      )}
+                        )
+                        const { work, leisure } = splitWorkFirst(detail.topPages.slice(0, 8), (p) => p.domain)
+                        const mainRows = work.length > 0 ? work : leisure
+                        const sideRows = work.length > 0 ? leisure : []
+                        return (
+                          <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
+                            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+                              Pages visited
+                            </div>
+                            <div style={{ display: 'grid', gap: 12 }}>
+                              {mainRows.map(renderPageRow)}
+                            </div>
+                            {sideRows.length > 0 && (
+                              <>
+                                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', margin: '18px 0 12px' }}>
+                                  Off to the side
+                                </div>
+                                <div style={{ display: 'grid', gap: 12, opacity: 0.72 }}>
+                                  {sideRows.map(renderPageRow)}
+                                </div>
+                              </>
+                            )}
+                          </section>
+                        )
+                      })()}
 
-                      {detail.pairedApps.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Often used with
-                          </div>
-                          <div style={{ display: 'grid', gap: 12 }}>
-                            {detail.pairedApps.slice(0, 8).map((app) => (
-                              <div key={app.canonicalAppId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <EntityIcon appName={app.displayName} bundleId={app.bundleId} canonicalAppId={app.canonicalAppId} size={28} />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={app.displayName}
-                                    style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                  />
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(app.totalSeconds)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </section>
-                      )}
+                      {/* Spec 4.5 / invariant 8: "Often used with" is removed
+                          entirely — it surfaced system noise (Siri, Finder,
+                          UserNotificationCenter) as co-used apps and added no
+                          value. The pairedApps payload is left intact upstream
+                          but is never rendered here. */}
                     </>
                   )
                 })()}

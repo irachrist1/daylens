@@ -4176,6 +4176,10 @@ async function generateAppNarrative(
     // domains, or paired apps). Evidence-thin apps must say so plainly —
     // a filler sentence like "used for development work" is not acceptable.
     'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page/domain names, or paired app names. If the evidence is too thin to cite two entities, say "Daylens has only thin app-specific signal for this app." and stop — do not pad with generic prose.',
+    // Invariant 9: never repeat an artifact. The earlier Safari recap read
+    // "Key artifacts include Netflix, Netflix". Each named entity appears at
+    // most once.
+    'Name each artifact, page, domain, or app at most once. Never repeat the same entity in a list (e.g. never write "Netflix, Netflix").',
     // B4: totals are rendered in the UI header and footer. The narrative
     // must not restate them — the header recomputes live and the cached
     // narrative drifts within seconds. Talk about what was done, not how
