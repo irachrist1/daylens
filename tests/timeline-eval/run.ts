@@ -469,7 +469,13 @@ function assertFounderFixtureStructure(file: string, fixture: TimelineFixture): 
       throw new Error(`Unsafe founder fixture ${file}: unapproved page title "${visit.title}"`)
     }
     const url = new URL(visit.url)
-    if (url.hostname !== domain || !url.pathname.startsWith('/daylens-fixture/')) {
+    if (
+      url.protocol !== 'https:'
+      || url.hostname !== domain
+      || !url.pathname.startsWith('/daylens-fixture/')
+      || url.search !== ''
+      || url.hash !== ''
+    ) {
       throw new Error(`Unsafe founder fixture ${file}: URL is not a fixture placeholder`)
     }
   }
@@ -628,9 +634,12 @@ function evaluateExpectedDay(fixture: TimelineFixture, payload: DayTimelinePaylo
 
   if (expected.minMaterialBlockMinutes != null) {
     for (const actual of actualBlocks) {
-      const minutes = Math.round(blockActiveSeconds(actual.block) / 60)
+      const minutes = blockActiveSeconds(actual.block) / 60
       if (minutes > 0 && minutes < expected.minMaterialBlockMinutes) {
-        issues.push(`material block ${formatRange(actual.startTime, actual.endTime)} is ${minutes}m, expected >= ${expected.minMaterialBlockMinutes}m`)
+        issues.push(
+          `material block ${formatRange(actual.startTime, actual.endTime)} is `
+          + `${minutes.toFixed(1)}m, expected >= ${expected.minMaterialBlockMinutes}m`,
+        )
       }
     }
   }
