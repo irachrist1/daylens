@@ -13,6 +13,7 @@ import {
   getCategoryOverrides,
   getBlockLabelOverride,
   writeAIBlockLabel,
+  writeAIBlockCategory,
 } from '../db/queries'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
@@ -37,7 +38,14 @@ import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
+import {
+  getBlockDetailPayload,
+  getDistractionCostPayload,
+  getRecapRange,
+  invalidateTimelineDay,
+  writeTimelineBlockReview,
+  mergeTimelineEpisodes,
+} from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
@@ -386,18 +394,23 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string) => {
-    // "Rebuild" is intentionally no longer a destructive block wipe. Days
-    // already self-heal on open; the useful manual action is to spend AI work
-    // only where the day is still on a deterministic floor or low-confidence
-    // label, preserving curated AI labels and user overrides.
+    // Analyze Day always recomputes the block boundaries from raw evidence
+    // before asking AI to name the resulting intent blocks. Reviews and
+    // boundary corrections live outside timeline_blocks and reattach by
+    // evidence lineage, so invalidating the projection does not discard the
+    // user's rename/merge decisions.
     const db = getDb()
+    invalidateTimelineDay(db, dateStr)
     const payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     let changed = false
     let attempted = 0
     const failures: string[] = []
 
     for (const block of payload.blocks) {
-      if (!shouldReanalyzeBlockWithAI(block)) continue
+      // This is an explicit user action, not a background cleanup sweep.
+      // Re-run every non-live, non-user-corrected block so improved prompts,
+      // category inference, and model changes actually take effect.
+      if (block.isLive || block.label.override?.trim() || block.label.source === 'user') continue
       attempted++
       try {
         const insight = await generateWorkBlockInsight(
@@ -575,7 +588,13 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, (_e, blockId: string) => {
-    clearBlockLabelOverride(getDb(), blockId)
+    const db = getDb()
+    const block = getBlockDetailPayload(db, blockId, getCurrentSession())
+    const ids = new Set<string>([blockId])
+    if (block?.review.originalBlockId) ids.add(block.review.originalBlockId)
+    for (const id of ids) {
+      clearBlockLabelOverride(db, id)
+    }
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')
@@ -998,16 +1017,19 @@ function applyAIInsightToTimelineBlock(
   if (!label) {
     throw new Error(`AI did not return a label for block ${block.id}.`)
   }
-  const wrote = writeAIBlockLabel(db, {
+  const wroteLabel = writeAIBlockLabel(db, {
     blockId: block.id,
     label,
     narrative: insight.narrative ?? null,
   })
-  if (!wrote) {
+  if (!wroteLabel) {
     // A user can rename the block while the AI request is in flight. That race
     // is a valid preserve-override no-op, not an AI persistence failure.
     if (getBlockLabelOverride(db, block.id)?.label.trim()) return false
     throw new Error(`AI label could not be persisted for block ${block.id}.`)
   }
-  return true
+  const wroteCategory = insight.category
+    ? writeAIBlockCategory(db, block.id, insight.category)
+    : false
+  return wroteLabel || wroteCategory
 }

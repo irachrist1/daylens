@@ -238,3 +238,60 @@ test('same video with a short detour is one block', () => {
   assert.equal(result.count, 1, `same video either side of a 2-min detour should be one block, got ${result.count}: ${result.spans.join(', ')}`)
   db.close()
 })
+
+test('a 42-second leisure detour cannot split or recategorize surrounding coding', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 0), endTime: at(9, 30), windowTitle: 'timeline backend — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(9, 30), endTime: at(9, 30) + 42_000, windowTitle: 'Netflix' }),
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 30) + 42_000, endTime: at(10, 0), windowTitle: 'timeline backend — daylens' }),
+  ]
+
+  const [block, ...rest] = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(rest.length, 0)
+  assert.equal(block.dominantCategory, 'development')
+  assert.doesNotMatch(block.label.current, /netflix/i)
+  db.close()
+})
+
+test('a detour under ten minutes is absorbed but a ten-minute detour remains distinct', () => {
+  const db = freshDb()
+  const underTen = [
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(10, 0), endTime: at(10, 25), windowTitle: 'timeline backend — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'social', startTime: at(10, 25), endTime: at(10, 34) + 59_000, windowTitle: 'X' }),
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(10, 34) + 59_000, endTime: at(11, 0), windowTitle: 'timeline backend — daylens' }),
+  ]
+  assert.equal(buildTimelineBlocksFromSessions(db, underTen).length, 1)
+
+  const sustained = [
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(12, 0), endTime: at(12, 25), windowTitle: 'timeline backend — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'social', startTime: at(12, 25), endTime: at(12, 35), windowTitle: 'X' }),
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(12, 35), endTime: at(13, 0), windowTitle: 'timeline backend — daylens' }),
+  ]
+  assert.equal(buildTimelineBlocksFromSessions(db, sustained).length, 3)
+  db.close()
+})
+
+test('brief leisure evidence cannot relabel sustained native debugging work', () => {
+  const db = freshDb()
+  seedWebsiteVisit(db, {
+    domain: 'netflix.com',
+    pageTitle: 'Netflix',
+    url: 'https://netflix.com/watch/example',
+    visitTime: at(15, 30),
+    durationSec: 8 * 60,
+    browserBundleId: 'company.thebrowser.dia',
+  })
+  const sessions = [
+    session({ bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startTime: at(15, 0), endTime: at(15, 30), windowTitle: 'nextdns debug logs' }),
+    session({ bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'aiTools', startTime: at(15, 30), endTime: at(15, 38), windowTitle: 'Starlink troubleshooting' }),
+    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(15, 38), endTime: at(16, 10), windowTitle: 'NextDNS debugging' }),
+  ]
+
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].kind, 'work')
+  assert.notEqual(blocks[0].dominantCategory, 'entertainment')
+  assert.ok(!blocks[0].websites.some((site) => site.domain === 'netflix.com'))
+  db.close()
+})

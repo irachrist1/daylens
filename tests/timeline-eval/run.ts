@@ -4,9 +4,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SCHEMA_SQL } from '../../src/main/db/schema.ts'
 import { getAppSummariesForRange } from '../../src/main/db/queries.ts'
+import { getTimelineDayProjection, getWeeklySummaryProjection } from '../../src/main/core/query/projections.ts'
 import { resolveCanonicalApp } from '../../src/main/lib/appIdentity.ts'
 import { executeTool } from '../../src/main/services/aiTools.ts'
-import { getAppDetailPayload, getBlockDetailPayload, getTimelineDayPayload, userVisibleLabelForBlock } from '../../src/main/services/workBlocks.ts'
+import { getAppDetailPayload, getBlockDetailPayload, userVisibleLabelForBlock } from '../../src/main/services/workBlocks.ts'
 import { buildFallbackNarrative, buildWrappedFactsFromPayload, computeFactsHash, type WrappedFacts } from '../../src/main/lib/wrappedNarrative.ts'
 import { buildRecapSummaries } from '../../src/renderer/lib/recap.ts'
 import { inferWorkIntent } from '../../src/shared/workIntent.ts'
@@ -672,7 +673,7 @@ function evaluateExpectedWeek(db: Database.Database, fixture: TimelineFixture): 
   const topAppNames = new Set<string>()
 
   for (const date of dateRange(expected.startDate, expected.endDate)) {
-    const payload = getTimelineDayPayload(db, date, null, { materialize: false })
+    const payload = getTimelineDayProjection(db, date, null, { materialize: false })
     const minutes = dayPayloadMinutes(payload)
     weekTotal += minutes
     for (const block of payload.blocks) {
@@ -1134,6 +1135,10 @@ function actualGapReason(segment: DayTimelinePayload['segments'][number]): strin
   if (segment.kind === 'work_block') return null
   if (segment.kind === 'machine_off') return 'machine_off'
   if (segment.kind === 'away') return 'away'
+  const label = segment.label.toLowerCase()
+  if (label.includes('paused')) return 'paused'
+  if (label.includes('permission')) return 'permission_limited'
+  if (label.includes('no samples') || label.includes('untracked')) return 'no_samples'
   return 'idle'
 }
 
@@ -1286,7 +1291,7 @@ function phase0WeekIssues(db: Database.Database, fixture: TimelineFixture): { ev
   if (!expected) return { evidenceCount: 0, issues: ['fixture has no independent week target'] }
 
   const payloads = dateRange(expected.startDate, expected.endDate)
-    .map((date) => getTimelineDayPayload(db, date, null, { materialize: false }))
+    .map((date) => getTimelineDayProjection(db, date, null, { materialize: false }))
   const dayRows = payloads.map((payload) => ({
     date: payload.date,
     seconds: payload.blocks
@@ -1296,12 +1301,9 @@ function phase0WeekIssues(db: Database.Database, fixture: TimelineFixture): { ev
   const chartSeconds = dayRows.reduce((sum, day) => sum + day.seconds, 0)
   const recap = buildRecapSummaries(payloads, expected.endDate).week
   const recapSeconds = recap.trend.reduce((sum, day) => sum + day.trackedSeconds, 0)
-  const tool = executeTool('getWeekSummary', { weekStartDate: expected.startDate }, db) as {
-    totalTrackedSeconds?: number
-    dailyBreakdown?: Array<{ totalSeconds: number }>
-  }
-  const reviewSeconds = tool.totalTrackedSeconds ?? 0
-  const reviewDaySeconds = (tool.dailyBreakdown ?? []).reduce((sum, day) => sum + day.totalSeconds, 0)
+  const review = getWeeklySummaryProjection(db, expected.endDate)
+  const reviewSeconds = review.totalTrackedSeconds
+  const reviewDaySeconds = review.dailyBreakdown.reduce((sum, day) => sum + day.totalSeconds, 0)
   const truthSeconds = expected.trackedMinutes * 60
   const toleranceSeconds = (expected.toleranceMinutes ?? 15) * 60
   const issues: string[] = []
@@ -1321,7 +1323,7 @@ function phase0WeekIssues(db: Database.Database, fixture: TimelineFixture): { ev
       + `${expected.trackedMinutes}m ±${expected.toleranceMinutes ?? 15}m`,
     )
   }
-  return { evidenceCount: payloads.length + (tool.dailyBreakdown?.length ?? 0) + 2, issues }
+  return { evidenceCount: payloads.length + review.dailyBreakdown.length + 2, issues }
 }
 
 function evaluatePhase0Assertions(
@@ -1390,7 +1392,7 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
   const db = createDb()
   try {
     seedFixture(db, fixture)
-    const payload = getTimelineDayPayload(db, fixture.date, null)
+    const payload = getTimelineDayProjection(db, fixture.date, null)
     const actualBlocks = actualBlocksFor(payload)
     const episodes = evaluateEpisodes(fixture, actualBlocks)
     const underSplits = findUnderSplits(fixture, actualBlocks)

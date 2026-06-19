@@ -116,7 +116,7 @@
     "topAppIncludes": "Cursor",
     "topDomain": "github.com",
     "matteredSubjectIncludes": "run.ts",
-    "needsReviewCount": 1,
+    "needsReviewCount": 2,
     "carryoverSubjectIncludes": "wrappedNarrative"
   }
 }

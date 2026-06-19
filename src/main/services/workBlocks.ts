@@ -47,13 +47,13 @@ import type {
   WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
-import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
+import { isHostFilteredFromArtifacts, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
-import { localDayBounds, localDateString } from '../lib/localDate'
+import { localDateString } from '../lib/localDate'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import {
   normalizeUrlForStorage,
@@ -68,6 +68,14 @@ import {
   matchPromotedPatterns,
   memoryEnabled,
 } from './workMemory'
+
+function localDayBounds(dateStr: string): [number, number] {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return [
+    new Date(year, month - 1, day).getTime(),
+    new Date(year, month - 1, day + 1).getTime(),
+  ]
+}
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -94,20 +102,17 @@ function sanitizeBlockLabel(label: string | null | undefined): string | null {
 }
 
 const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
-const RUNAWAY_GAP_THRESHOLD_MS = 40 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
-const SUSTAINED_CATEGORY_THRESHOLD_SEC = 15 * 60
+const SUSTAINED_CATEGORY_THRESHOLD_SEC = 10 * 60
 const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
-// R2 block-sizing: the target shape is a 60-120 minute block, not a string of
-// 20-minute slices. The base ceiling sits at 120 min so a sustained stretch of
-// the same work is not chopped at 60, and the coalesce pass below re-joins
-// adjacent fragments of the same work up to this same ceiling.
-const TIMELINE_MAX_BLOCK_SPAN_MS = 120 * 60_000
+// A continuous intent is allowed to span the working day. Real gaps, meetings,
+// and sustained intent changes create boundaries; elapsed time alone does not.
+const TIMELINE_MAX_BLOCK_SPAN_MS = 8 * 60 * 60_000
 // Blocks shorter than this are pure noise on the timeline (e.g. a 50-second
 // "Terminal work" sliver). They are unconditionally merged into an adjacent
 // block instead of being shown standalone.
@@ -127,15 +132,29 @@ const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
 // Genuine breaks (machine off for hours, long untracked spans) exceed this and
 // stay split.
 const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 30 * 60_000
-// Higher ceiling for candidates where every session shares the same
-// (bundleId, compacted window title) pair with no internal gap >= 5 min.
-// Quality bar: a 90-minute block titled "Daylens AI refactor — extract
-// chat_answer from ai.ts" is the right answer, not three 30-minute slices
-// labelled "Cursor" / "Cursor" / "Untitled block".
-const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 180 * 60_000
-const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 270 * 60_000
+const TIMELINE_COORDINATION_RESUME_GAP_MS = 35 * 60_000
+const TIMELINE_LEISURE_RESUME_GAP_MS = 45 * 60_000
+// Same-day safety ceiling only; normal segmentation is signal-driven.
+const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 8 * 60 * 60_000
+const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 8 * 60 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
+const SYSTEM_NOISE_TOKENS = [
+  'loginwindow',
+  'usernotificationcenter',
+  'notificationcenter',
+  'finder',
+  'screensaver',
+  'screen saver',
+  'windowserver',
+  'systemuiserver',
+  'electron helper',
+  'com.daylens',
+]
+// Bumped to v8 with: 15-minute hard gaps, sub-10-minute detour absorption,
+// correction lineage across reshaped blocks, system-noise projection filters,
+// and block-derived duration/count truth.
+//
 // Bumped to v7 with: short-block absorption is based on active tracked time
 // instead of wall-clock span, uncategorized AI/dev tools are treated as focused
 // timeline evidence, GitHub repo/review pages badge as research, and
@@ -153,7 +172,12 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // buildTimelineBlocksForDay) so the stale "Canva development" / "Notifications
 // development" labels get replaced — unless the day was already AI/user
 // processed, in which case that curated result is kept and its IDs stay stable.
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v7'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v8'
+
+function isSystemNoiseSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'rawAppName'>): boolean {
+  const identity = `${session.bundleId} ${session.appName} ${session.rawAppName ?? ''}`.toLowerCase()
+  return SYSTEM_NOISE_TOKENS.some((token) => identity.includes(token))
+}
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
@@ -332,6 +356,26 @@ function dominantFocusedCategoryFromDistribution(distribution: Partial<Record<Ap
   return focused[1] / total >= 0.3 ? focused[0] : null
 }
 
+function nativeFocusedDistribution(sessions: AppSession[]): Partial<Record<AppCategory, number>> {
+  const distribution: Partial<Record<AppCategory, number>> = {}
+  for (const session of sessions) {
+    if (isBrowserSession(session)) continue
+    const category = inferredFocusedCategoryForSession(session)
+    if ((!FOCUSED_CATEGORIES.includes(category) && category !== 'meetings') || category === 'browsing') continue
+    distribution[category] = (distribution[category] ?? 0) + session.durationSeconds
+  }
+  return distribution
+}
+
+function strongNativeWorkCategory(sessions: AppSession[]): AppCategory | null {
+  const nativeDistribution = nativeFocusedDistribution(sessions)
+  const entries = Object.entries(nativeDistribution) as Array<[AppCategory, number]>
+  const nativeSeconds = entries.reduce((sum, [, seconds]) => sum + seconds, 0)
+  const totalSeconds = sessions.reduce((sum, session) => sum + Math.max(0, session.durationSeconds), 0)
+  if (nativeSeconds < 3 * 60 || nativeSeconds / Math.max(1, totalSeconds) < 0.15) return null
+  return dominantCategoryFromDistribution(nativeDistribution)
+}
+
 function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
   return topArtifacts.some((artifact) => {
     if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
@@ -343,18 +387,48 @@ function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
 function dominantCategoryForBlock(
   distribution: Partial<Record<AppCategory, number>>,
   topArtifacts: ArtifactRef[],
+  sessions: AppSession[] = [],
 ): AppCategory {
   const baseCategory = dominantCategoryFromDistribution(distribution)
   const focusedCategory = dominantFocusedCategoryFromDistribution(distribution)
   const artifactCategory = categoryForTopPageArtifact(topArtifacts)
+  const nativeWorkCategory = strongNativeWorkCategory(sessions)
+  const totalSeconds = Object.values(distribution).reduce((sum, seconds) => sum + seconds, 0)
+  const leisureArtifactSeconds = topArtifacts
+    .filter((artifact) => {
+      const policy = policyForHost(artifact.host ?? null)
+      return policy === 'social_feed' || policy === 'entertainment'
+    })
+    .reduce((sum, artifact) => sum + artifact.totalSeconds, 0)
 
   if (baseCategory === 'browsing' && hasLocalhostPageArtifact(topArtifacts) && (distribution.development ?? 0) > 0) {
     return 'development'
   }
+  // Browser evidence can explain a browser-led block, but it cannot relabel a
+  // stretch with material native work. This is the episode-level version of
+  // "one Netflix/X tab never turns debugging into leisure."
+  if (nativeWorkCategory && artifactCategory) {
+    if (leisureArtifactSeconds / Math.max(1, totalSeconds) >= 0.8) {
+      return artifactCategory
+    }
+    return nativeWorkCategory
+  }
   if (focusedCategory && (baseCategory === 'browsing' || baseCategory === 'entertainment' || baseCategory === 'social')) {
     return focusedCategory
   }
-  return artifactCategory ?? baseCategory
+  if (artifactCategory && isBrowserLedCategory(baseCategory)) {
+    return artifactCategory
+  }
+  return baseCategory
+}
+
+function isBrowserLedCategory(category: AppCategory): boolean {
+  return category === 'browsing'
+    || category === 'aiTools'
+    || category === 'research'
+    || category === 'entertainment'
+    || category === 'social'
+    || category === 'uncategorized'
 }
 
 function coherenceScore(distribution: Partial<Record<AppCategory, number>>): number {
@@ -536,17 +610,7 @@ function longSingleAppStreak(sessions: AppSession[]): AppStreak | null {
   return best
 }
 
-function gapHasHardActivityBoundary(db: Database.Database, fromMs: number, toMs: number): boolean {
-  const rows = db.prepare(`
-    SELECT event_type
-    FROM activity_state_events
-    WHERE event_ts >= ? AND event_ts <= ?
-    LIMIT 8
-  `).all(fromMs, toMs) as Array<{ event_type: string }>
-  return rows.some((row) => /^(sleep|wake|lock|unlock|lock_screen|unlock_screen|suspend|resume|away_start|away_end|idle_start|idle_end)$/.test(row.event_type))
-}
-
-function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[]): CoarseSegment[] {
+function coarseSegmentsFromSessions(sessions: AppSession[]): CoarseSegment[] {
   if (sessions.length === 0) return []
 
   const segments: CoarseSegment[] = []
@@ -557,12 +621,12 @@ function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[
     const current = sessions[index]
     const previousEnd = sessionEndMs(previous)
     const gap = current.startTime - previousEnd
-    // A logged sleep/lock/away event makes a >15-min gap a hard boundary. But a
-    // long quiet stretch with no logged event is still idle — runaway guard: a
-    // 40-min+ gap is treated as idle on its own so a browser session left open
-    // across an afternoon cannot stretch one episode over an 8-hour span.
-    const isRunawayGap = gap >= RUNAWAY_GAP_THRESHOLD_MS
-    if (gap > IDLE_GAP_THRESHOLD_MS && (isRunawayGap || gapHasHardActivityBoundary(db, previousEnd, current.startTime))) {
+    // Fifteen minutes without trusted activity is a hard boundary regardless
+    // of whether the platform also emitted a lock/idle event. Sparse focused
+    // support captures carry only seconds of activity across a long capture
+    // window, so they remain evidence for the preceding work instead of
+    // pretending the whole wall-clock window was a new active stretch.
+    if (gap >= IDLE_GAP_THRESHOLD_MS && !isSparseFocusedSupportSession(current)) {
       segments.push({
         sessions: sessions.slice(startIndex, index),
         boundedBeforeGap: startIndex > 0,
@@ -588,6 +652,16 @@ function candidateSpanMs(candidate: CandidateBlock): number {
 
 function candidateActiveMs(candidate: CandidateBlock): number {
   return candidate.sessions.reduce((sum, session) => sum + Math.max(0, session.durationSeconds * 1000), 0)
+}
+
+function isSparseFocusedSupportSession(session: AppSession): boolean {
+  const wallSpanMs = Math.max(0, sessionEndMs(session) - session.startTime)
+  const activeMs = Math.max(0, session.durationSeconds * 1000)
+  const category = inferredFocusedCategoryForSession(session)
+  return activeMs < TIMELINE_MIN_BLOCK_SPAN_MS
+    && wallSpanMs >= IDLE_GAP_THRESHOLD_MS
+    && activeMs * 4 < wallSpanMs
+    && (category === 'development' || category === 'aiTools' || category === 'research')
 }
 
 function validTimelineSplit(index: number, sessions: AppSession[]): boolean {
@@ -1121,6 +1195,19 @@ function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
     .slice(0, 5)
 }
 
+function topAppsForBlock(
+  sessions: AppSession[],
+  dominantCategory: AppCategory,
+): WorkContextAppSummary[] {
+  const apps = topAppsFromSessions(sessions)
+  if (dominantCategory !== 'entertainment' && dominantCategory !== 'social') return apps
+  return apps.filter((app) => (
+    app.isBrowser
+    || !FOCUSED_CATEGORIES.includes(app.category)
+    || app.totalSeconds >= 5 * 60
+  ))
+}
+
 function sha1(value: string): string {
   return crypto.createHash('sha1').update(value).digest('hex')
 }
@@ -1310,7 +1397,80 @@ function findReviewRowForBlock(
   const evidenceRow = rows
     .filter((row) => row.evidence_key === evidenceKey)
     .sort(compareReviewRows)[0] ?? null
-  return { row: evidenceRow, source: evidenceRow ? 'stored_evidence' : 'default' }
+  if (evidenceRow) return { row: evidenceRow, source: 'stored_evidence' }
+
+  // Segmentation upgrades can merge or reshape a corrected block, so its exact
+  // session-set evidence key changes. Reattach explicit user decisions when
+  // the rebuilt block still contains nearly all of the evidence the user
+  // corrected. Default/automatic review rows are intentionally excluded.
+  const currentSessionIds = new Set(
+    block.sessions.map((session) => session.id).filter((id) => id >= 0),
+  )
+  if (currentSessionIds.size === 0) return { row: null, source: 'default' }
+
+  const lineageRows = db.prepare(`
+    SELECT
+      id,
+      block_id,
+      date,
+      evidence_key,
+      review_state,
+      original_block_json,
+      correction_json,
+      updated_at
+    FROM timeline_block_reviews
+    WHERE date = ?
+      AND review_state IN ('corrected', 'ignored', 'approved')
+    ORDER BY updated_at DESC
+  `).all(dateStr) as PersistedReviewRow[]
+
+  const sessionIdsForReview = (row: PersistedReviewRow): number[] => {
+    const original = parseReviewJson(row.original_block_json)
+    if (Array.isArray(original.sessionIds)) {
+      return original.sessionIds.filter((value): value is number => Number.isInteger(value) && value >= 0)
+    }
+    if (row.evidence_key.startsWith('sessions:')) {
+      return row.evidence_key.slice('sessions:'.length)
+        .split(',')
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value >= 0)
+    }
+    return []
+  }
+
+  const overlapRow = lineageRows
+    .map((row) => {
+      const priorSessionIds = sessionIdsForReview(row)
+      const overlap = priorSessionIds.filter((id) => currentSessionIds.has(id)).length
+      const retainedShare = priorSessionIds.length > 0 ? overlap / priorSessionIds.length : 0
+      if (retainedShare >= 0.8) return { row, retainedShare, overlap }
+
+      // Derived-session reprojection can assign new row ids. Fall back to the
+      // original corrected span plus app evidence so the decision still
+      // follows the same real activity rather than a database surrogate key.
+      const original = parseReviewJson(row.original_block_json)
+      const priorStart = typeof original.startTime === 'number' ? original.startTime : null
+      const priorEnd = typeof original.endTime === 'number' ? original.endTime : null
+      const priorApps = Array.isArray(original.appBundles)
+        ? original.appBundles.filter((value): value is string => typeof value === 'string')
+        : []
+      if (priorStart === null || priorEnd === null || priorEnd <= priorStart) return null
+      const overlapMs = Math.max(0, Math.min(priorEnd, block.endTime) - Math.max(priorStart, block.startTime))
+      const spanShare = overlapMs / (priorEnd - priorStart)
+      const currentApps = new Set(block.topApps.map((app) => app.bundleId))
+      const sharesApp = priorApps.length === 0 || priorApps.some((app) => currentApps.has(app))
+      return spanShare >= 0.8 && sharesApp
+        ? { row, retainedShare: spanShare, overlap: Math.round(overlapMs / 1000) }
+        : null
+    })
+    .filter((candidate): candidate is { row: PersistedReviewRow; retainedShare: number; overlap: number } => candidate !== null)
+    .sort((left, right) =>
+      right.retainedShare - left.retainedShare
+      || right.overlap - left.overlap
+      || compareReviewRows(left.row, right.row),
+    )[0]?.row ?? null
+
+  return { row: overlapRow, source: overlapRow ? 'stored_evidence' : 'default' }
 }
 
 function reviewForBlock(db: Database.Database, dateStr: string, block: WorkContextBlock): TimelineBlockReview {
@@ -1681,6 +1841,7 @@ function sessionKindFor(session: AppSession, context?: TimelineBuildContext): Wo
 
 // The dominant kind across a candidate's sessions, weighted by active time.
 function candidateKind(candidate: CandidateBlock, context?: TimelineBuildContext): WorkKind {
+  if (strongNativeWorkCategory(candidate.sessions)) return 'work'
   const weighted = candidate.sessions.map((session) => ({
     kind: sessionKindFor(session, context),
     seconds: session.durationSeconds,
@@ -1694,25 +1855,99 @@ function candidatesShareKind(left: CandidateBlock, right: CandidateBlock, contex
   return candidateKind(left, context) === candidateKind(right, context)
 }
 
-// Split a run of sessions into maximal same-kind runs so no candidate is ever
-// built across a kind boundary.
-function splitSessionsByKind(sessions: AppSession[], context?: TimelineBuildContext): AppSession[][] {
-  if (sessions.length === 0) return []
-  const runs: AppSession[][] = []
-  let current: AppSession[] = [sessions[0]]
-  let currentKind = sessionKindFor(sessions[0], context)
+function sustainedKindShiftSplitIndex(
+  sessions: AppSession[],
+  context: TimelineBuildContext,
+): number | null {
+  if (sessions.length < 2) return null
+  const MIN_SIDE_MS = 10 * 60_000
+  const MIN_PURITY = 0.7
+  let best: { index: number; score: number } | null = null
+
   for (let index = 1; index < sessions.length; index++) {
-    const kind = sessionKindFor(sessions[index], context)
-    if (kind === currentKind) {
-      current.push(sessions[index])
-      continue
-    }
-    runs.push(current)
-    current = [sessions[index]]
-    currentKind = kind
+    const left = sessions.slice(0, index)
+    const right = sessions.slice(index)
+    const leftMs = left.reduce((sum, session) => sum + session.durationSeconds * 1000, 0)
+    const rightMs = right.reduce((sum, session) => sum + session.durationSeconds * 1000, 0)
+    if (leftMs < MIN_SIDE_MS || rightMs < MIN_SIDE_MS) continue
+
+    const leftKind = dominantKind(left.map((session) => ({
+      kind: sessionKindFor(session, context),
+      seconds: session.durationSeconds,
+    })))
+    const rightKind = dominantKind(right.map((session) => ({
+      kind: sessionKindFor(session, context),
+      seconds: session.durationSeconds,
+    })))
+    if (leftKind === rightKind) continue
+
+    const leftKindMs = left
+      .filter((session) => sessionKindFor(session, context) === leftKind)
+      .reduce((sum, session) => sum + session.durationSeconds * 1000, 0)
+    const rightKindMs = right
+      .filter((session) => sessionKindFor(session, context) === rightKind)
+      .reduce((sum, session) => sum + session.durationSeconds * 1000, 0)
+    const leftPurity = leftKindMs / leftMs
+    const rightPurity = rightKindMs / rightMs
+    if (leftPurity < MIN_PURITY || rightPurity < MIN_PURITY) continue
+
+    const score = leftPurity + rightPurity
+    if (!best || score > best.score) best = { index, score }
   }
-  runs.push(current)
-  return runs
+  if (!best) return null
+
+  const leftKind = dominantKind(sessions.slice(0, best.index).map((session) => ({
+    kind: sessionKindFor(session, context),
+    seconds: session.durationSeconds,
+  })))
+  const rightKind = dominantKind(sessions.slice(best.index).map((session) => ({
+    kind: sessionKindFor(session, context),
+    seconds: session.durationSeconds,
+  })))
+  if (leftKind === 'leisure' && rightKind === 'work') {
+    const sustainedNativeIndex = sessions.findIndex((session, index) => {
+      if (index < best.index || isBrowserSession(session) || session.durationSeconds < 5 * 60) return false
+      const category = inferredFocusedCategoryForSession(session)
+      return FOCUSED_CATEGORIES.includes(category) || category === 'meetings'
+    })
+    if (sustainedNativeIndex >= best.index) return sustainedNativeIndex
+
+    for (let index = best.index; index < sessions.length; index++) {
+      const windowStart = sessions[index].startTime
+      const nativeWorkSeconds = sessions.slice(index)
+        .filter((session) => session.startTime < windowStart + 10 * 60_000)
+        .filter((session) => !isBrowserSession(session))
+        .filter((session) => {
+          const category = inferredFocusedCategoryForSession(session)
+          return FOCUSED_CATEGORIES.includes(category) || category === 'meetings'
+        })
+        .reduce((sum, session) => sum + session.durationSeconds, 0)
+      if (nativeWorkSeconds >= 5 * 60) return index
+    }
+  }
+  return best.index
+}
+
+function splitCandidateOnSustainedKindShift(
+  candidate: CandidateBlock,
+  context: TimelineBuildContext,
+): CandidateBlock[] {
+  const splitIndex = sustainedKindShiftSplitIndex(candidate.sessions, context)
+  if (splitIndex === null) return [candidate]
+  return [
+    {
+      ...candidate,
+      sessions: candidate.sessions.slice(0, splitIndex),
+      formation: 'heuristic',
+      boundedAfterGap: false,
+    },
+    {
+      ...candidate,
+      sessions: candidate.sessions.slice(splitIndex),
+      formation: 'heuristic',
+      boundedBeforeGap: false,
+    },
+  ]
 }
 
 function websiteVisitsForRange(
@@ -1994,9 +2229,9 @@ function buildBlockFromCandidate(
   const lastSession = candidate.sessions[candidate.sessions.length - 1]
   const blockEnd = lastSession.endTime ?? (lastSession.startTime + lastSession.durationSeconds * 1000)
   const computedAt = Date.now()
-  const websites = getWebsiteSummariesForRange(db, blockStart, blockEnd).slice(0, 5)
-  const keyPagesByDomain = getTopPagesForDomains(db, blockStart, blockEnd, websites.map((site) => site.domain), 2)
-  const keyPages = websites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
+  const rawWebsites = getWebsiteSummariesForRange(db, blockStart, blockEnd).slice(0, 5)
+  const keyPagesByDomain = getTopPagesForDomains(db, blockStart, blockEnd, rawWebsites.map((site) => site.domain), 2)
+  const keyPages = rawWebsites.flatMap((site) => keyPagesByDomain[site.domain] ?? [])
     .map((page) => page.title?.trim())
     .filter((title): title is string => Boolean(title))
     .filter((title, index, titles) => titles.indexOf(title) === index)
@@ -2004,7 +2239,6 @@ function buildBlockFromCandidate(
   const isLive = candidate.sessions.some((session) => session.id === -1)
   const storedInsight = isLive ? null : getWorkContextInsightForRange(db, blockStart, blockEnd)
   const confidence = confidenceForCandidate(candidate, coherence)
-  const topApps = topAppsFromSessions(candidate.sessions)
   const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
   const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
@@ -2012,7 +2246,15 @@ function buildBlockFromCandidate(
   const topArtifacts = [...pageRefs, ...documentRefs]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 6)
-  const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
+  const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts, candidate.sessions)
+  const topApps = topAppsForBlock(candidate.sessions, dominantCategory)
+  const leisureWebsiteSeconds = rawWebsites
+    .filter((site) => kindForDomain(site.domain) === 'leisure')
+    .reduce((sum, site) => sum + site.totalSeconds, 0)
+  const websites = strongNativeWorkCategory(candidate.sessions)
+    && leisureWebsiteSeconds < 10 * 60
+    ? rawWebsites.filter((site) => kindForDomain(site.domain) !== 'leisure')
+    : rawWebsites
   const evidenceSummary = {
     apps: topApps,
     pages: pageRefs,
@@ -2233,7 +2475,7 @@ const NON_BRIDGEABLE_CATEGORIES = new Set<AppCategory>([
 function candidateDominantCategory(candidate: CandidateBlock, db?: Database.Database, context?: TimelineBuildContext): AppCategory {
   const distribution = categoryDistributionFor(effectiveSessionsFor(candidate.sessions))
   if (!db) return dominantCategoryFromDistribution(distribution)
-  return dominantCategoryForBlock(distribution, candidatePageArtifacts(candidate, db, context))
+  return dominantCategoryForBlock(distribution, candidatePageArtifacts(candidate, db, context), candidate.sessions)
 }
 
 function candidatePageArtifacts(candidate: CandidateBlock, db: Database.Database, context?: TimelineBuildContext): ArtifactRef[] {
@@ -2487,6 +2729,50 @@ function dominantAppId(candidate: CandidateBlock): string | null {
   return topAppsFromSessions(candidate.sessions)[0]?.bundleId ?? null
 }
 
+function candidateHasLeisurePageEvidence(
+  candidate: CandidateBlock,
+  db: Database.Database,
+  context: TimelineBuildContext,
+): boolean {
+  return candidatePageArtifacts(candidate, db, context).some((artifact) => {
+    const policy = policyForHost(artifact.host ?? null)
+    return policy === 'social_feed' || policy === 'entertainment'
+  })
+}
+
+function isCoordinationResumeAcrossGap(
+  left: CandidateBlock,
+  right: CandidateBlock,
+  gapMs: number,
+  db: Database.Database,
+  context: TimelineBuildContext,
+): boolean {
+  return gapMs < TIMELINE_COORDINATION_RESUME_GAP_MS
+    && candidateHasCoordinationEvidence(left)
+    && candidateHasCoordinationEvidence(right)
+    && (
+      candidatesShareIntentEvidence(left, right, db, context)
+      || (dominantAppId(left) != null && dominantAppId(left) === dominantAppId(right))
+      || Math.min(candidateActiveMs(left), candidateActiveMs(right)) < 15 * 60_000
+    )
+}
+
+function isLeisureResumeAcrossGap(
+  left: CandidateBlock,
+  right: CandidateBlock,
+  gapMs: number,
+  db: Database.Database,
+  context: TimelineBuildContext,
+): boolean {
+  return gapMs < TIMELINE_LEISURE_RESUME_GAP_MS
+    && candidateKind(left, context) === 'leisure'
+    && candidateKind(right, context) === 'leisure'
+    && dominantAppId(left) != null
+    && dominantAppId(left) === dominantAppId(right)
+    && candidateHasLeisurePageEvidence(left, db, context)
+    && candidateHasLeisurePageEvidence(right, db, context)
+}
+
 // Bridge two stretches of the same continued work across a moderate gap. Unlike
 // shouldSoftMerge (which only joins zero/near-zero gaps within one coarse
 // segment), this deliberately reaches across coarse-segment boundaries — the
@@ -2495,9 +2781,12 @@ function dominantAppId(candidate: CandidateBlock): string | null {
 // bridge, and the result is capped at the coherent maximum so bridging cannot
 // build a runaway block.
 function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: Database.Database, context: TimelineBuildContext): boolean {
-  if (left.formation === 'meeting' || right.formation === 'meeting') return false
+  const gap = gapBetweenCandidates(left, right)
+  const coordinationResume = isCoordinationResumeAcrossGap(left, right, gap, db, context)
+  const leisureResume = isLeisureResumeAcrossGap(left, right, gap, db, context)
+  if ((left.formation === 'meeting' || right.formation === 'meeting') && !coordinationResume) return false
   if (!candidatesShareKind(left, right, context)) return false
-  if (left.boundedAfterGap && right.boundedBeforeGap) return false
+  if (left.boundedAfterGap && right.boundedBeforeGap && !coordinationResume && !leisureResume) return false
   // Drift categories never bridge across a gap. Two YouTube videos or two
   // X sessions separated by a 17-minute lull are not "the same work resuming" —
   // they are two separate detours, and the browser's content context is often
@@ -2506,12 +2795,12 @@ function shouldBridgeSameWork(left: CandidateBlock, right: CandidateBlock, db: D
   // runaway "watching" block whose span (and old duration) dwarfed the actual
   // tracked time (R4). Bridging is for focused work continuing past an
   // interruption, not for stitching drift together.
-  if (NON_BRIDGEABLE_CATEGORIES.has(candidateDominantCategory(left, db, context))) return false
-  const gap = gapBetweenCandidates(left, right)
-  if (gap >= TIMELINE_SAME_WORK_BRIDGE_GAP_MS) return false
+  if (NON_BRIDGEABLE_CATEGORIES.has(candidateDominantCategory(left, db, context)) && !leisureResume) return false
+  if (gap >= TIMELINE_SAME_WORK_BRIDGE_GAP_MS && !coordinationResume && !leisureResume) return false
   const assistedPair = candidatesAreAssistedWorkPair(left, right, db, context)
   const maxSpanMs = assistedPair ? TIMELINE_MAX_ASSISTED_WORK_SPAN_MS : TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS
   if (combinedSpanMs(left, right) > maxSpanMs) return false
+  if (coordinationResume || leisureResume) return true
   if (assistedPair && gap < TIMELINE_SPLIT_GAP_THRESHOLD_MS) return true
   const leftApp = dominantAppId(left)
   if (!leftApp || leftApp !== dominantAppId(right)) return false
@@ -2541,6 +2830,70 @@ function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Dat
     requireRelated: true,
     maxCombinedMs: TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS,
   }, db, context)
+}
+
+function attachBoundarySupportSessions(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  context: TimelineBuildContext,
+): CandidateBlock[] {
+  const result = candidates.map((candidate) => ({ ...candidate, sessions: [...candidate.sessions] }))
+  for (let index = 0; index < result.length - 1; index++) {
+    const left = result[index]
+    const right = result[index + 1]
+    if (runSignalsFor(left, db, context).mode !== 'drift' || runSignalsFor(right, db, context).mode === 'drift') continue
+
+    if (!candidateHasCoordinationEvidence(right) && strongNativeWorkCategory(right.sessions)) {
+      const sustainedNativeIndex = right.sessions.findIndex((session) => {
+        if (isBrowserSession(session) || session.durationSeconds < 5 * 60) return false
+        const category = inferredFocusedCategoryForSession(session)
+        return FOCUSED_CATEGORIES.includes(category) || category === 'meetings'
+      })
+      if (sustainedNativeIndex > 0) {
+        left.sessions.push(...right.sessions.splice(0, sustainedNativeIndex))
+      }
+    }
+
+    let suffixSeconds = 0
+    let suffixStart = left.sessions.length
+    let suffixHasWorkSupport = false
+    for (let sessionIndex = left.sessions.length - 1; sessionIndex >= 0; sessionIndex--) {
+      const session = left.sessions[sessionIndex]
+      suffixSeconds += session.durationSeconds
+      if (suffixSeconds > 2 * 60) break
+      suffixStart = sessionIndex
+      const category = inferredFocusedCategoryForSession(session)
+      if ((!isBrowserSession(session) || sessionKindFor(session, context) === 'work') && (
+        category === 'meetings'
+        || category === 'development'
+        || category === 'aiTools'
+        || category === 'research'
+      )) {
+        suffixHasWorkSupport = true
+      }
+    }
+    if (suffixHasWorkSupport && suffixStart < left.sessions.length) {
+      right.sessions.unshift(...left.sessions.splice(suffixStart))
+    }
+
+    const moved: AppSession[] = []
+    while (left.sessions.length > 1) {
+      const trailing = left.sessions[left.sessions.length - 1]
+      const category = inferredFocusedCategoryForSession(trailing)
+      const supportsWork = !isBrowserSession(trailing) && (
+        category === 'meetings'
+        || category === 'development'
+        || category === 'aiTools'
+        || category === 'research'
+      )
+      if (!supportsWork || trailing.durationSeconds >= 5 * 60) break
+      moved.unshift(left.sessions.pop()!)
+    }
+    if (moved.length > 0) {
+      right.sessions.unshift(...moved)
+    }
+  }
+  return result
 }
 
 // ── Boundary-scoring reconciliation ─────────────────────────────────────────
@@ -2654,7 +3007,7 @@ interface RunSignals {
 }
 
 function runModeFor(dominantCategory: AppCategory, isMeeting: boolean): RunMode {
-  if (isMeeting || dominantCategory === 'meetings') return 'meeting'
+  if (isMeeting) return 'meeting'
   if (EXECUTION_RUN_CATEGORIES.has(dominantCategory)) return 'execution'
   if (DRIFT_RUN_CATEGORIES.has(dominantCategory)) return 'drift'
   if (RESEARCH_RUN_CATEGORIES.has(dominantCategory)) return 'research'
@@ -2684,12 +3037,82 @@ function isShortAdminRun(left: RunSignals, right: RunSignals): boolean {
   return left.isAdmin && right.isAdmin
 }
 
+function candidateHasCoordinationEvidence(candidate: CandidateBlock): boolean {
+  return candidate.sessions.some((session) => session.category === 'meetings')
+}
+
 // Two runs are one research thread when both sit in the research family and are
 // effectively contiguous — the user is gathering context across sources (Rize,
 // then Toggl, then ChatGPT) on one investigation, even though each source has
 // its own page title.
 function isOneResearchThread(left: RunSignals, right: RunSignals, gapMs: number): boolean {
   return left.mode === 'research' && right.mode === 'research' && gapMs < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
+}
+
+function intentTokens(
+  candidate: CandidateBlock,
+  db?: Database.Database,
+  context?: TimelineBuildContext,
+): Set<string> {
+  const tokens = new Set<string>()
+  const values = candidate.sessions
+    .map((session) => usefulWindowTitle(session))
+    .filter((value): value is string => Boolean(value))
+  if (db) {
+    values.push(...buildPageCandidates(
+      db,
+      candidate.sessions[0]?.startTime ?? 0,
+      candidate.sessions.length > 0 ? sessionEndMs(candidate.sessions[candidate.sessions.length - 1]) : 0,
+      context,
+    ).flatMap((candidate) => candidate.pageRef
+      ? [candidate.pageRef.displayTitle, candidate.pageRef.host ?? '']
+      : []))
+  }
+  for (const value of values) {
+    for (const token of compactWindowTitle(value).toLowerCase().match(/[a-z0-9]{4,}/g) ?? []) {
+      if (![
+        'with', 'from', 'this', 'that', 'google', 'safari', 'chrome', 'cursor', 'codex',
+        'redacted', 'page', 'site', 'example', 'account',
+      ].includes(token)) {
+        tokens.add(token)
+      }
+    }
+  }
+  return tokens
+}
+
+function sameSurroundingIntent(
+  left: CandidateBlock,
+  right: CandidateBlock,
+  db: Database.Database,
+  context: TimelineBuildContext,
+): boolean {
+  const leftSig = runSignalsFor(left, db, context)
+  const rightSig = runSignalsFor(right, db, context)
+  if (leftSig.mode === 'drift' || rightSig.mode === 'drift' || leftSig.mode === 'meeting' || rightSig.mode === 'meeting') {
+    return false
+  }
+  if (candidatesRelated(left, right, db, context)) return true
+  if (leftSig.contentContext && leftSig.contentContext === rightSig.contentContext) return true
+
+  const leftTokens = intentTokens(left, db, context)
+  if ([...intentTokens(right, db, context)].some((token) => leftTokens.has(token))) return true
+
+  // Sharing a browser is not evidence that the subject stayed the same.
+  return leftSig.mode !== 'browse'
+    && rightSig.mode !== 'browse'
+    && leftSig.dominantApp != null
+    && leftSig.dominantApp === rightSig.dominantApp
+}
+
+function candidatesShareIntentEvidence(
+  left: CandidateBlock,
+  right: CandidateBlock,
+  db: Database.Database,
+  context: TimelineBuildContext,
+): boolean {
+  const leftTokens = intentTokens(left, db, context)
+  return [...intentTokens(right, db, context)].some((token) => leftTokens.has(token))
 }
 
 // Score a single proposed boundary. Positive ⇒ lean cut, negative ⇒ lean merge.
@@ -2789,6 +3212,24 @@ function scoreBoundary(
     }
     if (isOneResearchThread(leftSig, rightSig, gapMs)) score -= 4
     if (isShortAdminRun(leftSig, rightSig)) score -= 5
+    const shortBrowseResearchHandoff = (
+      (leftSig.mode === 'browse' && leftSig.activeMs < 10 * 60_000 && rightSig.mode === 'research')
+      || (rightSig.mode === 'browse' && rightSig.activeMs < 10 * 60_000 && leftSig.mode === 'research')
+    )
+    if (shortBrowseResearchHandoff) score -= 4
+    const sustainedInvestigationHandoff =
+      leftSig.activeMs >= 15 * 60_000
+      && rightSig.activeMs >= 15 * 60_000
+      && (leftSig.mode === 'research' || leftSig.mode === 'browse')
+      && (rightSig.mode === 'research' || rightSig.mode === 'browse')
+      && (strongNativeWorkCategory(left.sessions) || strongNativeWorkCategory(right.sessions))
+    if (sustainedInvestigationHandoff) score -= 4
+    if (
+      (candidateHasCoordinationEvidence(left) && rightSig.mode === 'research')
+      || (candidateHasCoordinationEvidence(right) && leftSig.mode === 'research')
+    ) {
+      score -= 4
+    }
   }
 
   return { score, reasons }
@@ -2833,6 +3274,53 @@ function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, con
   return result
 }
 
+// A brief leisure/social detour belongs to the work intent surrounding it.
+// Ten minutes is the product boundary: 9:59 is absorbed; 10:00 remains a
+// distinct episode. The neighbours must independently agree on intent so a
+// short detour never glues two unrelated pieces of work together.
+function foldBriefDetours(candidates: CandidateBlock[], db: Database.Database, context: TimelineBuildContext): CandidateBlock[] {
+  if (candidates.length < 3) return candidates
+
+  let current = candidates
+  let changed = true
+  while (changed) {
+    changed = false
+    const result: CandidateBlock[] = []
+    for (let index = 0; index < current.length; index++) {
+      const left = current[index]
+      const detour = current[index + 1]
+      const right = current[index + 2]
+      const detourActiveMs = detour ? candidateActiveMs(detour) : 0
+      const coordinationDetour = Boolean(
+        detour && left && right
+        && candidateHasCoordinationEvidence(detour)
+        && detourActiveMs < 30 * 60_000
+        && (
+          candidatesShareIntentEvidence(detour, left, db, context)
+          || candidatesShareIntentEvidence(detour, right, db, context)
+        ),
+      )
+      if (
+        left && detour && right
+        && detour.formation !== 'meeting'
+        && runSignalsFor(detour, db, context).mode === 'drift'
+        && (detourActiveMs < 10 * 60_000 || coordinationDetour)
+        && gapBetweenCandidates(left, detour) < IDLE_GAP_THRESHOLD_MS
+        && gapBetweenCandidates(detour, right) < IDLE_GAP_THRESHOLD_MS
+        && (sameSurroundingIntent(left, right, db, context) || coordinationDetour)
+      ) {
+        result.push(mergeCandidatePair(mergeCandidatePair(left, detour), right))
+        index += 2
+        changed = true
+        continue
+      }
+      result.push(left)
+    }
+    current = result
+  }
+  return current
+}
+
 // The reconciliation pass: fold brief peeks, then walk the proposed boundaries
 // and keep only those that clear the cut threshold. Records the surviving
 // reasons on each resulting candidate's edges so every block can explain why it
@@ -2844,7 +3332,7 @@ function reconcileBoundaries(
   corrections: BoundaryCorrections,
 ): CandidateBlock[] {
   if (candidates.length === 0) return candidates
-  const folded = foldBriefPeeks(candidates, db, context)
+  const folded = foldBriefPeeks(foldBriefDetours(candidates, db, context), db, context)
 
   const result: CandidateBlock[] = [{ ...folded[0], startReasons: ['day-start'], endReasons: ['day-end'] }]
   let prevSig = runSignalsFor(folded[0], db, context)
@@ -2881,24 +3369,27 @@ function reconcileBoundaries(
 }
 
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
-  const context = buildTimelineContext(db, sessions)
+  const visibleSessions = sessions.filter((session) => !isSystemNoiseSession(session))
+  if (visibleSessions.length === 0) return []
+  const context = buildTimelineContext(db, visibleSessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
-  const candidates = coarseSegmentsFromSessions(db, sessions)
+  const candidates = coarseSegmentsFromSessions(visibleSessions)
     .flatMap((segment) => {
-      // A kind change (work↔leisure↔personal) is a hard boundary: split the
-      // segment into same-kind runs before analysis so coding is never built
-      // into the same candidate as a video block.
-      const kindRuns = splitSessionsByKind(segment.sessions, context)
-      const segmentCandidates = kindRuns.flatMap((run, index) => {
-        const boundedBeforeGap = index === 0 ? segment.boundedBeforeGap : false
-        const boundedAfterGap = index === kindRuns.length - 1 ? segment.boundedAfterGap : false
-        return analyzeSessions(run, boundedBeforeGap, boundedAfterGap)
-          .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
-      })
+      // Kind is an episode-level result, not a boundary at every app sample.
+      // Analyze the full continuous stretch first so brief browser detours and
+      // neutral/system samples can be judged against the surrounding intent.
+      const segmentCandidates = analyzeSessions(
+        segment.sessions,
+        segment.boundedBeforeGap,
+        segment.boundedAfterGap,
+      )
+        .flatMap((candidate) => normalizeTimelineCandidates([candidate]))
+        .flatMap((candidate) => splitCandidateOnSustainedKindShift(candidate, context))
       return coalesceTimelineCandidates(segmentCandidates, db, context)
     })
-  const bridged = bridgeSameWorkCandidates(candidates, db, context)
-  return reconcileBoundaries(bridged, db, context, corrections)
+  const bridged = bridgeSameWorkCandidates(attachBoundarySupportSessions(candidates, db, context), db, context)
+  const reconciled = reconcileBoundaries(bridged, db, context, corrections)
+  return attachBoundarySupportSessions(reconciled, db, context)
     .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
@@ -2964,34 +3455,29 @@ function labelLooksToolOnly(label: string, block: WorkContextBlock): boolean {
   return false
 }
 
+function labelMatchesRawEvidence(label: string, block: WorkContextBlock): boolean {
+  const normalized = normalizeForLeakCheck(label)
+  if (!normalized) return true
+  const rawValues = [
+    ...block.sessions.flatMap((session) => [session.appName, session.rawAppName, session.windowTitle]),
+    ...block.pageRefs.flatMap((page) => [page.pageTitle, page.displayTitle]),
+    ...block.documentRefs.map((document) => document.displayTitle),
+  ]
+  return rawValues.some((value) => {
+    if (!value) return false
+    const raw = normalizeForLeakCheck(value)
+    return raw.length > 0 && raw === normalized
+  })
+}
+
 function usefulBlockLabel(block: WorkContextBlock, value: string | null | undefined): string | null {
   const label = usefulDerivedLabel(value)
   if (!label) return null
-  return labelLooksToolOnly(label, block) ? null : label
+  return labelLooksToolOnly(label, block) || labelMatchesRawEvidence(label, block) ? null : label
 }
 
-// Browser tab titles typically join segments with " | " (pipe + spaces),
-// e.g. "W2_Reading | Introduction to Machine Learning | Perusall". Real
-// document or page titles use em-dashes, hyphens, middle-dots, or colons.
-// Treat any " | "-joined string as raw tab-title evidence, not a label.
-function looksLikeBrowserTabTitle(value: string): boolean {
-  return / \| /.test(value)
-}
-
-// Categories where a browser page / website is the natural label source.
-// For anything else (development, communication, design, etc.), a stray
-// browser page should NOT be picked as the block label — that's how
-// "Pornhub - $title" ended up labeling a development block.
-const PAGE_LABEL_COMPATIBLE_CATEGORIES = new Set<AppCategory>([
-  'browsing',
-  'aiTools',
-  'research',
-  'entertainment',
-  'social',
-])
-
-function isPageLabelCompatible(block: WorkContextBlock): boolean {
-  return PAGE_LABEL_COMPATIBLE_CATEGORIES.has(block.dominantCategory)
+function isActivityShapedLabel(label: string): boolean {
+  return /^(building|testing|developing|researching|writing|designing|planning|organizing|configuring|debugging|reviewing|watching|browsing|communicating|meeting|communication|software development|research and analysis|design work|web research)\b/i.test(label.trim())
 }
 
 // Share of the block's time spent in non-browser focused-work apps
@@ -3055,50 +3541,11 @@ function labelIsBrowserContentLeak(label: string, block: WorkContextBlock): bool
   return false
 }
 
-function preferredArtifactLabel(block: WorkContextBlock): string | null {
-  // Document artifacts (files, repos, projects, window-derived) are
-  // produced by the foreground app itself, so they're category-compatible
-  // by construction — a VS Code window artifact reflects VS Code work.
-  // Keep them unconditional.
-  const documentLabel = usefulDerivedLabel(block.documentRefs[0]?.displayTitle)
-  if (documentLabel && !looksLikeBrowserTabTitle(documentLabel)) return documentLabel
-
-  // Page and website labels only apply when the block is browsing-dominant.
-  // For a development block, a stray YouTube/Pornhub/news page is noise,
-  // not a label.
-  if (!isPageLabelCompatible(block)) return null
-
-  // F1: even on a block whose dominantCategory is page-label-compatible (or
-  // was rewritten to 'entertainment' by the top-artifact override), reject
-  // entertainment/social/adult pages as the label when the user actually
-  // spent most of the block in non-browser work apps. The IDE/terminal time
-  // is what they were doing; the open tab is incidental.
-  const workAppDominant = blockHasWorkAppDominance(block)
-  const firstAllowedPage = block.pageRefs.find((page) => {
-    const host = page.domain ?? page.host ?? null
-    if (isHostBlockedForLabel(host)) return false
-    if (workAppDominant && isHostBlockedForAppsRail(host)) return false
-    return true
-  })
-  const rawPageLabel = firstAllowedPage?.displayTitle ?? firstAllowedPage?.pageTitle
-  const pageLabel = usefulDerivedLabel(rawPageLabel)
-  if (pageLabel && !looksLikeBrowserTabTitle(pageLabel)) return pageLabel
-
-  const firstAllowedSite = block.websites.find((site) => {
-    if (isHostBlockedForLabel(site.domain)) return false
-    if (workAppDominant && isHostBlockedForAppsRail(site.domain)) return false
-    return true
-  })
-  const domainLabel = firstAllowedSite ? shortDomainLabel(firstAllowedSite.domain) : null
-  return usefulDerivedLabel(domainLabel)
-}
-
 export type BackgroundRelabelDisposition = 'skip' | 'review' | 'relabel'
 
 export function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
   return Boolean(
-    preferredArtifactLabel(block)
-    || usefulBlockLabel(block, block.workflowRefs[0]?.label)
+    usefulBlockLabel(block, block.workflowRefs[0]?.label)
     || usefulBlockLabel(block, block.ruleBasedLabel),
   )
 }
@@ -3149,6 +3596,25 @@ function finalizedLabelForBlock(
   block: WorkContextBlock,
   dateStr: string = localDateKeyForTimestamp(block.startTime),
 ): WorkContextBlock {
+  // Today's blocks are recomputed from live sessions on every read. Reapply an
+  // explicit AI category written by Analyze Day so the badge does not snap
+  // back to the pre-analysis heuristic while the label remains AI-authored.
+  const persistedAiCategory = db.prepare(`
+    SELECT dominant_category AS category
+    FROM timeline_blocks
+    WHERE id = ?
+      AND invalidated_at IS NULL
+      AND label_source = 'ai'
+    LIMIT 1
+  `).get(block.id) as { category: AppCategory } | undefined
+  if (
+    persistedAiCategory
+    && persistedAiCategory.category !== 'system'
+    && persistedAiCategory.category !== 'uncategorized'
+  ) {
+    block = { ...block, dominantCategory: persistedAiCategory.category }
+  }
+
   const override = getBlockLabelOverride(db, block.id)
   // Work-memory labels ("<project> development", learned work patterns) only
   // make sense on a block whose dominant activity is focused work. On a
@@ -3168,9 +3634,11 @@ function finalizedLabelForBlock(
   const projectHint = concurrentEvidence
     ? extractProjectHintFromEvidence(block, concurrentEvidence)
     : null
-  const artifactLabel = preferredArtifactLabel(block)
+  const memoryLabel = usefulBlockLabel(block, memoryPattern?.label)
+  const projectLabel = usefulBlockLabel(block, projectHint?.label)
   const workflowLabel = usefulBlockLabel(block, block.workflowRefs[0]?.label)
-  const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
+  const rawRuleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
+  const ruleLabel = rawRuleLabel && isActivityShapedLabel(rawRuleLabel) ? rawRuleLabel : null
   const rawAiLabel = usefulBlockLabel(block, block.aiLabel)
   // F1: the AI labeler can also lift a YouTube tab title verbatim into the
   // block headline when it sees that page in the evidence. Reject any
@@ -3178,32 +3646,26 @@ function finalizedLabelForBlock(
   // in the block when the user's actual time was spent on work apps.
   const aiLabel = rawAiLabel && labelIsBrowserContentLeak(rawAiLabel, block) ? null : rawAiLabel
 
-  // Label priority. A user override always wins; a user-promoted memory pattern
-  // next. Then the names that read like a human wrote them — the AI label and
-  // the concrete artifact (page/document) title — before the deterministic
-  // floors. The project hint ("<project> development") is a FLOOR, not an
-  // override: it must never beat a real AI label like "Refactoring the timeline
-  // coalescer" (the §6 quality bar). It sits just above the bare rule label.
+  // Label priority. User corrections always win. Learned and AI labels are
+  // accepted only after the raw-evidence leak check; deterministic output is an
+  // activity phrase, never a copied app/window/page title.
   const chosen = override?.label?.trim()
-    || memoryPattern?.label
+    || memoryLabel
     || aiLabel
-    || artifactLabel
     || workflowLabel
-    || projectHint?.label
+    || projectLabel
     || ruleLabel
-    || userVisibleLabelForBlock(block)
+    || deterministicActivityLabel(block)
 
   const source = override?.label?.trim()
     ? 'user'
-    : memoryPattern?.label && chosen === memoryPattern.label
+    : memoryLabel && chosen === memoryLabel
       ? 'memory'
       : aiLabel && chosen === aiLabel
         ? 'ai'
-        : artifactLabel && chosen === artifactLabel
-          ? 'artifact'
-          : workflowLabel && chosen === workflowLabel
+        : workflowLabel && chosen === workflowLabel
             ? 'workflow'
-            : projectHint?.label && chosen === projectHint.label
+            : projectLabel && chosen === projectLabel
               ? 'memory'
               : ruleLabel && chosen === ruleLabel
                 ? 'rule'
@@ -3218,8 +3680,6 @@ function finalizedLabelForBlock(
         ? 1
         : source === 'memory'
           ? memoryPattern?.confidence ?? projectHint?.confidence ?? 0.72
-        : source === 'artifact'
-          ? 0.88
           : source === 'workflow'
             ? 0.8
             : source === 'ai'
@@ -3529,7 +3989,7 @@ function persistedBlockLabelsByBlockId(
     SELECT block_id, label, source
     FROM timeline_block_labels
     WHERE block_id IN (${sqlPlaceholders(blockIds.length)})
-    ORDER BY block_id ASC, created_at ASC, id ASC
+    ORDER BY block_id ASC, created_at DESC, id DESC
   `).all(...blockIds) as PersistedBlockLabelRow[]
 
   for (const row of rows) {
@@ -3681,7 +4141,7 @@ function loadPersistedTimelineBlocksForDay(
       categoryDistribution = {}
     }
 
-    const dominantCategory = dominantCategoryForBlock(categoryDistribution, topArtifacts)
+    const dominantCategory = row.dominant_category
     const ruleLabel = labelRows.find(r => r.source === 'rule')?.label || prettyCategory(dominantCategory)
     const aiLabel = labelRows.find(r => r.source === 'ai' || r.source === 'workflow')?.label || null
     const overrideRow = labelRows.find(r => r.source === 'user')
@@ -3689,7 +4149,18 @@ function loadPersistedTimelineBlocksForDay(
     const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
-    const blockSessions = sessions.filter((s) => sessionIds.has(s.id))
+    const matchedSessions = sessions.filter((s) => sessionIds.has(s.id))
+    // Derived-session ids are projection-local and can change after a startup
+    // reprojection. Preserve the persisted block's duration truth by
+    // reattaching sessions through its stable time range when member ids no
+    // longer resolve.
+    const blockSessions = matchedSessions.length === memberRows.length && matchedSessions.length > 0
+      ? matchedSessions
+      : sessions.filter((session) => {
+          const sessionEnd = session.endTime
+            ?? session.startTime + Math.max(1, session.durationSeconds) * 1000
+          return session.startTime < row.end_time && sessionEnd > row.start_time
+        })
 
     const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
 
@@ -3771,35 +4242,16 @@ function loadPersistedTimelineBlocksForDay(
   return blocks.map((block) => finalizedLabelForBlock(db, block, dateStr))
 }
 
-// A day is "processed" once any of its persisted blocks carries an AI,
-// workflow, or user-authored label — i.e. the nightly consolidation job (or the
-// user) has already named it. Such a day is kept exactly as it was summarized.
-function persistedDayWasProcessed(db: Database.Database, dateStr: string): boolean {
-  const row = db.prepare(`
-    SELECT 1
-    FROM timeline_block_labels labels
-    JOIN timeline_blocks blocks ON blocks.id = labels.block_id
-    WHERE blocks.date = ?
-      AND blocks.invalidated_at IS NULL
-      AND blocks.is_live = 0
-      AND labels.source IN ('ai', 'workflow', 'user')
-    LIMIT 1
-  `).get(dateStr)
-  return Boolean(row)
-}
-
 // True when the persisted blocks for a day were built by a superseded timeline
 // heuristic, so a fresh reconstruction would group them more accurately.
 function persistedDayHeuristicIsStale(db: Database.Database, dateStr: string): boolean {
   const row = db.prepare(`
-    SELECT heuristic_version
+    SELECT MIN(heuristic_version) AS heuristic_version, COUNT(*) AS block_count
     FROM timeline_blocks
     WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
-    ORDER BY computed_at ASC
-    LIMIT 1
-  `).get(dateStr) as { heuristic_version: string } | undefined
+  `).get(dateStr) as { heuristic_version: string | null; block_count: number } | undefined
   if (!row) return false
-  return row.heuristic_version !== TIMELINE_HEURISTIC_VERSION
+  return row.heuristic_version !== TIMELINE_HEURISTIC_VERSION || row.block_count > 24
 }
 
 export function listTimelineDaysNeedingHeuristicUpgrade(
@@ -3813,14 +4265,8 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
     WHERE blocks.date < ?
       AND blocks.invalidated_at IS NULL
       AND blocks.is_live = 0
-      AND blocks.heuristic_version <> ?
-      AND NOT EXISTS (
-        SELECT 1
-        FROM timeline_block_labels labels
-        WHERE labels.block_id = blocks.id
-          AND labels.source IN ('ai', 'workflow', 'user')
-      )
     GROUP BY blocks.date
+    HAVING MIN(blocks.heuristic_version) <> ? OR COUNT(*) > 24
     ORDER BY blocks.date DESC
     LIMIT ?
   `).all(beforeDate, TIMELINE_HEURISTIC_VERSION, limit) as Array<{ date: string }>
@@ -3840,12 +4286,11 @@ export function buildTimelineBlocksForDay(
   if (dateStr < todayStr) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
     if (persisted && persisted.length > 0) {
-      // Keep nightly/user-processed days exactly as they were summarized, and
-      // keep any day already on the current heuristic (no churn). Only an older
-      // day the nightly job never reached AND built under a superseded
-      // heuristic is reconstructed more accurately on revisit, then
-      // re-persisted so the improvement sticks.
-      if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
+      // Persisted labels are not permission to freeze bad segmentation. Every
+      // past day is lazily rebuilt when the block heuristic changes (or when a
+      // pathological legacy materialization still has dozens of blocks).
+      // Review and boundary corrections reattach through evidence lineage.
+      if (!persistedDayHeuristicIsStale(db, dateStr)) {
         return persisted
       }
       forceMaterialize = true
@@ -3889,7 +4334,7 @@ function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
   return merged
 }
 
-const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
+const MIN_VISIBLE_GAP_MS = 15 * 60 * 1000
 
 function isVisibleGapSegment(segment: TimelineSegment): boolean {
   if (segment.kind === 'work_block') return true
@@ -4043,7 +4488,68 @@ function leisureLabelForBlock(block: WorkContextBlock): string {
   if (leisureDomains.length > 0) return leisureActivityTitle(leisureDomains)
   // No leisure domain captured (titleless browsing): fall back to the top
   // domains, still activity-shaped.
-  return leisureActivityTitle(block.websites.map((site) => site.domain))
+  const fallback = leisureActivityTitle(block.websites.map((site) => site.domain))
+  if (fallback && fallback !== 'Leisure activity') return fallback
+  if (block.dominantCategory === 'social') return 'Social browsing'
+  if (block.dominantCategory === 'entertainment') return 'Watching entertainment'
+  if (block.dominantCategory === 'browsing') return 'Web browsing'
+  return 'Personal activity'
+}
+
+function deterministicActivityLabel(block: WorkContextBlock): string {
+  const rawSubject = inferWorkIntent(block).subject
+    ?? block.documentRefs[0]?.displayTitle
+    ?? block.pageRefs.find((page) => !isHostBlockedForAppsRail(page.domain ?? page.host ?? null))?.displayTitle
+    ?? bestTitleLabelForSessions(block.sessions)
+    ?? null
+  const subject = rawSubject
+    ? humanizeTitle(
+        naturalizeLabel(rawSubject)
+          .replace(/\.[a-z0-9]{1,6}\b/gi, '')
+          .replace(/[/_]+/g, ' ')
+          .replace(/([a-z])([A-Z])/g, '$1 $2')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      )
+    : null
+  const safeSubject = subject
+    && subject.length >= 3
+    && !/^(npm|pnpm|yarn|git|node|python|cargo|swift|make)\b/i.test(subject)
+    && !/^https?:\/\//i.test(subject)
+    && !block.topApps.some((app) => normalizedLabelValue(app.appName) === normalizedLabelValue(subject))
+    ? subject.split(/\s+/).slice(0, 8).join(' ')
+    : null
+
+  // Bare browsing without domain evidence can resolve to a neutral/personal
+  // kind. Keep its sustained topics distinct with an activity-shaped subject
+  // instead of collapsing every block to the same "Leisure activity" floor.
+  if (block.dominantCategory === 'browsing' && safeSubject) {
+    return `Browsing ${safeSubject}`
+  }
+
+  if (effectiveBlockKind(block) !== 'work') {
+    const leisure = leisureLabelForBlock(block)
+    return leisure && !GENERIC_LABELS.has(leisure) ? leisure : 'Leisure activity'
+  }
+
+  switch (block.dominantCategory) {
+    case 'development': return safeSubject ? `Developing ${safeSubject}` : 'Software development'
+    case 'research':
+    case 'aiTools': return safeSubject ? `Researching ${safeSubject}` : 'Research and analysis'
+    case 'writing': return safeSubject ? `Writing ${safeSubject}` : 'Writing'
+    case 'design': return safeSubject ? `Designing ${safeSubject}` : 'Design work'
+    case 'meetings': return safeSubject ? `Meeting about ${safeSubject}` : 'Meeting'
+    case 'communication':
+    case 'email': return safeSubject ? `Communicating about ${safeSubject}` : 'Communication'
+    case 'productivity': return safeSubject ? `Organizing ${safeSubject}` : 'Planning and administration'
+    case 'browsing': return safeSubject ? `Researching ${safeSubject}` : 'Web research'
+    case 'social': return 'Social browsing'
+    case 'entertainment': return 'Watching'
+    default:
+      return block.sessions.length > 0 || block.topApps.length > 0 || block.topArtifacts.length > 0
+        ? 'Computer activity'
+        : 'Untracked activity'
+  }
 }
 
 export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?: string | null): string {
@@ -4063,9 +4569,9 @@ export function userVisibleLabelForBlock(block: WorkContextBlock, overrideLabel?
 }
 
 function rawWorkLabelForBlock(block: WorkContextBlock): string {
-  const preferred = block.aiLabel
-  if (preferred && preferred.trim() && !GENERIC_LABELS.has(preferred.trim())) {
-    return preferred.trim()
+  const preferred = usefulBlockLabel(block, block.aiLabel)
+  if (preferred) {
+    return preferred
   }
 
   // The finalized label (artifact / workflow / memory / corrected) is the name
@@ -4074,45 +4580,22 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   // Prefer it whenever it is a real, specific label rather than a generic
   // category floor. This is what lets earlier intent name the block instead of
   // the block reading "Development" / "Writing" / "Productivity".
-  const current = block.label.current?.trim()
-  if (current && !GENERIC_LABELS.has(current) && current !== 'Untitled block') {
+  const current = usefulBlockLabel(block, block.label.current)
+  if (current) {
     return current
   }
 
-  if (block.ruleBasedLabel.trim() && !GENERIC_LABELS.has(block.ruleBasedLabel.trim())) {
-    return block.ruleBasedLabel.trim()
+  const ruleLabel = usefulBlockLabel(block, block.ruleBasedLabel)
+  if (ruleLabel) {
+    return ruleLabel
   }
 
-  // Subject-driven fallback: when the deterministic label is only a category
-  // floor, the inferred intent subject (the document/page/issue the user was
-  // actually on) names the work far better than the bare category. This is the
-  // "subject should drive the label" rule — a browser-hosted productivity block
-  // reads "Roadmap board", not "Productivity".
-  const intentSubject = inferWorkIntent(block).subject?.trim()
-  if (intentSubject && !GENERIC_LABELS.has(intentSubject)) {
+  const intentSubject = usefulBlockLabel(block, inferWorkIntent(block).subject)
+  if (intentSubject) {
     return intentSubject
   }
 
-  // Browser site names are only an honest label when a page could own the
-  // block. On a development/writing/etc. block, the open tabs are background
-  // noise (the same ownership gate as the artifact path) — labeling a coding
-  // block "Alueducation + Google" is the F1 leak. Only fall back to sites when
-  // the block's category is page-label-compatible.
-  if (isPageLabelCompatible(block)) {
-    const websiteLabels = block.websites
-      .map((site) => shortDomainLabel(site.domain))
-      .filter((label, index, labels) => labels.indexOf(label) === index)
-    if (websiteLabels.length >= 2) return `${websiteLabels[0]} + ${websiteLabels[1]}`
-    if (websiteLabels.length === 1) return websiteLabels[0]
-  }
-
-  // Last resort: name the category. "Development" reads far better than
-  // "Untitled block" as a floor, and it agrees with the badge. Only genuinely
-  // contentless blocks (system/uncategorized) stay "Untitled block".
-  if (block.dominantCategory !== 'uncategorized' && block.dominantCategory !== 'system') {
-    return prettyCategory(block.dominantCategory)
-  }
-  return 'Untitled block'
+  return deterministicActivityLabel(block)
 }
 
 export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
@@ -4163,6 +4646,33 @@ export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
   return `This block looks like ${label.toLowerCase()} for ${duration}. ${evidenceParts.join('. ')}. The block had ${switchSummary}.`
 }
 
+function dayTruthForBlocks(blocks: WorkContextBlock[]): {
+  totalSeconds: number
+  focusSeconds: number
+  appCount: number
+  siteDomains: Set<string>
+} {
+  const trusted = blocks.filter(isTrustedTimelineBlock)
+  const totalSeconds = trusted.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
+  const focusSeconds = trusted.reduce(
+    (sum, block) => sum + (FOCUSED_CATEGORIES.includes(block.dominantCategory) ? blockActiveSeconds(block) : 0),
+    0,
+  )
+  const appIds = new Set<string>()
+  const siteDomains = new Set<string>()
+  for (const block of trusted) {
+    for (const app of block.topApps) appIds.add(app.bundleId)
+    for (const page of block.pageRefs) {
+      const domain = page.domain ?? page.host
+      if (domain) siteDomains.add(domain)
+    }
+    for (const domain of block.evidenceSummary.domains ?? []) {
+      if (domain) siteDomains.add(domain)
+    }
+  }
+  return { totalSeconds, focusSeconds, appCount: appIds.size, siteDomains }
+}
+
 export function getTimelineDayPayload(
   db: Database.Database,
   dateStr: string,
@@ -4175,25 +4685,23 @@ export function getTimelineDayPayload(
   const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
-  const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-  const focusSeconds = sessions
-    .filter((session) => session.isFocused)
-    .reduce((sum, session) => sum + session.durationSeconds, 0)
+  const truth = dayTruthForBlocks(blocks)
+  const visibleWebsites = websites.filter((website) => truth.siteDomains.has(website.domain))
 
   return {
     date: dateStr,
     sessions,
-    websites,
+    websites: visibleWebsites,
     blocks,
     segments,
     focusSessions,
     computedAt: Date.now(),
     version: TIMELINE_HEURISTIC_VERSION,
-    totalSeconds,
-    focusSeconds,
-    focusPct: totalSeconds > 0 ? Math.round((focusSeconds / totalSeconds) * 100) : 0,
-    appCount: new Set(sessions.map((session) => session.bundleId)).size,
-    siteCount: websites.length,
+    totalSeconds: truth.totalSeconds,
+    focusSeconds: truth.focusSeconds,
+    focusPct: truth.totalSeconds > 0 ? Math.round((truth.focusSeconds / truth.totalSeconds) * 100) : 0,
+    appCount: truth.appCount,
+    siteCount: visibleWebsites.length,
   }
 }
 
@@ -4232,6 +4740,7 @@ function getLightweightDayPayload(
   db: Database.Database,
   dateStr: string,
 ): DayTimelinePayload | null {
+  if (persistedDayHeuristicIsStale(db, dateStr)) return null
   const [fromMs, toMs] = localDayBounds(dateStr)
   const sessions = getSessionsForRange(db, fromMs, toMs)
   const websitesForDay = getWebsiteSummariesForRange(db, fromMs, toMs)
@@ -4284,9 +4793,6 @@ function getLightweightDayPayload(
   const focusSessionMembersByBlock = persistedBlockMembersByBlockId(db, blockIds, 'focus_session')
 
   const blocks: WorkContextBlock[] = []
-
-  let totalSeconds = 0
-  let focusSeconds = 0
 
   for (const row of rows) {
     let evidence: Partial<TimelineEvidenceSummary> = {}
@@ -4349,13 +4855,6 @@ function getLightweightDayPayload(
       sessionIds: focusSessionIds,
     }
 
-    const blockActiveSec = blockSessions.length > 0
-      ? blockSessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-      : memberRows.reduce((sum, r) => sum + r.weight_seconds, 0)
-    totalSeconds += blockActiveSec
-    if (FOCUSED_CATEGORIES.includes(dominantCategory)) {
-      focusSeconds += blockActiveSec
-    }
     const evidenceApps = Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : []
     const topApps = evidenceApps.length > 0 ? evidenceApps : topAppsFromSessions(blockSessions)
 
@@ -4417,27 +4916,23 @@ function getLightweightDayPayload(
 
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
-  const activeSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
-  const focusedSeconds = sessions
-    .filter((session) => session.isFocused)
-    .reduce((sum, session) => sum + session.durationSeconds, 0)
-  const payloadTotalSeconds = activeSeconds > 0 ? activeSeconds : totalSeconds
-  const payloadFocusSeconds = activeSeconds > 0 ? focusedSeconds : focusSeconds
+  const truth = dayTruthForBlocks(blocks)
+  const visibleWebsites = websitesForDay.filter((website) => truth.siteDomains.has(website.domain))
 
   return {
     date: dateStr,
     sessions,
-    websites: websitesForDay,
+    websites: visibleWebsites,
     blocks,
     segments,
     focusSessions,
     computedAt: Date.now(),
     version: TIMELINE_HEURISTIC_VERSION,
-    totalSeconds: payloadTotalSeconds,
-    focusSeconds: payloadFocusSeconds,
-    focusPct: payloadTotalSeconds > 0 ? Math.round((payloadFocusSeconds / payloadTotalSeconds) * 100) : 0,
-    appCount: new Set(sessions.map((session) => session.bundleId)).size,
-    siteCount: websitesForDay.length,
+    totalSeconds: truth.totalSeconds,
+    focusSeconds: truth.focusSeconds,
+    focusPct: truth.totalSeconds > 0 ? Math.round((truth.focusSeconds / truth.totalSeconds) * 100) : 0,
+    appCount: truth.appCount,
+    siteCount: visibleWebsites.length,
   }
 }
 
@@ -4598,10 +5093,8 @@ export function getWorkflowSummaries(
   days = 14,
 ): WorkflowPattern[] {
   const today = localDateStringForOffset(0)
-  const [todayStart] = localDayBounds(today)
-  const fromMs = todayStart - Math.max(0, days - 1) * 86_400_000
-  const fromDate = new Date(fromMs)
-  const fromDateStr = `${fromDate.getFullYear()}-${String(fromDate.getMonth() + 1).padStart(2, '0')}-${String(fromDate.getDate()).padStart(2, '0')}`
+  const [year, month, day] = today.split('-').map(Number)
+  const fromDateStr = localDateString(new Date(year, month - 1, day - Math.max(0, days - 1)))
 
   const rows = db.prepare(`
     SELECT
@@ -4711,8 +5204,10 @@ export function getAppDetailPayload(
   const today = isDate ? (daysOrDate as string) : localDateStringForOffset(0)
   const days = isDate ? 1 : Number(daysOrDate)
 
-  const [todayFrom, todayTo] = localDayBounds(today)
-  const fromMs = todayFrom - Math.max(0, days - 1) * 86_400_000
+  const [, todayTo] = localDayBounds(today)
+  const [year, month, day] = today.split('-').map(Number)
+  const fromDate = localDateString(new Date(year, month - 1, day - Math.max(0, days - 1)))
+  const [fromMs] = localDayBounds(fromDate)
   const rangeKey = isDate ? `1d:${today}` : `${days}d:${today}`
 
   const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), liveSession)
@@ -4723,6 +5218,11 @@ export function getAppDetailPayload(
 
   const relevantDates = Array.from(new Set(sessions.map((session) => localDateKeyForTimestamp(session.startTime))))
   const historicalDates = relevantDates.filter((date) => !(date === today && liveSession))
+  for (const date of historicalDates) {
+    if (!persistedDayHeuristicIsStale(db, date) && validPersistedTimelineBlockCount(db, date) > 0) continue
+    const [dayFrom, dayTo] = localDayBounds(date)
+    buildTimelineBlocksForDay(db, date, getSessionsForRange(db, dayFrom, dayTo), { materialize: true })
+  }
   const persistedBlocksByDate = loadPersistedAppDetailBlocksForDates(db, historicalDates)
   const blocksByDate = new Map<string, AppDetailBlockSlice[]>(persistedBlocksByDate)
   const sessionDerivedBlocksByDate = buildSessionDerivedAppDetailBlocksByDate(sessions, canonicalAppId)

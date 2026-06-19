@@ -46,7 +46,6 @@ import {
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
-  fallbackGeneratedReportContent,
   parseGeneratedReportResult,
 } from '../lib/dayReportFallback'
 import { capContextBlock } from '../lib/contextCap'
@@ -109,7 +108,7 @@ import type {
   WorkContextInsight,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS } from '@shared/types'
-import { blockActiveSeconds } from '@shared/blockDuration'
+import { blockActiveSeconds, blockDisplayedActiveSeconds } from '@shared/blockDuration'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import {
   executeTextAIJob,
@@ -192,10 +191,6 @@ interface ReportContextBundle {
   tableRows: Array<Record<string, string | number>>
   chartRows: Array<{ label: string; value: number; secondaryValue?: number | null }>
   chartValueLabel: string
-  // When present, the report body is rendered deterministically from the
-  // bundle's structured data — no LLM call, no fabrication risk. The chat
-  // card response is a brief deterministic summary of the same numbers.
-  renderDeterministic?: () => { reportMarkdown: string; assistantResponse: string }
 }
 
 type DirectReportEntity =
@@ -3148,70 +3143,6 @@ function reviewedWorkIntent(block: WorkContextBlock): ReturnType<typeof inferWor
   }
 }
 
-function leadSentenceForIntent(block: WorkContextBlock): string {
-  const duration = formatDuration(blockDurationSeconds(block))
-  const intent = reviewedWorkIntent(block)
-
-  switch (intent.role) {
-    case 'execution':
-      return intent.subject
-        ? `The clearest named block was ${intent.subject} for ${duration}.`
-        : `The clearest block lasted ${duration}, but the label is still broad.`
-    case 'research':
-      return intent.subject
-        ? `A large share of today was captured around ${intent.subject} for ${duration}.`
-        : `A large share of today was browsing or page context for ${duration}, but intent is not certain.`
-    case 'review':
-      return intent.subject
-        ? `A large share of today touched ${intent.subject} for ${duration}.`
-        : `A large share of today looked like review for ${duration}, based on the available titles.`
-    case 'communication':
-      return intent.subject
-        ? `A large share of today was communication around ${intent.subject} for ${duration}.`
-        : `A large share of today was communication for ${duration}.`
-    case 'coordination':
-      return intent.subject
-        ? `A large share of today was coordination around ${intent.subject} for ${duration}.`
-        : `A large share of today was coordination for ${duration}.`
-    case 'ambient':
-      return intent.subject
-        ? `A meaningful chunk of today was browser or app context on ${intent.subject} for ${duration}.`
-        : `A meaningful chunk of today was browser or app context for ${duration}.`
-    case 'ambiguous':
-    default:
-      return intent.subject
-        ? `The day mixed together work touching ${intent.subject} for ${duration}.`
-        : `The day mixed together several threads over ${duration}.`
-  }
-}
-
-function supportingIntentSentence(primary: WorkContextBlock, rankedBlocks: WorkContextBlock[]): string | null {
-  const primaryIntent = reviewedWorkIntent(primary)
-  const supporting = rankedBlocks
-    .slice(1)
-    .map((block) => ({ block, intent: reviewedWorkIntent(block) }))
-    .find(({ intent }) => intent.role !== primaryIntent.role)
-
-  if (!supporting) return null
-
-  if (primaryIntent.role === 'execution' && (supporting.intent.role === 'research' || supporting.intent.role === 'ambient')) {
-    return `${supporting.intent.summary} was supporting context, based on the available titles.`
-  }
-
-  if ((primaryIntent.role === 'research' || primaryIntent.role === 'ambient') && supporting.intent.role === 'execution') {
-    return `The more concrete work evidence showed up in ${supporting.intent.summary.toLowerCase()}.`
-  }
-
-  return null
-}
-
-function focusSentence(payload: DayTimelinePayload): string {
-  if (payload.focusPct >= 70) {
-    return `Focus held for ${formatDuration(payload.focusSeconds)} (${payload.focusPct}% of tracked time).`
-  }
-  return `Focus was more fragmented, with ${formatDuration(payload.focusSeconds)} counted as focused time (${payload.focusPct}%).`
-}
-
 function inferFollowUpAffordances(answerKind: AIAnswerKind): AIConversationState['followUpAffordances'] {
   switch (answerKind) {
     case 'weekly_brief':
@@ -3453,66 +3384,66 @@ async function persistMessageArtifacts(
   }
 }
 
-function fallbackDaySummary(payload: DayTimelinePayload): AIDaySummaryResult {
-  if (payload.totalSeconds === 0) {
-    return {
-      summary: 'No tracked activity yet today. Once Daylens has real local history, this screen can answer questions about your work, files, pages, and focus patterns.',
-      questionSuggestions: [
-        'What kinds of questions will you be able to answer once I have more history?',
-        'How should I use Daylens if I am not tracking clients?',
-        'What should I pay attention to the first few days of tracking?',
-      ],
-    }
-  }
+function canonicalTimelineBlocks(payload: DayTimelinePayload): WorkContextBlock[] {
+  return payload.blocks.filter(isTrustedTimelineBlock)
+}
 
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const rankedBlocks = [...trustedBlocks]
-    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
-    .slice(0, 3)
-  const primary = rankedBlocks[0]
-  const evidence = primary ? namedEvidenceForSummary(primary) : []
-
-  const summaryParts = [
-    `You tracked ${formatDuration(payload.totalSeconds)} across ${trustedBlocks.length} trusted block${trustedBlocks.length === 1 ? '' : 's'} today.`,
-    primary ? leadSentenceForIntent(primary) : null,
-    evidence.length > 0 ? `Strongest evidence included ${evidence.join(', ')}.` : null,
-    primary ? supportingIntentSentence(primary, rankedBlocks) : null,
-    focusSentence(payload),
-  ]
-
+function canonicalBlockSignatureFacts(block: WorkContextBlock): Record<string, unknown> {
   return {
-    summary: summaryParts.filter((part): part is string => Boolean(part)).join(' '),
+    id: block.id,
+    label: block.label.current,
+    durationSeconds: blockDurationSeconds(block),
+    startTime: block.startTime,
+    endTime: block.endTime,
+    dominantCategory: block.dominantCategory,
+    categoryDistribution: Object.entries(block.categoryDistribution)
+      .sort(([left], [right]) => left.localeCompare(right)),
+    correction: {
+      state: block.review.state,
+      source: block.review.source,
+      originalBlockId: block.review.originalBlockId,
+      originalLabel: block.review.originalLabel,
+      originalIntentRole: block.review.originalIntentRole,
+      originalIntentSubject: block.review.originalIntentSubject,
+      correctedLabel: block.review.correctedLabel,
+      correctedIntentRole: block.review.correctedIntentRole,
+      correctedIntentSubject: block.review.correctedIntentSubject,
+      updatedAt: block.review.updatedAt,
+    },
+  }
+}
+
+function canonicalDayTotalSeconds(payload: DayTimelinePayload): number {
+  return canonicalTimelineBlocks(payload)
+    .reduce((total, block) => total + blockDisplayedActiveSeconds(block), 0)
+}
+
+function noDataDaySummary(dateStr: string): AIDaySummaryResult {
+  return {
+    summary: `No tracked activity was recorded for ${dateStr}.`,
     questionSuggestions: [
-      'What did I actually get done today?',
-      'Which files, docs, or pages did I touch today?',
-      payload.blocks.length >= 3 ? 'Where did my focus break down today?' : 'What should I pick back up next?',
+      'Show me another day',
+      'What did I work on this week?',
+      'Which days have tracked activity?',
     ],
   }
 }
 
 function daySummaryCacheKey(payload: DayTimelinePayload): string {
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const trustedBlocks = canonicalTimelineBlocks(payload)
   return JSON.stringify({
     date: payload.date,
-    totalSeconds: payload.totalSeconds,
-    focusSeconds: payload.focusSeconds,
-    focusPct: payload.focusPct,
+    totalSeconds: canonicalDayTotalSeconds(payload),
     blockCount: trustedBlocks.length,
     ignoredBlockIds: payload.blocks.filter((block) => !isTrustedTimelineBlock(block)).map((block) => block.id),
     blocks: trustedBlocks.map((block) => ({
-      id: block.id,
-      label: block.label.current,
+      ...canonicalBlockSignatureFacts(block),
       narrative: block.label.narrative,
-      reviewState: block.review.state,
-      correctedIntentRole: block.review.correctedIntentRole,
-      correctedIntentSubject: block.review.correctedIntentSubject,
-      startTime: block.startTime,
-      endTime: block.endTime,
-      dominantCategory: block.dominantCategory,
       topApps: block.topApps.slice(0, 3).map((app) => ({
         appName: app.appName,
         category: app.category,
         isBrowser: app.isBrowser,
+        totalSeconds: app.totalSeconds,
       })),
       domains: block.websites.slice(0, 3).map((site) => site.domain),
       artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
@@ -3523,40 +3454,34 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
 }
 
 function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
+  const trustedBlocks = canonicalTimelineBlocks(payload)
+  const canonicalTotalSeconds = canonicalDayTotalSeconds(payload)
   const dominantBlocks = [...trustedBlocks]
     .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
     .slice(0, 4)
     .map((block) => ({
       label: block.label.current,
-      timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
-      duration: formatDuration(blockDurationSeconds(block)),
+      startedAt: formatClock(block.startTime),
       reviewState: block.review.state,
       workIntent: reviewedWorkIntent(block),
       supportingEvidence: namedEvidenceForSummary(block),
     }))
 
-  const topCategories = Array.from(trustedBlocks.reduce<Map<string, number>>((map, block) => {
-    const durationSeconds = blockDurationSeconds(block)
-    map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + durationSeconds)
-    return map
-  }, new Map()).entries())
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 4)
-    .map(([category, seconds]) => ({ category, duration: formatDuration(seconds) }))
+  const topCategories = uniqueStrings(
+    [...trustedBlocks]
+      .sort((left, right) => blockDisplayedActiveSeconds(right) - blockDisplayedActiveSeconds(left))
+      .map((block) => block.dominantCategory),
+    4,
+  )
 
   const blocks = trustedBlocks.slice(0, 8).map((block) => ({
     label: block.label.current,
-    narrative: block.label.narrative,
-    timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
-    duration: formatDuration(blockDurationSeconds(block)),
+    startedAt: formatClock(block.startTime),
     dominantCategory: block.dominantCategory,
-    confidence: block.confidence,
     reviewState: block.review.state,
     workIntent: reviewedWorkIntent(block),
     topApps: block.topApps.slice(0, 3).map((app) => ({
       appName: app.appName,
-      duration: formatDuration(app.totalSeconds),
     })),
     artifacts: block.topArtifacts.slice(0, 4).map((artifact) => ({
       title: artifact.displayTitle,
@@ -3569,27 +3494,15 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     workflows: block.workflowRefs.slice(0, 3).map((workflow) => workflow.label),
   }))
 
-  const focusSessions = payload.focusSessions.slice(0, 4).map((session) => ({
-    label: session.label,
-    duration: formatDuration(session.durationSeconds),
-    startedAt: formatClock(session.startTime),
-  }))
-
   return JSON.stringify({
     date: payload.date,
     totals: {
-      tracked: formatDuration(payload.totalSeconds),
-      focus: formatDuration(payload.focusSeconds),
-      focusPct: payload.focusPct,
+      tracked: formatDuration(canonicalTotalSeconds),
       blockCount: trustedBlocks.length,
-      ignoredBlockCount: payload.blocks.length - trustedBlocks.length,
-      appCount: payload.appCount,
-      siteCount: payload.siteCount,
     },
     topCategories,
     dominantBlocks,
     blocks,
-    focusSessions,
   }, null, 2)
 }
 
@@ -3604,17 +3517,20 @@ function currentLocalDateString(): string {
 
 export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryResult> {
   const db = getDb()
+  const settings = getSettings()
   const liveSession = dateStr === currentLocalDateString() ? getCurrentSession() : null
   const payload = getTimelineDayPayload(db, dateStr, liveSession)
-  const fallback = fallbackDaySummary(payload)
+  const canonicalTotalSeconds = canonicalDayTotalSeconds(payload)
 
-  if (payload.totalSeconds === 0) {
-    return fallback
+  if (canonicalTotalSeconds === 0 && payload.totalSeconds === 0 && payload.sessions.length === 0) {
+    return noDataDaySummary(dateStr)
   }
 
   const [memoryFromMs, memoryToMs] = localDateBoundsFromString(dateStr)
   const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}`
+  const selectedProvider = settings.aiProvider ?? 'anthropic'
+  const selectedModel = modelForProvider(selectedProvider, settings)
+  const cacheKey = `${daySummaryCacheKey(payload)}:${hashText(memoryPrompt)}:${selectedProvider}:${selectedModel}`
   const cached = daySummaryCache.get(cacheKey)
   if (cached) return cached
 
@@ -3633,7 +3549,12 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
     'Mention exact file, document, page, repo, or artifact names only when they appear verbatim in the evidence.',
     'Do not write like a dashboard, analytics panel, or generic AI recap.',
     'Avoid filler like "based on the provided data", "top apps", or "productive/unproductive".',
-    'Use specific time ranges and named work blocks when they make the story clearer.',
+    'Use a supplied startedAt time only when it makes the story clearer. Do not invent an end time or time range.',
+    'The structured block facts are the complete numeric authority for this recap.',
+    'Every number or time range you write must appear exactly in the supplied JSON. Never add, recompute, round, or reconcile a total.',
+    'A block duration is active tracked time, not elapsed wall-clock time. Never subtract timestamps or describe the span between activities as time spent.',
+    'Do not mention durations, time spent, app totals, category totals, or block counts. The Timeline UI owns those numbers.',
+    'The Timeline panel already shows aggregate totals. Prefer describing the day without repeating tracked time, block count, app count, site count, percentages, or category totals.',
     'If the evidence is thin or ambiguous, say so plainly and stay modest.',
     'The summary must be declarative and must not ask the user a question.',
     'Return strict JSON with keys "summary" and "questionSuggestions".',
@@ -3657,11 +3578,11 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
   ].join('\n')
 
   try {
-    const { text } = await withTimeout(
+    const { text, config } = await withTimeout(
       executeTextAIJob(
         {
           jobType: 'day_summary',
-          screen: 'ai_chat',
+          screen: 'timeline_day',
           triggerSource: 'system',
           systemPrompt,
           userMessage,
@@ -3672,13 +3593,20 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
       'Day summary timed out',
     )
 
-    const parsed = parseDaySummaryResult(text, fallback.questionSuggestions)
-    const result = parsed ?? fallback
+    const parsed = parseDaySummaryResult(text, [
+      'What did I actually get done today?',
+      'Which files or pages mattered most today?',
+      'Summarize today as a short report I could share',
+    ])
+    if (!parsed?.summary.trim()) {
+      throw new Error(`${providerLabel(config.provider)} returned an invalid daily recap. Try generating it again.`)
+    }
+    const result = parsed
     daySummaryCache.set(cacheKey, result)
     return result
   } catch (error) {
     console.warn(`[ai] day_summary failed for ${dateStr}:`, error)
-    return fallback
+    throw friendlyProviderError(error, providerLabel(getSettings().aiProvider ?? 'anthropic'))
   }
 }
 
@@ -3737,11 +3665,16 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
   const db = getDb()
   const { weekStart, weekEnd, dates } = buildWeekDateRange(weekStartStr)
   const dayPayloads = dates.map((date) => getTimelineDayPayload(db, date, null))
-  const activeDays = dayPayloads.filter((payload) => payload.totalSeconds > 0)
+  const activeDays = dayPayloads
+    .map((payload) => ({
+      ...payload,
+      blocks: canonicalTimelineBlocks(payload),
+      totalSeconds: canonicalDayTotalSeconds(payload),
+    }))
+    .filter((payload) => payload.totalSeconds > 0)
   if (activeDays.length === 0) return null
 
   const totalTrackedSeconds = activeDays.reduce((sum, payload) => sum + payload.totalSeconds, 0)
-  const totalFocusSeconds = activeDays.reduce((sum, payload) => sum + payload.focusSeconds, 0)
   const topArtifacts = activeDays
     .flatMap((payload) => payload.blocks.flatMap((block) => block.topArtifacts.slice(0, 2).map((artifact) => artifact.displayTitle)))
     .filter(Boolean)
@@ -3749,7 +3682,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
 
   const topCategories = Array.from(activeDays.reduce<Map<string, number>>((map, payload) => {
     for (const block of payload.blocks) {
-      const durationSeconds = blockActiveSeconds(block)
+      const durationSeconds = blockDisplayedActiveSeconds(block)
       map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + durationSeconds)
     }
     return map
@@ -3761,105 +3694,16 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
   const dayRows = activeDays.map((payload) => ({
     date: payload.date,
     tracked: formatDuration(payload.totalSeconds),
-    focus: formatDuration(payload.focusSeconds),
-    focus_pct: payload.focusPct,
     top_blocks: payload.blocks.slice(0, 3).map((block) => block.label.current).filter(Boolean).join(' | ') || 'No clear blocks',
   }))
-
-  const renderDeterministic = (): { reportMarkdown: string; assistantResponse: string } => {
-    const weekFocusPct = totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0
-    const bestDay = activeDays.slice().sort((a, b) => b.focusPct - a.focusPct)[0]
-    const longestDay = activeDays.slice().sort((a, b) => b.totalSeconds - a.totalSeconds)[0]
-    const dayName = (dateStr: string): string => {
-      const [y, m, d] = dateStr.split('-').map((n) => Number(n))
-      const dt = new Date(y, (m ?? 1) - 1, d ?? 1)
-      return dt.toLocaleDateString('en-US', { weekday: 'long' })
-    }
-    const lines: string[] = []
-    lines.push(`# Week of ${weekStart} to ${weekEnd}`, '')
-    lines.push(`Daylens tracked **${formatDuration(totalTrackedSeconds)}** across ${activeDays.length} day${activeDays.length === 1 ? '' : 's'}, of which **${formatDuration(totalFocusSeconds)} (${weekFocusPct}%)** was in focused-category work (development, writing, design, research, AI tools).`, '')
-    if (bestDay) {
-      lines.push(`Strongest focus day was **${dayName(bestDay.date)}, ${bestDay.date}** at ${bestDay.focusPct}% focused (${formatDuration(bestDay.focusSeconds)} of ${formatDuration(bestDay.totalSeconds)} tracked).`, '')
-    }
-    if (longestDay && longestDay.date !== bestDay?.date) {
-      lines.push(`Longest tracked day was **${dayName(longestDay.date)}, ${longestDay.date}** at ${formatDuration(longestDay.totalSeconds)}.`, '')
-    }
-
-    if (topCategories.length > 0) {
-      lines.push('## Where time went (by category)', '')
-      for (const { category, duration } of topCategories) {
-        lines.push(`- **${category}** — ${duration}`)
-      }
-      lines.push('')
-    }
-
-    lines.push('## Day by day', '')
-    for (const payload of activeDays) {
-      const blocks = payload.blocks
-        .slice()
-        .sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))
-        .slice(0, 4)
-      lines.push(`### ${dayName(payload.date)}, ${payload.date} — ${formatDuration(payload.totalSeconds)} tracked, ${formatDuration(payload.focusSeconds)} focused (${payload.focusPct}%)`)
-      if (blocks.length === 0) {
-        lines.push('No clear blocks captured for this day.', '')
-        continue
-      }
-      for (const block of blocks) {
-        const seconds = blockActiveSeconds(block)
-        const label = block.label.current || `${block.dominantCategory} block`
-        const start = new Date(block.startTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-        const end = new Date(block.endTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
-        const evidenceBits: string[] = []
-        const artifactTitles = block.topArtifacts.slice(0, 2).map((a) => a.displayTitle).filter(Boolean)
-        if (artifactTitles.length > 0) evidenceBits.push(`artifacts: ${artifactTitles.join('; ')}`)
-        const apps = block.topApps.slice(0, 3).map((a) => a.appName).filter(Boolean)
-        if (apps.length > 0) evidenceBits.push(`apps: ${apps.join(', ')}`)
-        const tail = evidenceBits.length > 0 ? ` — ${evidenceBits.join(' | ')}` : ''
-        lines.push(`- **${label}** (${start}–${end}, ${formatDuration(seconds)})${tail}`)
-      }
-      lines.push('')
-    }
-
-    if (topArtifacts.length > 0) {
-      lines.push('## Notable artifacts referenced this week', '')
-      for (const title of topArtifacts) lines.push(`- ${title}`)
-      lines.push('')
-    }
-
-    lines.push('---', '', `_Generated deterministically from Daylens local timeline data. Every number above comes from the tracked blocks for ${weekStart} to ${weekEnd}; no AI synthesis was used in the body of this report._`)
-
-    const chatLines: string[] = []
-    chatLines.push(`Weekly report for ${weekStart} to ${weekEnd} attached. Headline: **${formatDuration(totalTrackedSeconds)}** tracked across ${activeDays.length} day${activeDays.length === 1 ? '' : 's'}, **${formatDuration(totalFocusSeconds)} focused (${weekFocusPct}%)** in development, writing, design, research, and AI tools.`)
-    chatLines.push('')
-    chatLines.push('Day by day:')
-    for (const payload of activeDays) {
-      const topBlock = payload.blocks.slice().sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
-      const topBlockLabel = topBlock?.label.current || (topBlock ? `${topBlock.dominantCategory} block` : 'no clear blocks')
-      chatLines.push(`- **${dayName(payload.date)} (${payload.date})** — ${formatDuration(payload.totalSeconds)} tracked, ${formatDuration(payload.focusSeconds)} focused (${payload.focusPct}%); longest block: ${topBlockLabel}`)
-    }
-    if (bestDay) {
-      chatLines.push('')
-      chatLines.push(`Strongest focus day was **${dayName(bestDay.date)}** at ${bestDay.focusPct}% (${formatDuration(bestDay.focusSeconds)} of ${formatDuration(bestDay.totalSeconds)} tracked).`)
-    }
-    chatLines.push('')
-    chatLines.push('Every number above is rendered deterministically from the tracked timeline — no AI prose synthesis, so the figures match Daylens exactly. The attached report has the per-block breakdown your manager can read end to end.')
-
-    return {
-      reportMarkdown: lines.join('\n'),
-      assistantResponse: chatLines.join('\n'),
-    }
-  }
 
   return {
     title: `Week review ${weekStart} to ${weekEnd}`,
     scopeLabel: `${weekStart} to ${weekEnd}`,
-    renderDeterministic,
     assistantScaffold: JSON.stringify({
       range: { weekStart, weekEnd },
       totals: {
         tracked: formatDuration(totalTrackedSeconds),
-        focus: formatDuration(totalFocusSeconds),
-        focusPct: totalTrackedSeconds > 0 ? Math.round((totalFocusSeconds / totalTrackedSeconds) * 100) : 0,
         activeDayCount: activeDays.length,
       },
       dailyHighlights: (() => {
@@ -3870,11 +3714,11 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
         return activeDays.map((payload) => ({
           date: payload.date,
           tracked: formatDuration(payload.totalSeconds),
-          focus: formatDuration(payload.focusSeconds),
-          focusPct: payload.focusPct,
           topBlocks: take(payload.blocks, evidenceCost).map((block) => ({
             label: block.label.current,
-            duration: formatDuration(blockActiveSeconds(block)),
+            duration: formatDuration(blockDisplayedActiveSeconds(block)),
+            category: block.dominantCategory,
+            correctionState: block.review.state,
             artifacts: block.topArtifacts.slice(0, 3).map((artifact) => artifact.displayTitle),
           })),
         }))
@@ -3883,12 +3727,11 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
       namedArtifacts: topArtifacts,
     }, null, 2),
     reportMarkdownScaffold: '',
-    tableColumns: ['date', 'tracked', 'focus', 'focus_pct', 'top_blocks'],
+    tableColumns: ['date', 'tracked', 'top_blocks'],
     tableRows: dayRows,
     chartRows: activeDays.map((payload) => ({
       label: payload.date.slice(5),
       value: Number((payload.totalSeconds / 3600).toFixed(1)),
-      secondaryValue: Number((payload.focusSeconds / 3600).toFixed(1)),
     })),
     chartValueLabel: 'hours',
   }
@@ -3925,6 +3768,29 @@ function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): 
     pairedApps: detail.pairedApps.slice(0, 8).map((item) => item.displayName),
     blockAppearances: detail.blockAppearances.slice(0, 8).map((block) => `${block.blockId}:${block.label}:${block.startTime}:${block.endTime}`),
   }))
+}
+
+function appNarrativeGenerationContext(
+  detail: ReturnType<typeof getAppDetailPayload>,
+  days: number,
+): { inputSignature: string; memoryPrompt: string } {
+  const [, todayToMs] = dayBounds(new Date())
+  const memoryPrompt = buildDaylensMemoryPromptBlock({
+    fromMs: todayToMs - Math.max(1, days) * 86_400_000,
+    toMs: todayToMs,
+  })
+  const settings = getSettings()
+  const selectedProvider = settings.aiProvider ?? 'anthropic'
+  const selectedModel = modelForProvider(selectedProvider, settings)
+  return {
+    memoryPrompt,
+    inputSignature: hashText([
+      appNarrativeSignature(detail),
+      memoryPrompt,
+      selectedProvider,
+      selectedModel,
+    ].join('\n')),
+  }
 }
 
 function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContextBundle | null {
@@ -4162,16 +4028,48 @@ function buildDayReportBundle(dateStr: string): ReportContextBundle | null {
   }
 }
 
+function weekReviewGenerationContext(
+  weekStartStr: string,
+  bundle: ReportContextBundle,
+): { inputSignature: string; memoryPrompt: string } {
+  const { weekStart, weekEnd, dates } = buildWeekDateRange(weekStartStr)
+  const [memoryFromMs] = localDateBoundsFromString(weekStart)
+  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
+  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
+  const settings = getSettings()
+  const selectedProvider = settings.aiProvider ?? 'anthropic'
+  const selectedModel = modelForProvider(selectedProvider, settings)
+  const canonicalDays = dates.map((date) => {
+    const payload = getTimelineDayPayload(getDb(), date, null)
+    const blocks = canonicalTimelineBlocks(payload)
+    return {
+      date,
+      totalSeconds: blocks.reduce((total, block) => total + blockDurationSeconds(block), 0),
+      blocks: blocks.map(canonicalBlockSignatureFacts),
+      ignoredBlockIds: payload.blocks
+        .filter((block) => !isTrustedTimelineBlock(block))
+        .map((block) => block.id),
+    }
+  })
+
+  return {
+    memoryPrompt,
+    inputSignature: hashText(JSON.stringify({
+      scaffold: bundle.assistantScaffold,
+      memoryPrompt,
+      selectedProvider,
+      selectedModel,
+      canonicalDays,
+    })),
+  }
+}
+
 async function generateWeekReview(weekStartStr: string, force = false): Promise<AISurfaceSummary | null> {
   const bundle = buildWeekReviewBundle(weekStartStr)
   if (!bundle) return null
 
   const scopeKey = `week:${weekStartStr}`
-  const { weekStart, weekEnd } = buildWeekDateRange(weekStartStr)
-  const [memoryFromMs] = localDateBoundsFromString(weekStart)
-  const [, memoryToMs] = localDateBoundsFromString(weekEnd)
-  const memoryPrompt = buildDaylensMemoryPromptBlock({ fromMs: memoryFromMs, toMs: memoryToMs })
-  const inputSignature = hashText([bundle.assistantScaffold, memoryPrompt].join('\n'))
+  const { inputSignature, memoryPrompt } = weekReviewGenerationContext(weekStartStr, bundle)
   if (!force) {
     const existingSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
     if (existingSignature === inputSignature) {
@@ -4179,7 +4077,6 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     }
   }
 
-  const fallback = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey, { stale: true })
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
@@ -4187,6 +4084,9 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'Use only the deterministic local evidence provided.',
+    'The supplied daily block facts are the complete numeric authority for this review.',
+    'Every number or duration you write must appear exactly in the supplied JSON. Never add, recompute, round, or reconcile totals.',
+    'Prefer describing the week without repeating aggregate totals already shown by the Timeline panel.',
     'Focus on the actual work threads, named artifacts, and where the week concentrated.',
     'Avoid dashboard filler or generic productivity language.',
     'Return strict JSON with keys "title" and "summary".',
@@ -4200,7 +4100,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
   ].join('\n')
 
   try {
-    const { text } = await executeTextAIJob(
+    const { text, config } = await executeTextAIJob(
       {
         jobType: 'week_review',
         screen: 'timeline_week',
@@ -4211,7 +4111,9 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
       sendWithProvider,
     )
     const parsed = parseSurfaceSummaryResult(text, bundle.title)
-    if (!parsed) return fallback
+    if (!parsed?.summary.trim()) {
+      throw new Error(`${providerLabel(config.provider)} returned an invalid week review. Try generating it again.`)
+    }
     const stored = upsertAISurfaceSummary(getDb(), {
       scopeType: 'timeline_week',
       scopeKey,
@@ -4224,7 +4126,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
     return stored
   } catch (error) {
     console.warn(`[ai] week_review failed for ${scopeKey}:`, error)
-    return fallback
+    throw friendlyProviderError(error, providerLabel(getSettings().aiProvider ?? 'anthropic'))
   }
 }
 
@@ -4241,12 +4143,7 @@ async function generateAppNarrative(
 
   const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
   const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
-  const [, todayToMs] = dayBounds(new Date())
-  const memoryPrompt = buildDaylensMemoryPromptBlock({
-    fromMs: todayToMs - Math.max(1, days) * 86_400_000,
-    toMs: todayToMs,
-  })
-  const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
+  const { inputSignature, memoryPrompt } = appNarrativeGenerationContext(detail, days)
   // Force=true must bypass the signature short-circuit. Without this, clicking
   // Generate/Refresh on an app whose evidence has not changed since the last
   // cached narrative returns the same cached row without ever calling the AI,
@@ -4265,8 +4162,6 @@ async function generateAppNarrative(
   }
   console.info(`[ai] app_narrative running model for ${scopeKey} (force=${force})`)
 
-  const cachedFallback = getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
-  const fallback = appNarrativeHasStaleMetrics(cachedFallback) ? null : cachedFallback
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
@@ -4307,7 +4202,7 @@ async function generateAppNarrative(
   ].join('\n')
 
   try {
-    const { text } = await executeTextAIJob(
+    const { text, config } = await executeTextAIJob(
       {
         jobType: 'app_narrative',
         screen: 'app_detail',
@@ -4318,9 +4213,8 @@ async function generateAppNarrative(
       sendWithProvider,
     )
     const parsed = parseSurfaceSummaryResult(text, bundle.title)
-    if (!parsed) {
-      console.warn(`[ai] app_narrative parse-failed for ${scopeKey}; falling back`)
-      return fallback
+    if (!parsed?.summary.trim()) {
+      throw new Error(`${providerLabel(config.provider)} returned an invalid app narrative. Try generating it again.`)
     }
     const stored = upsertAISurfaceSummary(getDb(), {
       scopeType: 'app_detail',
@@ -4337,7 +4231,7 @@ async function generateAppNarrative(
     return stored
   } catch (error) {
     console.warn(`[ai] app_narrative failed for ${scopeKey}:`, error)
-    throw error
+    throw friendlyProviderError(error, providerLabel(getSettings().aiProvider ?? 'anthropic'))
   }
 }
 
@@ -4583,6 +4477,7 @@ async function maybeGenerateRequestedOutput(params: {
     'Use "looks like" or "suggests" where the evidence is interpretive or attribution is weak.',
     'If tables or charts are requested, assume CSV and HTML companion files will be generated from the deterministic rows provided.',
     'Do not invent extra files, numbers, titles, artifacts, or projects beyond the scaffold.',
+    'Every numeric claim must appear exactly in the scaffold. Never add, recompute, round, or reconcile a total.',
   ].join(' ')
   const userMessage = [
     `Original request: ${params.question}`,
@@ -4593,65 +4488,48 @@ async function maybeGenerateRequestedOutput(params: {
     bundle.assistantScaffold,
   ].filter(Boolean).join('\n')
 
-  let reportContent = fallbackGeneratedReportContent(bundle)
   const trace = getCurrentTrace()
-  const deterministic = bundle.renderDeterministic?.()
-  if (deterministic) {
-    // Bundles that ship a deterministic renderer (e.g. weekly review)
-    // skip the LLM entirely — the body is templated from structured data,
-    // so there's no fabrication surface. The LLM was producing fluent
-    // hallucinations across day rows (Tuesday focus % swap, made-up
-    // artifact names) even with "use only the scaffold" prompting.
-    reportContent = {
-      assistantResponse: deterministic.assistantResponse,
-      reportTitle: bundle.title,
-      reportMarkdown: deterministic.reportMarkdown,
-    }
+  let reportContent: ReturnType<typeof parseGeneratedReportResult>
+  try {
     if (trace) {
       trace.addEvent({
         kind: 'prose_pass',
-        input: `[deterministic_report_template ${bundle.title}]\nscaffold:\n${bundle.assistantScaffold}`,
-        output: deterministic.reportMarkdown,
+        input: `[report_generation_input]\nsystem:\n${systemPrompt}\n\nuser:\n${userMessage}`,
+        output: '(pending)',
       })
     }
-  } else {
-    try {
-      if (trace) {
-        trace.addEvent({
-          kind: 'prose_pass',
-          input: `[report_generation_input]\nsystem:\n${systemPrompt}\n\nuser:\n${userMessage}`,
-          output: '(pending)',
-        })
-      }
-      const { text } = await withTimeout(
-        executeTextAIJob(
-          {
-            jobType: 'report_generation',
-            screen: 'ai_chat',
-            triggerSource: 'user',
-            systemPrompt,
-            userMessage,
-            prior: params.prior,
-          },
-          sendWithProvider,
-        ),
-        60_000,
-        'Report generation timed out',
-      )
-      if (trace) {
-        trace.addEvent({
-          kind: 'prose_pass',
-          input: '[report_generation_raw_output]',
-          output: text,
-        })
-      }
-      reportContent = parseGeneratedReportResult(text, bundle.title) ?? reportContent
-    } catch (error) {
-      console.warn('[ai] report_generation fell back to deterministic export:', error)
-      if (trace) {
-        trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
-      }
+    const { text, config } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'report_generation',
+          screen: 'ai_chat',
+          triggerSource: 'user',
+          systemPrompt,
+          userMessage,
+          prior: params.prior,
+        },
+        sendWithProvider,
+      ),
+      60_000,
+      'Report generation timed out',
+    )
+    if (trace) {
+      trace.addEvent({
+        kind: 'prose_pass',
+        input: '[report_generation_raw_output]',
+        output: text,
+      })
     }
+    reportContent = parseGeneratedReportResult(text, bundle.title)
+    if (!reportContent) {
+      throw new Error(`${providerLabel(config.provider)} returned an invalid report. Try generating it again.`)
+    }
+  } catch (error) {
+    console.warn('[ai] report_generation failed:', error)
+    if (trace) {
+      trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
+    }
+    throw friendlyProviderError(error, providerLabel(getSettings().aiProvider ?? 'anthropic'))
   }
 
   const artifactSpecs: ReportArtifactSpec[] = [
@@ -4875,10 +4753,14 @@ function answerKindForWeeklyContext(context: WeeklyBriefContext): AIAnswerKind {
 function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
   const candidate = escapeJsonBlock(raw)
   try {
-    const parsed = JSON.parse(candidate) as { label?: unknown; narrative?: unknown }
+    const parsed = JSON.parse(candidate) as { label?: unknown; narrative?: unknown; category?: unknown }
+    const category = typeof parsed.category === 'string' ? parsed.category.trim() : null
     return {
       label: typeof parsed.label === 'string' ? parsed.label.trim() : null,
       narrative: typeof parsed.narrative === 'string' ? parsed.narrative.trim() : null,
+      category: isAppCategory(category) && category !== 'system' && category !== 'uncategorized'
+        ? category
+        : null,
     }
   } catch {
     const labelMatch = candidate.match(/label\s*:\s*(.+)/i)
@@ -4887,8 +4769,103 @@ function parseWorkBlockInsight(raw: string): WorkContextInsight | null {
     return {
       label: labelMatch?.[1]?.trim() ?? null,
       narrative: narrativeMatch?.[1]?.trim() ?? null,
+      category: null,
     }
   }
+}
+
+function normalizeBlockLabelEvidence(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function inferredIntentCategory(label: string | null | undefined): import('@shared/types').AppCategory | null {
+  const normalized = normalizeBlockLabelEvidence(label ?? '')
+  if (!normalized) return null
+  if (/^(watch|watching|stream|streaming|playing|play)\b/.test(normalized)) return 'entertainment'
+  if (/^(attend|attending|meeting|joining)\b/.test(normalized)) return 'meetings'
+  if (/^(develop|developing|code|coding|debug|debugging|build|building|implement|implementing)\b/.test(normalized)) return 'development'
+  if (/^(write|writing|draft|drafting|prepare|preparing|compose|composing)\b/.test(normalized)) return 'writing'
+  if (/^(design|designing)\b/.test(normalized)) return 'design'
+  if (/^(communicate|communicating|message|messaging|discuss|discussing)\b/.test(normalized)) return 'communication'
+  if (/^(plan|planning|organize|organizing|configure|configuring|authorize|authorizing|manage|managing)\b/.test(normalized)) return 'productivity'
+  if (/^(research|researching|review|reviewing|evaluate|evaluating|investigate|investigating|check|checking|diagnose|diagnosing|troubleshoot|troubleshooting)\b/.test(normalized)) return 'research'
+  if (/^(browse|browsing)\b/.test(normalized)) return 'browsing'
+  return null
+}
+
+function isSafeHumanIntentLabel(label: string | null | undefined, block: WorkContextBlock): boolean {
+  const trimmed = label?.trim() ?? ''
+  if (!trimmed || trimmed.length > 72) return false
+  if (/https?:\/\/|www\.|(?:^|\s)[a-z0-9-]+\.(?:com|org|net|io|ai|dev|app|co)(?:\s|$|\/)/i.test(trimmed)) {
+    return false
+  }
+
+  const normalized = normalizeBlockLabelEvidence(trimmed)
+  const words = normalized.split(/\s+/).filter(Boolean)
+  if (words.length < 2 || words.length > 8) return false
+
+  const forbiddenBareLabels = new Set([
+    'browsing',
+    'development',
+    'research',
+    'writing',
+    'productivity',
+    'communication',
+    'meetings',
+    'entertainment',
+    'social',
+    'email',
+    'ai tools',
+    'uncategorized',
+    'building testing',
+  ])
+  if (forbiddenBareLabels.has(normalized)) return false
+
+  const firstWord = words[0]
+  const intentVerbs = new Set([
+    'analyze', 'analyzing', 'build', 'building', 'check', 'checking',
+    'code', 'coding', 'configure', 'configuring', 'debug', 'debugging',
+    'design', 'designing', 'draft', 'drafting', 'edit', 'editing',
+    'fix', 'fixing', 'learn', 'learning', 'manage', 'managing',
+    'organize', 'organizing', 'plan', 'planning', 'prepare', 'preparing',
+    'read', 'reading', 'research', 'researching', 'review', 'reviewing',
+    'set', 'setting', 'study', 'studying', 'test', 'testing',
+    'troubleshoot', 'troubleshooting', 'watch', 'watching', 'write', 'writing',
+  ])
+  if (!intentVerbs.has(firstWord) && !firstWord.endsWith('ing')) return false
+
+  const appNames = block.topApps
+    .map((app) => normalizeBlockLabelEvidence(app.appName))
+    .filter(Boolean)
+  const domains = block.websites
+    .map((site) => normalizeBlockLabelEvidence(site.domain))
+    .filter(Boolean)
+  const rawTitles = [
+    ...block.keyPages,
+    ...block.websites.map((site) => site.topTitle ?? ''),
+    ...block.pageRefs.flatMap((page) => [page.pageTitle ?? '', page.displayTitle]),
+  ]
+    .map(normalizeBlockLabelEvidence)
+    .filter((value) => value.split(/\s+/).length >= 2)
+
+  if ([...appNames, ...domains, ...rawTitles].includes(normalized)) return false
+  if (domains.some((domain) => domain && normalized.includes(domain))) return false
+
+  const toolTokens = new Set([
+    ...appNames.flatMap((appName) => appName.split(/\s+/)),
+    ...domains.flatMap((domain) => domain.split(/\s+/)),
+    'app', 'apps', 'browser', 'editor', 'terminal', 'tool', 'tools', 'using', 'use',
+  ])
+  const connectors = new Set(['a', 'an', 'and', 'at', 'for', 'in', 'of', 'on', 'the', 'to', 'with'])
+  const objectWords = words.slice(1).filter((word) => !connectors.has(word))
+  if (objectWords.length === 0 || objectWords.every((word) => toolTokens.has(word))) return false
+
+  return true
 }
 
 function workBlockPrompt(block: WorkContextBlock): string {
@@ -4923,9 +4900,13 @@ function workBlockPrompt(block: WorkContextBlock): string {
 
   const lines = [
     'Analyze this Daylens work block.',
-    'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: 2-5 word activity description. NEVER return a raw app name, browser name, or bare category name ("Chrome", "Safari", "Cursor", "Warp", "Browsing", "Development").',
+    'Return strict JSON: {"label":"...","narrative":"...","category":"..."}',
+    'label: a short human intent title, normally verb + object, such as "Configuring the work network" or "Reviewing the release plan".',
+    'NEVER return a raw app name, browser name, bare category, page/window title, URL/domain, article title, or video title.',
+    'A tool alone is not an intent. Reject shapes such as "Using Cursor", "Browsing Safari", "Watching YouTube", "Ubiquiti Account", or "Building & Testing".',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
+    'category: the overall intent of the whole block. Allowed: development, communication, research, writing, aiTools, design, browsing, meetings, entertainment, email, productivity, social.',
+    'Choose category from the sustained activity, not a brief detour or an open background tab. Coding with a short Netflix visit is development. A class call is meetings. Deliberate video streaming is entertainment even when opened in a browser or AI browser.',
     'Priority rules:',
     '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
@@ -5078,10 +5059,15 @@ export async function generateWorkBlockInsight(
       'Block insight timed out',
     )
     const parsed = parseWorkBlockInsight(text)
+    const proposedLabel = parsed?.label?.trim() ?? null
 
+    const acceptedLabel = isSafeHumanIntentLabel(proposedLabel, block)
+      ? proposedLabel
+      : userVisibleLabelForBlock(block)
     const insight = {
-      label: parsed?.label || userVisibleLabelForBlock(block),
+      label: acceptedLabel,
       narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
+      category: parsed?.category ?? inferredIntentCategory(acceptedLabel),
     }
     if (!block.isLive) {
       upsertWorkContextInsight(getDb(), {
@@ -5097,6 +5083,7 @@ export async function generateWorkBlockInsight(
     const insight = {
       label: userVisibleLabelForBlock(block),
       narrative: fallbackNarrativeForBlock(block),
+      category: null,
     }
     if (!block.isLive && block.aiLabel) {
       upsertWorkContextInsight(getDb(), {
@@ -5497,7 +5484,7 @@ async function routerProsePass(
 // switch-provider). The default label is the chat provider the UI shows.
 function friendlyChatError(err: unknown, label?: string): Error {
   const resolvedLabel = label
-    ?? providerLabel(getSettings().aiChatProvider ?? getSettings().aiProvider ?? 'anthropic')
+    ?? providerLabel(getSettings().aiProvider ?? 'anthropic')
   return friendlyProviderError(err, resolvedLabel)
 }
 
@@ -5690,10 +5677,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   if (routed) {
     if (routed.kind === 'weeklyBrief') {
       const settings = getSettings()
-      // R2: single source of truth — the chat surface (and the model string we
-      // show the user) must use the same provider the chat UI shows, which is
-      // aiChatProvider when set, else aiProvider.
-      const chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+      const chatProvider = settings.aiProvider ?? 'anthropic'
       const chatModel = modelForProvider(chatProvider, 'quality', settings)
       let pack = routed.briefContext.evidenceKey ? weeklyBriefCache.get(routed.briefContext.evidenceKey) ?? null : null
       if (!pack) {
@@ -5796,25 +5780,11 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
 
   const settings = getSettings()
   const { userName } = settings
-  // R2: resolve the chat provider from the same setting the UI shows
-  // (aiChatProvider ?? aiProvider) so the answer, the executing provider, and
-  // the "what model are you" string can never disagree.
-  // D4: a per-thread override (provider + model, set together from the catalog)
-  // wins for this thread — e.g. drop a flaky thread onto a higher-limit model
-  // without touching the global setting — but only when that provider has a key.
+  // Provider and model authority are global Settings. Thread settings may add
+  // instructions, but cannot silently route this surface elsewhere.
   const threadSettings = getThreadSettings(threadId)
-  let chatProvider = settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
-  let chatModel = modelForProvider(chatProvider, 'quality', settings)
-  if (threadSettings.provider && threadSettings.model) {
-    const overrideHasKey = threadSettings.provider === 'claude-cli'
-      || threadSettings.provider === 'codex-cli'
-      || Boolean(await getApiKey(threadSettings.provider))
-    if (overrideHasKey) {
-      chatProvider = threadSettings.provider
-      chatModel = threadSettings.model
-    }
-  }
-  // D4: per-thread additional instructions, appended to the system prompt below.
+  const chatProvider = settings.aiProvider ?? 'anthropic'
+  const chatModel = modelForProvider(chatProvider, 'quality', settings)
   const threadInstructionBlock = threadSettings.instructions
     ? `\n\nThe user set these additional instructions for this chat. Follow them unless they conflict with grounding or honesty:\n${threadSettings.instructions}`
     : ''
@@ -6067,6 +6037,11 @@ export async function getWeekReview(
 ): Promise<AISurfaceSummary | null> {
   const scopeKey = `week:${weekStartStr}`
   if (!force) {
+    const bundle = buildWeekReviewBundle(weekStartStr)
+    if (!bundle) return null
+    const { inputSignature } = weekReviewGenerationContext(weekStartStr, bundle)
+    const storedSignature = getAISurfaceSummarySignature(getDb(), 'timeline_week', scopeKey)
+    if (storedSignature !== inputSignature) return null
     const existing = getAISurfaceSummary(getDb(), 'timeline_week', scopeKey)
     if (existing && existing.scopeKey === scopeKey) return existing
     return null
@@ -6082,9 +6057,12 @@ export async function getAppNarrative(
   if (!force) {
     const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
     const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
+    const { inputSignature } = appNarrativeGenerationContext(detail, days)
+    const storedSignature = getAISurfaceSummarySignature(getDb(), 'app_detail', scopeKey)
+    if (storedSignature !== inputSignature) return null
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
-    if (existing) return existing
-    return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
+    if (appNarrativeHasStaleMetrics(existing)) return null
+    return existing
   }
   return generateAppNarrative(canonicalAppId, days, true)
 }

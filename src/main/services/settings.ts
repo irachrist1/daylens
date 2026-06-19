@@ -37,9 +37,9 @@ const DEFAULTS: AppSettings = {
   aiFallbackOrder: ['anthropic', 'openai', 'google'],
   aiModelStrategy: 'balanced',
   aiChatProvider: 'anthropic',
-  aiBlockNamingProvider: 'google',
+  aiBlockNamingProvider: 'anthropic',
   aiSummaryProvider: 'anthropic',
-  aiArtifactProvider: 'openai',
+  aiArtifactProvider: 'anthropic',
   aiBackgroundEnrichment: true,
   aiActiveBlockPreview: false,
   aiPromptCachingEnabled: true,
@@ -84,6 +84,7 @@ export function getSettings(): AppSettings {
   }
   const onboardingComplete = (_store.get('onboardingComplete', false) as boolean)
   const onboardingState = normalizeOnboardingState(_store.get('onboardingState', null), onboardingComplete)
+  const aiProvider = (_store.get('aiProvider', 'anthropic') as AIProviderMode)
   return {
     analyticsOptIn: (_store.get('analyticsOptIn', false) as boolean),
     shareAIFeedbackExamples: (_store.get('shareAIFeedbackExamples', false) as boolean),
@@ -95,17 +96,17 @@ export function getSettings(): AppSettings {
     userGoals: (_store.get('userGoals', []) as string[]),
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
-    aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
+    aiProvider,
     anthropicModel: liveModelId(_store.get('anthropicModel', 'claude-sonnet-4-6') as string),
     openaiModel: liveModelId(_store.get('openaiModel', 'gpt-5.5') as string),
     googleModel: liveModelId(_store.get('googleModel', 'gemini-3.1-flash-lite') as string),
     openrouterModel: liveModelId(_store.get('openrouterModel', 'anthropic/claude-sonnet-4.6') as string),
     aiFallbackOrder: (_store.get('aiFallbackOrder', ['anthropic', 'openai', 'google']) as AppSettings['aiFallbackOrder']),
     aiModelStrategy: (_store.get('aiModelStrategy', 'balanced') as AppSettings['aiModelStrategy']),
-    aiChatProvider: (_store.get('aiChatProvider', 'anthropic') as AppSettings['aiChatProvider']),
-    aiBlockNamingProvider: (_store.get('aiBlockNamingProvider', 'google') as AppSettings['aiBlockNamingProvider']),
-    aiSummaryProvider: (_store.get('aiSummaryProvider', 'anthropic') as AppSettings['aiSummaryProvider']),
-    aiArtifactProvider: (_store.get('aiArtifactProvider', 'openai') as AppSettings['aiArtifactProvider']),
+    aiChatProvider: aiProvider,
+    aiBlockNamingProvider: aiProvider,
+    aiSummaryProvider: aiProvider,
+    aiArtifactProvider: aiProvider,
     aiBackgroundEnrichment: (_store.get('aiBackgroundEnrichment', true) as boolean),
     aiActiveBlockPreview: (_store.get('aiActiveBlockPreview', false) as boolean),
     aiPromptCachingEnabled: (_store.get('aiPromptCachingEnabled', true) as boolean),
@@ -137,6 +138,18 @@ export async function getSettingsAsync(): Promise<AppSettings> {
 export async function setSettings(partial: Partial<AppSettings>): Promise<void> {
   const store = await getStore()
   const entries = { ...partial }
+  const legacyProviderSelection = entries.aiChatProvider
+    ?? entries.aiBlockNamingProvider
+    ?? entries.aiSummaryProvider
+    ?? entries.aiArtifactProvider
+  const selectedProvider = entries.aiProvider ?? legacyProviderSelection
+  if (selectedProvider) {
+    entries.aiProvider = selectedProvider
+    entries.aiChatProvider = selectedProvider
+    entries.aiBlockNamingProvider = selectedProvider
+    entries.aiSummaryProvider = selectedProvider
+    entries.aiArtifactProvider = selectedProvider
+  }
   if ('userName' in entries) {
     entries.userName = String(entries.userName ?? '').trim().slice(0, 80)
   }

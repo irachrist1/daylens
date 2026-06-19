@@ -56,13 +56,8 @@ interface AIJobDefinition {
   screen: AISurface
   foreground: boolean
   timeoutMs: number
-  providerPreferenceKey: 'aiChatProvider' | 'aiBlockNamingProvider' | 'aiSummaryProvider' | 'aiArtifactProvider'
   cachePolicy: 'off' | 'stable_prefix' | 'repeated_payload'
   modelStrategy: Extract<AIModelStrategy, 'balanced' | 'quality' | 'economy'>
-  // Hard-pin a specific model for this job regardless of tier defaults.
-  // Use sparingly — only for jobs that genuinely need a specific capability
-  // (e.g., report_generation needs Opus for structured agentic output).
-  providerModelOverride?: Partial<Record<AIProviderMode, string>>
   // Override the default output token cap for this job. Defaults to
   // DEFAULT_MAX_OUTPUT_TOKENS when omitted.
   maxOutputTokens?: number
@@ -74,7 +69,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: false,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'off',
     modelStrategy: 'economy',
   },
@@ -83,7 +77,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: false,
     timeoutMs: 12_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'economy',
   },
@@ -92,7 +85,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'background',
     foreground: false,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
@@ -101,7 +93,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: true,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -110,7 +101,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_week',
     foreground: true,
     timeoutMs: 18_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
     // Week review prose spans multiple days; give it the full 32k budget.
@@ -121,7 +111,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'app_detail',
     foreground: true,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
     maxOutputTokens: 32000,
@@ -131,7 +120,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 30_000,
-    providerPreferenceKey: 'aiChatProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'quality',
   },
@@ -140,7 +128,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiChatProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'economy',
   },
@@ -149,16 +136,8 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 60_000,
-    providerPreferenceKey: 'aiArtifactProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'quality',
-    // Report generation is the one job that genuinely warrants Opus — it produces
-    // long-form structured output (tables, charts, formatted exports) in an agentic
-    // multi-step pattern where the extra capability pays for itself.
-    providerModelOverride: {
-      anthropic: 'claude-opus-4-8',
-      'claude-cli': 'claude-opus-4-8',
-    },
     maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
   },
   attribution_assist: {
@@ -166,7 +145,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'background',
     foreground: false,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
@@ -175,7 +153,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: true,
     timeoutMs: 12_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -188,7 +165,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_week',
     foreground: true,
     timeoutMs: 14_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -200,7 +176,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiChatProvider',
     cachePolicy: 'off',
     modelStrategy: 'economy',
   },
@@ -216,9 +191,6 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
 //   economy  — background, high-volume, latency-tolerant jobs (block labeling, previews)
 //   balanced — foreground summaries that need coherent prose but not frontier reasoning
 //   quality  — interactive chat and complex queries where reasoning depth matters
-//
-// Opus is NOT in this table. It is only reached via providerModelOverride on specific
-// jobs (currently: report_generation) where structured agentic output justifies the cost.
 //
 // models reviewed: 2026-05-31 — ids verified against each provider's public
 // docs. This table is a LAST-RESORT fallback: under BYOK the user's chosen model
@@ -288,16 +260,11 @@ export function providerLabel(provider: AIProviderMode): string {
   }
 }
 
-// BYOK routing (R2): each job resolves to the provider its definition declares
-// via `providerPreferenceKey` — for chat that is `aiChatProvider`, which is
-// exactly what the chat UI shows — falling back to the global `aiProvider`.
-// This closes the latent seam where orchestration always ran on `aiProvider`
-// while the chat surface displayed `aiChatProvider ?? aiProvider`. Still no
-// cross-provider fallback (see applyStrategyProviderFallback): we never
-// silently route to a provider the user did not choose.
-function preferredProviderForJob(jobType: AIJobType, settings: AppSettings): AIProviderMode {
-  const preferenceKey = JOB_DEFINITIONS[jobType].providerPreferenceKey
-  return settings[preferenceKey] ?? settings.aiProvider ?? 'anthropic'
+// Settings has one provider authority. Legacy per-surface provider fields are
+// retained in AppSettings for compatibility with older renderer state, but
+// they never route a job.
+function preferredProviderForJob(_jobType: AIJobType, settings: AppSettings): AIProviderMode {
+  return settings.aiProvider ?? 'anthropic'
 }
 
 function applyStrategyProviderFallback(preferred: AIProviderMode): AIProviderMode[] {
@@ -348,9 +315,9 @@ function redactAIText(input: string, settings: AppSettings): string {
 async function resolveProviderConfigsForJob(
   jobType: AIJobType,
   settings: AppSettings,
-  preferredProviderOverride?: AIProviderMode | null,
+  _preferredProviderOverride?: AIProviderMode | null,
 ): Promise<ResolvedProviderConfig[]> {
-  const preferredProvider = preferredProviderOverride ?? preferredProviderForJob(jobType, settings)
+  const preferredProvider = preferredProviderForJob(jobType, settings)
   const orderedProviders = applyStrategyProviderFallback(preferredProvider)
   const definition = JOB_DEFINITIONS[jobType]
   const configs: ResolvedProviderConfig[] = []
@@ -362,13 +329,12 @@ async function resolveProviderConfigsForJob(
     configs.push({
       provider,
       apiKey,
-      model: definition.providerModelOverride?.[provider]
-        ?? modelForProvider(provider, definition.modelStrategy, settings),
+      model: modelForProvider(provider, definition.modelStrategy, settings),
     })
   }
 
   if (configs.length === 0) {
-    throw new Error('No AI provider is configured for this job. Check AI Settings.')
+    throw new Error(`${providerLabel(preferredProvider)} is not connected. Add its API key in Settings.`)
   }
 
   return configs

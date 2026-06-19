@@ -212,7 +212,8 @@ test('brief context changes under two minutes stay inside the surrounding block'
   const payload = getTimelineDayPayload(db, TEST_DATE)
 
   assert.equal(payload.blocks.length, 1)
-  assert.match(payload.blocks[0].label.current, /insightsQueryRouter\.ts|daylens/i)
+  assert.match(payload.blocks[0].label.current, /develop|software/i)
+  assert.doesNotMatch(payload.blocks[0].label.current, /insightsQueryRouter\.ts|Cursor/i)
   db.close()
 })
 
@@ -257,7 +258,7 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
   db.close()
 })
 
-test('same-app work bridges a moderate untracked gap into one block', () => {
+test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
   // A 50-second terminal sliver, then a 17-minute untracked gap, then an hour
   // of the same app. This is one coding session resuming, not two blocks.
@@ -266,7 +267,7 @@ test('same-app work bridges a moderate untracked gap into one block', () => {
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 1, `same-app work across a 17m gap should bridge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `same-app work across a 17m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
@@ -349,17 +350,13 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
   db.close()
 })
 
-test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
+test('a coherent continuous intent is not split by an arbitrary duration ceiling', () => {
   const db = createDb()
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.ok(blocks.length >= 2, `expected maximum duration split; got ${blocks.length}`)
-  assert.ok(
-    blocks.every((block) => block.endTime - block.startTime <= 180 * 60_000),
-    `expected every block at or below 180 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
-  )
+  assert.equal(blocks.length, 1, `continuous same-intent work should remain one block; got ${blocks.length}`)
   db.close()
 })
 
@@ -396,18 +393,18 @@ test('timeline hides short gap events while preserving meaningful untracked span
   db.close()
 })
 
-test('file and project window titles drive labels instead of app names', () => {
+test('file evidence produces an activity-shaped label instead of a raw title or app name', () => {
   const db = createDb()
   insertSession(db, { title: 'insightsQueryRouter.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 25 })
 
   const [label] = labelsFor(db)
 
-  assert.match(label, /insightsQueryRouter\.ts|daylens/i)
-  assert.notEqual(label, 'Cursor')
+  assert.match(label, /develop|software/i)
+  assert.doesNotMatch(label, /insightsQueryRouter\.ts|Cursor/i)
   db.close()
 })
 
-test('deterministic title labels outrank stale AI app-name labels', () => {
+test('activity-shaped deterministic labels outrank stale AI app-name labels', () => {
   const db = createDb()
   const startTime = localMs(9, 0)
   const endTime = startTime + 25 * 60_000
@@ -423,8 +420,8 @@ test('deterministic title labels outrank stale AI app-name labels', () => {
 
   const [label] = labelsFor(db)
 
-  assert.match(label, /insightsQueryRouter\.ts|daylens/i)
-  assert.notEqual(label, 'Cursor')
+  assert.match(label, /develop|software/i)
+  assert.doesNotMatch(label, /insightsQueryRouter\.ts|Cursor/i)
   db.close()
 })
 
@@ -435,8 +432,8 @@ test('terminal-dominant blocks use terminal window titles before browser page ti
 
   const [label] = labelsFor(db)
 
-  assert.match(label, /npm run typecheck|daylens/i)
-  assert.doesNotMatch(label, /React docs|Google Chrome/i)
+  assert.match(label, /develop|software|building|testing/i)
+  assert.doesNotMatch(label, /npm run typecheck|React docs|Google Chrome|Warp/i)
   db.close()
 })
 
@@ -506,11 +503,11 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
-test('a nightly-processed past day is kept even when its heuristic is stale', () => {
+test('a nightly-processed past day rebuilds stale segmentation while preserving its review lineage', () => {
   const db = createDb()
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
 
@@ -524,11 +521,11 @@ test('a nightly-processed past day is kept even when its heuristic is stale', ()
   `).run(`${blockId}:ai:test`, blockId, Date.now())
 
   getTimelineDayPayload(db, TEST_DATE)
-  assert.deepEqual(heuristicVersions(db), ['timeline-v3'], 'processed day must be kept as summarized')
+  assert.deepEqual(heuristicVersions(db), ['timeline-v8'], 'processed labels must not freeze stale segmentation')
   db.close()
 })
 
-test('background upgrade finds stale unprocessed days but leaves processed days alone', () => {
+test('background upgrade includes stale processed days', () => {
   const db = createDb()
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
 
@@ -543,7 +540,7 @@ test('background upgrade finds stale unprocessed days but leaves processed days 
     VALUES (?, ?, 'Refactoring the router', NULL, 'ai', 0.9, ?, NULL)
   `).run(`${blockId}:ai:processed`, blockId, Date.now())
 
-  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [])
+  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [TEST_DATE])
   db.close()
 })
 
@@ -560,6 +557,21 @@ test('timeline block review state survives reload from persisted blocks', () => 
   assert.equal(reloaded.review.state, 'ignored')
   const reviewRows = db.prepare(`SELECT COUNT(*) AS count FROM timeline_block_reviews WHERE review_state = 'ignored'`).get() as { count: number }
   assert.equal(reviewRows.count, 1)
+  db.close()
+})
+
+test('ignored blocks do not contribute to payload duration or evidence counts', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  writeTimelineBlockReview(db, TEST_DATE, block, { state: 'ignored' })
+
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  assert.equal(payload.totalSeconds, 0)
+  assert.equal(payload.focusSeconds, 0)
+  assert.equal(payload.appCount, 0)
+  assert.equal(payload.siteCount, 0)
   db.close()
 })
 
@@ -583,7 +595,41 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale day should rebuild while preserving correction')
+  db.close()
+})
+
+test('a corrected label reattaches when new segmentation merges its old block into a larger intent', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Router diagnostics - Safari', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'DNS diagnostics - Safari', startMinute: 25, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2)
+  writeTimelineBlockReview(db, TEST_DATE, before[0], {
+    state: 'corrected',
+    correctedLabel: 'Debugging the work network',
+  })
+
+  db.prepare(`UPDATE app_sessions SET window_title = 'Router diagnostics - Safari'`).run()
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+
+  const rebuilt = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(rebuilt.length, 1)
+  assert.equal(rebuilt[0].label.current, 'Debugging the work network')
+  assert.equal(rebuilt[0].review.source, 'stored_evidence')
+  db.close()
+})
+
+test('system bundle ids are excluded from blocks and payload evidence counts', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Timeline backend - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 30 })
+  insertSession(db, { title: 'Finder', bundleId: 'com.apple.finder', appName: 'Finder', category: 'system', startMinute: 30, durationMinutes: 5 })
+  insertSession(db, { title: 'Notifications', bundleId: 'com.apple.UserNotificationCenter', appName: 'Notifications', category: 'system', startMinute: 35, durationMinutes: 5 })
+
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  assert.equal(payload.appCount, 1)
+  assert.equal(payload.blocks.flatMap((block) => block.topApps).some((app) => /finder|notification/i.test(app.appName)), false)
   db.close()
 })
 

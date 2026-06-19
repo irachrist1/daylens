@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { blockDisplayedSpanSeconds } from '../src/shared/blockDuration.ts'
+import {
+  blockActiveSeconds,
+  blockDisplayedActiveSeconds,
+  blockDisplayedSpanSeconds,
+} from '../src/shared/blockDuration.ts'
 
 // Synthesize timestamps at known second offsets within a fixed minute.
 function minuteMs(hour: number, minute: number, second = 0): number {
@@ -32,4 +36,41 @@ test('displayed span floors to 1 second when start and end share a minute', () =
   const block = { startTime: minuteMs(9, 0, 10), endTime: minuteMs(9, 0, 50) }
   // Both round to "9:00" on the clock; avoid emitting "0m" next to the range.
   assert.equal(blockDisplayedSpanSeconds(block), 1)
+})
+
+test('active duration unions overlapping evidence instead of double-counting it', () => {
+  const startTime = minuteMs(9, 0)
+  const block = {
+    startTime,
+    endTime: startTime + 60 * 60_000,
+    sessions: [
+      { startTime, endTime: startTime + 45 * 60_000, durationSeconds: 45 * 60 },
+      { startTime: startTime + 30 * 60_000, endTime: startTime + 60 * 60_000, durationSeconds: 30 * 60 },
+    ],
+  }
+  assert.equal(blockActiveSeconds(block as any), 60 * 60)
+})
+
+test('active duration honors reported active time inside a longer session span', () => {
+  const startTime = minuteMs(9, 0)
+  const block = {
+    startTime,
+    endTime: startTime + 60 * 60_000,
+    sessions: [
+      { startTime, endTime: startTime + 60 * 60_000, durationSeconds: 45 * 60 },
+    ],
+  }
+  assert.equal(blockActiveSeconds(block as any), 45 * 60)
+})
+
+test('displayed active duration uses the same whole-minute bucket as the timeline card', () => {
+  const startTime = minuteMs(9, 0)
+  const block = {
+    startTime,
+    endTime: startTime + 10 * 60_000,
+    sessions: [
+      { startTime, endTime: startTime + 599_000, durationSeconds: 599 },
+    ],
+  }
+  assert.equal(blockDisplayedActiveSeconds(block as any), 9 * 60)
 })

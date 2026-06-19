@@ -1,9 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowDown, ArrowUp, EyeOff } from 'lucide-react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineBlockReviewState, TimelineGapSegment, TimelineSegment, WorkContextBlock, WorkIntentRole } from '@shared/types'
-import { blockActiveSeconds } from '@shared/blockDuration'
+import type { AIDaySummaryResult, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import { blockActiveSeconds, blockDisplayedActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { effectiveBlockKind } from '@shared/workKind'
@@ -19,61 +19,23 @@ import { formatDuration, formatFullDate, todayString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
 import { sanitizeForModel } from '@shared/aiSanitize'
 
-// Browser keyword check used to filter the "in App and App" clause down to
-// the apps that could plausibly own a page artifact (i.e. browsers).
-function isBrowserAppName(bundleId: string, appName: string): boolean {
-  const haystack = `${bundleId} ${appName}`.toLowerCase()
-  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(haystack)
-}
+const SYSTEM_NOISE_TOKENS = [
+  'loginwindow',
+  'usernotificationcenter',
+  'notificationcenter',
+  'finder',
+  'screensaver',
+  'screen saver',
+  'windowserver',
+  'systemuiserver',
+  'electron helper',
+  'com.daylens',
+]
 
-const PAGE_ARTIFACT_LABEL_CATEGORIES: ReadonlySet<AppCategory> = new Set<AppCategory>([
-  'browsing', 'research', 'entertainment', 'social', 'aiTools',
-])
-
-// Mirror of the R1 ownership gate at the renderer surface so the rail / day
-// sentence / summary subject all reject browser-page leaks even if a stale
-// label.current was persisted before the backend gate was tightened.
-function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
-  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) return true
-  const totalSeconds = block.topApps.reduce((sum, app) => sum + (app.totalSeconds ?? 0), 0)
-  if (totalSeconds <= 0) return false
-  const top2 = block.topApps.slice(0, 2)
-  const browserInTop2 = top2.find((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
-  if (!browserInTop2) return false
-  return (browserInTop2.totalSeconds ?? 0) / totalSeconds > 0.5
-}
-
-// Inbox(N) → "Email". The blockShortSummary path already normalizes this for
-// artifact phrases; the rail/day-clustered/drift paths need the same so
-// "Inbox (3)" doesn't surface verbatim.
-function naturalizeInboxLabel(label: string): string {
-  if (/^inbox(?:\s*\(\d+\))?$/i.test(label.trim())) return 'Email'
-  return label
-}
-
-// Defensive rail/day-summary label. If userVisibleBlockLabel returned a label
-// that matches a top page artifact or a website domain for a block whose
-// dominant category should not adopt page artifacts, fall back to a
-// category-derived workstream name instead of surfacing the leak.
-function railLabelForBlock(block: WorkContextBlock): string {
-  const raw = userVisibleBlockLabel(block)
-  const naturalized = naturalizeInboxLabel(raw)
-  if (pageArtifactLabelAllowed(block)) return naturalized
-
-  const lower = naturalized.toLowerCase().trim()
-  const matchesArtifact = block.topArtifacts.some((artifact) => {
-    if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
-    const title = naturalizeLabel(artifact.displayTitle.trim()).toLowerCase()
-    return title.length > 0 && title === lower
-  })
-  const matchesSite = block.websites.some((site) => {
-    const stripped = site.domain.replace(/^www\./i, '').split('.')[0]?.toLowerCase() ?? ''
-    return stripped.length > 0 && stripped === lower
-  })
-  if (matchesArtifact || matchesSite) {
-    return categoryLabel(block.dominantCategory)
-  }
-  return naturalized
+function isSystemNoiseApp(app: Pick<WorkContextBlock['topApps'][number], 'appName' | 'bundleId' | 'category'>): boolean {
+  if (app.category === 'system') return true
+  const identity = `${app.bundleId} ${app.appName}`.toLowerCase()
+  return SYSTEM_NOISE_TOKENS.some((token) => identity.includes(token))
 }
 
 // Strip raw URL query/fragment + secret-shaped tokens from any free-text the
@@ -82,6 +44,62 @@ function railLabelForBlock(block: WorkContextBlock): string {
 // `?code=…` straight into the block card.
 function safeTimelineText(text: string): string {
   return sanitizeForModel(text)
+}
+
+function normalizedTimelineLabel(value: string): string {
+  return naturalizeLabel(value)
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function timelineBlockLabel(block: WorkContextBlock): string {
+  const label = userVisibleBlockLabel(block)
+  if (block.label.override?.trim()) return label
+  if (/^(leisure activity|browsing|web session)$/i.test(label)) {
+    if (block.dominantCategory === 'entertainment') return 'Watching entertainment'
+    if (block.dominantCategory === 'social') return 'Social browsing'
+    return 'Web browsing'
+  }
+
+  const normalized = normalizedTimelineLabel(label)
+  const rawEvidence = [
+    ...block.topApps.flatMap((app) => [app.appName, app.bundleId]),
+    ...block.websites.flatMap((site) => [
+      site.domain,
+      site.domain.replace(/^www\./i, '').split('.')[0] ?? '',
+      site.topTitle ?? '',
+    ]),
+    ...block.pageRefs.flatMap((page) => [
+      page.pageTitle ?? '',
+      page.displayTitle,
+      page.domain ?? '',
+      page.host ?? '',
+    ]),
+    ...block.topArtifacts.map((artifact) => artifact.displayTitle),
+  ]
+    .map(normalizedTimelineLabel)
+    .filter(Boolean)
+
+  if (!rawEvidence.includes(normalized)) return label
+
+  switch (block.dominantCategory) {
+    case 'development': return 'Software development'
+    case 'research':
+    case 'aiTools': return 'Research and analysis'
+    case 'writing': return 'Writing'
+    case 'design': return 'Design work'
+    case 'meetings': return 'Meeting'
+    case 'communication':
+    case 'email': return 'Communication'
+    case 'productivity': return 'Planning and administration'
+    case 'browsing': return 'Web research'
+    case 'social': return 'Social browsing'
+    case 'entertainment': return 'Watching video content'
+    default: return 'Computer activity'
+  }
 }
 
 const CATEGORY_COLORS: Record<AppCategory, string> = {
@@ -150,7 +168,6 @@ function categoryLabel(category: AppCategory): string {
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
-// Human-readable phrasing for why an episode started or stopped.
 function boundaryButtonStyle(disabled: boolean): CSSProperties {
   return {
     height: 30,
@@ -190,10 +207,6 @@ function artifactSubtitle(block: WorkContextBlock): string | null {
   return domains.length > 0 ? domains.join(' • ') : null
 }
 
-function blockNarrative(block: WorkContextBlock): string | null {
-  return block.label.narrative?.trim() || null
-}
-
 // Short deterministic summary used when the AI narrative hasn't landed yet, so
 // every block on the timeline reads consistently instead of some having prose
 // and others showing nothing between the title and the app icons.
@@ -202,107 +215,16 @@ function blockNarrative(block: WorkContextBlock): string | null {
 // its wall-clock span. A block that bridges an untracked lull has a span far
 // larger than what was logged inside it; saying "Spent 1h 57m watching …" for a
 // window that only logged 1h 4m overstates the day (R4). blockActiveSeconds
-// (summed session time clamped to span) is the honest figure, and it lines up
-// with the Focus/Drift totals which now use the same basis.
-// Pick a verb that fits the block's dominant category. Keeps deterministic
-// summaries from reading like "56m on X in Y" and instead sounds like the
-// human-voice examples in the V1 punch-list ("Spent 56m preparing …").
-function categoryVerbPhrase(category: WorkContextBlock['dominantCategory']): { verb: string; noun: string } {
-  switch (category) {
-    case 'development': return { verb: 'editing', noun: 'code' }
-    case 'design': return { verb: 'working on', noun: 'design work' }
-    case 'writing': return { verb: 'writing', noun: 'a draft' }
-    case 'research': return { verb: 'researching', noun: 'reference material' }
-    case 'aiTools': return { verb: 'working with', noun: 'AI tools' }
-    case 'email': return { verb: 'checking', noun: 'email' }
-    case 'communication': return { verb: 'in', noun: 'conversation' }
-    case 'meetings': return { verb: 'in', noun: 'meetings' }
-    case 'browsing': return { verb: 'reviewing', noun: 'web context' }
-    case 'productivity': return { verb: 'working through', noun: 'tasks' }
-    case 'entertainment': return { verb: 'watching', noun: 'video content' }
-    case 'social': return { verb: 'on', noun: 'social' }
-    case 'system': return { verb: 'on', noun: 'system tasks' }
-    default: return { verb: 'spent on', noun: 'mixed work' }
-  }
-}
-
-function artifactPhraseForCategory(
-  artifactTitle: string,
-  artifactType: string,
-  category: WorkContextBlock['dominantCategory'],
-): string {
-  // "Inbox (3)", "Inbox" → "email"; the title alone is noise here.
-  if (/^inbox(?:\s*\(\d+\))?$/i.test(artifactTitle)) return 'email'
-  if (artifactType === 'page' && category === 'browsing') return `the ${artifactTitle} page`
-  if (artifactType === 'page' && (category === 'research' || category === 'aiTools')) {
-    return `${artifactTitle}`
-  }
-  if (artifactType === 'document') return `${artifactTitle}`
-  return artifactTitle
-}
-
+// (summed session time clamped to span) is the honest figure used everywhere
+// this renderer displays time.
 function blockShortSummary(block: WorkContextBlock): string {
   const duration = formatDuration(blockActiveSeconds(block))
-  const allApps = block.topApps
-    .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
-  // Same ownership gate as the label/artifact path: a development block with a
-  // background youtube.com tab must not read "across youtube.com". Only carry
-  // site phrases when the block's category could plausibly own a page artifact.
-  const allowPageSubject = pageArtifactLabelAllowed(block)
-  const sites = allowPageSubject
-    ? block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
-    : []
-  // Skip page/domain artifacts that don't fit the block's category — a dev
-  // block with a co-occurring YouTube tab must not summarize itself as the
-  // YouTube video.
-  const topArtifact = block.topArtifacts.find(
-    (artifact) =>
-      artifact.displayTitle.trim().length > 0
-      && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
-  )
-  const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
-  const naturalizedArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
-
-  // Same artifact-ownership filter as before: only attribute the artifact to
-  // apps that could plausibly own it (browsers for page artifacts, the named
-  // owner for document artifacts).
-  const orderedApps = (() => {
-    if (!topArtifact) return allApps
-    if (topArtifact.artifactType === 'page') {
-      const browsers = allApps.filter((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
-      return browsers.length > 0 ? browsers : allApps
-    }
-    if (topArtifact.ownerBundleId) {
-      const owners = allApps.filter((app) => app.bundleId === topArtifact.ownerBundleId)
-      return owners.length > 0 ? owners : allApps
-    }
-    return allApps
-  })()
-  const appNames = orderedApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
-  const primaryApp = appNames[0] ?? null
-  const secondaryApp = appNames[1] ?? null
-  const { verb, noun } = categoryVerbPhrase(block.dominantCategory)
-
-  const supportingClause = secondaryApp
-    ? `, mostly in ${primaryApp} with ${secondaryApp} as supporting context`
-    : primaryApp
-      ? `, mostly in ${primaryApp}`
-      : ''
-
-  if (naturalizedArtifact) {
-    const artifactPhrase = artifactPhraseForCategory(naturalizedArtifact, topArtifact!.artifactType, block.dominantCategory)
-    return `Spent ${duration} ${verb} ${artifactPhrase}${supportingClause}.`
-  }
-  if (primaryApp && sites.length > 0) {
-    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}${supportingClause}.`
-  }
-  if (primaryApp) {
-    return `Spent ${duration} ${verb} ${noun}${supportingClause}.`
-  }
-  if (sites.length > 0) {
-    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}.`
-  }
-  return `Spent ${duration} on ${categoryLabel(block.dominantCategory).toLowerCase()}.`
+  const label = timelineBlockLabel(block).trim()
+  const naturalized = label.charAt(0).toLowerCase() + label.slice(1)
+  const startsWithActivityVerb = /^(?:attending|authorizing|building|checking|completing|configuring|creating|developing|discussing|drafting|evaluating|generating|managing|planning|preparing|reading|researching|reviewing|streaming|taking|testing|watching|working|writing)\b/i.test(label)
+  return startsWithActivityVerb
+    ? `Spent ${duration} ${naturalized}.`
+    : `Spent ${duration} on ${naturalized}.`
 }
 
 function gapKindLabel(kind: TimelineGapSegment['kind']): string {
@@ -318,7 +240,7 @@ type DisplayTimelineSegment = TimelineSegment | {
   items: TimelineGapSegment[]
 }
 
-const MIN_VISIBLE_GAP_SECONDS = 30 * 60
+const MIN_VISIBLE_GAP_SECONDS = 15 * 60
 const LONG_GAP_ANCHOR_SECONDS = 75 * 60
 
 function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineSegment[] {
@@ -393,24 +315,27 @@ function IconChevronRight() {
   )
 }
 
-function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
-  return (
-    <div style={{
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '6px 14px',
-      padding: '0 0 18px',
-      fontSize: 12.5,
-      color: 'var(--color-text-tertiary)',
-    }}>
-      <span>
-        <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(payload.totalSeconds)}</strong> tracked
-      </span>
-      <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
-      <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
-      <span>{payload.siteCount} site{payload.siteCount !== 1 ? 's' : ''}</span>
-    </div>
-  )
+function visibleBlocks(blocks: WorkContextBlock[]): WorkContextBlock[] {
+  return blocks.filter((block) => isTrustedTimelineBlock(block) && blockActiveSeconds(block) >= 60)
+}
+
+function visibleBlockTotal(blocks: WorkContextBlock[]): number {
+  return blocks.reduce((sum, block) => sum + blockDisplayedActiveSeconds(block), 0)
+}
+
+function visibleAppCount(blocks: WorkContextBlock[]): number {
+  return new Set(
+    blocks.flatMap((block) =>
+      block.topApps
+        .filter((app) => !isSystemNoiseApp(app))
+        .map((app) => app.bundleId || app.appName.toLowerCase()),
+    ),
+  ).size
+}
+
+function blockCardHeight(block: WorkContextBlock): number {
+  const hours = blockActiveSeconds(block) / 3600
+  return Math.max(120, Math.round(hours * 120))
 }
 
 const TimelineRow = memo(function TimelineRow({
@@ -422,10 +347,9 @@ const TimelineRow = memo(function TimelineRow({
   block: WorkContextBlock | null
   isSelected: boolean
 }) {
-  const duration = formatDuration(segmentDurationSeconds(segment))
-
   if (!block) {
     const gapSegment = segment as TimelineGapSegment
+    const duration = formatDuration(segmentDurationSeconds(segment))
 
     return (
       <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
@@ -457,10 +381,8 @@ const TimelineRow = memo(function TimelineRow({
   const blockKind = effectiveBlockKind(block)
   const muted = blockKind !== 'work'
   const artifactLine = artifactSubtitle(block)
-  const appsLine = block.topApps
-    .slice(0, 3)
-    .map((app) => formatDisplayAppName(app.appName))
-    .join(' • ')
+  const duration = formatDuration(blockDurationSeconds(block))
+  const height = blockCardHeight(block)
 
   return (
     <button
@@ -487,6 +409,7 @@ const TimelineRow = memo(function TimelineRow({
       </div>
       <div style={{
         position: 'relative',
+        height,
         padding: '14px 16px 14px 18px',
         borderRadius: 16,
         border: isSelected ? `1px solid ${accent}55` : '1px solid var(--color-border-ghost)',
@@ -496,6 +419,8 @@ const TimelineRow = memo(function TimelineRow({
         overflow: 'hidden',
         minWidth: 0,
         opacity: ignored ? 0.5 : muted ? 0.72 : 1,
+        display: 'flex',
+        flexDirection: 'column',
       }}>
         <div style={{
           position: 'absolute',
@@ -509,7 +434,7 @@ const TimelineRow = memo(function TimelineRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, marginBottom: 6 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <InlineRevealText
-              text={userVisibleBlockLabel(block)}
+              text={timelineBlockLabel(block)}
               style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.25 }}
             />
           </div>
@@ -542,34 +467,25 @@ const TimelineRow = memo(function TimelineRow({
         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)}
         </div>
-        <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
-          {blockNarrative(block) ?? blockShortSummary(block)}
+        <p style={{
+          fontSize: 13.5,
+          lineHeight: 1.5,
+          color: 'var(--color-text-secondary)',
+          margin: 0,
+          overflowWrap: 'break-word',
+          minWidth: 0,
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: height >= 220 ? 5 : 2,
+          overflow: 'hidden',
+        }}>
+          {blockShortSummary(block)}
         </p>
-        {isSelected && artifactLine && (
+        {isSelected && artifactLine && height >= 180 && (
           <InlineRevealText
             text={artifactLine}
-            style={{ fontSize: 12.5, color: 'var(--color-text-primary)', marginBottom: appsLine ? 6 : 0 }}
+            style={{ fontSize: 12.5, color: 'var(--color-text-primary)', marginTop: 10 }}
           />
-        )}
-        {isSelected && appsLine && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {block.topApps.slice(0, 2).map((app) => (
-                <AppIcon
-                  key={`${block.id}:${app.bundleId}`}
-                  bundleId={app.bundleId}
-                  appName={app.appName}
-                  size={18}
-                  fontSize={9}
-                  color={accent}
-                />
-              ))}
-            </div>
-            <InlineRevealText
-              text={appsLine}
-              style={{ fontSize: 12, color: 'var(--color-text-tertiary)', flex: 1 }}
-            />
-          </div>
         )}
       </div>
     </button>
@@ -626,132 +542,53 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
-// Categories that count as focused/deep work, mirroring the backend focus
-// criteria used elsewhere (wrappedFacts.ts, workBlocks.ts). Kept inline here
-// rather than importing the shared constant so this file stays decoupled from
-// the wrapped calculation surface.
-const FOCUSED_CATEGORIES_SET: ReadonlySet<AppCategory> = new Set<AppCategory>([
-  'development', 'research', 'writing', 'aiTools', 'design', 'productivity',
-])
-
-interface DayTheme {
-  label: string
-  seconds: number
-  blocks: WorkContextBlock[]
-  category: AppCategory
-  apps: string[]
-  artifacts: string[]
+function invalidateDaySummaryRecap(date: string): void {
+  daySummaryRecapCache.delete(date)
 }
 
-function normalizeThemeLabel(label: string): string {
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-}
-
-function themeLabelForText(label: string): string {
-  let cleaned = naturalizeInboxLabel(naturalizeLabel(safeTimelineText(label))).trim()
-  const repoTitle = cleaned.match(/^[\w.-]+\/[\w.-]+:\s*(.+)$/)
-  if (repoTitle?.[1]) cleaned = repoTitle[1].trim()
-  return cleaned || label.trim()
-}
-
-function themeLabelForBlock(block: WorkContextBlock): string {
-  return themeLabelForText(railLabelForBlock(block))
-}
-
-function blockThemeKey(block: WorkContextBlock): string {
-  const label = normalizeThemeLabel(themeLabelForBlock(block))
-  if (label && !['building testing', 'mixed work', 'untitled activity', 'web session'].includes(label)) return label
-  if (label === 'building testing' || label === 'mixed work') return `cat:${block.dominantCategory}`
-  const compatibleArtifact = block.topArtifacts.find((artifact) =>
-    artifact.displayTitle?.trim()
-    && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
-  )
-  if (compatibleArtifact) return normalizeThemeLabel(themeLabelForText(compatibleArtifact.displayTitle.trim()))
-  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) {
-    const site = block.websites[0]?.domain?.trim()
-    if (site) return normalizeThemeLabel(site)
-  }
-  return block.dominantCategory
-}
-
-function buildDayThemes(blocks: WorkContextBlock[]): DayTheme[] {
-  const map = new Map<string, DayTheme>()
-  for (const block of blocks) {
-    const key = blockThemeKey(block)
-    const seconds = blockActiveSeconds(block)
-    const existing = map.get(key)
-    const label = themeLabelForBlock(block)
-    const apps = block.topApps
-      .filter((app) => app.category !== 'system')
-      .slice(0, 3)
-      .map((app) => formatDisplayAppName(app.appName))
-    const artifacts = block.topArtifacts
-      .slice(0, 3)
-      .map((artifact) => themeLabelForText(artifact.displayTitle.trim()))
-      .filter(Boolean)
-
-    if (existing) {
-      existing.seconds += seconds
-      existing.blocks.push(block)
-      for (const app of apps) if (!existing.apps.includes(app) && existing.apps.length < 4) existing.apps.push(app)
-      for (const artifact of artifacts) if (!existing.artifacts.includes(artifact) && existing.artifacts.length < 4) existing.artifacts.push(artifact)
-    } else {
-      map.set(key, {
-        label,
-        seconds,
-        blocks: [block],
-        category: block.dominantCategory,
-        apps,
-        artifacts,
-      })
-    }
-  }
-  return [...map.values()]
-    .filter((theme) => theme.seconds >= 5 * 60)
-    .sort((left, right) => right.seconds - left.seconds)
-}
-
-function productivityScore(totalSeconds: number, focusedSeconds: number, detourSeconds: number): number | null {
-  if (totalSeconds < 15 * 60) return null
-  const focusShare = focusedSeconds / Math.max(1, totalSeconds)
-  const detourShare = detourSeconds / Math.max(1, totalSeconds)
-  const trackedDepthBonus = Math.min(totalSeconds / (5 * 60 * 60), 1) * 10
-  return Math.max(0, Math.min(100, Math.round(35 + focusShare * 60 + trackedDepthBonus - detourShare * 12)))
-}
-
-// Gates for naming "the shape of the day". A day needs both a floor of tracked
-// time and a handful of substantive blocks before Daylens will describe what it
-// was about — otherwise it says so plainly instead of overreaching on thin data.
-const SHAPE_OF_DAY_MIN_TRACKED_SECONDS = 90 * 60
-const SHAPE_OF_DAY_MIN_BLOCKS = 3
-
-function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
+function DaySummaryInspector({ payload, blocks, onRefresh }: { payload: DayTimelinePayload; blocks: WorkContextBlock[]; onRefresh?: () => Promise<void> }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
+  const [recapError, setRecapError] = useState<string | null>(null)
   const [reanalyzing, setReanalyzing] = useState(false)
   const [reanalyzeStatus, setReanalyzeStatus] = useState<string | null>(null)
 
-  const handleReanalyze = async () => {
+  const handleAnalyzeDay = async () => {
     if (reanalyzing) return
     setReanalyzing(true)
     setReanalyzeStatus(null)
     try {
       await ipc.db.rebuildTimelineDay(payload.date)
-      await onRefresh?.()
-      setReanalyzeStatus('AI labels refreshed')
+      invalidateDaySummaryRecap(payload.date)
+      setRecap(null)
+      setReanalyzeStatus('Day analyzed. Blocks and labels are up to date.')
     } catch (error) {
-      // T1/R4: strip the IPC scaffolding so the user never sees the channel name
-      // ("db:rebuild-timeline-day"); the throttle/retry (R1) already rode out
-      // any transient rate limit before we got here.
-      const { message } = sanitizeIpcError(error, 'AI re-analysis failed. Try again in a moment.')
+      const { message } = sanitizeIpcError(error, "Couldn't analyze this day. Try again.")
       setReanalyzeStatus(message)
     } finally {
+      await onRefresh?.().catch(() => undefined)
       setReanalyzing(false)
+    }
+  }
+
+  const handleGenerateRecap = async () => {
+    if (recapLoading) return
+    setRecapLoading(true)
+    setRecapError(null)
+    try {
+      const result = await ipc.ai.generateDaySummary(payload.date)
+      daySummaryRecapCache.set(payload.date, result)
+      setRecap(result)
+    } catch (error) {
+      setRecapError(sanitizeIpcError(error, "Couldn't generate the recap. Try again.").message)
+    } finally {
+      setRecapLoading(false)
     }
   }
 
   useEffect(() => {
     setReanalyzeStatus(null)
+    setRecapError(null)
     const cached = daySummaryRecapCache.get(payload.date)
     if (cached) {
       setRecap(cached)
@@ -762,47 +599,8 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
     setRecapLoading(false)
   }, [payload.date])
 
-  // Focus / Drift / Score must be measured in *active tracked* time, not
-  // wall-clock span. A block that bridged a 17-minute untracked lull has a span
-  // far larger than the time actually logged inside it; summing spans inflated
-  // Focused + Drift past the day's tracked total (R3/R4). blockActiveSeconds is
-  // the summed session time clamped to span, so these totals stay within the
-  // tracked total shown in the header.
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const trustedTotal = trustedBlocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const focusedTotal = trustedBlocks
-    .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const detourTotal = trustedBlocks
-    .filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const score = productivityScore(trustedTotal, focusedTotal, detourTotal)
-  const themes = buildDayThemes(trustedBlocks)
-  const topThemes = themes.slice(0, 4)
-  // The "clustered around" claim is about the day's focused work; the "drift" is
-  // the non-focused time. Keep them disjoint so the same theme never appears as
-  // both the headline and the distraction (the P3 "named the same items as both
-  // the cluster and the drift" bug). Fall back to the overall top themes only if
-  // no focused theme cleared the bar.
-  const focusedThemes = themes.filter((theme) => FOCUSED_CATEGORIES_SET.has(theme.category))
-  const clusterThemes = (focusedThemes.length > 0 ? focusedThemes : topThemes).slice(0, 2)
-  const clusterKeys = new Set(clusterThemes.map((theme) => normalizeThemeLabel(theme.label)))
-  const driftThemes = themes
-    .filter((theme) => !FOCUSED_CATEGORIES_SET.has(theme.category))
-    .filter((theme) => !clusterKeys.has(normalizeThemeLabel(theme.label)))
-    .slice(0, 2)
-
-  // The shape of the day is a claim about what the day was about. Don't make it
-  // until there is enough tracked activity to support it — early in the day, or
-  // on a sparsely-tracked day, the honest answer is "not yet". This is purely
-  // data-driven (no wall-clock), so a genuinely heavy morning qualifies and a
-  // thin all-day trickle does not. The factual stat tiles below are always safe
-  // to show; only the narrative sentence is gated.
-  const substantiveBlocks = trustedBlocks.filter((block) => blockActiveSeconds(block) >= 5 * 60)
-  const hasEnoughForShape =
-    trustedTotal >= SHAPE_OF_DAY_MIN_TRACKED_SECONDS
-    && substantiveBlocks.length >= SHAPE_OF_DAY_MIN_BLOCKS
-    && topThemes.length > 0
+  const totalSeconds = visibleBlockTotal(blocks)
+  const appCount = visibleAppCount(blocks)
 
   return (
     <div style={{
@@ -822,72 +620,82 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
     }} className="timeline-summary-inspector">
       <div>
         <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)', marginBottom: 6 }}>
-          The shape of the day
+          Day recap
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatFullDate(payload.date)}
         </div>
       </div>
 
-      {payload.totalSeconds > 0 && onRefresh && (
-        <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
-          <button
-            type="button"
-            onClick={() => { void handleReanalyze() }}
-            disabled={reanalyzing}
-            style={{
-              justifySelf: 'start',
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-secondary)',
-              borderRadius: 10,
-              padding: '7px 12px',
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: reanalyzing ? 'default' : 'pointer',
-              opacity: reanalyzing ? 0.6 : 1,
-            }}
-          >
-            {reanalyzing ? 'Re-analyzing…' : 'Re-analyze with AI'}
-          </button>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+        <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+          <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Tracked</div>
+          <div style={{ fontSize: 16, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(totalSeconds)}</div>
+        </div>
+        <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+          <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Blocks</div>
+          <div style={{ fontSize: 16, color: 'var(--color-text-primary)', fontWeight: 720 }}>{blocks.length}</div>
+        </div>
+        <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
+          <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Apps</div>
+          <div style={{ fontSize: 16, color: 'var(--color-text-primary)', fontWeight: 720 }}>{appCount}</div>
+        </div>
+      </div>
+
+      {totalSeconds > 0 && (
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => { void handleAnalyzeDay() }}
+              disabled={reanalyzing}
+              style={{
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-high)',
+                color: 'var(--color-text-secondary)',
+                borderRadius: 10,
+                padding: '7px 12px',
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: reanalyzing ? 'default' : 'pointer',
+                opacity: reanalyzing ? 0.6 : 1,
+              }}
+            >
+              {reanalyzing ? 'Analyzing…' : 'Analyze Day'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { void handleGenerateRecap() }}
+              disabled={recapLoading}
+              style={{
+                border: 'none',
+                background: 'var(--gradient-primary)',
+                color: 'var(--color-primary-contrast)',
+                borderRadius: 10,
+                padding: '7px 12px',
+                fontSize: 12.5,
+                fontWeight: 700,
+                cursor: recapLoading ? 'default' : 'pointer',
+                opacity: recapLoading ? 0.6 : 1,
+              }}
+            >
+              {recapLoading ? 'Generating…' : recap ? 'Generate Again' : 'Generate Recap'}
+            </button>
+          </div>
           {reanalyzeStatus && (
-            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
+            <div role="status" style={{ fontSize: 11.5, color: reanalyzeStatus.startsWith("Couldn't") ? '#f87171' : 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
               {reanalyzeStatus}
+            </div>
+          )}
+          {recapError && (
+            <div role="alert" style={{ fontSize: 11.5, color: '#f87171', lineHeight: 1.4 }}>
+              {recapError}
             </div>
           )}
         </div>
       )}
 
-      {payload.totalSeconds > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Score</div>
-            <div style={{ fontSize: 20, color: 'var(--color-text-primary)', fontWeight: 760 }}>{score ?? '—'}</div>
-          </div>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Focused</div>
-            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(focusedTotal)}</div>
-          </div>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Drift</div>
-            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(detourTotal)}</div>
-          </div>
-        </div>
-      )}
-
-      {hasEnoughForShape && (
-        <div style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)' }}>
-          {`The day centered on ${clusterThemes.map((theme) => theme.label).join(' and ')}. ${driftThemes.length > 0 ? `The main drift came from ${driftThemes.map((theme) => theme.label).join(' and ')}.` : 'Most of the tracked time stayed inside focused work.'}`}
-        </div>
-      )}
-
-      {!hasEnoughForShape && payload.totalSeconds > 0 && (
-        <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-          Not enough tracked activity yet to name the shape of the day. Daylens fills this in as the day builds up.
-        </div>
-      )}
-
-      {hasEnoughForShape && recap && recap.summary && (
+      {recap?.summary && (
         <div style={{
           fontSize: 14,
           lineHeight: 1.65,
@@ -897,75 +705,10 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
         </div>
       )}
 
-      {recapLoading && null}
-
-      {payload.totalSeconds === 0 && (
+      {totalSeconds === 0 && (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-          Nothing tracked yet. Daylens fills this in once the day has something to say.
+          Nothing tracked in visible blocks for this day.
         </div>
-      )}
-
-      {topThemes.length > 0 && (
-        <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
-            What mattered
-          </div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {topThemes.map((theme) => {
-              const jumpTarget = theme.blocks[0]?.id ?? null
-              const clickable = Boolean(jumpTarget && onSelectBlock)
-              const handleJump = () => {
-                if (jumpTarget && onSelectBlock) onSelectBlock(jumpTarget)
-              }
-              return (
-                <div
-                  key={theme.label}
-                  role={clickable ? 'button' : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onClick={clickable ? handleJump : undefined}
-                  onKeyDown={clickable ? (event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      handleJump()
-                    }
-                  } : undefined}
-                  style={{
-                    display: 'flex',
-                    gap: 10,
-                    minWidth: 0,
-                    cursor: clickable ? 'pointer' : 'default',
-                    borderRadius: 8,
-                    padding: clickable ? '2px 4px' : 0,
-                    margin: clickable ? '-2px -4px' : 0,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 3,
-                      borderRadius: 999,
-                      background: CATEGORY_COLORS[theme.category] ?? CATEGORY_COLORS.uncategorized,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
-                      {formatDuration(theme.seconds)}{theme.blocks.length > 1 ? ` · ${theme.blocks.length} stretches` : ''}
-                    </div>
-                    <InlineRevealText
-                      text={theme.label}
-                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                    />
-                    {theme.apps.length > 0 && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
-                        {theme.apps.slice(0, 3).join(' · ')}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </section>
       )}
     </div>
   )
@@ -974,76 +717,47 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
 function BlockInspector({
   block,
   payload,
+  blocks,
   onRefresh,
-  onSelectBlock,
 }: {
   block: WorkContextBlock | null
   payload: DayTimelinePayload
+  blocks: WorkContextBlock[]
   onRefresh: () => Promise<void>
-  onSelectBlock?: (blockId: string) => void
 }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
-  const [reviewSaving, setReviewSaving] = useState<TimelineBlockReviewState | 'intent' | null>(null)
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [boundarySaving, setBoundarySaving] = useState<'merge-prev' | 'merge-next' | null>(null)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
-  // The entire correction surface lives behind this one disclosure — invisible
-  // by default, revealed only when the user disagrees.
-  const [notRight, setNotRight] = useState(false)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
     setReviewError(null)
-    setReviewSaving(null)
     setBoundarySaving(null)
     setBoundaryError(null)
-    setNotRight(false)
   }, [block?.id, block?.label.current, block?.label.override])
 
   if (!block) {
-    return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
+    return <DaySummaryInspector payload={payload} blocks={blocks} onRefresh={onRefresh} />
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   const hasOverride = Boolean(block.label.override?.trim())
-  const saveReviewState = async (
-    state: TimelineBlockReviewState,
-    corrections?: {
-      correctedLabel?: string | null
-      correctedIntentRole?: WorkIntentRole | null
-      correctedIntentSubject?: string | null
-    },
-  ) => {
-    setReviewSaving(corrections?.correctedIntentRole !== undefined || corrections?.correctedIntentSubject !== undefined ? 'intent' : state)
-    setReviewError(null)
-    try {
-      await ipc.db.setBlockReview({
-        blockId: block.id,
-        date: payload.date,
-        state,
-        ...corrections,
-      })
-      await onRefresh()
-    } catch (error) {
-      setReviewError(sanitizeIpcError(error, "Couldn't save the review state. Try again in a moment.").message)
-    } finally {
-      setReviewSaving(null)
-    }
-  }
-  const sortedDayBlocks = [...payload.blocks].sort((a, b) => a.startTime - b.startTime)
+  const sortedDayBlocks = [...blocks].sort((a, b) => a.startTime - b.startTime)
   const blockIndex = sortedDayBlocks.findIndex((candidate) => candidate.id === block.id)
   const previousBlock = blockIndex > 0 ? sortedDayBlocks[blockIndex - 1] : null
   const nextBlock = blockIndex >= 0 && blockIndex < sortedDayBlocks.length - 1 ? sortedDayBlocks[blockIndex + 1] : null
 
-  const mergeEpisodeWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
+  const mergeBlockWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
     setBoundarySaving(side)
     setBoundaryError(null)
     try {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [block.id, other.id], date: payload.date })
+      invalidateDaySummaryRecap(payload.date)
       await onRefresh()
     } catch (error) {
-      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these episodes. Try again in a moment.").message)
+      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again.").message)
     } finally {
       setBoundarySaving(null)
     }
@@ -1065,7 +779,7 @@ function BlockInspector({
     }}>
       <div style={{ marginBottom: 18 }}>
         <div
-          title={userVisibleBlockLabel(block)}
+          title={timelineBlockLabel(block)}
           style={{
             fontSize: 18,
             fontWeight: 750,
@@ -1080,109 +794,96 @@ function BlockInspector({
             wordBreak: 'break-word',
           }}
         >
-          {userVisibleBlockLabel(block)}
+          {timelineBlockLabel(block)}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
       </div>
 
-      {/* The whole correction surface — invisible until the user disagrees. */}
-      {!notRight ? (
-        <button
-          type="button"
-          onClick={() => setNotRight(true)}
-          style={{ marginBottom: 18, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0, textDecorationLine: 'underline', textUnderlineOffset: 3 }}
+      <div style={{ marginBottom: 18, display: 'grid', gap: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', padding: '12px 13px' }}>
+        <div style={{ fontSize: 11.5, fontWeight: 760, color: 'var(--color-text-secondary)' }}>Corrections</div>
+        <form
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
+          onSubmit={(event) => {
+            event.preventDefault()
+            const label = overrideDraft.trim()
+            if (!label || overrideSaving || label === block.label.current) return
+            setOverrideSaving(true)
+            setReviewError(null)
+            void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
+              .then(() => {
+                invalidateDaySummaryRecap(payload.date)
+                return onRefresh()
+              })
+              .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again.").message))
+              .finally(() => setOverrideSaving(false))
+          }}
         >
-          Not right?
-        </button>
-      ) : (
-        <div style={{ marginBottom: 18, display: 'grid', gap: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', padding: '12px 13px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 760, color: 'var(--color-text-secondary)' }}>Fix this episode</span>
-            <button type="button" onClick={() => setNotRight(false)} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer' }}>Done</button>
-          </div>
-
-          {/* Rename */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename episode</label>
-            <input
-              id="timeline-block-label-override"
-              type="text"
-              value={overrideDraft}
-              onChange={(event) => setOverrideDraft(event.target.value)}
-              placeholder={userVisibleBlockLabel(block)}
-              style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
-            />
+          <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename block</label>
+          <input
+            id="timeline-block-label-override"
+            type="text"
+            value={overrideDraft}
+            onChange={(event) => setOverrideDraft(event.target.value)}
+            placeholder={timelineBlockLabel(block)}
+            style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
+          />
+          <button
+            type="submit"
+            disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+            style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+          >
+            {overrideSaving ? 'Saving…' : 'Rename'}
+          </button>
+          {hasOverride && (
             <button
               type="button"
-              disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+              disabled={overrideSaving}
               onClick={() => {
-                const label = overrideDraft.trim()
-                if (!label) return
                 setOverrideSaving(true)
                 setReviewError(null)
-                void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
-                  .then(() => onRefresh())
-                  .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
-                  .finally(() => setOverrideSaving(false))
+                void ipc.db.clearBlockLabelOverride(block.id).then(() => {
+                  invalidateDaySummaryRecap(payload.date)
+                  return onRefresh()
+                }).catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't reset this rename. Try again.").message)).finally(() => setOverrideSaving(false))
               }}
-              style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+              style={{ height: 32, padding: '0 12px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
             >
-              {overrideSaving ? 'Saving…' : 'Rename'}
+              Reset
             </button>
-            {hasOverride && (
-              <button
-                type="button"
-                disabled={overrideSaving}
-                onClick={() => {
-                  setOverrideSaving(true)
-                  setReviewError(null)
-                  void ipc.db.clearBlockLabelOverride(block.id).then(() => onRefresh()).catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't reset this rename. Try again in a moment.").message)).finally(() => setOverrideSaving(false))
-                }}
-                style={{ height: 32, padding: '0 12px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                Reset
-              </button>
-            )}
-          </div>
+          )}
+        </form>
 
-          {/* Merge up/down · Hide */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {previousBlock && (
-              <button type="button" title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={boundaryButtonStyle(boundarySaving !== null)}>
-                <ArrowUp size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge up'}
-              </button>
-            )}
-            {nextBlock && (
-              <button type="button" title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={boundaryButtonStyle(boundarySaving !== null)}>
-                <ArrowDown size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge down'}
-              </button>
-            )}
-            <button type="button" title="Hide this episode from summaries" disabled={reviewSaving !== null || block.review.state === 'ignored'} onClick={() => { void saveReviewState('ignored') }} style={boundaryButtonStyle(reviewSaving !== null || block.review.state === 'ignored')}>
-              <EyeOff size={13} strokeWidth={2} aria-hidden="true" />{block.review.state === 'ignored' ? 'Hidden' : 'Hide'}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {previousBlock && (
+            <button type="button" title={`Merge with ${timelineBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeBlockWith(previousBlock, 'merge-prev') }} style={boundaryButtonStyle(boundarySaving !== null)}>
+              <ArrowUp size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging…' : 'Merge with above'}
             </button>
-          </div>
-
-          {(reviewError || boundaryError) && (
-            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{reviewError || boundaryError}</div>
+          )}
+          {nextBlock && (
+            <button type="button" title={`Merge with ${timelineBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeBlockWith(nextBlock, 'merge-next') }} style={boundaryButtonStyle(boundarySaving !== null)}>
+              <ArrowDown size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging…' : 'Merge with below'}
+            </button>
           )}
         </div>
-      )}
 
-      {blockNarrative(block) && (
-        <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
-          {blockNarrative(block)}
-        </p>
-      )}
+        {(reviewError || boundaryError) && (
+          <div role="alert" style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{reviewError || boundaryError}</div>
+        )}
+      </div>
+
+      <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
+        {blockShortSummary(block)}
+      </p>
 
       <div style={{ display: 'grid', gap: 18 }}>
         <section>
           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-            Apps used
+            Evidence
           </div>
           <div style={{ display: 'grid', gap: 10 }}>
-            {block.topApps.slice(0, 6).map((app) => (
+            {block.topApps.filter((app) => !isSystemNoiseApp(app)).slice(0, 6).map((app) => (
               <div key={`${block.id}:${app.bundleId}`} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -1197,93 +898,83 @@ function BlockInspector({
                 </div>
               </div>
             ))}
-          </div>
-        </section>
-
-        {block.topArtifacts.length > 0 && (
-          <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Key artifacts
-            </div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {block.topArtifacts.slice(0, 6).map((artifact) => {
-                return (
-                  <div
-                    key={artifact.id}
+            {block.topArtifacts.slice(0, 6).map((artifact) => {
+              return (
+                <div
+                  key={artifact.id}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'start',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void openArtifact(artifact)}
+                    disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
                     style={{
-                      width: '100%',
+                      flex: 1,
+                      minWidth: 0,
                       display: 'flex',
                       alignItems: 'start',
-                      justifyContent: 'space-between',
-                      gap: 12,
+                      gap: 10,
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
                     }}
                   >
-                    <button
-                      type="button"
-                      onClick={() => void openArtifact(artifact)}
-                      disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: 'flex',
-                        alignItems: 'start',
-                        gap: 10,
-                        padding: 0,
-                        border: 'none',
-                        background: 'transparent',
-                        textAlign: 'left',
-                        cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
-                      }}
-                    >
-                      <EntityIcon
-                        artifactType={artifact.artifactType}
-                        canonicalAppId={artifact.canonicalAppId}
-                        ownerBundleId={artifact.ownerBundleId}
-                        ownerAppName={artifact.ownerAppName}
-                        ownerAppInstanceId={artifact.ownerAppInstanceId}
+                    <EntityIcon
+                      artifactType={artifact.artifactType}
+                      canonicalAppId={artifact.canonicalAppId}
+                      ownerBundleId={artifact.ownerBundleId}
+                      ownerAppName={artifact.ownerAppName}
+                      ownerAppInstanceId={artifact.ownerAppInstanceId}
+                      title={artifact.displayTitle}
+                      path={artifact.path}
+                      domain={artifact.host}
+                      url={artifact.url}
+                      size={28}
+                    />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div
                         title={artifact.displayTitle}
-                        path={artifact.path}
-                        domain={artifact.host}
-                        url={artifact.url}
-                        size={28}
-                      />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div
-                          title={artifact.displayTitle}
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: 'var(--color-text-primary)',
-                            lineHeight: 1.35,
-                            display: '-webkit-box',
-                            WebkitBoxOrient: 'vertical',
-                            WebkitLineClamp: 2,
-                            overflow: 'hidden',
-                            overflowWrap: 'break-word',
-                            wordBreak: 'break-word',
-                          }}
-                        >
-                          {artifact.displayTitle}
-                        </div>
-                        {(artifact.subtitle || artifact.host || artifact.path) && (
-                          <InlineRevealText
-                            text={artifact.subtitle || artifact.host || artifact.path || ''}
-                            style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
-                          />
-                        )}
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: 'var(--color-text-primary)',
+                          lineHeight: 1.35,
+                          display: '-webkit-box',
+                          WebkitBoxOrient: 'vertical',
+                          WebkitLineClamp: 2,
+                          overflow: 'hidden',
+                          overflowWrap: 'break-word',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {artifact.displayTitle}
                       </div>
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                        {formatDuration(artifact.totalSeconds)}
-                      </div>
+                      {(artifact.subtitle || artifact.host || artifact.path) && (
+                        <InlineRevealText
+                          text={artifact.subtitle || artifact.host || artifact.path || ''}
+                          style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
+                        />
+                      )}
+                    </div>
+                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                      {formatDuration(artifact.totalSeconds)}
                     </div>
                   </div>
-                )
-              })}
-            </div>
-          </section>
-        )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
 
         {block.websites.length > 0 && (
           <section>
@@ -1336,6 +1027,7 @@ interface WeekDaySummary {
   date: string
   totalSeconds: number
   categories: Array<{ category: AppCategory; seconds: number }>
+  workCategories: Array<{ category: AppCategory; seconds: number }>
   blockCount: number
   topLabels: string[]
 }
@@ -1362,52 +1054,38 @@ function WeekView({
       const days = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date)))
       return days.map((payload) => {
         const categories = new Map<AppCategory, number>()
-        const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-        for (const block of trustedBlocks) {
-          categories.set(block.dominantCategory, (categories.get(block.dominantCategory) ?? 0) + blockDurationSeconds(block))
+        const workCategories = new Map<AppCategory, number>()
+        const dayBlocks = visibleBlocks(payload.blocks)
+        for (const block of dayBlocks) {
+          const seconds = blockDisplayedActiveSeconds(block)
+          categories.set(block.dominantCategory, (categories.get(block.dominantCategory) ?? 0) + seconds)
+          if (effectiveBlockKind(block) === 'work') {
+            workCategories.set(block.dominantCategory, (workCategories.get(block.dominantCategory) ?? 0) + seconds)
+          }
         }
-        const trustedTotalSeconds = trustedBlocks.reduce((sum, block) => sum + blockDurationSeconds(block), 0)
+        const dayTotalSeconds = visibleBlockTotal(dayBlocks)
         return {
           date: payload.date,
-          totalSeconds: trustedTotalSeconds,
+          totalSeconds: dayTotalSeconds,
           categories: [...categories.entries()]
             .sort((left, right) => right[1] - left[1])
             .map(([category, seconds]) => ({ category, seconds })),
-          blockCount: trustedBlocks.length,
+          workCategories: [...workCategories.entries()]
+            .sort((left, right) => right[1] - left[1])
+            .map(([category, seconds]) => ({ category, seconds })),
+          blockCount: dayBlocks.length,
           topLabels: [...new Set(
-            trustedBlocks
+            dayBlocks
               .slice(0, 5)
-              .map((block) => userVisibleBlockLabel(block))
+              .map((block) => timelineBlockLabel(block))
               .filter(Boolean)
           )].slice(0, 3),
         }
       })
     },
   })
-  const expectedWeekReviewScopeKey = `week:${weekStart}`
-  const weekReviewResource = useProjectionResource<AISurfaceSummary | null>({
-    scope: 'timeline',
-    dependencies: [weekStart],
-    intervalMs: 0,
-    load: () => ipc.ai.getWeekReview(weekStart).catch(() => null),
-  })
-  const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
 
   const data = weekResource.data ?? []
-  const rawWeekReview = weekReviewResource.data ?? null
-  const weekReview = rawWeekReview && rawWeekReview.scopeKey === expectedWeekReviewScopeKey
-    ? rawWeekReview
-    : null
-
-  const handleGenerateWeekReview = useCallback(async () => {
-    setGeneratingWeekReview(true)
-    try {
-      await ipc.ai.getWeekReview(weekStart, true).catch(() => null)
-      await weekReviewResource.refresh()
-    } finally {
-      setGeneratingWeekReview(false)
-    }
-  }, [weekStart, weekReviewResource])
   const maxSeconds = data.length > 0 ? Math.max(...data.map((day) => day.totalSeconds), 1) : 1
   const activeDays = data.filter((day) => day.totalSeconds > 0)
   const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.totalSeconds, 0)
@@ -1416,12 +1094,20 @@ function WeekView({
     ? activeDays.reduce((best, day) => day.totalSeconds > best.totalSeconds ? day : best)
     : null
   const topWeekCategory = Array.from(activeDays.reduce<Map<AppCategory, number>>((map, day) => {
-    for (const category of day.categories) {
+    for (const category of day.workCategories) {
       map.set(category.category, (map.get(category.category) ?? 0) + category.seconds)
     }
     return map
   }, new Map()).entries())
     .sort((left, right) => right[1] - left[1])[0] ?? null
+  const legendCategories = Array.from(activeDays.reduce<Map<AppCategory, number>>((map, day) => {
+    for (const entry of day.categories) {
+      map.set(entry.category, (map.get(entry.category) ?? 0) + entry.seconds)
+    }
+    return map
+  }, new Map()).entries())
+    .sort((left, right) => right[1] - left[1])
+    .map(([category]) => category)
   const activeDay = data.find((day) => day.date === hoveredDate)
     ?? data.find((day) => day.date === selectedDate)
     ?? activeDays[0]
@@ -1429,81 +1115,93 @@ function WeekView({
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 10 }}>
-        {data.map((day) => {
-          const [y, m, d] = day.date.split('-').map(Number)
-          const isSelected = day.date === selectedDate
-          const isToday = day.date === today
-          const height = Math.max(14, (day.totalSeconds / maxSeconds) * 148)
+      <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(96px, 1fr))', gap: 10, minWidth: 720 }}>
+          {data.map((day) => {
+            const [y, m, d] = day.date.split('-').map(Number)
+            const isSelected = day.date === selectedDate
+            const isToday = day.date === today
+            const height = Math.max(14, (day.totalSeconds / maxSeconds) * 148)
 
-          return (
-            <button
-              key={day.date}
-              type="button"
-              onClick={() => onSelectDate(day.date)}
-              onMouseEnter={() => setHoveredDate(day.date)}
-              style={{
-                border: isSelected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
-                background: isToday || isSelected ? 'var(--color-surface-low)' : 'transparent',
-                borderRadius: 14,
-                padding: '12px 8px 10px',
-                cursor: 'pointer',
-                textAlign: 'center',
-              }}
-            >
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                {new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(y, m - 1, d))}
-              </div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)', marginTop: 2 }}>
-                {d}
-              </div>
-              <div style={{
-                height: 168,
-                display: 'flex',
-                alignItems: 'end',
+            return (
+              <button
+                key={day.date}
+                type="button"
+                onClick={() => onSelectDate(day.date)}
+                onMouseEnter={() => setHoveredDate(day.date)}
+                style={{
+                  border: isSelected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
+                  background: isToday || isSelected ? 'var(--color-surface-low)' : 'transparent',
+                  borderRadius: 14,
+                  padding: '12px 8px 10px',
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                  {new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(y, m - 1, d))}
+                </div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)', marginTop: 2 }}>
+                  {d}
+                </div>
+                <div style={{
+                  height: 168,
+                  display: 'flex',
+                  alignItems: 'end',
                   justifyContent: 'center',
                   marginTop: 10,
                 }}>
-                <div style={{
-                  width: 76,
-                  height,
-                  borderRadius: 12,
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border-ghost)',
-                  overflow: 'hidden',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'end',
-                }}>
-                  {day.categories.slice(0, 4).map((category, index, array) => {
-                    const total = array.reduce((sum, item) => sum + item.seconds, 0) || 1
-                    const segmentHeight = `${Math.max(8, (category.seconds / total) * 100)}%`
-                    return (
-                      <div
-                        key={`${day.date}:${category.category}`}
-                        onMouseEnter={(event) => {
-                          event.stopPropagation()
-                          setHoveredDate(day.date)
-                          setHoveredStack({ date: day.date, category: category.category, seconds: category.seconds })
-                        }}
-                        onMouseLeave={() => setHoveredStack((current) => current?.date === day.date && current.category === category.category ? null : current)}
-                        style={{
-                          height: segmentHeight,
-                          background: CATEGORY_COLORS[category.category],
-                          opacity: 1 - (index * 0.08),
-                        }}
-                      />
-                    )
-                  })}
+                  <div style={{
+                    width: 76,
+                    height,
+                    borderRadius: 12,
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-border-ghost)',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'end',
+                  }}>
+                    {day.categories.map((category, index) => {
+                      const segmentHeight = `${(category.seconds / Math.max(1, day.totalSeconds)) * 100}%`
+                      return (
+                        <div
+                          key={`${day.date}:${category.category}`}
+                          onMouseEnter={(event) => {
+                            event.stopPropagation()
+                            setHoveredDate(day.date)
+                            setHoveredStack({ date: day.date, category: category.category, seconds: category.seconds })
+                          }}
+                          onMouseLeave={() => setHoveredStack((current) => current?.date === day.date && current.category === category.category ? null : current)}
+                          style={{
+                            height: segmentHeight,
+                            background: CATEGORY_COLORS[category.category],
+                            opacity: Math.max(0.35, 1 - (index * 0.08)),
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 8 }}>
-                {day.totalSeconds > 0 ? formatDuration(day.totalSeconds) : 'No data'}
-              </div>
-            </button>
-          )
-        })}
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 8 }}>
+                  {day.totalSeconds > 0 ? formatDuration(day.totalSeconds) : day.date > today ? 'Future' : 'No data'}
+                </div>
+              </button>
+            )
+          })}
+        </div>
       </div>
+
+      {legendCategories.length > 0 && (
+        <div aria-label="Timeline category legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 14px' }}>
+          {legendCategories.map((category) => (
+            <span key={category} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+              <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[category] }} />
+              {categoryLabel(category)}
+            </span>
+          ))}
+        </div>
+      )}
 
       <div style={{
         borderRadius: 16,
@@ -1555,51 +1253,11 @@ function WeekView({
               Main mode
             </div>
             <div style={{ fontSize: 16, fontWeight: 760, color: 'var(--color-text-primary)' }}>
-              {topWeekCategory ? categoryLabel(topWeekCategory[0]) : 'No data'}
+              {topWeekCategory ? categoryLabel(topWeekCategory[0]) : 'No work mode yet'}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-              {topWeekCategory ? formatDuration(topWeekCategory[1]) : 'Waiting for tracked time'}
+              {topWeekCategory ? formatDuration(topWeekCategory[1]) : 'Leisure stays in the breakdown'}
             </div>
-          </div>
-        </div>
-
-        <div style={{
-          borderTop: '1px solid var(--color-border-ghost)',
-          paddingTop: 14,
-          display: 'grid',
-          gap: 8,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)' }}>
-              Week review
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleGenerateWeekReview()}
-              disabled={generatingWeekReview || weekReviewResource.loading}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 8,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-low)',
-                color: 'var(--color-text-secondary)',
-                fontSize: 11.5,
-                fontWeight: 700,
-                cursor: generatingWeekReview || weekReviewResource.loading ? 'default' : 'pointer',
-                opacity: generatingWeekReview || weekReviewResource.loading ? 0.6 : 1,
-              }}
-            >
-              {generatingWeekReview ? 'Generating…' : weekReview ? 'Refresh' : 'Generate'}
-            </button>
-          </div>
-          <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
-            {generatingWeekReview
-              ? 'Generating a grounded review for this week…'
-              : weekReview
-                ? weekReview.summary
-                : weekReviewResource.loading
-                  ? 'Checking for a saved review…'
-                  : 'No saved review for this week yet. Click Generate to summarize what happened.'}
           </div>
         </div>
 
@@ -1616,7 +1274,11 @@ function WeekView({
                   {formatFullDate(activeDay.date)}
                 </div>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                  {formatDuration(activeDay.totalSeconds)} tracked • {activeDay.blockCount} block{activeDay.blockCount !== 1 ? 's' : ''}
+                  {activeDay.totalSeconds > 0
+                    ? `${formatDuration(activeDay.totalSeconds)} tracked • ${activeDay.blockCount} block${activeDay.blockCount !== 1 ? 's' : ''}`
+                    : activeDay.date > today
+                      ? 'Future'
+                      : 'No data'}
                 </div>
               </div>
               <button
@@ -1734,14 +1396,22 @@ export default function Timeline() {
   const payload = timelineResource.data?.date === date ? timelineResource.data : null
   const error = timelineResource.error
   const loading = view === 'day' && (!payload || timelineResource.loading)
+  const dayBlocks = useMemo(
+    () => visibleBlocks(payload?.blocks ?? []),
+    [payload],
+  )
+  const dayTotalSeconds = useMemo(
+    () => visibleBlockTotal(dayBlocks),
+    [dayBlocks],
+  )
 
   const blockMap = useMemo(() => {
     const map = new Map<string, WorkContextBlock>()
-    for (const block of payload?.blocks ?? []) {
+    for (const block of dayBlocks) {
       map.set(block.id, block)
     }
     return map
-  }, [payload])
+  }, [dayBlocks])
 
   useEffect(() => {
     if (!selectedBlockId) return
@@ -1763,23 +1433,27 @@ export default function Timeline() {
     const openKey = view === 'week'
       ? `week:${date}`
       : payload
-        ? `day:${payload.date}:${payload.blocks.length}:${payload.totalSeconds}`
+        ? `day:${payload.date}:${dayBlocks.length}:${dayTotalSeconds}`
         : null
     if (!openKey || lastTimelineOpenKeyRef.current === openKey) return
     lastTimelineOpenKeyRef.current = openKey
     track(ANALYTICS_EVENT.TIMELINE_OPENED, {
-      block_count_bucket: blockCountBucket(payload?.blocks.length ?? 0),
+      block_count_bucket: blockCountBucket(dayBlocks.length),
       surface: 'timeline',
-      tracked_time_bucket: trackedTimeBucket(payload?.totalSeconds ?? 0),
+      tracked_time_bucket: trackedTimeBucket(dayTotalSeconds),
       trigger: 'navigation',
       view,
     })
-  }, [date, payload, view])
+  }, [date, dayBlocks.length, dayTotalSeconds, payload, view])
 
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
   const displaySegments = useMemo(
-    () => compressTimelineSegments(payload?.segments ?? []),
-    [payload],
+    () => compressTimelineSegments(
+      (payload?.segments ?? []).filter((segment) =>
+        segment.kind !== 'work_block' || blockMap.has(segment.blockId),
+      ),
+    ),
+    [blockMap, payload],
   )
 
   useEffect(() => {
@@ -1790,13 +1464,13 @@ export default function Timeline() {
     if (lastBlockOpenKeyRef.current === selectedBlock.id) return
     lastBlockOpenKeyRef.current = selectedBlock.id
     track(ANALYTICS_EVENT.TIMELINE_BLOCK_OPENED, {
-      block_count_bucket: blockCountBucket(payload?.blocks.length ?? 0),
+      block_count_bucket: blockCountBucket(dayBlocks.length),
       surface: 'timeline',
-      tracked_time_bucket: trackedTimeBucket(payload?.totalSeconds ?? 0),
+      tracked_time_bucket: trackedTimeBucket(dayTotalSeconds),
       trigger: 'click',
       view,
     })
-  }, [payload, selectedBlock, view])
+  }, [dayBlocks.length, dayTotalSeconds, selectedBlock, view])
 
   function updateNavState(nextState: TimelineNavState) {
     setNavState((current) => (
@@ -1821,8 +1495,8 @@ export default function Timeline() {
   }
 
   const forwardDisabled = view === 'day'
-    ? isToday
-    : getWeekStart(date) === getWeekStart(todayString())
+    ? date >= todayString()
+    : getWeekStart(date) >= getWeekStart(todayString())
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -1832,10 +1506,11 @@ export default function Timeline() {
         zIndex: 10,
         background: 'var(--color-bg)',
         borderBottom: '1px solid var(--color-border-ghost)',
-        padding: '20px 32px 16px',
+        padding: isCompact ? '16px 18px 14px' : '20px 32px 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
+        flexWrap: 'wrap',
         gap: 16,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1948,7 +1623,7 @@ export default function Timeline() {
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
         {view === 'week' && (
-          <div style={{ padding: '24px 32px 40px' }}>
+          <div style={{ padding: isCompact ? '20px 18px 36px' : '24px 32px 40px' }}>
             <WeekView
               selectedDate={date}
               onSelectDate={(nextDate) => {
@@ -1959,7 +1634,7 @@ export default function Timeline() {
         )}
 
         {view === 'day' && (
-          <div style={{ padding: '24px 32px 40px' }}>
+          <div style={{ padding: isCompact ? '20px 18px 36px' : '24px 32px 40px' }}>
             {error && (
               <div style={{
                 borderRadius: 16,
@@ -1985,10 +1660,26 @@ export default function Timeline() {
             )}
 
             {!error && !loading && payload && (
-              <>
-                <SummaryStrip payload={payload} />
-
-                {payload.blocks.length === 0 && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 360px',
+                  gap: 24,
+                  alignItems: 'start',
+                }}
+                onClickCapture={(event) => {
+                  const target = event.target as HTMLElement | null
+                  if (target?.closest('[data-timeline-inspector="true"]')) {
+                    return
+                  }
+                  const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
+                  const nextSelectedId = blockButton?.dataset.timelineBlockId ?? null
+                  if (nextSelectedId !== selectedBlockId) {
+                    setSelectedBlockId(nextSelectedId)
+                  }
+                }}
+              >
+                {dayBlocks.length === 0 ? (
                   <div style={{
                     borderRadius: 18,
                     border: '1px solid var(--color-border-ghost)',
@@ -2003,58 +1694,32 @@ export default function Timeline() {
                       Daylens rebuilds this view from persisted local activity. Once foreground activity exists for the day, blocks and gaps appear here automatically.
                     </div>
                   </div>
-                )}
-
-                {payload.blocks.length > 0 && (
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 360px',
-                  gap: 24,
-                  alignItems: 'start',
-                }}
-                  onClickCapture={(event) => {
-                    const target = event.target as HTMLElement | null
-                    if (target?.closest('[data-timeline-inspector="true"]')) {
-                      return
-                    }
-                    const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
-                    const nextSelectedId = blockButton?.dataset.timelineBlockId ?? null
-                    if (nextSelectedId !== selectedBlockId) {
-                      setSelectedBlockId(nextSelectedId)
-                    }
-                  }}>
-                    <div style={{ display: 'grid', gap: 14 }}>
-                      {displaySegments.map((segment) => (
-                        segment.kind === 'gap_group' ? (
-                          <GapGroupRow
-                            key={`gap-group:${segment.startTime}:${segment.endTime}`}
-                            segment={segment}
-                          />
-                        ) : (
-                          <TimelineRow
-                            key={segment.kind === 'work_block' ? segment.blockId : `${segment.kind}:${segment.startTime}:${segment.endTime}`}
-                            segment={segment}
-                            block={segment.kind === 'work_block' ? blockMap.get(segment.blockId) ?? null : null}
-                            isSelected={segment.kind === 'work_block' && selectedBlockId === segment.blockId}
-                          />
-                        )
-                      ))}
-                    </div>
-                    <BlockInspector
-                      block={selectedBlock}
-                      payload={payload}
-                      onRefresh={timelineResource.refresh}
-                      onSelectBlock={(blockId) => {
-                        setSelectedBlockId(blockId)
-                        requestAnimationFrame(() => {
-                          const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
-                          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        })
-                      }}
-                    />
+                ) : (
+                  <div style={{ display: 'grid', gap: 14 }}>
+                    {displaySegments.map((segment) => (
+                      segment.kind === 'gap_group' ? (
+                        <GapGroupRow
+                          key={`gap-group:${segment.startTime}:${segment.endTime}`}
+                          segment={segment}
+                        />
+                      ) : (
+                        <TimelineRow
+                          key={segment.kind === 'work_block' ? segment.blockId : `${segment.kind}:${segment.startTime}:${segment.endTime}`}
+                          segment={segment}
+                          block={segment.kind === 'work_block' ? blockMap.get(segment.blockId) ?? null : null}
+                          isSelected={segment.kind === 'work_block' && selectedBlockId === segment.blockId}
+                        />
+                      )
+                    ))}
                   </div>
                 )}
-              </>
+                <BlockInspector
+                  block={selectedBlock}
+                  payload={payload}
+                  blocks={dayBlocks}
+                  onRefresh={timelineResource.refresh}
+                />
+              </div>
             )}
           </div>
         )}

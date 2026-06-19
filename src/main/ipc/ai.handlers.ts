@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
+import { updateAIMessageFeedback, writeAIBlockCategory, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
 import {
@@ -140,6 +140,9 @@ export function registerAIHandlers(): void {
     })
     if (!wrote) {
       throw new Error('AI label could not be persisted. Reopen the timeline and try again.')
+    }
+    if (insight.category) {
+      writeAIBlockCategory(db, block.id, insight.category)
     }
 
     return insight

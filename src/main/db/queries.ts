@@ -19,9 +19,16 @@ import type {
   WorkContextInsight,
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
-import { localDayBounds } from '../lib/localDate'
 import { resolveCanonicalApp } from '../lib/appIdentity'
 import { learnFromBlockOverride } from '../services/workMemory'
+
+function localDayBounds(dateStr: string): [number, number] {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return [
+    new Date(year, month - 1, day).getTime(),
+    new Date(year, month - 1, day + 1).getTime(),
+  ]
+}
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -31,7 +38,7 @@ function resolveDisplayName(bundleId: string, fallbackName: string): string {
 // Applied at read time so junk data never surfaces in the UI.
 // The DB is NOT mutated — raw data is always preserved for debugging / export.
 //
-// Matches lowercase substrings of the stored app_name value.
+// Matches lowercase substrings of the stored bundle id + app name identity.
 // Keep this in sync with the write-layer filter in tracking.ts so that anything
 // added there also has a read-layer backstop here.
 const UX_NOISE_SUBSTRINGS = [
@@ -41,6 +48,13 @@ const UX_NOISE_SUBSTRINGS = [
   'cmux',       // tmux manager shim
   'node.js',    // Node.js runtime windows
   'loginwindow', // macOS lock screen / auth process — not a user app
+  'usernotificationcenter',
+  'notificationcenter',
+  'finder',
+  'screensaver',
+  'screen saver',
+  'windowserver',
+  'systemuiserver',
 ]
 
 // Minimum session duration exposed to the UI (seconds).
@@ -85,10 +99,12 @@ const LEGACY_WEAK_AI_LABELS = [
   'Writing',
 ]
 
-function isUxNoise(appName: string): boolean {
-  const lower = appName.toLowerCase()
+function isUxNoise(bundleId: string, appName: string): boolean {
+  const lower = `${bundleId} ${appName}`.toLowerCase()
   return UX_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
 }
+
+const UX_NOISE_SQL_IDENTITY = `LOWER(COALESCE(app_sessions.bundle_id, '') || ' ' || COALESCE(app_sessions.app_name, ''))`
 
 interface AppSessionRow {
   id: number
@@ -566,7 +582,7 @@ export function getAppSummariesForRange(
 
   const clippedSessions = mergeSessions(
     rows
-      .filter((row) => !isUxNoise(row.app_name))
+      .filter((row) => !isUxNoise(row.bundle_id, row.app_name))
       .map((row) => {
         // User overrides first; fall through to catalog's default category for
         // sessions that were captured before the catalog was fully populated.
@@ -625,7 +641,7 @@ export function getSessionsForRange(
 
   return mergeSessions(
     rows
-      .filter((row) => !isUxNoise(row.app_name))
+      .filter((row) => !isUxNoise(row.bundle_id, row.app_name))
       .map((row) => {
         const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
         const category: AppCategory =
@@ -862,7 +878,7 @@ export function getHourlyBreakdown(
   toMs: number,
 ): { hour: number; totalSeconds: number; focusSeconds: number }[] {
   const focusedCategoryPlaceholders = FOCUSED_CATEGORIES.map(() => '?').join(', ')
-  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => `${UX_NOISE_SQL_IDENTITY} NOT LIKE ?`).join(' AND ')
   const rows = db
     .prepare(`
       SELECT
@@ -916,7 +932,7 @@ export function getPeakHours(
   // derive both the distinct-day gate and the 24-hour breakdown, replacing the
   // previous two full scans (distinct-day pass + getHourlyBreakdown).
   const focusedCategoryPlaceholders = FOCUSED_CATEGORIES.map(() => '?').join(', ')
-  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => `${UX_NOISE_SQL_IDENTITY} NOT LIKE ?`).join(' AND ')
   const rows = db
     .prepare(`
       SELECT
@@ -1041,7 +1057,7 @@ export function getWeeklySummary(
     return best
   }, null)
 
-  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => 'LOWER(app_sessions.app_name) NOT LIKE ?').join(' AND ')
+  const noiseFilters = UX_NOISE_SUBSTRINGS.map(() => `${UX_NOISE_SQL_IDENTITY} NOT LIKE ?`).join(' AND ')
   const topAppRows = db
     .prepare(`
       SELECT
@@ -1740,7 +1756,7 @@ export function getSessionsForApp(
     .all(bundleId, fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
   const clipped = rows
-    .filter((r) => !isUxNoise(r.app_name))
+    .filter((r) => !isUxNoise(r.bundle_id, r.app_name))
     .map((r) => {
       const category: AppCategory = overrides[r.bundle_id] ?? r.category
       return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.bundle_id, r.app_name))
@@ -2146,6 +2162,22 @@ export function writeAIBlockLabel(
   `).run(`${params.blockId}:ai:${labelHash}`, params.blockId, label, narrative, confidence, now, null)
 
   return true
+}
+
+export function writeAIBlockCategory(
+  db: Database.Database,
+  blockId: string,
+  category: AppCategory,
+): boolean {
+  if (category === 'system' || category === 'uncategorized') return false
+  const result = db.prepare(`
+    UPDATE timeline_blocks
+    SET dominant_category = ?,
+        computed_at = ?
+    WHERE id = ?
+      AND dominant_category <> ?
+  `).run(category, Date.now(), blockId, category)
+  return result.changes > 0
 }
 
 export function getBlockLabelOverride(

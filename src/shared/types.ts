@@ -257,6 +257,7 @@ export type HistoryDayPayload = DayTimelinePayload
 export interface WorkContextInsight {
   label: string | null
   narrative: string | null
+  category?: AppCategory | null
 }
 
 export interface WorkMemoryPatternSummary {

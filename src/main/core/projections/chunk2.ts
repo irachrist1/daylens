@@ -10,15 +10,34 @@ import type { AppCategory, AppUsageSummary } from '@shared/types'
 import { classifyResult } from '../../services/tracking'
 import { isCategoryFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
-import { localDateString, localDayBounds } from '../../lib/localDate'
-import { naturalizeProjectionLabel } from './chunk2Label'
+import { localDateString } from '../../lib/localDate'
+
+function localDayBounds(dateStr: string): [number, number] {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return [
+    new Date(year, month - 1, day).getTime(),
+    new Date(year, month - 1, day + 1).getTime(),
+  ]
+}
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
 // any rows whose stored version is older. Idempotent.
-export const PROJECTION_VERSION = 1
+export const PROJECTION_VERSION = 2
 
-const IDLE_GAP_MS = 5 * 60 * 1000   // 5 min boundary between blocks
+const IDLE_GAP_MS = 15 * 60 * 1000  // only a real 15m gap is a hard boundary
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
+const SYSTEM_NOISE_TOKENS = [
+  'loginwindow',
+  'usernotificationcenter',
+  'notificationcenter',
+  'finder',
+  'screensaver',
+  'screen saver',
+  'windowserver',
+  'systemuiserver',
+  'electron helper',
+  'com.daylens',
+]
 
 interface FocusEventRow {
   id: number
@@ -109,7 +128,7 @@ export function projectDay(
      ORDER BY ts_ms ASC, id ASC
   `).all(from, to) as FocusEventRow[]
 
-  const sessions = foldSessions(events, to)
+  const sessions = foldSessions(events, to).filter((session) => !isDerivedSystemNoise(session))
   const blocks = segmentBlocks(sessions)
 
   writeProjection(db, date, sessions, blocks)
@@ -121,6 +140,11 @@ export function projectDay(
     blocks: blocks.length,
     skipped: false,
   }
+}
+
+function isDerivedSystemNoise(session: Pick<DerivedSessionRow, 'app_bundle_id' | 'app_name'>): boolean {
+  const identity = `${session.app_bundle_id ?? ''} ${session.app_name ?? ''}`.toLowerCase()
+  return SYSTEM_NOISE_TOKENS.some((token) => identity.includes(token))
 }
 
 // ---------- projection 1: sessions ----------
@@ -244,13 +268,6 @@ function segmentBlocks(sessions: DerivedSessionRow[]): DerivedBlockDraft[] {
   const blocks: DerivedBlockDraft[] = []
   let current: { sessions: DerivedSessionRow[]; indices: number[] } | null = null
 
-  const projectKey = (s: DerivedSessionRow): string => {
-    if (s.is_browser && s.domain) return `dom:${s.domain}`
-    if (s.app_bundle_id) return `app:${s.app_bundle_id}`
-    if (s.app_name) return `app:${s.app_name.toLowerCase()}`
-    return 'unknown'
-  }
-
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]
     if (!current) {
@@ -260,11 +277,7 @@ function segmentBlocks(sessions: DerivedSessionRow[]): DerivedBlockDraft[] {
     const last = current.sessions[current.sessions.length - 1]
     const gapMs = s.start_ts_ms - last.end_ts_ms
 
-    const breakOnGap = gapMs >= IDLE_GAP_MS
-    const breakOnCategory = s.category !== last.category && categoryMajor(s.category) !== categoryMajor(last.category)
-    const breakOnProject = projectKey(s) !== projectKey(last) && breakProjectIsHard(last, s)
-
-    if (breakOnGap || breakOnCategory || breakOnProject) {
+    if (gapMs >= IDLE_GAP_MS) {
       blocks.push(finalizeBlock(current.sessions, current.indices))
       current = { sessions: [s], indices: [i] }
     } else {
@@ -275,39 +288,6 @@ function segmentBlocks(sessions: DerivedSessionRow[]): DerivedBlockDraft[] {
 
   if (current) blocks.push(finalizeBlock(current.sessions, current.indices))
   return blocks
-}
-
-function breakProjectIsHard(prev: DerivedSessionRow, next: DerivedSessionRow): boolean {
-  if (prev.category === next.category) {
-    if (prev.is_browser && next.is_browser && prev.domain && next.domain) {
-      return prev.domain !== next.domain
-    }
-    return false
-  }
-  return true
-}
-
-function categoryMajor(category: string): 'focus' | 'supporting' | 'ambient' {
-  switch (category) {
-    case 'development':
-    case 'design':
-    case 'writing':
-    case 'research':
-    case 'productivity':
-    case 'aiTools':
-    case 'spreadsheet':
-    case 'editor':
-      return 'focus'
-    case 'communication':
-    case 'email':
-    case 'mail':
-    case 'chat':
-    case 'meetings':
-    case 'meeting':
-      return 'supporting'
-    default:
-      return 'ambient'
-  }
 }
 
 function finalizeBlock(sessions: DerivedSessionRow[], indices: number[]): DerivedBlockDraft {
@@ -345,78 +325,24 @@ function finalizeBlock(sessions: DerivedSessionRow[], indices: number[]): Derive
 }
 
 function chooseLabel(
-  sessions: DerivedSessionRow[],
+  _sessions: DerivedSessionRow[],
   dominantCategory: string,
 ): { label: string; source: 'artifact' | 'domain' | 'app' | 'ai' } {
-  const dominantMajor = categoryMajor(dominantCategory)
-  // C6: development-shaped blocks must not be labeled by browser tab titles.
-  // Restrict artifact sourcing to sessions whose own category is coherent
-  // with the block's dominant major.
-  const coherent = sessions.filter((s) => categoryMajor(s.category) === dominantMajor)
-  const pool = coherent.length > 0 ? coherent : sessions
-
-  const artifact = pickArtifact(pool)
-  if (artifact) {
-    const cleaned = naturalizeProjectionLabel(artifact)
-    if (cleaned) return { label: cleaned, source: 'artifact' }
+  switch (dominantCategory) {
+    case 'development': return { label: 'Software development', source: 'app' }
+    case 'research':
+    case 'aiTools': return { label: 'Research and analysis', source: 'app' }
+    case 'writing': return { label: 'Writing', source: 'app' }
+    case 'design': return { label: 'Design work', source: 'app' }
+    case 'meetings': return { label: 'Meeting', source: 'app' }
+    case 'communication':
+    case 'email': return { label: 'Communication', source: 'app' }
+    case 'productivity': return { label: 'Planning and administration', source: 'app' }
+    case 'entertainment': return { label: 'Watching', source: 'app' }
+    case 'social': return { label: 'Social browsing', source: 'app' }
+    case 'browsing': return { label: 'Browsing', source: 'app' }
+    default: return { label: 'Computer activity', source: 'app' }
   }
-
-  const domain = pickDomain(pool)
-  if (domain) {
-    const cleaned = naturalizeProjectionLabel(domain)
-    if (cleaned) return { label: cleaned, source: 'domain' }
-  }
-
-  const app = pickAppName(pool)
-  if (app) {
-    const cleaned = naturalizeProjectionLabel(app)
-    if (cleaned) return { label: cleaned, source: 'app' }
-  }
-
-  return { label: 'Untitled activity', source: 'app' }
-}
-
-function pickArtifact(sessions: DerivedSessionRow[]): string | null {
-  const totals = new Map<string, number>()
-  for (const s of sessions) {
-    const candidate = s.page_title || s.window_title
-    if (!candidate) continue
-    const key = candidate.trim()
-    if (!key) continue
-    totals.set(key, (totals.get(key) ?? 0) + s.active_seconds)
-  }
-  return pickMax(totals)
-}
-
-function pickDomain(sessions: DerivedSessionRow[]): string | null {
-  const totals = new Map<string, number>()
-  for (const s of sessions) {
-    if (!s.is_browser || !s.domain) continue
-    totals.set(s.domain, (totals.get(s.domain) ?? 0) + s.active_seconds)
-  }
-  return pickMax(totals)
-}
-
-function pickAppName(sessions: DerivedSessionRow[]): string | null {
-  const totals = new Map<string, number>()
-  for (const s of sessions) {
-    const name = s.app_name?.trim()
-    if (!name) continue
-    totals.set(name, (totals.get(name) ?? 0) + s.active_seconds)
-  }
-  return pickMax(totals)
-}
-
-function pickMax(totals: Map<string, number>): string | null {
-  let best: string | null = null
-  let bestSecs = 0
-  for (const [k, secs] of totals) {
-    if (secs > bestSecs) {
-      bestSecs = secs
-      best = k
-    }
-  }
-  return best
 }
 
 // ---------- writer ----------
@@ -650,6 +576,7 @@ export function readDerivedAppSummariesForDate(
 
   const summaries = new Map<string, AppUsageSummary>()
   for (const session of day.sessions) {
+    if (isDerivedSystemNoise(session)) continue
     const bundleId = session.app_bundle_id ?? session.app_name ?? 'unknown'
     const appName = session.app_name ?? session.app_bundle_id ?? 'Unknown app'
     const identity = resolveCanonicalApp(bundleId, appName)
