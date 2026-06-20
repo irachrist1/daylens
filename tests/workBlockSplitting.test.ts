@@ -587,6 +587,28 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   db.close()
 })
 
+// Undo a rename: a rename is stored as both an override and an evidence-keyed
+// review correction, so clearing it must reset the review too — otherwise the
+// corrected label keeps winning and the rename never goes away.
+test('clearing a corrected review reverts the block to its computed label', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  const computedLabel = block.label.current
+  writeTimelineBlockReview(db, TEST_DATE, block, { state: 'corrected', correctedLabel: 'Renamed thing' })
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks[0].label.current, 'Renamed thing')
+
+  // Undo: reset the review and drop the corrected label.
+  const corrected = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  writeTimelineBlockReview(db, TEST_DATE, corrected, { state: 'auto-approved', correctedLabel: null })
+
+  const reverted = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.notEqual(reverted.label.current, 'Renamed thing', 'undo should drop the corrected label')
+  assert.equal(reverted.label.current, computedLabel, 'undo restores the computed label')
+  db.close()
+})
+
 // timeline.md §4: today, before it has been analyzed, is one provisional block
 // per idle-bounded stretch — neutral "Active now", never per-activity named.
 test('the live day shows provisional blocks until it is analyzed', () => {

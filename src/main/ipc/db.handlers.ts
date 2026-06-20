@@ -579,7 +579,18 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, (_e, blockId: string) => {
-    clearBlockLabelOverride(getDb(), blockId)
+    const db = getDb()
+    clearBlockLabelOverride(db, blockId)
+    // A rename is stored in two places: the override AND an evidence-keyed
+    // review correction (so it survives a rebuild). Undo must clear BOTH, or
+    // the review's correctedLabel keeps winning and the rename never goes away.
+    const block = getBlockDetailPayload(db, blockId, getCurrentSession())
+    if (block) {
+      writeTimelineBlockReview(db, localDateStringForTimestamp(block.startTime), block, {
+        state: 'auto-approved',
+        correctedLabel: null,
+      })
+    }
     invalidateProjectionScope('timeline', 'block_label_override')
     invalidateProjectionScope('apps', 'block_label_override')
     invalidateProjectionScope('insights', 'block_label_override')
