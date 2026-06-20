@@ -438,16 +438,20 @@ export function registerDbHandlers(): void {
   // days=1 → today since local midnight (not rolling 24h)
   // days=7/30 → rolling window ending at end of today
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
+    // Normalize at the boundary: a NaN/fractional value would otherwise slip
+    // past the branches into getCachedRangeAppSummaries and yield an empty or
+    // wrong range.
+    const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
     const [todayFrom, todayTo] = dayBounds(localDateString())
-    if (days <= 1) {
+    if (normalizedDays <= 1) {
       return getAppSummariesForRange(getDb(), todayFrom, todayTo)
     }
     // All-time: one query over all captured history. Avoids the day-by-day
     // cache loop, which would iterate ~36,500 times for this sentinel.
-    if (days >= ALL_TIME_DAYS) {
+    if (normalizedDays >= ALL_TIME_DAYS) {
       return getAppSummariesForRange(getDb(), 0, todayTo)
     }
-    return getCachedRangeAppSummaries(days)
+    return getCachedRangeAppSummaries(normalizedDays)
   })
 
   // C23 / D6: Apps view date switcher. Returns summaries for a specific
