@@ -587,6 +587,39 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   db.close()
 })
 
+// timeline.md §4: today, before it has been analyzed, is one provisional block
+// per idle-bounded stretch — neutral "Active now", never per-activity named.
+test('the live day shows provisional blocks until it is analyzed', () => {
+  const db = createDb()
+  const today = dateStringForOffset(0)
+  insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
+
+  const blocks = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(blocks.length >= 1, 'today should still produce a block')
+  assert.ok(blocks.every((block) => block.provisional === true), 'today blocks are provisional before analysis')
+  assert.ok(blocks.every((block) => block.label.current === 'Active now'), `provisional blocks are neutral, got ${blocks.map((b) => b.label.current).join(', ')}`)
+  db.close()
+})
+
+// Analyze Day finalizes the live day: materializing it persists named blocks,
+// and subsequent passive reads show those — never the provisional placeholder.
+test('analyzing the live day replaces the provisional block with named blocks', () => {
+  const db = createDb()
+  const today = dateStringForOffset(0)
+  insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
+
+  const provisional = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(provisional.every((block) => block.provisional), 'starts provisional')
+
+  // Analyze Day = a materialize request: persists the real segmentation.
+  materializeTimelineDayProjection(db, today, null)
+
+  const named = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(named.every((block) => !block.provisional), 'an analyzed day is no longer provisional')
+  assert.ok(named.every((block) => block.label.current !== 'Active now'), 'analyzed blocks are named, not "Active now"')
+  db.close()
+})
+
 test('timeline projection reads derived days without materializing timeline blocks', () => {
   const db = createDb()
   insertDerivedSessionDay(db)

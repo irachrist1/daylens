@@ -4454,12 +4454,15 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  // timeline.md §4: today, before it has been analyzed (Analyze Day / nightly /
-  // next-day open), shows as provisional "Active now" stretches — not named
-  // per-activity blocks. A materialize request (Analyze Day) or an already
-  // analyzed day always gets the real named segmentation.
+  // timeline.md §4: today, before it has been analyzed, shows as provisional
+  // "Active now" stretches — not named per-activity blocks. The day finalizes
+  // when it is materialized: Analyze Day (a materialize request) persists named
+  // blocks, after which passive reads see those persisted blocks and render the
+  // real segmentation. So a day is provisional only while it has never been
+  // materialized and the nightly job hasn't processed it.
   const isLiveProvisionalDay = dateStr === localDateString()
     && !(options.materialize ?? false)
+    && validPersistedTimelineBlockCount(db, dateStr) === 0
     && !persistedDayWasProcessed(db, dateStr)
   const blocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)

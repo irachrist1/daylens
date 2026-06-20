@@ -814,11 +814,18 @@ function BlockInspector({
   const previousBlock = blockIndex > 0 ? sortedDayBlocks[blockIndex - 1] : null
   const nextBlock = blockIndex >= 0 && blockIndex < sortedDayBlocks.length - 1 ? sortedDayBlocks[blockIndex + 1] : null
 
+  // Fixing a block (rename / undo / merge) makes any generated recap that named
+  // the old version stale — drop the cached recap for the day so it regenerates
+  // against the corrected blocks (timeline.md acceptance: a fix refreshes the
+  // recap). The backend already invalidates the insights projection scope.
+  const invalidateDayRecap = () => { daySummaryRecapCache.delete(payload.date) }
+
   const mergeEpisodeWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
     setBoundarySaving(side)
     setBoundaryError(null)
     try {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [block.id, other.id], date: payload.date })
+      invalidateDayRecap()
       await onRefresh()
     } catch (error) {
       setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again in a moment.").message)
@@ -833,7 +840,7 @@ function BlockInspector({
     setOverrideSaving(true)
     setReviewError(null)
     void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
-      .then(() => onRefresh())
+      .then(() => { invalidateDayRecap(); return onRefresh() })
       .then(() => setRenaming(false))
       .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
       .finally(() => setOverrideSaving(false))
@@ -843,7 +850,7 @@ function BlockInspector({
     setOverrideSaving(true)
     setReviewError(null)
     void ipc.db.clearBlockLabelOverride(block.id)
-      .then(() => onRefresh())
+      .then(() => { invalidateDayRecap(); return onRefresh() })
       .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't undo the rename. Try again in a moment.").message))
       .finally(() => setOverrideSaving(false))
   }

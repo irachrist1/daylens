@@ -141,6 +141,38 @@ test('entertainment across a real >15-minute gap stays separate', () => {
   db.close()
 })
 
+// FIX (timeline.md §3.2/§3.5): a brief (<10 min) Netflix peek in the middle of
+// a coding stretch folds into the surrounding work — one block, named for the
+// work, never "Watching Netflix", and the category stays development (one
+// off-task tab can't flip it, §3.6).
+test('a brief Netflix peek inside coding folds into the work block', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 30), windowTitle: 'workBlocks.ts — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(9, 30), endTime: at(9, 36), windowTitle: 'Stranger Things · Netflix' }),
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 36), endTime: at(10, 6), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 1, `peek should fold into one coding block, got ${blocks.length}`)
+  assert.equal(blocks[0].dominantCategory, 'development', `a Netflix peek must not flip the category, got ${blocks[0].dominantCategory}`)
+  assert.doesNotMatch(blocks[0].label.current.toLowerCase(), /netflix|watching/, `work block must not be named after the peek, got "${blocks[0].label.current}"`)
+  db.close()
+})
+
+// GUARD (R4 still holds): a *sustained* (>=10 min) off-task stretch between work
+// is NOT a brief peek — it stays its own block.
+test('a sustained Netflix stretch inside coding stays its own block', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 30), windowTitle: 'workBlocks.ts — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(9, 30), endTime: at(9, 52), windowTitle: 'Stranger Things · Netflix' }),
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 52), endTime: at(10, 22), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const result = labels(db, sessions)
+  assert.equal(result.count, 3, `a 22-minute Netflix stretch must stand alone, got ${result.count}: ${result.spans.join(', ')}`)
+  db.close()
+})
+
 // FIX (contentless sliver): a sub-30-min Safari fragment with no window titles
 // and no page artifacts sits between two stretches of architecture-review work.
 // It carries no independent meaning, so it folds into a neighbour even though
