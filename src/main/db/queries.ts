@@ -21,6 +21,7 @@ import type {
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDayBounds } from '../lib/localDate'
 import { resolveCanonicalApp } from '../lib/appIdentity'
+import { isBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
@@ -42,11 +43,19 @@ const UX_NOISE_SUBSTRINGS = [
   'node.js',    // Node.js runtime windows
   'loginwindow', // macOS lock screen / auth process — not a user app
 ]
+const UX_NOISE_EXACT_NAMES = new Set([
+  'finder',
+  'siri',
+  'usernotificationcenter',
+  'notification center',
+])
 
 // Minimum session duration exposed to the UI (seconds).
 // Sessions shorter than this are noise from brief app transitions.
 const MIN_DISPLAY_SEC = 15
 const SAME_APP_MERGE_GAP_MS = 15_000
+const MIN_CAPTURE_DWELL_SEC = 10
+const ENGAGEMENT_RETURN_GAP_MS = 2 * 60_000
 
 // How far before a range's start we look for sessions that began earlier but
 // overlap into the window. Range queries filter on `start_time` (the indexed
@@ -87,7 +96,24 @@ const LEGACY_WEAK_AI_LABELS = [
 
 function isUxNoise(appName: string): boolean {
   const lower = appName.toLowerCase()
-  return UX_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
+  return UX_NOISE_EXACT_NAMES.has(lower) || UX_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
+}
+
+function resolvedSessionCategory(
+  row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'category'>,
+  overrides: Record<string, AppCategory>,
+): AppCategory {
+  const override = overrides[row.bundle_id]
+  if (override) return override
+  if (row.category && row.category !== 'uncategorized') return row.category
+  if (process.platform === 'darwin' && isBrowserApplication({
+    bundleId: row.bundle_id,
+    appName: row.app_name,
+  })) {
+    return 'browsing'
+  }
+  return resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
+    ?? 'uncategorized'
 }
 
 interface AppSessionRow {
@@ -570,26 +596,27 @@ export function getAppSummariesForRange(
       .map((row) => {
         // User overrides first; fall through to catalog's default category for
         // sessions that were captured before the catalog was fully populated.
-        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
-        const category: AppCategory =
-          overrides[row.bundle_id]
-          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
-          ?? catalogCategory
-          ?? 'uncategorized'
+        const category = resolvedSessionCategory(row, overrides)
         return clipRowToRange(row, fromMs, toMs, category)
       })
-      .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
-  )
+      .filter((session): session is AppSession => session !== null),
+  ).filter((session) => session.durationSeconds >= MIN_CAPTURE_DWELL_SEC)
 
   const summaryMap = new Map<string, AppUsageSummary>()
+  const lastEngagementEnd = new Map<string, number>()
 
   for (const session of clippedSessions) {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     const mapKey = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    const endTime = appSessionEndTime(session)
     const existing = summaryMap.get(mapKey)
     if (existing) {
       existing.totalSeconds += session.durationSeconds
-      existing.sessionCount = (existing.sessionCount ?? 0) + 1
+      const previousEnd = lastEngagementEnd.get(mapKey) ?? session.startTime
+      if (session.startTime - previousEnd >= ENGAGEMENT_RETURN_GAP_MS) {
+        existing.sessionCount = (existing.sessionCount ?? 0) + 1
+      }
+      lastEngagementEnd.set(mapKey, Math.max(previousEnd, endTime))
     } else {
       summaryMap.set(mapKey, {
         bundleId: session.bundleId,
@@ -600,6 +627,7 @@ export function getAppSummariesForRange(
         isFocused: isCategoryFocused(session.category),
         sessionCount: 1,
       })
+      lastEngagementEnd.set(mapKey, endTime)
     }
   }
 
@@ -627,12 +655,7 @@ export function getSessionsForRange(
     rows
       .filter((row) => !isUxNoise(row.app_name))
       .map((row) => {
-        const catalogCategory = resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
-        const category: AppCategory =
-          overrides[row.bundle_id]
-          ?? (row.category && row.category !== 'uncategorized' ? row.category : null)
-          ?? catalogCategory
-          ?? 'uncategorized'
+        const category = resolvedSessionCategory(row, overrides)
         return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.bundle_id, row.app_name))
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)

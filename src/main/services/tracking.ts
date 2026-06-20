@@ -32,6 +32,7 @@ import { localDateString, localDayBounds } from '../lib/localDate'
 import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
+import { resolveBrowserApplication } from './browserRegistry'
 import { getSettings } from './settings'
 import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { runAttributionForRange } from './attribution'
@@ -949,7 +950,7 @@ function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): ActiveWinResult | nu
       SELECT ts_ms, app_bundle_id, app_name, pid, window_title
       FROM focus_events
       WHERE source = 'nsworkspace_event'
-        AND event_type IN ('app_activated', 'space_changed')
+        AND event_type IN ('app_activated', 'window_changed', 'space_changed')
         AND (app_bundle_id IS NOT NULL OR app_name IS NOT NULL)
       ORDER BY ts_ms DESC, id DESC
       LIMIT 1
@@ -997,6 +998,9 @@ const OS_NOISE_BUNDLE_IDS = new Set([
   'com.apple.screensaver.engine',
   'com.apple.backgroundtaskmanagementagent',
   'com.apple.usernotificationcenter',
+  'com.apple.finder',
+  'com.apple.siri',
+  'com.apple.siri.agent',
   'com.apple.WindowManager',
 ])
 
@@ -1007,6 +1011,10 @@ const OS_NOISE_APP_NAMES = new Set([
   'universalaccessd',
   'dock',
   'systemuiserver',
+  'finder',
+  'siri',
+  'usernotificationcenter',
+  'notification center',
   // Windows OS-level processes
   'dwm.exe',
   'csrss.exe',
@@ -1067,11 +1075,6 @@ function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: s
   if (DAYLENS_SELF_PROCESS_NAMES.has(pathIdentity)) return true
 
   return false
-}
-
-function looksLikeBrowserApp(bundleId: string, appName: string): boolean {
-  const lower = `${bundleId} ${appName}`.toLowerCase()
-  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(lower)
 }
 
 function looksLikePassiveMediaSession(session: InFlightSession): boolean {
@@ -1566,6 +1569,21 @@ async function poll(): Promise<void> {
       return
     }
 
+    if (process.platform === 'darwin' && (!win.title?.trim() || win.title.trim() === win.application.trim())) {
+      const nativeWindow = recentMacFocusEventWindow()
+      if (
+        nativeWindow?.title?.trim()
+        && (
+          nativeWindow.application === win.application
+          || nativeWindow.path === win.path
+          || nativeWindow.pid === win.pid
+        )
+      ) {
+        win = { ...win, title: nativeWindow.title }
+        backend = `${backend}+focus_title`
+      }
+    }
+
     trackingStatus.pollError = null
     trackingStatus.lastRawWindow = {
       title: win.title,
@@ -1577,13 +1595,22 @@ async function poll(): Promise<void> {
     }
 
     const resolvedWin = resolveWindowIdentity(win)
-    const { bundleId, appName } = resolvedWin
+    const browserApplication = process.platform === 'darwin'
+      ? resolveBrowserApplication({
+          bundleId: resolvedWin.bundleId,
+          appName: resolvedWin.appName,
+          executablePath: resolvedWin.path,
+        })
+      : null
+    const bundleId = browserApplication?.bundleId ?? resolvedWin.bundleId
+    const appName = browserApplication?.name ?? resolvedWin.appName
     const rawResolvedTitle = resolvedWin.title?.trim() || null
     // 1A capture-side hygiene: when a browser app's window title contains a
     // URL token, strip query/fragment (and the path for non-allowlisted hosts)
     // before it lands in app_sessions. The full URL still flows into
     // website_visits.url via the browser-history reader.
-    const isBrowserApp = looksLikeBrowserApp(bundleId, appName)
+    const isBrowserApp = Boolean(browserApplication)
+      || resolveCanonicalApp(bundleId, appName).defaultCategory === 'browsing'
     const resolvedWindowTitle = stripBrowserUrlFromTitle(rawResolvedTitle, isBrowserApp)
     trackingStatus.lastResolvedWindow = {
       backend,
@@ -1593,7 +1620,15 @@ async function poll(): Promise<void> {
       pid: resolvedWin.pid,
       path: resolvedWin.path,
     }
-    const identity = resolveCanonicalApp(bundleId, appName)
+    const resolvedIdentity = resolveCanonicalApp(bundleId, appName)
+    const identity = browserApplication && !resolvedIdentity.canonicalAppId
+      ? {
+          ...resolvedIdentity,
+          canonicalAppId: browserApplication.bundleId.toLowerCase(),
+          displayName: browserApplication.name,
+          defaultCategory: 'browsing' as const,
+        }
+      : resolvedIdentity
 
     const exclusionReason = trackedForegroundSessionExclusionReason({
       bundleId,
@@ -1626,7 +1661,9 @@ async function poll(): Promise<void> {
 
     // Skip OS infrastructure processes
     if (isOsNoise(bundleId, appName, resolvedWin.path)) {
+      if (currentSession) flushCurrent(undefined, 'system_noise')
       flushActiveBrowserContext(getDb())
+      clearPersistedLiveSnapshot()
       return
     }
 
@@ -1679,6 +1716,7 @@ async function poll(): Promise<void> {
       appName: identity.displayName,
       windowTitle: resolvedWindowTitle,
       capturedAt: Date.now(),
+      executablePath: resolvedWin.path,
     })
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform

@@ -37,6 +37,7 @@ import type {
   TimelineBlockReviewUpdate,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
+  TrackingPermissionDetails,
   TrackingPermissionState,
   WorkContextInsight,
   WorkMemorySettingsSummary,
@@ -241,6 +242,7 @@ const api = {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
     getDiagnostics: (): Promise<TrackingDiagnosticsPayload> => ipcRenderer.invoke(IPC.TRACKING.GET_DIAGNOSTICS),
     getPermissionState: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_STATE),
+    getPermissionDetails: (): Promise<TrackingPermissionDetails> => ipcRenderer.invoke(IPC.TRACKING.GET_PERMISSION_DETAILS),
     requestScreenPermission: (): Promise<TrackingPermissionState> => ipcRenderer.invoke(IPC.TRACKING.REQUEST_SCREEN_PERMISSION),
     deleteAppHistory: (payload: { bundleId?: string | null; appName?: string | null }): Promise<{ deletedRows: number; affectedDates: string[] }> =>
       ipcRenderer.invoke(IPC.TRACKING.DELETE_APP_HISTORY, payload),

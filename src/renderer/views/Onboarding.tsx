@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AppSettings, DayTimelinePayload, LiveSession, OnboardingStage, ProofState, TrackingPermissionState } from '@shared/types'
+import type {
+  AppSettings,
+  DayTimelinePayload,
+  LiveSession,
+  OnboardingStage,
+  ProofState,
+  TrackingPermissionDetails,
+  TrackingPermissionState,
+} from '@shared/types'
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
@@ -68,7 +76,7 @@ function SettingsPreview() {
         <div className="onboarding-settings-mock-dot" style={{ background: '#ff5f56' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#ffbd2e' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#27c93f' }} />
-        <div className="onboarding-settings-mock-title">Privacy & Security — Screen Recording</div>
+        <div className="onboarding-settings-mock-title">Privacy & Security — Daylens capture</div>
       </div>
       <div className="onboarding-settings-mock-body">
         <div className="onboarding-settings-mock-row onboarding-settings-mock-row-other">
@@ -107,6 +115,7 @@ export default function Onboarding({
   const [trackingOptIn, setTrackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
   const [defaultUserName, setDefaultUserName] = useState('')
   const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
+  const [permissionDetails, setPermissionDetails] = useState<TrackingPermissionDetails | null>(null)
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
@@ -166,8 +175,12 @@ export default function Onboarding({
 
   async function refreshPermissionState() {
     if (!isMac) return
-    const nextState = await ipc.tracking.getPermissionState()
+    const [nextState, details] = await Promise.all([
+      ipc.tracking.getPermissionState(),
+      ipc.tracking.getPermissionDetails(),
+    ])
     setPermissionState(nextState)
+    setPermissionDetails(details)
 
     if (nextState !== 'granted') {
       if (stage === 'verifying_permission') {
@@ -357,6 +370,7 @@ export default function Onboarding({
       const requestedAt = Date.now()
       const nextState = await ipc.tracking.requestScreenPermission()
       setPermissionState(nextState)
+      setPermissionDetails(await ipc.tracking.getPermissionDetails())
       setSettingsHandoff(nextState !== 'granted' && nextState !== 'awaiting_relaunch')
       if (nextState === 'awaiting_relaunch') {
         await persistOnboarding('relaunch_required', {
@@ -436,11 +450,11 @@ export default function Onboarding({
 
         {stage === 'permission' && (
           <div className="onboarding-screen">
-            <StageHeading title="macOS calls it Screen Recording. Daylens only reads window titles — no video, ever." />
+            <StageHeading title="Daylens needs Accessibility and Screen Recording to read window titles — no screenshots or video." />
             <SettingsPreview />
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void beginPermissionRequest()} disabled={busy}>
-                {busy ? 'Opening System Settings…' : 'Open Screen Recording'}
+                {busy ? 'Opening System Settings…' : 'Open Privacy & Security'}
               </button>
               <button className="onboarding-btn-secondary" onClick={() => void refreshPermissionState()}>
                 I already enabled it
@@ -456,6 +470,15 @@ export default function Onboarding({
                 </span>
               )}
             </div>
+            {permissionDetails && (
+              <div className="onboarding-status onboarding-status-pending">
+                <span className="onboarding-status-label">
+                  Accessibility: {permissionDetails.accessibility === 'granted' ? 'Enabled' : 'Missing'}
+                  {' · '}
+                  Screen Recording: {permissionDetails.screenRecording === 'granted' ? 'Enabled' : 'Missing'}
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -491,7 +514,7 @@ export default function Onboarding({
                 <span />
               </div>
               <div className="onboarding-verify-copy">
-                <div className="onboarding-callout-title">Verifying Screen Recording</div>
+                <div className="onboarding-callout-title">Verifying capture permissions</div>
                 <div className="onboarding-callout-body">
                   This should take a second or two. If it is taking longer, macOS may not have saved the toggle — we will recover automatically.
                 </div>

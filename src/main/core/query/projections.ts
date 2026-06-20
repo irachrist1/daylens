@@ -15,7 +15,8 @@ import type {
 import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay } from '../../services/workBlocks'
 import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
-import { localDateString, localDayBounds } from '../../lib/localDate'
+import { localDateString } from '../../lib/localDate'
+import { ownedDayBounds } from '../../lib/dayOwnership'
 import { isCategoryFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
 
@@ -66,8 +67,12 @@ function derivedSessionToAppSession(session: DerivedDayResult['sessions'][number
 
 const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
 
-function buildDerivedSegments(dateStr: string, blocks: WorkContextBlock[]): TimelineSegment[] {
-  const [fromMs, toMs] = localDayBounds(dateStr)
+function buildDerivedSegments(
+  db: Database.Database,
+  dateStr: string,
+  blocks: WorkContextBlock[],
+): TimelineSegment[] {
+  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const segments: TimelineSegment[] = []
   let cursor = fromMs
   for (const block of blocks) {
@@ -115,7 +120,7 @@ function getDerivedDayTimelinePayload(
   const day = readDerivedDay(db, dateStr)
   if (!day) return null
 
-  const [fromMs, toMs] = localDayBounds(dateStr)
+  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = day.sessions.map(derivedSessionToAppSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
@@ -124,7 +129,7 @@ function getDerivedDayTimelinePayload(
   // 100+ micro-block timelines on past days), so rebuild blocks from the
   // derived sessions instead of mapping derived_blocks one-to-one.
   const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
-  const segments = buildDerivedSegments(dateStr, blocks)
+  const segments = buildDerivedSegments(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions
     .filter((session) => session.isFocused)

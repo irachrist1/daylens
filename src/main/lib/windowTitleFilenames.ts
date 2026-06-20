@@ -40,7 +40,7 @@ const PATTERNS: RegExp[] = [
   new RegExp(`(?:^|\\s)([~/.]?(?:[\\w./\\-]+/)+[\\w\\-.]+\\.(${FILE_EXTENSIONS}))`, 'gi'),
 ]
 
-function extractFilenames(title: string): string[] {
+export function extractFilenames(title: string): string[] {
   const found = new Set<string>()
   for (const pattern of PATTERNS) {
     pattern.lastIndex = 0
@@ -59,7 +59,7 @@ function extractFilenames(title: string): string[] {
 function localDayBounds(dateStr: string): [number, number] {
   const [y, m, d] = dateStr.split('-').map(Number)
   const from = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
-  return [from, from + 86_400_000]
+  return [from, new Date(y, m - 1, d + 1, 0, 0, 0, 0).getTime()]
 }
 
 function toDateStr(ms: number): string {

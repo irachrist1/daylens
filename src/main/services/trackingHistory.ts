@@ -57,11 +57,84 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
 
   const where = 'WHERE (? <> \'\' AND lower(bundle_id) = lower(?)) OR (? <> \'\' AND lower(app_name) = lower(?))'
   const params = [bundle, bundle, name, name]
-  const rows = db.prepare(`SELECT start_time FROM app_sessions ${where}`).all(...params) as { start_time: number }[]
-  const affectedDates = distinctLocalDates(rows.map((r) => r.start_time))
-  const info = db.prepare(`DELETE FROM app_sessions ${where}`).run(...params)
+  const affected = new Set<string>()
+  let deletedRows = 0
+
+  const purge = db.transaction(() => {
+    const rows = db.prepare(`SELECT start_time FROM app_sessions ${where}`).all(...params) as { start_time: number }[]
+    for (const date of distinctLocalDates(rows.map((row) => row.start_time))) affected.add(date)
+    deletedRows += db.prepare(`DELETE FROM app_sessions ${where}`).run(...params).changes
+
+    const focusRows = db.prepare(`
+      SELECT ts_ms
+      FROM focus_events
+      WHERE (? <> '' AND lower(app_bundle_id) = lower(?))
+         OR (? <> '' AND lower(app_name) = lower(?))
+    `).all(...params) as { ts_ms: number }[]
+    for (const date of distinctLocalDates(focusRows.map((row) => row.ts_ms))) affected.add(date)
+    deletedRows += db.prepare(`
+      DELETE FROM focus_events
+      WHERE (? <> '' AND lower(app_bundle_id) = lower(?))
+         OR (? <> '' AND lower(app_name) = lower(?))
+    `).run(...params).changes
+
+    const visitRows = db.prepare(`
+      SELECT visit_time
+      FROM website_visits
+      WHERE (? <> '' AND (
+        lower(browser_bundle_id) = lower(?)
+        OR lower(browser_bundle_id) LIKE lower(?)
+      ))
+    `).all(bundle, bundle, `${bundle}:%`) as { visit_time: number }[]
+    for (const date of distinctLocalDates(visitRows.map((row) => row.visit_time))) affected.add(date)
+    deletedRows += db.prepare(`
+      DELETE FROM website_visits
+      WHERE (? <> '' AND (
+        lower(browser_bundle_id) = lower(?)
+        OR lower(browser_bundle_id) LIKE lower(?)
+      ))
+    `).run(bundle, bundle, `${bundle}:%`).changes
+
+    try {
+      const segmentRows = db.prepare(`
+        SELECT started_at
+        FROM activity_segments
+        WHERE (? <> '' AND lower(primary_bundle_id) = lower(?))
+      `).all(bundle, bundle) as { started_at: number }[]
+      for (const date of distinctLocalDates(segmentRows.map((row) => row.started_at))) affected.add(date)
+      deletedRows += db.prepare(`
+        DELETE FROM activity_segments
+        WHERE (? <> '' AND lower(primary_bundle_id) = lower(?))
+      `).run(bundle, bundle).changes
+    } catch {
+      // Older databases may not have attribution tables yet.
+    }
+
+    try {
+      const derivedRows = db.prepare(`
+        SELECT date
+        FROM derived_sessions
+        WHERE (? <> '' AND lower(app_bundle_id) = lower(?))
+           OR (? <> '' AND lower(app_name) = lower(?))
+      `).all(...params) as { date: string }[]
+      for (const row of derivedRows) affected.add(row.date)
+      deletedRows += db.prepare(`
+        DELETE FROM derived_sessions
+        WHERE (? <> '' AND lower(app_bundle_id) = lower(?))
+           OR (? <> '' AND lower(app_name) = lower(?))
+      `).run(...params).changes
+    } catch {
+      // Derived projection tables are optional on older installs.
+    }
+  })
+  purge()
+
+  const affectedDates = [...affected]
+  for (const date of affectedDates) {
+    try { projectDay(db, date, { finalize: date < localDateString() }) } catch { /* legacy-only install */ }
+  }
   rematerializeAndNotify(affectedDates)
-  return { deletedRows: info.changes, affectedDates }
+  return { deletedRows, affectedDates }
 }
 
 export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
@@ -72,11 +145,64 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
   // Exact host or any subdomain (so excluding youtube.com also clears m.youtube.com).
   const where = 'WHERE lower(domain) = ? OR lower(domain) LIKE ?'
   const params = [domain, `%.${domain}`]
-  const rows = db.prepare(`SELECT visit_time FROM website_visits ${where}`).all(...params) as { visit_time: number }[]
-  const affectedDates = distinctLocalDates(rows.map((r) => r.visit_time))
-  const info = db.prepare(`DELETE FROM website_visits ${where}`).run(...params)
+  const affected = new Set<string>()
+  let deletedRows = 0
+  const urlPatterns = [`%://${domain}/%`, `%://%.${domain}/%`, `%://${domain}`, `%://%.${domain}`]
+
+  const purge = db.transaction(() => {
+    const rows = db.prepare(`SELECT visit_time FROM website_visits ${where}`).all(...params) as { visit_time: number }[]
+    for (const date of distinctLocalDates(rows.map((row) => row.visit_time))) affected.add(date)
+    deletedRows += db.prepare(`DELETE FROM website_visits ${where}`).run(...params).changes
+
+    const focusRows = db.prepare(`
+      SELECT ts_ms
+      FROM focus_events
+      WHERE lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ?
+    `).all(...urlPatterns) as { ts_ms: number }[]
+    for (const date of distinctLocalDates(focusRows.map((row) => row.ts_ms))) affected.add(date)
+    deletedRows += db.prepare(`
+      DELETE FROM focus_events
+      WHERE lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ? OR lower(url) LIKE ?
+    `).run(...urlPatterns).changes
+
+    try {
+      const segmentRows = db.prepare(`
+        SELECT started_at
+        FROM activity_segments
+        WHERE lower(domain) = ? OR lower(domain) LIKE ?
+      `).all(...params) as { started_at: number }[]
+      for (const date of distinctLocalDates(segmentRows.map((row) => row.started_at))) affected.add(date)
+      deletedRows += db.prepare(`
+        DELETE FROM activity_segments
+        WHERE lower(domain) = ? OR lower(domain) LIKE ?
+      `).run(...params).changes
+    } catch {
+      // Older databases may not have attribution tables yet.
+    }
+
+    try {
+      const derivedRows = db.prepare(`
+        SELECT date
+        FROM derived_sessions
+        WHERE lower(domain) = ? OR lower(domain) LIKE ?
+      `).all(...params) as { date: string }[]
+      for (const row of derivedRows) affected.add(row.date)
+      deletedRows += db.prepare(`
+        DELETE FROM derived_sessions
+        WHERE lower(domain) = ? OR lower(domain) LIKE ?
+      `).run(...params).changes
+    } catch {
+      // Derived projection tables are optional on older installs.
+    }
+  })
+  purge()
+
+  const affectedDates = [...affected]
+  for (const date of affectedDates) {
+    try { projectDay(db, date, { finalize: date < localDateString() }) } catch { /* legacy-only install */ }
+  }
   rematerializeAndNotify(affectedDates)
-  return { deletedRows: info.changes, affectedDates }
+  return { deletedRows, affectedDates }
 }
 
 function normalizeIds(values: number[] | null | undefined): number[] {

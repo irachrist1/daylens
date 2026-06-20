@@ -53,7 +53,7 @@ test('app detail omits app-name-only block appearances', () => {
   db.close()
 })
 
-test('app detail totals and session count come from canonical app summaries, not display-filtered sessions', () => {
+test('app detail keeps total time but merges quick returns into one human session', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
   const date = todayKey()
@@ -82,6 +82,6 @@ test('app detail totals and session count come from canonical app summaries, not
   const detail = getAppDetailPayload(db, 'test-app', 1, null)
 
   assert.equal(detail.totalSeconds, 30)
-  assert.equal(detail.sessionCount, 2)
+  assert.equal(detail.sessionCount, 1)
   db.close()
 })

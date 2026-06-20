@@ -23,6 +23,12 @@ import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { capture, captureRateLimited } from './analytics'
+import {
+  getMacBrowserHistoryLocations,
+  type BrowserFamily,
+} from './browserRegistry'
+import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { getSettings } from './settings'
 
 // ─── Chrome timestamp arithmetic ─────────────────────────────────────────────
 // Chrome stores timestamps as microseconds since 1601-01-01 00:00:00 UTC.
@@ -45,7 +51,7 @@ export interface BrowserEntry {
   name: string
   bundleId: string      // macOS bundle ID or Windows executable/browser identifier
   historyPath: string
-  type: 'chromium' | 'firefox'
+  type: BrowserFamily
 }
 
 interface ChromiumHistoryRow {
@@ -62,6 +68,12 @@ interface FirefoxHistoryRow {
   visit_type: number
 }
 
+interface WebKitHistoryRow {
+  url: string
+  title: string | null
+  visit_time: number
+}
+
 interface ProcessedHistoryRow {
   domain: string
   pageTitle: string | null
@@ -72,39 +84,16 @@ interface ProcessedHistoryRow {
 }
 
 function macBrowsers(): BrowserEntry[] {
-  const home = os.homedir()
-  return [
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/Google/Chrome'),
-      'Google Chrome',
-      'com.google.Chrome',
-    ),
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/BraveSoftware/Brave-Browser'),
-      'Brave',
-      'com.brave.Browser',
-    ),
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/Arc/User Data'),
-      'Arc',
-      'company.thebrowser.Browser',
-    ),
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/Dia/User Data'),
-      'Dia',
-      'company.thebrowser.dia',
-    ),
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/Comet'),
-      'Comet',
-      'ai.perplexity.comet',
-    ),
-    ...enumerateChromiumProfiles(
-      path.join(home, 'Library/Application Support/Microsoft Edge'),
-      'Microsoft Edge',
-      'com.microsoft.edgemac',
-    ),
-  ]
+  return getMacBrowserHistoryLocations().map((location) => ({
+    name: location.profileId === 'default'
+      ? location.name
+      : `${location.name} (${location.profileId})`,
+    bundleId: location.profileId === 'default'
+      ? location.bundleId
+      : `${location.bundleId}:${location.profileId}`,
+    historyPath: location.historyPath,
+    type: location.family,
+  }))
 }
 
 function enumerateChromiumProfiles(userDataDir: string, name: string, bundleId: string): BrowserEntry[] {
@@ -356,6 +345,35 @@ function processFirefoxRows(rows: FirefoxHistoryRow[]): ProcessedHistoryRow[] {
     .filter((row): row is ProcessedHistoryRow => row !== null)
 }
 
+const WEBKIT_EPOCH_OFFSET_SEC = 978_307_200
+
+function processWebKitRows(rows: WebKitHistoryRow[]): ProcessedHistoryRow[] {
+  return rows
+    .map((row, index) => {
+      const visitMs = Math.round((row.visit_time + WEBKIT_EPOCH_OFFSET_SEC) * 1_000)
+      const domain = extractDomain(row.url)
+      if (!domain) return null
+
+      const nextVisitMs = index < rows.length - 1
+        ? Math.round((rows[index + 1].visit_time + WEBKIT_EPOCH_OFFSET_SEC) * 1_000)
+        : visitMs + 30_000
+      const estimatedDurationSec = Math.min(
+        Math.max(Math.round((nextVisitMs - visitMs) / 1_000), 5),
+        1_800,
+      )
+
+      return {
+        domain,
+        pageTitle: row.title ?? null,
+        url: row.url,
+        visitTime: visitMs,
+        visitTimeUs: BigInt(visitMs) * 1_000n,
+        durationSec: estimatedDurationSec,
+      }
+    })
+    .filter((row): row is ProcessedHistoryRow => row !== null)
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -426,6 +444,7 @@ function pollChromium(
   const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
   // If no cursor yet, start from 24h ago
   const fromUs: bigint = lastCursorUs ?? msToChromeUs(Date.now() - 86_400_000)
+  const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
     fs.copyFileSync(browser.historyPath, tmpDb)
@@ -460,6 +479,7 @@ function pollChromium(
       const rowsToProcess = isFinalBatch ? rows : rows.slice(0, -1)
 
       for (const processed of processChromiumRows(rowsToProcess)) {
+        if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
         const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
         const didInsert = insertWebsiteVisit(db, {
           domain:          processed.domain,
@@ -537,6 +557,7 @@ function pollFirefox(
   // Firefox visit_date is Unix µs — not Chrome epoch µs
   const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
   const fromUs: bigint = lastCursorUs ?? (BigInt(Date.now() - 86_400_000) * 1000n)
+  const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
     fs.copyFileSync(browser.historyPath, tmpDb)
@@ -569,6 +590,7 @@ function pollFirefox(
       const rowsToProcess = isFinalBatch ? rows : rows.slice(0, -1)
 
       for (const processed of processFirefoxRows(rowsToProcess)) {
+        if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
         const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
         const didInsert = insertWebsiteVisit(db, {
           domain:          processed.domain,
@@ -619,6 +641,83 @@ function pollFirefox(
   return { inserted, error }
 }
 
+function pollWebKit(
+  browser: BrowserEntry,
+  db: ReturnType<typeof getDb>,
+): { inserted: number; error: string | null } {
+  const tmpBase = path.join(os.tmpdir(), `daylens_wk_${Date.now()}`)
+  const tmpDb = `${tmpBase}.sqlite`
+  const tmpWal = `${tmpBase}.sqlite-wal`
+  const tmpShm = `${tmpBase}.sqlite-shm`
+  let inserted = 0
+  let error: string | null = null
+
+  const lastCursorUs = browserCursors.get(browser.bundleId) ?? null
+  const fromMs = lastCursorUs ? Number(lastCursorUs / 1_000n) : Date.now() - 86_400_000
+  const fromWebKitSeconds = fromMs / 1_000 - WEBKIT_EPOCH_OFFSET_SEC
+
+  try {
+    fs.copyFileSync(browser.historyPath, tmpDb)
+    if (fs.existsSync(`${browser.historyPath}-wal`)) fs.copyFileSync(`${browser.historyPath}-wal`, tmpWal)
+    if (fs.existsSync(`${browser.historyPath}-shm`)) fs.copyFileSync(`${browser.historyPath}-shm`, tmpShm)
+
+    const histDb = new Database(tmpDb, { readonly: true })
+    const rows = histDb.prepare(`
+      SELECT history_items.url AS url,
+             COALESCE(history_visits.title, history_items.title) AS title,
+             history_visits.visit_time AS visit_time
+      FROM history_visits
+      JOIN history_items ON history_visits.history_item = history_items.id
+      WHERE history_visits.visit_time > ?
+      ORDER BY history_visits.visit_time ASC
+      LIMIT 5000
+    `).all(fromWebKitSeconds) as WebKitHistoryRow[]
+    histDb.close()
+
+    const controls = trackingControlsStateFromSettings(getSettings())
+    for (const processed of processWebKitRows(rows)) {
+      if (!decideSiteCapture(controls, { domain: processed.domain }).capture) continue
+      const browserIdentity = resolveCanonicalBrowser(browser.bundleId)
+      const didInsert = insertWebsiteVisit(db, {
+        domain: processed.domain,
+        pageTitle: processed.pageTitle,
+        url: processed.url,
+        normalizedUrl: normalizeUrlForStorage(processed.url),
+        pageKey: pageKeyForUrl(processed.url),
+        visitTime: processed.visitTime,
+        visitTimeUs: processed.visitTimeUs,
+        durationSec: processed.durationSec,
+        browserBundleId: browser.bundleId,
+        canonicalBrowserId: browserIdentity.canonicalBrowserId,
+        browserProfileId: browserIdentity.browserProfileId,
+        source: 'webkit_history',
+      })
+      if (didInsert) inserted++
+    }
+
+    const last = rows[rows.length - 1]
+    if (last) {
+      const lastMs = Math.round((last.visit_time + WEBKIT_EPOCH_OFFSET_SEC) * 1_000)
+      browserCursors.set(browser.bundleId, BigInt(lastMs) * 1_000n)
+    }
+  } catch (err) {
+    error = String(err)
+    console.warn(`[browser] failed to poll ${browser.name}:`, err)
+    captureRateLimited(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, `browser:${browser.bundleId}`, {
+      failure_kind: classifyFailureKind(err),
+      reason: 'poll',
+      status: 'error',
+      surface: 'browser',
+    })
+  } finally {
+    for (const target of [tmpDb, tmpWal, tmpShm]) {
+      try { if (fs.existsSync(target)) fs.unlinkSync(target) } catch { /* best effort */ }
+    }
+  }
+
+  return { inserted, error }
+}
+
 // ─── Poll all browsers ────────────────────────────────────────────────────────
 
 async function pollAll(): Promise<void> {
@@ -632,14 +731,18 @@ async function pollAll(): Promise<void> {
 
   for (const browser of browsers) {
     if (!fs.existsSync(browser.historyPath)) continue
+    const controls = trackingControlsStateFromSettings(getSettings())
+    if (!decideAppCapture(controls, { bundleId: browser.bundleId, appName: browser.name }).capture) continue
     pollable++
 
-    const { inserted, error } = browser.type === 'firefox'
+    const result = browser.type === 'firefox'
       ? pollFirefox(browser, db)
-      : pollChromium(browser, db)
+      : browser.type === 'webkit'
+        ? pollWebKit(browser, db)
+        : pollChromium(browser, db)
 
-    totalInserted += inserted
-    if (error) lastError = error
+    totalInserted += result.inserted
+    if (result.error) lastError = result.error
   }
 
   // Count today's visits for status

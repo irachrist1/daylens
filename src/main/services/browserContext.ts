@@ -11,8 +11,13 @@ import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
 import { decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import {
+  resolveBrowserApplication,
+  type BrowserApplication,
+  type BrowserCandidate,
+} from './browserRegistry'
 
-const MIN_CONTEXT_SEC = 5
+const MIN_CONTEXT_SEC = 10
 const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
 // How long the unchanged-title fast path may reuse the last tab read before a
 // re-read is forced. Caps how long two same-title tabs could be conflated while
@@ -20,7 +25,7 @@ const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
 const TAB_CACHE_TRUST_MS = 30_000
 const CHROME_OFFSET_US = 11_644_473_600_000_000n
 
-const BROWSER_APP_IDS = new Set([
+const WINDOWS_BROWSER_APP_IDS = new Set([
   'arc',
   'brave',
   'chrome',
@@ -34,22 +39,12 @@ const BROWSER_APP_IDS = new Set([
   'vivaldi',
 ])
 
-const MAC_SCRIPT_APP_NAMES: Record<string, string> = {
-  arc: 'Arc',
-  brave: 'Brave Browser',
-  chrome: 'Google Chrome',
-  comet: 'Comet',
-  dia: 'Dia',
-  edge: 'Microsoft Edge',
-  firefox: 'Firefox',
-  safari: 'Safari',
-}
-
 export interface ActiveBrowserWindowSnapshot {
   bundleId: string
   appName: string
   windowTitle: string | null
   capturedAt: number
+  executablePath?: string | null
 }
 
 export interface ActiveBrowserTab {
@@ -81,14 +76,28 @@ function extractDomain(url: string): string | null {
   }
 }
 
+function macBrowserApplicationFor(snapshot: ActiveBrowserWindowSnapshot): BrowserApplication | null {
+  return resolveBrowserApplication({
+    bundleId: snapshot.bundleId,
+    appName: snapshot.appName,
+    executablePath: snapshot.executablePath,
+  })
+}
+
 function browserAppIdFor(snapshot: ActiveBrowserWindowSnapshot): string | null {
+  if (process.platform === 'darwin') {
+    const application = macBrowserApplicationFor(snapshot)
+    if (!application) return null
+    return resolveCanonicalBrowser(application.bundleId).canonicalBrowserId ?? application.bundleId.toLowerCase()
+  }
+
   const identity = resolveCanonicalApp(snapshot.bundleId, snapshot.appName)
-  if (identity.canonicalAppId && BROWSER_APP_IDS.has(identity.canonicalAppId)) {
+  if (identity.canonicalAppId && WINDOWS_BROWSER_APP_IDS.has(identity.canonicalAppId)) {
     return identity.canonicalAppId
   }
 
   const fallback = `${snapshot.bundleId} ${snapshot.appName}`.toLowerCase()
-  for (const browserId of BROWSER_APP_IDS) {
+  for (const browserId of WINDOWS_BROWSER_APP_IDS) {
     if (fallback.includes(browserId)) return browserId
   }
   return null
@@ -124,15 +133,12 @@ function runOsaScript(script: string): ActiveBrowserTab | null {
 }
 
 function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
-  const browserId = browserAppIdFor(snapshot)
-  if (!browserId) return null
+  const application = macBrowserApplicationFor(snapshot)
+  if (!application || application.family === 'firefox') return null
 
-  const appName = MAC_SCRIPT_APP_NAMES[browserId]
-  if (!appName) return null
-
-  if (browserId === 'safari') {
+  if (application.family === 'webkit') {
     return runOsaScript(`
-      tell application "${appName}"
+      tell application "${application.name}"
         if (count of windows) is 0 then return ""
         if (count of tabs of front window) is 0 then return ""
         return URL of current tab of front window & linefeed & name of current tab of front window
@@ -141,7 +147,7 @@ function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab |
   }
 
   return runOsaScript(`
-    tell application "${appName}"
+    tell application "${application.name}"
       if (count of windows) is 0 then return ""
       if (count of tabs of front window) is 0 then return ""
       return URL of active tab of front window & linefeed & title of active tab of front window
@@ -232,10 +238,14 @@ function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string 
 function recentHistoryTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
   const browserId = browserAppIdFor(snapshot)
   if (!browserId) return null
+  const macApplication = process.platform === 'darwin' ? macBrowserApplicationFor(snapshot) : null
 
   const entries = getBrowserEntries()
     .filter((entry) => fs.existsSync(entry.historyPath))
-    .filter((entry) => resolveCanonicalBrowser(entry.bundleId).canonicalBrowserId === browserId)
+    .filter((entry) => {
+      if (macApplication) return entry.bundleId.split(':', 1)[0] === macApplication.bundleId
+      return resolveCanonicalBrowser(entry.bundleId).canonicalBrowserId === browserId
+    })
 
   for (const entry of entries) {
     const tab = entry.type === 'firefox'
@@ -261,8 +271,21 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
   return null
 }
 
+export function isBrowserWindowCandidate(candidate: BrowserCandidate): boolean {
+  if (process.platform === 'darwin') return resolveBrowserApplication(candidate) !== null
+  const snapshot: ActiveBrowserWindowSnapshot = {
+    bundleId: candidate.bundleId ?? '',
+    appName: candidate.appName ?? '',
+    windowTitle: null,
+    capturedAt: Date.now(),
+    executablePath: candidate.executablePath,
+  }
+  return browserAppIdFor(snapshot) !== null
+}
+
 export class ActiveBrowserContextTracker {
   private inFlight: InFlightBrowserContext | null = null
+  private pending: InFlightBrowserContext | null = null
   // The foreground window title (captured cheaply by the tracker) reflects the
   // active tab's page title. While it is unchanged we reuse the in-flight tab
   // instead of re-running the per-sample osascript / history-DB read, which is
@@ -273,11 +296,67 @@ export class ActiveBrowserContextTracker {
   // pages) can't be merged indefinitely — we force a re-read after this.
   private lastTabReadAt = 0
 
-  constructor(private readonly readTab: ActiveBrowserTabReader = readActiveBrowserTab) {}
+  constructor(
+    private readonly readTab: ActiveBrowserTabReader = readActiveBrowserTab,
+    private readonly isBrowser: (snapshot: ActiveBrowserWindowSnapshot) => boolean =
+      (snapshot) => browserAppIdFor(snapshot) !== null,
+  ) {}
+
+  private promotePending(db: BetterSqlite.Database, capturedAt: number): void {
+    if (!this.pending || capturedAt - this.pending.startedAt < MIN_CONTEXT_SEC * 1_000) return
+    const pending = this.pending
+    this.pending = null
+    this.flush(db, pending.startedAt)
+    this.inFlight = pending
+  }
+
+  private observeTab(
+    db: BetterSqlite.Database,
+    snapshot: ActiveBrowserWindowSnapshot,
+    tab: ActiveBrowserTab,
+    normalizedUrl: string | null,
+  ): void {
+    if (!this.inFlight) {
+      this.inFlight = {
+        snapshot,
+        tab,
+        normalizedUrl,
+        startedAt: snapshot.capturedAt,
+        lastSeenAt: snapshot.capturedAt,
+      }
+      this.pending = null
+      return
+    }
+
+    if (sameContext(this.inFlight, tab, normalizedUrl)) {
+      this.pending = null
+      this.inFlight.snapshot = snapshot
+      this.inFlight.tab = tab
+      this.inFlight.lastSeenAt = snapshot.capturedAt
+      return
+    }
+
+    if (this.pending && sameContext(this.pending, tab, normalizedUrl)) {
+      this.pending.snapshot = snapshot
+      this.pending.tab = tab
+      this.pending.lastSeenAt = snapshot.capturedAt
+      this.promotePending(db, snapshot.capturedAt)
+      return
+    }
+
+    this.pending = {
+      snapshot,
+      tab,
+      normalizedUrl,
+      startedAt: snapshot.capturedAt,
+      lastSeenAt: snapshot.capturedAt,
+    }
+  }
 
   sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): void {
-    if (!browserAppIdFor(snapshot)) {
+    if (!this.isBrowser(snapshot)) {
       this.flush(db, snapshot.capturedAt)
+      this.pending = null
       this.lastWindowTitle = null
       return
     }
@@ -287,14 +366,18 @@ export class ActiveBrowserContextTracker {
     // paying for another tab read. The freshness cap bounds how long a
     // same-title tab switch could go unnoticed.
     if (
-      this.inFlight
+      (this.inFlight || this.pending)
       && snapshot.windowTitle
       && snapshot.windowTitle === this.lastWindowTitle
-      && snapshot.bundleId === this.inFlight.snapshot.bundleId
+      && snapshot.bundleId === (this.pending?.snapshot.bundleId ?? this.inFlight?.snapshot.bundleId)
       && snapshot.capturedAt - this.lastTabReadAt < TAB_CACHE_TRUST_MS
     ) {
-      this.inFlight.snapshot = snapshot
-      this.inFlight.lastSeenAt = snapshot.capturedAt
+      const cached = this.pending ?? this.inFlight
+      if (cached) {
+        cached.snapshot = snapshot
+        cached.lastSeenAt = snapshot.capturedAt
+        if (this.pending) this.promotePending(db, snapshot.capturedAt)
+      }
       return
     }
 
@@ -303,6 +386,7 @@ export class ActiveBrowserContextTracker {
     const domain = tab ? extractDomain(tab.url) : null
     if (!tab || !domain) {
       this.flush(db, snapshot.capturedAt)
+      this.pending = null
       this.lastWindowTitle = null
       return
     }
@@ -310,26 +394,13 @@ export class ActiveBrowserContextTracker {
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
-    if (this.inFlight && sameContext(this.inFlight, tab, normalizedUrl)) {
-      this.inFlight.snapshot = snapshot
-      this.inFlight.tab = tab
-      this.inFlight.lastSeenAt = snapshot.capturedAt
-      return
-    }
-
-    this.flush(db, snapshot.capturedAt)
-    this.inFlight = {
-      snapshot,
-      tab,
-      normalizedUrl,
-      startedAt: snapshot.capturedAt,
-      lastSeenAt: snapshot.capturedAt,
-    }
+    this.observeTab(db, snapshot, tab, normalizedUrl)
   }
 
   flush(db: BetterSqlite.Database, endTime = Date.now()): boolean {
     const context = this.inFlight
     this.inFlight = null
+    this.pending = null
     if (!context) return false
 
     const domain = extractDomain(context.tab.url)

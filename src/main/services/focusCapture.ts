@@ -11,6 +11,7 @@ const FOCUS_EVENT_SCHEMA_VERSION = 1
 const FOCUS_EVENT_TYPES = [
   'app_activated',
   'app_deactivated',
+  'window_changed',
   'space_changed',
   'sleep',
   'wake',
@@ -32,6 +33,7 @@ const FOCUS_EVENT_CONFIDENCE_SET = new Set<string>(FOCUS_EVENT_CONFIDENCES)
 const WORKSPACE_EVENT_TYPES = new Set<FocusEventType>([
   'app_activated',
   'app_deactivated',
+  'window_changed',
   'space_changed',
   'sleep',
   'wake',
