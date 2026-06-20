@@ -4904,6 +4904,18 @@ function workBlockPrompt(block: WorkContextBlock): string {
   // Native window titles (non-browser) — document/file context
   const pages = block.keyPages.filter(Boolean).slice(0, 5)
 
+  // DEV-87 evidence object: real captured window titles and the files touched.
+  // These carry the intent that app names alone never could (the "blindfolded
+  // namer" failure in docs/findings.md) — feed them to the model explicitly.
+  const windowTitleLines = (block.evidenceSummary.windowTitles ?? [])
+    .filter((w) => w.title?.trim())
+    .slice(0, 6)
+    .map((w) => `  "${w.title.slice(0, 80)}" — ${w.appName} (${formatDuration(w.totalSeconds)})`)
+  const fileLines = (block.evidenceSummary.files ?? [])
+    .filter((f) => f.filename?.trim())
+    .slice(0, 6)
+    .map((f) => `  ${f.filename} — ${f.appName} (${formatDuration(f.totalSeconds)})`)
+
   // Top apps with duration and category
   const appLines = block.topApps.slice(0, 5).map((app) => {
     return `  ${app.appName} (${app.category}) — ${formatDuration(app.totalSeconds)}`
@@ -4924,19 +4936,24 @@ function workBlockPrompt(block: WorkContextBlock): string {
   const lines = [
     'Analyze this Daylens work block.',
     'Return strict JSON: {"label":"...","narrative":"..."}',
-    'label: 2-5 word activity description. NEVER return a raw app name, browser name, or bare category name ("Chrome", "Safari", "Cursor", "Warp", "Browsing", "Development").',
+    'label: a 2-7 word phrase naming what they were DOING — usually verb + object ("Configuring the work network", "Refactoring the timeline engine"). NEVER a raw app name, browser name, page/video title, or bare category ("Chrome", "Cursor", "Watching Netflix", "Browsing", "Development"). NEVER the literal "Computer activity", "Uncategorized", or "Untitled".',
     'narrative: 1-2 plain sentences. Evidence-led, no hype, no "the user" prefix.',
     'Priority rules:',
     '  - Window titles and page titles > artifact names > category descriptions > app names only as last-resort context, never as the label.',
     '  - Browser+AI only ≠ Development → call it Research or Planning.',
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
+    '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
+    '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
     `Duration: ${durationMinutes} minutes`,
     `Dominant category: ${block.dominantCategory}`,
     switchNote,
     '',
     websiteLines.length > 0 ? `Website evidence (highest priority):\n${websiteLines.join('\n')}` : 'Websites: none',
-    pages.length > 0 ? `Window titles:\n${pages.map((p) => `  ${p}`).join('\n')}` : 'Window titles: none',
+    windowTitleLines.length > 0 ? `Window titles (what was on screen):\n${windowTitleLines.join('\n')}` : '',
+    fileLines.length > 0 ? `Files touched:\n${fileLines.join('\n')}` : '',
+    pages.length > 0 ? `Page titles:\n${pages.map((p) => `  ${p}`).join('\n')}` : 'Page titles: none',
     appLines.length > 0 ? `Apps used:\n${appLines.join('\n')}` : 'Apps: none',
     catLines.length > 0 ? `Category breakdown:\n${catLines.join('\n')}` : '',
     `Rule-based label (override this if evidence supports better): ${userVisibleLabelForBlock(block)}`,

@@ -215,6 +215,11 @@ export interface WorkContextBlock {
   // block was built from; always non-empty (day edges at minimum). Additive —
   // older persisted/derived blocks fall back to a computed default.
   boundary?: BlockBoundary
+  // The live day before it has been analyzed: one neutral provisional block per
+  // idle-bounded stretch ("Active now"), never per-activity named. Set only on
+  // the today view before Analyze Day / nightly finalize (timeline.md §4). The
+  // renderer hides Rename/Merge/Hide and the category badge for these.
+  provisional?: boolean
 }
 
 export type TimelineBlock = WorkContextBlock

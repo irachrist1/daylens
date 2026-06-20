@@ -587,6 +587,61 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   db.close()
 })
 
+// Undo a rename: a rename is stored as both an override and an evidence-keyed
+// review correction, so clearing it must reset the review too — otherwise the
+// corrected label keeps winning and the rename never goes away.
+test('clearing a corrected review reverts the block to its computed label', () => {
+  const db = createDb()
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  const computedLabel = block.label.current
+  writeTimelineBlockReview(db, TEST_DATE, block, { state: 'corrected', correctedLabel: 'Renamed thing' })
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks[0].label.current, 'Renamed thing')
+
+  // Undo: reset the review and drop the corrected label.
+  const corrected = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  writeTimelineBlockReview(db, TEST_DATE, corrected, { state: 'auto-approved', correctedLabel: null })
+
+  const reverted = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.notEqual(reverted.label.current, 'Renamed thing', 'undo should drop the corrected label')
+  assert.equal(reverted.label.current, computedLabel, 'undo restores the computed label')
+  db.close()
+})
+
+// timeline.md §4: today, before it has been analyzed, is one provisional block
+// per idle-bounded stretch — neutral "Active now", never per-activity named.
+test('the live day shows provisional blocks until it is analyzed', () => {
+  const db = createDb()
+  const today = dateStringForOffset(0)
+  insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
+
+  const blocks = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(blocks.length >= 1, 'today should still produce a block')
+  assert.ok(blocks.every((block) => block.provisional === true), 'today blocks are provisional before analysis')
+  assert.ok(blocks.every((block) => block.label.current === 'Active now'), `provisional blocks are neutral, got ${blocks.map((b) => b.label.current).join(', ')}`)
+  db.close()
+})
+
+// Analyze Day finalizes the live day: materializing it persists named blocks,
+// and subsequent passive reads show those — never the provisional placeholder.
+test('analyzing the live day replaces the provisional block with named blocks', () => {
+  const db = createDb()
+  const today = dateStringForOffset(0)
+  insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
+
+  const provisional = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(provisional.every((block) => block.provisional), 'starts provisional')
+
+  // Analyze Day = a materialize request: persists the real segmentation.
+  materializeTimelineDayProjection(db, today, null)
+
+  const named = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
+  assert.ok(named.every((block) => !block.provisional), 'an analyzed day is no longer provisional')
+  assert.ok(named.every((block) => block.label.current !== 'Active now'), 'analyzed blocks are named, not "Active now"')
+  db.close()
+})
+
 test('timeline projection reads derived days without materializing timeline blocks', () => {
   const db = createDb()
   insertDerivedSessionDay(db)

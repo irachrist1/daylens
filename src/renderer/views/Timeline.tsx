@@ -1,12 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowDown, ArrowUp, EyeOff } from 'lucide-react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineBlockReviewState, TimelineGapSegment, TimelineSegment, WorkContextBlock, WorkIntentRole } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
-import { effectiveBlockKind } from '@shared/workKind'
+import { effectiveBlockKind, kindForDomain } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -41,39 +41,6 @@ function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
   const browserInTop2 = top2.find((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
   if (!browserInTop2) return false
   return (browserInTop2.totalSeconds ?? 0) / totalSeconds > 0.5
-}
-
-// Inbox(N) → "Email". The blockShortSummary path already normalizes this for
-// artifact phrases; the rail/day-clustered/drift paths need the same so
-// "Inbox (3)" doesn't surface verbatim.
-function naturalizeInboxLabel(label: string): string {
-  if (/^inbox(?:\s*\(\d+\))?$/i.test(label.trim())) return 'Email'
-  return label
-}
-
-// Defensive rail/day-summary label. If userVisibleBlockLabel returned a label
-// that matches a top page artifact or a website domain for a block whose
-// dominant category should not adopt page artifacts, fall back to a
-// category-derived workstream name instead of surfacing the leak.
-function railLabelForBlock(block: WorkContextBlock): string {
-  const raw = userVisibleBlockLabel(block)
-  const naturalized = naturalizeInboxLabel(raw)
-  if (pageArtifactLabelAllowed(block)) return naturalized
-
-  const lower = naturalized.toLowerCase().trim()
-  const matchesArtifact = block.topArtifacts.some((artifact) => {
-    if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
-    const title = naturalizeLabel(artifact.displayTitle.trim()).toLowerCase()
-    return title.length > 0 && title === lower
-  })
-  const matchesSite = block.websites.some((site) => {
-    const stripped = site.domain.replace(/^www\./i, '').split('.')[0]?.toLowerCase() ?? ''
-    return stripped.length > 0 && stripped === lower
-  })
-  if (matchesArtifact || matchesSite) {
-    return categoryLabel(block.dominantCategory)
-  }
-  return naturalized
 }
 
 // Strip raw URL query/fragment + secret-shaped tokens from any free-text the
@@ -151,23 +118,6 @@ function categoryLabel(category: AppCategory): string {
 }
 
 // Human-readable phrasing for why an episode started or stopped.
-function boundaryButtonStyle(disabled: boolean): CSSProperties {
-  return {
-    height: 30,
-    padding: '0 10px',
-    borderRadius: 8,
-    border: '1px solid var(--color-border-ghost)',
-    background: 'var(--color-surface)',
-    color: 'var(--color-text-secondary)',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 12,
-    fontWeight: 700,
-    cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.55 : 1,
-  }
-}
 
 function shortDomainLabel(domain: string): string {
   return domain.replace(/^www\./i, '')
@@ -450,6 +400,14 @@ const TimelineRow = memo(function TimelineRow({
   }
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
+  // timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long — a
+  // 3-hour block is 3× a 1-hour block. Height is linear in the block's active
+  // minutes; the floor keeps a short block's content legible, the ceiling keeps
+  // a marathon block from dwarfing the day. Within the common 1–3h range the
+  // proportionality is exact (60m→66px, 180m→198px).
+  const PX_PER_MINUTE = 1.1
+  const proportionalHeight = Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE)
+  const blockMinHeight = Math.max(44, Math.min(360, proportionalHeight))
   const ignored = block.review.state === 'ignored'
   // Leisure / personal rows are muted so the eye finds work first. Work is
   // full-strength; everything else recedes. This is the whole point of the
@@ -495,6 +453,7 @@ const TimelineRow = memo(function TimelineRow({
         transition: 'border-color 120ms, background 120ms',
         overflow: 'hidden',
         minWidth: 0,
+        minHeight: blockMinHeight,
         opacity: ignored ? 0.5 : muted ? 0.72 : 1,
       }}>
         <div style={{
@@ -514,18 +473,22 @@ const TimelineRow = memo(function TimelineRow({
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <span style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: accent,
-              background: `${accent}18`,
-              borderRadius: 999,
-              padding: '3px 7px',
-            }}>
-              {categoryLabel(block.dominantCategory)}
-            </span>
+            {/* A provisional live block stays neutral — no category badge until
+                the day is analyzed (timeline.md §4). */}
+            {!block.provisional && (
+              <span style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: accent,
+                background: `${accent}18`,
+                borderRadius: 999,
+                padding: '3px 7px',
+              }}>
+                {categoryLabel(block.dominantCategory)}
+              </span>
+            )}
             {block.isLive && (
               <span style={{
                 fontSize: 10,
@@ -626,183 +589,80 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
-// Categories that count as focused/deep work, mirroring the backend focus
-// criteria used elsewhere (wrappedFacts.ts, workBlocks.ts). Kept inline here
-// rather than importing the shared constant so this file stays decoupled from
-// the wrapped calculation surface.
-const FOCUSED_CATEGORIES_SET: ReadonlySet<AppCategory> = new Set<AppCategory>([
-  'development', 'research', 'writing', 'aiTools', 'design', 'productivity',
-])
-
-interface DayTheme {
-  label: string
-  seconds: number
-  blocks: WorkContextBlock[]
-  category: AppCategory
-  apps: string[]
-  artifacts: string[]
+// Plain-English count line for the recap footer: "8 blocks · 12 apps · 9 sites".
+function countSummaryLine(blockCount: number, appCount: number, siteCount: number): string {
+  const parts = [
+    `${blockCount} block${blockCount === 1 ? '' : 's'}`,
+    `${appCount} app${appCount === 1 ? '' : 's'}`,
+  ]
+  if (siteCount > 0) parts.push(`${siteCount} site${siteCount === 1 ? '' : 's'}`)
+  return parts.join(' · ')
 }
 
-function normalizeThemeLabel(label: string): string {
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-}
-
-function themeLabelForText(label: string): string {
-  let cleaned = naturalizeInboxLabel(naturalizeLabel(safeTimelineText(label))).trim()
-  const repoTitle = cleaned.match(/^[\w.-]+\/[\w.-]+:\s*(.+)$/)
-  if (repoTitle?.[1]) cleaned = repoTitle[1].trim()
-  return cleaned || label.trim()
-}
-
-function themeLabelForBlock(block: WorkContextBlock): string {
-  return themeLabelForText(railLabelForBlock(block))
-}
-
-function blockThemeKey(block: WorkContextBlock): string {
-  const label = normalizeThemeLabel(themeLabelForBlock(block))
-  if (label && !['building testing', 'mixed work', 'untitled activity', 'web session'].includes(label)) return label
-  if (label === 'building testing' || label === 'mixed work') return `cat:${block.dominantCategory}`
-  const compatibleArtifact = block.topArtifacts.find((artifact) =>
-    artifact.displayTitle?.trim()
-    && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
-  )
-  if (compatibleArtifact) return normalizeThemeLabel(themeLabelForText(compatibleArtifact.displayTitle.trim()))
-  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) {
-    const site = block.websites[0]?.domain?.trim()
-    if (site) return normalizeThemeLabel(site)
-  }
-  return block.dominantCategory
-}
-
-function buildDayThemes(blocks: WorkContextBlock[]): DayTheme[] {
-  const map = new Map<string, DayTheme>()
-  for (const block of blocks) {
-    const key = blockThemeKey(block)
-    const seconds = blockActiveSeconds(block)
-    const existing = map.get(key)
-    const label = themeLabelForBlock(block)
-    const apps = block.topApps
-      .filter((app) => app.category !== 'system')
-      .slice(0, 3)
-      .map((app) => formatDisplayAppName(app.appName))
-    const artifacts = block.topArtifacts
-      .slice(0, 3)
-      .map((artifact) => themeLabelForText(artifact.displayTitle.trim()))
-      .filter(Boolean)
-
-    if (existing) {
-      existing.seconds += seconds
-      existing.blocks.push(block)
-      for (const app of apps) if (!existing.apps.includes(app) && existing.apps.length < 4) existing.apps.push(app)
-      for (const artifact of artifacts) if (!existing.artifacts.includes(artifact) && existing.artifacts.length < 4) existing.artifacts.push(artifact)
-    } else {
-      map.set(key, {
-        label,
-        seconds,
-        blocks: [block],
-        category: block.dominantCategory,
-        apps,
-        artifacts,
-      })
-    }
-  }
-  return [...map.values()]
-    .filter((theme) => theme.seconds >= 5 * 60)
-    .sort((left, right) => right.seconds - left.seconds)
-}
-
-function productivityScore(totalSeconds: number, focusedSeconds: number, detourSeconds: number): number | null {
-  if (totalSeconds < 15 * 60) return null
-  const focusShare = focusedSeconds / Math.max(1, totalSeconds)
-  const detourShare = detourSeconds / Math.max(1, totalSeconds)
-  const trackedDepthBonus = Math.min(totalSeconds / (5 * 60 * 60), 1) * 10
-  return Math.max(0, Math.min(100, Math.round(35 + focusShare * 60 + trackedDepthBonus - detourShare * 12)))
-}
-
-// Gates for naming "the shape of the day". A day needs both a floor of tracked
-// time and a handful of substantive blocks before Daylens will describe what it
-// was about — otherwise it says so plainly instead of overreaching on thin data.
-const SHAPE_OF_DAY_MIN_TRACKED_SECONDS = 90 * 60
-const SHAPE_OF_DAY_MIN_BLOCKS = 3
-
-function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
+function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
-  const [reanalyzing, setReanalyzing] = useState(false)
-  const [reanalyzeStatus, setReanalyzeStatus] = useState<string | null>(null)
+  const [recapError, setRecapError] = useState<string | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null)
 
-  const handleReanalyze = async () => {
-    if (reanalyzing) return
-    setReanalyzing(true)
-    setReanalyzeStatus(null)
-    try {
-      await ipc.db.rebuildTimelineDay(payload.date)
-      await onRefresh?.()
-      setReanalyzeStatus('AI labels refreshed')
-    } catch (error) {
-      // T1/R4: strip the IPC scaffolding so the user never sees the channel name
-      // ("db:rebuild-timeline-day"); the throttle/retry (R1) already rode out
-      // any transient rate limit before we got here.
-      const { message } = sanitizeIpcError(error, 'AI re-analysis failed. Try again in a moment.')
-      setReanalyzeStatus(message)
-    } finally {
-      setReanalyzing(false)
-    }
-  }
+  const isToday = payload.date === todayString()
+  const provisional = payload.blocks.some((block) => block.provisional)
+
+  // Invariant 5: every number on the recap comes from the same blocks the
+  // timeline draws. The headline tracked time is the sum of the blocks'
+  // active seconds — never a separately-computed total that could disagree.
+  const blockSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
+  const trackedSeconds = blockSeconds > 0 ? blockSeconds : payload.totalSeconds
+  const countLine = countSummaryLine(payload.blocks.length, payload.appCount, payload.siteCount)
 
   useEffect(() => {
-    setReanalyzeStatus(null)
+    setAnalyzeStatus(null)
+    setRecapError(null)
     const cached = daySummaryRecapCache.get(payload.date)
-    if (cached) {
-      setRecap(cached)
-      setRecapLoading(false)
-      return
-    }
-    setRecap(null)
+    setRecap(cached ?? null)
     setRecapLoading(false)
   }, [payload.date])
 
-  // Focus / Drift / Score must be measured in *active tracked* time, not
-  // wall-clock span. A block that bridged a 17-minute untracked lull has a span
-  // far larger than the time actually logged inside it; summing spans inflated
-  // Focused + Drift past the day's tracked total (R3/R4). blockActiveSeconds is
-  // the summed session time clamped to span, so these totals stay within the
-  // tracked total shown in the header.
-  const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const trustedTotal = trustedBlocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const focusedTotal = trustedBlocks
-    .filter((block) => FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const detourTotal = trustedBlocks
-    .filter((block) => !FOCUSED_CATEGORIES_SET.has(block.dominantCategory))
-    .reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const score = productivityScore(trustedTotal, focusedTotal, detourTotal)
-  const themes = buildDayThemes(trustedBlocks)
-  const topThemes = themes.slice(0, 4)
-  // The "clustered around" claim is about the day's focused work; the "drift" is
-  // the non-focused time. Keep them disjoint so the same theme never appears as
-  // both the headline and the distraction (the P3 "named the same items as both
-  // the cluster and the drift" bug). Fall back to the overall top themes only if
-  // no focused theme cleared the bar.
-  const focusedThemes = themes.filter((theme) => FOCUSED_CATEGORIES_SET.has(theme.category))
-  const clusterThemes = (focusedThemes.length > 0 ? focusedThemes : topThemes).slice(0, 2)
-  const clusterKeys = new Set(clusterThemes.map((theme) => normalizeThemeLabel(theme.label)))
-  const driftThemes = themes
-    .filter((theme) => !FOCUSED_CATEGORIES_SET.has(theme.category))
-    .filter((theme) => !clusterKeys.has(normalizeThemeLabel(theme.label)))
-    .slice(0, 2)
+  // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
+  // into named blocks and refresh deterministic-floor / low-confidence labels.
+  const handleAnalyze = async () => {
+    if (analyzing) return
+    setAnalyzing(true)
+    setAnalyzeStatus(null)
+    try {
+      await ipc.db.rebuildTimelineDay(payload.date)
+      await onRefresh?.()
+      setAnalyzeStatus(provisional ? 'Day analyzed' : 'Labels refreshed')
+    } catch (error) {
+      const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
+      setAnalyzeStatus(message)
+    } finally {
+      setAnalyzing(false)
+    }
+  }
 
-  // The shape of the day is a claim about what the day was about. Don't make it
-  // until there is enough tracked activity to support it — early in the day, or
-  // on a sparsely-tracked day, the honest answer is "not yet". This is purely
-  // data-driven (no wall-clock), so a genuinely heavy morning qualifies and a
-  // thin all-day trickle does not. The factual stat tiles below are always safe
-  // to show; only the narrative sentence is gated.
-  const substantiveBlocks = trustedBlocks.filter((block) => blockActiveSeconds(block) >= 5 * 60)
-  const hasEnoughForShape =
-    trustedTotal >= SHAPE_OF_DAY_MIN_TRACKED_SECONDS
-    && substantiveBlocks.length >= SHAPE_OF_DAY_MIN_BLOCKS
-    && topThemes.length > 0
+  // Generate Recap: a short, grounded AI summary of the day built from the same
+  // blocks. Cached per date so re-opening the day doesn't re-spend the call.
+  const handleGenerateRecap = async () => {
+    if (recapLoading) return
+    setRecapLoading(true)
+    setRecapError(null)
+    try {
+      const result = await ipc.ai.generateDaySummary(payload.date)
+      daySummaryRecapCache.set(payload.date, result)
+      setRecap(result)
+    } catch (error) {
+      const { message } = sanitizeIpcError(error, "Couldn't generate the recap. Try again in a moment.")
+      setRecapError(message)
+    } finally {
+      setRecapLoading(false)
+    }
+  }
+
+  const analyzeLabel = analyzing
+    ? (provisional ? 'Analyzing…' : 'Re-analyzing…')
+    : (provisional ? 'Analyze day' : 'Re-analyze with AI')
 
   return (
     <div style={{
@@ -820,152 +680,90 @@ function DaySummaryInspector({ payload, onSelectBlock, onRefresh }: { payload: D
       display: 'grid',
       gap: 16,
     }} className="timeline-summary-inspector">
-      <div>
-        <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)', marginBottom: 6 }}>
-          The shape of the day
-        </div>
-        <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-          {formatFullDate(payload.date)}
-        </div>
+      <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)' }}>
+        {isToday ? 'Today' : formatFullDate(payload.date)}
       </div>
 
-      {payload.totalSeconds > 0 && onRefresh && (
-        <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
-          <button
-            type="button"
-            onClick={() => { void handleReanalyze() }}
-            disabled={reanalyzing}
-            style={{
-              justifySelf: 'start',
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface-high)',
-              color: 'var(--color-text-secondary)',
-              borderRadius: 10,
-              padding: '7px 12px',
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: reanalyzing ? 'default' : 'pointer',
-              opacity: reanalyzing ? 0.6 : 1,
-            }}
-          >
-            {reanalyzing ? 'Re-analyzing…' : 'Re-analyze with AI'}
-          </button>
-          {reanalyzeStatus && (
-            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
-              {reanalyzeStatus}
-            </div>
-          )}
-        </div>
-      )}
-
-      {payload.totalSeconds > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Score</div>
-            <div style={{ fontSize: 20, color: 'var(--color-text-primary)', fontWeight: 760 }}>{score ?? '—'}</div>
-          </div>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Focused</div>
-            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(focusedTotal)}</div>
-          </div>
-          <div style={{ borderRadius: 12, background: 'var(--color-surface-high)', padding: '10px 11px' }}>
-            <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Drift</div>
-            <div style={{ fontSize: 15, color: 'var(--color-text-primary)', fontWeight: 720 }}>{formatDuration(detourTotal)}</div>
-          </div>
-        </div>
-      )}
-
-      {hasEnoughForShape && (
-        <div style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)' }}>
-          {`The day centered on ${clusterThemes.map((theme) => theme.label).join(' and ')}. ${driftThemes.length > 0 ? `The main drift came from ${driftThemes.map((theme) => theme.label).join(' and ')}.` : 'Most of the tracked time stayed inside focused work.'}`}
-        </div>
-      )}
-
-      {!hasEnoughForShape && payload.totalSeconds > 0 && (
-        <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-          Not enough tracked activity yet to name the shape of the day. Daylens fills this in as the day builds up.
-        </div>
-      )}
-
-      {hasEnoughForShape && recap && recap.summary && (
-        <div style={{
-          fontSize: 14,
-          lineHeight: 1.65,
-          color: 'var(--color-text-secondary)',
-        }}>
-          {recap.summary}
-        </div>
-      )}
-
-      {recapLoading && null}
-
-      {payload.totalSeconds === 0 && (
+      {payload.totalSeconds === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
           Nothing tracked yet. Daylens fills this in once the day has something to say.
         </div>
-      )}
-
-      {topThemes.length > 0 && (
-        <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
-            What mattered
-          </div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {topThemes.map((theme) => {
-              const jumpTarget = theme.blocks[0]?.id ?? null
-              const clickable = Boolean(jumpTarget && onSelectBlock)
-              const handleJump = () => {
-                if (jumpTarget && onSelectBlock) onSelectBlock(jumpTarget)
-              }
-              return (
-                <div
-                  key={theme.label}
-                  role={clickable ? 'button' : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onClick={clickable ? handleJump : undefined}
-                  onKeyDown={clickable ? (event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      handleJump()
-                    }
-                  } : undefined}
-                  style={{
-                    display: 'flex',
-                    gap: 10,
-                    minWidth: 0,
-                    cursor: clickable ? 'pointer' : 'default',
-                    borderRadius: 8,
-                    padding: clickable ? '2px 4px' : 0,
-                    margin: clickable ? '-2px -4px' : 0,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 3,
-                      borderRadius: 999,
-                      background: CATEGORY_COLORS[theme.category] ?? CATEGORY_COLORS.uncategorized,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', letterSpacing: '0.04em', marginBottom: 2 }}>
-                      {formatDuration(theme.seconds)}{theme.blocks.length > 1 ? ` · ${theme.blocks.length} stretches` : ''}
-                    </div>
-                    <InlineRevealText
-                      text={theme.label}
-                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                    />
-                    {theme.apps.length > 0 && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2, lineHeight: 1.45 }}>
-                        {theme.apps.slice(0, 3).join(' · ')}
-                      </div>
-                    )}
-                  </div>
+      ) : (
+        <>
+          {/* The recap leads — calm, grounded prose, Dia-style. */}
+          {recap && recap.summary ? (
+            <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
+              {recap.summary}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 10, justifyItems: 'start' }}>
+              {provisional && (
+                <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                  Today is still going. Analyze the day to turn it into named blocks and a recap.
                 </div>
-              )
-            })}
+              )}
+              <button
+                type="button"
+                onClick={() => { void handleGenerateRecap() }}
+                disabled={recapLoading}
+                style={{
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-high)',
+                  color: 'var(--color-text-primary)',
+                  borderRadius: 10,
+                  padding: '8px 13px',
+                  fontSize: 13,
+                  fontWeight: 650,
+                  cursor: recapLoading ? 'default' : 'pointer',
+                  opacity: recapLoading ? 0.6 : 1,
+                }}
+              >
+                {recapLoading ? 'Generating recap…' : 'Generate recap'}
+              </button>
+            </div>
+          )}
+
+          {recapError && (
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{recapError}</div>
+          )}
+
+          {/* Counts footer — secondary to the prose. */}
+          <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 14, display: 'grid', gap: 4 }}>
+            <div style={{ fontSize: 15, fontWeight: 720, color: 'var(--color-text-primary)' }}>
+              {formatDuration(trackedSeconds)} tracked
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>{countLine}</div>
           </div>
-        </section>
+
+          {onRefresh && (
+            <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
+              <button
+                type="button"
+                onClick={() => { void handleAnalyze() }}
+                disabled={analyzing}
+                style={{
+                  justifySelf: 'start',
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'transparent',
+                  color: 'var(--color-text-secondary)',
+                  borderRadius: 10,
+                  padding: '7px 12px',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: analyzing ? 'default' : 'pointer',
+                  opacity: analyzing ? 0.6 : 1,
+                }}
+              >
+                {analyzeLabel}
+              </button>
+              {analyzeStatus && (
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
+                  {analyzeStatus}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -984,21 +782,19 @@ function BlockInspector({
 }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
-  const [reviewSaving, setReviewSaving] = useState<TimelineBlockReviewState | 'intent' | null>(null)
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [boundarySaving, setBoundarySaving] = useState<'merge-prev' | 'merge-next' | null>(null)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
-  // The entire correction surface lives behind this one disclosure — invisible
-  // by default, revealed only when the user disagrees.
-  const [notRight, setNotRight] = useState(false)
+  // The rename input is revealed only when the user clicks Rename — the panel
+  // stays calm until then.
+  const [renaming, setRenaming] = useState(false)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
     setReviewError(null)
-    setReviewSaving(null)
     setBoundarySaving(null)
     setBoundaryError(null)
-    setNotRight(false)
+    setRenaming(false)
   }, [block?.id, block?.label.current, block?.label.override])
 
   if (!block) {
@@ -1007,46 +803,149 @@ function BlockInspector({
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   const hasOverride = Boolean(block.label.override?.trim())
-  const saveReviewState = async (
-    state: TimelineBlockReviewState,
-    corrections?: {
-      correctedLabel?: string | null
-      correctedIntentRole?: WorkIntentRole | null
-      correctedIntentSubject?: string | null
-    },
-  ) => {
-    setReviewSaving(corrections?.correctedIntentRole !== undefined || corrections?.correctedIntentSubject !== undefined ? 'intent' : state)
-    setReviewError(null)
-    try {
-      await ipc.db.setBlockReview({
-        blockId: block.id,
-        date: payload.date,
-        state,
-        ...corrections,
-      })
-      await onRefresh()
-    } catch (error) {
-      setReviewError(sanitizeIpcError(error, "Couldn't save the review state. Try again in a moment.").message)
-    } finally {
-      setReviewSaving(null)
-    }
-  }
+  // The name this block had before the user renamed it — shown so they can see
+  // what changed and undo it (timeline.md acceptance: previous name + undo).
+  const previousName = block.label.ruleBased?.trim() || block.label.aiSuggested?.trim() || null
+  // A provisional (live, not-yet-analyzed) block is never renamed or merged —
+  // those controls appear once the day is analyzed (timeline.md §4).
+  const correctable = !block.provisional
   const sortedDayBlocks = [...payload.blocks].sort((a, b) => a.startTime - b.startTime)
   const blockIndex = sortedDayBlocks.findIndex((candidate) => candidate.id === block.id)
   const previousBlock = blockIndex > 0 ? sortedDayBlocks[blockIndex - 1] : null
   const nextBlock = blockIndex >= 0 && blockIndex < sortedDayBlocks.length - 1 ? sortedDayBlocks[blockIndex + 1] : null
+
+  // Fixing a block (rename / undo / merge) makes any generated recap that named
+  // the old version stale — drop the cached recap for the day so it regenerates
+  // against the corrected blocks (timeline.md acceptance: a fix refreshes the
+  // recap). The backend already invalidates the insights projection scope.
+  const invalidateDayRecap = () => { daySummaryRecapCache.delete(payload.date) }
 
   const mergeEpisodeWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
     setBoundarySaving(side)
     setBoundaryError(null)
     try {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [block.id, other.id], date: payload.date })
+      invalidateDayRecap()
       await onRefresh()
     } catch (error) {
-      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these episodes. Try again in a moment.").message)
+      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again in a moment.").message)
     } finally {
       setBoundarySaving(null)
     }
+  }
+
+  const submitRename = () => {
+    const label = overrideDraft.trim()
+    if (!label || label === block.label.current) return
+    setOverrideSaving(true)
+    setReviewError(null)
+    void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
+      .then(() => { invalidateDayRecap(); return onRefresh() })
+      .then(() => setRenaming(false))
+      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
+      .finally(() => setOverrideSaving(false))
+  }
+
+  const undoRename = () => {
+    setOverrideSaving(true)
+    setReviewError(null)
+    void ipc.db.clearBlockLabelOverride(block.id)
+      .then(() => { invalidateDayRecap(); return onRefresh() })
+      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't undo the rename. Try again in a moment.").message))
+      .finally(() => setOverrideSaving(false))
+  }
+
+  // One evidence view (timeline.md §2/§3.0): the apps, sites, and files behind
+  // the block, in a single list sorted by time — the old "Apps used" and "Key
+  // artifacts" merged into one. Work-first ordering falls out of sorting by
+  // seconds. Off-task evidence is split out below as side trips (§6).
+  type EvidenceRow = {
+    key: string
+    name: string
+    detail: string | null
+    seconds: number
+    icon: ReactNode
+    onOpen?: () => void
+    offTask: boolean
+  }
+  const isOffTaskCategory = (category: AppCategory): boolean =>
+    category === 'entertainment' || category === 'social'
+  const appRows: EvidenceRow[] = block.topApps.slice(0, 8).map((app) => ({
+    key: `app:${app.bundleId}`,
+    name: formatDisplayAppName(app.appName),
+    detail: categoryLabel(app.category),
+    seconds: app.totalSeconds,
+    icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />,
+    offTask: isOffTaskCategory(app.category),
+  }))
+  const artifactRows: EvidenceRow[] = block.topArtifacts.slice(0, 8).map((artifact) => ({
+    key: `art:${artifact.id}`,
+    name: safeTimelineText(artifact.displayTitle.trim()),
+    detail: artifact.subtitle || artifact.host || artifact.path || null,
+    seconds: artifact.totalSeconds,
+    icon: (
+      <EntityIcon
+        artifactType={artifact.artifactType}
+        canonicalAppId={artifact.canonicalAppId}
+        ownerBundleId={artifact.ownerBundleId}
+        ownerAppName={artifact.ownerAppName}
+        ownerAppInstanceId={artifact.ownerAppInstanceId}
+        title={artifact.displayTitle}
+        path={artifact.path}
+        domain={artifact.host}
+        url={artifact.url}
+        size={24}
+      />
+    ),
+    onOpen: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? undefined : () => void openArtifact(artifact),
+    // A page artifact on a leisure host (a YouTube/Netflix tab that leaked into
+    // the block's evidence) is a side trip, mirroring how site rows are routed.
+    offTask: kindForDomain(artifact.host) === 'leisure',
+  }))
+  // Sites already represented by an artifact row are not repeated.
+  const artifactHosts = new Set(block.topArtifacts.map((a) => a.host?.toLowerCase()).filter(Boolean) as string[])
+  const siteRows: EvidenceRow[] = block.websites
+    .filter((site) => !artifactHosts.has(site.domain.toLowerCase()))
+    .slice(0, 8)
+    .map((site) => ({
+      key: `site:${site.domain}`,
+      name: shortDomainLabel(site.domain),
+      detail: site.topTitle?.trim() || null,
+      seconds: site.totalSeconds,
+      icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={24} />,
+      offTask: kindForDomain(site.domain) === 'leisure',
+    }))
+  const allEvidence = [...appRows, ...artifactRows, ...siteRows].sort((a, b) => b.seconds - a.seconds)
+  const evidence = allEvidence.filter((row) => !row.offTask)
+  const sideTrips = allEvidence.filter((row) => row.offTask)
+
+  const renderEvidenceRow = (row: EvidenceRow, dimmed: boolean) => {
+    const content = (
+      <>
+        {row.icon}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <InlineRevealText
+            text={row.name}
+            style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
+          />
+          {row.detail && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.detail}</div>
+          )}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+          {formatDuration(row.seconds)}
+        </div>
+      </>
+    )
+    const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1 }
+    if (row.onOpen) {
+      return (
+        <button key={row.key} type="button" onClick={row.onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}>
+          {content}
+        </button>
+      )
+    }
+    return <div key={row.key} style={baseStyle}>{content}</div>
   }
 
   return (
@@ -1063,111 +962,86 @@ function BlockInspector({
       background: 'var(--color-surface)',
       padding: 22,
     }}>
-      <div style={{ marginBottom: 18 }}>
-        <div
-          title={userVisibleBlockLabel(block)}
-          style={{
-            fontSize: 18,
-            fontWeight: 750,
-            color: 'var(--color-text-primary)',
-            marginBottom: 6,
-            lineHeight: 1.3,
-            display: '-webkit-box',
-            WebkitBoxOrient: 'vertical',
-            WebkitLineClamp: 3,
-            overflow: 'hidden',
-            overflowWrap: 'break-word',
-            wordBreak: 'break-word',
-          }}
-        >
-          {userVisibleBlockLabel(block)}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+          <div
+            title={userVisibleBlockLabel(block)}
+            style={{
+              fontSize: 18,
+              fontWeight: 750,
+              color: 'var(--color-text-primary)',
+              lineHeight: 1.3,
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 3,
+              overflow: 'hidden',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+            }}
+          >
+            {userVisibleBlockLabel(block)}
+          </div>
+          {correctable && (
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setRenaming((value) => !value)}
+                style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '2px 4px' }}
+              >
+                Rename
+              </button>
+              {previousBlock && (
+                <button type="button" title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge'}
+                </button>
+              )}
+              {nextBlock && (
+                <button type="button" title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <ArrowDown size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge'}
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
+        {hasOverride && previousName && (
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
+            Renamed from “{previousName}” ·{' '}
+            <button type="button" disabled={overrideSaving} onClick={undoRename} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', padding: 0, textDecorationLine: 'underline', textUnderlineOffset: 2 }}>
+              Undo
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* The whole correction surface — invisible until the user disagrees. */}
-      {!notRight ? (
-        <button
-          type="button"
-          onClick={() => setNotRight(true)}
-          style={{ marginBottom: 18, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0, textDecorationLine: 'underline', textUnderlineOffset: 3 }}
-        >
-          Not right?
-        </button>
-      ) : (
-        <div style={{ marginBottom: 18, display: 'grid', gap: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', padding: '12px 13px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 11.5, fontWeight: 760, color: 'var(--color-text-secondary)' }}>Fix this episode</span>
-            <button type="button" onClick={() => setNotRight(false)} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11.5, cursor: 'pointer' }}>Done</button>
-          </div>
-
-          {/* Rename */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename episode</label>
-            <input
-              id="timeline-block-label-override"
-              type="text"
-              value={overrideDraft}
-              onChange={(event) => setOverrideDraft(event.target.value)}
-              placeholder={userVisibleBlockLabel(block)}
-              style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
-            />
-            <button
-              type="button"
-              disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
-              onClick={() => {
-                const label = overrideDraft.trim()
-                if (!label) return
-                setOverrideSaving(true)
-                setReviewError(null)
-                void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
-                  .then(() => onRefresh())
-                  .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
-                  .finally(() => setOverrideSaving(false))
-              }}
-              style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
-            >
-              {overrideSaving ? 'Saving…' : 'Rename'}
-            </button>
-            {hasOverride && (
-              <button
-                type="button"
-                disabled={overrideSaving}
-                onClick={() => {
-                  setOverrideSaving(true)
-                  setReviewError(null)
-                  void ipc.db.clearBlockLabelOverride(block.id).then(() => onRefresh()).catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't reset this rename. Try again in a moment.").message)).finally(() => setOverrideSaving(false))
-                }}
-                style={{ height: 32, padding: '0 12px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-              >
-                Reset
-              </button>
-            )}
-          </div>
-
-          {/* Merge up/down · Hide */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {previousBlock && (
-              <button type="button" title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={boundaryButtonStyle(boundarySaving !== null)}>
-                <ArrowUp size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge up'}
-              </button>
-            )}
-            {nextBlock && (
-              <button type="button" title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={boundaryButtonStyle(boundarySaving !== null)}>
-                <ArrowDown size={13} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge down'}
-              </button>
-            )}
-            <button type="button" title="Hide this episode from summaries" disabled={reviewSaving !== null || block.review.state === 'ignored'} onClick={() => { void saveReviewState('ignored') }} style={boundaryButtonStyle(reviewSaving !== null || block.review.state === 'ignored')}>
-              <EyeOff size={13} strokeWidth={2} aria-hidden="true" />{block.review.state === 'ignored' ? 'Hidden' : 'Hide'}
-            </button>
-          </div>
-
-          {(reviewError || boundaryError) && (
-            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{reviewError || boundaryError}</div>
-          )}
+      {renaming && correctable && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename block</label>
+          <input
+            id="timeline-block-label-override"
+            type="text"
+            autoFocus
+            value={overrideDraft}
+            onChange={(event) => setOverrideDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submitRename() }}
+            placeholder={userVisibleBlockLabel(block)}
+            style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
+          />
+          <button
+            type="button"
+            disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+            onClick={submitRename}
+            style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+          >
+            {overrideSaving ? 'Saving…' : 'Save'}
+          </button>
         </div>
+      )}
+
+      {(reviewError || boundaryError) && (
+        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginBottom: 12 }}>{reviewError || boundaryError}</div>
       )}
 
       {blockNarrative(block) && (
@@ -1177,153 +1051,24 @@ function BlockInspector({
       )}
 
       <div style={{ display: 'grid', gap: 18 }}>
-        <section>
-          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-            Apps used
-          </div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {block.topApps.slice(0, 6).map((app) => (
-              <div key={`${block.id}:${app.bundleId}`} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <InlineRevealText
-                    text={formatDisplayAppName(app.appName)}
-                    style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
-                  />
-                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{categoryLabel(app.category)}</div>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-                  {formatDuration(app.totalSeconds)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {block.topArtifacts.length > 0 && (
+        {evidence.length > 0 && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Key artifacts
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
+              Evidence
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
-              {block.topArtifacts.slice(0, 6).map((artifact) => {
-                return (
-                  <div
-                    key={artifact.id}
-                    style={{
-                      width: '100%',
-                      display: 'flex',
-                      alignItems: 'start',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void openArtifact(artifact)}
-                      disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: 'flex',
-                        alignItems: 'start',
-                        gap: 10,
-                        padding: 0,
-                        border: 'none',
-                        background: 'transparent',
-                        textAlign: 'left',
-                        cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
-                      }}
-                    >
-                      <EntityIcon
-                        artifactType={artifact.artifactType}
-                        canonicalAppId={artifact.canonicalAppId}
-                        ownerBundleId={artifact.ownerBundleId}
-                        ownerAppName={artifact.ownerAppName}
-                        ownerAppInstanceId={artifact.ownerAppInstanceId}
-                        title={artifact.displayTitle}
-                        path={artifact.path}
-                        domain={artifact.host}
-                        url={artifact.url}
-                        size={28}
-                      />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div
-                          title={artifact.displayTitle}
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: 'var(--color-text-primary)',
-                            lineHeight: 1.35,
-                            display: '-webkit-box',
-                            WebkitBoxOrient: 'vertical',
-                            WebkitLineClamp: 2,
-                            overflow: 'hidden',
-                            overflowWrap: 'break-word',
-                            wordBreak: 'break-word',
-                          }}
-                        >
-                          {artifact.displayTitle}
-                        </div>
-                        {(artifact.subtitle || artifact.host || artifact.path) && (
-                          <InlineRevealText
-                            text={artifact.subtitle || artifact.host || artifact.path || ''}
-                            style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}
-                          />
-                        )}
-                      </div>
-                    </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                        {formatDuration(artifact.totalSeconds)}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
+              {evidence.map((row) => renderEvidenceRow(row, false))}
             </div>
           </section>
         )}
 
-        {block.websites.length > 0 && (
+        {sideTrips.length > 0 && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Websites
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
+              Side trips
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {block.websites.slice(0, 6).map((site) => (
-                <span
-                  key={`${block.id}:${site.domain}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    borderRadius: 999,
-                    padding: '6px 8px 6px 10px',
-                    background: 'var(--color-surface-low)',
-                    color: 'var(--color-text-secondary)',
-                    fontSize: 12,
-                  }}
-                >
-                  <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={18} />
-                  {shortDomainLabel(site.domain)} • {formatDuration(site.totalSeconds)}
-                </span>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {block.workflowRefs.length > 0 && (
-          <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10 }}>
-              Workflow clues
-            </div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              {block.workflowRefs.slice(0, 4).map((workflow) => (
-                <div key={workflow.id} style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                  {workflow.label}
-                </div>
-              ))}
+            <div style={{ display: 'grid', gap: 10 }}>
+              {sideTrips.map((row) => renderEvidenceRow(row, true))}
             </div>
           </section>
         )}

@@ -104,6 +104,10 @@ const SUSTAINED_CATEGORY_THRESHOLD_SEC = 15 * 60
 const COMMUNICATION_INTERRUPTION_THRESHOLD_SEC = 5 * 60
 const FAST_SWITCH_THRESHOLD_SEC = 5 * 60
 const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
+// A *clear, sustained* switch to a different goal is a real boundary
+// (timeline.md §3.1). Short detours below the §3.2 cutoff never reach here —
+// they are absorbed by the brief-peek pass (BRIEF_PEEK_MAX_ACTIVE_MS) — so this
+// floor stays at a genuine-topic-run length, not the detour cutoff.
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
 // R2 block-sizing: the target shape is a 60-120 minute block, not a string of
 // 20-minute slices. The base ceiling sits at 120 min so a sustained stretch of
@@ -326,12 +330,22 @@ function dominantFocusedCategoryFromDistribution(distribution: Partial<Record<Ap
   const total = entries.reduce((sum, [, seconds]) => sum + seconds, 0)
   if (total <= 0) return null
 
-  const focused = entries
+  const focusedEntries = entries
     .filter(([category]) => FOCUSED_CATEGORIES.includes(category) && category !== 'browsing')
-    .sort((left, right) => right[1] - left[1])[0]
-  if (!focused) return null
+    .sort((left, right) => right[1] - left[1])
+  if (focusedEntries.length === 0) return null
 
-  return focused[1] / total >= 0.3 ? focused[0] : null
+  // timeline.md §3.6: the category comes from the block's *overall* intent, not
+  // a single app or tab. The largest focused sub-category names the block when
+  // either (a) it alone clears the bar — the original rule — or (b) focused work
+  // is the *majority* of the block, so a stretch split across coding + writing +
+  // AI tools with a brief Netflix/X peek folded in still reads as work. The
+  // majority test is what stops a genuinely leisure-dominant block (e.g. 65%
+  // entertainment, 35% scattered work) from being mislabeled as work.
+  const focusedTotal = focusedEntries.reduce((sum, [, seconds]) => sum + seconds, 0)
+  const largestFocusedShare = focusedEntries[0][1] / total
+  if (largestFocusedShare >= 0.3 || focusedTotal / total >= 0.5) return focusedEntries[0][0]
+  return null
 }
 
 function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
@@ -2173,7 +2187,14 @@ function buildBlockFromCandidate(
       state: confidence === 'low' ? 'pending' : 'auto-approved',
     },
     isLive,
-    kind: candidateKind(candidate, context),
+    // timeline.md §3.2/§3.6: the block's kind follows its *overall intent*. A
+    // brief folded peek (Netflix/X) must not flip a work block to leisure just
+    // because it out-weighs the work by raw seconds — when the intent-weighted
+    // dominant category is focused work, the block is work. Genuine leisure
+    // blocks (dominant category entertainment/social) keep their leisure kind.
+    kind: FOCUSED_CATEGORIES.includes(dominantCategory)
+      ? 'work'
+      : candidateKind(candidate, context),
   }
 
   const normalizedBlock = {
@@ -2675,7 +2696,10 @@ function bridgeSameWorkCandidates(candidates: CandidateBlock[], db: Database.Dat
 
 const BOUNDARY_CUT_THRESHOLD = 1
 const BOUNDARY_HARD_SCORE = 100
-const BRIEF_PEEK_MAX_ACTIVE_MS = 12 * 60_000
+// timeline.md §3.2 (founder decision): under 10 minutes = absorbed into the
+// surrounding block; 10 minutes or more = its own block. A peek at X/Netflix in
+// the middle of a work stretch folds in; it never splits or renames the block.
+const BRIEF_PEEK_MAX_ACTIVE_MS = 10 * 60_000
 
 // ── User correction memory for boundaries ───────────────────────────────────
 //
@@ -2920,23 +2944,68 @@ function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, con
     const leftSig = sig[sig.length - 1]
     const right = candidates[index + 1]
     const rightSig = signals[index + 1]
-    const isPeek =
+
+    // Focused work continuing on both sides of the middle slice, with no real
+    // idle gap on either edge. "Focused work" is execution *or* research — AI
+    // tools (Codex, Claude) read as research mode, so a Cursor/Codex coding
+    // stretch with a peek in the middle must still count as a work sandwich.
+    // `left` is read from the running result so a chain (work / peek / work /
+    // peek / work) collapses in one forward pass.
+    const isWorkAnchor = (mode: RunMode | undefined): boolean =>
+      mode === 'execution' || mode === 'research'
+    const noIdleGapAround = Boolean(
       left && right
       && current.formation !== 'meeting'
-      && candidatesShareKind(left, current, context)
-      && signals[index].mode === 'research'
-      && signals[index].activeMs < BRIEF_PEEK_MAX_ACTIVE_MS
-      && leftSig?.mode === 'execution'
-      && rightSig?.mode === 'execution'
+      && isWorkAnchor(leftSig?.mode)
+      && isWorkAnchor(rightSig?.mode)
+      && gapBetweenCandidates(left, current) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
+      && gapBetweenCandidates(current, right) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS,
+    )
+    // The research-peek fold (a) is conservative: it requires the SAME app on
+    // both sides (look up a PR in the editor's browser, back to the editor).
+    const sandwichedBySameWork = noIdleGapAround
       && leftSig.dominantApp != null
       && leftSig.dominantApp === rightSig.dominantApp
-      && gapBetweenCandidates(left, current) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
-      && gapBetweenCandidates(current, right) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
-    if (isPeek) {
+    const briefMiddle = signals[index].activeMs < BRIEF_PEEK_MAX_ACTIVE_MS
+
+    // (a) A brief same-subject research look-up inside execution (check a PR,
+    // back to the editor). Fold it into the left run; the two execution runs
+    // then merge on app continuity in scoring.
+    const researchPeek =
+      sandwichedBySameWork
+      && briefMiddle
+      && candidatesShareKind(left, current, context)
+      && signals[index].mode === 'research'
+    if (researchPeek) {
       result[result.length - 1] = mergeCandidatePair(left, current)
       sig[sig.length - 1] = runSignalsFor(result[result.length - 1], db, context)
       continue
     }
+
+    // (b) timeline.md §3.2: a brief off-task peek — X, Netflix, a YouTube clip,
+    // a song on Spotify, a quick Google — in the middle of a work stretch folds
+    // into that block; it never becomes its own SOCIAL/entertainment block. It
+    // crosses the work↔leisure kind line, which scoring treats as a hard cut, so
+    // we fuse left+peek+right in one step here, before scoring. The work-on-both-
+    // sides requirement is what keeps the R4 guard intact: a peek only folds
+    // *between* work, so two videos across a gap (drift on both sides) never
+    // stitch into a runaway "watching" block. Same-app is NOT required here — a
+    // brief Netflix peek pollutes the merged block's dominant app, so insisting
+    // on it would strand the next sliver. Bounded to under the §3.2 cutoff and
+    // the coherent span ceiling so a *sustained* detour still stands alone.
+    const driftPeek =
+      noIdleGapAround
+      && briefMiddle
+      && (signals[index].mode === 'drift' || signals[index].mode === 'browse')
+      && combinedSpanMs(left, right) <= TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS
+    if (driftPeek && right) {
+      const fused = mergeCandidatePair(mergeCandidatePair(left, current), right)
+      result[result.length - 1] = fused
+      sig[sig.length - 1] = runSignalsFor(fused, db, context)
+      index += 1 // `right` is already fused in — consume it
+      continue
+    }
+
     result.push(current)
     sig.push(signals[index])
   }
@@ -3088,6 +3157,19 @@ function looksLikeBrowserTabTitle(value: string): boolean {
   return / \| /.test(value)
 }
 
+// timeline.md §3.5: a search-engine results page is a raw page title, never a
+// block name — "the song … - Google Search" is what you typed, not what you
+// did. Reject it from the deterministic label so the block falls to an
+// evidence-based name (or the AI's intent name) instead.
+function looksLikeSearchResultTitle(value: string): boolean {
+  const trimmed = value.trim()
+  // The engine suffix ("… - Google Search") and the "Search results …" page
+  // prefix are the real results-page shapes. Kept narrow so a genuine title
+  // that merely mentions search ("Improving Google Search ranking") is not lost.
+  return /[-–—|·:]\s*(google|bing|duckduckgo|duck ?duck ?go|yahoo|brave|ecosia)\s+search\s*$/i.test(trimmed)
+    || /^search results\b/i.test(trimmed)
+}
+
 // Categories where a browser page / website is the natural label source.
 // For anything else (development, communication, design, etc.), a stray
 // browser page should NOT be picked as the block label — that's how
@@ -3143,16 +3225,33 @@ function normalizeForLeakCheck(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-// True when `label` looks like it was lifted verbatim from a page artifact
-// hosted on an entertainment/social/adult domain inside this block. Catches
-// the AI-labeler case where the model saw a YouTube tab in the evidence and
-// emitted its title as the block headline.
+// The brand token of a host: netflix.com → "netflix", studio.youtube.com →
+// "youtube", bbc.co.uk → "bbc". Reuses the curated website-label map so it
+// handles compound TLDs and short brands a bare domain split gets wrong (which
+// otherwise let "x"/"hbo" slip past the leak guard). Used to catch entertainment
+// labels that name the service without quoting a page title verbatim.
+function brandTokenForHost(host: string | null | undefined): string | null {
+  if (!host) return null
+  const token = normalizeForLeakCheck(shortDomainLabel(host))
+  return token.length >= 2 ? token : null
+}
+
+// True when `label` looks like it was lifted from — or names — an
+// entertainment/social/adult service the user only peeked at inside this block.
+// Catches the AI-labeler case where the model saw a Netflix/YouTube tab in the
+// evidence and emitted "Watching Netflix" as the headline. timeline.md §3.5: a
+// work block (work-app dominant OR overall intent is a focused category — a
+// folded §3.2 peek leaves the block focused work) is never named after
+// streaming; the open tab is evidence, not the headline.
 function labelIsBrowserContentLeak(label: string, block: WorkContextBlock): boolean {
-  if (!blockHasWorkAppDominance(block)) return false
+  if (!blockHasWorkAppDominance(block) && !FOCUSED_CATEGORIES.includes(block.dominantCategory)) return false
   const normLabel = normalizeForLeakCheck(label)
   if (!normLabel) return false
   for (const page of block.pageRefs) {
-    if (!isHostBlockedForAppsRail(page.domain ?? page.host ?? null)) continue
+    const host = page.domain ?? page.host ?? null
+    if (!isHostBlockedForAppsRail(host)) continue
+    const brand = brandTokenForHost(host)
+    if (brand && new RegExp(`(^| )${brand}( |$)`).test(normLabel)) return true
     const candidates = [page.pageTitle, page.displayTitle].filter((value): value is string => Boolean(value))
     for (const candidate of candidates) {
       const norm = normalizeForLeakCheck(candidate)
@@ -3178,12 +3277,22 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   // not a label.
   if (!isPageLabelCompatible(block)) return null
 
-  // F1: even on a block whose dominantCategory is page-label-compatible (or
-  // was rewritten to 'entertainment' by the top-artifact override), reject
-  // entertainment/social/adult pages as the label when the user actually
-  // spent most of the block in non-browser work apps. The IDE/terminal time
-  // is what they were doing; the open tab is incidental.
+  // timeline.md §3.5: a block with real non-browser work in it (an editor, a
+  // terminal, Word) is named after that work, never after a co-occurring web
+  // page. The page is a peek; the work is the headline. Genuine document
+  // artifacts already returned above; everything else defers to the AI/evidence
+  // name. Page/domain labels survive only for browsing/research/AI blocks whose
+  // page genuinely *is* the activity.
+  if (blockHasWorkAppDominance(block)) return null
+
+  // F1 + timeline.md §3.5: reject entertainment/social/adult pages as the label
+  // on any work block — whether the user spent most of the block in non-browser
+  // work apps, OR the block's overall intent is focused work (its dominant
+  // category is a focused category). A folded Netflix/X peek (§3.2) is evidence
+  // inside the block, never its headline. The IDE/terminal/AI-tool time is what
+  // they were doing; the open tab is incidental.
   const workAppDominant = blockHasWorkAppDominance(block)
+    || FOCUSED_CATEGORIES.includes(block.dominantCategory)
   const firstAllowedPage = block.pageRefs.find((page) => {
     const host = page.domain ?? page.host ?? null
     if (isHostBlockedForLabel(host)) return false
@@ -3192,7 +3301,7 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   })
   const rawPageLabel = firstAllowedPage?.displayTitle ?? firstAllowedPage?.pageTitle
   const pageLabel = usefulDerivedLabel(rawPageLabel)
-  if (pageLabel && !looksLikeBrowserTabTitle(pageLabel)) return pageLabel
+  if (pageLabel && !looksLikeBrowserTabTitle(pageLabel) && !looksLikeSearchResultTitle(pageLabel)) return pageLabel
 
   const firstAllowedSite = block.websites.find((site) => {
     if (isHostBlockedForLabel(site.domain)) return false
@@ -3940,6 +4049,50 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
+// timeline.md §4: the live day, before it is analyzed, is ONE provisional block
+// per idle-bounded stretch — labelled neutrally "Active now", never given a
+// speculative per-activity intent name (naming live is how a transcription
+// session got stamped "Software Development Block"). It still carries full
+// evidence so the detail panel works; it just isn't named or AI-analyzed. The
+// provisional blocks finalize into real named blocks when the user runs Analyze
+// Day, on the next day's open, or via nightly consolidation.
+function buildProvisionalLiveBlocks(
+  db: Database.Database,
+  sessions: AppSession[],
+): WorkContextBlock[] {
+  if (sessions.length === 0) return []
+  const context = buildTimelineContext(db, sessions)
+  const segments = coarseSegmentsFromSessions(db, sessions)
+  const coarse = segments.length > 0
+    ? segments
+    : [{ sessions, boundedBeforeGap: false, boundedAfterGap: false }]
+
+  return coarse.map((segment, index) => {
+    const candidate: CandidateBlock = {
+      sessions: segment.sessions,
+      formation: 'heuristic',
+      boundedBeforeGap: segment.boundedBeforeGap,
+      boundedAfterGap: segment.boundedAfterGap,
+    }
+    const block = buildBlockFromCandidate(candidate, db, context)
+    const isLastStretch = index === coarse.length - 1
+    const containsLiveSession = segment.sessions.some((session) => session.id === -1)
+    return {
+      ...block,
+      provisional: true,
+      isLive: isLastStretch && containsLiveSession,
+      label: {
+        ...block.label,
+        current: 'Active now',
+        source: 'rule' as const,
+        confidence: 0,
+        override: null,
+        aiSuggested: null,
+      },
+    }
+  })
+}
+
 export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -4220,12 +4373,33 @@ function rawWorkLabelForBlock(block: WorkContextBlock): string {
   }
 
   // Last resort: name the category. "Development" reads far better than
-  // "Untitled block" as a floor, and it agrees with the badge. Only genuinely
-  // contentless blocks (system/uncategorized) stay "Untitled block".
+  // "Untitled block" as a floor, and it agrees with the badge.
   if (block.dominantCategory !== 'uncategorized' && block.dominantCategory !== 'system') {
     return prettyCategory(block.dominantCategory)
   }
-  return 'Untitled block'
+
+  // timeline.md §3.5 + invariant 8: even when intent can't be derived, name from
+  // the evidence we DO have — never "Computer activity", "Uncategorized", or
+  // "Untitled". Build an honest title from the real apps the user was in, e.g.
+  // "Cursor, Warp, and Terminal — focused work".
+  return evidenceBasedFallbackLabel(block)
+}
+
+// Honest, evidence-based name for a block whose intent we can't read: the real
+// apps the user was in, never a giving-up word. timeline.md §3.5 / invariant 8.
+function evidenceBasedFallbackLabel(block: WorkContextBlock): string {
+  const appNames = block.topApps
+    .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
+    .map((app) => app.appName.trim())
+    .filter((name, index, names) => name.length > 0 && names.indexOf(name) === index)
+    .slice(0, 3)
+  if (appNames.length === 0) return 'Computer time'
+  const list = appNames.length === 1
+    ? appNames[0]
+    : `${appNames.slice(0, -1).join(', ')} and ${appNames[appNames.length - 1]}`
+  return appCategoryIsFocused(block.dominantCategory) || appNames.length >= 2
+    ? `${list} — focused work`
+    : list
 }
 
 export function fallbackNarrativeForBlock(block: WorkContextBlock): string {
@@ -4285,7 +4459,19 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
+  // timeline.md §4: today, before it has been analyzed, shows as provisional
+  // "Active now" stretches — not named per-activity blocks. The day finalizes
+  // when it is materialized: Analyze Day (a materialize request) persists named
+  // blocks, after which passive reads see those persisted blocks and render the
+  // real segmentation. So a day is provisional only while it has never been
+  // materialized and the nightly job hasn't processed it.
+  const isLiveProvisionalDay = dateStr === localDateString()
+    && !(options.materialize ?? false)
+    && validPersistedTimelineBlockCount(db, dateStr) === 0
+    && !persistedDayWasProcessed(db, dateStr)
+  const blocks = isLiveProvisionalDay
+    ? buildProvisionalLiveBlocks(db, sessions)
+    : buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
