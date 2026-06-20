@@ -3225,16 +3225,15 @@ function normalizeForLeakCheck(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-// The registrable brand token of a host: netflix.com → "netflix",
-// studio.youtube.com → "youtube". Used to catch entertainment labels that name
-// the service without quoting a page title verbatim ("Watching Netflix").
+// The brand token of a host: netflix.com → "netflix", studio.youtube.com →
+// "youtube", bbc.co.uk → "bbc". Reuses the curated website-label map so it
+// handles compound TLDs and short brands a bare domain split gets wrong (which
+// otherwise let "x"/"hbo" slip past the leak guard). Used to catch entertainment
+// labels that name the service without quoting a page title verbatim.
 function brandTokenForHost(host: string | null | undefined): string | null {
   if (!host) return null
-  const clean = host.toLowerCase().replace(/^www\./, '').split(':')[0]
-  const parts = clean.split('.').filter(Boolean)
-  if (parts.length < 2) return null
-  const token = parts[parts.length - 2]
-  return token.length >= 4 ? token : null
+  const token = normalizeForLeakCheck(shortDomainLabel(host))
+  return token.length >= 2 ? token : null
 }
 
 // True when `label` looks like it was lifted from — or names — an
