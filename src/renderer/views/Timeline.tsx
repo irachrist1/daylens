@@ -898,7 +898,9 @@ function BlockInspector({
       />
     ),
     onOpen: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? undefined : () => void openArtifact(artifact),
-    offTask: isOffTaskCategory(block.dominantCategory) && false,
+    // A page artifact on a leisure host (a YouTube/Netflix tab that leaked into
+    // the block's evidence) is a side trip, mirroring how site rows are routed.
+    offTask: kindForDomain(artifact.host) === 'leisure',
   }))
   // Sites already represented by an artifact row are not repeated.
   const artifactHosts = new Set(block.topArtifacts.map((a) => a.host?.toLowerCase()).filter(Boolean) as string[])

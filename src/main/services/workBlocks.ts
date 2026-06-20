@@ -336,12 +336,16 @@ function dominantFocusedCategoryFromDistribution(distribution: Partial<Record<Ap
   if (focusedEntries.length === 0) return null
 
   // timeline.md §3.6: the category comes from the block's *overall* intent, not
-  // a single app or tab. Weigh the SUM of focused work (coding + writing + AI
-  // tools + …) against the whole block — a work stretch with a Netflix/X peek
-  // folded in is still a work block, even when no single work sub-category alone
-  // clears the bar. The largest focused sub-category names the block.
+  // a single app or tab. The largest focused sub-category names the block when
+  // either (a) it alone clears the bar — the original rule — or (b) focused work
+  // is the *majority* of the block, so a stretch split across coding + writing +
+  // AI tools with a brief Netflix/X peek folded in still reads as work. The
+  // majority test is what stops a genuinely leisure-dominant block (e.g. 65%
+  // entertainment, 35% scattered work) from being mislabeled as work.
   const focusedTotal = focusedEntries.reduce((sum, [, seconds]) => sum + seconds, 0)
-  return focusedTotal / total >= 0.3 ? focusedEntries[0][0] : null
+  const largestFocusedShare = focusedEntries[0][1] / total
+  if (largestFocusedShare >= 0.3 || focusedTotal / total >= 0.5) return focusedEntries[0][0]
+  return null
 }
 
 function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
@@ -3159,9 +3163,11 @@ function looksLikeBrowserTabTitle(value: string): boolean {
 // evidence-based name (or the AI's intent name) instead.
 function looksLikeSearchResultTitle(value: string): boolean {
   const trimmed = value.trim()
+  // The engine suffix ("… - Google Search") and the "Search results …" page
+  // prefix are the real results-page shapes. Kept narrow so a genuine title
+  // that merely mentions search ("Improving Google Search ranking") is not lost.
   return /[-–—|·:]\s*(google|bing|duckduckgo|duck ?duck ?go|yahoo|brave|ecosia)\s+search\s*$/i.test(trimmed)
-    || /\b(google|bing) search\b/i.test(trimmed)
-    || /^search\b/i.test(trimmed)
+    || /^search results\b/i.test(trimmed)
 }
 
 // Categories where a browser page / website is the natural label source.
