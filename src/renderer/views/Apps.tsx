@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
-import type { AISurfaceSummary, AppActivityDigest, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
+import { ALL_TIME_DAYS } from '@shared/types'
+import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
+import { kindForDomain } from '@shared/workKind'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
@@ -11,7 +13,20 @@ import { formatDisplayAppName } from '../lib/apps'
 import { formatDuration, todayString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
 
-const DAYS_OPTIONS = [1, 7, 30] as const
+const DAYS_OPTIONS = [1, 7, 30, ALL_TIME_DAYS] as const
+
+// Stable work-first ordering: leisure (streaming/social) domains sink below the
+// rest while each group keeps its incoming duration order. Mirrors the recap's
+// ordering so the view and the AI agree (spec invariant 8).
+function partitionWorkFirst<T>(rows: T[], domain: (row: T) => string | null | undefined): { work: T[]; leisure: T[] } {
+  const work: T[] = []
+  const leisure: T[] = []
+  for (const row of rows) {
+    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
+    else work.push(row)
+  }
+  return { work, leisure }
+}
 
 const CATEGORY_LABELS: Record<AppCategory, string> = {
   development: 'Development',
@@ -37,7 +52,7 @@ function categoryLabel(category: AppCategory): string {
 function liveAwareSummaries(
   summaries: AppUsageSummary[],
   live: LiveSession | null,
-  days: (typeof DAYS_OPTIONS)[number],
+  days: number,
 ): AppUsageSummary[] {
   if (!live) return summaries
 
@@ -73,35 +88,6 @@ function liveAwareSummaries(
   ].sort((left, right) => right.totalSeconds - left.totalSeconds)
 }
 
-
-function normalizedActivityLabel(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
-
-function detailSummary(detail: AppDetailPayload, selectedAppName: string): string {
-  const blockLabels = detail.blockAppearances
-    .slice(0, 3)
-    .map((block) => block.label)
-    .filter(Boolean)
-    .filter((label) => normalizedActivityLabel(label) !== normalizedActivityLabel(selectedAppName))
-    .filter((label, index, labels) => labels.indexOf(label) === index)
-
-  const artifacts = detail.topArtifacts
-    .slice(0, 3)
-    .map((artifact) => artifact.displayTitle)
-    .filter(Boolean)
-
-  const paired = detail.pairedApps
-    .slice(0, 3)
-    .map((app) => app.displayName)
-    .filter(Boolean)
-
-  const parts: string[] = []
-  if (blockLabels.length > 0) parts.push(`Most often part of ${blockLabels.join(', ')}`)
-  if (artifacts.length > 0) parts.push(`Key artifacts include ${artifacts.join(', ')}`)
-  if (paired.length > 0) parts.push(`Often used alongside ${paired.join(', ')}`)
-  return parts.join('. ') || 'Daylens needs more context to describe this tool.'
-}
 
 function appMetricSentence(totalSeconds: number, sessionCount?: number): string {
   const sessions = sessionCount ?? 0
@@ -205,7 +191,6 @@ export default function Apps() {
   const appsResource = useProjectionResource<{
     summaries: AppUsageSummary[]
     live: LiveSession | null
-    digest: AppActivityDigest[]
   }>({
     scope: 'apps',
     dependencies: [days, dateMode ? selectedDate : null],
@@ -217,29 +202,13 @@ export default function Apps() {
         ? (isAppsToday ? ipc.db.getAppSummaries(1) : ipc.db.getAppSummariesForDate(selectedDate))
         : ipc.db.getAppSummaries(days)
       const liveP = isAppsToday ? ipc.tracking.getLiveSession() : Promise.resolve(null)
-      // Past days and today (raw) skip the narrative-shaped digest fetch —
-      // those panels render finalized projections or raw totals, never the
-      // narrative-driven digest.
-      const digestP = isAppsPastDay || isAppsToday
-        ? Promise.resolve([] as AppActivityDigest[])
-        : ipc.db.getAppActivityDigest(days).catch(() => [] as AppActivityDigest[])
-      const [summaries, live, digest] = await Promise.all([summariesP, liveP, digestP])
+      const [summaries, live] = await Promise.all([summariesP, liveP])
       return {
         summaries: summaries as AppUsageSummary[],
         live: live as LiveSession | null,
-        digest: digest as AppActivityDigest[],
       }
     },
   })
-
-  const digestByApp = useMemo(() => {
-    const map = new Map<string, AppActivityDigest>()
-    for (const entry of appsResource.data?.digest ?? []) {
-      map.set(entry.canonicalAppId, entry)
-      map.set(entry.bundleId, entry)
-    }
-    return map
-  }, [appsResource.data])
 
   const summaries = useMemo(
     () => liveAwareSummaries(appsResource.data?.summaries ?? [], appsResource.data?.live ?? null, days),
@@ -357,7 +326,7 @@ export default function Apps() {
     : `${days}d:${todayString()}`
   const selectedRangeLabel = dateMode
     ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
-    : `last ${days} days`
+    : (days >= ALL_TIME_DAYS ? 'all time' : `last ${days} days`)
   const detail = detailResource.data && detailResource.data.canonicalAppId === selectedCanonicalId
     && detailResource.data.rangeKey === expectedRangeKey
     ? detailResource.data
@@ -542,7 +511,7 @@ export default function Apps() {
             }}>
               {dateMode
                 ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate))
-                : `Last ${days} days`}
+                : (days >= ALL_TIME_DAYS ? 'All time' : `Last ${days} days`)}
             </div>
             <button
               type="button"
@@ -618,7 +587,7 @@ export default function Apps() {
                     fontWeight: 700,
                   }}
                 >
-                  {option === 1 ? 'Day' : `${option}d`}
+                  {option === 1 ? 'Day' : option >= ALL_TIME_DAYS ? 'All' : `${option}d`}
                 </button>
               ))}
             </div>
@@ -709,11 +678,11 @@ export default function Apps() {
                   {items.map((summary) => {
                     const key = summary.canonicalAppId ?? summary.bundleId
                     const selected = key === selectedAppId
-                    const digest = digestByApp.get(summary.canonicalAppId ?? summary.bundleId)
-                      ?? digestByApp.get(summary.bundleId)
-                    const activityHeadline = digest?.topBlockLabel || digest?.topArtifactTitle || null
+                    // Invariant 1: the bold title is ALWAYS the real app name —
+                    // never a block label, page, or video title. The category
+                    // is the quiet section header above; the subtitle carries
+                    // time and a sane session count.
                     const appName = formatDisplayAppName(summary.appName)
-                    const minutesLine = `${appName} · ${formatDuration(summary.totalSeconds)}${summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}`
                     return (
                       <button
                         key={key}
@@ -731,26 +700,13 @@ export default function Apps() {
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                           <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={30} />
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            {activityHeadline ? (
-                              <>
-                                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>
-                                  {activityHeadline}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 4, lineHeight: 1.3 }}>
-                                  {minutesLine}
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3 }}>
-                                  {appName}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
-                                  {formatDuration(summary.totalSeconds)}
-                                  {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
-                                </div>
-                              </>
-                            )}
+                            <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {appName}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
+                              {categoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
+                              {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
+                            </div>
                           </div>
                         </div>
                       </button>
@@ -908,9 +864,18 @@ export default function Apps() {
                     )}
                   </div>
                   <>
+                    {/* Deterministic metric always; the AI recap is appended only
+                        after Generate (spec 4.3) — the real detail lives in the
+                        sections below and never waits on AI. */}
                     <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)} {narrative?.summary || (detail ? detailSummary(detail, formatDisplayAppName(selectedSummary.appName)) : 'Loading app context…')}
+                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)}
+                      {narrative?.summary ? ` ${narrative.summary}` : ''}
                     </p>
+                    {!narrative && !isUserGenerating && !currentGenerationStatus && narrativeSupported && (
+                      <p style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
+                        The sites and pages below are computed from your activity. Press Generate for a written recap.
+                      </p>
+                    )}
                     {deleteActivityError && (
                       <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
                         Could not delete activity: {deleteActivityError}
@@ -986,6 +951,88 @@ export default function Apps() {
                   // "Daylens development × 14 sessions" instead.
                   const rollups = detail.blockMemoryRollups ?? []
                   const useRollup = rollups.some((row) => row.patternId && row.sessionCount >= 2)
+
+                  // Work surfaces first (spec invariant 8): split domains and
+                  // pages into a primary work list and a quieter "Off to the
+                  // side" group for streaming/social. Each group keeps its
+                  // duration order; nothing is hidden, only deprioritized.
+                  const domainSplit = partitionWorkFirst((detail.topDomains ?? []).slice(0, 8), (d) => d.domain)
+                  const pageSplit = partitionWorkFirst(detail.topPages.slice(0, 8), (p) => p.domain)
+
+                  const offToTheSideSubhead = (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px', color: 'var(--color-text-tertiary)' }}>
+                      <div style={{ flex: 1, height: 1, background: 'var(--color-border-ghost)' }} />
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Off to the side</span>
+                      <div style={{ flex: 1, height: 1, background: 'var(--color-border-ghost)' }} />
+                    </div>
+                  )
+
+                  const renderDomainRow = (entry: NonNullable<AppDetailPayload['topDomains']>[number]) => (
+                    <div key={entry.domain} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <EntityIcon artifactType="page" domain={entry.domain} size={26} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <InlineRevealText
+                          text={entry.domain}
+                          style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                        />
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                          {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
+                          {entry.topTitle ? ` · ${entry.topTitle.slice(0, 60)}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                        {formatDuration(entry.totalSeconds)}
+                      </div>
+                      <DeleteIconButton
+                        label={`Delete activity for ${entry.domain}`}
+                        busy={deletingActivityKey === `domain:${entry.domain}`}
+                        onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
+                      />
+                    </div>
+                  )
+
+                  const renderPageRow = (page: AppDetailPayload['topPages'][number]) => (
+                    <div key={page.id} style={{ display: 'flex', alignItems: 'start', gap: 10, width: '100%' }}>
+                      <button
+                        type="button"
+                        onClick={() => void openArtifact(page)}
+                        disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'start',
+                          gap: 10,
+                          flex: 1,
+                          minWidth: 0,
+                          padding: 0,
+                          border: 'none',
+                          background: 'transparent',
+                          textAlign: 'left',
+                          cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
+                        }}
+                      >
+                        <EntityIcon artifactType="page" domain={page.domain} url={page.url} size={28} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <InlineRevealText
+                            text={page.displayTitle}
+                            style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                          />
+                          <InlineRevealText
+                            text={page.domain}
+                            style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
+                          />
+                        </div>
+                      </button>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                        {formatDuration(page.totalSeconds)}
+                      </div>
+                      <DeleteIconButton
+                        label={`Delete activity for ${page.displayTitle}`}
+                        busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
+                        onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
+                      />
+                    </div>
+                  )
+
                   return (
                     <>
                       {useRollup && rollups.length > 0 && (
@@ -1114,135 +1161,41 @@ export default function Apps() {
                         </section>
                       )}
 
-                      {detail.topDomains && detail.topDomains.length > 0 && (
+                      {(domainSplit.work.length > 0 || domainSplit.leisure.length > 0) && (
                         <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
                           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
                             Time by domain
                           </div>
                           <div style={{ display: 'grid', gap: 10 }}>
-                            {detail.topDomains.slice(0, 8).map((entry) => (
-                              <div
-                                key={entry.domain}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 10,
-                                }}
-                              >
-                                <EntityIcon
-                                  artifactType="page"
-                                  domain={entry.domain}
-                                  size={26}
-                                />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={entry.domain}
-                                    style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                  />
-                                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                                    {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
-                                    {entry.topTitle ? ` · ${entry.topTitle.slice(0, 60)}` : ''}
-                                  </div>
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(entry.totalSeconds)}
-                                </div>
-                                <DeleteIconButton
-                                  label={`Delete activity for ${entry.domain}`}
-                                  busy={deletingActivityKey === `domain:${entry.domain}`}
-                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
-                                />
-                              </div>
-                            ))}
+                            {domainSplit.work.map(renderDomainRow)}
                           </div>
+                          {domainSplit.leisure.length > 0 && (
+                            <>
+                              {domainSplit.work.length > 0 && offToTheSideSubhead}
+                              <div style={{ display: 'grid', gap: 10 }}>
+                                {domainSplit.leisure.map(renderDomainRow)}
+                              </div>
+                            </>
+                          )}
                         </section>
                       )}
 
-                      {detail.topPages.length > 0 && (
+                      {(pageSplit.work.length > 0 || pageSplit.leisure.length > 0) && (
                         <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
                           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
                             Pages visited
                           </div>
                           <div style={{ display: 'grid', gap: 12 }}>
-                            {detail.topPages.slice(0, 8).map((page) => (
-                              <div
-                                key={page.id}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'start',
-                                  gap: 10,
-                                  width: '100%',
-                                }}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => void openArtifact(page)}
-                                  disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'start',
-                                    gap: 10,
-                                    flex: 1,
-                                    minWidth: 0,
-                                    padding: 0,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    textAlign: 'left',
-                                    cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
-                                  }}
-                                >
-                                  <EntityIcon
-                                    artifactType="page"
-                                    domain={page.domain}
-                                    url={page.url}
-                                    size={28}
-                                  />
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <InlineRevealText
-                                      text={page.displayTitle}
-                                      style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                    />
-                                    <InlineRevealText
-                                      text={page.domain}
-                                      style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
-                                    />
-                                  </div>
-                                </button>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(page.totalSeconds)}
-                                </div>
-                                <DeleteIconButton
-                                  label={`Delete activity for ${page.displayTitle}`}
-                                  busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
-                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
-                                />
+                            {pageSplit.work.map(renderPageRow)}
+                          </div>
+                          {pageSplit.leisure.length > 0 && (
+                            <>
+                              {pageSplit.work.length > 0 && offToTheSideSubhead}
+                              <div style={{ display: 'grid', gap: 12 }}>
+                                {pageSplit.leisure.map(renderPageRow)}
                               </div>
-                            ))}
-                          </div>
-                        </section>
-                      )}
-
-                      {detail.pairedApps.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Often used with
-                          </div>
-                          <div style={{ display: 'grid', gap: 12 }}>
-                            {detail.pairedApps.slice(0, 8).map((app) => (
-                              <div key={app.canonicalAppId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <EntityIcon appName={app.displayName} bundleId={app.bundleId} canonicalAppId={app.canonicalAppId} size={28} />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={app.displayName}
-                                    style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                  />
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(app.totalSeconds)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
+                            </>
+                          )}
                         </section>
                       )}
                     </>

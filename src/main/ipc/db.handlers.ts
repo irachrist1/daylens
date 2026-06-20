@@ -66,7 +66,7 @@ import type {
   TimelineBlockReviewUpdate,
   WorkMemorySettingsSummary,
 } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
+import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -441,6 +441,11 @@ export function registerDbHandlers(): void {
     const [todayFrom, todayTo] = dayBounds(localDateString())
     if (days <= 1) {
       return getAppSummariesForRange(getDb(), todayFrom, todayTo)
+    }
+    // All-time: one query over all captured history. Avoids the day-by-day
+    // cache loop, which would iterate ~36,500 times for this sentinel.
+    if (days >= ALL_TIME_DAYS) {
+      return getAppSummariesForRange(getDb(), 0, todayTo)
     }
     return getCachedRangeAppSummaries(days)
   })

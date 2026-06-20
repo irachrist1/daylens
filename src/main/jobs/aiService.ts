@@ -44,6 +44,7 @@ import {
   type QuestionShape,
 } from '../lib/followUpSuggestions'
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
+import { kindForDomain } from '@shared/workKind'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
   fallbackGeneratedReportContent,
@@ -3894,7 +3895,7 @@ function buildWeekReviewBundle(weekStartStr: string): ReportContextBundle | null
   }
 }
 
-const APP_NARRATIVE_CACHE_VERSION = 2
+const APP_NARRATIVE_CACHE_VERSION = 3
 
 function appNarrativeHasStaleMetrics(summary: AISurfaceSummary | null): boolean {
   if (!summary) return false
@@ -3922,25 +3923,56 @@ function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): 
     canonicalAppId: detail.canonicalAppId,
     rangeKey: detail.rangeKey,
     topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => artifact.displayTitle),
-    pairedApps: detail.pairedApps.slice(0, 8).map((item) => item.displayName),
+    topDomains: (detail.topDomains ?? []).slice(0, 8).map((entry) => entry.domain),
+    topPages: detail.topPages.slice(0, 8).map((page) => page.displayTitle),
     blockAppearances: detail.blockAppearances.slice(0, 8).map((block) => `${block.blockId}:${block.label}:${block.startTime}:${block.endTime}`),
   }))
+}
+
+// Collapse rows that share a normalized display title, keeping the first
+// (highest-duration, since inputs arrive duration-sorted). Prevents the recap
+// from naming the same artifact/page twice ("Netflix, Netflix").
+function dedupeByTitle<T>(rows: T[], title: (row: T) => string): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const row of rows) {
+    const key = title(row).trim().toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+  return out
+}
+
+// Stable work-first ordering: rows whose domain is leisure (streaming/social)
+// sink below the rest, preserving each group's incoming duration order. Work
+// surfaces before leisure (spec invariant 8) without dropping anything.
+function workFirstByDomain<T>(rows: T[], domain: (row: T) => string | null | undefined): T[] {
+  const work: T[] = []
+  const leisure: T[] = []
+  for (const row of rows) {
+    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
+    else work.push(row)
+  }
+  return [...work, ...leisure]
 }
 
 function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContextBundle | null {
   const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
   if (detail.totalSeconds <= 0) return null
 
-  // B8: drop noise-level pairings (under 60 seconds) but keep everything
-  // else. The earlier 10%-of-total floor was too aggressive — for a 2h
-  // Safari today it required pairings of ≥12 minutes, which filtered out
-  // every legit pair and produced the self-contradicting "no paired
-  // applications captured" narrative even when the rail clearly shows
-  // Safari ran alongside Dia, Kiro, etc. The real fix for B8 (the model
-  // inventing apps like "Codex" that aren't in the data) is the closed-set
-  // prompt rule below: "Only name apps that appear in pairedApps." That
-  // rule prevents fabrication without stripping real signal.
-  const filteredPairedApps = detail.pairedApps.filter((item) => item.totalSeconds >= 60)
+  // DEV-89: "Often used with" is gone from the Apps view, and the recap no
+  // longer talks about app pairings — it narrates what was done, grounded in
+  // the deduped, work-first domains and pages the view itself shows.
+
+  // Dedupe artifacts by display title so the recap can never repeat an
+  // artifact ("Netflix, Netflix"): the same title under two different URLs/ids
+  // collapses to one entry, keeping the highest-duration row.
+  const dedupedArtifacts = dedupeByTitle(detail.topArtifacts, (a) => a.displayTitle)
+  // Work surfaces before leisure: order domains and pages so the model leads
+  // with the work the user came to do, mirroring the view's ordering.
+  const orderedDomains = workFirstByDomain(detail.topDomains ?? [], (d) => d.domain)
+  const orderedPages = workFirstByDomain(dedupeByTitle(detail.topPages, (p) => p.displayTitle), (p) => p.domain)
 
   // B3: collapse the 24-bucket per-hour distribution into the top whole-hour
   // ranges. The model previously confabulated sub-hour windows like
@@ -3963,8 +3995,9 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   // ~28k-token budget instead of fixed slices, so a heavy day's evidence is not
   // clipped to the first handful of items.
   const take = createEvidenceBudget()
-  const packedArtifacts = take(detail.topArtifacts, evidenceCost)
-  const packedPairedApps = take(filteredPairedApps, evidenceCost)
+  const packedArtifacts = take(dedupedArtifacts, evidenceCost)
+  const packedDomains = take(orderedDomains, evidenceCost)
+  const packedPages = take(orderedPages, evidenceCost)
   const packedBlockAppearances = take(detail.blockAppearances, evidenceCost)
 
   return {
@@ -3987,9 +4020,16 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
         subtitle: artifact.subtitle ?? artifact.host ?? artifact.path ?? null,
         duration: formatDuration(artifact.totalSeconds),
       })),
-      pairedApps: packedPairedApps.map((item) => ({
-        displayName: item.displayName,
-        duration: formatDuration(item.totalSeconds),
+      // Work-first domains and pages — the same evidence the view shows, in the
+      // same order, so the recap leads with work and never repeats an artifact.
+      topDomains: packedDomains.map((entry) => ({
+        domain: entry.domain,
+        duration: formatDuration(entry.totalSeconds),
+      })),
+      topPages: packedPages.map((page) => ({
+        title: page.displayTitle,
+        domain: page.domain,
+        duration: formatDuration(page.totalSeconds),
       })),
       blockAppearances: packedBlockAppearances.map((block) => ({
         label: block.label,
@@ -4273,24 +4313,27 @@ async function generateAppNarrative(
     'You are Daylens, writing the short narrative card for an app detail view.',
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
-    'Explain what this tool was helping with, which artifacts or contexts appeared there, and what it tended to pair with.',
+    'Explain what this tool was helping with and which artifacts, pages, or sites appeared there. Lead with the work (the domains and pages listed first); mention leisure only briefly if at all.',
     'Use only the deterministic evidence below.',
     'Do not write vanity metrics or generic app summaries.',
     // Citation floor: the summary must name at least two concrete entities
-    // from the structured evidence (block labels, artifacts, pages,
-    // domains, or paired apps). Evidence-thin apps must say so plainly —
-    // a filler sentence like "used for development work" is not acceptable.
-    'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page/domain names, or paired app names. If the evidence is too thin to cite two entities, say "Daylens has only thin app-specific signal for this app." and stop — do not pad with generic prose.',
+    // from the structured evidence (block labels, artifacts, pages, domains).
+    // Evidence-thin apps must say so plainly — a filler sentence like "used
+    // for development work" is not acceptable.
+    'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page titles, or domain names. If the evidence is too thin to cite two entities, say "Daylens has only thin app-specific signal for this app." and stop — do not pad with generic prose.',
+    // DEV-89 invariant 10: never repeat an artifact and never name one absent
+    // from the evidence. The evidence is already deduped; do not list the same
+    // site, page, or artifact twice ("Netflix, Netflix") or invent one.
+    'Never name the same domain, page, or artifact more than once, and never name one that is not in the evidence below.',
     // B4: totals are rendered in the UI header and footer. The narrative
     // must not restate them — the header recomputes live and the cached
     // narrative drifts within seconds. Talk about what was done, not how
     // long it took.
     'Do not state total time, session count, or "across N sessions" / "totaling Xh Ym" framings. Those numbers live in the UI; the narrative says what was done in the app.',
-    // B8: paired-app fabrication. The Warp narrative recently named "Codex"
-    // as a primary pair even though Codex was absent from the rail and the
-    // structured evidence. Treat `pairedApps` as the closed set of allowed
-    // names — no inference, no synonyms, no inventing.
-    'Only name apps that appear in `pairedApps`. Do not invent app names, infer related tools, or substitute synonyms. If `pairedApps` is empty or has only one entry, do not write a "paired with" sentence at all.',
+    // DEV-89: the recap no longer discusses which apps were used together —
+    // "Often used with" was removed. Do not write a "paired with" / "used
+    // alongside" sentence; talk about the work done in this app.
+    'Do not describe which other apps this one was used alongside. There is no paired-app evidence; focus on the sites, pages, and artifacts.',
     // B3: minute-precise window confabulation. The model previously wrote
     // "concentrated in the 9:00–9:46am window" — arithmetic that cannot fit
     // the total minutes claimed. `topHourBuckets` holds the only ranges
