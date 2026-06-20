@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { getSessionsForRange } from '../src/main/db/queries.ts'
+import { getAppSummariesForRange, getSessionsForRange } from '../src/main/db/queries.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
 
@@ -97,6 +97,34 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
   assert.equal(sessions.length, 1)
   assert.ok(!sessions.some((session) =>
     ['finder', 'loginwindow', 'usernotificationcenter'].includes(session.appName.toLowerCase())))
+  db.close()
+})
+
+test('overlapping capture rows are coalesced before engagement totals are counted', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-06-18'
+  const start = localMs(date, 10)
+  const end = localMs(date, 10, 30)
+
+  insertAppSession(db, {
+    bundleId: 'com.microsoft.VSCode',
+    appName: 'Cursor',
+    start,
+    end,
+    windowTitle: 'capture-foundation.ts — daylens',
+  })
+  insertAppSession(db, {
+    bundleId: 'com.microsoft.VSCode',
+    appName: 'Cursor',
+    start: start + 5_000,
+    end,
+    windowTitle: 'capture-foundation.ts — daylens',
+  })
+
+  const [summary] = getAppSummariesForRange(db, start, end)
+  assert.equal(summary.totalSeconds, 30 * 60)
+  assert.equal(summary.sessionCount, 1)
   db.close()
 })
 

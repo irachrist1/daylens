@@ -590,16 +590,17 @@ export function getAppSummariesForRange(
     `)
     .all(fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
-  const clippedSessions = rows
-    .filter((row) => !isUxNoise(row.app_name))
-    .map((row) => {
-      // User overrides first; fall through to catalog's default category for
-      // sessions that were captured before the catalog was fully populated.
-      const category = resolvedSessionCategory(row, overrides)
-      return clipRowToRange(row, fromMs, toMs, category)
-    })
-    .filter((session): session is AppSession =>
-      session !== null && session.durationSeconds >= MIN_CAPTURE_DWELL_SEC)
+  const clippedSessions = mergeSessions(
+    rows
+      .filter((row) => !isUxNoise(row.app_name))
+      .map((row) => {
+        // User overrides first; fall through to catalog's default category for
+        // sessions that were captured before the catalog was fully populated.
+        const category = resolvedSessionCategory(row, overrides)
+        return clipRowToRange(row, fromMs, toMs, category)
+      })
+      .filter((session): session is AppSession => session !== null),
+  ).filter((session) => session.durationSeconds >= MIN_CAPTURE_DWELL_SEC)
 
   const summaryMap = new Map<string, AppUsageSummary>()
   const lastEngagementEnd = new Map<string, number>()
