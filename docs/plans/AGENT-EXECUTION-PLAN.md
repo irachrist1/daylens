@@ -1,57 +1,53 @@
-# Daylens v2 — agent execution plan (packets, models, order)
+# Daylens v2 — agent execution plan (issues, models, order)
 
-Operating rules: [`/AGENTS.md`](../../AGENTS.md). Canonical plan:
-[`DAYLENS-V2-PLAN.md`](DAYLENS-V2-PLAN.md). This file says **who builds what, batched, in
-what order**, so the founder gets one notable testable feature per PR and tests between packets.
+The issue order. Read [`AGENTS.md`](../../AGENTS.md) first for how the loop works. Pick the
+lowest-numbered **unblocked** issue in the "Daylens v2" project (DEV-87 … DEV-92), plan it in
+the issue, build it, PR it, clear review, move it to In Review.
 
-## Model strengths (why these assignments)
+## Which model does which work
 
-- **Claude Opus 4.8** — SWE-bench Verified 88.6%; best at repository-level / cross-surface
-  rewrites; controllable. → the risky seam fixes.
-- **GPT-5.5 (high)** — long-horizon autonomous backend, aggregation, test harnesses, build-from-scratch.
-- **Sonnet 4.6** — fast, strong frontend + medium-scoped work.
-- **Composer 2.5 (Cursor)** — cheap/fast mechanical & UI patches (folded into packets, never solo micro-PRs).
+Match the model to the risk and shape of the work:
 
-Engines: **Codex** runs via Linear delegate (auto status). **Cursor** runs Opus 4.8 /
-Sonnet 4.6 / Composer 2.5 as background agents with Bugbot — pick the model per the table.
-Both branch from `main` and PR to `main`. (Claude is *not* a Linear delegate agent, so the
-Opus packets run as Cursor agents with Opus 4.8 selected.)
+- **Opus 4.8** — risky cross-surface work where one mistake breaks the invariants: the capture
+  foundation and block engine (DEV-87, DEV-88). When in doubt, this one.
+- **GPT-5.5** — backend, aggregation, resolvers, SQL: the AI resolver layer (DEV-90), frozen
+  snapshots and wrap math (DEV-91).
+- **Sonnet 4.6** — frontend and React: the Timeline/Apps/AI views, the wrap carousel, Settings
+  and onboarding UI (DEV-89, and the view layers of DEV-88/90/91/92).
+- **Composer 2.5** — mechanical, well-specified patches: renames, prop plumbing, deleting dead
+  code, label string changes.
 
-## Packets (build top-down; each = one PR = one testable feature)
+## The build order spine
 
-| # | Packet (issues) | Lead model | Engine | Depends on | What the founder tests |
-|---|---|---|---|---|---|
-| **P0** | Truth baseline — DEV-17 | GPT-5.5 | Codex | — | Saved real day/week matches your memory ±15m; the new checks fail on today's app |
-| **P1a** | Trustworthy blocks — DEV-22, DEV-19, DEV-18, DEV-20 | Opus 4.8 | Cursor | P0 | A coding day = few believable blocks; one duration everywhere; no `loginwindow` |
-| **P1b** | Day view tells the truth — DEV-23, DEV-24, DEV-21 | Sonnet 4.6 | Cursor | P1a | Open yesterday and nod; header = tracked/work/leisure; no leisure in "What mattered" |
-| **P2** | Corrections & invalidation — DEV-25 | Opus 4.8 | Cursor | P1a | Rename/merge sticks everywhere + survives re-analysis |
-| **P3** | Morning wedge — DEV-26, DEV-27 | Sonnet 4.6 | Cursor | P1b | Morning brief = one screen naming a real open thread; matching notification |
-| **P4** | Evening wrap — DEV-28 | Sonnet 4.6 | Cursor | P1b | ≤5 calm cards; 2 on a rest day; totals match the timeline |
-| **P5** | Timeline proof + week — DEV-30, DEV-29, DEV-31 | GPT-5.5 | Codex | P1b | Week totals agree + legend; re-analyze uses your model; future days look future |
-| **P6a** | Apps identity & attribution — DEV-32, DEV-33, DEV-34 | Sonnet 4.6 | Cursor | P1a | Safari is "Safari" in every period; Netflix under the browser, not Dia |
-| **P6b** | Apps detail & labels — DEV-35, DEV-36, DEV-37 | Sonnet 4.6 | Cursor | P6a | Detail loads without Generate; deduped pages; label overrides take effect |
-| **P7a** | AI spine — DEV-38, DEV-39, DEV-45 | Opus 4.8 | Cursor | P1a | "What did I work on today?" answers with real times; every AI surface uses your model |
-| **P7b** | AI features — DEV-40, DEV-41, DEV-42, DEV-44 | Sonnet 4.6 | Cursor | P7a | Tables + CSV; "turn into bullets" works; calm voice; client breakdown |
-| **P7c** | Chat state — DEV-43 | Opus 4.8 | Cursor | P7a | History survives Apps→AI; mid-generation switch never wipes; no duplicate rows |
-| **P8a** | Model authority & memory — DEV-46, DEV-48 | Opus 4.8 | Cursor | P7a | Memory shows varied earned categories; settings changes show their effect |
-| **P8b** | Clients & MCP — DEV-47, DEV-49 | GPT-5.5 | Codex | P8a | Add a client → "how much on X this week?" answers; MCP off by default in packaged build |
-| **P9** | Wraps — DEV-50 | GPT-5.5 | Codex | P5 | Weekly == chart == day rows; answer "what did I do last week/month?" from Daylens |
-| **P10** | Onboarding & trust — DEV-51, DEV-52 | Opus 4.8 | Cursor | all | Fresh-profile first-run proves capture; low-confidence items are marked + correctable |
+**Capture first, then everything fans out.** Nothing downstream is trustworthy until DEV-87 is
+merged — every view reads the same evidence object (one truth, three views), so blind capture
+poisons all of them. After capture: the Timeline and Apps and AI fan out; briefs/wraps need a
+trustworthy day and the resolvers; settings/onboarding cross-cut.
 
-Order: **P0 → P1a → P1b** (the wedge spine, do not reorder), then P2–P4 in parallel-safe
-order, then P5 → P6 → P7 → P8 → P9 → P10. One packet in flight per surface.
+```
+DEV-87 capture ──┬── DEV-88 timeline ──┐
+                 ├── DEV-89 apps        ├── DEV-91 briefs + wraps
+                 ├── DEV-90 AI ─────────┘
+                 └── DEV-92 settings + onboarding
+```
 
-Engine column below: "Cursor" = launch a Cursor background agent with the listed model;
-"Codex" = delegate the issue to Codex from Linear. All branch from `main`, PR to `main`.
+(The blocking relations in Linear encode this: DEV-87 blocks 88/89/90/92; DEV-88 and DEV-90
+block 91.)
 
-## Per-issue model (for reference / Cursor launch)
+## The issues
 
-Opus 4.8: DEV-22, 19, 25, 38, 45, 43, 48, 51, 52 · GPT-5.5: DEV-17, 18, 30, 33, 47, 50 ·
-Sonnet 4.6: DEV-23, 21, 26, 28, 29, 31, 32, 34, 35, 37, 40, 42, 44, 46 · Composer 2.5
-(folded into the Cursor packets above): DEV-20, 24, 27, 36, 39, 41, 49.
+| Issue | What it ships | Blocked by | What the user tests |
+|---|---|---|---|
+| **DEV-87** | **Capture foundation** — window-title + permission capture, OS-based browser discovery (Zen), the rich evidence object, 10s dwell floor, system-noise + day-boundary rules. | — | Zen browsing shows up; blocks carry real window/page context; sessions are tens not thousands; no `loginwindow`. |
+| **DEV-88** | **Timeline** — ~8-block segmentation, tiered intent naming + unknown-intent rule, merge + absorb, proportional sizing, provisional live block, recap replaces grades, corrections that stick. | DEV-87 | A real day reads as ~8 named blocks; a Netflix peek is absorbed; no Score/Drift; a rename survives re-analyze. |
+| **DEV-89** | **Apps** — real app-name titles every period (+ All-time), domain attribution to the hosting browser, deduped work-first pages, Today not empty, delete page/domain, no "often used with". | DEV-87 | Click Zen/Safari → right name, right domains, deduped pages, detail without Generate. |
+| **DEV-90** | **AI** — plan → resolve → phrase (tool-loop deleted), resolver set, tables, DOCX/PDF export, recall, chat state, model-from-Settings. | DEV-87 | "What did I do today?" → grounded answer; week → a table; report → a real doc; history survives a tab switch. |
+| **DEV-91** | **Briefs & wraps** — frozen daily snapshots, morning brief (2 notifications), evening wrap (≤5 / 2 cards), weekly + monthly + annual. | DEV-88, DEV-90 | A weekly wrap: card and write-up agree to the minute, reads like Wrapped, no score. |
+| **DEV-92** | **Settings & onboarding** — labels (all apps, auto-categorize, propagate), work memory (editable paragraph), MCP off in prod, clients, model selector, first-run that proves capture. | DEV-87 | Relabel an app → changes everywhere; edit the memory paragraph → it persists; onboarding proves capture before asking for trust. |
 
-## Merge cadence
-
-One PR per packet into `main`. The founder tests the packet's branch on their Mac, then
-merges — that merge is the only thing that lands on `main`. ~16 PRs total across the
-project, each a real feature, never a micro-PR.
+Each issue carries its own spec links, acceptance checklist, and the one user-facing test in
+its Linear description. Accessibility (keyboard + screen-reader path) and the visual quality
+gate are **not** separate work — every issue ships keyboard-completable and screenshot-verified.
+See [`docs/research/open-questions.md`](../research/open-questions.md) for the cross-cutting
+decisions, [`docs/findings.md`](../findings.md) for why capture comes first, and
+[`docs/research/prior-art.md`](../research/prior-art.md) for the patterns behind the thresholds.

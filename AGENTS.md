@@ -1,104 +1,124 @@
-# Daylens v2 — Autonomous agent operating contract
+# Daylens — how agents work here
 
-**Read this first, every run. It is binding for every coding agent (Cursor background
-agents, Codex, Claude Code) working this repo.** It is also read by Cursor and Codex
-automatically. If anything here conflicts with a tool default, this file wins.
+Read this before you touch the repo. Then read [`PRODUCT.md`](PRODUCT.md) (the vision),
+[`docs/plans/DAYLENS-V2-PLAN.md`](docs/plans/DAYLENS-V2-PLAN.md) (the 12 invariants), the
+specs in [`docs/specs/`](docs/specs/), and
+[`docs/plans/AGENT-EXECUTION-PLAN.md`](docs/plans/AGENT-EXECUTION-PLAN.md) (the issue
+order, models, build spine). The invariants are physics — never break one to ship a feature.
 
-The founder's only job is to **test**. Everything else — code, tests, quality, Linear
-updates, PRs — is yours. Do not ask the founder questions mid-run. Make reasonable
-decisions, document them, and surface only when a packet is ready to test.
+## The goal
 
----
+Daylens is broken in the ways listed in the plan. Your job is to take it from there to the
+PMF vision by completing the Linear issues in the "Daylens v2" project. One issue at a time
+turns into one tested feature. You are done when the issues are done and the user has
+confirmed each one works on a real day.
 
-## 1. The goal (your standing objective)
+## The loop
 
-Take Daylens from a half-working build to the PMF vision by completing the 36 issues in
-the Linear project **Daylens v2** (workspace `irachrist1`). Source of truth:
+You run this loop without stopping to ask questions:
 
-- `docs/plans/DAYLENS-V2-PLAN.md` — the canonical plan (north star; read the relevant § only).
-- `docs/plans/AGENT-EXECUTION-PLAN.md` — **who builds what**: model routing + work packets + order.
-- Each Linear issue — its own self-contained spec (Problem / Checks it should pass).
+1. **Pick the issue.** Work the "Daylens v2" project — issues **DEV-87 … DEV-92**, each one a
+   whole shippable PR. Take the lowest-numbered issue that is **not blocked** (Linear shows the
+   blockers; DEV-87 unblocks the rest). If nothing is unblocked, say so and stop.
+2. **Branch from `main`.** `git fetch` and branch from the latest `main`:
+   `agent/dev-<n>-<slug>`. Never commit to `main`.
+3. **Plan first, in the issue.** Before writing code, read the issue's spec links and the
+   invariants (they are physics — never break one to ship), then comment your plan on the issue:
+   the files/systems you'll change, the approach, decisions where the spec is silent, and the
+   edge cases you see. **If the issue involves visual or UX design, your plan pauses here for
+   references — see "Design work" below.** Move the issue to **In Progress**.
+4. **Build it.** Make reasonable calls when the spec is silent — document them in the PR, don't
+   stop to ask. Be ruthless about deleting legacy code; if you're not adding it back, it wasn't
+   needed. Tick the issue's acceptance checklist as each item lands.
+5. **Verify it for real** (quality gate below) — including the issue's "one test you run."
+6. **Open a PR and clear review.** Open the PR, move the issue to **In Review**, and comment in
+   the format below. Then **resolve every comment the automated reviewers leave** (Bugbot,
+   CodeRabbit, `/code-review` — whatever runs on the PR): fix it, or reply with why it's
+   intentional, and re-request review. The issue is not ready until every reviewer thread is
+   resolved and the acceptance checklist is fully ticked.
+7. **Repeat** with the next unblocked issue.
 
-You are done with the whole goal only when every issue is **Done**, and only the founder
-marks Done.
+## Definition of done — the ship checklist
 
-## 2. The loop (how you run for hours, unattended)
+An issue (DEV-87 … DEV-92) is ready for the user to test only when **all** of these are true:
 
-0. **Branch check — do this FIRST, every run, before writing anything.** Run
-   `git fetch origin`, then create your working branch from the latest `origin/main`:
-   `git checkout -B agent/<packet-id> origin/main`. Confirm with `git branch --show-current`
-   that you are on that branch — NOT on `main`, NOT on a stale branch. Never commit to `main`
-   directly. If you are not on a fresh branch off `main`, stop and fix it before continuing.
-1. Open `AGENT-EXECUTION-PLAN.md`. Find the **lowest-numbered packet that is not yet merged
-   and whose dependencies are merged**. That is your packet.
-2. Confirm you are the assigned model/engine for it. If not, stop — the right agent takes it.
-3. Move every issue in the packet to **In Progress** in Linear.
-4. Build the whole packet (see §3–§5). Iterate until the quality gate (§5) is green.
-5. Open ONE PR for the packet (§4), tag `/bugbot`, address its findings.
-6. Move the packet's issues to **In Review** + add the `ready-to-test` label, and comment
-   on each (§6).
-7. Pick up the next eligible packet and repeat. Keep going without pausing for the founder.
+- [ ] Every box in the issue's **acceptance checklist** is ticked and true in the running app.
+- [ ] The issue's **"one test you run"** passes when you do it by hand in the app.
+- [ ] `npm run typecheck` and `npm run lint` are clean; `npm test` is green.
+- [ ] You **drove the real app** (`npm start`) and attached **before/after screenshots** to the
+      issue — green tests are not proof.
+- [ ] No spec **invariant** is broken to ship the feature.
+- [ ] **Every automated-reviewer comment** on the PR is resolved — fixed or answered — and review
+      re-requested.
+- [ ] The Linear comment (What changed / What to test / Evidence) is posted and the issue is **In
+      Review** — never Done. Only the user sets Done, after testing on a real day.
 
-**Never run two packets that touch the same area at the same time on `v2`** — it creates
-merge chaos. One packet in flight per surface.
+The user's only job is to test. Everything up to the test is yours. Never ask the user a
+question mid-run — make the call, write down why, and surface it when the issue is ready.
 
-## 3. Work in packets — never micro-PRs
+## Design work — ask before you invent a look
 
-- A **packet = 2+ related issues** that together produce **one notable, testable feature**.
-  Packets are defined in `AGENT-EXECUTION-PLAN.md`. Do the whole packet in one run.
-- **Do not** open a PR for a single small issue, and never a ~100-line PR the founder can't
-  meaningfully test. If a packet ends up trivial, fold the next related issue in so the
-  founder always has **at least one notable feature to test** per PR.
-- A large standalone architectural rewrite (e.g. the block-fact contract, corrections
-  system, chat-state rewrite) may be its own packet — those are substantial enough alone.
+The specs define **behavior**, not **aesthetics**. They say what a screen shows, its states,
+and how it acts — never the visual style. That is on purpose.
 
-## 4. Branching & PRs (the founder is a 1–3 branch person, main-centric)
+**If an issue involves visual or UX design — a new screen, a redesigned panel, onboarding, the
+wrap carousel, the AI chat surface, the Apps layout — stop and ask Tonny for reference
+screenshots before you build the look.** "Here are three apps whose onboarding I like — which
+direction?" beats inventing one and getting it thrown out. Touchstones already named in the
+specs: **Raycast** (clean, native, keyboard-first), **Dia** (the morning-brief voice and feel),
+**Spotify Wrapped** (the wraps). Use them as a starting point, but get Tonny's actual
+screenshots and pick a direction with him **before** writing the UI — this is the one place you
+do pause and ask. Functional behavior never waits; the *look* always does.
 
-- **Base branch is `main`.** Branch from the latest `origin/main` per packet
-  (`agent/<packet-id>`) and open your PR back into `main`. Never push to `main` directly —
-  it is protected (PR + typecheck required).
-- **One packet → one PR** into `main`. Each PR is a whole testable feature, never a lone
-  micro-fix. Delete your branch after merge so live branches stay near zero.
-- **Tag `/bugbot` on every PR** and resolve its findings before requesting test.
-- The founder tests your branch on their Mac, then merges. That merge is the only thing
-  that lands on `main`.
+## Work whole issues, never micro-PRs
 
-## 5. Quality gate — nothing reaches the founder broken
+Each issue **DEV-87 … DEV-92 is already one whole testable feature = one PR** — a PR the user
+can open the app and check. Ship the whole issue, not a PR per file or per checklist line. If a
+change can't be tested on its own, it belongs with the rest of its issue.
 
-Before moving anything to In Review:
+## The quality gate — green tests are not truth
 
-- `npm test` and `npm run timeline:eval` pass. Typecheck passes. Lint clean.
-- For any UI/behavior change, **run the app and capture a screenshot** proving it — green
-  tests are NOT product truth (see the plan's Truth Rule). Compare against the named
-  failure screenshots in `docs/plans/screenshots/`.
-- Self-review your diff for correctness, reuse, and dead code. Fix it yourself.
-- If you genuinely cannot verify a thing live, leave the issue **In Progress**, add the
-  `unverified` label, and say exactly why. Code passing is not proof.
+`npm run typecheck` must pass. That's the floor, not the proof.
 
-## 6. Linear protocol (keep the founder's test queue clean)
+**Green `npm test` does not mean the feature works.** The only proof is the running app.
+For every issue:
 
-- Status flow: **Todo → In Progress** (on start) → **In Review** + `ready-to-test`
-  (done AND self-verified). 
-- **Never set an issue to Done.** Only the founder does, after testing. If the founder
-  sends it back, it returns to In Progress with their notes — fix and re-submit.
-- When you move a packet to In Review, comment on each issue with:
-  1. **What changed** (plain language).
-  2. **How to test** — copy the issue's "Checks it should pass" steps; add the exact
-     screen/path and any seed data needed.
-  3. **Evidence** — screenshot(s) + the PR link.
-- The founder filters on `ready-to-test` / the In Review column. That filtered list must
-  always be testable features, never half-work.
+- Drive the real Electron app (`npm start`).
+- Take screenshots of what you actually see — the timeline, the block, the chat answer.
+- Attach them to the Linear issue as evidence.
+- If you can't visually verify something, **say so plainly.** Never claim a screen works
+  when you haven't seen it work. "I couldn't reproduce this on a live day" is a real,
+  acceptable answer. A false "it works" is not.
 
-## 7. Hands-off rules
+## Linear protocol
 
-- Don't ask the founder anything mid-run. Resolve ambiguity from the plan + issue; if still
-  unclear, choose the simplest option that satisfies the issue's Checks and note it in the PR.
-- Don't burn the founder's attention on trivia. Batch, finish, then surface.
-- Plain language in all founder-facing text (Linear comments, PR descriptions). No jargon,
-  no meta-commentary. State the feature and how to test it.
+- Move an issue to **In Progress** when you start it.
+- Move it to **In Review** when the PR is open.
+- **Never set an issue to Done.** Only the user does that, after testing. Done means a human
+  confirmed it on a real day.
+- Comment on each issue when the PR is ready, in exactly this shape:
+  - **What changed for you** — the user-visible difference, plain English.
+  - **What to test** — numbered steps the user follows to verify.
+  - **Evidence** — the screenshots you took driving the app.
 
-## 8. Model routing
+## Commands that need human approval
 
-Each packet has an assigned model + engine in `AGENT-EXECUTION-PLAN.md`. Respect it — the
-assignment is based on each model's measured strengths (architecture vs. backend vs.
-frontend vs. cheap mechanical). If you are not that model, don't take the packet.
+These cost money, mutate data, or hit the AI providers. **Never run them without explicit
+human approval:**
+
+- `npm run test:behaviour`
+- `npm run ai:bench`
+- `npm run test:toolcalls`
+- `npm run test:entity-prompts`
+- Report regeneration (day/week/month recaps, wraps)
+- Work-memory backfills / rebuilds
+
+These are always safe and need no approval: `npm run typecheck`, `npm start` (running the
+app), reading code, taking screenshots. `npm run timeline:eval` is safe to read; it is a
+scored baseline, not a pass/fail gate.
+
+## Language
+
+Plain English. No role honorifics ("as requested, sir"), no agent-speak ("I shall now
+proceed to..."), no walls of text. Write like the specs are written — short, specific,
+grounded. Say what changed and what to test. That's it.
