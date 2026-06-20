@@ -10,7 +10,8 @@ import type { AppCategory, AppUsageSummary } from '@shared/types'
 import { classifyResult } from '../../services/tracking'
 import { isCategoryFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
-import { localDateString, localDayBounds } from '../../lib/localDate'
+import { localDateString } from '../../lib/localDate'
+import { ownedDayBounds } from '../../lib/dayOwnership'
 import { naturalizeProjectionLabel } from './chunk2Label'
 
 // Bump when segmentation or labeling logic changes. Reprojection rewrites
@@ -27,6 +28,7 @@ interface FocusEventRow {
   event_type:
     | 'app_activated'
     | 'app_deactivated'
+    | 'window_changed'
     | 'space_changed'
     | 'sleep'
     | 'wake'
@@ -100,7 +102,7 @@ export function projectDay(
     return { date, events: 0, sessions: 0, blocks: 0, skipped: true, reason: 'future' }
   }
 
-  const [from, to] = localDayBounds(date)
+  const [from, to] = ownedDayBounds(db, date)
   const events = db.prepare(`
     SELECT id, ts_ms, mono_ns, event_type, app_bundle_id, app_name,
            window_title, url, page_title, confidence
@@ -186,6 +188,10 @@ function foldSessions(events: FocusEventRow[], dayEnd: number): DerivedSessionRo
       case 'sleep':
       case 'lock': {
         close(ev.ts_ms)
+        break
+      }
+      case 'window_changed': {
+        if (open && ev.window_title) open.window_title = ev.window_title
         break
       }
       // wake / unlock / space_changed do not bound a session by themselves.
@@ -427,7 +433,7 @@ function writeProjection(
   sessions: DerivedSessionRow[],
   blocks: DerivedBlockDraft[],
 ): void {
-  const [from, to] = localDayBounds(date)
+  const [from, to] = ownedDayBounds(db, date)
   const tx = db.transaction(() => {
     db.prepare(`DELETE FROM derived_block_sessions WHERE block_id IN (
       SELECT id FROM derived_blocks WHERE date = ?

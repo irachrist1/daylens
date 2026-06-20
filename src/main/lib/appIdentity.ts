@@ -147,7 +147,7 @@ export function resolveCanonicalBrowser(browserBundleId: string | null | undefin
   const [baseId, profilePart] = browserBundleId.split(':', 2)
   const identity = resolveCanonicalApp(baseId, baseId)
   return {
-    canonicalBrowserId: identity.canonicalAppId,
+    canonicalBrowserId: identity.canonicalAppId ?? baseId.trim().toLowerCase(),
     browserProfileId: profilePart?.trim() || 'default',
   }
 }

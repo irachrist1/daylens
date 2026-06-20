@@ -38,10 +38,13 @@ function snapshot(overrides: Partial<ActiveBrowserWindowSnapshot> = {}): ActiveB
 
 test('frontmost Safari tab context is persisted as website evidence', () => {
   const db = createDb()
-  const tracker = new ActiveBrowserContextTracker(() => ({
-    url: 'https://www.youtube.com/watch?v=kJC1l4__UhE&t=2825s',
-    title: "Are These Apple's Next Products? - YouTube",
-  }))
+  const tracker = new ActiveBrowserContextTracker(
+    () => ({
+      url: 'https://www.youtube.com/watch?v=kJC1l4__UhE&t=2825s',
+      title: "Are These Apple's Next Products? - YouTube",
+    }),
+    () => true,
+  )
 
   tracker.sample(db, snapshot())
   tracker.sample(db, snapshot({ capturedAt: 1_800_000_010_000 }))
@@ -77,7 +80,7 @@ test('browser tab switches flush separate page visits', () => {
     url: 'https://chatgpt.com/c/first',
     title: 'Planning browser tracking',
   }
-  const tracker = new ActiveBrowserContextTracker(() => current)
+  const tracker = new ActiveBrowserContextTracker(() => current, () => true)
 
   tracker.sample(db, snapshot({ appName: 'Google Chrome', bundleId: 'chrome.exe', capturedAt: 1_800_000_000_000 }))
   current = {
@@ -85,7 +88,7 @@ test('browser tab switches flush separate page visits', () => {
     title: 'irachrist1/daylens',
   }
   tracker.sample(db, snapshot({ appName: 'Google Chrome', bundleId: 'chrome.exe', capturedAt: 1_800_000_012_000 }))
-  tracker.sample(db, snapshot({ appName: 'Google Chrome', bundleId: 'chrome.exe', capturedAt: 1_800_000_020_000 }))
+  tracker.sample(db, snapshot({ appName: 'Google Chrome', bundleId: 'chrome.exe', capturedAt: 1_800_000_022_000 }))
   tracker.flush(db, 1_800_000_025_000)
 
   const rows = db.prepare(`
@@ -100,3 +103,27 @@ test('browser tab switches flush separate page visits', () => {
   ])
 })
 
+test('a browser-page flicker under ten seconds is absorbed instead of becoming a visit', () => {
+  const db = createDb()
+  let current = {
+    url: 'https://github.com/irachrist1/daylens',
+    title: 'irachrist1/daylens',
+  }
+  const tracker = new ActiveBrowserContextTracker(() => current, () => true)
+  const at = (seconds: number) => 1_800_000_000_000 + seconds * 1_000
+
+  tracker.sample(db, snapshot({ capturedAt: at(0) }))
+  tracker.sample(db, snapshot({ capturedAt: at(10) }))
+  current = { url: 'https://x.com/home', title: 'Home / X' }
+  tracker.sample(db, snapshot({ capturedAt: at(20), windowTitle: 'Home / X' }))
+  current = { url: 'https://github.com/irachrist1/daylens', title: 'irachrist1/daylens' }
+  tracker.sample(db, snapshot({ capturedAt: at(25), windowTitle: 'irachrist1/daylens' }))
+  tracker.flush(db, at(30))
+
+  const rows = db.prepare(`
+    SELECT domain, duration_sec
+    FROM website_visits
+    ORDER BY visit_time ASC
+  `).all()
+  assert.deepEqual(rows, [{ domain: 'github.com', duration_sec: 30 }])
+})

@@ -54,7 +54,9 @@ import { inferWorkIntent } from '@shared/workIntent'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { localDayBounds, localDateString } from '../lib/localDate'
+import { ownedDayBounds } from '../lib/dayOwnership'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
+import { extractFilenames } from '../lib/windowTitleFilenames'
 import {
   normalizeUrlForStorage,
   normalizeWebsiteTitleForDisplay,
@@ -1937,6 +1939,110 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     })
 }
 
+function buildWindowTitleEvidence(
+  db: Database.Database,
+  startTime: number,
+  endTime: number,
+  sessions: AppSession[],
+): NonNullable<TimelineEvidenceSummary['windowTitles']> {
+  const grouped = new Map<string, NonNullable<TimelineEvidenceSummary['windowTitles']>[number]>()
+  let capturedRows: Array<{
+    ts_ms: number
+    app_bundle_id: string | null
+    app_name: string | null
+    window_title: string
+  }> = []
+  try {
+    capturedRows = db.prepare(`
+      SELECT ts_ms, app_bundle_id, app_name, window_title
+      FROM focus_events
+      WHERE source = 'nsworkspace_event'
+        AND event_type IN ('app_activated', 'window_changed', 'space_changed')
+        AND window_title IS NOT NULL
+        AND trim(window_title) <> ''
+        AND ts_ms >= ?
+        AND ts_ms < ?
+      ORDER BY ts_ms ASC, id ASC
+    `).all(startTime, endTime) as typeof capturedRows
+  } catch {
+    capturedRows = []
+  }
+
+  const titleIntervals = capturedRows.length > 0
+    ? capturedRows.map((row, index) => ({
+        title: row.window_title.trim(),
+        bundleId: row.app_bundle_id?.trim() || row.app_name?.trim() || 'unknown',
+        appName: row.app_name?.trim() || row.app_bundle_id?.trim() || 'Unknown app',
+        startTime: Math.max(startTime, row.ts_ms),
+        endTime: Math.min(endTime, capturedRows[index + 1]?.ts_ms ?? endTime),
+      }))
+    : sessions.map((session) => ({
+        title: session.windowTitle?.trim() ?? '',
+        bundleId: session.bundleId,
+        appName: session.appName,
+        startTime: session.startTime,
+        endTime: session.endTime ?? session.startTime + session.durationSeconds * 1_000,
+      }))
+
+  for (const interval of titleIntervals) {
+    const title = interval.title
+    if (!title || !titleLooksUseful(title)) continue
+    if (title.toLowerCase() === interval.appName.trim().toLowerCase()) continue
+    const totalSeconds = Math.max(1, Math.round((interval.endTime - interval.startTime) / 1_000))
+    const key = `${interval.bundleId}\u0000${title.toLowerCase()}`
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.startTime = Math.min(existing.startTime, interval.startTime)
+      existing.endTime = Math.max(existing.endTime, interval.endTime)
+      existing.totalSeconds += totalSeconds
+      continue
+    }
+    grouped.set(key, {
+      title,
+      bundleId: interval.bundleId,
+      appName: interval.appName,
+      startTime: interval.startTime,
+      endTime: interval.endTime,
+      totalSeconds,
+    })
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+    .slice(0, 12)
+}
+
+function buildFileEvidence(
+  windowTitles: NonNullable<TimelineEvidenceSummary['windowTitles']>,
+): NonNullable<TimelineEvidenceSummary['files']> {
+  const grouped = new Map<string, NonNullable<TimelineEvidenceSummary['files']>[number]>()
+
+  for (const evidence of windowTitles) {
+    for (const filename of extractFilenames(evidence.title)) {
+      const key = filename.toLowerCase()
+      const existing = grouped.get(key)
+      if (existing) {
+        existing.firstSeenAt = Math.min(existing.firstSeenAt, evidence.startTime)
+        existing.totalSeconds += evidence.totalSeconds
+        continue
+      }
+      grouped.set(key, {
+        filename,
+        path: /[/\\]/.test(filename) ? filename : null,
+        appName: evidence.appName,
+        windowTitle: evidence.title,
+        firstSeenAt: evidence.startTime,
+        totalSeconds: evidence.totalSeconds,
+        inferred: true,
+      })
+    }
+  }
+
+  return [...grouped.values()]
+    .sort((left, right) => right.totalSeconds - left.totalSeconds)
+    .slice(0, 12)
+}
+
 function workflowLabelForBlock(apps: string[], block: WorkContextBlock): string {
   if (apps.length === 0) return userVisibleLabelForBlock(block)
   // Map canonical IDs → display names using the block's own topApps list
@@ -2013,11 +2119,15 @@ function buildBlockFromCandidate(
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 6)
   const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
+  const windowTitles = buildWindowTitleEvidence(db, blockStart, blockEnd, candidate.sessions)
   const evidenceSummary = {
     apps: topApps,
     pages: pageRefs,
     documents: documentRefs,
     domains: websites.map((site) => site.domain),
+    windowTitles,
+    sites: pageRefs,
+    files: buildFileEvidence(windowTitles),
   }
   const blockId = blockIdFor(
     blockStart,
@@ -3742,6 +3852,9 @@ function loadPersistedTimelineBlocksForDay(
         pages: pageRefs,
         documents: documentRefs,
         domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
+        windowTitles: Array.isArray(evidence.windowTitles) ? evidence.windowTitles : [],
+        sites: Array.isArray(evidence.sites) ? evidence.sites : pageRefs,
+        files: Array.isArray(evidence.files) ? evidence.files : [],
       },
       heuristicVersion: row.heuristic_version,
       computedAt: row.computed_at,
@@ -3901,7 +4014,7 @@ function buildSegmentsForDay(
   dateStr: string,
   blocks: WorkContextBlock[],
 ): TimelineSegment[] {
-  const [fromMs, toMs] = localDayBounds(dateStr)
+  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const events = getActivityStateEventsForRange(db, fromMs, toMs)
   const workSegments: TimelineSegment[] = blocks.map((block) => ({
     kind: 'work_block',
@@ -4169,7 +4282,7 @@ export function getTimelineDayPayload(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
-  const [fromMs, toMs] = localDayBounds(dateStr)
+  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
@@ -4232,7 +4345,7 @@ function getLightweightDayPayload(
   db: Database.Database,
   dateStr: string,
 ): DayTimelinePayload | null {
-  const [fromMs, toMs] = localDayBounds(dateStr)
+  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = getSessionsForRange(db, fromMs, toMs)
   const websitesForDay = getWebsiteSummariesForRange(db, fromMs, toMs)
 
@@ -4390,6 +4503,9 @@ function getLightweightDayPayload(
         pages: pageRefs,
         documents: documentRefs,
         domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
+        windowTitles: Array.isArray(evidence.windowTitles) ? evidence.windowTitles : [],
+        sites: Array.isArray(evidence.sites) ? evidence.sites : pageRefs,
+        files: Array.isArray(evidence.files) ? evidence.files : [],
       },
       heuristicVersion: row.heuristic_version,
       computedAt: row.computed_at,

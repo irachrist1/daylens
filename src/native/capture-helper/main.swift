@@ -50,13 +50,132 @@ func logErr(_ s: String) {
 
 // MARK: browser detection
 
-let browserKeywords = ["safari", "chrome", "chromium", "arc", "dia", "comet", "brave", "edge", "opera", "vivaldi", "firefox", "browser"]
-func isBrowser(_ name: String?, _ bundle: String?) -> Bool {
-  let hay = ((name ?? "") + " " + (bundle ?? "")).lowercased()
-  return browserKeywords.contains { hay.contains($0) }
+enum BrowserFamily: Equatable { case chromium, firefox, webkit }
+
+func browserFamily(at appURL: URL) -> BrowserFamily {
+  let root = appURL.appendingPathComponent("Contents")
+  let resources = root.appendingPathComponent("Resources")
+  if FileManager.default.fileExists(atPath: resources.appendingPathComponent("omni.ja").path)
+      || FileManager.default.fileExists(atPath: resources.appendingPathComponent("browser/omni.ja").path) {
+    return .firefox
+  }
+
+  let frameworks = root.appendingPathComponent("Frameworks")
+  if let items = try? FileManager.default.contentsOfDirectory(atPath: frameworks.path),
+     items.contains(where: {
+       let lower = $0.lowercased()
+       return lower.contains("framework.framework")
+         || lower == "arccore.framework"
+         || lower.contains("chromium")
+         || lower.contains("electron")
+     }) {
+    return .chromium
+  }
+  return .webkit
 }
-func isFirefox(_ name: String?) -> Bool { (name ?? "").lowercased().contains("firefox") }
-func isSafari(_ name: String?) -> Bool { (name ?? "").lowercased().contains("safari") }
+
+func handlesWebURLs(_ bundle: Bundle) -> Bool {
+  guard let types = bundle.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
+    return false
+  }
+  let schemes = Set(types.flatMap { ($0["CFBundleURLSchemes"] as? [String]) ?? [] }.map { $0.lowercased() })
+  return schemes.contains("http") && schemes.contains("https")
+}
+
+final class BrowserRegistry {
+  private let lock = NSLock()
+  private var applications: [String: (url: URL, family: BrowserFamily)] = [:]
+  private var lastRefresh: TimeInterval = 0
+
+  init() { refresh() }
+
+  func refresh() {
+    guard let webURL = URL(string: "https://daylens.invalid") else { return }
+    let urls = NSWorkspace.shared.urlsForApplications(toOpen: webURL)
+    var next: [String: (url: URL, family: BrowserFamily)] = [:]
+    for url in urls {
+      guard let bundle = Bundle(url: url), let id = bundle.bundleIdentifier, handlesWebURLs(bundle) else { continue }
+      next[id] = (url, browserFamily(at: url))
+    }
+    lock.lock()
+    applications = next
+    lastRefresh = Date().timeIntervalSince1970
+    lock.unlock()
+  }
+
+  func resolve(pid: pid_t, bundleId: String?) -> (url: URL, family: BrowserFamily)? {
+    if let id = bundleId {
+      lock.lock()
+      let known = applications[id]
+      let stale = Date().timeIntervalSince1970 - lastRefresh > 60
+      lock.unlock()
+      if let known { return known }
+      if stale { refresh() }
+    }
+
+    guard let app = NSRunningApplication(processIdentifier: pid),
+          let appURL = app.bundleURL,
+          let bundle = Bundle(url: appURL),
+          handlesWebURLs(bundle) else { return nil }
+    let id = bundle.bundleIdentifier ?? bundleId ?? appURL.path
+    let resolved = (url: appURL, family: browserFamily(at: appURL))
+    lock.lock()
+    applications[id] = resolved
+    lock.unlock()
+    return resolved
+  }
+
+  func snapshot() -> [(bundleId: String, url: URL, family: BrowserFamily)] {
+    lock.lock()
+    defer { lock.unlock() }
+    return applications.map { (bundleId: $0.key, url: $0.value.url, family: $0.value.family) }
+  }
+}
+
+let browserRegistry = BrowserRegistry()
+
+struct BrowserDiscoveryRecord: Encodable {
+  let name: String
+  let bundleId: String
+  let appPath: String
+  let family: String
+}
+
+func emitBrowserDiscovery() -> Int32 {
+  let records = browserRegistry.snapshot().compactMap { entry -> BrowserDiscoveryRecord? in
+    guard let bundle = Bundle(url: entry.url) else { return nil }
+    let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+      ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
+      ?? entry.url.deletingPathExtension().lastPathComponent
+    let family: String
+    switch entry.family {
+    case .chromium: family = "chromium"
+    case .firefox: family = "firefox"
+    case .webkit: family = "webkit"
+    }
+    return BrowserDiscoveryRecord(
+      name: name,
+      bundleId: entry.bundleId,
+      appPath: entry.url.path,
+      family: family)
+  }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  guard let data = try? encoder.encode(records) else { return 1 }
+  FileHandle.standardOutput.write(data)
+  FileHandle.standardOutput.write(Data([0x0a]))
+  return 0
+}
+
+func isBrowser(_ pid: pid_t, _ bundle: String?) -> Bool {
+  return browserRegistry.resolve(pid: pid, bundleId: bundle) != nil
+}
+
+func isFirefox(_ pid: pid_t, _ bundle: String?) -> Bool {
+  return browserRegistry.resolve(pid: pid, bundleId: bundle)?.family == .firefox
+}
+
+func isSafari(_ pid: pid_t, _ bundle: String?) -> Bool {
+  return browserRegistry.resolve(pid: pid, bundleId: bundle)?.family == .webkit
+}
 
 let internalSchemes = ["chrome://", "chrome-untrusted://", "about:", "safari-resource://"]
 func isInternalScheme(_ url: String) -> Bool {
@@ -76,7 +195,13 @@ final class Frontmost {
   func setApp(pid: pid_t, name: String?, bundle: String?) {
     lock.lock(); _pid = pid; _name = name; _bundle = bundle; lock.unlock()
   }
-  func setTitle(_ t: String?) { lock.lock(); _title = t; lock.unlock() }
+  func setTitle(_ t: String?) -> Bool {
+    lock.lock()
+    let changed = _title != t
+    _title = t
+    lock.unlock()
+    return changed
+  }
   func get() -> (pid: pid_t, name: String?, bundle: String?, title: String?) {
     lock.lock(); defer { lock.unlock() }
     return (_pid, _name, _bundle, _title)
@@ -277,11 +402,13 @@ func sampleTime(mono: UInt64?, ts: Int?) -> (mono: UInt64, ts: Int) {
 }
 
 func handleFrontmostBrowserSample(permissionOverride: Automation? = nil, tabReadOverride: TabRead? = nil,
+                                  browserFamilyOverride: BrowserFamily? = nil,
                                   mono: UInt64? = nil, ts: Int? = nil) {
   let f = frontmost.get()
-  guard let bundle = f.bundle, isBrowser(f.name, f.bundle) else { return }
+  guard let bundle = f.bundle,
+        let family = browserFamilyOverride ?? browserRegistry.resolve(pid: f.pid, bundleId: f.bundle)?.family else { return }
 
-  if isFirefox(f.name) {
+  if family == .firefox {
     let t = sampleTime(mono: mono, ts: ts)
     onTabReadFailure(mono: t.mono, ts: t.ts)
     return
@@ -289,7 +416,7 @@ func handleFrontmostBrowserSample(permissionOverride: Automation? = nil, tabRead
 
   switch permissionOverride ?? permission(bundle) {
   case .authorized:
-    let read = tabReadOverride ?? reader.read(appName: f.name ?? "", safari: isSafari(f.name), timeoutMs: 500)
+    let read = tabReadOverride ?? reader.read(appName: f.name ?? "", safari: family == .webkit, timeoutMs: 500)
     let t = sampleTime(mono: mono, ts: ts)
     handleTabRead(read, mono: t.mono, ts: t.ts)
   case .notDetermined, .denied, .other:
@@ -316,7 +443,7 @@ func stopPolling() {
 func pollTick(_ epoch: Int) {
   guard epoch == pollEpoch else { return }
   let f = frontmost.get()
-  guard let bundle = f.bundle, isBrowser(f.name, f.bundle) else { return }
+  guard let bundle = f.bundle, isBrowser(f.pid, f.bundle) else { return }
   _ = bundle
 
   handleFrontmostBrowserSample()
@@ -353,7 +480,7 @@ func adoptFrontmost(_ a: NSRunningApplication?) {
   let bundle = a?.bundleIdentifier
   let title = axFocusedWindowTitle(pid: pid)
   frontmost.setApp(pid: pid, name: name, bundle: bundle)
-  frontmost.setTitle(title)
+  _ = frontmost.setTitle(title)
 }
 func runNeverGuessProbe(_ mode: String) -> Int32 {
   let mono = monoNow()
@@ -361,7 +488,7 @@ func runNeverGuessProbe(_ mode: String) -> Int32 {
   let browserName = mode == "unsupported_browser" ? "Firefox" : "Google Chrome"
   let bundle = mode == "unsupported_browser" ? "org.mozilla.firefox" : "com.google.Chrome"
   frontmost.setApp(pid: 123, name: browserName, bundle: bundle)
-  frontmost.setTitle("Stale window title")
+  _ = frontmost.setTitle("Stale window title")
   dwell = Dwell(
     key: "https://stale.example.test/previous",
     url: "https://stale.example.test/previous",
@@ -372,21 +499,34 @@ func runNeverGuessProbe(_ mode: String) -> Int32 {
 
   switch mode {
   case "permission_denied":
-    handleFrontmostBrowserSample(permissionOverride: .denied, mono: mono, ts: ts)
+    handleFrontmostBrowserSample(permissionOverride: .denied, browserFamilyOverride: .chromium, mono: mono, ts: ts)
   case "permission_not_determined":
-    handleFrontmostBrowserSample(permissionOverride: .notDetermined, mono: mono, ts: ts)
+    handleFrontmostBrowserSample(permissionOverride: .notDetermined, browserFamilyOverride: .chromium, mono: mono, ts: ts)
   case "timeout":
-    handleFrontmostBrowserSample(permissionOverride: .authorized, tabReadOverride: .timeout, mono: mono, ts: ts)
+    handleFrontmostBrowserSample(
+      permissionOverride: .authorized, tabReadOverride: .timeout,
+      browserFamilyOverride: .chromium, mono: mono, ts: ts)
   case "missing_value":
-    handleFrontmostBrowserSample(permissionOverride: .authorized, tabReadOverride: .missingValue, mono: mono, ts: ts)
+    handleFrontmostBrowserSample(
+      permissionOverride: .authorized, tabReadOverride: .missingValue,
+      browserFamilyOverride: .chromium, mono: mono, ts: ts)
   case "unsupported_browser":
-    handleFrontmostBrowserSample(permissionOverride: .authorized, tabReadOverride: .unsupported, mono: mono, ts: ts)
+    handleFrontmostBrowserSample(
+      permissionOverride: .authorized,
+      tabReadOverride: .unsupported,
+      browserFamilyOverride: .firefox,
+      mono: mono,
+      ts: ts)
   default:
     logErr("unknown never-guess probe mode: \(mode)")
     return 64
   }
 
   return 0
+}
+
+if ProcessInfo.processInfo.environment["DAYLENS_CAPTURE_HELPER_BROWSER_DISCOVERY"] == "1" {
+  exit(emitBrowserDiscovery())
 }
 
 if let mode = ProcessInfo.processInfo.environment["DAYLENS_CAPTURE_HELPER_NEVER_GUESS_PROBE"] {
@@ -410,7 +550,7 @@ wsNc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object
   adoptFrontmost(a)
   let f = frontmost.get()
   emitForeground("app_activated", pid: f.pid, name: f.name, bundle: f.bundle, title: f.title)
-  let browser = isBrowser(f.name, f.bundle)
+  let browser = isBrowser(f.pid, f.bundle)
   let bundle = f.bundle
   tabQueue.async {
     if let b = bundle { permCache[b] = nil } // re-check permission on activation
@@ -422,7 +562,7 @@ wsNc.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, obje
   let a = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
   emitForeground("app_deactivated", pid: a?.processIdentifier ?? 0,
                  name: a?.localizedName, bundle: a?.bundleIdentifier, title: nil)
-  if isBrowser(a?.localizedName, a?.bundleIdentifier) {
+  if isBrowser(a?.processIdentifier ?? 0, a?.bundleIdentifier) {
     tabQueue.async { stopPolling() }
   }
 }
@@ -431,6 +571,23 @@ wsNc.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: 
   adoptFrontmost(NSWorkspace.shared.frontmostApplication)
   let f = frontmost.get()
   emitForeground("space_changed", pid: f.pid, name: f.name, bundle: f.bundle, title: f.title)
+}
+
+func pollFocusedWindowTitle() {
+  let f = frontmost.get()
+  if f.pid > 0 {
+    let title = axFocusedWindowTitle(pid: f.pid)
+    if frontmost.setTitle(title) {
+      let updated = frontmost.get()
+      emitForeground(
+        "window_changed",
+        pid: updated.pid,
+        name: updated.name,
+        bundle: updated.bundle,
+        title: updated.title)
+    }
+  }
+  DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { pollFocusedWindowTitle() }
 }
 
 wsNc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
@@ -462,9 +619,10 @@ DispatchQueue.global(qos: .utility).async {
 adoptFrontmost(NSWorkspace.shared.frontmostApplication)
 let seed = frontmost.get()
 emitForeground("app_activated", pid: seed.pid, name: seed.name, bundle: seed.bundle, title: seed.title)
-if isBrowser(seed.name, seed.bundle) {
+if isBrowser(seed.pid, seed.bundle) {
   tabQueue.async { startPolling() }
 }
+pollFocusedWindowTitle()
 
 logErr("started (ax_trusted=\(AXIsProcessTrusted()))")
 nsApp.run()

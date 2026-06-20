@@ -8,7 +8,8 @@ export function localDateString(date: Date = new Date()): string {
 export function localDayBounds(dateStr: string): [number, number] {
   const [year, month, day] = dateStr.split('-').map(Number)
   const from = new Date(year, month - 1, day).getTime()
-  return [from, from + 86_400_000]
+  const to = new Date(year, month - 1, day + 1).getTime()
+  return [from, to]
 }
 
 export function daysFromTodayLocalDateString(offsetDays: number): string {

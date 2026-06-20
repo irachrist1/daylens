@@ -750,6 +750,24 @@ export interface TimelineEvidenceSummary {
   pages: PageRef[]
   documents: DocumentRef[]
   domains: string[]
+  windowTitles?: Array<{
+    title: string
+    bundleId: string
+    appName: string
+    startTime: number
+    endTime: number
+    totalSeconds: number
+  }>
+  sites?: PageRef[]
+  files?: Array<{
+    filename: string
+    path: string | null
+    appName: string
+    windowTitle: string
+    firstSeenAt: number
+    totalSeconds: number
+    inferred: true
+  }>
 }
 
 export interface PeakHoursResult {
@@ -996,6 +1014,14 @@ export type TrackingPermissionState =
   | 'awaiting_relaunch'
   | 'unsupported_or_unknown'
 
+export type CapturePermissionStatus = 'granted' | 'missing' | 'unsupported_or_unknown'
+
+export interface TrackingPermissionDetails {
+  accessibility: CapturePermissionStatus
+  screenRecording: CapturePermissionStatus
+  combined: TrackingPermissionState
+}
+
 export type OnboardingStage =
   | 'welcome'
   | 'permission'
@@ -1193,6 +1219,15 @@ export interface LinuxDesktopDiagnostics {
 export interface TrackingDiagnosticsPayload {
   platform: NodeJS.Platform
   trackingStatus: TrackingStatusDiagnostics
+  captureHealth: {
+    permissions: TrackingPermissionDetails
+    windowTitles: {
+      status: 'healthy' | 'waiting' | 'missing'
+      recentSamples: number
+      recentSamplesWithTitle: number
+      lastCapturedAt: number | null
+    }
+  }
   linuxTracking: LinuxTrackingDiagnostics | null
   linuxDesktop: LinuxDesktopDiagnostics | null
 }
@@ -1416,6 +1451,7 @@ export const IPC = {
     GET_DIAGNOSTICS: 'tracking:get-diagnostics',
     GET_PROCESS_METRICS: 'tracking:get-process-metrics',
     GET_PERMISSION_STATE: 'tracking:get-permission-state',
+    GET_PERMISSION_DETAILS: 'tracking:get-permission-details',
     REQUEST_SCREEN_PERMISSION: 'tracking:request-screen-permission',
     // T3: delete already-captured history for an excluded app/site.
     DELETE_APP_HISTORY: 'tracking:delete-app-history',

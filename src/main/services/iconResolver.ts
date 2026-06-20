@@ -30,7 +30,7 @@ interface BrowserEntry {
   name: string
   bundleId: string
   historyPath: string
-  type: 'chromium' | 'firefox'
+  type: 'chromium' | 'firefox' | 'webkit'
 }
 
 interface DiskCacheEntry {
@@ -1076,6 +1076,8 @@ async function defaultGetSiteIconFromBrowserCache(domain: string, pageUrl: strin
       if (dataUrl) return dataUrl
       continue
     }
+
+    if (browser.type === 'webkit') continue
 
     const firefoxProfileDir = path.dirname(browser.historyPath)
     const firefoxCandidates = [

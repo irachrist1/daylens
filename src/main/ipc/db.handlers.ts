@@ -43,7 +43,11 @@ import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC } from '@shared/types'
-import { getTrackingPermissionState, requestScreenTrackingPermission } from '../services/trackingPermissions'
+import {
+  getTrackingPermissionDetails,
+  getTrackingPermissionState,
+  requestScreenTrackingPermission,
+} from '../services/trackingPermissions'
 import type {
   AppUsageSummary,
   AppSession,
@@ -632,13 +636,46 @@ export function registerDbHandlers(): void {
   // Returns the current in-flight session (not yet flushed to DB) so the renderer
   // can display live totals without waiting for the next app switch.
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
-  ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => ({
-    platform: process.platform,
-    trackingStatus: { ...trackingStatus },
-    linuxTracking: getLinuxTrackingDiagnostics(),
-    linuxDesktop: getLinuxDesktopDiagnostics(),
-  }))
+  ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => {
+    const since = Date.now() - 15 * 60_000
+    const titleRows = getDb().prepare(`
+      SELECT
+        COUNT(*) AS recent_samples,
+        SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
+        MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN ts_ms ELSE NULL END) AS last_captured_at
+      FROM focus_events
+      WHERE source = 'nsworkspace_event'
+        AND event_type IN ('app_activated', 'window_changed', 'space_changed')
+        AND ts_ms >= ?
+    `).get(since) as {
+      recent_samples: number
+      with_title: number | null
+      last_captured_at: number | null
+    }
+    const recentSamplesWithTitle = titleRows.with_title ?? 0
+
+    return {
+      platform: process.platform,
+      trackingStatus: { ...trackingStatus },
+      captureHealth: {
+        permissions: getTrackingPermissionDetails(),
+        windowTitles: {
+          status: recentSamplesWithTitle > 0
+            ? 'healthy'
+            : titleRows.recent_samples > 0
+              ? 'missing'
+              : 'waiting',
+          recentSamples: titleRows.recent_samples,
+          recentSamplesWithTitle,
+          lastCapturedAt: titleRows.last_captured_at,
+        },
+      },
+      linuxTracking: getLinuxTrackingDiagnostics(),
+      linuxDesktop: getLinuxDesktopDiagnostics(),
+    }
+  })
   ipcMain.handle(IPC.TRACKING.GET_PERMISSION_STATE, () => getTrackingPermissionState())
+  ipcMain.handle(IPC.TRACKING.GET_PERMISSION_DETAILS, () => getTrackingPermissionDetails())
   ipcMain.handle(IPC.TRACKING.REQUEST_SCREEN_PERMISSION, async () => requestScreenTrackingPermission())
 
   ipcMain.handle(IPC.TRACKING.GET_PROCESS_METRICS, () => {

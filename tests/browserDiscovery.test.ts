@@ -5,6 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveCanonicalBrowser } from '../src/main/lib/appIdentity.ts'
 import { getBrowserEntries, getBrowserStatus } from '../src/main/services/browser.ts'
+import {
+  discoverMacBrowserHistoryLocations,
+  parseLaunchServicesBrowserDump,
+  type BrowserApplication,
+} from '../src/main/services/browserRegistry.ts'
 
 function tempHomeDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'daylens-browser-home-'))
@@ -87,4 +92,61 @@ test('browser diagnostics always expose a discoveredBrowsers array', async () =>
     assert.equal(arc?.historyPath, arcHistoryPath)
     assert.equal(arc?.historyExists, true)
   })
+})
+
+test('LaunchServices http/https handlers discover Zen without a browser-name list', () => {
+  const dump = `
+--------------------------------------------------------------------------------
+bundle id:                  Zen (0x20e4)
+path:                       /Applications/Zen Test.app (0x3cf0)
+name:                       Zen
+identifier:                 app.zen-browser.zen
+more flags:                 web-browser
+claimed schemes:            file:, http:, https:
+--------------------------------------------------------------------------------
+bundle id:                  VLC (0x20e5)
+path:                       /Applications/VLC.app (0x3cf1)
+name:                       VLC
+identifier:                 org.videolan.vlc
+claimed schemes:            http:, https:
+--------------------------------------------------------------------------------
+`
+
+  const applications = parseLaunchServicesBrowserDump(dump)
+  assert.deepEqual(applications.map((application) => ({
+    name: application.name,
+    bundleId: application.bundleId,
+    family: application.family,
+  })), [{
+    name: 'Zen',
+    bundleId: 'app.zen-browser.zen',
+    family: 'webkit',
+  }])
+})
+
+test('mac browser history discovery maps a newly discovered Gecko browser to places.sqlite', () => {
+  const homeDir = tempHomeDir()
+  const placesPath = path.join(
+    homeDir,
+    'Library',
+    'Application Support',
+    'Zen',
+    'Profiles',
+    'abc.default',
+    'places.sqlite',
+  )
+  touch(placesPath)
+  const applications: BrowserApplication[] = [{
+    name: 'Zen',
+    bundleId: 'app.zen-browser.zen',
+    appPath: '/Applications/Zen.app',
+    family: 'firefox',
+    source: 'launch_services',
+  }]
+
+  const locations = discoverMacBrowserHistoryLocations(applications, homeDir)
+  assert.equal(locations.length, 1)
+  assert.equal(locations[0].historyPath, placesPath)
+  assert.equal(locations[0].family, 'firefox')
+  assert.equal(locations[0].bundleId, 'app.zen-browser.zen')
 })
