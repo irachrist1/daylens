@@ -15,6 +15,8 @@ import {
   writeAIBlockLabel,
   writeAIBlockCategory,
 } from '../db/queries'
+import { resolveCanonicalApp } from '../lib/appIdentity'
+import { isCategoryFocused } from '../lib/focusScore'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -53,6 +55,7 @@ import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC } from '@shared/types'
 import { getTrackingPermissionState, requestScreenTrackingPermission } from '../services/trackingPermissions'
 import type {
+  AppCategory,
   AppUsageSummary,
   AppSession,
   WorkSessionPayload,
@@ -105,18 +108,42 @@ function localDateStringForTimestamp(timestamp: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-function mergeAppSummaryRows(rows: AppUsageSummary[]): AppUsageSummary[] {
+function mergeAppSummaryRows(
+  rows: AppUsageSummary[],
+  overrides: Record<string, AppCategory>,
+): AppUsageSummary[] {
   const map = new Map<string, AppUsageSummary>()
+  // Category must be stable across periods (invariant 2). Merging per-day rows
+  // used to keep the first day's category, so an app read differently on 7d vs
+  // 30d depending on which day fell first in the window. Re-resolve it the same
+  // way the single-day path does: override → catalog default → the category the
+  // app spent the most time in across the merged days.
+  const timeByCategory = new Map<string, Map<AppCategory, number>>()
+  const overrideByApp = new Map<string, AppCategory>()
   for (const row of rows) {
-    const key = row.canonicalAppId ?? row.bundleId
+    const key = row.canonicalAppId || row.bundleId
     const existing = map.get(key)
     if (existing) {
       existing.totalSeconds += row.totalSeconds
       existing.sessionCount = (existing.sessionCount ?? 0) + (row.sessionCount ?? 0)
-      existing.isFocused = existing.isFocused || row.isFocused
-      continue
+    } else {
+      map.set(key, { ...row })
     }
-    map.set(key, { ...row })
+    const override = overrides[row.bundleId]
+    if (override && !overrideByApp.has(key)) overrideByApp.set(key, override)
+    const byCategory = timeByCategory.get(key) ?? new Map<AppCategory, number>()
+    byCategory.set(row.category, (byCategory.get(row.category) ?? 0) + row.totalSeconds)
+    timeByCategory.set(key, byCategory)
+  }
+  for (const [key, summary] of map) {
+    const dominant = [...(timeByCategory.get(key)?.entries() ?? [])]
+      .sort((left, right) => right[1] - left[1])[0]?.[0] ?? null
+    const category = overrideByApp.get(key)
+      ?? resolveCanonicalApp(key, summary.appName).defaultCategory
+      ?? dominant
+      ?? summary.category
+    summary.category = category
+    summary.isFocused = isCategoryFocused(category)
   }
   return [...map.values()]
     .filter((summary) => summary.totalSeconds > 0)
@@ -139,7 +166,24 @@ function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
     const [from, to] = dayBounds(dateStr)
     rows.push(...getAppSummariesForRange(db, from, to))
   }
-  return mergeAppSummaryRows(rows)
+  return mergeAppSummaryRows(rows, getCategoryOverrides(db))
+}
+
+// Re-resolve a summary list's categories to the stable per-app value (override
+// → catalog default → keep existing). Used on derived per-day reads, whose
+// cached category predates the override and would otherwise disagree with the
+// live single-day and multi-day paths (invariant 2 / 11).
+function withStableCategory(db: ReturnType<typeof getDb>, summaries: AppUsageSummary[]): AppUsageSummary[] {
+  const overrides = getCategoryOverrides(db)
+  return summaries.map((summary) => {
+    const key = summary.canonicalAppId || summary.bundleId
+    const category = overrides[summary.bundleId]
+      ?? resolveCanonicalApp(key, summary.appName).defaultCategory
+      ?? summary.category
+    return category === summary.category
+      ? summary
+      : { ...summary, category, isFocused: isCategoryFocused(category) }
+  })
 }
 
 function getWorkMemorySettingsSummary(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
@@ -459,7 +503,7 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, (_e, dateStr: string) => {
     if (dateStr !== localDateString()) {
       const derived = readDerivedAppSummariesForDate(getDb(), dateStr)
-      if (derived) return derived
+      if (derived) return withStableCategory(getDb(), derived)
     }
     const [from, to] = dayBounds(dateStr)
     return getAppSummariesForRange(getDb(), from, to)

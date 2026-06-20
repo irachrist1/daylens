@@ -604,7 +604,6 @@ export function getAppSummariesForRange(
   // default category for the app (range-independent), then the category the app
   // spent the most time in. Overrides and catalog are range-independent, so the
   // badge no longer flips between Today / 7d / 30d.
-  const catalogCategoryByApp = new Map<string, AppCategory | null>()
   const overrideByApp = new Map<string, AppCategory>()
   const timeByCategory = new Map<string, Map<AppCategory, number>>()
 
@@ -629,7 +628,6 @@ export function getAppSummariesForRange(
         sessionCount: 1,
       })
     }
-    if (!catalogCategoryByApp.has(mapKey)) catalogCategoryByApp.set(mapKey, identity.defaultCategory)
     const override = overrides[session.bundleId]
     if (override && !overrideByApp.has(mapKey)) overrideByApp.set(mapKey, override)
     const byCategory = timeByCategory.get(mapKey) ?? new Map<AppCategory, number>()
@@ -640,8 +638,14 @@ export function getAppSummariesForRange(
   for (const [mapKey, summary] of summaryMap) {
     const dominant = [...(timeByCategory.get(mapKey)?.entries() ?? [])]
       .sort((left, right) => right[1] - left[1])[0]?.[0] ?? null
+    // Resolve the catalog default from the canonical key itself, not a single
+    // session's identity (which can be null when that row was captured under an
+    // unrecognized bundle id even though the app is known). This keeps the badge
+    // range-independent — the source of the earlier Dia "AI tools" vs "Browsing"
+    // flip between periods.
+    const catalogDefault = resolveCanonicalApp(mapKey, summary.appName).defaultCategory
     const category = overrideByApp.get(mapKey)
-      ?? catalogCategoryByApp.get(mapKey)
+      ?? catalogDefault
       ?? dominant
       ?? 'uncategorized'
     summary.category = category
