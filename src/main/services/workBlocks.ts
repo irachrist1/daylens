@@ -4044,6 +4044,50 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
+// timeline.md §4: the live day, before it is analyzed, is ONE provisional block
+// per idle-bounded stretch — labelled neutrally "Active now", never given a
+// speculative per-activity intent name (naming live is how a transcription
+// session got stamped "Software Development Block"). It still carries full
+// evidence so the detail panel works; it just isn't named or AI-analyzed. The
+// provisional blocks finalize into real named blocks when the user runs Analyze
+// Day, on the next day's open, or via nightly consolidation.
+function buildProvisionalLiveBlocks(
+  db: Database.Database,
+  sessions: AppSession[],
+): WorkContextBlock[] {
+  if (sessions.length === 0) return []
+  const context = buildTimelineContext(db, sessions)
+  const segments = coarseSegmentsFromSessions(db, sessions)
+  const coarse = segments.length > 0
+    ? segments
+    : [{ sessions, boundedBeforeGap: false, boundedAfterGap: false }]
+
+  return coarse.map((segment, index) => {
+    const candidate: CandidateBlock = {
+      sessions: segment.sessions,
+      formation: 'heuristic',
+      boundedBeforeGap: segment.boundedBeforeGap,
+      boundedAfterGap: segment.boundedAfterGap,
+    }
+    const block = buildBlockFromCandidate(candidate, db, context)
+    const isLastStretch = index === coarse.length - 1
+    const containsLiveSession = segment.sessions.some((session) => session.id === -1)
+    return {
+      ...block,
+      provisional: true,
+      isLive: isLastStretch && containsLiveSession,
+      label: {
+        ...block.label,
+        current: 'Active now',
+        source: 'rule' as const,
+        confidence: 0,
+        override: null,
+        aiSuggested: null,
+      },
+    }
+  })
+}
+
 export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -4410,7 +4454,16 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
+  // timeline.md §4: today, before it has been analyzed (Analyze Day / nightly /
+  // next-day open), shows as provisional "Active now" stretches — not named
+  // per-activity blocks. A materialize request (Analyze Day) or an already
+  // analyzed day always gets the real named segmentation.
+  const isLiveProvisionalDay = dateStr === localDateString()
+    && !(options.materialize ?? false)
+    && !persistedDayWasProcessed(db, dateStr)
+  const blocks = isLiveProvisionalDay
+    ? buildProvisionalLiveBlocks(db, sessions)
+    : buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
