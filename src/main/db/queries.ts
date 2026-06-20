@@ -598,10 +598,22 @@ export function getAppSummariesForRange(
   )
 
   const summaryMap = new Map<string, AppUsageSummary>()
+  // Per-app category must be stable across periods (invariant 2: an app shows
+  // the same badge in every range). We therefore do NOT take the first
+  // session's category. We pick, in order: a user override, the catalog's
+  // default category for the app (range-independent), then the category the app
+  // spent the most time in. Overrides and catalog are range-independent, so the
+  // badge no longer flips between Today / 7d / 30d.
+  const catalogCategoryByApp = new Map<string, AppCategory | null>()
+  const overrideByApp = new Map<string, AppCategory>()
+  const timeByCategory = new Map<string, Map<AppCategory, number>>()
 
   for (const session of clippedSessions) {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
-    const mapKey = session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId
+    // Prefer the deterministic catalog identity and treat empty strings as
+    // absent, so an app captured under both its bundle id and its raw
+    // executable path (e.g. Comet, Claude) collapses to a single row.
+    const mapKey = session.canonicalAppId || identity.canonicalAppId || session.bundleId
     const existing = summaryMap.get(mapKey)
     if (existing) {
       existing.totalSeconds += session.durationSeconds
@@ -611,12 +623,29 @@ export function getAppSummariesForRange(
         bundleId: session.bundleId,
         canonicalAppId: mapKey,
         appName: identity.displayName || session.appName,
-        category: session.category,
+        category: session.category, // replaced by the stable category below
         totalSeconds: session.durationSeconds,
         isFocused: isCategoryFocused(session.category),
         sessionCount: 1,
       })
     }
+    if (!catalogCategoryByApp.has(mapKey)) catalogCategoryByApp.set(mapKey, identity.defaultCategory)
+    const override = overrides[session.bundleId]
+    if (override && !overrideByApp.has(mapKey)) overrideByApp.set(mapKey, override)
+    const byCategory = timeByCategory.get(mapKey) ?? new Map<AppCategory, number>()
+    byCategory.set(session.category, (byCategory.get(session.category) ?? 0) + session.durationSeconds)
+    timeByCategory.set(mapKey, byCategory)
+  }
+
+  for (const [mapKey, summary] of summaryMap) {
+    const dominant = [...(timeByCategory.get(mapKey)?.entries() ?? [])]
+      .sort((left, right) => right[1] - left[1])[0]?.[0] ?? null
+    const category = overrideByApp.get(mapKey)
+      ?? catalogCategoryByApp.get(mapKey)
+      ?? dominant
+      ?? 'uncategorized'
+    summary.category = category
+    summary.isFocused = isCategoryFocused(category)
   }
 
   return Array.from(summaryMap.values())
