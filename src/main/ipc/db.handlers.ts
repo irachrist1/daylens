@@ -513,12 +513,9 @@ export function registerDbHandlers(): void {
     return getAppDetailProjection(getDb(), canonicalAppId, days, getCurrentSession())
   })
 
-  // D5: per-app activity digest used by the Apps list view to lead with what
-  // was accomplished in each app, not how long. Walks each day in the range,
-  // builds canonical-app → best block label + best artifact title pairs.
-  // Artifact/page attribution respects ownership: a page captured in Safari
-  // never bleeds onto a non-browser app in the same block, and an artifact
-  // with ownerBundleId=VS Code never attaches to Dia.
+  // Per-app activity digest. Retained for reuse though the Apps list no longer
+  // leads with it (DEV-89 made the app name the row title); the artifact-
+  // surfacing policy it encodes is covered by appActivityDigest tests.
   ipcMain.handle(IPC.DB.GET_APP_ACTIVITY_DIGEST, (_e, days: number = 1): import('@shared/types').AppActivityDigest[] => {
     const db = getDb()
     const today = localDateString()

@@ -109,7 +109,7 @@ import type {
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
-import { DISTRACTION_DOMAINS } from '@shared/types'
+import { DISTRACTION_DOMAINS, ALL_TIME_DAYS } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import {
@@ -4000,9 +4000,10 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   const packedPages = take(orderedPages, evidenceCost)
   const packedBlockAppearances = take(detail.blockAppearances, evidenceCost)
 
+  const rangeWord = days >= ALL_TIME_DAYS ? 'all time' : days === 1 ? 'day' : `${days} days`
   return {
-    title: `${detail.displayName} in the last ${days === 1 ? 'day' : `${days} days`}`,
-    scopeLabel: `${detail.displayName} over ${days === 1 ? 'today' : `${days} days`}`,
+    title: days >= ALL_TIME_DAYS ? `${detail.displayName} across all time` : `${detail.displayName} in the last ${rangeWord}`,
+    scopeLabel: `${detail.displayName} over ${days >= ALL_TIME_DAYS ? 'all time' : days === 1 ? 'today' : `${days} days`}`,
     // B4: do NOT feed totalTracked / sessionCount to the narrative model.
     // The rail recomputes those live (and adds live-session minutes) while
     // the narrative is cache-keyed to a snapshot. The two drift within
