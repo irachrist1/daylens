@@ -699,9 +699,11 @@ export interface ResolvedIconPayload {
 export interface PageRef extends ArtifactRef {
   artifactType: 'page'
   domain: string
+  visitCount?: number
   browserBundleId?: string | null
   canonicalBrowserId?: string | null
   normalizedUrl?: string | null
+  pageKey?: string | null
   pageTitle?: string | null
 }
 

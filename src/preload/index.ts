@@ -176,8 +176,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
     getWeekReview: (weekStart: string, force?: boolean): Promise<AISurfaceSummary | null> =>
       ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart, force }),
-    getAppNarrative: (canonicalAppId: string, days?: number, force?: boolean): Promise<AISurfaceSummary | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, days, force }),
+    getAppNarrative: (canonicalAppId: string, daysOrDate?: number | string, force?: boolean): Promise<AISurfaceSummary | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, daysOrDate, force }),
     prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>
@@ -256,6 +256,8 @@ const api = {
       appName?: string | null
       domain?: string | null
       url?: string | null
+      normalizedUrl?: string | null
+      pageKey?: string | null
       startTime?: number | null
       endTime?: number | null
       date?: string | null

@@ -12,6 +12,12 @@ test('mac-specific app aliases resolve to the right canonical app identities', (
   assert.equal(resolveCanonicalApp('com.daylens.app.dev', 'Daylens').displayName, 'Daylens')
 })
 
+test('catalog names collapse legacy executable-path rows to one canonical identity', () => {
+  assert.equal(resolveCanonicalApp('/Applications/Warp.app/Contents/MacOS/stable', 'Warp').canonicalAppId, 'warp')
+  assert.equal(resolveCanonicalApp('/Applications/Claude.app/Contents/MacOS/Claude', 'Claude').canonicalAppId, 'claude')
+  assert.equal(resolveCanonicalApp('/Applications/Comet.app/Contents/MacOS/Comet', 'Comet').canonicalAppId, 'comet')
+})
+
 test('Microsoft 365 app aliases resolve consistently across raw names and executables', () => {
   assert.equal(resolveCanonicalApp('excel.exe', 'EXCEL.EXE').displayName, 'Microsoft Excel')
   assert.equal(resolveCanonicalApp('', 'Microsoft Word').displayName, 'Microsoft Word')

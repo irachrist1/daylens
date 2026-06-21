@@ -77,8 +77,17 @@ export function registerAIHandlers(): void {
     return getWeekReview(payload.weekStart, payload.force ?? false)
   })
 
-  ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (_e, payload: { canonicalAppId: string; days?: number; force?: boolean }) => {
-    return getAppNarrative(payload.canonicalAppId, payload.days ?? 7, payload.force ?? false)
+  ipcMain.handle(IPC.AI.GET_APP_NARRATIVE, async (
+    _e,
+    payload: { canonicalAppId: string; daysOrDate?: number | string; days?: number; force?: boolean },
+  ) => {
+    // `days` remains a compatibility fallback for callers from older renderer
+    // bundles during development hot reloads.
+    return getAppNarrative(
+      payload.canonicalAppId,
+      payload.daysOrDate ?? payload.days ?? 7,
+      payload.force ?? false,
+    )
   })
 
   ipcMain.handle(IPC.AI.PREPARE_DAILY_REPORT, async (_e, payload?: { date?: string | null }) => {

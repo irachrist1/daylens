@@ -111,7 +111,11 @@ export function resolveCanonicalApp(bundleId: string, appName: string): Canonica
 
   let canonicalAppId: string | null = null
   for (const candidate of candidates) {
-    const resolved = map.aliases[candidate] ?? map.aliases[candidate.toLowerCase()]
+    const normalizedCandidate = candidate.toLowerCase()
+    const resolved = map.aliases[candidate]
+      ?? map.aliases[normalizedCandidate]
+      ?? (map.catalog[candidate] ? candidate : null)
+      ?? (map.catalog[normalizedCandidate] ? normalizedCandidate : null)
     if (resolved) {
       canonicalAppId = resolved
       break

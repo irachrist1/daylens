@@ -58,14 +58,18 @@ function liveAwareSummaries(
 
   const end = Date.now()
   const today = new Date()
-  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
-  const rangeStart = days === 1 ? todayStart : todayStart - (days - 1) * 86_400_000
+  const rangeStart = days >= ALL_TIME_DAYS
+    ? 0
+    : new Date(today.getFullYear(), today.getMonth(), today.getDate() - Math.max(0, days - 1)).getTime()
   const liveStart = Math.max(live.startTime, rangeStart)
   const seconds = Math.max(0, Math.round((end - liveStart) / 1000))
 
   if (seconds <= 0) return summaries
 
-  const index = summaries.findIndex((summary) => summary.bundleId === live.bundleId)
+  const liveKey = live.canonicalAppId ?? live.bundleId
+  const index = summaries.findIndex((summary) =>
+    (summary.canonicalAppId ?? summary.bundleId) === liveKey
+    || summary.bundleId === live.bundleId)
   if (index >= 0) {
     return summaries
       .map((summary, position) => position === index
@@ -113,15 +117,6 @@ function shiftAppsDate(dateStr: string, delta: number): string {
 function formatAppsDateLabel(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(y, m - 1, d))
-}
-
-function appRangeBounds(dateStr: string, days: number): { startTime: number; endTime: number } {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const dayStart = new Date(y, m - 1, d).getTime()
-  return {
-    startTime: dayStart - (Math.max(1, days) - 1) * 86_400_000,
-    endTime: dayStart + 86_400_000,
-  }
 }
 
 function DeleteIconButton({
@@ -235,12 +230,11 @@ export default function Apps() {
     [selectedCategory, summaries],
   )
 
-  // Group apps by category and split low-signal entries below a fold so high-
-  // signal tools lead. An app is "fleeting" if it totalled under 2 minutes or
-  // only ran in a single session — these are visit-once tools that should not
-  // be promoted alongside a primary workstream app.
-  const { grouped, fleeting } = useMemo(() => {
-    const map = new Map<AppCategory, AppUsageSummary[]>()
+  // Preserve the backend's most-used-first ordering. Low-signal entries sit
+  // below a fold, but primary apps are never regrouped in a way that lets a
+  // lower-usage category jump ahead of a more-used app.
+  const { primary, fleeting } = useMemo(() => {
+    const primary: AppUsageSummary[] = []
     const fleeting: AppUsageSummary[] = []
     for (const summary of filteredSummaries) {
       const isFleeting = summary.totalSeconds < 120 || (summary.sessionCount ?? 1) <= 1 && summary.totalSeconds < 5 * 60
@@ -248,33 +242,10 @@ export default function Apps() {
         fleeting.push(summary)
         continue
       }
-      const list = map.get(summary.category) ?? []
-      list.push(summary)
-      map.set(summary.category, list)
+      primary.push(summary)
     }
-    // Keep category order by cumulative time within that category, so the
-    // section containing today's main work leads. Inside each section we
-    // preserve the `totalSeconds` desc ordering `summaries` already uses.
-    const orderedCategories = [...map.entries()]
-      .map(([category, items]) => ({
-        category,
-        items,
-        total: items.reduce((sum, item) => sum + item.totalSeconds, 0),
-      }))
-      .sort((left, right) => right.total - left.total)
-    return { grouped: orderedCategories, fleeting }
+    return { primary, fleeting }
   }, [filteredSummaries, selectedCategory])
-
-  // Leakage callout: top time-sink apps from categories the user didn't come
-  // to work in (entertainment, social, and low-signal browsing). Shown as a
-  // sidebar footer when the range has real signal and any such apps exceed
-  // 5 minutes.
-  const leakApps = useMemo(() => {
-    const leakCategories: AppCategory[] = ['entertainment', 'social']
-    return summaries
-      .filter((summary) => leakCategories.includes(summary.category) && summary.totalSeconds >= 5 * 60)
-      .slice(0, 3)
-  }, [summaries])
 
   useEffect(() => {
     if (!selectedAppId) return
@@ -318,7 +289,11 @@ export default function Apps() {
       !event.canonicalAppId
       || event.canonicalAppId === selectedCanonicalId
     ),
-    load: () => ipc.ai.getAppNarrative(selectedCanonicalId as string, isAppsPastDay ? 1 : days, false).catch(() => null),
+    load: () => ipc.ai.getAppNarrative(
+      selectedCanonicalId as string,
+      isAppsPastDay ? selectedDate : days,
+      false,
+    ).catch(() => null),
   })
 
   const expectedRangeKey = isAppsPastDay
@@ -353,13 +328,6 @@ export default function Apps() {
     !!value && value.summary.includes(THIN_NARRATIVE_MARKER)
   const narrative = rawNarrative && !isThinNarrative(rawNarrative) ? rawNarrative : null
 
-  // Past-day Apps cannot ask for an AI narrative scoped to the chosen date —
-  // the main-side narrative path keys cache by `1d:<today>` regardless of the
-  // selected date, so any returned summary would be rejected by the scopeKey
-  // check above and the section would silently never populate. Hide the
-  // narrative affordance for past-day until the AI path becomes date-aware.
-  const narrativeSupported = !isAppsPastDay
-
   // Tracks scopeKeys the user explicitly clicked Generate on in this session.
   // The "Generating a stronger app narrative…" message and the disabled
   // button state are only shown for these scopes — cache-only reads on
@@ -391,8 +359,8 @@ export default function Apps() {
     }
     if (activeGenerationScopes.has(expectedNarrativeScopeKey)) return
     const scopeKey = expectedNarrativeScopeKey
-    const requestDays = isAppsPastDay ? 1 : days
-    console.info(`[apps-narrative] generating for ${scopeKey} (days=${requestDays})`)
+    const requestRange = isAppsPastDay ? selectedDate : days
+    console.info(`[apps-narrative] generating for ${scopeKey} (range=${requestRange})`)
     setActiveGenerationScopes((prev) => {
       const next = new Set(prev)
       next.add(scopeKey)
@@ -405,7 +373,7 @@ export default function Apps() {
       return next
     })
     try {
-      const result = await ipc.ai.getAppNarrative(selectedCanonicalId, requestDays, true)
+      const result = await ipc.ai.getAppNarrative(selectedCanonicalId, requestRange, true)
       console.info(`[apps-narrative] ipc returned for ${scopeKey}`, {
         hasResult: !!result,
         scopeKey: result?.scopeKey,
@@ -435,24 +403,39 @@ export default function Apps() {
     }
   }
 
-  const handleDeleteWebsiteActivity = async (target: { domain: string; url?: string | null; title?: string | null }) => {
+  const handleDeleteWebsiteActivity = async (target: {
+    domain: string
+    url?: string | null
+    normalizedUrl?: string | null
+    pageKey?: string | null
+    title?: string | null
+  }) => {
     const label = target.title?.trim() || target.domain
-    const confirmed = window.confirm(`Delete tracked activity for ${label} in ${selectedRangeLabel}? This removes only this website entry from the selected range.`)
+    const isPage = Boolean(target.url || target.normalizedUrl || target.pageKey)
+    const targetKind = isPage ? 'page' : 'domain'
+    const confirmed = window.confirm(
+      `Permanently delete this ${targetKind} from all Daylens history?\n\n${label}\n\nThis cannot be undone. Any recap built from it will be cleared.`,
+    )
     if (!confirmed) return
 
-    const key = target.url ? `url:${target.url}` : `domain:${target.domain}`
+    const key = isPage
+      ? `url:${target.normalizedUrl ?? target.url ?? target.pageKey}`
+      : `domain:${target.domain}`
     setDeletingActivityKey(key)
     setDeleteActivityError(null)
-    const range = appRangeBounds(isAppsPastDay ? selectedDate : todayString(), isAppsPastDay ? 1 : days)
     try {
-      await ipc.tracking.deleteActivity({
-        domain: target.domain,
-        url: target.url ?? null,
-        date: dateMode ? selectedDate : null,
-        ...range,
-      })
+      if (isPage) {
+        await ipc.tracking.deleteActivity({
+          url: target.url,
+          normalizedUrl: target.normalizedUrl,
+          pageKey: target.pageKey,
+        })
+      } else {
+        await ipc.tracking.deleteSiteHistory({ domain: target.domain })
+      }
       await appsResource.refresh()
       await detailResource.refresh()
+      await narrativeResource.refresh()
     } catch (error) {
       setDeleteActivityError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -663,57 +646,39 @@ export default function Apps() {
             )}
 
             <div style={{ display: 'grid', gap: 18 }}>
-              {grouped.map(({ category, items }) => (
-                <section key={category} style={{ display: 'grid', gap: 6 }}>
-                  <div style={{
-                    fontSize: 10.5,
-                    fontWeight: 800,
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    color: 'var(--color-text-tertiary)',
-                    padding: '0 4px 4px',
-                  }}>
-                    {categoryLabel(category)}
-                  </div>
-                  {items.map((summary) => {
-                    const key = summary.canonicalAppId ?? summary.bundleId
-                    const selected = key === selectedAppId
-                    // Invariant 1: the bold title is ALWAYS the real app name —
-                    // never a block label, page, or video title. The category
-                    // is the quiet section header above; the subtitle carries
-                    // time and a sane session count.
-                    const appName = formatDisplayAppName(summary.appName)
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => setSelectedAppId(key)}
-                        style={{
-                          width: '100%',
-                          border: selected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
-                          background: selected ? 'var(--color-surface-low)' : 'transparent',
-                          borderRadius: 14,
-                          padding: '14px 14px',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                          <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={30} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {appName}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
-                              {categoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
-                              {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
-                            </div>
-                          </div>
+              {primary.map((summary) => {
+                const key = summary.canonicalAppId ?? summary.bundleId
+                const selected = key === selectedAppId
+                const appName = formatDisplayAppName(summary.appName)
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedAppId(key)}
+                    style={{
+                      width: '100%',
+                      border: selected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
+                      background: selected ? 'var(--color-surface-low)' : 'transparent',
+                      borderRadius: 14,
+                      padding: '14px 14px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                      <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={30} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {appName}
                         </div>
-                      </button>
-                    )
-                  })}
-                </section>
-              ))}
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
+                          {categoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
+                          {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
 
               {fleeting.length > 0 && (
                 <details style={{ marginTop: 4 }}>
@@ -763,56 +728,6 @@ export default function Apps() {
                 </details>
               )}
 
-              {leakApps.length > 0 && (
-                <section style={{
-                  marginTop: 4,
-                  borderTop: '1px solid var(--color-border-ghost)',
-                  paddingTop: 16,
-                  display: 'grid',
-                  gap: 8,
-                }}>
-                  <div style={{
-                    fontSize: 10.5,
-                    fontWeight: 800,
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    color: 'var(--color-text-tertiary)',
-                    padding: '0 4px',
-                  }}>
-                    Where time slipped
-                  </div>
-                  {leakApps.map((summary) => {
-                    const key = summary.canonicalAppId ?? summary.bundleId
-                    return (
-                      <button
-                        key={`leak:${key}`}
-                        onClick={() => setSelectedAppId(key)}
-                        style={{
-                          width: '100%',
-                          border: '1px solid transparent',
-                          background: 'transparent',
-                          borderRadius: 12,
-                          padding: '8px 12px',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={22} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                              {formatDisplayAppName(summary.appName)}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-                            {formatDuration(summary.totalSeconds)}
-                          </div>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </section>
-              )}
             </div>
           </div>
 
@@ -842,26 +757,24 @@ export default function Apps() {
                         {categoryLabel(selectedSummary.category)} · {selectedRangeLabel}
                       </div>
                     </div>
-                    {narrativeSupported && (!narrative || !dateMode || isAppsToday) && (
-                      <button
-                        type="button"
-                        disabled={isUserGenerating}
-                        onClick={() => { void handleGenerateAppNarrative() }}
-                        style={{
-                          padding: '7px 10px',
-                          borderRadius: 8,
-                          border: '1px solid var(--color-border-ghost)',
-                          background: 'var(--color-surface-low)',
-                          color: 'var(--color-text-secondary)',
-                          fontSize: 11.5,
-                          fontWeight: 700,
-                          cursor: isUserGenerating ? 'default' : 'pointer',
-                          opacity: isUserGenerating ? 0.6 : 1,
-                        }}
-                      >
-                        {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      disabled={isUserGenerating}
+                      onClick={() => { void handleGenerateAppNarrative() }}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 8,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface-low)',
+                        color: 'var(--color-text-secondary)',
+                        fontSize: 11.5,
+                        fontWeight: 700,
+                        cursor: isUserGenerating ? 'default' : 'pointer',
+                        opacity: isUserGenerating ? 0.6 : 1,
+                      }}
+                    >
+                      {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
+                    </button>
                   </div>
                   <>
                     {/* Deterministic metric always; the AI recap is appended only
@@ -871,7 +784,7 @@ export default function Apps() {
                       {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)}
                       {narrative?.summary ? ` ${narrative.summary}` : ''}
                     </p>
-                    {!narrative && !isUserGenerating && !currentGenerationStatus && narrativeSupported && (
+                    {!narrative && !isUserGenerating && !currentGenerationStatus && (
                       <p style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
                         The sites and pages below are computed from your activity. Press Generate for a written recap.
                       </p>
@@ -956,8 +869,8 @@ export default function Apps() {
                   // pages into a primary work list and a quieter "Off to the
                   // side" group for streaming/social. Each group keeps its
                   // duration order; nothing is hidden, only deprioritized.
-                  const domainSplit = partitionWorkFirst((detail.topDomains ?? []).slice(0, 8), (d) => d.domain)
-                  const pageSplit = partitionWorkFirst(detail.topPages.slice(0, 8), (p) => p.domain)
+                  const domainSplit = partitionWorkFirst(detail.topDomains ?? [], (d) => d.domain)
+                  const pageSplit = partitionWorkFirst(detail.topPages, (p) => p.domain)
 
                   const offToTheSideSubhead = (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px', color: 'var(--color-text-tertiary)' }}>
@@ -1020,6 +933,9 @@ export default function Apps() {
                             text={page.domain}
                             style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
                           />
+                          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                            {page.visitCount ?? 1} visit{(page.visitCount ?? 1) === 1 ? '' : 's'}
+                          </div>
                         </div>
                       </button>
                       <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
@@ -1027,8 +943,20 @@ export default function Apps() {
                       </div>
                       <DeleteIconButton
                         label={`Delete activity for ${page.displayTitle}`}
-                        busy={deletingActivityKey === (page.url ? `url:${page.url}` : `domain:${page.domain}`)}
-                        onClick={() => { void handleDeleteWebsiteActivity({ domain: page.domain, url: page.url, title: page.displayTitle }) }}
+                        busy={deletingActivityKey === (
+                          page.url || page.normalizedUrl || page.pageKey
+                            ? `url:${page.normalizedUrl ?? page.url ?? page.pageKey}`
+                            : `domain:${page.domain}`
+                        )}
+                        onClick={() => {
+                          void handleDeleteWebsiteActivity({
+                            domain: page.domain,
+                            url: page.url,
+                            normalizedUrl: page.normalizedUrl,
+                            pageKey: page.pageKey,
+                            title: page.displayTitle,
+                          })
+                        }}
                       />
                     </div>
                   )

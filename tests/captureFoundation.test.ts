@@ -69,7 +69,7 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
 
   insertAppSession(db, {
     bundleId: 'com.apple.loginwindow',
-    appName: 'loginwindow',
+    appName: 'Login Window',
     start: localMs(date, 8),
     end: localMs(date, 9),
   })
@@ -96,7 +96,34 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
   const sessions = getSessionsForRange(db, from, to)
   assert.equal(sessions.length, 1)
   assert.ok(!sessions.some((session) =>
-    ['finder', 'loginwindow', 'usernotificationcenter'].includes(session.appName.toLowerCase())))
+    ['finder', 'login window', 'usernotificationcenter'].includes(session.appName.toLowerCase())))
+  db.close()
+})
+
+test('legacy executable paths collapse into the same canonical app rows as bundle ids', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-06-18'
+  const [from, to] = localDayBounds(date)
+
+  insertAppSession(db, {
+    bundleId: '/Applications/Claude.app/Contents/MacOS/Claude',
+    appName: 'Claude',
+    start: localMs(date, 9),
+    end: localMs(date, 9, 30),
+  })
+  insertAppSession(db, {
+    bundleId: 'com.anthropic.claudefordesktop',
+    appName: 'Claude',
+    start: localMs(date, 10),
+    end: localMs(date, 10, 30),
+  })
+
+  const summaries = getAppSummariesForRange(db, from, to)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].canonicalAppId, 'claude')
+  assert.equal(summaries[0].appName, 'Claude')
+  assert.equal(summaries[0].totalSeconds, 60 * 60)
   db.close()
 })
 

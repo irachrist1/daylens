@@ -2002,7 +2002,8 @@ function formatDuration(seconds: number): string {
 
 function dayBounds(date: Date): [number, number] {
   const from = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-  return [from, from + 86_400_000]
+  const to = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime()
+  return [from, to]
 }
 
 function countSwitches(sessions: { bundleId: string }[]): number {
@@ -2373,7 +2374,8 @@ function tableExistsForAIPrompt(tableName: string): boolean {
 function localDateBoundsFromString(dateStr: string): [number, number] {
   const [year, month, day] = dateStr.split('-').map(Number)
   const from = new Date(year, month - 1, day).getTime()
-  return [from, from + 86_400_000]
+  const to = new Date(year, month - 1, day + 1).getTime()
+  return [from, to]
 }
 
 function summarizePatternKey(raw: string): string | null {
@@ -3957,8 +3959,11 @@ function workFirstByDomain<T>(rows: T[], domain: (row: T) => string | null | und
   return [...work, ...leisure]
 }
 
-function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContextBundle | null {
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
+function buildAppNarrativeBundle(
+  canonicalAppId: string,
+  daysOrDate: number | string = 7,
+): ReportContextBundle | null {
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   if (detail.totalSeconds <= 0) return null
 
   // DEV-89: "Often used with" is gone from the Apps view, and the recap no
@@ -4000,10 +4005,20 @@ function buildAppNarrativeBundle(canonicalAppId: string, days = 7): ReportContex
   const packedPages = take(orderedPages, evidenceCost)
   const packedBlockAppearances = take(detail.blockAppearances, evidenceCost)
 
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
   const rangeWord = days >= ALL_TIME_DAYS ? 'all time' : days === 1 ? 'day' : `${days} days`
+  const title = isDate
+    ? `${detail.displayName} on ${daysOrDate}`
+    : days >= ALL_TIME_DAYS
+      ? `${detail.displayName} across all time`
+      : `${detail.displayName} in the last ${rangeWord}`
+  const scopeLabel = isDate
+    ? `${detail.displayName} on ${daysOrDate}`
+    : `${detail.displayName} over ${days >= ALL_TIME_DAYS ? 'all time' : days === 1 ? 'today' : `${days} days`}`
   return {
-    title: days >= ALL_TIME_DAYS ? `${detail.displayName} across all time` : `${detail.displayName} in the last ${rangeWord}`,
-    scopeLabel: `${detail.displayName} over ${days >= ALL_TIME_DAYS ? 'all time' : days === 1 ? 'today' : `${days} days`}`,
+    title,
+    scopeLabel,
     // B4: do NOT feed totalTracked / sessionCount to the narrative model.
     // The rail recomputes those live (and adds live-session minutes) while
     // the narrative is cache-keyed to a snapshot. The two drift within
@@ -4271,21 +4286,35 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
 
 async function generateAppNarrative(
   canonicalAppId: string,
-  days = 7,
+  daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
-  const bundle = buildAppNarrativeBundle(canonicalAppId, days)
+  const bundle = buildAppNarrativeBundle(canonicalAppId, daysOrDate)
   if (!bundle) {
-    console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${days}d`)
+    console.info(`[ai] app_narrative skipped: no bundle (totalSeconds<=0) for ${canonicalAppId} ${daysOrDate}`)
     return null
   }
 
-  const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
+  const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
   const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
-  const [, todayToMs] = dayBounds(new Date())
+  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
+  const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
+  const [memoryFromMs, memoryToMs] = isDate
+    ? localDateBoundsFromString(daysOrDate)
+    : (() => {
+      const [, todayToMs] = dayBounds(new Date())
+      if (days >= ALL_TIME_DAYS) return [0, todayToMs] as const
+      const end = new Date(todayToMs)
+      const fromMs = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate() - days,
+      ).getTime()
+      return [fromMs, todayToMs] as const
+    })()
   const memoryPrompt = buildDaylensMemoryPromptBlock({
-    fromMs: todayToMs - Math.max(1, days) * 86_400_000,
-    toMs: todayToMs,
+    fromMs: memoryFromMs,
+    toMs: memoryToMs,
   })
   const inputSignature = hashText([appNarrativeSignature(detail), memoryPrompt].join('\n'))
   // Force=true must bypass the signature short-circuit. Without this, clicking
@@ -6137,17 +6166,17 @@ export async function getWeekReview(
 
 export async function getAppNarrative(
   canonicalAppId: string,
-  days = 7,
+  daysOrDate: number | string = 7,
   force = false,
 ): Promise<AISurfaceSummary | null> {
   if (!force) {
-    const detail = getAppDetailPayload(getDb(), canonicalAppId, days, getCurrentSession())
+    const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
     const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
     if (existing) return existing
     return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })
   }
-  return generateAppNarrative(canonicalAppId, days, true)
+  return generateAppNarrative(canonicalAppId, daysOrDate, true)
 }
 
 export function clearAIHistory(): void {
