@@ -60,11 +60,16 @@ function toDateStr(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function eachDay(from: string, to: string, cap = 62): string[] {
+// Expand a span into per-day keys. When the span exceeds `cap`, we keep the
+// most RECENT `cap` days (chat almost always wants recent activity) and the
+// caller reports the effective window, so a long range is never silently
+// truncated at the wrong end.
+function eachDay(from: string, to: string, cap = 92): string[] {
   const [fromMs] = localDayBounds(from)
   const [toMs] = localDayBounds(to)
+  const earliestAllowed = Math.max(fromMs, toMs - (cap - 1) * 86_400_000)
   const days: string[] = []
-  for (let ms = fromMs; ms <= toMs && days.length < cap; ms += 86_400_000) {
+  for (let ms = earliestAllowed; ms <= toMs; ms += 86_400_000) {
     days.push(toDateStr(ms))
   }
   return days
@@ -99,7 +104,12 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
   const appSeconds = new Map<string, number>()
   let totalTrackedSeconds = 0
 
-  for (const date of eachDay(from, to)) {
+  // The effective window may be narrower than requested for very long spans
+  // (see eachDay's cap); report what we actually scanned so totals are honest.
+  const scannedDays = eachDay(from, to)
+  const effectiveFrom = scannedDays[0] ?? from
+
+  for (const date of scannedDays) {
     const summary = execGetDaySummary({ date }, db)
     if (summary.totalTrackedSeconds <= 0) continue
     totalTrackedSeconds += summary.totalTrackedSeconds
@@ -134,7 +144,7 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
     .slice(0, 12)
 
-  return { from, to, totalTrackedSeconds, days, topActivities, topApps }
+  return { from: effectiveFrom, to, totalTrackedSeconds, days, topActivities, topApps }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,9 +270,10 @@ export function runResolverQueries(queries: ResolverQuery[], db: Database.Databa
 // ---------------------------------------------------------------------------
 
 function fmtDuration(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds))
-  const h = Math.floor(total / 3600)
-  const m = Math.round((total % 3600) / 60)
+  // Round to whole minutes first so we never emit an invalid "1h 60m".
+  const totalMinutes = Math.round(Math.max(0, seconds) / 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
   if (h <= 0) return `${m}m`
   return `${h}h ${m}m`
 }

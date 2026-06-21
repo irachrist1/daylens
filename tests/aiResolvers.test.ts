@@ -48,8 +48,9 @@ function seedCodingDay(db: Database.Database): Date {
   return today
 }
 
-test('getDay resolves grounded blocks + a non-zero total for a coding day', () => {
+test('getDay resolves grounded blocks + a non-zero total for a coding day', (t) => {
   const db = setupDb()
+  t.after(() => db.close())
   const today = seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getDay', date: dateStr(today) }, db)
   assert.equal(fact.isEmpty, false, 'a day with two coding sessions is not empty')
@@ -60,40 +61,40 @@ test('getDay resolves grounded blocks + a non-zero total for a coding day', () =
   const text = serializeFact(fact)
   assert.match(text, /getDay/)
   assert.match(text, /\d{2}:\d{2}/, 'block time ranges are present for citation')
-  db.close()
 })
 
-test('getApp resolves Cursor time and a per-day breakdown', () => {
+test('getApp resolves Cursor time and a per-day breakdown', (t) => {
   const db = setupDb()
+  t.after(() => db.close())
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getApp', app: 'Cursor' }, db)
   assert.equal(fact.isEmpty, false)
   const data = fact.data as GetAppUsageResult
   assert.ok(data.totalSeconds > 0, 'Cursor has tracked time')
   assert.ok(data.dailyBreakdown.length > 0, 'a per-day breakdown is returned')
-  db.close()
 })
 
-test('getApp on an unknown app reports empty without throwing', () => {
+test('getApp on an unknown app reports empty without throwing', (t) => {
   const db = setupDb()
+  t.after(() => db.close())
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getApp', app: 'NonexistentApp42' }, db)
   assert.equal(fact.isEmpty, true, 'no tracked time for an app that was never used')
-  db.close()
 })
 
-test('recall finds a session by a window-title keyword', () => {
+test('recall finds a session by a window-title keyword', (t) => {
   const db = setupDb()
+  t.after(() => db.close())
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'recall', query: 'wrappedFacts' }, db)
   assert.equal(fact.isEmpty, false, 'the wrappedFacts.ts window title is searchable')
   const data = fact.data as SearchSessionsResult
   assert.ok(data.hits.length > 0)
-  db.close()
 })
 
-test('getAttribution with no clients returns an inferred breakdown and offers setup', () => {
+test('getAttribution with no clients returns an inferred breakdown and offers setup', (t) => {
   const db = setupDb()
+  t.after(() => db.close())
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getAttribution' }, db)
   const data = fact.data as GetAttributionResult
@@ -102,5 +103,4 @@ test('getAttribution with no clients returns an inferred breakdown and offers se
   assert.ok((data.inferred?.length ?? 0) > 0, 'an inferred breakdown is produced from the blocks')
   const text = serializeFact(fact)
   assert.match(text, /offer to set up named projects/i)
-  db.close()
 })
