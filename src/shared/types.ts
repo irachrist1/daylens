@@ -460,7 +460,7 @@ export interface AIReviewFocusAction {
 export type AIMessageAction = AIStartFocusAction | AIStopFocusAction | AIReviewFocusAction
 
 export type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
-export type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json'
+export type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx'
 
 export interface AIMessageArtifact {
   id: string

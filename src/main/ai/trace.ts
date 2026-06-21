@@ -60,6 +60,23 @@ export interface TraceProsePassEvent {
   fallback?: 'timestamp_mismatch' | 'empty' | 'error' | 'timeout'
 }
 
+// Emitted by the planner (ADR 0002 step 1): which resolvers it chose, and
+// whether that came from a deterministic shortcut, the constrained model call,
+// or the nearest-answerable fallback.
+export interface TracePlannerDecisionEvent {
+  kind: 'planner_decision'
+  source: 'shortcut' | 'model' | 'fallback'
+  queries: unknown[]
+}
+
+// Emitted by the phrase pass (ADR 0002 step 3). `input` is the resolved facts
+// block; `output` is the answer handed to the user.
+export interface TracePhrasePassEvent {
+  kind: 'phrase_pass'
+  input: string
+  output: string
+}
+
 export interface TraceFinalEvent {
   kind: 'final'
   text: string
@@ -86,6 +103,8 @@ export type TraceEvent =
   | TraceRouterEvent
   | TraceRouterDecisionEvent
   | TraceProsePassEvent
+  | TracePlannerDecisionEvent
+  | TracePhrasePassEvent
   | TraceFinalEvent
   | TraceCitationEvent
   | TraceErrorEvent
