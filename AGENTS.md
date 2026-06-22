@@ -122,3 +122,22 @@ scored baseline, not a pass/fail gate.
 Plain English. No role honorifics ("as requested, sir"), no agent-speak ("I shall now
 proceed to..."), no walls of text. Write like the specs are written — short, specific,
 grounded. Say what changed and what to test. That's it.
+
+## Cursor Cloud specific instructions
+
+This is an Electron desktop app. Standard commands live in `package.json` / `CONTRIBUTING.md`
+(`npm run typecheck`, `npm run lint`, `npm test`, `npm start`). The VM snapshot already has the
+native-module system libraries (`libsecret-1-dev`, `xvfb`, `dbus-x11`, etc.) and node deps
+installed; the startup update script runs `npm install`, whose `postinstall` rebuilds the native
+modules (`better-sqlite3`, `@paymoapp/active-window`, `keytar`) against Electron. If a run ever
+hits a native-module ABI error, re-run `npm install` to rebuild.
+
+- **Running the app:** it needs a display. A desktop is on `DISPLAY=:1`, and the container needs
+  the sandbox off, so launch with `DISPLAY=:1 ELECTRON_DISABLE_SANDBOX=1 npm start`.
+- **Expected non-fatal noise:** `Failed to connect to the bus` (dbus), `Exiting GPU process`,
+  `failed to register global shortcut`, and `keytar`/`settings hasApiKey` "transport disabled"
+  errors are all normal headless-VM output — the app still runs. There is no OS keyring, so API
+  keys can't be stored; the app starts fine without one.
+- **Tests:** `npm test` is hermetic (no API keys, no network) and runs each file in its own
+  Electron-as-node process. It does not need a display. The paid AI suites listed above still
+  require human approval and real keys.
