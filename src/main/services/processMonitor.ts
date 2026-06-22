@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import fs from 'node:fs'
 import type { ProcessSnapshot } from '@shared/types'
 import { observeProcessSnapshots } from './backgroundProcessEvidence'
 
@@ -9,6 +10,32 @@ const PROCESS_POLL_MS = 30_000
 let monitorInterval: ReturnType<typeof setInterval> | null = null
 let latestSnapshot: ProcessSnapshot[] = []
 let refreshInFlight = false
+let previousCpuByPid = new Map<number, { cpuTicks: number; capturedAt: number }>()
+
+export function parseProcStatLine(statContent: string, statusContent: string): ProcessSnapshot | null {
+  const close = statContent.lastIndexOf(')')
+  const open = statContent.indexOf('(')
+  if (close <= open) return null
+
+  const pid = parseInt(statContent.slice(0, open).trim(), 10)
+  if (!Number.isFinite(pid) || pid <= 0) return null
+
+  const name = statContent.slice(open + 1, close).trim() || 'unknown'
+  const rest = statContent.slice(close + 2).trim().split(/\s+/)
+  const utime = parseInt(rest[11] ?? '0', 10)
+  const stime = parseInt(rest[12] ?? '0', 10)
+  const rssMatch = statusContent.match(/^VmRSS:\s+(\d+)\s+kB/m)
+  const memoryMb = rssMatch ? Math.round(parseInt(rssMatch[1], 10) / 1024) : 0
+  if (memoryMb <= 0) return null
+
+  return {
+    pid,
+    name,
+    cpuPercent: Math.max(0, utime + stime),
+    memoryMb,
+    capturedAt: Date.now(),
+  }
+}
 
 export function parseCimProcessOutput(output: string): ProcessSnapshot[] {
   const now = Date.now()
@@ -66,7 +93,43 @@ export function parseWmicOutput(output: string): ProcessSnapshot[] {
 }
 
 function enrichCpuPercent(snapshots: ProcessSnapshot[]): ProcessSnapshot[] {
-  return snapshots
+  const now = Date.now()
+  return snapshots.map((snapshot) => {
+    const cpuTicks = snapshot.cpuPercent
+    const previous = previousCpuByPid.get(snapshot.pid)
+    previousCpuByPid.set(snapshot.pid, { cpuTicks, capturedAt: now })
+    if (!previous) return { ...snapshot, cpuPercent: 0 }
+
+    const elapsedSec = Math.max(0.001, (now - previous.capturedAt) / 1_000)
+    const deltaTicks = Math.max(0, cpuTicks - previous.cpuTicks)
+    const cpuPercent = Math.max(0, Math.min(100, (deltaTicks / elapsedSec) * 100 / 100))
+    return { ...snapshot, cpuPercent }
+  })
+}
+
+function refreshSnapshotProc(): void {
+  if (process.platform !== 'linux' || refreshInFlight) return
+  refreshInFlight = true
+  try {
+    const snapshots: ProcessSnapshot[] = []
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue
+      try {
+        const stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf8')
+        const status = fs.readFileSync(`/proc/${entry}/status`, 'utf8')
+        const snapshot = parseProcStatLine(stat, status)
+        if (snapshot) snapshots.push(snapshot)
+      } catch {
+        // ignore unreadable processes
+      }
+    }
+    latestSnapshot = snapshots
+    observeProcessSnapshots(latestSnapshot)
+  } catch {
+    // keep previous snapshot
+  } finally {
+    refreshInFlight = false
+  }
 }
 
 function refreshSnapshotCim(): void {
@@ -101,13 +164,18 @@ function refreshSnapshotWmic(): void {
 }
 
 function refreshSnapshot(): void {
-  if (process.platform !== 'win32' || refreshInFlight) return
+  if (refreshInFlight) return
+  if (process.platform === 'linux') {
+    refreshSnapshotProc()
+    return
+  }
+  if (process.platform !== 'win32') return
   refreshInFlight = true
   refreshSnapshotCim()
 }
 
 export function ensureProcessMonitor(): void {
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' && process.platform !== 'linux') {
     latestSnapshot = []
     return
   }

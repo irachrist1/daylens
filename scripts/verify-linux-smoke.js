@@ -97,6 +97,14 @@ if (!report.trackingStatus.moduleSource && !report.trackingStatus.loadError) {
   fail('Expected either a tracking backend source or a tracking load error.')
 }
 
+if (!report.linuxTracking || typeof report.linuxTracking !== 'object') {
+  fail('Linux tracking diagnostics were missing from the smoke report.')
+}
+
+if (!['ready', 'limited', 'unsupported'].includes(report.linuxTracking.supportLevel)) {
+  fail(`Expected linuxTracking.supportLevel to be ready/limited/unsupported, got ${report.linuxTracking.supportLevel}`)
+}
+
 console.log('Smoke verification passed:')
 console.log(JSON.stringify({
   packageType: report.linuxDesktop.packageType,
@@ -104,5 +112,7 @@ console.log(JSON.stringify({
   packageOwner: report.linuxDesktop.packageOwner,
   updaterSupported: report.updater.supported,
   trackerBackend: report.trackingStatus.moduleSource,
+  linuxTrackingSupport: report.linuxTracking.supportLevel,
+  discoveredBrowsers: report.browserStatus.discoveredBrowsers.length,
   trayAvailable: report.tray?.available ?? null,
 }, null, 2))

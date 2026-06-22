@@ -677,7 +677,7 @@ export function registerDbHandlers(): void {
     let recentSamplesWithTitle = titleRows.with_title ?? 0
     let lastCapturedAt = titleRows.last_captured_at
 
-    if (process.platform === 'win32' && recentSamplesWithTitle === 0) {
+    if ((process.platform === 'win32' || process.platform === 'linux') && recentSamplesWithTitle === 0) {
       const sessionRows = db.prepare(`
         SELECT
           COUNT(*) AS recent_samples,

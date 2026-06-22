@@ -8,6 +8,7 @@ import type {
   ProofState,
   TrackingPermissionDetails,
   TrackingPermissionState,
+  LinuxTrackingDiagnostics,
 } from '@shared/types'
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { ipc } from '../lib/ipc'
@@ -119,6 +120,7 @@ export default function Onboarding({
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
+  const [linuxTracking, setLinuxTracking] = useState<LinuxTrackingDiagnostics | null>(null)
   const [settingsHandoff, setSettingsHandoff] = useState(false)
   const onboardingTrackedRef = useRef(false)
   const proofTrackedRef = useRef(false)
@@ -127,6 +129,7 @@ export default function Onboarding({
   const platform = settings.onboardingState.platform
   const stage = settings.onboardingState.stage
   const isMac = platform === 'macos'
+  const isLinux = platform === 'linux'
   const steps = isMac ? MAC_STEPS : NON_MAC_STEPS
   const activeStepIndex = useMemo(() => {
     const idx = steps.findIndex((s) => s.id.includes(stage))
@@ -262,11 +265,16 @@ export default function Onboarding({
 
     async function loadProof() {
       try {
-        const [timeline, liveSession] = await Promise.all([
+        const [timeline, liveSession, diagnostics] = await Promise.all([
           ipc.db.getTimelineDay(todayString()).catch(() => null),
           ipc.tracking.getLiveSession().catch(() => null),
+          isLinux ? ipc.tracking.getDiagnostics().catch(() => null) : Promise.resolve(null),
         ])
         if (cancelled) return
+
+        if (isLinux && diagnostics?.linuxTracking) {
+          setLinuxTracking(diagnostics.linuxTracking)
+        }
 
         const ready = Boolean(
           liveSession
@@ -304,7 +312,7 @@ export default function Onboarding({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [stage])
+  }, [stage, isLinux])
 
   useEffect(() => {
     if (!proof.ready || proofTrackedRef.current) return
@@ -563,7 +571,11 @@ export default function Onboarding({
                   <span />
                   <span />
                 </div>
-                <p>Have a great day. Daylens will keep listening for real work signal.</p>
+                {isLinux && linuxTracking && linuxTracking.supportLevel !== 'ready' ? (
+                  <p>{linuxTracking.supportMessage} Open Settings → Capture health after setup for the full picture.</p>
+                ) : (
+                  <p>Have a great day. Daylens will keep listening for real work signal.</p>
+                )}
               </div>
             )}
             <div className="onboarding-actions">
