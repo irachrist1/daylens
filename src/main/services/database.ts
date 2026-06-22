@@ -54,6 +54,17 @@ export function initDb(): void {
     // WAL mode for concurrent reads during tracking flushes
     _db.pragma('journal_mode = WAL')
     _db.pragma('foreign_keys = ON')
+    // The real database is large (500MB+, growing). Tune for that scale:
+    // - busy_timeout: wait out a tracking-flush write lock instead of throwing,
+    //   which previously surfaced as UI stalls during capture.
+    // - cache_size: negative = KiB; 64MB keeps hot pages (indexes, recent days)
+    //   resident instead of re-reading from disk on every navigation.
+    // - mmap_size: memory-map up to 512MB so reads avoid per-page read() syscalls.
+    // - synchronous NORMAL: safe with WAL, fewer fsyncs on the write path.
+    _db.pragma('busy_timeout = 5000')
+    _db.pragma('cache_size = -65536')
+    _db.pragma('mmap_size = 536870912')
+    _db.pragma('synchronous = NORMAL')
 
     stage = 'schema'
     // Apply schema (all CREATE TABLE IF NOT EXISTS — safe to run every launch)
