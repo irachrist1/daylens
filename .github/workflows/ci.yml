@@ -78,4 +78,5 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
       - run: npm run typecheck
-      - run: npm test
+      # Hermetic suite runs on ubuntu-latest/test; this job only proves Windows
+      # native modules compile under electron-rebuild.
