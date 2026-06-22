@@ -23,15 +23,17 @@
 //   TEST_CONCURRENCY=1 node scripts/run-tests.mjs   # force serial
 
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const require = createRequire(import.meta.url)
 const testsDir = path.join(projectRoot, 'tests')
 const loader = path.join(testsDir, 'support', 'ts-loader.mjs')
-const electronBin = path.join(projectRoot, 'node_modules', '.bin', 'electron')
+const electronBin = require('electron')
 
 // Files that must NOT run in the hermetic suite because they need a live
 // Anthropic key, real keytar, the user's real DB, or otherwise reach the
