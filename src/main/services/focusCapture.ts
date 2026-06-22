@@ -7,6 +7,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { getDb } from './database'
+import { getSettings } from './settings'
+import { resolveCanonicalApp } from '../lib/appIdentity'
+import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
+import { isSystemNoiseApp } from '@shared/systemNoise'
 const FOCUS_EVENT_SCHEMA_VERSION = 1
 const FOCUS_EVENT_TYPES = [
   'app_activated',
@@ -185,7 +189,38 @@ function flushFocusEvents(): void {
   }
 }
 
+// Focus events get the same system-noise and exclusion gates as foreground
+// sessions, so a tab-switch or window-change for an excluded app/site (or a
+// system surface like loginwindow) is never even written to focus_events — and
+// so never reaches projections, Timeline, Apps, or the AI/MCP boundary. Pure
+// and exported so the gate is directly testable without spawning the helper.
+export function shouldCaptureFocusEvent(
+  ev: Pick<HelperEvent, 'app_bundle_id' | 'app_name' | 'window_title' | 'url'>,
+  controls: TrackingControlsState,
+): boolean {
+  if (ev.app_bundle_id || ev.app_name) {
+    if (isSystemNoiseApp({ bundleId: ev.app_bundle_id, appName: ev.app_name })) return false
+    const identity = resolveCanonicalApp(ev.app_bundle_id ?? '', ev.app_name ?? '')
+    if (!decideAppCapture(controls, {
+      bundleId: ev.app_bundle_id,
+      canonicalAppId: identity.canonicalAppId,
+      appName: ev.app_name,
+      windowTitle: ev.window_title,
+    }).capture) return false
+  }
+  if (ev.url) {
+    try {
+      const domain = new URL(ev.url).hostname
+      if (!decideSiteCapture(controls, { domain, windowTitle: ev.window_title }).capture) return false
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
 function enqueueEvent(ev: HelperEvent): void {
+  if (!shouldCaptureFocusEvent(ev, trackingControlsStateFromSettings(getSettings()))) return
   pendingEvents.push(ev)
   if (pendingEvents.length >= FOCUS_FLUSH_MAX_BATCH) {
     flushFocusEvents()

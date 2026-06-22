@@ -23,6 +23,7 @@ import { localDayBounds } from '../lib/localDate'
 import { resolveCanonicalApp, type CanonicalAppIdentity } from '../lib/appIdentity'
 import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
+import { isSystemNoiseApp } from '@shared/systemNoise'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -99,6 +100,9 @@ function normalizedNoiseIdentity(value: string | null | undefined): string {
 }
 
 function isUxNoise(row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'raw_app_name' | 'canonical_app_id'>): boolean {
+  // Shared invisible-OS-identity policy first (bundle-id list lives in one
+  // place); then the read-layer's own product-noise names/substrings.
+  if (isSystemNoiseApp({ bundleId: row.bundle_id, appName: row.app_name })) return true
   const values = [row.bundle_id, row.app_name, row.raw_app_name, row.canonical_app_id]
     .filter((value): value is string => Boolean(value?.trim()))
   const normalizedExactNames = new Set([...UX_NOISE_EXACT_NAMES].map(normalizedNoiseIdentity))

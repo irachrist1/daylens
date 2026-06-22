@@ -9,6 +9,9 @@
 // them. New question types are served by ADDING a resolver here, never by
 // loosening the model.
 import type Database from 'better-sqlite3'
+import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
+import { trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
+import { getSettings } from '../services/settings'
 import {
   execGetAppUsage,
   execGetBlockAtTime,
@@ -230,7 +233,11 @@ function isEmptyResult(query: ResolverQuery, data: unknown): boolean {
   }
 }
 
-export function runResolverQuery(query: ResolverQuery, db: Database.Database): ResolvedFact {
+export function runResolverQuery(
+  query: ResolverQuery,
+  db: Database.Database,
+  controls: TrackingControlsState = trackingControlsStateFromSettings(getSettings()),
+): ResolvedFact {
   let data: unknown
   switch (query.resolver) {
     case 'getDay':
@@ -255,11 +262,20 @@ export function runResolverQuery(query: ResolverQuery, db: Database.Database): R
       data = execListClients({ startDate: query.from, endDate: query.to }, db)
       break
   }
-  return { query, data, isEmpty: isEmptyResult(query, data) }
+  // Last-line privacy boundary: nothing excluded (or system-noise) is allowed
+  // into a fact before it is serialized and handed to the model. isEmpty stays
+  // on the raw result so "the day had activity" is reported honestly even when
+  // every surfaced row was an excluded one.
+  const filtered = filterTrackingExcludedEvidence(data, controls)
+  return { query, data: filtered, isEmpty: isEmptyResult(query, data) }
 }
 
-export function runResolverQueries(queries: ResolverQuery[], db: Database.Database): ResolvedFact[] {
-  return queries.map((query) => runResolverQuery(query, db))
+export function runResolverQueries(
+  queries: ResolverQuery[],
+  db: Database.Database,
+  controls: TrackingControlsState = trackingControlsStateFromSettings(getSettings()),
+): ResolvedFact[] {
+  return queries.map((query) => runResolverQuery(query, db, controls))
 }
 
 // ---------------------------------------------------------------------------
