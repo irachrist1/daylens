@@ -1,8 +1,11 @@
-// Tool schemas and executor for AI recall queries.
-// Imported by: spike scripts (Task C), tool-use integration (Task D),
-// MCP server (Task E).
+// Resolver bodies for the AI tab (ADR 0002). The `exec*` functions are the
+// deterministic data functions the app owns; they're wrapped by the typed
+// resolver set in `ai/resolvers.ts` (getDay/getRange/getApp/getBlockAtTime/
+// recall/getAttribution/listClients). The model never executes them — it only
+// selects/parameterizes (the planner) and phrases their output. The old
+// model-facing tool schemas + agentic tool-loop were deleted with DEV-90.
+// `executeTool` remains as a typed name→resolver dispatch for tests/the MCP layer.
 import type Database from 'better-sqlite3'
-import type { FunctionDeclaration } from '@google/genai'
 import {
   getAppSummariesForRange,
   getSessionsForRange,
@@ -79,6 +82,9 @@ export interface SessionSearchHit {
   durationSeconds: number
   date: string        // YYYY-MM-DD local
   excerpt: string     // FTS5 snippet with [[mark]]…[[/mark]] highlights
+  /** The page URL for kind:'page' hits — what link recall (ai.md §8.1) returns
+   *  to the user. Null for app-session hits. */
+  url?: string | null
 }
 
 export interface SearchSessionsResult {
@@ -322,256 +328,6 @@ export interface ListClientsResult {
 }
 
 // ---------------------------------------------------------------------------
-// JSON Schema — shared property definitions (reused across both formats)
-// ---------------------------------------------------------------------------
-
-const DATE_PARAM = {
-  type: 'string',
-  description: 'Local calendar date in YYYY-MM-DD format (e.g. "2026-04-21").',
-  pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-}
-
-const LIMIT_PARAM = {
-  type: 'integer',
-  description: 'Maximum number of results to return. Defaults to 25, capped at 100.',
-  minimum: 1,
-  maximum: 100,
-}
-
-// ---------------------------------------------------------------------------
-// Anthropic tool schemas
-// Spec: https://docs.anthropic.com/en/api/messages#tools
-// ---------------------------------------------------------------------------
-
-export interface AnthropicTool {
-  name: string
-  description: string
-  input_schema: {
-    type: 'object'
-    properties: Record<string, object>
-    required?: string[]
-  }
-}
-
-export const anthropicTools: AnthropicTool[] = [
-  {
-    name: 'searchSessions',
-    description:
-      'Full-text search across app sessions and browser page visits by app name, window title, URL, and page title. ' +
-      'Use this to find when the user worked in a specific app, on a specific project, ' +
-      'studied a topic, consumed web pages, or saw a particular window/page title. Results are sorted by recency.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description:
-            'Keywords to search for in app name and window title. ' +
-            'Supports FTS5 operators: AND, OR, NOT, phrase quotes, prefix*.',
-        },
-        startDate: { ...DATE_PARAM, description: 'Restrict results to sessions starting on or after this date.' },
-        endDate: { ...DATE_PARAM, description: 'Restrict results to sessions starting on or before this date.' },
-        limit: LIMIT_PARAM,
-      },
-      required: ['query'],
-    },
-  },
-
-  {
-    name: 'getDaySummary',
-    description:
-      'Return a structured summary of all tracked activity for a given calendar day: ' +
-      'total time, top apps, top websites, timeline block labels, and focus metrics.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        date: { ...DATE_PARAM, description: 'The calendar day to summarize.' },
-      },
-      required: ['date'],
-    },
-  },
-
-  {
-    name: 'getAppUsage',
-    description:
-      'Return total usage time and session count for a specific application, ' +
-      'optionally filtered by date range. Also returns a per-day breakdown ' +
-      'and recent window titles so you can infer what the user was doing.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        appName: {
-          type: 'string',
-          description:
-            'App display name to look up (case-insensitive partial match, e.g. "Figma", "VS Code", "Chrome").',
-        },
-        startDate: { ...DATE_PARAM, description: 'Start of the date range (inclusive).' },
-        endDate: { ...DATE_PARAM, description: 'End of the date range (inclusive).' },
-      },
-      required: ['appName'],
-    },
-  },
-
-  {
-    name: 'searchArtifacts',
-    description:
-      'Search AI-generated artifacts (reports, charts, CSVs, exports) by title and summary. ' +
-      'Use this when the user asks about documents or files they generated via the AI.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Keywords to search in artifact title and summary text.',
-        },
-      },
-      required: ['query'],
-    },
-  },
-
-  {
-    name: 'getWeekSummary',
-    description:
-      'Return a structured summary for a full calendar week (Mon–Sun): ' +
-      'total time, focus percentage, top apps, per-day breakdown, best day, and most active day. ' +
-      'Use this for questions about "last week", "this week", or week-over-week comparisons.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        weekStartDate: {
-          ...DATE_PARAM,
-          description:
-            'The Monday that starts the target week in YYYY-MM-DD format. ' +
-            'To get last week, subtract 7 days from today\'s Monday.',
-        },
-      },
-      required: ['weekStartDate'],
-    },
-  },
-
-  {
-    name: 'getAttributionContext',
-    description:
-      'Return how much time the user has spent on a specific client or project, ' +
-      'based on attribution rules and labeled work sessions. ' +
-      'Use this for questions like "how long on ClientX" or "Daylens project time this month".',
-    input_schema: {
-      type: 'object',
-      properties: {
-        entityName: {
-          type: 'string',
-          description:
-            'Client or project name to look up. Partial, case-insensitive match. ' +
-            'Examples: "ClientX", "Daylens", "acme".',
-        },
-      },
-      required: ['entityName'],
-    },
-  },
-
-  {
-    name: 'searchFileMentions',
-    description:
-      'Extract filename-like tokens from window title strings in the tracked sessions. ' +
-      'Use this when the user asks which files, documents, or code files they had open. ' +
-      'Results are INFERRED from title strings — not from file-system events — so ' +
-      'always surface the note field to the user so they understand the evidence level.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        startDate: { ...DATE_PARAM, description: 'Restrict to sessions starting on or after this date.' },
-        endDate: { ...DATE_PARAM, description: 'Restrict to sessions starting on or before this date.' },
-      },
-      required: [],
-    },
-  },
-
-  {
-    name: 'getBlockAtTime',
-    description:
-      'Return the timeline work block covering a specific moment. Use this for ' +
-      'questions like "what was I doing at 4pm" or "what happened yesterday at 3pm". ' +
-      'Returns the covering block plus the app sessions overlapping it. ' +
-      'If no block covers the moment, `found` is false — do not fabricate an answer.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        date: { ...DATE_PARAM, description: 'Calendar day the moment falls on.' },
-        time: {
-          type: 'string',
-          description: 'Local time in 24-hour HH:MM format (e.g. "16:00" for 4 pm, "09:30" for 9:30 am).',
-          pattern: '^\\d{2}:\\d{2}$',
-        },
-      },
-      required: ['date', 'time'],
-    },
-  },
-
-  {
-    name: 'listClients',
-    description:
-      'Return the list of clients Daylens knows about, optionally ranked by ' +
-      'attributed time in a date range. Always returns the full client roster ' +
-      'from the clients table as `clientRoster`, and additionally returns ' +
-      'ranked usage in `attributedClients` when a date range is given or when ' +
-      'the most recent week has attributed sessions. Use this for questions ' +
-      'like "who are my clients", "list my clients this month".',
-    input_schema: {
-      type: 'object',
-      properties: {
-        startDate: { ...DATE_PARAM, description: 'Start of the attribution window (inclusive). Optional — omit for the full client roster.' },
-        endDate: { ...DATE_PARAM, description: 'End of the attribution window (inclusive). Optional — omit for the full client roster.' },
-      },
-      required: [],
-    },
-  },
-]
-
-// ---------------------------------------------------------------------------
-// OpenAI function-calling schemas
-// Spec: https://platform.openai.com/docs/guides/function-calling
-// ---------------------------------------------------------------------------
-
-export interface OpenAITool {
-  type: 'function'
-  function: {
-    name: string
-    description: string
-    parameters: {
-      type: 'object'
-      properties: Record<string, object>
-      required?: string[]
-    }
-  }
-}
-
-export const openaiTools: OpenAITool[] = anthropicTools.map((t) => ({
-  type: 'function' as const,
-  function: {
-    name: t.name,
-    description: t.description,
-    parameters: {
-      type: 'object' as const,
-      properties: t.input_schema.properties,
-      required: t.input_schema.required ?? [],
-    },
-  },
-}))
-
-// ---------------------------------------------------------------------------
-// Google (@google/genai) function-calling schemas
-// Spec: https://ai.google.dev/gemini-api/docs/function-calling
-// The Anthropic input_schema is already OpenAPI-3.0-shaped JSON Schema, which
-// is what Gemini accepts as a function declaration's `parameters` field.
-// ---------------------------------------------------------------------------
-
-export const googleTools: FunctionDeclaration[] = anthropicTools.map((t) => ({
-  name: t.name,
-  description: t.description,
-  parameters: t.input_schema as unknown as FunctionDeclaration['parameters'],
-}))
-
-// ---------------------------------------------------------------------------
 // Tool name union — used for typed dispatch in execution layer
 // ---------------------------------------------------------------------------
 
@@ -597,7 +353,7 @@ export type { SearchFileMentionsResult }
 // Executor — main-process only; bridges tool params to real DB queries
 // ---------------------------------------------------------------------------
 
-function localDayBounds(dateStr: string): [number, number] {
+export function localDayBounds(dateStr: string): [number, number] {
   const [y, m, d] = dateStr.split('-').map(Number)
   const from = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
   return [from, from + 86_400_000]
@@ -682,7 +438,7 @@ function tokenizeForBroadenedSearch(query: string): string[] {
     .filter((token) => token.length >= 3 && !SEARCH_STOPWORDS.has(token))
 }
 
-function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
+export function execSearchSessions(params: SearchSessionsParams, db: Database.Database): SearchSessionsResult {
   const limit = params.limit ?? 25
   const searchOpts = { startDate: params.startDate, endDate: params.endDate, limit }
 
@@ -696,6 +452,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
     durationSeconds: Math.round((h.endTime - h.startTime) / 1000),
     date: h.date,
     excerpt: h.excerpt ?? h.windowTitle ?? h.appName,
+    url: null,
   })
 
   const mapBrowserHit = (h: { id: number; domain: string; pageTitle: string | null; url: string | null; startTime: number; endTime: number; date: string; excerpt: string }): SessionSearchHit => ({
@@ -708,6 +465,7 @@ function execSearchSessions(params: SearchSessionsParams, db: Database.Database)
     durationSeconds: Math.max(0, Math.round((h.endTime - h.startTime) / 1000)),
     date: h.date,
     excerpt: h.excerpt ?? h.pageTitle ?? h.url ?? h.domain,
+    url: h.url ?? null,
   })
 
   // B2: search both app_sessions_fts and website_visits_fts so the AI can
@@ -781,7 +539,7 @@ function fmtHHMM(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): DaySummaryResult {
+export function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): DaySummaryResult {
   const [fromMs, toMs] = localDayBounds(params.date)
   const summaries = getAppSummariesForRange(db, fromMs, toMs)
   const sessions = getSessionsForRange(db, fromMs, toMs)
@@ -917,7 +675,7 @@ function execGetDaySummary(params: GetDaySummaryParams, db: Database.Database): 
   }
 }
 
-function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetAppUsageResult {
+export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetAppUsageResult {
   const now = Date.now()
   const fromMs = params.startDate ? localDayBounds(params.startDate)[0] : now - 365 * 86_400_000
   const toMs = params.endDate ? localDayBounds(params.endDate)[1] : now
@@ -985,7 +743,7 @@ function execGetAppUsage(params: GetAppUsageParams, db: Database.Database): GetA
   }
 }
 
-function execSearchArtifacts(params: SearchArtifactsParams, db: Database.Database): SearchArtifactsResult {
+export function execSearchArtifacts(params: SearchArtifactsParams, db: Database.Database): SearchArtifactsResult {
   const hits = dbSearchArtifacts(db, params.query)
   return {
     hits: hits.map((h) => ({
@@ -999,7 +757,7 @@ function execSearchArtifacts(params: SearchArtifactsParams, db: Database.Databas
   }
 }
 
-function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database): GetWeekSummaryResult {
+export function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database): GetWeekSummaryResult {
   const [weekFromMs] = localDayBounds(params.weekStartDate)
   const weekToMs = weekFromMs + 7 * 86_400_000
   const weekEnd = toDateStr(weekToMs - 1)
@@ -1072,7 +830,7 @@ function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database)
   }
 }
 
-function execGetAttributionContext(params: GetAttributionContextParams, db: Database.Database): GetAttributionContextResult {
+export function execGetAttributionContext(params: GetAttributionContextParams, db: Database.Database): GetAttributionContextResult {
   const client = findClientByName(params.entityName, db)
   const project = client ? null : findProjectByName(params.entityName, db)
   const entityId = client?.id ?? project?.id ?? null
@@ -1153,7 +911,7 @@ function sanitizeKeyPageTitle(page: PageRefLike): string | null {
   return null
 }
 
-function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database): GetBlockAtTimeResult {
+export function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database): GetBlockAtTimeResult {
   const { date, time } = params
   const [fromMs] = localDayBounds(date)
   const match = time.match(/^(\d{1,2}):(\d{2})$/)
@@ -1230,7 +988,7 @@ function execGetBlockAtTime(params: GetBlockAtTimeParams, db: Database.Database)
 // List-clients tool
 // ---------------------------------------------------------------------------
 
-function execListClients(params: ListClientsParams, db: Database.Database): ListClientsResult {
+export function execListClients(params: ListClientsParams, db: Database.Database): ListClientsResult {
   const roster = dbListClients(db).map((row) => ({
     clientId: row.id,
     clientName: row.name,

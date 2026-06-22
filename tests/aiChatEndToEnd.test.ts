@@ -15,8 +15,9 @@
 // result, `sendMessage` sets sourceKind='deterministic' (see call site
 // around aiService.ts:4553). That's the invariant under test here.
 //
-// For the LLM tool-use path (when the router misses), see
-// tests/aiToolUse.test.ts — this file does not re-exercise that surface.
+// For the router-miss path, answers are now built plan → resolve → phrase
+// (ADR 0002); the deterministic resolver layer is covered in
+// tests/aiResolvers.test.ts. The old agentic tool-loop was deleted with DEV-90.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
