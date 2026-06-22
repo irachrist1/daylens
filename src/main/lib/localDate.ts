@@ -18,3 +18,8 @@ export function daysFromTodayLocalDateString(offsetDays: number): string {
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + offsetDays),
   )
 }
+
+export function shiftLocalDateString(dateStr: string, offsetDays: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return localDateString(new Date(year, month - 1, day + offsetDays))
+}

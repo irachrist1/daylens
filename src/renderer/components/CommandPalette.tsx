@@ -15,7 +15,7 @@ import {
   Timer,
 } from 'lucide-react'
 import { ipc } from '../lib/ipc'
-import { dateStringFromMs, todayString } from '../lib/format'
+import { shiftDateString, todayString } from '../lib/format'
 import {
   dedupeAndRankResults,
   isNaturalQuery,
@@ -215,7 +215,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
     { id: 'nav-ai', group: 'Navigate', label: 'Open AI', hint: 'Chat with Daylens', keywords: 'chat insights ask', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => navigate('/ai') },
     { id: 'nav-settings', group: 'Navigate', label: 'Open Settings', hint: 'Preferences and integrations', keywords: 'preferences provider sync', icon: <SettingsIcon size={15} strokeWidth={1.8} />, perform: () => navigate('/settings') },
     { id: 'wrapped-today', group: 'Day Wrapped', label: "Open today's Day Wrapped", hint: 'Recap the day so far', keywords: 'recap summary', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(todayString()) },
-    { id: 'wrapped-yesterday', group: 'Day Wrapped', label: "Open yesterday's Day Wrapped", hint: 'Morning brief', keywords: 'recap summary morning brief', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(dateStringFromMs(Date.now() - 86_400_000)) },
+    { id: 'wrapped-yesterday', group: 'Day Wrapped', label: "Open yesterday's Day Wrapped", hint: 'Morning brief', keywords: 'recap summary morning brief', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(shiftDateString(todayString(), -1)) },
     activeFocus
       ? { id: 'focus-stop', group: 'Focus' as const, label: 'End focus session', hint: `Session #${activeFocus.id}`, keywords: 'stop end', icon: <Timer size={15} strokeWidth={1.8} />, perform: async () => { await ipc.focus.stop(activeFocus.id); setActiveFocus(null) } }
       : { id: 'focus-start', group: 'Focus' as const, label: 'Start focus session', hint: 'Quiet distraction alerts', keywords: 'deep work', icon: <Timer size={15} strokeWidth={1.8} />, perform: async () => { await ipc.focus.start(null); setActiveFocus(await ipc.focus.getActive()) } },

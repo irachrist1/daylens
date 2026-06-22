@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AIWrappedNarrative, AppCategory, DayTimelinePayload, DistractionCostPayload, WebsiteSummary, WrappedPeriodFacts, WrappedPeriodNarrative } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { dateStringFromMs, dayBounds, formatTime, todayString } from '../lib/format'
+import { dayBounds, formatTime, shiftDateString, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
 import type { BrowserContext, FocusByPeriod, IdentityConfidence, WrappedQuality } from '../lib/wrappedFacts'
 import {
@@ -1382,11 +1382,7 @@ function useWeekData(enabled: boolean, anchorDate: string): WeekSummary | null {
 
   useEffect(() => {
     if (!enabled) return
-    const [y, m, d] = anchorDate.split('-').map(Number)
-    const anchorMs = new Date(y, m - 1, d).getTime()
-    const dates = Array.from({ length: 14 }, (_, i) =>
-      dateStringFromMs(anchorMs - (13 - i) * 86_400_000)
-    )
+    const dates = Array.from({ length: 14 }, (_, i) => shiftDateString(anchorDate, -(13 - i)))
 
     Promise.all(dates.map(date => ipc.db.getTimelineDay(date).catch(() => null)))
       .then(payloads => {

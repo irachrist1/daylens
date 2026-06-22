@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, Notification, app, nativeImage } from 'electron'
 import { getSessionsForRange } from '../db/queries'
-import { localDateString, localDayBounds } from '../lib/localDate'
+import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import { getDb } from './database'
 import { getSettings } from './settings'
 import { prepareDailyReport } from './ai'
@@ -192,7 +192,7 @@ async function checkMorningNudge(): Promise<void> {
   const settings = getSettings()
   const now = new Date()
   const today = localDateString(now)
-  const yesterday = localDateString(new Date(now.getTime() - 86_400_000))
+  const yesterday = shiftLocalDateString(today, -1)
   const state = readState()
 
   const decision = decideMorningNudge({
@@ -231,7 +231,7 @@ export async function fireTestDailyNotification(): Promise<{ ok: boolean; reason
 
   const now = new Date()
   const today = localDateString(now)
-  const yesterday = localDateString(new Date(now.getTime() - 86_400_000))
+  const yesterday = shiftLocalDateString(today, -1)
   const isMorning = now.getHours() < 12
   const targetDate = isMorning ? yesterday : today
 
