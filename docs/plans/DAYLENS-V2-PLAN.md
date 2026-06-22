@@ -42,7 +42,7 @@ Concretely:
 10. **Views don't talk to each other.** The Timeline, Apps, AI, and weekly review
     each compute their own numbers instead of reading from the same source.
 
-See `docs/plans/screenshots/` for evidence of each one.
+Each one is tracked as an issue in the "Daylens v2" Linear project.
 
 ---
 
