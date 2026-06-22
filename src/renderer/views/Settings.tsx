@@ -650,7 +650,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [workMemorySummary, setWorkMemorySummary] = useState<WorkMemorySettingsSummary | null>(null)
   const [workMemoryBusy, setWorkMemoryBusy] = useState<string | null>(null)
   const [workMemoryError, setWorkMemoryError] = useState<string | null>(null)
-  const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string> } | null>(null)
+  const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [clients, setClients] = useState<ClientRecord[]>([])
   const [clientsLoaded, setClientsLoaded] = useState(false)
@@ -1481,6 +1481,15 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   </button>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.55 }}>
+                  Reads <code style={{ fontSize: 11 }}>{mcpConfig.dbPath}</code> — your real local database.
+                </div>
+                {!mcpConfig.isPackaged && (
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
+                    Dev build — the paths above point at your source checkout. A packaged install runs the bundled
+                    server from inside the app and ships with this server off by default.
+                  </div>
+                )}
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
                   After updating the config, restart your MCP client for the changes to take effect.
                 </div>
               </div>

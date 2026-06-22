@@ -6,6 +6,11 @@ export const app = {
     if (name === 'userData') return os.tmpdir()
     return os.tmpdir()
   },
+  getAppPath() {
+    // Tests that exercise path resolution (e.g. mcpServer) can point this at a
+    // fixture root via DAYLENS_TEST_APP_PATH; otherwise it's a harmless tmp dir.
+    return process.env.DAYLENS_TEST_APP_PATH || os.tmpdir()
+  },
   getVersion() {
     return '0.0.0-test'
   },

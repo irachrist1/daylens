@@ -1,0 +1,18 @@
+import type { AIProviderMode, AppSettings } from '@shared/types'
+
+// Invariant #12: every AI surface runs on the provider the user picked in
+// Settings (`aiProvider`). The single exception is the AI chat tab, where the
+// user may explicitly pick a different provider for that one conversation
+// (`aiChatProvider`). That override is visible and user-initiated — never a
+// silent background swap. Block naming, summaries, reports, briefs and wraps
+// all follow `aiProvider`. This pure helper is the one place that rule lives,
+// kept free of electron imports so it can be unit-tested directly.
+export function selectJobProvider(
+  usesChatOverride: boolean,
+  settings: Pick<AppSettings, 'aiProvider' | 'aiChatProvider'>,
+): AIProviderMode {
+  if (usesChatOverride) {
+    return settings.aiChatProvider ?? settings.aiProvider ?? 'anthropic'
+  }
+  return settings.aiProvider ?? 'anthropic'
+}

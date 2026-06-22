@@ -5,6 +5,7 @@ import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
+import { selectJobProvider } from '../lib/providerRouting'
 import type {
   AIInvocationSource,
   AIJobType,
@@ -56,13 +57,14 @@ interface AIJobDefinition {
   screen: AISurface
   foreground: boolean
   timeoutMs: number
-  providerPreferenceKey: 'aiChatProvider' | 'aiBlockNamingProvider' | 'aiSummaryProvider' | 'aiArtifactProvider'
+  // Invariant #12: every AI surface runs on the single provider/model the user
+  // picked in Settings. The only sanctioned exception is an explicit, visible
+  // per-chat provider override in the AI tab — never a silent swap. Jobs that
+  // belong to that chat surface set `usesChatOverride`; everything else (block
+  // naming, summaries, reports, wraps) follows `settings.aiProvider`.
+  usesChatOverride?: boolean
   cachePolicy: 'off' | 'stable_prefix' | 'repeated_payload'
   modelStrategy: Extract<AIModelStrategy, 'balanced' | 'quality' | 'economy'>
-  // Hard-pin a specific model for this job regardless of tier defaults.
-  // Use sparingly — only for jobs that genuinely need a specific capability
-  // (e.g., report_generation needs Opus for structured agentic output).
-  providerModelOverride?: Partial<Record<AIProviderMode, string>>
   // Override the default output token cap for this job. Defaults to
   // DEFAULT_MAX_OUTPUT_TOKENS when omitted.
   maxOutputTokens?: number
@@ -74,7 +76,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: false,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'off',
     modelStrategy: 'economy',
   },
@@ -83,7 +84,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: false,
     timeoutMs: 12_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'economy',
   },
@@ -92,7 +92,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'background',
     foreground: false,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiBlockNamingProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
@@ -101,7 +100,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: true,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -110,7 +108,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_week',
     foreground: true,
     timeoutMs: 18_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
     // Week review prose spans multiple days; give it the full 32k budget.
@@ -121,7 +118,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'app_detail',
     foreground: true,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
     maxOutputTokens: 32000,
@@ -131,7 +127,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 30_000,
-    providerPreferenceKey: 'aiChatProvider',
+    usesChatOverride: true,
     cachePolicy: 'stable_prefix',
     modelStrategy: 'quality',
   },
@@ -140,7 +136,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiChatProvider',
+    usesChatOverride: true,
     cachePolicy: 'repeated_payload',
     modelStrategy: 'economy',
   },
@@ -149,16 +145,11 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 60_000,
-    providerPreferenceKey: 'aiArtifactProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'quality',
-    // Report generation is the one job that genuinely warrants Opus — it produces
-    // long-form structured output (tables, charts, formatted exports) in an agentic
-    // multi-step pattern where the extra capability pays for itself.
-    providerModelOverride: {
-      anthropic: 'claude-opus-4-8',
-      'claude-cli': 'claude-opus-4-8',
-    },
+    // No model pin: reports run on the same model the user picked in Settings,
+    // like every other surface (invariant #12). A silent Opus swap here is
+    // exactly the "nothing secretly switches" rule says we must not do.
     maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
   },
   attribution_assist: {
@@ -166,7 +157,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'background',
     foreground: false,
     timeoutMs: 15_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'stable_prefix',
     modelStrategy: 'balanced',
   },
@@ -175,7 +165,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: true,
     timeoutMs: 12_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -188,7 +177,6 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_week',
     foreground: true,
     timeoutMs: 14_000,
-    providerPreferenceKey: 'aiSummaryProvider',
     cachePolicy: 'repeated_payload',
     modelStrategy: 'balanced',
   },
@@ -200,7 +188,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 8_000,
-    providerPreferenceKey: 'aiChatProvider',
+    usesChatOverride: true,
     cachePolicy: 'off',
     modelStrategy: 'economy',
   },
@@ -217,8 +205,8 @@ function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | '
 //   balanced — foreground summaries that need coherent prose but not frontier reasoning
 //   quality  — interactive chat and complex queries where reasoning depth matters
 //
-// Opus is NOT in this table. It is only reached via providerModelOverride on specific
-// jobs (currently: report_generation) where structured agentic output justifies the cost.
+// This table is a last-resort fallback only: under BYOK the user's chosen model
+// (settings.<provider>Model) always wins, on every surface, including reports.
 //
 // models reviewed: 2026-05-31 — ids verified against each provider's public
 // docs. This table is a LAST-RESORT fallback: under BYOK the user's chosen model
@@ -296,8 +284,12 @@ export function providerLabel(provider: AIProviderMode): string {
 // cross-provider fallback (see applyStrategyProviderFallback): we never
 // silently route to a provider the user did not choose.
 function preferredProviderForJob(jobType: AIJobType, settings: AppSettings): AIProviderMode {
-  const preferenceKey = JOB_DEFINITIONS[jobType].providerPreferenceKey
-  return settings[preferenceKey] ?? settings.aiProvider ?? 'anthropic'
+  // The selected provider in Settings is authoritative for every surface. Chat
+  // is the one place a user can explicitly pick a different provider for that
+  // conversation; when they have, honour it — otherwise chat also follows the
+  // Settings choice. No background surface ever routes to a provider the user
+  // didn't pick (that was the "Settings says Claude, re-analyze runs Gemini" bug).
+  return selectJobProvider(Boolean(JOB_DEFINITIONS[jobType].usesChatOverride), settings)
 }
 
 function applyStrategyProviderFallback(preferred: AIProviderMode): AIProviderMode[] {
@@ -362,8 +354,7 @@ async function resolveProviderConfigsForJob(
     configs.push({
       provider,
       apiKey,
-      model: definition.providerModelOverride?.[provider]
-        ?? modelForProvider(provider, definition.modelStrategy, settings),
+      model: modelForProvider(provider, definition.modelStrategy, settings),
     })
   }
 
