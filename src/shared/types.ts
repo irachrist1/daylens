@@ -2,6 +2,11 @@
 // Shared types — imported by both main and renderer via path alias @shared/*
 // ---------------------------------------------------------------------------
 
+// Sentinel "days" value for the Apps view's All-time period. Large enough to
+// span all captured history (~100 years) so the range reaches epoch, and shared
+// so the renderer's range key and the main-process queries agree on the value.
+export const ALL_TIME_DAYS = 36500
+
 export interface AppSession {
   id: number
   bundleId: string          // exe name on Windows, bundle ID on macOS
@@ -694,9 +699,11 @@ export interface ResolvedIconPayload {
 export interface PageRef extends ArtifactRef {
   artifactType: 'page'
   domain: string
+  visitCount?: number
   browserBundleId?: string | null
   canonicalBrowserId?: string | null
   normalizedUrl?: string | null
+  pageKey?: string | null
   pageTitle?: string | null
 }
 

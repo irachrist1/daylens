@@ -10,6 +10,7 @@ import { localDateString } from '../lib/localDate'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { projectDay } from '../core/projections/chunk2'
+import { normalizeUrlForStorage, pageKeyForUrl } from '../lib/appIdentity'
 
 export interface PurgeResult {
   deletedRows: number
@@ -24,6 +25,8 @@ export interface DeleteTrackedActivityInput {
   appName?: string | null
   domain?: string | null
   url?: string | null
+  normalizedUrl?: string | null
+  pageKey?: string | null
   startTime?: number | null
   endTime?: number | null
   date?: string | null
@@ -47,6 +50,14 @@ function rematerializeAndNotify(affectedDates: string[]): void {
 
 function distinctLocalDates(timestamps: number[]): string[] {
   return [...new Set(timestamps.map((ms) => localDateString(new Date(ms))))]
+}
+
+function clearGeneratedActivitySummaries(db: ReturnType<typeof getDb>): void {
+  // A page/domain deletion changes the evidence behind app recaps and wider
+  // period summaries. Clear generated surfaces so no stale prose survives the
+  // user's explicit deletion; the next Generate action rebuilds from what
+  // remains.
+  db.prepare('DELETE FROM ai_surface_summaries').run()
 }
 
 export function deleteHistoryForApp(input: { bundleId?: string | null; appName?: string | null }): PurgeResult {
@@ -128,6 +139,7 @@ export function deleteHistoryForApp(input: { bundleId?: string | null; appName?:
     }
   })
   purge()
+  if (deletedRows > 0) clearGeneratedActivitySummaries(db)
 
   const affectedDates = [...affected]
   for (const date of affectedDates) {
@@ -196,6 +208,7 @@ export function deleteHistoryForSite(input: { domain: string }): PurgeResult {
     }
   })
   purge()
+  if (deletedRows > 0) clearGeneratedActivitySummaries(db)
 
   const affectedDates = [...affected]
   for (const date of affectedDates) {
@@ -359,6 +372,47 @@ export function deleteTrackedActivity(input: DeleteTrackedActivityInput): PurgeR
 
   const domain = (input.domain ?? '').trim().toLowerCase().replace(/^www\./, '')
   const url = (input.url ?? '').trim()
+  const normalizedUrl = (input.normalizedUrl ?? normalizeUrlForStorage(url) ?? '').trim()
+  const pageKey = (input.pageKey ?? pageKeyForUrl(normalizedUrl || url) ?? '').trim()
+  if (!hasValidExplicitRange && (url || normalizedUrl || pageKey)) {
+    // Match the strongest page identity available. A page key deliberately
+    // drops query parameters, so combining it with a normalized URL would
+    // wrongly delete every video or search sharing the same path.
+    const pageWhere = normalizedUrl
+      ? 'normalized_url = ?'
+      : pageKey
+        ? 'page_key = ?'
+        : 'url = ?'
+    const pageParams = [normalizedUrl || pageKey || url]
+    const visitRows = db.prepare(`
+      SELECT visit_time
+      FROM website_visits
+      WHERE ${pageWhere}
+    `).all(...pageParams) as { visit_time: number }[]
+    for (const row of visitRows) affectedDates.add(localDateString(new Date(row.visit_time)))
+    deletedRows += db.prepare(`DELETE FROM website_visits WHERE ${pageWhere}`).run(...pageParams).changes
+
+    const focusRows = db.prepare(`
+      SELECT id, ts_ms, url
+      FROM focus_events
+      WHERE url IS NOT NULL
+    `).all() as Array<{ id: number; ts_ms: number; url: string }>
+    const matchingFocusRows = focusRows.filter((row) =>
+      normalizedUrl
+        ? normalizeUrlForStorage(row.url) === normalizedUrl
+        : pageKey
+          ? pageKeyForUrl(row.url) === pageKey
+          : row.url === url)
+    const deleteFocusEvent = db.prepare('DELETE FROM focus_events WHERE id = ?')
+    const purgeFocusRows = db.transaction(() => {
+      for (const row of matchingFocusRows) {
+        affectedDates.add(localDateString(new Date(row.ts_ms)))
+        deletedRows += deleteFocusEvent.run(row.id).changes
+      }
+    })
+    purgeFocusRows()
+  }
+
   if (hasValidExplicitRange && (domain || url)) {
     const clauses: string[] = []
     const params: unknown[] = []
@@ -389,6 +443,8 @@ export function deleteTrackedActivity(input: DeleteTrackedActivityInput): PurgeR
         AND visit_time < ?
     `).run(...params, explicitStartTime, explicitEndTime).changes
   }
+
+  if (deletedRows > 0 && (domain || url)) clearGeneratedActivitySummaries(db)
 
   const dates = [...affectedDates]
   for (const date of dates) {
