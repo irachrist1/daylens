@@ -10,7 +10,7 @@ import {
 import { capture, updateAnalyticsPreference } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
-import { getMcpServerConfig, startMcpServer, stopMcpServer } from '../services/mcpServer'
+import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -54,6 +54,16 @@ export function registerSettingsHandlers(): void {
         startMcpServer()
       } else {
         stopMcpServer()
+      }
+    } else if (isMcpServerRunning()) {
+      // The MCP subprocess reads the exclusion set from env at spawn time. If a
+      // privacy-relevant setting changes while it's running, respawn it so the
+      // new exclusions take effect immediately instead of at the next launch —
+      // otherwise an MCP client could keep reading data the user just excluded.
+      const PRIVACY_KEYS = ['trackingControlsEnabled', 'trackingExcludedApps', 'trackingExcludedSites', 'trackingPaused']
+      if (rawChangedKeys.some((key) => PRIVACY_KEYS.includes(key))) {
+        stopMcpServer()
+        startMcpServer()
       }
     }
 

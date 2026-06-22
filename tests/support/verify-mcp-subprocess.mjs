@@ -5,6 +5,10 @@
 import { spawn } from 'node:child_process'
 
 const [dbPath, date = '2026-06-21'] = process.argv.slice(2)
+if (!dbPath) {
+  console.error('usage: verify-mcp-subprocess.mjs <dbPath> [date]')
+  process.exit(2)
+}
 const SERVER = 'dist/mcp-server/index.cjs'
 // Production spawns the bundle under the Electron binary with ELECTRON_RUN_AS_NODE
 // (see mcpServer.ts) so the better-sqlite3 native ABI matches. Mirror that here.

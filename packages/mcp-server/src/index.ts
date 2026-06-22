@@ -26,17 +26,34 @@ db.pragma('busy_timeout = 5000')
 // exclusion set is handed in by env (see mcpServer.ts). Without this the MCP
 // boundary would have no exclusion list and excluded apps/sites could leave the
 // machine through an MCP client. System noise is stripped regardless.
+const trackingControlsEnabled = process.env.DAYLENS_TRACKING_CONTROLS_ENABLED === '1'
+
+// Fail closed: when tracking controls are ON, a malformed exclusion env would
+// otherwise silently become [] and the server would serve unfiltered excluded
+// data. Refuse to start instead — no data is safer than leaked data. When
+// controls are OFF there is nothing to enforce, so a bad/empty value is [].
 function envList(name: string): string[] {
-  try {
-    const parsed = JSON.parse(process.env[name] ?? '[]') as unknown
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : []
-  } catch {
+  const raw = process.env[name]
+  if (raw == null || raw.trim() === '') {
+    if (trackingControlsEnabled) throw new Error(`${name} missing while tracking controls enabled`)
     return []
   }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    if (trackingControlsEnabled) throw new Error(`${name} is not valid JSON while tracking controls enabled`)
+    return []
+  }
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== 'string')) {
+    if (trackingControlsEnabled) throw new Error(`${name} must be a JSON string array while tracking controls enabled`)
+    return []
+  }
+  return parsed as string[]
 }
 
 const trackingControls: TrackingControlsState = {
-  enabled: process.env.DAYLENS_TRACKING_CONTROLS_ENABLED === '1',
+  enabled: trackingControlsEnabled,
   paused: false,
   excludedApps: envList('DAYLENS_TRACKING_EXCLUDED_APPS'),
   excludedSites: envList('DAYLENS_TRACKING_EXCLUDED_SITES'),

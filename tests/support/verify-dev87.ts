@@ -12,6 +12,10 @@ import type { TrackingControlsState } from '../../src/shared/trackingControls'
 
 const dbPath = process.argv[2]
 const date = process.argv[3] ?? '2026-06-21'
+if (!dbPath) {
+  console.error('usage: verify-dev87.ts <dbPath> [date]')
+  process.exit(2)
+}
 const EXCLUDED_APP = 'dia'           // by canonical app id (real top app that day)
 const EXCLUDED_SITE = 'youtube.com'  // real top domain that day
 
