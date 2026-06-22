@@ -137,6 +137,10 @@ import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
+import {
+  CONVERSATIONAL_GREETING_SYSTEM_PROMPT,
+  isConversationalGreeting,
+} from '../ai/smallTalk'
 import { getCurrentTrace, maybeStartTrace, setCurrentTrace } from '../ai/trace'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
@@ -4277,13 +4281,27 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
   }
 
-  if (/^\s*(hey|hi|hello|sup|yo|howdy|hiya|helo|test|testing)\s*[!.?]?\s*$/i.test(effectiveUserMessage)) {
-    const greetingText = 'Hey! What would you like to know about your day?'
-    await stream.streamText(greetingText)
+  if (isConversationalGreeting(effectiveUserMessage)) {
+    const { text } = await executeTextAIJob(
+      {
+        jobType: 'chat_answer',
+        screen: 'ai_chat',
+        triggerSource: 'user',
+        systemPrompt: CONVERSATIONAL_GREETING_SYSTEM_PROMPT,
+        userMessage: effectiveUserMessage,
+        prior: [],
+      },
+      sendWithProvider,
+      { onDelta: (delta) => stream.push(delta) },
+    )
+    const greetingText = text.trim()
+    if (!greetingText) {
+      throw new Error('The AI returned an empty response. Please try again.')
+    }
     return persistChatTurn(db, conversationId, userMessage, {
       assistantText: greetingText,
       answerKind: 'freeform_chat',
-      sourceKind: 'deterministic',
+      sourceKind: 'freeform',
       resolvedTemporalContext: null,
       conversationState: null,
       suggestedFollowUps: [],

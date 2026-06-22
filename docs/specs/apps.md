@@ -139,8 +139,10 @@ A short paragraph the AI writes when you press Generate. It names what you did i
 app, grounded in the real domains and pages.
 
 - **No duplicates.** Never "Netflix, Netflix". Each artifact is named once.
-- Grounded, calm, specific — the Daylens voice. It narrates the real numbers; it never
-  invents an artifact that isn't in the evidence.
+- Warm, grounded, calm, and specific — the Daylens voice. It uses everyday words and short
+  sentences, so someone should not need to know what a domain, artifact, or session is to
+  understand the recap. It narrates the real evidence; it never invents an artifact that
+  isn't there.
 - Uses the Settings model. Runs reliably, not "most of the time".
 
 When an app genuinely has too little signal to describe (a system surface like

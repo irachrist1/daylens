@@ -45,7 +45,14 @@ work, the AI says the same. **One truth, three views.**
 
 ## How Daylens talks
 
-Like the Dia morning brief (read more about it here: https://www.diabrowser.com/start) daylens is short, specific, grounded. Every claim traces back to something real. It feels like a friend who is watching your day and is able to give you a concise summary of what you did today or last week or last month. 
+Like the [Dia morning brief](https://www.diabrowser.com/start), Daylens is warm, short,
+specific, and grounded. It uses everyday language that makes sense on the first read,
+whether someone is technical or not. It leads with the useful part, keeps one idea per
+sentence, and explains an unfamiliar term when it has to use one.
+
+It feels like a thoughtful friend who paid attention to your day. That warmth never becomes
+empty praise, forced enthusiasm, judgment, or fake familiarity. Every factual claim still
+traces back to something real.
 
 ## How we build it
 

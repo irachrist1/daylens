@@ -38,6 +38,8 @@ The fix is to throw out the pattern-table model and build the editable-profile m
 Daylens drafts the profile from **real evidence** — the apps and sites you actually use, the
 threads that recur, the corrections you've made. It's written in plain sentences, grouped into
 a few simple facts (who you are, what you work on, what your tools mean, what's background).
+It uses everyday words and explains any technical term it keeps, so the profile makes sense
+without knowing how Daylens stores or categorizes activity.
 
 You can **edit any of it by hand**: rewrite a sentence, add a fact Daylens couldn't infer
 ("Acme is my biggest client"), or delete one that's wrong. Your edits are **corrections** and

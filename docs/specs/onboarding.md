@@ -26,6 +26,9 @@ not *"okay, I've clicked through five slides about features I haven't tried."*
 ## 3. The flow
 
 Short, honest, and front-loaded with the permission grant because nothing works without it.
+Every screen uses the shared Daylens voice: warm, plain language, one clear idea and one
+clear action. If a macOS term such as Accessibility or Screen Recording is necessary, the
+same screen explains what it means and why Daylens needs it.
 
 1. **What Daylens is** — one screen, one sentence: *"Daylens quietly watches what you do on
    your computer and tells you what you actually got done. Nothing leaves your machine unless

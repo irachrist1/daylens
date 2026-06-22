@@ -39,7 +39,7 @@ function localDateStr(d: Date): string {
 // The nearest-answerable line. Never a refusal, never a request for the user to
 // paste data — it names what the resolvers CAN do (ai.md §4.2).
 const PLANNER_FALLBACK_MESSAGE =
-  "I can tell you what you worked on (a day, a week, a month), how long you spent in a specific app, what you were doing at a given time, or find a page or link you saw. Which of those are you after?"
+  "I’m best at helping you make sense of your activity. Ask what you worked on, how long you spent in an app, what happened at a certain time, or where to find a page you saw."
 
 function sanitizeQuery(raw: unknown): ResolverQuery | null {
   if (!raw || typeof raw !== 'object') return null

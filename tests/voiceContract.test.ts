@@ -39,8 +39,16 @@ test('voice system prompt includes the citation contract', () => {
   }
 })
 
+test('voice system prompt is warm and clear without weakening honesty', () => {
+  assert.match(VOICE_SYSTEM_PROMPT, /warm, clear, specific, and evidence-led/i)
+  assert.match(VOICE_SYSTEM_PROMPT, /everyday words/i)
+  assert.match(VOICE_SYSTEM_PROMPT, /non-technical reader/i)
+  assert.match(VOICE_SYSTEM_PROMPT, /sentences short/i)
+  assert.match(VOICE_SYSTEM_PROMPT, /automatic praise/i)
+  assert.match(VOICE_SYSTEM_PROMPT, /partial or ambiguous/i)
+})
+
 test('banned vocabulary assertion catches golden output drift', () => {
   assert.doesNotThrow(() => assertNoBannedVocab('Cursor appeared in the 9am block with github.com open.'))
   assert.throws(() => assertNoBannedVocab('Great question, let us dive into your day.'))
 })
-

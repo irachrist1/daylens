@@ -34,7 +34,8 @@ One provider, one selected model, honored everywhere.
 - You connect a provider (Anthropic, OpenAI, Google) and pick a model. That model is used by
   **chat, re-analyze, recaps, briefs, and wraps** — every surface, every time (`ai.md` §5).
 - If a call fails (quota, auth), the error **names the selected provider** and never silently
-  swaps to a different model.
+  swaps to a different model. The message uses plain language, says what happened, and gives
+  one clear next step; it never assumes the person knows provider or billing jargon.
 - With no provider connected or no credits, AI surfaces show one clear "connect a provider"
   message and nothing fake (the no-credits rule, `ai.md` §5).
 

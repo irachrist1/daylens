@@ -61,7 +61,7 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     'You will receive a compact JSON facts object derived deterministically from local activity over the period.',
     'Return STRICT JSON with exactly these keys: "lead" (string), "slides" (object with keys "chart", "record", "comparison", each a string or null).',
     'No prose outside the JSON. No code fences. No emoji. No markdown.',
-    'Voice: dry, direct, second-person, a colleague who has been paying attention. No motivational filler. No exclamation marks. Specific over generic.',
+    'Voice: warm, direct, second-person, and easy to understand — like a thoughtful colleague who has been paying attention. No motivational filler. No exclamation marks. Specific over generic.',
     'Each string is one sentence, 24-170 characters. Never two sentences. Never ask the user a question.',
     `lead: the headline read on the ${label} — concrete and grounded in facts. Mention the dominant category if signal is clear.`,
     `slides.chart: narrates the shape across the ${label} — the busiest day or the rhythm — without restating raw hours.`,

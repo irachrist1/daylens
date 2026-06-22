@@ -82,6 +82,8 @@ Swift 847 times — top 0.5% of fans." Not "Your most-played artist was Taylor S
 - **Specific over generic.** Real app names, real times, real activities. "94 minutes
   straight in Claude — your longest stretch in any app today," not "significant time in your
   AI tools."
+- **Easy on the first read.** Use everyday words, short sentences, and one idea per card.
+  Explain a term if someone would need product or technical knowledge to understand it.
 - **Insight over readout.** A number alone isn't a card. Tell the reader something they
   didn't already know or wouldn't have said themselves.
 - **Never grades.** No score, no focus percentage, no "you used 35% of your day," no
@@ -92,8 +94,9 @@ Swift 847 times — top 0.5% of fans." Not "Your most-played artist was Taylor S
   signal," no "AI-assisted work." Write like a person, not a metrics pipeline.
 - **Names what you were doing, not the app you used.** "Managing device policies in Intune,"
   not "Microsoft Intune admin center."
-- **Warm, occasionally funny.** A wrap can have a personality. Light humor is welcome,
-  especially on a quiet day (section 5).
+- **Warm, occasionally funny.** A wrap can have a personality. Light humor is welcome when
+  it fits the facts and the user's tone, especially on a quiet day (section 5). Never tease,
+  guilt, scold, or pretend to know how the person feels.
 
 ### Good vs bad — the contrast
 
@@ -313,3 +316,5 @@ names that provider plainly — nothing silently swaps to a different model.
     on a leisure day — with no focus lecture on a rest day.
 11. Every brief and wrap uses the model picked in Settings; errors name that provider and
     nothing silently swaps to another model.
+12. Every card is understandable on the first read: everyday words, short sentences, one
+    idea per card, and no unexplained product or technical jargon.

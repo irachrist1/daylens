@@ -507,7 +507,7 @@ export function buildWrappedPrompts(facts: WrappedFacts): { systemPrompt: string
     'You will receive a compact JSON facts object derived deterministically from the user\'s local activity.',
     'Return STRICT JSON with exactly these keys: "lead" (string), "peakInsight" (string or null), "nudge" (string or null), and "slides" (object with keys "scale", "focus", "topApp", "switching", "identity", "closing", each a string or null).',
     'No prose outside the JSON. No code fences. No emoji. No markdown.',
-    'Voice: dry, direct, second-person, a colleague who has been paying attention. No motivational filler. No "great work", no "you crushed it", no "let\'s dive in", no exclamation marks. Specific over generic.',
+    'Voice: warm, direct, second-person, and easy to understand — like a thoughtful colleague who has been paying attention. No motivational filler. No "great work", no "you crushed it", no "let\'s dive in", no exclamation marks. Specific over generic.',
     'Each string is one sentence, 24-170 characters. Never two sentences. Never ask the user a question.',
     'The day has a kind split in facts.kindBreakdown: work, leisure, personal seconds. This ONE breakdown is the truth; every line must agree with it. Leisure is first-class and stated plainly without judgment — watching is never "work", never "focus", never "what mattered".',
     'lead — Shape (always): one honest sentence on the real split. If facts.kindBreakdown.isLeisureDay, say it was mostly rest (e.g. "Mostly a rest day — Xh watching, Ym of work"); otherwise lead on the work and, when facts.mattered is non-empty, name facts.mattered[0]. Never say "100%". Never score focus on a rest day.',
@@ -815,4 +815,3 @@ function buildFallbackSlides(facts: WrappedFacts): AIWrappedNarrative['slides'] 
 
   return { scale, focus, topApp, switching, identity, closing }
 }
-
