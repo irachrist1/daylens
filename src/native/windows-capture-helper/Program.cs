@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -57,7 +58,7 @@ internal static class Program
 
         var exePath = process.MainModule?.FileName ?? process.ProcessName;
         var appName = process.ProcessName;
-        var bundleId = Path.GetFileName(exePath).ToLowerInvariant();
+        var bundleId = System.IO.Path.GetFileName(exePath).ToLowerInvariant();
         var windowTitle = ReadWindowTitle(hwnd);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var mono = Stopwatch.GetTimestamp();
