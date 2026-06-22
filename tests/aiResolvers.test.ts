@@ -66,8 +66,14 @@ test('getDay resolves grounded blocks + a non-zero total for a coding day', (t) 
 test('getApp resolves Cursor time and a per-day breakdown', (t) => {
   const db = setupDb()
   t.after(() => db.close())
-  seedCodingDay(db)
-  const fact = runResolverQuery({ resolver: 'getApp', app: 'Cursor' }, db)
+  const today = seedCodingDay(db)
+  // Bound the query to the seeded day. With no range, getApp defaults toMs to
+  // the current clock, which (correctly) excludes sessions seeded later in the
+  // same calendar day when the suite runs in the morning. Real captured
+  // sessions are always in the past; the explicit range mirrors how getDay is
+  // tested and keeps this deterministic regardless of time of day.
+  const day = dateStr(today)
+  const fact = runResolverQuery({ resolver: 'getApp', app: 'Cursor', from: day, to: day }, db)
   assert.equal(fact.isEmpty, false)
   const data = fact.data as GetAppUsageResult
   assert.ok(data.totalSeconds > 0, 'Cursor has tracked time')

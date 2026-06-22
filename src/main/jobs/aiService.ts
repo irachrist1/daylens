@@ -100,7 +100,7 @@ import type {
   WorkContextBlock,
   WorkContextInsight,
 } from '@shared/types'
-import { DISTRACTION_DOMAINS, ALL_TIME_DAYS } from '@shared/types'
+import { ALL_TIME_DAYS } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import {
@@ -1643,13 +1643,6 @@ function tableExistsForAIPrompt(tableName: string): boolean {
   } catch {
     return false
   }
-}
-
-function localDateBoundsFromString(dateStr: string): [number, number] {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  const from = new Date(year, month - 1, day).getTime()
-  const to = new Date(year, month - 1, day + 1).getTime()
-  return [from, to]
 }
 
 function summarizePatternKey(raw: string): string | null {
