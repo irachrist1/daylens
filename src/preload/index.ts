@@ -42,6 +42,8 @@ import type {
   TrackingPermissionState,
   WorkContextInsight,
   WorkMemorySettingsSummary,
+  WorkMemoryProfile,
+  WorkMemoryMutationResult,
   WorkspaceResult,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
@@ -157,6 +159,16 @@ const api = {
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_PATTERN, patternId),
     forgetAllWorkMemory: (): Promise<WorkMemorySettingsSummary> =>
       ipcRenderer.invoke(IPC.DB.FORGET_ALL_WORK_MEMORY),
+    getWorkMemoryProfile: (): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.GET_WORK_MEMORY_PROFILE),
+    updateWorkMemoryFact: (id: string, text: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.UPDATE_WORK_MEMORY_FACT, id, text),
+    addWorkMemoryFact: (text: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.ADD_WORK_MEMORY_FACT, text),
+    forgetWorkMemoryFact: (id: string): Promise<WorkMemoryMutationResult> =>
+      ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_FACT, id),
+    rebuildWorkMemory: (): Promise<WorkMemoryMutationResult> =>
+      ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
   },
   memory: {
     backfill: (): Promise<MemoryBackfillResult> =>

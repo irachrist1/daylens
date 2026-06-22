@@ -16,6 +16,13 @@ import {
   getBlockLabelOverride,
   writeAIBlockLabel,
 } from '../db/queries'
+import {
+  getWorkMemoryProfile,
+  updateWorkMemoryFact,
+  addWorkMemoryFact,
+  forgetWorkMemoryFact,
+  rebuildWorkMemory,
+} from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -191,7 +198,7 @@ function forgetWorkMemoryPattern(db: ReturnType<typeof getDb>, patternId: string
 }
 
 function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
-  const tables = ['pattern_occurrences', 'context_patterns', 'user_memory_facts', 'daily_memory_archive']
+  const tables = ['pattern_occurrences', 'context_patterns', 'user_memory_facts', 'daily_memory_archive', 'work_memory_facts']
   for (const table of tables) {
     if (tableExists(db, table)) db.prepare(`DELETE FROM ${table}`).run()
   }
@@ -552,6 +559,27 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.BACKFILL_WORK_MEMORY, () => {
     return backfillMemoryFromHistory(getDb())
+  })
+
+  // Editable work-memory profile (ChatGPT-style) — docs/specs/work-memory.md.
+  ipcMain.handle(IPC.DB.GET_WORK_MEMORY_PROFILE, () => {
+    return getWorkMemoryProfile(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.UPDATE_WORK_MEMORY_FACT, (_e, id: string, text: string) => {
+    return updateWorkMemoryFact(getDb(), id, text)
+  })
+
+  ipcMain.handle(IPC.DB.ADD_WORK_MEMORY_FACT, (_e, text: string) => {
+    return addWorkMemoryFact(getDb(), text)
+  })
+
+  ipcMain.handle(IPC.DB.FORGET_WORK_MEMORY_FACT, (_e, id: string) => {
+    return forgetWorkMemoryFact(getDb(), id)
+  })
+
+  ipcMain.handle(IPC.DB.REBUILD_WORK_MEMORY, () => {
+    return rebuildWorkMemory(getDb())
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {

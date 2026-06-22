@@ -287,6 +287,26 @@ export interface WorkMemorySettingsSummary {
   topPatterns: WorkMemoryPatternSummary[]
 }
 
+// Work memory as an editable, human-readable profile (ChatGPT-style) — replaces
+// the opaque pattern table. See docs/specs/work-memory.md.
+export type WorkMemoryFactOrigin = 'drafted' | 'user'
+
+export interface WorkMemoryFact {
+  id: string
+  text: string
+  origin: WorkMemoryFactOrigin
+}
+
+export interface WorkMemoryProfile {
+  facts: WorkMemoryFact[]
+}
+
+// Rebuild / forget each report what changed in one plain-language line.
+export interface WorkMemoryMutationResult {
+  facts: WorkMemoryFact[]
+  changeSummary: string
+}
+
 // Result of the one-shot work-memory backfill across the user's full history
 // (R4). Returned to the renderer so the Settings panel can report what ran.
 export interface MemoryBackfillResult {
@@ -1392,6 +1412,11 @@ export const IPC = {
     FORGET_WORK_MEMORY_PATTERN: 'db:forget-work-memory-pattern',
     FORGET_ALL_WORK_MEMORY: 'db:forget-all-work-memory',
     BACKFILL_WORK_MEMORY: 'db:backfill-work-memory',
+    GET_WORK_MEMORY_PROFILE: 'db:get-work-memory-profile',
+    UPDATE_WORK_MEMORY_FACT: 'db:update-work-memory-fact',
+    ADD_WORK_MEMORY_FACT: 'db:add-work-memory-fact',
+    FORGET_WORK_MEMORY_FACT: 'db:forget-work-memory-fact',
+    REBUILD_WORK_MEMORY: 'db:rebuild-work-memory',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',

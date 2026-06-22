@@ -8,7 +8,7 @@ import type {
   AppUsageSummary,
   ClientRecord,
   TrackingDiagnosticsPayload,
-  WorkMemorySettingsSummary,
+  WorkMemoryFact,
 } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
@@ -649,9 +649,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
   // What the last relabel touched, shown inline so a change is never silent.
   const [relabelEffect, setRelabelEffect] = useState<{ bundleId: string; message: string } | null>(null)
-  const [workMemorySummary, setWorkMemorySummary] = useState<WorkMemorySettingsSummary | null>(null)
+  const [workMemoryProfile, setWorkMemoryProfile] = useState<WorkMemoryFact[] | null>(null)
   const [workMemoryBusy, setWorkMemoryBusy] = useState<string | null>(null)
   const [workMemoryError, setWorkMemoryError] = useState<string | null>(null)
+  const [workMemoryChange, setWorkMemoryChange] = useState<string | null>(null)
+  // Inline edit buffers, keyed by fact id; plus the "add a fact" draft.
+  const [factDrafts, setFactDrafts] = useState<Record<string, string>>({})
+  const [newFactText, setNewFactText] = useState('')
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [clients, setClients] = useState<ClientRecord[]>([])
@@ -703,8 +707,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
         if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
       })
-      void ipc.db.getWorkMemorySummary().catch(() => null).then((summary) => {
-        if (!cancelled) setWorkMemorySummary(summary as WorkMemorySettingsSummary | null)
+      void ipc.db.getWorkMemoryProfile().catch(() => ({ facts: [] })).then((profile) => {
+        if (!cancelled) setWorkMemoryProfile(profile.facts)
       })
       void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
         if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
@@ -763,19 +767,69 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     }
   }
 
-  async function refreshWorkMemorySummary() {
-    const summary = await ipc.db.getWorkMemorySummary()
-    setWorkMemorySummary(summary)
-    return summary
-  }
-
-  async function forgetWorkMemoryPattern(patternId: string, label: string) {
-    if (!window.confirm(`Forget "${label}"?`)) return
-    setWorkMemoryBusy(patternId)
+  // Save an inline edit to a fact. A hand edit becomes a correction (the backend
+  // flips its origin to 'user') that a rebuild never overwrites.
+  async function saveWorkMemoryFact(id: string) {
+    const text = (factDrafts[id] ?? '').trim()
+    if (!text) return
+    setWorkMemoryBusy(id)
     setWorkMemoryError(null)
     try {
-      const summary = await ipc.db.forgetWorkMemoryPattern(patternId)
-      setWorkMemorySummary(summary)
+      const profile = await ipc.db.updateWorkMemoryFact(id, text)
+      setWorkMemoryProfile(profile.facts)
+      setFactDrafts((current) => {
+        const next = { ...current }
+        delete next[id]
+        return next
+      })
+      setWorkMemoryChange('Saved — the AI will use this the next time it talks about you.')
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  async function addWorkMemoryFact() {
+    const text = newFactText.trim()
+    if (!text) return
+    setWorkMemoryBusy('add')
+    setWorkMemoryError(null)
+    try {
+      const profile = await ipc.db.addWorkMemoryFact(text)
+      setWorkMemoryProfile(profile.facts)
+      setNewFactText('')
+      setWorkMemoryChange('Added — the AI will use this the next time it talks about you.')
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  async function forgetWorkMemoryFact(id: string) {
+    setWorkMemoryBusy(id)
+    setWorkMemoryError(null)
+    try {
+      const result = await ipc.db.forgetWorkMemoryFact(id)
+      setWorkMemoryProfile(result.facts)
+      setWorkMemoryChange(result.changeSummary)
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
+  // Re-draft the profile from current evidence, keeping hand edits, and report
+  // what changed in one line.
+  async function rebuildWorkMemory() {
+    setWorkMemoryBusy('rebuild')
+    setWorkMemoryError(null)
+    try {
+      const result = await ipc.db.rebuildWorkMemory()
+      setWorkMemoryProfile(result.facts)
+      setWorkMemoryChange(result.changeSummary)
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -784,35 +838,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   async function forgetAllWorkMemory() {
-    if (!window.confirm('Forget all work memory?')) return
+    if (!window.confirm('Forget everything Daylens has learned about you?')) return
     setWorkMemoryBusy('all')
     setWorkMemoryError(null)
     try {
-      const summary = await ipc.db.forgetAllWorkMemory()
-      setWorkMemorySummary(summary)
-    } catch (error) {
-      setWorkMemoryError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setWorkMemoryBusy(null)
-    }
-  }
-
-  // Triggers the one-time backfill from history. The IPC binding is owned by
-  // the memory-backfill change (R4); the button calls it via optional-chained
-  // access on the preload bridge so it degrades to a clear error if the
-  // preload side hasn't shipped yet.
-  async function rebuildWorkMemoryFromHistory() {
-    if (!window.confirm('Rebuild work memory from your full history? This walks every tracked day and may take a moment.')) return
-    setWorkMemoryBusy('backfill')
-    setWorkMemoryError(null)
-    try {
-      const bridge = (window as unknown as { daylens?: { memory?: { backfill?: () => Promise<unknown> } } }).daylens
-      const backfill = bridge?.memory?.backfill
-      if (typeof backfill !== 'function') {
-        throw new Error('Memory backfill is not available yet — restart Daylens after updating to enable it.')
-      }
-      await backfill()
-      await refreshWorkMemorySummary()
+      await ipc.db.forgetAllWorkMemory()
+      const profile = await ipc.db.getWorkMemoryProfile()
+      setWorkMemoryProfile(profile.facts)
+      setWorkMemoryChange('Forgot everything Daylens had learned about you.')
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1001,133 +1034,147 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           title="Work memory"
         >
           <div>
-            <SettingsRow
-              first
-              title="Consolidate at end of day"
-              description="Archives finalized blocks, promotes repeated patterns, and decays stale learned patterns."
-              control={<Toggle checked={settings.workMemoryConsolidationEnabled ?? true} onChange={(value) => void persist({ workMemoryConsolidationEnabled: value })} />}
-            />
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-              <div style={infoPanelStyle}>
-                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                  Promoted patterns
-                </div>
-                <div style={{ fontSize: 22, fontWeight: 780, color: 'var(--color-text-primary)' }}>
-                  {workMemorySummary?.promotedCount ?? 0}
-                </div>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6, marginBottom: 14 }}>
+              What Daylens knows about you, in plain language. Edit any line, add a fact it couldn't infer, or
+              delete one that's wrong — your edits win and the AI uses them everywhere it talks about you.
+            </div>
+
+            {workMemoryError && (
+              <div style={{ fontSize: 12, color: '#f87171', lineHeight: 1.55, marginBottom: 10 }}>
+                {workMemoryError}
               </div>
-              <div style={infoPanelStyle}>
-                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                  Total occurrences
-                </div>
-                <div style={{ fontSize: 22, fontWeight: 780, color: 'var(--color-text-primary)' }}>
-                  {workMemorySummary?.totalOccurrences ?? 0}
-                </div>
+            )}
+            {workMemoryChange && (
+              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.55, marginBottom: 10 }}>
+                {workMemoryChange}
+              </div>
+            )}
+
+            {workMemoryProfile === null ? (
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading…</div>
+            ) : workMemoryProfile.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                Nothing learned yet. Use Rebuild below once Daylens has some tracked history, or add a fact by hand.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {workMemoryProfile.map((fact) => {
+                  const draft = factDrafts[fact.id]
+                  const isEditing = draft !== undefined
+                  const busy = workMemoryBusy === fact.id
+                  return (
+                    <div key={fact.id} style={{ ...infoPanelStyle, display: 'grid', gap: 8 }}>
+                      <textarea
+                        value={isEditing ? draft : fact.text}
+                        onChange={(event) => setFactDrafts((current) => ({ ...current, [fact.id]: event.target.value }))}
+                        rows={2}
+                        style={{
+                          width: '100%',
+                          resize: 'vertical',
+                          fontSize: 13.5,
+                          lineHeight: 1.5,
+                          color: 'var(--color-text-primary)',
+                          background: 'transparent',
+                          border: '1px solid var(--color-border-ghost)',
+                          borderRadius: 8,
+                          padding: '8px 10px',
+                          fontFamily: 'inherit',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {fact.origin === 'user' && (
+                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Edited by you</span>
+                        )}
+                        <div style={{ flex: 1 }} />
+                        {isEditing && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void saveWorkMemoryFact(fact.id)}
+                            style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                          >
+                            {busy ? 'Saving…' : 'Save'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void forgetWorkMemoryFact(fact.id)}
+                          style={{ ...inlineButtonStyle, color: '#f87171', opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                        >
+                          Forget
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div style={{ ...infoPanelStyle, marginTop: 10, display: 'grid', gap: 8 }}>
+              <textarea
+                value={newFactText}
+                onChange={(event) => setNewFactText(event.target.value)}
+                rows={2}
+                placeholder="Add a fact Daylens couldn't infer — e.g. “Acme is my biggest client.”"
+                style={{
+                  width: '100%',
+                  resize: 'vertical',
+                  fontSize: 13.5,
+                  lineHeight: 1.5,
+                  color: 'var(--color-text-primary)',
+                  background: 'transparent',
+                  border: '1px solid var(--color-border-ghost)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  fontFamily: 'inherit',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  disabled={workMemoryBusy === 'add' || newFactText.trim() === ''}
+                  onClick={() => void addWorkMemoryFact()}
+                  style={{
+                    ...inlineButtonStyle,
+                    opacity: workMemoryBusy === 'add' || newFactText.trim() === '' ? 0.6 : 1,
+                    cursor: workMemoryBusy === 'add' || newFactText.trim() === '' ? 'default' : 'pointer',
+                  }}
+                >
+                  {workMemoryBusy === 'add' ? 'Adding…' : 'Add fact'}
+                </button>
               </div>
             </div>
 
-            <div style={{ ...infoPanelStyle, marginTop: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                  Top learned patterns
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWorkMemoryError(null)
-                    void refreshWorkMemorySummary().catch((error) => {
-                      setWorkMemoryError(error instanceof Error ? error.message : String(error))
-                    })
-                  }}
-                  style={inlineButtonStyle}
-                >
-                  Refresh
-                </button>
-              </div>
-              {workMemoryError && (
-                <div style={{ fontSize: 12, color: '#f87171', lineHeight: 1.55 }}>
-                  {workMemoryError}
-                </div>
-              )}
-              {workMemorySummary === null ? (
-                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-                  Loading…
-                </div>
-              ) : workMemorySummary.topPatterns.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-                  No promoted work memory yet.
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gap: 0 }}>
-                  {workMemorySummary.topPatterns.map((pattern, index) => {
-                    const busy = workMemoryBusy === pattern.id
-                    return (
-                      <div
-                        key={pattern.id}
-                        style={{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 12,
-                          padding: index === 0 ? '2px 0 12px' : '12px 0',
-                          borderTop: index === 0 ? 'none' : '1px solid var(--color-border-ghost)',
-                        }}
-                      >
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: 13.5, fontWeight: 680, color: 'var(--color-text-primary)' }}>
-                            {pattern.label}
-                          </div>
-                          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                            {Math.round(pattern.confidence * 100)}% confidence · {pattern.recallCount} recalls · {pattern.occurrenceCount} occurrences{pattern.category ? ` · ${pattern.category}` : ''}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={busy || workMemoryBusy === 'all'}
-                          onClick={() => void forgetWorkMemoryPattern(pattern.id, pattern.label)}
-                          style={{
-                            ...inlineButtonStyle,
-                            color: '#f87171',
-                            opacity: busy || workMemoryBusy === 'all' ? 0.6 : 1,
-                            cursor: busy || workMemoryBusy === 'all' ? 'default' : 'pointer',
-                          }}
-                        >
-                          {busy ? 'Forgetting…' : 'Forget'}
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              <div style={{ paddingTop: 12, borderTop: '1px solid var(--color-border-ghost)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  disabled={workMemoryBusy !== null}
-                  onClick={() => void rebuildWorkMemoryFromHistory()}
-                  style={{
-                    ...inlineButtonStyle,
-                    opacity: workMemoryBusy !== null ? 0.6 : 1,
-                    cursor: workMemoryBusy !== null ? 'default' : 'pointer',
-                  }}
-                >
-                  {workMemoryBusy === 'backfill' ? 'Rebuilding…' : 'Rebuild memory from history'}
-                </button>
-                <button
-                  type="button"
-                  disabled={workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0}
-                  onClick={() => void forgetAllWorkMemory()}
-                  style={{
-                    ...inlineButtonStyle,
-                    borderColor: 'rgba(248, 113, 113, 0.28)',
-                    color: '#f87171',
-                    opacity: workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0 ? 0.6 : 1,
-                    cursor: workMemoryBusy !== null || (workMemorySummary?.promotedCount ?? 0) === 0 ? 'default' : 'pointer',
-                  }}
-                >
-                  {workMemoryBusy === 'all' ? 'Forgetting…' : 'Forget everything'}
-                </button>
-              </div>
+            <div style={{ paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                disabled={workMemoryBusy !== null}
+                onClick={() => void rebuildWorkMemory()}
+                style={{
+                  ...inlineButtonStyle,
+                  opacity: workMemoryBusy !== null ? 0.6 : 1,
+                  cursor: workMemoryBusy !== null ? 'default' : 'pointer',
+                }}
+              >
+                {workMemoryBusy === 'rebuild' ? 'Rebuilding…' : 'Rebuild from recent activity'}
+              </button>
+              <button
+                type="button"
+                disabled={workMemoryBusy !== null || (workMemoryProfile?.length ?? 0) === 0}
+                onClick={() => void forgetAllWorkMemory()}
+                style={{
+                  ...inlineButtonStyle,
+                  borderColor: 'rgba(248, 113, 113, 0.28)',
+                  color: '#f87171',
+                  opacity: workMemoryBusy !== null || (workMemoryProfile?.length ?? 0) === 0 ? 0.6 : 1,
+                  cursor: workMemoryBusy !== null || (workMemoryProfile?.length ?? 0) === 0 ? 'default' : 'pointer',
+                }}
+              >
+                {workMemoryBusy === 'all' ? 'Forgetting…' : 'Forget everything'}
+              </button>
             </div>
           </div>
         </SettingsSection>
