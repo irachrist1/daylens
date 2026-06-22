@@ -41,13 +41,14 @@ function insertAppSession(
     end: number
     category?: string
     windowTitle?: string | null
+    canonicalAppId?: string | null
   },
 ): void {
   db.prepare(`
     INSERT INTO app_sessions (
       bundle_id, app_name, start_time, end_time, duration_sec, category,
-      is_focused, window_title, raw_app_name, capture_source, capture_version
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 'test', 2)
+      is_focused, window_title, raw_app_name, canonical_app_id, capture_source, capture_version
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'test', 2)
   `).run(
     input.bundleId,
     input.appName,
@@ -57,6 +58,7 @@ function insertAppSession(
     input.category ?? 'development',
     input.windowTitle ?? null,
     input.appName,
+    input.canonicalAppId ?? null,
   )
 }
 
@@ -69,7 +71,7 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
 
   insertAppSession(db, {
     bundleId: 'com.apple.loginwindow',
-    appName: 'loginwindow',
+    appName: 'Login Window',
     start: localMs(date, 8),
     end: localMs(date, 9),
   })
@@ -96,7 +98,66 @@ test('system surfaces stay out of captured sessions even when legacy rows exist'
   const sessions = getSessionsForRange(db, from, to)
   assert.equal(sessions.length, 1)
   assert.ok(!sessions.some((session) =>
-    ['finder', 'loginwindow', 'usernotificationcenter'].includes(session.appName.toLowerCase())))
+    ['finder', 'login window', 'usernotificationcenter'].includes(session.appName.toLowerCase())))
+  db.close()
+})
+
+test('legacy executable paths collapse into the same canonical app rows as bundle ids', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-06-18'
+  const [from, to] = localDayBounds(date)
+
+  insertAppSession(db, {
+    bundleId: '/Applications/Claude.app/Contents/MacOS/Claude',
+    appName: 'Claude',
+    start: localMs(date, 9),
+    end: localMs(date, 9, 30),
+  })
+  insertAppSession(db, {
+    bundleId: 'com.anthropic.claudefordesktop',
+    appName: 'Claude',
+    start: localMs(date, 10),
+    end: localMs(date, 10, 30),
+  })
+
+  const summaries = getAppSummariesForRange(db, from, to)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].canonicalAppId, 'claude')
+  assert.equal(summaries[0].appName, 'Claude')
+  assert.equal(summaries[0].totalSeconds, 60 * 60)
+  db.close()
+})
+
+test('legacy and current Zen identities collapse into one browsing row', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-06-18'
+  const [from, to] = localDayBounds(date)
+
+  insertAppSession(db, {
+    bundleId: '/Applications/Zen.app/Contents/MacOS/zen',
+    appName: 'Zen',
+    start: localMs(date, 9),
+    end: localMs(date, 9, 30),
+    category: 'uncategorized',
+    canonicalAppId: '/applications/zen.app/contents/macos/zen',
+  })
+  insertAppSession(db, {
+    bundleId: 'app.zen-browser.zen',
+    appName: 'Zen',
+    start: localMs(date, 10),
+    end: localMs(date, 10, 30),
+    category: 'uncategorized',
+    canonicalAppId: 'app.zen-browser.zen',
+  })
+
+  const summaries = getAppSummariesForRange(db, from, to)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].canonicalAppId, 'zen')
+  assert.equal(summaries[0].appName, 'Zen')
+  assert.equal(summaries[0].category, 'browsing')
+  assert.equal(summaries[0].totalSeconds, 60 * 60)
   db.close()
 })
 
