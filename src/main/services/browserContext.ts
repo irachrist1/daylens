@@ -14,7 +14,6 @@ import { decideSiteCapture, trackingControlsStateFromSettings } from '@shared/tr
 import {
   resolveBrowserApplication,
   type BrowserApplication,
-  type BrowserCandidate,
 } from './browserRegistry'
 import { getDb } from './database'
 
@@ -264,7 +263,7 @@ function recentHistoryTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserT
   return null
 }
 
-export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
+function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
   if (!browserAppIdFor(snapshot)) return null
 
   if (process.platform === 'darwin') {
@@ -280,10 +279,6 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
   }
 
   return null
-}
-
-export function isBrowserWindowCandidate(candidate: BrowserCandidate): boolean {
-  return resolveBrowserApplication(candidate) !== null
 }
 
 export class ActiveBrowserContextTracker {

@@ -416,7 +416,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 // Per-browser cursor: Map<bundleId, last processed visit_time_us as bigint>
 const browserCursors = new Map<string, bigint>()
 
-export const browserStatus = {
+const browserStatus = {
   lastPoll:         null as number | null,
   visitsToday:      0,
   error:            null as string | null,

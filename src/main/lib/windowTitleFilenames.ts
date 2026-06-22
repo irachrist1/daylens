@@ -3,7 +3,7 @@
 // Results are marked as inferred (title-string evidence), not definitive.
 import type Database from 'better-sqlite3'
 
-export interface FileMention {
+interface FileMention {
   filename: string
   extension: string
   appName: string

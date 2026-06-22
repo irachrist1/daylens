@@ -5,9 +5,9 @@ import type {
   TrackingPermissionState,
 } from '@shared/types'
 
-export const ONBOARDING_FLOW_VERSION = 3
+const ONBOARDING_FLOW_VERSION = 3
 
-export function currentOnboardingPlatform(): OnboardingPlatform {
+function currentOnboardingPlatform(): OnboardingPlatform {
   switch (process.platform) {
     case 'darwin':
       return 'macos'

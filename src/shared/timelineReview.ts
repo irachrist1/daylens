@@ -1,6 +1,6 @@
 import type { TimelineBlockReview, TimelineBlockReviewState, WorkContextBlock } from './types'
 
-export const TIMELINE_BLOCK_REVIEW_STATES: readonly TimelineBlockReviewState[] = [
+const TIMELINE_BLOCK_REVIEW_STATES: readonly TimelineBlockReviewState[] = [
   'auto-approved',
   'pending',
   'approved',

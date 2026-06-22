@@ -1,7 +1,3 @@
-type AppIdentity = {
-  bundleId: string
-  appName: string
-}
 
 const APP_NAME_ALIASES: Record<string, string> = {
   snippingtool: 'Snipping Tool',
@@ -93,25 +89,4 @@ export function brandedAppIconSpec(rawName: string, canonicalAppId?: string | nu
   if (key.includes('outlook')) return { label: 'O', background: '#0f6cbd', foreground: '#ffffff' }
   if (key.includes('teams')) return { label: 'T', background: '#5b5fc7', foreground: '#ffffff' }
   return null
-}
-
-export function buildAppBundleLookup(
-  groups: Array<Array<AppIdentity | null | undefined>>,
-): Map<string, string> {
-  const lookup = new Map<string, string>()
-  for (const group of groups) {
-    for (const item of group) {
-      if (!item?.bundleId || !item.appName) continue
-      const key = normalizeAppNameKey(item.appName)
-      if (key && !lookup.has(key)) lookup.set(key, item.bundleId)
-    }
-  }
-  return lookup
-}
-
-export function resolveBundleIdForName(
-  lookup: Map<string, string>,
-  appName: string,
-): string | null {
-  return lookup.get(normalizeAppNameKey(appName)) ?? null
 }

@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import type { ProjectionInvalidationEvent, ProjectionScope } from '@shared/core'
 import { IPC } from '@shared/types'
 
-export function emitProjectionInvalidation(
+function emitProjectionInvalidation(
   payload: Omit<ProjectionInvalidationEvent, 'at'>,
 ): ProjectionInvalidationEvent {
   const event: ProjectionInvalidationEvent = {

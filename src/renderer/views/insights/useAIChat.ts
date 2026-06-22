@@ -741,5 +741,3 @@ export function useAIChat() {
     analyticsContext,
   }
 }
-
-export type UseAIChat = ReturnType<typeof useAIChat>

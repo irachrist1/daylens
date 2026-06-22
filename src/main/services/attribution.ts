@@ -24,10 +24,10 @@ import {
 } from '../lib/appIdentity'
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
-export const MIN_CONFIDENCE_TO_ATTRIBUTE = 0.75
-export const MAX_MERGE_GAP_MS = 120_000          // 2 minutes
-export const EXCLUDE_IDLE_OVER_MS = 300_000      // 5 minutes
-export const NEIGHBOR_PROPAGATION_PENALTY = 0.85 // multiplied into propagated confidence
+const MIN_CONFIDENCE_TO_ATTRIBUTE = 0.75
+const MAX_MERGE_GAP_MS = 120_000          // 2 minutes
+const EXCLUDE_IDLE_OVER_MS = 300_000      // 5 minutes
+const NEIGHBOR_PROPAGATION_PENALTY = 0.85 // multiplied into propagated confidence
 
 // Signal weight order — repo > file path > client domain > doc title > generic.
 const SIGNAL_BASE_WEIGHT = {
@@ -73,7 +73,7 @@ interface IdlePeriod {
   endedAt: number
 }
 
-export interface ActivitySegmentRecord {
+interface ActivitySegmentRecord {
   id: string
   deviceId: string
   startedAt: number
@@ -90,13 +90,13 @@ export interface ActivitySegmentRecord {
   rawSessionIds: number[]
 }
 
-export interface AttributionSignal {
+interface AttributionSignal {
   kind: SignalKind
   value: string
   weight: number
 }
 
-export interface SegmentAttributionRecord {
+interface SegmentAttributionRecord {
   id: string
   segmentId: string
   clientId: string | null
@@ -129,7 +129,7 @@ interface AttributionRuleRow {
 // ─── Device helpers ──────────────────────────────────────────────────────────
 let cachedDeviceId: string | null = null
 
-export function ensureLocalDevice(db: Database.Database = getDb()): string {
+function ensureLocalDevice(db: Database.Database = getDb()): string {
   if (cachedDeviceId) return cachedDeviceId
   const hostname = os.hostname() || 'localhost'
   const platform = process.platform
@@ -191,7 +191,7 @@ function loadIdlePeriods(db: Database.Database, fromMs: number, toMs: number): I
 }
 
 // ─── Step 2 — normalize raw rows into activity_segments ──────────────────────
-export function normalizeToSegments(
+function normalizeToSegments(
   deviceId: string,
   fromMs: number,
   toMs: number,
@@ -439,7 +439,7 @@ const GENERIC_DOMAINS = new Set([
   'outlook.office.com', 'figma.com', 'linear.app',
 ])
 
-export function extractSignals(segment: ActivitySegmentRecord): AttributionSignal[] {
+function extractSignals(segment: ActivitySegmentRecord): AttributionSignal[] {
   const signals: AttributionSignal[] = []
 
   if (segment.filePath) {
@@ -527,7 +527,7 @@ function ruleMatchesSignal(rule: AttributionRuleRow, signal: AttributionSignal, 
   }
 }
 
-export interface ScoredCandidate {
+interface ScoredCandidate {
   clientId: string | null
   projectId: string | null
   score: number
@@ -536,7 +536,7 @@ export interface ScoredCandidate {
   decisionSource: SegmentAttributionRecord['decisionSource']
 }
 
-export function scoreSegment(
+function scoreSegment(
   segment: ActivitySegmentRecord,
   signals: AttributionSignal[],
   rules: AttributionRuleRow[],
@@ -577,7 +577,7 @@ export function scoreSegment(
 }
 
 // ─── Step 5 — neighbor propagation ──────────────────────────────────────────
-export function propagateAttribution(
+function propagateAttribution(
   segments: ActivitySegmentRecord[],
   candidatesBySegment: Map<string, ScoredCandidate[]>,
 ): void {
@@ -861,7 +861,7 @@ function localDayStringForMs(ms: number, _timezone: string): string {
   return `${y}-${m}-${day}`
 }
 
-export function updateRollups(
+function updateRollups(
   fromMs: number, toMs: number,
   timezone: string = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   db: Database.Database = getDb(),
@@ -966,31 +966,4 @@ export function runAttributionForRange(
     unattributedSessions: sessions.filter((s) => s.status === 'unattributed').length,
     fromMs, toMs,
   }
-}
-
-// ─── Step 8 — backfill from legacy raw data ─────────────────────────────────
-export function backfillFromLegacyData(
-  options: { batchDays?: number; timezone?: string } = {},
-  db: Database.Database = getDb(),
-): { dayCount: number; totalSessions: number } {
-  const batchDays = Math.max(1, options.batchDays ?? 1)
-  const range = db.prepare(`
-    SELECT MIN(start_time) AS lo, MAX(COALESCE(end_time, start_time + duration_sec * 1000)) AS hi
-    FROM app_sessions
-  `).get() as { lo: number | null; hi: number | null }
-
-  if (!range.lo || !range.hi || range.hi <= range.lo) {
-    return { dayCount: 0, totalSessions: 0 }
-  }
-
-  const dayMs = 86_400_000 * batchDays
-  let totalSessions = 0
-  let dayCount = 0
-  for (let cursor = range.lo; cursor < range.hi; cursor += dayMs) {
-    const end = Math.min(range.hi, cursor + dayMs)
-    const result = runAttributionForRange(cursor, end, { timezone: options.timezone }, db)
-    totalSessions += result.sessionCount
-    dayCount += 1
-  }
-  return { dayCount, totalSessions }
 }

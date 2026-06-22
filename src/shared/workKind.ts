@@ -216,10 +216,6 @@ export function dominantKind(weighted: Array<{ kind: WorkKind; seconds: number }
   return best
 }
 
-export function isWorkKind(kind: WorkKind): boolean {
-  return kind === 'work'
-}
-
 interface BlockKindInput {
   kind?: WorkKind
   dominantCategory: AppCategory
@@ -238,7 +234,7 @@ export function effectiveBlockKind(block: BlockKindInput): WorkKind {
 // contributes its own category-kind; browser time is attributed to the kind of
 // the domains it sat on (leisure youtube vs work github). The dominant kind by
 // seconds wins. Used as the fallback for blocks that predate the stored field.
-export function resolveBlockKind(block: BlockKindInput): WorkKind {
+function resolveBlockKind(block: BlockKindInput): WorkKind {
   const weighted: Array<{ kind: WorkKind; seconds: number }> = []
 
   for (const app of block.topApps) {
@@ -259,13 +255,4 @@ export function resolveBlockKind(block: BlockKindInput): WorkKind {
     return kindForCategory(block.dominantCategory)
   }
   return dominantKind(weighted)
-}
-
-export function kindLabel(kind: WorkKind): string {
-  switch (kind) {
-    case 'work': return 'work'
-    case 'leisure': return 'leisure'
-    case 'personal': return 'personal'
-    case 'idle': return 'idle'
-  }
 }

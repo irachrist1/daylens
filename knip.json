@@ -4,7 +4,6 @@
     "src/main/index.ts",
     "src/preload/index.ts",
     "src/renderer/index.html",
-    "src/renderer/main.tsx",
     "packages/mcp-server/src/index.ts",
     "packages/remote-contract/index.ts",
     "forge.config.ts",
@@ -19,5 +18,6 @@
     "tests/routerHardPromptBenchmark.ts"
   ],
   "project": ["src/**/*.{ts,tsx}", "packages/**/*.ts", "scripts/**/*.{mjs,js}"],
-  "ignore": ["src/main/services/bip39wordlist.ts"]
+  "ignore": ["src/main/services/bip39wordlist.ts"],
+  "ignoreDependencies": ["tailwindcss"]
 }

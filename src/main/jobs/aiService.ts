@@ -4002,7 +4002,7 @@ const lastTimelineAIJobFingerprint = new Map<string, string>()
  * skipped. Keyed on what `backgroundRelabelDispositionForBlock` actually reads:
  * block identity, end time, and current label/source.
  */
-export function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
+function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
   // Hash a structured (delimiter-free) encoding of the block fields. The old
   // `:`/`|`-joined string collided when a label itself contained those
   // characters, letting two different day states share a fingerprint and

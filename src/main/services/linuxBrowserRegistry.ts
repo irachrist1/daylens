@@ -319,7 +319,7 @@ export function discoverLinuxBrowserHistoryLocations(
   return unique(locations, (location) => normalizedPath(location.historyPath))
 }
 
-export function refreshLinuxBrowserRegistry(): BrowserApplication[] {
+function refreshLinuxBrowserRegistry(): BrowserApplication[] {
   if (process.platform !== 'linux') {
     registryCache = { readAt: Date.now(), applications: [] }
     historyCache = null
@@ -331,7 +331,7 @@ export function refreshLinuxBrowserRegistry(): BrowserApplication[] {
   return applications
 }
 
-export function getLinuxBrowserApplications(): BrowserApplication[] {
+function getLinuxBrowserApplications(): BrowserApplication[] {
   if (process.platform !== 'linux') return []
   if (!registryCache || Date.now() - registryCache.readAt >= REGISTRY_CACHE_MS) {
     return refreshLinuxBrowserRegistry()

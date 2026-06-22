@@ -90,7 +90,7 @@ export function getTrackingPermissionState(): TrackingPermissionState {
   return getTrackingPermissionDetails().combined
 }
 
-export async function openTrackingPermissionSettings(
+async function openTrackingPermissionSettings(
   permission: 'accessibility' | 'screenRecording' = 'screenRecording',
 ): Promise<void> {
   if (process.platform !== 'darwin') return

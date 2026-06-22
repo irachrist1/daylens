@@ -21,7 +21,7 @@ import {
   listClients as dbListClients,
   listClientsForRange as dbListClientsForRange,
 } from '../core/query/attributionResolvers'
-import { searchFileMentions as execSearchFileMentions, type SearchFileMentionsResult } from '../lib/windowTitleFilenames'
+import { searchFileMentions as execSearchFileMentions } from '../lib/windowTitleFilenames'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
 import { sanitizeToolResult } from '@shared/aiSanitize'
 import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
@@ -49,11 +49,11 @@ export interface GetAppUsageParams {
   endDate?: string    // YYYY-MM-DD local
 }
 
-export interface SearchArtifactsParams {
+interface SearchArtifactsParams {
   query: string
 }
 
-export interface GetWeekSummaryParams {
+interface GetWeekSummaryParams {
   weekStartDate: string  // YYYY-MM-DD local (Monday of the target week)
 }
 
@@ -110,7 +110,7 @@ export interface SearchSessionsResult {
   _instruction?: string
 }
 
-export interface AppUsageStat {
+interface AppUsageStat {
   appName: string
   bundleId: string
   totalSeconds: number
@@ -186,7 +186,7 @@ export interface DaySummaryResult {
   longestStreakSeconds: number
 }
 
-export interface AppUsageDailyBreakdown {
+interface AppUsageDailyBreakdown {
   date: string
   totalSeconds: number
   sessionCount: number
@@ -203,7 +203,7 @@ export interface GetAppUsageResult {
   recentWindowTitles: string[]  // up to 10 most recent distinct window titles
 }
 
-export interface ArtifactHit {
+interface ArtifactHit {
   id: number
   title: string
   kind: string      // 'report' | 'chart' | 'csv' | etc.
@@ -212,11 +212,11 @@ export interface ArtifactHit {
   date: string      // YYYY-MM-DD local
 }
 
-export interface SearchArtifactsResult {
+interface SearchArtifactsResult {
   hits: ArtifactHit[]
 }
 
-export interface DailyBreakdownEntry {
+interface DailyBreakdownEntry {
   date: string       // YYYY-MM-DD
   totalSeconds: number
   focusSeconds: number
@@ -227,7 +227,7 @@ export interface DailyBreakdownEntry {
  * sufficient for the model to write "On Monday you spent 09:09–10:08 on
  * 'Building & Testing' with Kiro and Dia." without further tool calls.
  */
-export interface WeeklyDayBlockSummary {
+interface WeeklyDayBlockSummary {
   date: string  // YYYY-MM-DD
   /** Up to 6 top blocks for the day, sorted by duration desc. */
   topBlocks: Array<{
@@ -239,7 +239,7 @@ export interface WeeklyDayBlockSummary {
   }>
 }
 
-export interface GetWeekSummaryResult {
+interface GetWeekSummaryResult {
   weekStart: string  // YYYY-MM-DD
   weekEnd: string    // YYYY-MM-DD
   /** Sum of block durations across the week — matches what the timeline shows. */
@@ -259,7 +259,7 @@ export interface GetWeekSummaryResult {
   topApps: AppUsageStat[]
 }
 
-export interface AttributionSession {
+interface AttributionSession {
   date: string
   totalSeconds: number
   label: string | null
@@ -350,12 +350,10 @@ export type ToolName =
   | 'getBlockAtTime'
   | 'listClients'
 
-export interface SearchFileMentionsParams {
+interface SearchFileMentionsParams {
   startDate?: string
   endDate?: string
 }
-
-export type { SearchFileMentionsResult }
 
 // ---------------------------------------------------------------------------
 // Executor — main-process only; bridges tool params to real DB queries
@@ -751,7 +749,7 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
   }
 }
 
-export function execSearchArtifacts(params: SearchArtifactsParams, db: Database.Database): SearchArtifactsResult {
+function execSearchArtifacts(params: SearchArtifactsParams, db: Database.Database): SearchArtifactsResult {
   const hits = dbSearchArtifacts(db, params.query)
   return {
     hits: hits.map((h) => ({
@@ -765,7 +763,7 @@ export function execSearchArtifacts(params: SearchArtifactsParams, db: Database.
   }
 }
 
-export function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database): GetWeekSummaryResult {
+function execGetWeekSummary(params: GetWeekSummaryParams, db: Database.Database): GetWeekSummaryResult {
   const [weekFromMs] = localDayBounds(params.weekStartDate)
   const weekToMs = weekFromMs + 7 * 86_400_000
   const weekEnd = toDateStr(weekToMs - 1)
@@ -1069,17 +1067,6 @@ export function execListClients(params: ListClientsParams, db: Database.Database
     clientRoster: roster,
   }
 }
-
-export type ToolParams =
-  | { name: 'searchSessions'; params: SearchSessionsParams }
-  | { name: 'getDaySummary'; params: GetDaySummaryParams }
-  | { name: 'getAppUsage'; params: GetAppUsageParams }
-  | { name: 'searchArtifacts'; params: SearchArtifactsParams }
-  | { name: 'getWeekSummary'; params: GetWeekSummaryParams }
-  | { name: 'getAttributionContext'; params: GetAttributionContextParams }
-  | { name: 'searchFileMentions'; params: SearchFileMentionsParams }
-  | { name: 'getBlockAtTime'; params: GetBlockAtTimeParams }
-  | { name: 'listClients'; params: ListClientsParams }
 
 export function executeTool(
   name: ToolName,

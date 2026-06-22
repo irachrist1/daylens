@@ -49,8 +49,8 @@ export interface AITextJobExecutionOptions {
 // supports >=32k output, so the surfaces that were clipping rich summaries no
 // longer truncate. Short jobs (block labels, follow-up chips) naturally emit a
 // handful of tokens regardless of this ceiling.
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32000
-export const LONG_FORM_MAX_OUTPUT_TOKENS = 32000
+const DEFAULT_MAX_OUTPUT_TOKENS = 32000
+const LONG_FORM_MAX_OUTPUT_TOKENS = 32000
 
 interface AIJobDefinition {
   jobType: AIJobType
@@ -318,10 +318,6 @@ function isQuotaOrAuthError(error: unknown): boolean {
 // copy and a structured code the renderer can act on.
 function friendlyProviderError(error: unknown, label: string): Error {
   return friendlyProviderErrorClassified(error, label)
-}
-
-export function promptCachingPolicyForJob(jobType: AIJobType): AIJobDefinition['cachePolicy'] {
-  return JOB_DEFINITIONS[jobType].cachePolicy
 }
 
 function redactAIText(input: string, settings: AppSettings): string {

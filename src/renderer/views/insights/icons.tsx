@@ -103,37 +103,12 @@ export function IconArchive({ size = 13 }: { size?: number }) {
   )
 }
 
-// D4: per-chat settings (gear).
-export function IconGear({ size = 15 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1M12.5 12.5l-1.1-1.1M4.6 4.6 3.5 3.5" />
-    </svg>
-  )
-}
-
 export function IconExternal() {
   return (
     <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2 12L12 2M7 2h5v5" />
     </svg>
   )
-}
-
-export function artifactAccentColor(artifact: AIArtifactRecord): string {
-  switch (artifact.kind) {
-    case 'csv':
-    case 'json_table':
-      return '#16a34a'
-    case 'html_chart':
-      return '#7c3aed'
-    case 'report':
-      return '#2563eb'
-    case 'markdown':
-    default:
-      return '#0891b2'
-  }
 }
 
 export function IconArtifactFile({ kind }: { kind: AIArtifactRecord['kind'] }) {
@@ -245,16 +220,4 @@ export function IconActionButton({
       {children}
     </button>
   )
-}
-
-export function relativeTime(ms: number): string {
-  const diff = Date.now() - ms
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7) return `${days}d ago`
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }

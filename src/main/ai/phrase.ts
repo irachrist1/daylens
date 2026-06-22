@@ -70,5 +70,3 @@ export async function phraseAnswer(
   if (trace) trace.addEvent({ kind: 'phrase_pass', input: factsBlock, output: answer })
   return answer
 }
-
-export { serializeFact }

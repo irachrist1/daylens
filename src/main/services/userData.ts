@@ -2,8 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const APP_DISPLAY_NAME = 'Daylens'
-export const MAC_USER_DATA_DIR = 'Daylens Desktop'
-export const LEGACY_USER_DATA_DIRS = ['Daylens', 'DaylensWindows']
+const MAC_USER_DATA_DIR = 'Daylens Desktop'
+const LEGACY_USER_DATA_DIRS = ['Daylens', 'DaylensWindows']
 const PRIMARY_DB_FILES = ['daylens.sqlite', 'daylens.sqlite-wal']
 const LEGACY_DB_FILES = ['daylens.db']
 const IMPORTANT_STATE_FILES = [
@@ -58,7 +58,7 @@ function directoryStateRank(state: UserDataDirectoryState, preferredPath: string
   )
 }
 
-export function getUserDataDirNames(platform: NodeJS.Platform): { preferredDirName: string; legacyDirNames: string[] } {
+function getUserDataDirNames(platform: NodeJS.Platform): { preferredDirName: string; legacyDirNames: string[] } {
   if (platform === 'darwin') {
     return {
       preferredDirName: MAC_USER_DATA_DIR,
@@ -157,7 +157,7 @@ export function createBackupManifest(sourceDir: string, sourceVersion: string): 
   }
 }
 
-export function readBackupManifest(backupDir: string): BackupManifest | null {
+function readBackupManifest(backupDir: string): BackupManifest | null {
   const manifestPath = path.join(backupDir, 'backup-manifest.json')
   const manifest = readJsonFile(manifestPath)
   if (!manifest) return null

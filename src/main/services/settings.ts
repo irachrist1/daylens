@@ -254,19 +254,3 @@ export async function clearApiKey(provider: AIProviderMode): Promise<void> {
     // Key may not exist — ignore
   }
 }
-
-export async function hasAnthropicApiKey(): Promise<boolean> {
-  return hasApiKey('anthropic')
-}
-
-export async function getAnthropicApiKey(): Promise<string | null> {
-  return getApiKey('anthropic')
-}
-
-export async function setAnthropicApiKey(key: string): Promise<void> {
-  await setApiKey('anthropic', key)
-}
-
-export async function clearAnthropicApiKey(): Promise<void> {
-  await clearApiKey('anthropic')
-}

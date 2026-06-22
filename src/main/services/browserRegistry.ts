@@ -120,7 +120,7 @@ function handlesWebUrls(plist: Record<string, unknown>): boolean {
   return schemes.has('http') && schemes.has('https')
 }
 
-export function classifyMacBrowserFamily(appPath: string): BrowserFamily {
+function classifyMacBrowserFamily(appPath: string): BrowserFamily {
   if (
     fs.existsSync(path.join(appPath, 'Contents', 'Resources', 'omni.ja'))
     || fs.existsSync(path.join(appPath, 'Contents', 'Resources', 'browser', 'omni.ja'))
@@ -144,7 +144,7 @@ export function classifyMacBrowserFamily(appPath: string): BrowserFamily {
   return 'webkit'
 }
 
-export function inspectMacBrowserApplication(appPath: string): BrowserApplication | null {
+function inspectMacBrowserApplication(appPath: string): BrowserApplication | null {
   const normalizedAppPath = appBundlePath(appPath)
   if (!normalizedAppPath) return null
   const plist = plistJson(normalizedAppPath)
@@ -195,59 +195,6 @@ export function parseLaunchServicesBrowserDump(dump: string): BrowserApplication
   }
 
   return unique(applications, (app) => app.bundleId.toLowerCase())
-}
-
-function readLaunchServicesBrowsers(): BrowserApplication[] {
-  const helperCandidates = [
-    ...(process.resourcesPath
-      ? [path.join(process.resourcesPath, 'build', 'capture-helper')]
-      : []),
-    path.join(__dirname, '..', '..', 'build', 'capture-helper'),
-    path.join(process.cwd(), 'build', 'capture-helper'),
-  ]
-  for (const helperPath of helperCandidates) {
-    if (!fs.existsSync(helperPath)) continue
-    try {
-      const raw = execFileSync(helperPath, [], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          DAYLENS_CAPTURE_HELPER_BROWSER_DISCOVERY: '1',
-        },
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2_000,
-      })
-      const parsed = JSON.parse(raw) as BrowserApplication[]
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((application) => ({
-          ...application,
-          family: classifyMacBrowserFamily(application.appPath),
-          source: 'launch_services' as const,
-        }))
-      }
-    } catch {
-      // Fall through to LaunchServices' registry dump.
-    }
-  }
-
-  try {
-    const dump = execFileSync(LSREGISTER_PATH, ['-dump'], {
-      encoding: 'utf8',
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    })
-    return parseLaunchServicesBrowserDump(dump)
-  } catch {
-    return []
-  }
-}
-
-export function refreshBrowserRegistry(): BrowserApplication[] {
-  const applications = process.platform === 'darwin' ? readLaunchServicesBrowsers() : []
-  registryCache = { readAt: Date.now(), applications }
-  historyCache = null
-  return applications
 }
 
 const execFileAsync = promisify(execFile)
@@ -316,7 +263,7 @@ function ensureRegistryWarming(): void {
   prewarmInFlight = prewarmBrowserRegistry().finally(() => { prewarmInFlight = null })
 }
 
-export function getBrowserApplications(): BrowserApplication[] {
+function getBrowserApplications(): BrowserApplication[] {
   if (process.platform !== 'darwin') return []
   // Never block a synchronous read path on the ~5s LaunchServices dump. If the
   // cache is missing or stale, refresh it in the background and serve what we
@@ -499,8 +446,3 @@ export function getMacBrowserHistoryLocations(): BrowserHistoryLocation[] {
 }
 
 export { getLinuxBrowserHistoryLocations }
-
-export function __resetBrowserRegistryForTests(): void {
-  registryCache = null
-  historyCache = null
-}

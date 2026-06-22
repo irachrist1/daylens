@@ -98,11 +98,6 @@ export async function getWrappedNarrative(
   }
 }
 
-/** Pre-warm the narrative cache without forcing the caller to wait on it. */
-export function warmWrappedNarrative(payload: DayTimelinePayload): void {
-  void getWrappedNarrative(payload).catch(() => undefined)
-}
-
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
@@ -111,9 +106,4 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
       (error) => { clearTimeout(timer); reject(error) },
     )
   })
-}
-
-/** Test hook — drops cached narratives so tests can re-run with new facts. */
-export function clearWrappedNarrativeCache(): void {
-  narrativeCache.clear()
 }

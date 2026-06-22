@@ -5,7 +5,7 @@ import { hasMaintenanceRun, markMaintenanceRun } from '../../db/maintenance'
 
 const APP_IDENTITY_OBSERVATIONS_REPAIR_KEY = 'app_identity_observations_v1'
 
-export interface AppIdentityMetadata {
+interface AppIdentityMetadata {
   observedCategory?: AppCategory | null
   executablePath?: string | null
   uwpPackageFamily?: string | null

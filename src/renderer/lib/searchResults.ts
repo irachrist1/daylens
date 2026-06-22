@@ -45,15 +45,6 @@ export function searchResultSubtitle(result: DaylensSearchResult): string {
   }
 }
 
-/** App name (session) or domain (browser) — the thing whose icon we resolve. */
-export function searchResultAppName(result: DaylensSearchResult): string | null {
-  return result.type === 'session' ? result.appName : null
-}
-
-export function searchResultDomain(result: DaylensSearchResult): string | null {
-  return result.type === 'browser' ? result.domain : null
-}
-
 function normalizeForDedup(value: string): string {
   return value.toLowerCase().replace(/\s+/g, ' ').replace(/[^\w ]+/g, '').trim()
 }

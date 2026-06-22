@@ -82,19 +82,19 @@ interface RollupRow {
 
 // ─── Output payload types ───────────────────────────────────────────────────
 
-export interface SessionAppEntry {
+interface SessionAppEntry {
   app_name: string
   duration_ms: number
   role: string
 }
 
-export interface EvidenceEntry {
+interface EvidenceEntry {
   type: string
   value: string
   weight: number
 }
 
-export interface SessionPayload {
+interface SessionPayload {
   work_session_id: string
   start: string
   end: string
@@ -161,7 +161,7 @@ export interface ClientComparisonPayload {
   winner_client_id: string | null
 }
 
-export type ClientEvidenceKind = 'email' | 'workbook' | 'document' | 'tab' | 'file' | 'unknown'
+type ClientEvidenceKind = 'email' | 'workbook' | 'document' | 'tab' | 'file' | 'unknown'
 
 export interface ClientEvidenceItem {
   label: string
@@ -177,7 +177,7 @@ export interface ClientEvidencePayload {
   items: ClientEvidenceItem[]
 }
 
-export interface ClientTimelineEntry {
+interface ClientTimelineEntry {
   work_session_id: string
   start: string
   end: string
@@ -196,7 +196,7 @@ export interface ClientTimelinePayload {
   sessions: ClientTimelineEntry[]
 }
 
-export interface ClientAppBreakdownEntry {
+interface ClientAppBreakdownEntry {
   app_name: string
   duration_ms: number
   session_count: number
@@ -209,7 +209,7 @@ export interface ClientAppBreakdownPayload {
   apps: ClientAppBreakdownEntry[]
 }
 
-export interface ClientInvoiceLineItem {
+interface ClientInvoiceLineItem {
   label: string
   duration_ms: number
   app_names: string[]
@@ -295,7 +295,7 @@ export interface EvidenceBackedAppBreakdownPayload {
   apps: ClientAppBreakdownEntry[]
 }
 
-export interface DaySessionPayload {
+interface DaySessionPayload {
   work_session_id: string
   start: string
   end: string
@@ -308,7 +308,7 @@ export interface DaySessionPayload {
   evidence: EvidenceEntry[]
 }
 
-export interface DayAmbiguousSegment {
+interface DayAmbiguousSegment {
   start: string
   end: string
   duration_ms: number

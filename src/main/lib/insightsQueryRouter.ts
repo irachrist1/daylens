@@ -35,7 +35,7 @@ import {
 import { getTimelineDayPayload, userVisibleLabelForBlock } from '../services/workBlocks'
 import { resolveWeeklyBriefContext, type WeeklyBriefContext } from './weeklyBrief'
 
-export type EntityIntent =
+type EntityIntent =
   | 'portfolio'
   | 'comparison'
   | 'evidence'

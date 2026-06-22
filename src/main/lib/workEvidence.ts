@@ -1,7 +1,7 @@
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
 
-export type WorkEvidenceSource = 'appSummary' | 'session' | 'website'
+type WorkEvidenceSource = 'appSummary' | 'session' | 'website'
 
 export interface WorkEvidenceSignal {
   source: WorkEvidenceSource
@@ -12,7 +12,7 @@ export interface WorkEvidenceSignal {
   confidence: number
 }
 
-export interface WorkEvidenceTaskSummary {
+interface WorkEvidenceTaskSummary {
   label: string
   category: AppCategory
   confidence: number
@@ -211,11 +211,4 @@ export function deriveWorkEvidenceSummary(input: WorkEvidenceInput): WorkEvidenc
     totalSeconds,
     focusedSeconds,
   }
-}
-
-export function formatWorkEvidenceSummary(summary: WorkEvidenceSummary): string {
-  const taskPart = `Likely task: ${summary.task.label}.`
-  const evidencePart = summary.evidenceText.trim()
-  const totalsPart = `Tracked: ${formatDuration(summary.totalSeconds)} total, ${formatDuration(summary.focusedSeconds)} focused.`
-  return [taskPart, evidencePart, totalsPart].join(' ')
 }

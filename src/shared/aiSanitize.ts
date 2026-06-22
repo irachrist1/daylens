@@ -91,11 +91,6 @@ export function sanitizeForModel(value: string): string {
   return applyPatterns(value, '').text
 }
 
-export function sanitizeForModelWithReport(value: string): { text: string; report: SanitizeReport } {
-  if (!value) return { text: value, report: { redactionCount: 0, patternsHit: [] } }
-  return applyPatterns(value, '')
-}
-
 // sanitizeForRender: replace each match with [redacted] so the user can see
 // something was filtered out. Returns the cleaned text plus a report so the
 // caller can fire an analytics event when redactionCount > 0.

@@ -12,7 +12,7 @@ export interface WorkMemoryBlockInput {
   topApps?: WorkContextAppSummary[]
 }
 
-export interface ConcurrentWebsiteVisit {
+interface ConcurrentWebsiteVisit {
   id: number
   domain: string
   pageTitle: string | null
@@ -21,7 +21,7 @@ export interface ConcurrentWebsiteVisit {
   durationSec: number
 }
 
-export interface ConcurrentBrowserContext {
+interface ConcurrentBrowserContext {
   id: string
   bundleId: string
   tabUrl: string | null
@@ -33,7 +33,7 @@ export interface ConcurrentBrowserContext {
   endedAt: number
 }
 
-export interface ConcurrentFileActivity {
+interface ConcurrentFileActivity {
   filePath: string
   fileName: string | null
   projectRoot: string | null
@@ -577,10 +577,6 @@ export function buildBlockPatternKeyJson(
   const key = buildPatternKey(block, evidence)
   if (!key) return null
   return { json: JSON.stringify(key), project: key.project, devContext: key.devContext }
-}
-
-export function blockHasDevOrTerminalApp(block: WorkMemoryBlockInput): boolean {
-  return hasDevOrTerminalApp(block)
 }
 
 export function evidenceIsAllDistraction(evidence: ConcurrentEvidence): boolean {

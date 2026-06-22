@@ -40,7 +40,7 @@ function containsBreakEvent(
   }
 }
 
-export function lateNightCarryEnd(
+function lateNightCarryEnd(
   db: Database.Database,
   boundaryMs: number,
 ): number {

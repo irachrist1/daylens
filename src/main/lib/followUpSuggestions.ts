@@ -192,14 +192,6 @@ export function filterFollowUpCandidatesWithReport(
   return { suggestions: suggestions.slice(0, 4), rejectedByRule }
 }
 
-export function filterFollowUpCandidates(
-  answerText: string,
-  candidates: FollowUpSuggestion[],
-  justAnsweredShape?: QuestionShape | null,
-): FollowUpSuggestion[] {
-  return filterFollowUpCandidatesWithReport(answerText, candidates, justAnsweredShape).suggestions
-}
-
 // Model-generated suggestions must name a specific app, file, page, or entity.
 // Accepts suggestions that contain a mid-sentence capitalized word (proper noun)
 // or a filename-like token (e.g. "index.ts", "Cursor", "Notion").

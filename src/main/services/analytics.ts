@@ -432,7 +432,7 @@ export async function initAnalytics(): Promise<void> {
   }
 }
 
-export function identifyAnonymousIdentity(): void {
+function identifyAnonymousIdentity(): void {
   try {
     const client = getPosthog()
     if (!client) return
@@ -533,7 +533,7 @@ export function captureException(
   }
 }
 
-export async function flush(): Promise<void> {
+async function flush(): Promise<void> {
   const pending: Array<Promise<unknown>> = []
 
   try {

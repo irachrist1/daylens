@@ -90,7 +90,3 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
     )
   })
 }
-
-export function clearWrappedPeriodNarrativeCache(): void {
-  narrativeCache.clear()
-}

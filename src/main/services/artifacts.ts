@@ -178,7 +178,7 @@ export function listArtifactsByThread(threadId: number): AIArtifactRecord[] {
   return rows.map(rowToRecord)
 }
 
-export function getArtifact(id: number): AIArtifactRecord | null {
+function getArtifact(id: number): AIArtifactRecord | null {
   const db = getDb()
   const row = db
     .prepare(`SELECT * FROM ai_artifacts WHERE id = ?`)
@@ -186,7 +186,7 @@ export function getArtifact(id: number): AIArtifactRecord | null {
   return row ? rowToRecord(row) : null
 }
 
-export async function readArtifactContent(id: number): Promise<AIArtifactContent | null> {
+async function readArtifactContent(id: number): Promise<AIArtifactContent | null> {
   const record = getArtifact(id)
   if (!record) return null
   if (record.filePath) {
@@ -260,7 +260,7 @@ export async function readArtifactPreview(
   }
 }
 
-export async function deleteArtifact(id: number): Promise<void> {
+async function deleteArtifact(id: number): Promise<void> {
   const record = getArtifact(id)
   if (!record) return
   if (record.filePath) {
@@ -486,18 +486,4 @@ export function setThreadSettings(threadId: number, patch: AIThreadSettings, db:
   db.prepare('UPDATE ai_threads SET metadata_json = ?, updated_at = ? WHERE id = ?')
     .run(JSON.stringify({ ...meta, settings: next }), Date.now(), threadId)
   return next
-}
-
-export function ensureDefaultThread(conversationId: number): number {
-  const db = getDb()
-  const existing = db
-    .prepare(`
-      SELECT thread_id AS threadId FROM ai_messages
-      WHERE conversation_id = ? AND thread_id IS NOT NULL
-      ORDER BY created_at DESC LIMIT 1
-    `)
-    .get(conversationId) as { threadId: number | null } | undefined
-  if (existing?.threadId) return existing.threadId
-  const fresh = createThread(DEFAULT_THREAD_TITLE)
-  return fresh.id
 }

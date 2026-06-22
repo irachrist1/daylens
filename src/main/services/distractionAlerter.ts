@@ -229,7 +229,7 @@ function checkDistraction(nowMs = Date.now()): void {
   leisureState.hasAlertedForCurrentRun = true
 }
 
-export async function setDistractionThreshold(minutes: number): Promise<void> {
+async function setDistractionThreshold(minutes: number): Promise<void> {
   thresholdMinutes = Math.max(1, Math.round(minutes))
   await setSettings({ distractionAlertThresholdMinutes: thresholdMinutes })
   if (leisureState && leisureState.consecutiveSeconds < thresholdMinutes * 60) {

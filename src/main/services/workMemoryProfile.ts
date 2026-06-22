@@ -12,9 +12,9 @@ import type Database from 'better-sqlite3'
 import type { AppCategory } from '@shared/types'
 import { tableExists } from './database'
 
-export type WorkMemoryFactOrigin = 'drafted' | 'user'
+type WorkMemoryFactOrigin = 'drafted' | 'user'
 
-export interface WorkMemoryFact {
+interface WorkMemoryFact {
   id: string
   text: string
   origin: WorkMemoryFactOrigin

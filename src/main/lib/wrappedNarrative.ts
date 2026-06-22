@@ -34,7 +34,7 @@ import { friendlyDomain } from '@shared/humanize'
 // morning/evening narrative is allowed to speak from.
 
 /** A substantial, trusted, non-pending block — work we can stand behind. */
-export interface WrappedMatteredItem {
+interface WrappedMatteredItem {
   label: string
   category: AppCategory
   intentRole: WorkIntentRole | null
@@ -47,7 +47,7 @@ export interface WrappedMatteredItem {
 }
 
 /** A pending block the user has not yet confirmed — the review pile. */
-export interface WrappedReviewItem {
+interface WrappedReviewItem {
   label: string
   durationSeconds: number
   startClock: string
@@ -56,7 +56,7 @@ export interface WrappedReviewItem {
 
 /** An unresolved thread worth resuming. `open-thread` was still on screen at
  *  day's end; `recurring` spanned multiple blocks. */
-export interface WrappedCarryoverItem {
+interface WrappedCarryoverItem {
   label: string
   intentRole: WorkIntentRole
   intentSubject: string | null
@@ -112,7 +112,7 @@ export interface WrappedFacts {
   kindBreakdown: KindBreakdown
 }
 
-export interface KindBreakdown {
+interface KindBreakdown {
   work: number
   leisure: number
   personal: number

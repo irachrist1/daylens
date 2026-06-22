@@ -37,7 +37,7 @@ export function parseProcStatLine(statContent: string, statusContent: string): P
   }
 }
 
-export function parseCimProcessOutput(output: string): ProcessSnapshot[] {
+function parseCimProcessOutput(output: string): ProcessSnapshot[] {
   const now = Date.now()
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   const snapshots: ProcessSnapshot[] = []
@@ -150,19 +150,6 @@ function refreshSnapshotCim(): void {
   )
 }
 
-function refreshSnapshotWmic(): void {
-  execFile('wmic', ['process', 'get', 'ProcessId,Name,WorkingSetSize', '/format:csv'], { timeout: 5_000, windowsHide: true }, (error, stdout) => {
-    refreshInFlight = false
-    if (error) return
-    try {
-      latestSnapshot = parseWmicOutput(stdout)
-      observeProcessSnapshots(latestSnapshot)
-    } catch {
-      // keep previous snapshot
-    }
-  })
-}
-
 function refreshSnapshot(): void {
   if (refreshInFlight) return
   if (process.platform === 'linux') {
@@ -194,10 +181,3 @@ export function getProcessMetrics(): ProcessSnapshot[] {
   ensureProcessMonitor()
   return latestSnapshot
 }
-
-export function getLatestSnapshot(): ProcessSnapshot[] {
-  return latestSnapshot
-}
-
-// Test-only export for WMIC fallback verification.
-export { refreshSnapshotWmic }

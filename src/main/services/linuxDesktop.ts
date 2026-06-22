@@ -418,17 +418,12 @@ export function getLinuxPackageDiagnostics(): LinuxPackageDiagnostics | null {
   return resolveLinuxPackageDiagnostics()
 }
 
-export function getLinuxPackageType(): LinuxPackageType {
-  if (process.platform !== 'linux' || !app.isPackaged) return null
-  return resolveLinuxPackageDiagnostics().packageType
-}
-
-export function getLinuxAutostartFilePath(): string {
+function getLinuxAutostartFilePath(): string {
   const configHome = process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), '.config')
   return path.join(configHome, 'autostart', AUTOSTART_FILE)
 }
 
-export async function setLinuxLaunchOnLogin(enabled: boolean): Promise<boolean> {
+async function setLinuxLaunchOnLogin(enabled: boolean): Promise<boolean> {
   if (process.platform !== 'linux' || !app.isPackaged) return false
 
   const autostartPath = getLinuxAutostartFilePath()

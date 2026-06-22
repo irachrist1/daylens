@@ -47,26 +47,6 @@ export async function syncNowForQuit(): Promise<void> {
   // Syncing with Convex is disabled; no-op on quit to keep it fast.
 }
 
-export function markDirty(_dateStr: string): void {
-  // Sync is disabled; no-op.
-}
-
-export function getLastSyncAt(): number | null {
-  return null
-}
-
-export function getSyncRuntimeState(): SyncRuntimeState {
-  return {
-    lastHeartbeatAt: null,
-    lastSuccessfulDaySyncAt: null,
-    lastHeartbeatFailureAt: null,
-    lastHeartbeatFailureMessage: null,
-    lastDaySyncFailureAt: null,
-    lastDaySyncFailureMessage: null,
-    hasCompletedInitialDaySync: false,
-  }
-}
-
 export function finalizePreviousDay(): void {
   const yesterday = daysFromTodayLocalDateString(-1)
 

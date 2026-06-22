@@ -63,7 +63,3 @@ export async function reconcileOnboardingState(): Promise<AppSettings> {
 
   return changed ? { ...settings, onboardingState, onboardingComplete: onboardingState.stage === 'complete' } : settings
 }
-
-export function shouldShowOnboarding(settings: AppSettings): boolean {
-  return !settings.onboardingComplete || settings.onboardingState.stage !== 'complete'
-}

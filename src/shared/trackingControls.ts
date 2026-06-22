@@ -27,7 +27,7 @@ export interface SiteCaptureCandidate {
   windowTitle?: string | null
 }
 
-export type CaptureBlockReason = 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
+type CaptureBlockReason = 'paused' | 'excluded_app' | 'excluded_site' | 'incognito'
 
 export interface CaptureDecision {
   capture: boolean

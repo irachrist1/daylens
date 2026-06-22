@@ -25,13 +25,6 @@ export interface AppSession {
   captureVersion?: number
 }
 
-export interface DailySummary {
-  date: string              // YYYY-MM-DD
-  totalTrackedSeconds: number
-  focusSeconds: number
-  topApps: AppUsageSummary[]
-}
-
 export interface AppUsageSummary {
   bundleId: string
   canonicalAppId?: string | null
@@ -133,22 +126,6 @@ export interface BlockBoundary {
   endReasons: BoundaryReason[]
 }
 
-// Internal segmentation model: an intent episode is the unit Daylens actually
-// builds — a contiguous run of work with a single inferred role/subject and an
-// ordered list of boundary reasons on each edge. Episodes are projected to
-// WorkContextBlock for the timeline, wraps, review ledger, recap, and the eval;
-// IntentEpisode itself never crosses the IPC boundary.
-export interface IntentEpisode {
-  startTime: number
-  endTime: number
-  kind: WorkKind
-  role: WorkIntentRole
-  subject: string | null
-  confidence: number
-  evidence: string[]
-  boundary: BlockBoundary
-}
-
 export type TimelineBlockReviewState =
   | 'auto-approved'
   | 'pending'
@@ -234,8 +211,6 @@ export interface WorkContextBlock {
   provisional?: boolean
 }
 
-export type TimelineBlock = WorkContextBlock
-
 export interface TimelineGapSegment {
   kind: 'idle_gap' | 'away' | 'machine_off'
   startTime: number
@@ -244,7 +219,7 @@ export interface TimelineGapSegment {
   source: 'derived_gap' | 'activity_event'
 }
 
-export interface TimelineBlockSegment {
+interface TimelineBlockSegment {
   kind: 'work_block'
   startTime: number
   endTime: number
@@ -276,7 +251,7 @@ export interface WorkContextInsight {
   narrative: string | null
 }
 
-export interface WorkMemoryPatternSummary {
+interface WorkMemoryPatternSummary {
   id: string
   label: string
   category: AppCategory | null
@@ -294,7 +269,7 @@ export interface WorkMemorySettingsSummary {
 
 // Work memory as an editable, human-readable profile (ChatGPT-style) — replaces
 // the opaque pattern table. See docs/specs/work-memory.md.
-export type WorkMemoryFactOrigin = 'drafted' | 'user'
+type WorkMemoryFactOrigin = 'drafted' | 'user'
 
 export interface WorkMemoryFact {
   id: string
@@ -355,18 +330,6 @@ export interface FocusReflectionSavePayload {
   note: string
 }
 
-export interface AIConversation {
-  id: number
-  messages: AIMessage[]
-  createdAt: number
-}
-
-export interface AIMessage {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: number
-}
-
 export interface AIDaySummaryResult {
   summary: string
   questionSuggestions: string[]
@@ -393,7 +356,7 @@ export type FollowUpAffordance =
   | 'switch_timeframe'
   | 'repair'
 
-export type FollowUpResolutionKind =
+type FollowUpResolutionKind =
   | 'fresh_query'
   | 'followup_reuse_context'
   | 'followup_with_override'
@@ -469,19 +432,19 @@ export interface FollowUpResolution {
 
 export type AIMessageRating = 'up' | 'down'
 
-export interface AIStartFocusAction {
+interface AIStartFocusAction {
   kind: 'start_focus_session'
   label: string
   payload: FocusStartPayload
 }
 
-export interface AIStopFocusAction {
+interface AIStopFocusAction {
   kind: 'stop_focus_session'
   label: string
   sessionId: number
 }
 
-export interface AIReviewFocusAction {
+interface AIReviewFocusAction {
   kind: 'review_focus_session'
   label: string
   sessionId: number
@@ -491,8 +454,8 @@ export interface AIReviewFocusAction {
 
 export type AIMessageAction = AIStartFocusAction | AIStopFocusAction | AIReviewFocusAction
 
-export type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
-export type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx'
+type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
+type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx'
 
 export interface AIMessageArtifact {
   id: string
@@ -505,7 +468,7 @@ export interface AIMessageArtifact {
   createdAt: number
 }
 
-export type AISurfaceSummaryScope = 'timeline_week' | 'app_detail'
+type AISurfaceSummaryScope = 'timeline_week' | 'app_detail'
 
 export interface AISurfaceSummary {
   scope: AISurfaceSummaryScope
@@ -749,7 +712,7 @@ export interface WorkflowRef {
   artifactKeys: string[]
 }
 
-export interface BlockLabel {
+interface BlockLabel {
   current: string
   source: LabelSource
   confidence: number
@@ -759,26 +722,7 @@ export interface BlockLabel {
   override: string | null
 }
 
-export interface AIJobUsageEvent {
-  id: string
-  jobType: AIJobType
-  screen: AISurface
-  triggerSource: AIInvocationSource
-  provider: AIProviderMode | null
-  model: string | null
-  success: boolean
-  failureReason: string | null
-  startedAt: number
-  completedAt: number | null
-  latencyMs: number | null
-  inputTokens: number | null
-  outputTokens: number | null
-  cacheReadTokens: number | null
-  cacheWriteTokens: number | null
-  cacheHit: boolean
-}
-
-export interface FocusOverlapSummary {
+interface FocusOverlapSummary {
   totalSeconds: number
   pct: number
   sessionIds: number[]
@@ -940,14 +884,6 @@ export interface AppDetailPayload {
   rangeKey: string
 }
 
-export interface RangeSummaryPayload {
-  rangeKey: string
-  blockCount: number
-  topArtifacts: ArtifactRef[]
-  workflows: WorkflowPattern[]
-  computedAt: number
-}
-
 export interface BreakRecommendation {
   triggerReason: 'sustained_focus'
   focusedMinutes: number
@@ -995,7 +931,7 @@ export interface AIWrappedNarrative {
   factsHash: string
 }
 
-export type WrappedPeriod = 'week' | 'month'
+type WrappedPeriod = 'week' | 'month'
 
 export interface WrappedPeriodFacts {
   period: WrappedPeriod
@@ -1073,8 +1009,8 @@ export type OnboardingStage =
   | 'complete'
 
 export type ProofState = 'idle' | 'collecting' | 'ready'
-export type PersonalizationState = 'pending' | 'completed'
-export type AISetupState = 'pending' | 'dismissed' | 'connected'
+type PersonalizationState = 'pending' | 'completed'
+type AISetupState = 'pending' | 'dismissed' | 'connected'
 
 export interface OnboardingState {
   flowVersion: number
@@ -1088,7 +1024,7 @@ export interface OnboardingState {
   completedAt: number | null
 }
 
-export type ProviderConnectionStatus =
+type ProviderConnectionStatus =
   | 'valid'
   | 'invalid_credentials'
   | 'unsupported_format'
@@ -1186,9 +1122,9 @@ export interface LiveSession {
 }
 
 export type TrackingModuleSource = 'package' | 'unpacked' | 'hyprctl' | 'swaymsg' | 'xdotool' | 'xprop'
-export type LinuxTrackingSupportLevel = 'ready' | 'limited' | 'unsupported'
+type LinuxTrackingSupportLevel = 'ready' | 'limited' | 'unsupported'
 
-export interface LinuxTrackingHelperCommands {
+interface LinuxTrackingHelperCommands {
   hyprctl: boolean
   swaymsg: boolean
   xdotool: boolean
@@ -1205,7 +1141,7 @@ export interface LinuxTrackingDiagnostics {
   waylandDisplay: string | null
 }
 
-export interface TrackingRawWindowDiagnostics {
+interface TrackingRawWindowDiagnostics {
   title: string
   application: string
   path: string
@@ -1214,7 +1150,7 @@ export interface TrackingRawWindowDiagnostics {
   uwpPackage: string
 }
 
-export interface TrackingResolvedWindowDiagnostics {
+interface TrackingResolvedWindowDiagnostics {
   backend: string
   bundleId: string
   appName: string
@@ -1223,7 +1159,7 @@ export interface TrackingResolvedWindowDiagnostics {
   path: string
 }
 
-export interface TrackingStatusDiagnostics {
+interface TrackingStatusDiagnostics {
   moduleSource: TrackingModuleSource | null
   loadError: string | null
   pollError: string | null
@@ -1232,9 +1168,9 @@ export interface TrackingStatusDiagnostics {
   lastResolvedWindow: TrackingResolvedWindowDiagnostics | null
 }
 
-export type LinuxPackageType = 'appimage' | 'deb' | 'rpm' | 'pacman' | 'unknown' | null
+type LinuxPackageType = 'appimage' | 'deb' | 'rpm' | 'pacman' | 'unknown' | null
 
-export interface LinuxDesktopDiagnostics {
+interface LinuxDesktopDiagnostics {
   sessionType: string | null
   display: string | null
   waylandDisplay: string | null
@@ -1296,7 +1232,7 @@ export type AppCategory =
 
 // The full set of valid categories, for validating untrusted input (e.g. an
 // IPC payload) before it's persisted or cast to AppCategory.
-export const APP_CATEGORIES: readonly AppCategory[] = [
+const APP_CATEGORIES: readonly AppCategory[] = [
   'development', 'communication', 'research', 'writing', 'aiTools', 'design',
   'browsing', 'meetings', 'entertainment', 'email', 'productivity', 'social',
   'system', 'uncategorized',
@@ -1317,9 +1253,9 @@ export const FOCUSED_CATEGORIES: AppCategory[] = [
 
 // ─── Attribution / Work Session types for renderer ───────────────────────────
 
-export type AttributionStatus = 'attributed' | 'ambiguous' | 'unattributed'
+type AttributionStatus = 'attributed' | 'ambiguous' | 'unattributed'
 
-export interface ClientSummary {
+interface ClientSummary {
   id: string
   name: string
   color: string | null
@@ -1350,7 +1286,7 @@ export interface WorkSessionApp {
   role: string // primary | supporting | ambient
 }
 
-export interface WorkSessionEvidence {
+interface WorkSessionEvidence {
   type: string   // domain | file_path | title | repo_remote | email_domain | sequence
   value: string
   weight: number

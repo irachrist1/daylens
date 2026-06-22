@@ -3398,7 +3398,7 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
 
 export type BackgroundRelabelDisposition = 'skip' | 'review' | 'relabel'
 
-export function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
+function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
   return Boolean(
     preferredArtifactLabel(block)
     || usefulBlockLabel(block, block.workflowRefs[0]?.label)
@@ -3626,7 +3626,7 @@ function persistWorkflow(db: Database.Database, block: WorkContextBlock, dateStr
 
 // Invalidate every persisted block for a date so the next reconstruction starts
 // clean. Exported so the rebuild path can clear stale blocks before recomputing.
-export function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
+function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
   db.prepare(`
     UPDATE timeline_blocks
     SET invalidated_at = ?
@@ -3634,7 +3634,7 @@ export function invalidateTimelineDay(db: Database.Database, dateStr: string): v
   `).run(Date.now(), dateStr)
 }
 
-export function persistTimelineDay(
+function persistTimelineDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],

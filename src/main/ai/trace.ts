@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export interface TraceTurnEvent {
+interface TraceTurnEvent {
   kind: 'turn'
   role: 'assistant'
   text: string
@@ -20,7 +20,7 @@ export interface TraceTurnEvent {
   usage?: TraceUsage | null
 }
 
-export interface TraceToolResultEvent {
+interface TraceToolResultEvent {
   kind: 'tool_result'
   name: string
   input: unknown
@@ -30,7 +30,7 @@ export interface TraceToolResultEvent {
   truncated: boolean
 }
 
-export interface TraceRouterEvent {
+interface TraceRouterEvent {
   kind: 'router'
   matched: boolean
   reason: string
@@ -41,7 +41,7 @@ export interface TraceRouterEvent {
 // Emitted when the deterministic router produces an answer. Lets us see the
 // structured data the prose-pass will rewrite — without this, scenarios that
 // take the router path appear as empty traces.
-export interface TraceRouterDecisionEvent {
+interface TraceRouterDecisionEvent {
   kind: 'router_decision'
   routedKind: string
   structuredAnswer: string
@@ -53,7 +53,7 @@ export interface TraceRouterDecisionEvent {
 // what we returned to the user. `fallback` is set when the rewrite was
 // rejected (timestamp drift, empty, exception) and the structured data was
 // returned verbatim instead.
-export interface TraceProsePassEvent {
+interface TraceProsePassEvent {
   kind: 'prose_pass'
   input: string
   output: string
@@ -63,7 +63,7 @@ export interface TraceProsePassEvent {
 // Emitted by the planner (ADR 0002 step 1): which resolvers it chose, and
 // whether that came from a deterministic shortcut, the constrained model call,
 // or the nearest-answerable fallback.
-export interface TracePlannerDecisionEvent {
+interface TracePlannerDecisionEvent {
   kind: 'planner_decision'
   source: 'shortcut' | 'model' | 'fallback'
   queries: unknown[]
@@ -71,19 +71,19 @@ export interface TracePlannerDecisionEvent {
 
 // Emitted by the phrase pass (ADR 0002 step 3). `input` is the resolved facts
 // block; `output` is the answer handed to the user.
-export interface TracePhrasePassEvent {
+interface TracePhrasePassEvent {
   kind: 'phrase_pass'
   input: string
   output: string
 }
 
-export interface TraceFinalEvent {
+interface TraceFinalEvent {
   kind: 'final'
   text: string
   source: string
 }
 
-export interface TraceCitationEvent {
+interface TraceCitationEvent {
   kind: 'citation_check'
   ok: boolean
   missing: string[]
@@ -91,7 +91,7 @@ export interface TraceCitationEvent {
   retry?: boolean
 }
 
-export interface TraceErrorEvent {
+interface TraceErrorEvent {
   kind: 'error'
   message: string
   phase: string
@@ -109,7 +109,7 @@ export type TraceEvent =
   | TraceCitationEvent
   | TraceErrorEvent
 
-export interface TraceUsage {
+interface TraceUsage {
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
@@ -212,10 +212,6 @@ export function getCurrentTrace(): TraceRecorder | null {
 
 export function setCurrentTrace(recorder: TraceRecorder | null): void {
   currentRecorder = recorder
-}
-
-export function tracingEnabled(): boolean {
-  return Boolean(process.env.DAYLENS_AI_TRACE_DIR)
 }
 
 export function maybeStartTrace(opts: { scenarioId?: string | null; tag?: string } = {}): TraceRecorder | null {

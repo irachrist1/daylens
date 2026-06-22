@@ -28,7 +28,7 @@ export type DomainClass =
   | 'communication' | 'email' | 'learning' | 'video' | 'entertainment'
   | 'social' | 'news' | 'unknown'
 
-export const DOMAIN_CLASSIFICATION: Record<string, DomainClass> = {
+const DOMAIN_CLASSIFICATION: Record<string, DomainClass> = {
   // Code platforms
   'github.com': 'codePlatform',
   'gitlab.com': 'codePlatform',
@@ -321,18 +321,6 @@ export function categoryBreakdownFromSources(
     dominantCategory: dominant[0],
     dominantCategoryPct: total > 0 ? Math.round((dominant[1] / total) * 100) : 0,
   }
-}
-
-export function visibleCategoryBreakdown(
-  breakdown: CategoryBreakdownItem[],
-  limit = 5,
-): CategoryBreakdownItem[] {
-  const visible = breakdown.slice(0, limit)
-  const percentages = largestRemainderPercentages(visible.map((item) => item.seconds))
-  return visible.map((item, index) => ({
-    ...item,
-    pct: percentages[index] ?? 0,
-  }))
 }
 
 // ─── Peak block selection and labels ──────────────────────────────────────────

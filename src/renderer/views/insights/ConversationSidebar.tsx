@@ -26,7 +26,7 @@ const DAY_MS = 86_400_000
 // so they read as generated reports, not conversations.
 const DAY_REPORT_RE = /^Day report \d{4}-\d{2}-\d{2}$/
 
-export function isDayReportThread(thread: Pick<AIThreadSummary, 'title'>): boolean {
+function isDayReportThread(thread: Pick<AIThreadSummary, 'title'>): boolean {
   return DAY_REPORT_RE.test(thread.title.trim())
 }
 

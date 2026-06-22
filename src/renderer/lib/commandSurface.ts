@@ -8,7 +8,7 @@ import type { ReactNode } from 'react'
 // without moving chat state out of the AI view: the actions' `perform` closures
 // still live in the view that owns the state.
 
-export type CommandSurfaceGroup = 'message' | 'chat'
+type CommandSurfaceGroup = 'message' | 'chat'
 
 export interface CommandSurfaceAction {
   id: string

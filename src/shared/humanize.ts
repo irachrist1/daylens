@@ -66,7 +66,7 @@ function compact(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }
 
-export function normalizeHost(host: string | null | undefined): string {
+function normalizeHost(host: string | null | undefined): string {
   return (host ?? '').trim().toLowerCase().replace(/^www\./, '')
 }
 
@@ -160,14 +160,6 @@ export function humanizeTitle(raw: string | null | undefined): string | null {
   }
 
   return value
-}
-
-// Shorten an over-long title for inline display, on a word boundary.
-export function truncateTitle(value: string, maxLength = 60): string {
-  if (value.length <= maxLength) return value
-  const slice = value.slice(0, maxLength)
-  const lastSpace = slice.lastIndexOf(' ')
-  return `${(lastSpace > 20 ? slice.slice(0, lastSpace) : slice).trimEnd()}…`
 }
 
 // Activity-shaped title for a leisure block, derived from the leisure domains it

@@ -1,7 +1,7 @@
 import type { ArtifactRef, OpenTarget } from '@shared/types'
 import { ipc } from './ipc'
 
-export async function openTarget(target: OpenTarget): Promise<void> {
+async function openTarget(target: OpenTarget): Promise<void> {
   if (target.kind === 'external_url' && target.value) {
     ipc.shell.openExternal(target.value)
     return

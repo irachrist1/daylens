@@ -186,7 +186,7 @@ export interface AIModelCapabilities {
 
 // Keyed by model id (ids are shared across API + CLI variants, distinct on
 // OpenRouter). Reviewed alongside the catalog on 2026-05-31.
-export const AI_MODEL_CAPABILITIES: Record<string, AIModelCapabilities> = {
+const AI_MODEL_CAPABILITIES: Record<string, AIModelCapabilities> = {
   'claude-opus-4-8': { speed: 3, intelligence: 5, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
   'claude-sonnet-4-6': { speed: 4, intelligence: 4, contextTokens: 200_000, vision: true, toolUse: true, reasoning: true },
   'claude-haiku-4-5': { speed: 5, intelligence: 3, contextTokens: 200_000, vision: true, toolUse: true, reasoning: false },

@@ -1,6 +1,6 @@
 import { BrowserWindow, globalShortcut } from 'electron'
 
-export const PALETTE_TOGGLE_CHANNEL = 'palette:toggle'
+const PALETTE_TOGGLE_CHANNEL = 'palette:toggle'
 
 const MAC_ACCELERATOR = 'CommandOrControl+Alt+D'
 const WIN_LINUX_ACCELERATOR = 'CommandOrControl+Alt+D'
@@ -42,8 +42,4 @@ export function unregisterCommandPaletteShortcut(): void {
     try { globalShortcut.unregister(registeredAccelerator) } catch { /* noop */ }
     registeredAccelerator = null
   }
-}
-
-export function commandPaletteAccelerator(): string {
-  return paletteAccelerator()
 }

@@ -5,35 +5,35 @@ import { formatDuration, todayString } from './format'
 
 export type RecapPeriod = 'day' | 'week' | 'month'
 
-export type RecapChapterId = 'headline' | 'focus' | 'artifacts' | 'rhythm' | 'change'
+type RecapChapterId = 'headline' | 'focus' | 'artifacts' | 'rhythm' | 'change'
 
-export interface RecapMetric {
+interface RecapMetric {
   label: string
   value: string
   detail: string
 }
 
-export interface RecapListItem {
+interface RecapListItem {
   label: string
   value: string
   detail: string
 }
 
-export interface RecapTrendPoint {
+interface RecapTrendPoint {
   date: string
   shortLabel: string
   trackedSeconds: number
   focusSeconds: number
 }
 
-export interface RecapChapter {
+interface RecapChapter {
   id: RecapChapterId
   eyebrow: string
   title: string
   body: string
 }
 
-export interface RecapCoverage {
+interface RecapCoverage {
   attributedPct: number
   untitledPct: number
   activeDayCount: number

@@ -84,13 +84,13 @@ function eachDay(from: string, to: string, cap = 92): string[] {
 // Timeline to the minute). ai.md §8.3.
 // ---------------------------------------------------------------------------
 
-export interface RangeDaySummary {
+interface RangeDaySummary {
   date: string
   totalTrackedSeconds: number
   topBlocks: Array<{ label: string; startTime: string; endTime: string; durationSeconds: number; apps: string[] }>
 }
 
-export interface GetRangeResult {
+interface GetRangeResult {
   from: string
   to: string
   totalTrackedSeconds: number

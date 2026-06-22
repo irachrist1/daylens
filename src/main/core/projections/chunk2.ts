@@ -6,10 +6,7 @@
 // finalization (D2) is the only caller that sets it for today.
 
 import type Database from 'better-sqlite3'
-import type { AppCategory, AppUsageSummary } from '@shared/types'
 import { classifyResult } from '../../services/tracking'
-import { isCategoryFocused } from '../../lib/focusScore'
-import { resolveCanonicalApp } from '../../lib/appIdentity'
 import { localDateString } from '../../lib/localDate'
 import { ownedDayBounds } from '../../lib/dayOwnership'
 import { naturalizeProjectionLabel } from './chunk2Label'
@@ -545,14 +542,14 @@ interface DerivedSessionRowFull extends DerivedSessionRow {
   id: number
 }
 
-export function hasDerivedDay(db: Database.Database, date: string): boolean {
+function hasDerivedDay(db: Database.Database, date: string): boolean {
   const row = db
     .prepare(`SELECT projection_version FROM derived_projection_runs WHERE date = ?`)
     .get(date) as { projection_version: number } | undefined
   return Boolean(row && row.projection_version === PROJECTION_VERSION)
 }
 
-export interface DerivedDayBlock {
+interface DerivedDayBlock {
   id: string
   startTime: number
   endTime: number
@@ -624,63 +621,6 @@ export function readDerivedDay(db: Database.Database, date: string): DerivedDayR
   })
 
   return { date, blocks, sessions: sessionRows }
-}
-
-const APP_CATEGORIES: ReadonlySet<string> = new Set([
-  'development',
-  'communication',
-  'research',
-  'writing',
-  'aiTools',
-  'design',
-  'browsing',
-  'meetings',
-  'entertainment',
-  'email',
-  'productivity',
-  'social',
-  'system',
-  'uncategorized',
-])
-
-function toAppCategory(category: string | null | undefined): AppCategory {
-  return category && APP_CATEGORIES.has(category) ? category as AppCategory : 'uncategorized'
-}
-
-export function readDerivedAppSummariesForDate(
-  db: Database.Database,
-  date: string,
-): AppUsageSummary[] | null {
-  const day = readDerivedDay(db, date)
-  if (!day) return null
-
-  const summaries = new Map<string, AppUsageSummary>()
-  for (const session of day.sessions) {
-    const bundleId = session.app_bundle_id ?? session.app_name ?? 'unknown'
-    const appName = session.app_name ?? session.app_bundle_id ?? 'Unknown app'
-    const identity = resolveCanonicalApp(bundleId, appName)
-    const canonicalAppId = identity.canonicalAppId ?? bundleId
-    const category = toAppCategory(session.category)
-    const existing = summaries.get(canonicalAppId)
-    if (existing) {
-      existing.totalSeconds += session.active_seconds
-      existing.sessionCount = (existing.sessionCount ?? 0) + 1
-      continue
-    }
-    summaries.set(canonicalAppId, {
-      bundleId,
-      canonicalAppId,
-      appName: identity.displayName || appName,
-      category,
-      totalSeconds: session.active_seconds,
-      isFocused: isCategoryFocused(category),
-      sessionCount: 1,
-    })
-  }
-
-  return [...summaries.values()]
-    .filter((summary) => summary.totalSeconds > 0)
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
 }
 
 // ---------- reprojection sweep (used by D7 cache invalidation on version bump) ----------

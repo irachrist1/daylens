@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 
-export function ensureMaintenanceRunsTable(db: Database.Database): void {
+function ensureMaintenanceRunsTable(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS maintenance_runs (
       key TEXT PRIMARY KEY,

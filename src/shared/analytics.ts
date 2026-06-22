@@ -1,5 +1,3 @@
-import type { AIAnswerKind, AIJobType, AISurface } from './types'
-
 export const ANALYTICS_EVENT = {
   APP_LAUNCHED: 'app_launched',
   APP_CRASHED: 'app_crashed',
@@ -168,10 +166,10 @@ const SAFE_ARRAY_KEYS = new Set([
   'settings_changed_keys',
 ])
 
-export const TRACKING_SETTING_KEYS = [
+const TRACKING_SETTING_KEYS = [
 ] as const
 
-export const AI_SETTING_KEYS = [
+const AI_SETTING_KEYS = [
   'aiProvider',
   'anthropicModel',
   'openaiModel',
@@ -187,7 +185,7 @@ export const AI_SETTING_KEYS = [
   'aiRedactEmails',
 ] as const
 
-export const PRIVACY_SETTING_KEYS = [
+const PRIVACY_SETTING_KEYS = [
   'analyticsOptIn',
   'shareAIFeedbackExamples',
   'allowThirdPartyWebsiteIconFallback',
@@ -200,11 +198,11 @@ export const NOTIFICATION_SETTING_KEYS = [
   'distractionAlertThresholdMinutes',
 ] as const
 
-export const APPEARANCE_SETTING_KEYS = [
+const APPEARANCE_SETTING_KEYS = [
   'theme',
 ] as const
 
-export const SAFE_SETTINGS_KEYS = new Set<string>([
+const SAFE_SETTINGS_KEYS = new Set<string>([
   ...TRACKING_SETTING_KEYS,
   ...AI_SETTING_KEYS,
   ...PRIVACY_SETTING_KEYS,
@@ -345,15 +343,4 @@ export function featureForView(view: string): AnalyticsFeature | null {
   if (view === 'apps') return 'apps'
   if (view === 'ai') return 'ai'
   return null
-}
-
-export function featureForSurface(surface: AISurface | 'timeline' | 'apps' | 'ai' | 'settings'): AnalyticsFeature | null {
-  if (surface === 'timeline' || surface === 'timeline_day' || surface === 'timeline_week') return 'timeline'
-  if (surface === 'apps' || surface === 'apps_list' || surface === 'app_detail') return 'apps'
-  if (surface === 'ai' || surface === 'ai_chat') return 'ai'
-  return null
-}
-
-export function isExportLikeJob(jobType: AIJobType, answerKind?: AIAnswerKind | null): boolean {
-  return jobType === 'report_generation' || answerKind === 'day_summary_style'
 }

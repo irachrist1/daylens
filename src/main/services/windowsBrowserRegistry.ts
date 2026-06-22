@@ -169,7 +169,7 @@ export function parseStartMenuInternetDump(dump: string): BrowserApplication[] {
   return unique(applications, (app) => app.bundleId.toLowerCase())
 }
 
-export function readStartMenuInternetBrowsers(): BrowserApplication[] {
+function readStartMenuInternetBrowsers(): BrowserApplication[] {
   if (process.platform !== 'win32') return []
 
   const applications: BrowserApplication[] = []
@@ -275,7 +275,7 @@ function appDataRootsForBrowser(application: BrowserApplication, home = os.homed
   return [...roots]
 }
 
-export function discoverWindowsBrowserHistoryLocations(
+function discoverWindowsBrowserHistoryLocations(
   applications = getWindowsBrowserApplications(),
   home = os.homedir(),
 ): BrowserHistoryLocation[] {
@@ -299,7 +299,7 @@ export function discoverWindowsBrowserHistoryLocations(
   return unique(locations, (location) => normalizedPath(location.historyPath))
 }
 
-export function refreshWindowsBrowserRegistry(): BrowserApplication[] {
+function refreshWindowsBrowserRegistry(): BrowserApplication[] {
   if (process.platform !== 'win32') {
     registryCache = { readAt: Date.now(), applications: [] }
     historyCache = null
@@ -311,7 +311,7 @@ export function refreshWindowsBrowserRegistry(): BrowserApplication[] {
   return applications
 }
 
-export function getWindowsBrowserApplications(): BrowserApplication[] {
+function getWindowsBrowserApplications(): BrowserApplication[] {
   if (process.platform !== 'win32') return []
   if (!registryCache || Date.now() - registryCache.readAt >= REGISTRY_CACHE_MS) {
     return refreshWindowsBrowserRegistry()
@@ -354,9 +354,4 @@ export function resolveWindowsBrowserApplication(candidate: BrowserCandidate): B
 
 export function isWindowsBrowserApplication(candidate: BrowserCandidate): boolean {
   return resolveWindowsBrowserApplication(candidate) !== null
-}
-
-export function __resetWindowsBrowserRegistryForTests(): void {
-  registryCache = null
-  historyCache = null
 }

@@ -5,14 +5,14 @@ import { getTimelineDayPayload } from '../services/workBlocks'
 import type { ArtifactRef, WorkContextBlock } from '../../shared/types'
 import { blockActiveSeconds } from '../../shared/blockDuration'
 
-export type WeeklyBriefIntent =
+type WeeklyBriefIntent =
   | 'weekly_browsing_reading_brief'
   | 'weekly_topic_exploration_brief'
   | 'weekly_deepen_followup'
 
-export type WeeklyBriefResponseMode = 'reading' | 'exploration' | 'deepen' | 'literal'
+type WeeklyBriefResponseMode = 'reading' | 'exploration' | 'deepen' | 'literal'
 
-export interface WeeklyDateRange {
+interface WeeklyDateRange {
   fromMs: number
   toMs: number
   startDate: string
@@ -28,7 +28,7 @@ export interface WeeklyBriefContext {
   evidenceKey: string | null
 }
 
-export interface NamedEvidenceItem {
+interface NamedEvidenceItem {
   title: string
   source: string
   kind: 'page' | 'video' | 'thread' | 'chat' | 'artifact'
@@ -40,7 +40,7 @@ export interface NamedEvidenceItem {
   note: string | null
 }
 
-export interface WeeklyWorkBlockSummary {
+interface WeeklyWorkBlockSummary {
   id: string
   label: string
   day: string
@@ -51,7 +51,7 @@ export interface WeeklyWorkBlockSummary {
   artifacts: string[]
 }
 
-export interface WeeklyThemeCluster {
+interface WeeklyThemeCluster {
   label: string
   summary: string
   minutes: number
@@ -59,7 +59,7 @@ export interface WeeklyThemeCluster {
   supportingBlocks: WeeklyWorkBlockSummary[]
 }
 
-export interface WeeklyAmbientUsageItem {
+interface WeeklyAmbientUsageItem {
   source: string
   minutes: number
   note: string
