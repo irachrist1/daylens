@@ -166,11 +166,20 @@ export function userVisibleBlockLabel(block: WorkContextBlock): string {
     }
   }
 
-  // Floor: name the category ("Development") rather than "Untitled block". It
-  // reads better and agrees with the badge. Only truly contentless blocks
-  // (system / uncategorized) fall through to "Untitled block".
+  // Floor: name the category ("Development") rather than announcing that
+  // naming failed. For system / uncategorized blocks, name from the app
+  // evidence that exists; if there is none, say the interval was untracked.
   if (block.dominantCategory !== 'uncategorized' && block.dominantCategory !== 'system') {
     return categoryDisplayName(block.dominantCategory)
   }
-  return 'Untitled block'
+  const appNames = block.topApps
+    .filter((app) => app.category !== 'system')
+    .map((app) => app.appName.trim())
+    .filter((name, index, names) => name.length > 0 && names.indexOf(name) === index)
+    .slice(0, 3)
+  if (appNames.length === 0) return 'Untracked time'
+  const list = appNames.length === 1
+    ? appNames[0]
+    : `${appNames.slice(0, -1).join(', ')} and ${appNames[appNames.length - 1]}`
+  return `${list} — activity`
 }
