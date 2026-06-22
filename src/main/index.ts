@@ -65,6 +65,7 @@ import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { startWindowsFocusCapture, stopWindowsFocusCapture } from './services/windowsFocusCapture'
 import { ensureProcessMonitor } from './services/processMonitor'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
+import { prewarmBrowserRegistry } from './services/browserRegistry'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
@@ -812,6 +813,12 @@ app.whenReady()
     registerCommandPaletteShortcut(() => mainWindow)
 
     startBackgroundServices()
+
+    // Warm the macOS browser registry off the main thread before the user's
+    // first Apps/Timeline click. Its synchronous fallback (`lsregister -dump`)
+    // is a ~5s blocking subprocess; pre-warming asynchronously keeps that cost
+    // off every interaction path. Fire-and-forget — failures self-heal lazily.
+    void prewarmBrowserRegistry()
 
     // A reset-triggering derived-state version bump defers its destructive wipe
     // off the startup path (F21); run it now that the window is up. No-op unless

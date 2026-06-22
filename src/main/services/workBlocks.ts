@@ -258,7 +258,30 @@ const GENERIC_LABELS = new Set([
   'Writing',
 ])
 
+// Whether a session is a browser is fully determined by (category, bundleId,
+// appName). The fallback to isBrowserApplication() shells out to plutil and the
+// LaunchServices registry, and this predicate is called many times per session
+// across the block-building pipeline. Re-resolving it per call made it the
+// single hottest path when building today's timeline (~35% of a 2.8s build).
+// Memoize so each distinct identity pays the filesystem cost at most once.
+const isBrowserSessionCache = new Map<string, boolean>()
+const IS_BROWSER_CACHE_LIMIT = 5000
+
 function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
+  const cacheKey = `${session.category} ${session.bundleId} ${session.appName}`
+  const cached = isBrowserSessionCache.get(cacheKey)
+  if (cached !== undefined) return cached
+
+  const result = computeIsBrowserSession(session)
+
+  if (isBrowserSessionCache.size >= IS_BROWSER_CACHE_LIMIT) {
+    isBrowserSessionCache.clear()
+  }
+  isBrowserSessionCache.set(cacheKey, result)
+  return result
+}
+
+function computeIsBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
   if (session.category === 'browsing') return true
   const identity = resolveCanonicalApp(session.bundleId, session.appName)
   if (identity.isBrowser || identity.defaultCategory === 'browsing') return true

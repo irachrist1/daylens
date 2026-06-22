@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -249,12 +250,83 @@ export function refreshBrowserRegistry(): BrowserApplication[] {
   return applications
 }
 
+const execFileAsync = promisify(execFile)
+
+// Populate the registry cache off the main thread. The synchronous reader falls
+// back to `lsregister -dump`, a ~4s subprocess plus ~1.5s of parsing on macOS —
+// catastrophic when it runs lazily on a user's first Apps/Timeline click. Run
+// the same discovery asynchronously at startup so the subprocess never blocks
+// the main thread and the cache is warm before the first interaction. Exact
+// behaviour of the sync path is preserved; this only changes when it runs.
+export async function prewarmBrowserRegistry(): Promise<void> {
+  if (process.platform !== 'darwin') return
+  if (registryCache && Date.now() - registryCache.readAt < REGISTRY_CACHE_MS) return
+
+  const helperCandidates = [
+    ...(process.resourcesPath ? [path.join(process.resourcesPath, 'build', 'capture-helper')] : []),
+    path.join(__dirname, '..', '..', 'build', 'capture-helper'),
+    path.join(process.cwd(), 'build', 'capture-helper'),
+  ]
+
+  for (const helperPath of helperCandidates) {
+    if (!fs.existsSync(helperPath)) continue
+    try {
+      const { stdout } = await execFileAsync(helperPath, [], {
+        encoding: 'utf8',
+        env: { ...process.env, DAYLENS_CAPTURE_HELPER_BROWSER_DISCOVERY: '1' },
+        timeout: 5_000,
+        maxBuffer: 8 * 1024 * 1024,
+      })
+      const parsed = JSON.parse(stdout) as BrowserApplication[]
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        registryCache = {
+          readAt: Date.now(),
+          applications: parsed.map((application) => ({
+            ...application,
+            family: classifyMacBrowserFamily(application.appPath),
+            source: 'launch_services' as const,
+          })),
+        }
+        historyCache = null
+        return
+      }
+    } catch {
+      // Helper unavailable or returned nothing — fall through to lsregister.
+    }
+  }
+
+  try {
+    const { stdout } = await execFileAsync(LSREGISTER_PATH, ['-dump'], {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 10_000,
+    })
+    registryCache = { readAt: Date.now(), applications: parseLaunchServicesBrowserDump(stdout) }
+    historyCache = null
+  } catch {
+    // Leave the cache cold; the lazy synchronous path still resolves on first use.
+  }
+}
+
+let prewarmInFlight: Promise<void> | null = null
+
+// Kick off a single background refresh; callers get whatever is cached now.
+function ensureRegistryWarming(): void {
+  if (prewarmInFlight) return
+  prewarmInFlight = prewarmBrowserRegistry().finally(() => { prewarmInFlight = null })
+}
+
 export function getBrowserApplications(): BrowserApplication[] {
   if (process.platform !== 'darwin') return []
+  // Never block a synchronous read path on the ~5s LaunchServices dump. If the
+  // cache is missing or stale, refresh it in the background and serve what we
+  // have (an empty list until the first warm completes). Common browsers are
+  // resolved from the app catalog before this fallback, so only obscure
+  // non-catalog browsers are momentarily undetected right after launch.
   if (!registryCache || Date.now() - registryCache.readAt >= REGISTRY_CACHE_MS) {
-    return refreshBrowserRegistry()
+    ensureRegistryWarming()
   }
-  return registryCache.applications
+  return registryCache?.applications ?? []
 }
 
 function candidateMatchesApplication(candidate: BrowserCandidate, application: BrowserApplication): boolean {
