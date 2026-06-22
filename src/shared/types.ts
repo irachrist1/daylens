@@ -42,6 +42,13 @@ export interface AppUsageSummary {
   sessionCount?: number   // populated from DB queries; absent for live/synthetic entries
 }
 
+// What a category relabel touched, so Settings can report its effect instead of
+// changing silently (settings spec §4).
+export interface CategoryOverrideEffect {
+  daysAffected: number
+  sessionsAffected: number
+}
+
 // D5: each Apps row leads with what was accomplished, not how long.
 // This compact digest provides the headline activity per app over a range —
 // the top work block the app participated in and the top artifact it touched.
@@ -283,6 +290,26 @@ export interface WorkMemorySettingsSummary {
   promotedCount: number
   totalOccurrences: number
   topPatterns: WorkMemoryPatternSummary[]
+}
+
+// Work memory as an editable, human-readable profile (ChatGPT-style) — replaces
+// the opaque pattern table. See docs/specs/work-memory.md.
+export type WorkMemoryFactOrigin = 'drafted' | 'user'
+
+export interface WorkMemoryFact {
+  id: string
+  text: string
+  origin: WorkMemoryFactOrigin
+}
+
+export interface WorkMemoryProfile {
+  facts: WorkMemoryFact[]
+}
+
+// Rebuild / forget each report what changed in one plain-language line.
+export interface WorkMemoryMutationResult {
+  facts: WorkMemoryFact[]
+  changeSummary: string
 }
 
 // Result of the one-shot work-memory backfill across the user's full history
@@ -1114,10 +1141,10 @@ export interface AppSettings {
   openrouterModel: string
   aiFallbackOrder: AIProvider[]
   aiModelStrategy: AIModelStrategy
+  // The only per-surface provider override left: an explicit, user-chosen
+  // provider for the AI chat tab. Every other surface follows `aiProvider`
+  // (invariant #12). When unset, chat follows `aiProvider` too.
   aiChatProvider?: AIProviderMode
-  aiBlockNamingProvider?: AIProviderMode
-  aiSummaryProvider?: AIProviderMode
-  aiArtifactProvider?: AIProviderMode
   aiBackgroundEnrichment?: boolean
   aiActiveBlockPreview?: boolean
   aiPromptCachingEnabled?: boolean
@@ -1260,6 +1287,18 @@ export type AppCategory =
   | 'system'
   | 'uncategorized'
 
+// The full set of valid categories, for validating untrusted input (e.g. an
+// IPC payload) before it's persisted or cast to AppCategory.
+export const APP_CATEGORIES: readonly AppCategory[] = [
+  'development', 'communication', 'research', 'writing', 'aiTools', 'design',
+  'browsing', 'meetings', 'entertainment', 'email', 'productivity', 'social',
+  'system', 'uncategorized',
+]
+
+export function isAppCategory(value: unknown): value is AppCategory {
+  return typeof value === 'string' && (APP_CATEGORIES as readonly string[]).includes(value)
+}
+
 export const FOCUSED_CATEGORIES: AppCategory[] = [
   'development',
   'research',
@@ -1377,6 +1416,7 @@ export const IPC = {
     REBUILD_TIMELINE_DAY: 'db:rebuild-timeline-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
+    GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',
     GET_CATEGORY_OVERRIDES: 'db:get-category-overrides',
     SET_CATEGORY_OVERRIDE: 'db:set-category-override',
     CLEAR_CATEGORY_OVERRIDE: 'db:clear-category-override',
@@ -1391,6 +1431,11 @@ export const IPC = {
     FORGET_WORK_MEMORY_PATTERN: 'db:forget-work-memory-pattern',
     FORGET_ALL_WORK_MEMORY: 'db:forget-all-work-memory',
     BACKFILL_WORK_MEMORY: 'db:backfill-work-memory',
+    GET_WORK_MEMORY_PROFILE: 'db:get-work-memory-profile',
+    UPDATE_WORK_MEMORY_FACT: 'db:update-work-memory-fact',
+    ADD_WORK_MEMORY_FACT: 'db:add-work-memory-fact',
+    FORGET_WORK_MEMORY_FACT: 'db:forget-work-memory-fact',
+    REBUILD_WORK_MEMORY: 'db:rebuild-work-memory',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',

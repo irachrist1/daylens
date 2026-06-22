@@ -53,18 +53,13 @@ async function main(): Promise<void> {
   process.env.GOOGLE_API_KEY = googleKey
   process.env.GEMINI_API_KEY = googleKey
 
-  // Pin EVERY provider preference key to google so the answer, the executing
-  // provider, follow-ups, titles, and report/export jobs all run on Gemini
-  // (R2 single-source). Pinning only aiProvider/aiChatProvider left
-  // report_generation routing through aiArtifactProvider, which surfaced a
-  // spurious "No AI provider is configured for this job" in the first run.
+  // Pin the selected provider to google. Every surface — the answer, the
+  // executing provider, follow-ups, titles, report/export — now routes through
+  // `aiProvider` (invariant #12), so one key covers them all.
   try {
     await setSettings({
       aiProvider: 'google',
       aiChatProvider: 'google',
-      aiArtifactProvider: 'google',
-      aiSummaryProvider: 'google',
-      aiBlockNamingProvider: 'google',
     })
   } catch (e) {
     console.warn(`[setup] could not pin provider: ${e instanceof Error ? e.message : String(e)}`)

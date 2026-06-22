@@ -1812,6 +1812,27 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 34,
+    description: 'Add editable work-memory profile facts (ChatGPT-style, replaces opaque patterns)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS work_memory_facts (
+          id          TEXT PRIMARY KEY,
+          fact_text   TEXT NOT NULL,
+          origin      TEXT NOT NULL CHECK(origin IN ('drafted', 'user')),
+          status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deleted')),
+          topic_key   TEXT,
+          sort_order  INTEGER NOT NULL DEFAULT 0,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_work_memory_facts_status
+          ON work_memory_facts (status, sort_order);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

@@ -23,6 +23,7 @@ import type {
   AppSettings,
   AIProviderMode,
   BrowserLinkResult,
+  CategoryOverrideEffect,
   ClientRecord,
   BreakRecommendation,
   DayTimelinePayload,
@@ -41,6 +42,8 @@ import type {
   TrackingPermissionState,
   WorkContextInsight,
   WorkMemorySettingsSummary,
+  WorkMemoryProfile,
+  WorkMemoryMutationResult,
   WorkspaceResult,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
@@ -134,8 +137,9 @@ const api = {
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSummariesForDate: (date: string): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, date),
+    getAllAppsForLabeling: (): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_ALL_APPS_FOR_LABELING),
     getCategoryOverrides: (): Promise<Record<string, AppCategory>> => ipcRenderer.invoke(IPC.DB.GET_CATEGORY_OVERRIDES),
-    setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
+    setCategoryOverride: (bundleId: string, category: AppCategory): Promise<CategoryOverrideEffect> =>
       ipcRenderer.invoke(IPC.DB.SET_CATEGORY_OVERRIDE, bundleId, category),
     clearCategoryOverride: (bundleId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_CATEGORY_OVERRIDE, bundleId),
     setBlockLabelOverride: (payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }): Promise<void> =>
@@ -155,6 +159,16 @@ const api = {
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_PATTERN, patternId),
     forgetAllWorkMemory: (): Promise<WorkMemorySettingsSummary> =>
       ipcRenderer.invoke(IPC.DB.FORGET_ALL_WORK_MEMORY),
+    getWorkMemoryProfile: (): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.GET_WORK_MEMORY_PROFILE),
+    updateWorkMemoryFact: (id: string, text: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.UPDATE_WORK_MEMORY_FACT, id, text),
+    addWorkMemoryFact: (text: string): Promise<WorkMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.ADD_WORK_MEMORY_FACT, text),
+    forgetWorkMemoryFact: (id: string): Promise<WorkMemoryMutationResult> =>
+      ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_FACT, id),
+    rebuildWorkMemory: (): Promise<WorkMemoryMutationResult> =>
+      ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
   },
   memory: {
     backfill: (): Promise<MemoryBackfillResult> =>

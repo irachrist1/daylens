@@ -750,4 +750,22 @@ CREATE TABLE IF NOT EXISTS daily_memory_archive (
   archive_json        TEXT NOT NULL,
   created_at          INTEGER NOT NULL
 );
+
+-- Work memory as a short, human-readable profile (ChatGPT-style), not opaque
+-- patterns. Each row is one plain-language fact. origin distinguishes a fact
+-- Daylens drafted from evidence from one the user wrote/edited by hand; a
+-- hand-edited fact becomes a correction (origin=user) that a rebuild never
+-- overwrites. status=deleted tombstones a forgotten drafted fact (by its
+-- topic_key) so a rebuild does not drag it back. See docs/specs/work-memory.md.
+CREATE TABLE IF NOT EXISTS work_memory_facts (
+  id          TEXT PRIMARY KEY,
+  fact_text   TEXT NOT NULL,
+  origin      TEXT NOT NULL CHECK(origin IN ('drafted', 'user')),
+  status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deleted')),
+  topic_key   TEXT,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_memory_facts_status ON work_memory_facts (status, sort_order);
 `

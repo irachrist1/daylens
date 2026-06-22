@@ -165,15 +165,13 @@ async function main(): Promise<void> {
   if (evalProvider === 'openai' && subjectApiKey) process.env.OPENAI_API_KEY = subjectApiKey
   console.log(color('dim', `[setup] judge=anthropic · subject=${evalProvider} (keys from keytar)`))
 
-  // 4. Pin EVERY provider preference key to the subject so chat, follow-ups,
-  //    titles, and report/export jobs all route to the provider under test.
+  // 4. Pin the selected provider to the subject. Every surface — chat,
+  //    follow-ups, titles, report/export — now routes through `aiProvider`
+  //    (invariant #12), so this single key covers them all.
   try {
     await setSettings({
       aiProvider: evalProvider,
       aiChatProvider: evalProvider,
-      aiArtifactProvider: evalProvider,
-      aiSummaryProvider: evalProvider,
-      aiBlockNamingProvider: evalProvider,
     })
   } catch (e) {
     console.warn(color('yellow', `[setup] could not pin provider: ${e instanceof Error ? e.message : String(e)}`))

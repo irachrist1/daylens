@@ -4,6 +4,8 @@ import {
   setBlockLabelOverride,
   getAppCharacter,
   getAppSummariesForRange,
+  getAllAppsForLabeling,
+  getCategoryOverrideEffect,
   getPeakHours,
   getSessionsForRange,
   getSessionsForApp,
@@ -14,6 +16,13 @@ import {
   getBlockLabelOverride,
   writeAIBlockLabel,
 } from '../db/queries'
+import {
+  getWorkMemoryProfile,
+  updateWorkMemoryFact,
+  addWorkMemoryFact,
+  forgetWorkMemoryFact,
+  rebuildWorkMemory,
+} from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
@@ -41,7 +50,7 @@ import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
-import { IPC } from '@shared/types'
+import { IPC, isAppCategory } from '@shared/types'
 import {
   getTrackingPermissionDetails,
   getTrackingPermissionState,
@@ -151,7 +160,7 @@ function forgetWorkMemoryPattern(db: ReturnType<typeof getDb>, patternId: string
 }
 
 function forgetAllWorkMemory(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
-  const tables = ['pattern_occurrences', 'context_patterns', 'user_memory_facts', 'daily_memory_archive']
+  const tables = ['pattern_occurrences', 'context_patterns', 'user_memory_facts', 'daily_memory_archive', 'work_memory_facts']
   for (const table of tables) {
     if (tableExists(db, table)) db.prepare(`DELETE FROM ${table}`).run()
   }
@@ -425,11 +434,21 @@ export function registerDbHandlers(): void {
     return getAppSummariesForRange(getDb(), from, to)
   })
 
+  ipcMain.handle(IPC.DB.GET_ALL_APPS_FOR_LABELING, () => {
+    return getAllAppsForLabeling(getDb())
+  })
+
   ipcMain.handle(IPC.DB.SET_CATEGORY_OVERRIDE, (_e, bundleId: string, category: string) => {
-    setCategoryOverride(getDb(), bundleId, category as import('@shared/types').AppCategory)
+    // Validate at the boundary — never persist an arbitrary renderer string as a category.
+    if (!isAppCategory(category)) {
+      throw new Error(`Invalid category: ${String(category)}`)
+    }
+    setCategoryOverride(getDb(), bundleId, category)
     invalidateProjectionScope('timeline', 'category_override')
     invalidateProjectionScope('apps', 'category_override')
     invalidateProjectionScope('insights', 'category_override')
+    // Report what the relabel touched so Settings never changes silently.
+    return getCategoryOverrideEffect(getDb(), bundleId)
   })
 
   ipcMain.handle(IPC.DB.CLEAR_CATEGORY_OVERRIDE, (_e, bundleId: string) => {
@@ -510,6 +529,27 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.BACKFILL_WORK_MEMORY, () => {
     return backfillMemoryFromHistory(getDb())
+  })
+
+  // Editable work-memory profile (ChatGPT-style) — docs/specs/work-memory.md.
+  ipcMain.handle(IPC.DB.GET_WORK_MEMORY_PROFILE, () => {
+    return getWorkMemoryProfile(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.UPDATE_WORK_MEMORY_FACT, (_e, id: string, text: string) => {
+    return updateWorkMemoryFact(getDb(), id, text)
+  })
+
+  ipcMain.handle(IPC.DB.ADD_WORK_MEMORY_FACT, (_e, text: string) => {
+    return addWorkMemoryFact(getDb(), text)
+  })
+
+  ipcMain.handle(IPC.DB.FORGET_WORK_MEMORY_FACT, (_e, id: string) => {
+    return forgetWorkMemoryFact(getDb(), id)
+  })
+
+  ipcMain.handle(IPC.DB.REBUILD_WORK_MEMORY, () => {
+    return rebuildWorkMemory(getDb())
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {

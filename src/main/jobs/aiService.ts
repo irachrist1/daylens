@@ -56,7 +56,8 @@ import {
 } from '../core/query/attributionResolvers'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
-import { getDb, tableExists } from '../services/database'
+import { getDb } from '../services/database'
+import { workMemoryPromptBlock } from '../services/workMemoryProfile'
 import {
   createArtifact,
   createThread,
@@ -1637,135 +1638,13 @@ function localDateBoundsFromString(dateStr: string): [number, number] {
   return [from, from + 86_400_000]
 }
 
-function tableExistsForAIPrompt(tableName: string): boolean {
+// Work memory handed to the AI as context: the editable, human-readable profile
+// (docs/specs/work-memory.md). Replaces the old opaque "65% pattern" block. The
+// range/limit params are kept for caller compatibility but the profile is
+// range-independent — it's who you are, not what happened in a window.
+function buildDaylensMemoryPromptBlock(_range: { fromMs: number; toMs: number }, _limit = 10): string {
   try {
-    return tableExists(getDb(), tableName)
-  } catch {
-    return false
-  }
-}
-
-function summarizePatternKey(raw: string): string | null {
-  try {
-    const parsed = JSON.parse(raw) as {
-      apps?: unknown
-      domains?: unknown
-      titleTokens?: unknown
-      project?: unknown
-      hasLocalhost?: unknown
-    }
-    const parts: string[] = []
-    const apps = Array.isArray(parsed.apps) ? parsed.apps.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
-    const domains = Array.isArray(parsed.domains) ? parsed.domains.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
-    const titles = Array.isArray(parsed.titleTokens) ? parsed.titleTokens.filter((item): item is string => typeof item === 'string').slice(0, 3) : []
-    if (apps.length > 0) parts.push(`apps ${apps.join(' + ')}`)
-    if (domains.length > 0) parts.push(`domains ${domains.join(', ')}`)
-    if (titles.length > 0) parts.push(`titles ${titles.join(', ')}`)
-    if (typeof parsed.project === 'string' && parsed.project) parts.push(`project ${parsed.project}`)
-    if (parsed.hasLocalhost) parts.push('localhost')
-    return parts.length > 0 ? parts.join('; ') : null
-  } catch {
-    return null
-  }
-}
-
-function compactFactValue(raw: string): string | null {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const entries = Object.entries(parsed)
-      .filter(([, value]) => value !== null && value !== undefined && value !== '')
-      .slice(0, 3)
-      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.slice(0, 3).join(', ') : String(value)}`)
-    return entries.length > 0 ? entries.join('; ') : null
-  } catch {
-    return null
-  }
-}
-
-function buildDaylensMemoryPromptBlock(range: { fromMs: number; toMs: number }, limit = 10): string {
-  try {
-    const db = getDb()
-    if (!tableExistsForAIPrompt('context_patterns')) return ''
-
-    const scopedPatterns = db.prepare(`
-      SELECT
-        context_patterns.pattern_key AS patternKey,
-        context_patterns.label_suggestion AS label,
-        context_patterns.category_suggestion AS category,
-        context_patterns.confidence AS confidence,
-        context_patterns.recall_count AS recallCount,
-        COUNT(pattern_occurrences.id) AS rangeMatches
-      FROM context_patterns
-      JOIN pattern_occurrences
-        ON pattern_occurrences.pattern_id = context_patterns.id
-      JOIN timeline_blocks
-        ON timeline_blocks.id = pattern_occurrences.block_id
-      WHERE context_patterns.status = 'promoted'
-        AND context_patterns.confidence >= 0.65
-        AND timeline_blocks.start_time < ?
-        AND timeline_blocks.end_time > ?
-      GROUP BY context_patterns.id
-      ORDER BY rangeMatches DESC, context_patterns.confidence DESC, context_patterns.recall_count DESC, context_patterns.updated_at DESC
-      LIMIT ?
-    `).all(range.toMs, range.fromMs, limit) as Array<{
-      patternKey: string
-      label: string
-      category: string | null
-      confidence: number
-      recallCount: number
-      rangeMatches: number
-    }>
-
-    const patternRows = scopedPatterns.length > 0
-      ? scopedPatterns
-      : db.prepare(`
-        SELECT
-          pattern_key AS patternKey,
-          label_suggestion AS label,
-          category_suggestion AS category,
-          confidence,
-          recall_count AS recallCount,
-          0 AS rangeMatches
-        FROM context_patterns
-        WHERE status = 'promoted'
-          AND confidence >= 0.65
-        ORDER BY confidence DESC, recall_count DESC, updated_at DESC
-        LIMIT ?
-      `).all(Math.max(0, Math.floor(limit / 2))) as typeof scopedPatterns
-
-    const lines = patternRows.map((row) => {
-      const confidencePct = Math.round(row.confidence * 100)
-      const category = row.category ? `, ${row.category}` : ''
-      const signal = summarizePatternKey(row.patternKey)
-      const matched = row.rangeMatches > 0 ? `, matched ${row.rangeMatches}x in this range` : ''
-      return `- Pattern: "${row.label}"${category} (${confidencePct}% confidence, seen ${row.recallCount}x${matched})${signal ? ` — signals: ${signal}` : ''}`
-    })
-
-    if (tableExistsForAIPrompt('user_memory_facts') && lines.length < limit) {
-      const facts = db.prepare(`
-        SELECT fact_type AS factType, fact_key AS factKey, subject, fact_value_json AS factValueJson
-        FROM user_memory_facts
-        WHERE updated_at <= ?
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `).all(range.toMs, limit - lines.length) as Array<{
-        factType: string
-        factKey: string
-        subject: string
-        factValueJson: string
-      }>
-
-      for (const fact of facts) {
-        const value = compactFactValue(fact.factValueJson)
-        lines.push(`- Fact: ${fact.factType} "${fact.subject}" (${fact.factKey})${value ? ` — ${value}` : ''}`)
-      }
-    }
-
-    if (lines.length === 0) return ''
-    return [
-      'Daylens memory for this user (do not invent beyond this list)',
-      ...lines.slice(0, limit),
-    ].join('\n')
+    return workMemoryPromptBlock(getDb())
   } catch (error) {
     console.warn('[ai] memory prompt context failed:', error)
     return ''

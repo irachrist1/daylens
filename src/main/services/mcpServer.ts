@@ -12,6 +12,13 @@ export interface McpServerConfig {
   command: string
   args: string[]
   env: Record<string, string>
+  // Metadata for the Settings UI — NOT part of the pasteable snippet (the UI
+  // picks command/args/env explicitly). `isPackaged` lets the renderer explain
+  // why a dev build shows source-checkout paths while a packaged install never
+  // does (settings spec §7). `dbPath` is always the real userData database, so
+  // the UI can show it and prove no developer path is exposed in production.
+  isPackaged: boolean
+  dbPath: string
 }
 
 let _proc: ChildProcess | null = null
@@ -53,6 +60,8 @@ export function getMcpServerConfig(): McpServerConfig | null {
       ELECTRON_RUN_AS_NODE: '1',
       DAYLENS_DB_PATH: dbPath,
     },
+    isPackaged: app.isPackaged,
+    dbPath,
   }
 }
 
