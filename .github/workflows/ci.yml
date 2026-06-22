@@ -73,6 +73,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
       - name: Rebuild native modules for Electron
         run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
       - run: npm run typecheck
