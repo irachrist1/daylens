@@ -60,7 +60,7 @@ import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { initDb, closeDb, getDb } from './services/database'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
-import { startTracking, stopTracking, trackingStatus } from './services/tracking'
+import { getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
 import { startWindowsFocusCapture, stopWindowsFocusCapture } from './services/windowsFocusCapture'
 import { ensureProcessMonitor } from './services/processMonitor'
@@ -274,6 +274,7 @@ async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTr
       windowVisible: win.isVisible(),
       currentSession: null,
       trackingStatus: { ...trackingStatus },
+      linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),
       browserStatus: getBrowserStatus(),
       tray: getTrayDiagnostics(),
@@ -296,6 +297,7 @@ async function runSmokeValidation(win: BrowserWindow, trigger: SmokeValidationTr
       error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       stack: err instanceof Error ? err.stack ?? null : null,
       trackingStatus: { ...trackingStatus },
+      linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),
       browserStatus: getBrowserStatus(),
       tray: getTrayDiagnostics(),

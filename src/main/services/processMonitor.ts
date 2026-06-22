@@ -10,7 +10,7 @@ const PROCESS_POLL_MS = 30_000
 let monitorInterval: ReturnType<typeof setInterval> | null = null
 let latestSnapshot: ProcessSnapshot[] = []
 let refreshInFlight = false
-let previousCpuByPid = new Map<number, { cpuTicks: number; capturedAt: number }>()
+const previousCpuByPid = new Map<number, { cpuTicks: number; capturedAt: number }>()
 
 export function parseProcStatLine(statContent: string, statusContent: string): ProcessSnapshot | null {
   const close = statContent.lastIndexOf(')')

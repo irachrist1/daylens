@@ -92,3 +92,31 @@ test('reports a not-found trace when the session has no usable helper', () => {
     __setLinuxCaptureTestHarness(null)
   }
 })
+
+test('resolves focused window from canned gdbus GNOME Shell output', () => {
+  __setLinuxCaptureTestHarness({
+    availableCommands: ['gdbus'],
+    exec: (command, args) => {
+      if (command === 'gdbus' && args.includes('org.gnome.Shell.Eval')) {
+        return "(true, 'GitHub - Google Chrome')"
+      }
+      return null
+    },
+  })
+  try {
+    withEnv({
+      HYPRLAND_INSTANCE_SIGNATURE: undefined,
+      SWAYSOCK: undefined,
+      DISPLAY: undefined,
+      XDG_SESSION_TYPE: 'wayland',
+      XDG_CURRENT_DESKTOP: 'GNOME',
+    }, () => {
+      const result = linuxFallbackActiveWindow()
+      assert.ok(result?.win, 'expected GNOME Shell focused title')
+      assert.equal(result.win.title, 'GitHub - Google Chrome')
+      assert.equal(result.win.application, 'Google Chrome')
+    })
+  } finally {
+    __setLinuxCaptureTestHarness(null)
+  }
+})

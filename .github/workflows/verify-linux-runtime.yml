@@ -27,7 +27,7 @@ jobs:
       - name: Install Linux packaging and runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11
+          sudo apt-get install -y rpm libsecret-1-dev libnotify-dev libx11-dev libxss-dev libxtst-dev xvfb xauth x11-utils xdotool dbus-x11 chromium-browser
           docker --version
 
       - name: Install dependencies
