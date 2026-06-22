@@ -571,12 +571,26 @@ function CaptureHealthSection({
       : 'Waiting for data'
   const browserNames = captureHealth.browsers?.names ?? []
   const permissions = captureHealth.permissions
+  const linuxTracking = diagnostics?.linuxTracking
 
   return (
     <SettingsSection title="Capture health">
       <div>
+        {linuxTracking && (
+          <SettingsRow
+            first
+            title="Linux session"
+            description={linuxTracking.supportMessage}
+            control={
+              <StatusPill
+                label={linuxTracking.supportLevel === 'ready' ? 'Ready' : linuxTracking.supportLevel === 'limited' ? 'Limited' : 'Unsupported'}
+                tone={linuxTracking.supportLevel === 'ready' ? 'success' : linuxTracking.supportLevel === 'limited' ? 'warning' : 'neutral'}
+              />
+            }
+          />
+        )}
         <SettingsRow
-          first
+          first={!linuxTracking}
           title="Window titles"
           description="Whether Daylens is capturing what you are working on, not just which app is open."
           control={<StatusPill label={titleLabel} tone={titleStatus === 'healthy' ? 'success' : titleStatus === 'missing' ? 'warning' : 'neutral'} />}

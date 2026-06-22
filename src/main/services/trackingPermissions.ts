@@ -7,7 +7,7 @@ import type {
 } from '@shared/types'
 import { capture, captureException } from './analytics'
 import { getSettings, setSettings } from './settings'
-import { requestTrackingPermission } from './tracking'
+import { requestTrackingPermission, getLinuxTrackingDiagnostics } from './tracking'
 import { isWindowsFocusCaptureRunning } from './windowsFocusCapture'
 
 const MAC_SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
@@ -35,6 +35,24 @@ export function getTrackingPermissionDetails(): TrackingPermissionDetails {
       combined: helperRunning ? 'granted' : 'missing',
       platformNote: 'Windows does not use macOS Accessibility. Daylens relies on its capture helper and foreground polling.',
       captureHelperRunning: helperRunning,
+    }
+  }
+
+  if (process.platform === 'linux') {
+    const linuxTracking = getLinuxTrackingDiagnostics()
+    const supportLevel = linuxTracking?.supportLevel ?? 'limited'
+    const combined: TrackingPermissionState =
+      supportLevel === 'ready'
+        ? 'granted'
+        : supportLevel === 'limited'
+          ? 'missing'
+          : 'missing'
+    return {
+      accessibility: 'unsupported_or_unknown',
+      screenRecording: 'unsupported_or_unknown',
+      combined,
+      platformNote: linuxTracking?.supportMessage
+        ?? 'Linux capture depends on your desktop session. Open Capture health in Settings for details.',
     }
   }
 

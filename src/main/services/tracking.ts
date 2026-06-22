@@ -691,6 +691,38 @@ function swayActiveWindow(): ActiveWinResult | null {
   }
 }
 
+function gnomeShellActiveWindow(): ActiveWinResult | null {
+  if (!commandAvailable('gdbus')) return null
+  const output = execText('gdbus', [
+    'call',
+    '--session',
+    '--dest',
+    'org.gnome.Shell',
+    '--object-path',
+    '/org/gnome/Shell',
+    '--method',
+    'org.gnome.Shell.Eval',
+    'global.display.focus_window ? global.display.focus_window.get_title() : ""',
+  ])
+  if (!output) return null
+
+  const match = output.match(/\(\s*(?:true|false)\s*,\s*'((?:\\'|[^'])*)'\s*\)/)
+  const title = match?.[1]?.replace(/\\'/g, "'").trim()
+  if (!title) return null
+
+  const application = title.includes(' - ')
+    ? title.split(' - ').pop()?.trim() || title
+    : title
+
+  return {
+    title,
+    application,
+    path: application,
+    pid: 0,
+    icon: '',
+  }
+}
+
 function parseXpropField(output: string, field: string): string {
   const line = output
     .split(/\r?\n/)
@@ -831,6 +863,13 @@ export function linuxFallbackActiveWindow(): { source: Exclude<TrackingModuleSou
     const win = swayActiveWindow()
     if (win) return { source: 'swaymsg', win, trace: ['swaymsg: focused window found'] }
     trace.push(commandAvailable('swaymsg') ? 'swaymsg: no focused node returned' : 'swaymsg: command not found')
+  }
+
+  const gnomeSession = desktop.includes('gnome') && linuxSessionType() === 'wayland'
+  if (gnomeSession) {
+    const win = gnomeShellActiveWindow()
+    if (win) return { source: 'xdotool', win, trace: ['gdbus: GNOME Shell focused window found'] }
+    trace.push(commandAvailable('gdbus') ? 'gdbus: GNOME Shell did not return a focused title' : 'gdbus: command not found')
   }
 
   if (process.env.DISPLAY) {
