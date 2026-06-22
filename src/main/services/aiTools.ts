@@ -263,6 +263,11 @@ export interface GetAttributionContextResult {
   totalTrackedSeconds: number   // across available history
   last30DaysSeconds: number
   recentSessions: AttributionSession[]  // last 10
+  // When the name matches no client/project, the AI must NOT dead-end (settings
+  // spec §5 / ai §8.2). These give it an inferred breakdown to answer from and a
+  // hint to offer setting the entity up as a client in Settings.
+  inferredActivity?: Array<{ label: string; date: string; durationSeconds: number }>
+  setupHint?: string
 }
 
 export interface GetBlockAtTimeResult {
@@ -1079,13 +1084,35 @@ function execGetAttributionContext(params: GetAttributionContextParams, db: Data
   const entityType: 'client' | 'project' | 'unknown' = client ? 'client' : project ? 'project' : 'unknown'
 
   if (!entityId) {
+    // No client/project by this name — never dead-end. Infer a breakdown from
+    // captured activity matching the name as a keyword (app/page/title), and
+    // tell the AI to offer setting it up as a client in Settings.
+    const sessionHits = dbSearchSessions(db, params.entityName, { limit: 8 })
+    const pageHits = dbSearchBrowser(db, params.entityName, { limit: 8 })
+    const inferredActivity = [
+      ...sessionHits.map((h) => ({
+        label: h.windowTitle ?? h.appName,
+        date: h.date,
+        durationSeconds: Math.max(0, Math.round((h.endTime - h.startTime) / 1000)),
+      })),
+      ...pageHits.map((h) => ({
+        label: h.pageTitle ?? h.domain,
+        date: h.date,
+        durationSeconds: Math.max(0, Math.round((h.endTime - h.startTime) / 1000)),
+      })),
+    ]
+      .sort((a, b) => b.durationSeconds - a.durationSeconds)
+      .slice(0, 10)
+
     return {
       entityName: params.entityName,
       entityType: 'unknown',
       matchedEntityId: null,
-      totalTrackedSeconds: 0,
+      totalTrackedSeconds: inferredActivity.reduce((s, a) => s + a.durationSeconds, 0),
       last30DaysSeconds: 0,
       recentSessions: [],
+      inferredActivity,
+      setupHint: `"${params.entityName}" isn't set up as a client yet, so this is an inferred breakdown from activity mentioning it — not attributed time. Offer the user to add it as a client in Settings → Clients for exact totals. Never refuse; answer from inferredActivity.`,
     }
   }
 
