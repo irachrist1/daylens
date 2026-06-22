@@ -98,6 +98,31 @@ test('forgetting a drafted fact keeps it gone across a rebuild', () => {
   }
 })
 
+test('an edited-then-forgotten drafted fact does not resurrect on rebuild', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  try {
+    seedEvidence(db)
+    rebuildWorkMemory(db)
+    const drafted = getWorkMemoryProfile(db).facts.find((f) => f.origin === 'drafted')
+    assert.ok(drafted)
+
+    // Edit (origin flips to user, topic_key retained) then forget.
+    updateWorkMemoryFact(db, drafted.id, 'Cursor is where I live.')
+    const edited = getWorkMemoryProfile(db).facts.find((f) => f.text === 'Cursor is where I live.')
+    assert.ok(edited)
+    forgetWorkMemoryFact(db, edited.id)
+
+    // A rebuild must NOT bring the drafted topic back.
+    rebuildWorkMemory(db)
+    const facts = getWorkMemoryProfile(db).facts
+    assert.ok(!facts.some((f) => /spend most of your day/.test(f.text)), 'forgotten topic must stay gone after editing')
+    assert.ok(!facts.some((f) => f.text === 'Cursor is where I live.'))
+  } finally {
+    db.close()
+  }
+})
+
 test('the prompt block carries the profile as context, or is empty when blank', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)

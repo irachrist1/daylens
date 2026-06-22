@@ -41,7 +41,7 @@ The harness:
 1. Copies `~/Library/Application Support/DaylensWindows/daylens.sqlite` (and `-wal` / `-shm` sidecars) to a temp directory. The real DB is never touched.
 2. Reroutes Electron's `app.getPath('userData')` to that temp dir so `initDb()` opens the copy.
 3. Loads the judge key (`getApiKey('anthropic')`) and the subject key (`getApiKey(DAYLENS_EVAL_PROVIDER)`) from keytar.
-4. Pins every provider preference key (`aiProvider`, `aiChatProvider`, `aiArtifactProvider`, `aiSummaryProvider`, `aiBlockNamingProvider`) to the subject for the run.
+4. Pins the selected provider (`aiProvider`, plus the visible per-chat override `aiChatProvider`) to the subject for the run. Every surface routes through `aiProvider` (invariant #12), so one key covers them all.
 5. Gathers a compact ground-truth summary (clients, today's blocks, yesterday's blocks, 7-day roll-up).
 6. For each scenario in [scenarios.yaml](./scenarios.yaml): calls `sendMessage(...)` directly, captures the verbatim assistant answer + route + source kind + artifact count.
 7. Runs an LLM judge (Claude Sonnet 4.5) over the answer with the rubric and ground truth. Verdict is `good | bad | worse | error` with a one-line reason.

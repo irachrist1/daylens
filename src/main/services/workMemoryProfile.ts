@@ -93,15 +93,17 @@ export function addWorkMemoryFact(db: Database.Database, text: string): WorkMemo
   return getWorkMemoryProfile(db)
 }
 
-// Forgetting a DRAFTED fact tombstones it by topic so a rebuild won't re-add the
-// same topic; if it was purposely forgotten, it stays gone until the user adds
-// it back by hand. A user-written fact is simply removed.
+// Forgetting a fact that came from a drafted topic tombstones that topic so a
+// rebuild won't re-add it — even if the user edited it first (an edit flips
+// origin to 'user' but keeps the topic_key). A purely hand-added fact has no
+// topic_key and is simply removed. This keeps "forgot on purpose stays gone"
+// true across the edit-then-forget path (work-memory.md §3.3).
 export function forgetWorkMemoryFact(db: Database.Database, id: string): ForgetResult {
   if (!ready(db)) return { facts: [], changeSummary: 'Nothing to forget.' }
   const row = db.prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ?`).get(id) as FactRow | undefined
   if (!row) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
 
-  if (row.origin === 'drafted' && row.topic_key) {
+  if (row.topic_key) {
     db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), id)
   } else {
     db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(id)
