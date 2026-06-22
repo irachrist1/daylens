@@ -15,16 +15,26 @@ function asString(record: JsonRecord, ...keys: string[]): string | null {
   return null
 }
 
+// A bare hostname: labels joined by dots, no scheme, no path, no spaces. Used
+// to recognise a domain that a resolver stuffed into an app-name-shaped field
+// (search "page" hits set appName = the visited domain), so a null-url page hit
+// for an excluded site is still caught by site exclusion.
+const BARE_HOST_RE = /^(?=.{4,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9-]+)+$/i
+
 function domainFromRecord(record: JsonRecord): string | null {
   const direct = asString(record, 'domain', 'host')
   if (direct) return direct
   const rawUrl = asString(record, 'url', 'normalizedUrl')
-  if (!rawUrl) return null
-  try {
-    return new URL(rawUrl).hostname
-  } catch {
-    return null
+  if (rawUrl) {
+    try {
+      return new URL(rawUrl).hostname
+    } catch {
+      // fall through to the app-name-as-host check
+    }
   }
+  const nameLike = asString(record, 'appName', 'application', 'ownerAppName', 'displayName')
+  if (nameLike && BARE_HOST_RE.test(nameLike)) return nameLike
+  return null
 }
 
 function escapeRegex(value: string): string {
@@ -48,12 +58,24 @@ function containsBoundedToken(value: string, rawToken: string): boolean {
 // keep only the full host to avoid nuking the parent brand (excluding
 // "docs.google.com" must not redact every "Google"). Bounded matching still
 // applies, so "youtube" never touches "youtuber".
+// Common second-level labels in compound public suffixes (bbc.co.uk,
+// abc.com.au, foo.co.jp). Not a full PSL — just enough that the registrable
+// brand label is found for the everyday ccTLD cases.
+const COMPOUND_SUFFIX_SLDS = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac'])
+
 function siteExclusionTokens(entry: string): string[] {
   const host = entry.trim().toLowerCase().replace(/^www\./, '')
   if (!host) return []
   const tokens = [host]
   const labels = host.split('.')
-  if (labels.length === 2 && labels[0].length >= 3) tokens.push(labels[0])
+  // Registrable brand label: the label just left of the public suffix.
+  // "youtube.com" → youtube; "bbc.co.uk" → bbc; but a deeper subdomain the
+  // user explicitly targeted ("docs.google.com") keeps only the full host so
+  // we never redact the parent brand.
+  let brandIdx = -1
+  if (labels.length === 2) brandIdx = 0
+  else if (labels.length === 3 && labels[1].length <= 3 && COMPOUND_SUFFIX_SLDS.has(labels[1])) brandIdx = 0
+  if (brandIdx >= 0 && labels[brandIdx].length >= 3) tokens.push(labels[brandIdx])
   return tokens
 }
 

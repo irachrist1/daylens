@@ -97,14 +97,16 @@ export interface GetRangeResult {
   days: RangeDaySummary[]
   /** Block labels rolled up across the whole range, by total seconds. */
   topActivities: Array<{ label: string; totalSeconds: number }>
-  /** Apps rolled up across the range, by total seconds. */
-  topApps: Array<{ appName: string; totalSeconds: number }>
+  /** Apps rolled up across the range, by total seconds. bundleId is carried so
+   *  the privacy filter can drop apps excluded by bundle id, not only by name. */
+  topApps: Array<{ appName: string; bundleId: string | null; totalSeconds: number }>
 }
 
 function getRange(from: string, to: string, db: Database.Database): GetRangeResult {
   const days: RangeDaySummary[] = []
   const activitySeconds = new Map<string, number>()
   const appSeconds = new Map<string, number>()
+  const appBundleIds = new Map<string, string | null>()
   let totalTrackedSeconds = 0
 
   // The effective window may be narrower than requested for very long spans
@@ -135,6 +137,7 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
     }
     for (const app of summary._evidence.topApps) {
       appSeconds.set(app.appName, (appSeconds.get(app.appName) ?? 0) + app.totalSeconds)
+      if (!appBundleIds.has(app.appName)) appBundleIds.set(app.appName, app.bundleId ?? null)
     }
   }
 
@@ -143,7 +146,7 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
     .slice(0, 12)
   const topApps = [...appSeconds.entries()]
-    .map(([appName, totalSeconds]) => ({ appName, totalSeconds }))
+    .map(([appName, totalSeconds]) => ({ appName, bundleId: appBundleIds.get(appName) ?? null, totalSeconds }))
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
     .slice(0, 12)
 

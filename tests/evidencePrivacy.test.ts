@@ -123,6 +123,54 @@ test('multi-label excluded host does not nuke the parent brand', () => {
   assert.equal(filtered.b, 'Google Search and Google Docs')
 })
 
+test('a page hit that carries the domain as appName (null url) is dropped by site exclusion', () => {
+  // recall/search "page" hits set appName = the visited domain and url can be
+  // null. Site exclusion must still catch it even though the host is not under
+  // a domain/url key.
+  const filtered = filterTrackingExcludedEvidence({
+    hits: [
+      { kind: 'page', appName: 'youtube.com', windowTitle: 'Some talk', url: null },
+      { kind: 'page', appName: 'github.com', windowTitle: 'a repo', url: null },
+      { kind: 'session', appName: 'Cursor', windowTitle: 'main.ts', url: null },
+    ],
+  }, {
+    ...controls,
+    excludedApps: [],
+    excludedSites: ['youtube.com'],
+  }) as { hits: Array<{ appName: string }> }
+
+  assert.deepEqual(filtered.hits.map((h) => h.appName), ['github.com', 'Cursor'])
+})
+
+test('a compound-TLD site exclusion redacts its brand (bbc.co.uk → "BBC")', () => {
+  const filtered = filterTrackingExcludedEvidence({
+    label: 'Watching BBC',
+    keep: 'Reading the news',
+  }, {
+    ...controls,
+    excludedApps: [],
+    excludedSites: ['bbc.co.uk'],
+  }) as Record<string, string>
+
+  assert.equal(filtered.label, '[excluded]')
+  assert.equal(filtered.keep, 'Reading the news')
+})
+
+test('an app excluded by bundle id is dropped even when the record also carries its name', () => {
+  const filtered = filterTrackingExcludedEvidence({
+    topApps: [
+      { appName: 'Zen', bundleId: 'app.zen-browser.zen', totalSeconds: 600 },
+      { appName: 'Cursor', bundleId: 'com.microsoft.VSCode', totalSeconds: 900 },
+    ],
+  }, {
+    ...controls,
+    excludedApps: ['app.zen-browser.zen'],
+    excludedSites: [],
+  }) as { topApps: Array<{ appName: string }> }
+
+  assert.deepEqual(filtered.topApps.map((a) => a.appName), ['Cursor'])
+})
+
 test('system noise is stripped even when tracking controls are disabled', () => {
   const filtered = filterTrackingExcludedEvidence({
     topApps: [
