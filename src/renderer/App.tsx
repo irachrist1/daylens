@@ -208,6 +208,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
           threadId={wrappedThreadId}
           artifactId={wrappedArtifactId}
           userName={settings?.userName ?? null}
+          onOpenSettings={() => { setWrappedOpen(false); navigate('/settings') }}
           onClose={() => setWrappedOpen(false)}
           onOpenReport={() => {
             setWrappedOpen(false)

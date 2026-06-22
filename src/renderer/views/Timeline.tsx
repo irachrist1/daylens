@@ -271,6 +271,19 @@ type DisplayTimelineSegment = TimelineSegment | {
 const MIN_VISIBLE_GAP_SECONDS = 30 * 60
 const LONG_GAP_ANCHOR_SECONDS = 75 * 60
 
+// timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long, so the
+// shape of the day shows where time went before you read a label. Height is
+// linear in active minutes. The engine's 15-minute floor is the shortest a block
+// can be, and at this slope a 15-minute block clears the readable minimum, so the
+// scale stays genuinely proportional (a 3-hour block is ~12× a 15-minute one)
+// without squashing the short end. MIN_BLOCK_HEIGHT is a defensive floor for any
+// sub-floor block (live/edge cases) so a card can always show its title + meta.
+const PX_PER_MINUTE = 3.2
+const MIN_BLOCK_HEIGHT = 48
+// Below this height a card shows only its title + meta line; taller cards add the
+// narrative so a short block stays legible instead of clipping mid-sentence.
+const BLOCK_NARRATIVE_MIN_HEIGHT = 104
+
 function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineSegment[] {
   const compressed: DisplayTimelineSegment[] = []
   let gapCluster: TimelineGapSegment[] = []
@@ -378,23 +391,20 @@ const TimelineRow = memo(function TimelineRow({
   if (!block) {
     const gapSegment = segment as TimelineGapSegment
 
+    // A break in the day reads as a thin divider, not a card — it's the empty
+    // space between events on a calendar, labelled so you know why the time is
+    // blank ("Away · 45m") without it competing with the real blocks.
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
-        <div style={{ paddingTop: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>{formatClockTime(gapSegment.startTime)}</div>
-          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{duration}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'center' }}>
+        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
+          {formatClockTime(gapSegment.startTime)}
         </div>
-        <div style={{
-          borderTop: '1px solid var(--color-border-ghost)',
-          paddingTop: 10,
-          paddingBottom: 10,
-          color: 'var(--color-text-tertiary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}>
-          <span style={{ fontSize: 12 }}>{gapKindLabel(gapSegment.kind)}</span>
-          <span style={{ fontSize: 11 }}>{duration}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0' }}>
+          <div style={{ flex: '0 0 16px', borderTop: '1px dashed var(--color-border-ghost)' }} />
+          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+            {gapKindLabel(gapSegment.kind)} · {duration}
+          </span>
+          <div style={{ flex: 1, borderTop: '1px dashed var(--color-border-ghost)' }} />
         </div>
       </div>
     )
@@ -402,11 +412,13 @@ const TimelineRow = memo(function TimelineRow({
 
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   // timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long — a
-  // 3-hour block is 3× a 1-hour block. Height is linear in the block's active
-  // minutes with no floor or ceiling: the invariant is exact for short and long
-  // blocks too, not only the common 1–3h range.
-  const PX_PER_MINUTE = 1.1
-  const proportionalHeight = Math.max(1, Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE))
+  // 3-hour block towers over a 15-minute one. Height is linear in active minutes
+  // (PX_PER_MINUTE), with MIN_BLOCK_HEIGHT only as a defensive floor for any
+  // sub-floor block so its title and meta stay readable.
+  const proportionalHeight = Math.max(MIN_BLOCK_HEIGHT, Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE))
+  // A short card can't fit a narrative without clipping mid-sentence, so it shows
+  // title + meta only; taller cards (or the open one) add the prose.
+  const showNarrative = isSelected || proportionalHeight >= BLOCK_NARRATIVE_MIN_HEIGHT
   const ignored = block.review.state === 'ignored'
   // Leisure / personal rows are muted so the eye finds work first. Work is
   // full-strength; everything else recedes. This is the whole point of the
@@ -454,7 +466,11 @@ const TimelineRow = memo(function TimelineRow({
         transition: 'border-color 120ms, background 120ms',
         overflow: 'hidden',
         minWidth: 0,
-        height: proportionalHeight,
+        // Height is proportional to duration (the calendar invariant), but used
+        // as a *floor* so a short block with a long, full title grows just enough
+        // to show it instead of clipping. Tall blocks keep their exact
+        // proportional height — their text never reaches this floor.
+        minHeight: proportionalHeight,
         opacity: ignored ? 0.5 : muted ? 0.72 : 1,
       }}>
         <div style={{
@@ -466,12 +482,25 @@ const TimelineRow = memo(function TimelineRow({
           borderRadius: 999,
           background: accent,
         }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, marginBottom: 6 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <InlineRevealText
-              text={userVisibleBlockLabel(block)}
-              style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1.25 }}
-            />
+        <div style={{ display: 'flex', alignItems: 'start', gap: 10, minWidth: 0, marginBottom: 6 }}>
+          <div
+            title={userVisibleBlockLabel(block)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 15,
+              fontWeight: 700,
+              color: 'var(--color-text-primary)',
+              lineHeight: 1.25,
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
+              overflow: 'hidden',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+            }}
+          >
+            {userVisibleBlockLabel(block)}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {/* A provisional live block stays neutral — no category badge until
@@ -503,12 +532,14 @@ const TimelineRow = memo(function TimelineRow({
             )}
           </div>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: showNarrative ? 8 : 0 }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)}
         </div>
-        <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
-          {blockNarrative(block) ?? blockShortSummary(block)}
-        </p>
+        {showNarrative && (
+          <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
+            {blockNarrative(block) ?? blockShortSummary(block)}
+          </p>
+        )}
         {isSelected && artifactLine && (
           <InlineRevealText
             text={artifactLine}
@@ -541,7 +572,6 @@ const TimelineRow = memo(function TimelineRow({
 })
 
 function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { kind: 'gap_group' }> }) {
-  const duration = formatDuration(Math.max(1, Math.round((segment.endTime - segment.startTime) / 1000)))
   const totals = segment.items.reduce<Map<TimelineGapSegment['kind'], number>>((map, item) => {
     map.set(item.kind, (map.get(item.kind) ?? 0) + segmentDurationSeconds(item))
     return map
@@ -557,32 +587,17 @@ function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { k
 
   if (chips.length === 0) return null
 
+  const breakSummary = chips.map((chip) => `${chip.label} ${chip.duration}`).join(' · ')
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'start' }}>
-      <div style={{ paddingTop: 10 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>{formatClockTime(segment.startTime)}</div>
-        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{duration}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'center' }}>
+      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
+        {formatClockTime(segment.startTime)}
       </div>
-      <div style={{
-        borderTop: '1px solid var(--color-border-ghost)',
-        paddingTop: 10,
-        paddingBottom: 10,
-        display: 'grid',
-        gap: 8,
-      }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          {chips.map((chip) => (
-            <span
-              key={`${segment.startTime}:${chip.kind}`}
-              style={{
-                color: 'var(--color-text-tertiary)',
-                fontSize: 12,
-              }}
-            >
-              {chip.label} {chip.duration}
-            </span>
-          ))}
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0' }}>
+        <div style={{ flex: '0 0 16px', borderTop: '1px dashed var(--color-border-ghost)' }} />
+        <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{breakSummary}</span>
+        <div style={{ flex: 1, borderTop: '1px dashed var(--color-border-ghost)' }} />
       </div>
     </div>
   )
@@ -969,49 +984,47 @@ function BlockInspector({
       padding: 22,
     }}>
       <div style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-          <div
-            title={userVisibleBlockLabel(block)}
-            style={{
-              fontSize: 18,
-              fontWeight: 750,
-              color: 'var(--color-text-primary)',
-              lineHeight: 1.3,
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: 3,
-              overflow: 'hidden',
-              overflowWrap: 'break-word',
-              wordBreak: 'break-word',
-            }}
-          >
-            {userVisibleBlockLabel(block)}
-          </div>
-          {correctable && (
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={() => setRenaming((value) => !value)}
-                style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '2px 4px' }}
-              >
-                Rename
-              </button>
-              {previousBlock && (
-                <button type="button" aria-label={`Merge with block above: ${userVisibleBlockLabel(previousBlock)}`} title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge'}
-                </button>
-              )}
-              {nextBlock && (
-                <button type="button" aria-label={`Merge with block below: ${userVisibleBlockLabel(nextBlock)}`} title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <ArrowDown size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge'}
-                </button>
-              )}
-            </div>
-          )}
+        {/* The title gets the full panel width — the Rename / Merge controls sit
+            on their own row below so a long block name is never squeezed or
+            clipped against the buttons. */}
+        <div
+          title={userVisibleBlockLabel(block)}
+          style={{
+            fontSize: 18,
+            fontWeight: 750,
+            color: 'var(--color-text-primary)',
+            lineHeight: 1.3,
+            marginBottom: 6,
+            overflowWrap: 'break-word',
+            wordBreak: 'break-word',
+          }}
+        >
+          {userVisibleBlockLabel(block)}
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
+        {correctable && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+            <button
+              type="button"
+              onClick={() => setRenaming((value) => !value)}
+              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
+            >
+              Rename
+            </button>
+            {previousBlock && (
+              <button type="button" aria-label={`Merge with block above: ${userVisibleBlockLabel(previousBlock)}`} title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge up'}
+              </button>
+            )}
+            {nextBlock && (
+              <button type="button" aria-label={`Merge with block below: ${userVisibleBlockLabel(nextBlock)}`} title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <ArrowDown size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge down'}
+              </button>
+            )}
+          </div>
+        )}
         {hasOverride && previousName && (
           <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
             Renamed from “{previousName}” ·{' '}

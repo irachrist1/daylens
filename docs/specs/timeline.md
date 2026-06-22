@@ -73,8 +73,10 @@ session, evidence row, or session-count. This is Toggl's rule, and it's what kil
 A short off-task moment inside a work stretch folds into that block — it does not rename it
 or split it. Your X.com peek during network setup is absorbed, not a SOCIAL block.
 
-> **DECISION (you): the cutoff.** I propose **under 10 minutes = absorbed; 10 minutes or
-> more = its own block.** OK, or a different number?
+> **DECISION (resolved): the cutoff.** A brief off-task peek (under ~10 minutes) is absorbed
+> into the surrounding work. Independently, the §3.4 calendar floor means **nothing under
+> fifteen minutes is ever its own block** — so a 12-minute off-kind sliver that isn't a peek
+> still folds into a neighbour. §3.4 is the single size rule.
 
 ### 3.3 Same-intent neighbors merge
 
@@ -84,10 +86,28 @@ should understand that and merge them. The name of the merged block should combi
 into one coherent title, for example "Configuring the work network using the Ubiquiti
 dashboard" or "Setting up the work network using the Ubiquiti dashboard and the Terminal."
 
-### 3.4 Size = real duration
+### 3.4 What a calendar block is — the 15-minute floor and proportional height
 
-A 3-hour block is drawn 3× the height of a 1-hour block, always. It's a calendar-like view
-so the blocks should be of different sizes based on how long the block is.
+A block is **one continuous stretch of one thing you were doing**, drawn on the vertical
+timeline the way an event sits on a calendar. Two rules make it read as a real calendar:
+
+1. **No block is shorter than fifteen minutes.** A stretch briefer than that isn't a block of
+   its own — it's a moment that belongs folded into the work around it. This is the hard floor
+   the engine enforces last, after every boundary decision (`enforceMinimumBlockFloor` in
+   `workBlocks.ts`): any sub-15-minute non-meeting block is folded into its best neighbour
+   (a related one first, then same-category, then the nearer by gap). The only blocks that may
+   stay under the floor are a block with **no non-meeting neighbour** to fold into (a lone short
+   day) and a real **meeting** (a 10-minute standup is a block, not a sliver). A genuinely long
+   activity that was only sparsely tracked — a 41-minute agent run that logged 30 seconds of
+   foreground polling — spans ≥ 15 minutes and is a real block, never folded. Analyze only ever
+   makes the day **fewer, truer blocks**, never more.
+2. **A block's height is proportional to how long it lasted.** A 3-hour block towers over a
+   15-minute one; the shape of the day tells you where the time went before you read a label.
+   Height is linear in the block's active minutes, with a small readable minimum so the
+   shortest (15-minute) block still shows its title and time.
+
+This supersedes the earlier §3.2 "10-minute cutoff" proposal as the single size rule: under
+15 minutes is never its own block.
 
 ### 3.5 How a block gets its name — deterministic first, AI for the rest
 
@@ -201,14 +221,16 @@ the blocks and the apps and the sites that were used during that day.
 ## 8. Invariants (rules this view must always obey)
 
 1. A block's on-screen height is proportional to its duration.
-2. No block is named after a raw app, page, or video title.
-3. A single off-task tab never sets a block's category.
-4. Adjacent same-intent blocks are merged.
-5. Every number on the screen comes from the same blocks — the recap total equals the sum of
+2. No block is shorter than fifteen minutes, except a meeting or a lone block with no
+   non-meeting neighbour to fold into (§3.4). Analyze makes the day fewer blocks, never more.
+3. No block is named after a raw app, page, or video title.
+4. A single off-task tab never sets a block's category.
+5. Adjacent same-intent blocks are merged.
+6. Every number on the screen comes from the same blocks — the recap total equals the sum of
    the blocks. No two parts of the screen disagree.
-6. A user correction always wins and always survives a rebuild.
-7. The view never shows a Score, a Focus rating, or a Drift number.
-8. When Daylens doesn't know, it says so — it never fills the gap with a guess.
+7. A user correction always wins and always survives a rebuild.
+8. The view never shows a Score, a Focus rating, or a Drift number.
+9. When Daylens doesn't know, it says so — it never fills the gap with a guess.
 
 ## 9. Future integrations
 

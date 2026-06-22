@@ -19,10 +19,6 @@ export function formatFullDate(dateStr: string): string {
   })
 }
 
-export function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-}
-
 function dateStringFromMs(ms: number): string {
   const d = new Date(ms)
   const y = d.getFullYear()

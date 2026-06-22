@@ -361,6 +361,20 @@ async function resolveProviderConfigsForJob(
   return configs
 }
 
+// Briefs & wraps no-credits gate (briefs-wraps.md §7): the wrap surfaces ask
+// whether a provider is resolvable for the wrapped job BEFORE rendering, so they
+// can show one "connect a provider in Settings" message instead of any content.
+// This never makes a network call — it only checks that a key/CLI exists for the
+// provider the user selected in Settings.
+export async function getWrapProviderState(): Promise<{ connected: boolean; provider: string | null }> {
+  const settings = await getSettingsAsync()
+  const provider = preferredProviderForJob('wrapped_narrative', settings)
+  const label = providerLabel(provider)
+  if (providerUsesCLI(provider)) return { connected: true, provider: label }
+  const apiKey = await getApiKey(provider)
+  return { connected: Boolean(apiKey), provider: label }
+}
+
 export async function executeTextAIJob(
   payload: {
     jobType: AIJobType

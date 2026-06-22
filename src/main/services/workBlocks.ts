@@ -127,6 +127,16 @@ const TIMELINE_MIN_BLOCK_SPAN_MS = 5 * 60_000
 // only when such a neighbour exists; an isolated 20-minute activity bounded by
 // real gaps stays standalone rather than being forced into something unrelated.
 const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
+// The hard calendar floor (timeline.md §3.4 / DEV-99): no block under fifteen
+// minutes ever stands on its own. A briefer stretch isn't a block — it's a
+// moment that belongs folded into the work around it. The passes above only
+// fold a short block into a *related* / same-kind neighbour, so an off-kind
+// sliver (a 35-second Spotify+Pasty blip between two work blocks) survives them.
+// The final enforceMinimumBlockFloor pass closes that gap: it folds any sub-floor
+// non-meeting block into its nearest sensible neighbour unconditionally. The only
+// blocks that may stay under the floor are a meeting (a 10-minute standup is real)
+// and a lone short block with no non-meeting neighbour to fold into.
+const TIMELINE_MIN_BLOCK_FLOOR_MS = 15 * 60_000
 // The same work continued across a moderate untracked gap is one block, not two.
 // A 17-minute lull in the middle of a coding morning (stepped away, tracker
 // missed a stretch) should not split one Ghostty session into "Terminal work"
@@ -3143,6 +3153,84 @@ function reconcileBoundaries(
   return result
 }
 
+// Merge two adjacent candidates while preserving the boundary reasons set by
+// reconcileBoundaries: the survivor spans left.start → right.end, so it keeps
+// the left edge's start reasons and the right edge's end reasons. (Plain
+// mergeCandidatePair drops both, which is correct earlier in the pipeline but
+// not after reconciliation has annotated the edges.)
+function mergeCandidatePairPreservingReasons(left: CandidateBlock, right: CandidateBlock): CandidateBlock {
+  return {
+    ...mergeCandidatePair(left, right),
+    startReasons: left.startReasons,
+    endReasons: right.endReasons,
+  }
+}
+
+// Final calendar-floor pass (timeline.md §3.4 / DEV-99): no block under fifteen
+// minutes stands alone. Runs last, after every boundary decision, so it operates
+// on the day's settled blocks. For each sub-floor non-meeting block it folds into
+// the best neighbour — a *related* one first (the same work resuming), then one in
+// the same category, then simply the nearer by gap — and never swallows or folds
+// into a meeting. It repeats until nothing under the floor remains that can be
+// folded; a lone short block with only meeting neighbours (or none) is the only
+// thing allowed to stay under the floor.
+function enforceMinimumBlockFloor(
+  candidates: CandidateBlock[],
+  db: Database.Database,
+  context: TimelineBuildContext,
+): CandidateBlock[] {
+  if (candidates.length <= 1) return candidates
+  const result = [...candidates]
+
+  for (let guard = 0; guard < result.length; guard++) {
+    let foldedAny = false
+    for (let index = 0; index < result.length; index++) {
+      const candidate = result[index]
+      if (candidate.formation === 'meeting') continue
+      // A real sliver is short on BOTH axes — the time it took (active) and the
+      // stretch of day it covers (span). A sparsely-tracked but genuinely long
+      // activity (e.g. a 41-minute agent run that only registered 27s of
+      // foreground polling) spans ≥ the floor and is a real block, not a sliver,
+      // so it is never folded away.
+      if (candidateActiveMs(candidate) >= TIMELINE_MIN_BLOCK_FLOOR_MS) continue
+      if (candidateSpanMs(candidate) >= TIMELINE_MIN_BLOCK_FLOOR_MS) continue
+
+      const left = index > 0 ? result[index - 1] : null
+      const right = index < result.length - 1 ? result[index + 1] : null
+      const leftOk = Boolean(left && left.formation !== 'meeting')
+      const rightOk = Boolean(right && right.formation !== 'meeting')
+      if (!leftOk && !rightOk) continue
+
+      let mergeLeft: boolean
+      if (leftOk && !rightOk) mergeLeft = true
+      else if (!leftOk && rightOk) mergeLeft = false
+      else {
+        const relLeft = candidatesRelated(candidate, left!, db, context)
+        const relRight = candidatesRelated(candidate, right!, db, context)
+        const category = candidateDominantCategory(candidate, db, context)
+        const catLeft = candidateDominantCategory(left!, db, context) === category
+        const catRight = candidateDominantCategory(right!, db, context) === category
+        if (relLeft !== relRight) mergeLeft = relLeft
+        else if (catLeft !== catRight) mergeLeft = catLeft
+        else mergeLeft = gapBetweenCandidates(left!, candidate) <= gapBetweenCandidates(candidate, right!)
+      }
+
+      if (mergeLeft) {
+        result[index - 1] = mergeCandidatePairPreservingReasons(left!, candidate)
+        result.splice(index, 1)
+      } else {
+        result[index] = mergeCandidatePairPreservingReasons(candidate, right!)
+        result.splice(index + 1, 1)
+      }
+      foldedAny = true
+      break
+    }
+    if (!foldedAny) break
+  }
+
+  return result
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
@@ -3161,7 +3249,8 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
       return coalesceTimelineCandidates(segmentCandidates, db, context)
     })
   const bridged = bridgeSameWorkCandidates(candidates, db, context)
-  return reconcileBoundaries(bridged, db, context, corrections)
+  const reconciled = reconcileBoundaries(bridged, db, context, corrections)
+  return enforceMinimumBlockFloor(reconciled, db, context)
     .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 

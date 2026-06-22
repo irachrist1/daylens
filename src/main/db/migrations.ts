@@ -1902,6 +1902,25 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 36,
+    description: 'Add day_snapshots — frozen daily numbers for weekly/monthly/annual wraps',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS day_snapshots (
+          date           TEXT    PRIMARY KEY,
+          total_active   INTEGER NOT NULL DEFAULT 0,
+          work_sec       INTEGER NOT NULL DEFAULT 0,
+          leisure_sec    INTEGER NOT NULL DEFAULT 0,
+          personal_sec   INTEGER NOT NULL DEFAULT 0,
+          facts_json     TEXT    NOT NULL,
+          facts_hash     TEXT    NOT NULL,
+          finalized_at   INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_day_snapshots_date ON day_snapshots (date);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

@@ -45,8 +45,10 @@ import type {
   WorkMemoryProfile,
   WorkMemoryMutationResult,
   WorkspaceResult,
+  WrappedPeriod,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
+  WrapProviderState,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 import type { McpServerConfig } from '../main/services/mcpServer'
@@ -196,8 +198,10 @@ const api = {
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date }),
-    getWrappedPeriodNarrative: (facts: WrappedPeriodFacts): Promise<WrappedPeriodNarrative | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { facts }),
+    getWrappedPeriodWrap: (period: WrappedPeriod, anchorDate: string): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate }),
+    getWrapProviderState: (): Promise<WrapProviderState> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAP_PROVIDER_STATE),
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),

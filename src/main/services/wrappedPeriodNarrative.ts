@@ -1,14 +1,21 @@
-// Period (week/month) narrative service. Mirrors `wrappedNarrative.ts` but
-// for aggregated periods. The renderer aggregates facts from per-day payloads
-// and ships them here; we keep the AI orchestration + cache in main.
+// Period (week / month / year) Wrapped — service layer. Builds the facts by
+// SUMMING frozen daily snapshots (so the stat card and narrative agree), then
+// overlays the AI narrative. briefs-wraps.md §6, invariant 4.
 
-import type { WrappedPeriodFacts, WrappedPeriodNarrative } from '@shared/types'
+import type {
+  WrappedPeriod,
+  WrappedPeriodFacts,
+  WrappedPeriodNarrative,
+} from '@shared/types'
 import {
   executeTextAIJob,
   type ResolvedProviderConfig,
   type AITextJobExecutionOptions,
   type ProviderTextResponse,
 } from './aiOrchestration'
+import { getDaySnapshotsForRange } from './daySnapshots'
+import { computePeriodRange } from '../lib/wrappedPeriodRange'
+import { rollupSnapshots, bucketTotals } from '../lib/wrappedPeriodFacts'
 import {
   buildPeriodFallbackNarrative,
   buildPeriodPrompts,
@@ -35,9 +42,64 @@ export function registerWrappedPeriodNarrativeProvider(runner: ProviderRunner): 
   providerRunner = runner
 }
 
-const NARRATIVE_TIMEOUT_MS = 14_000
+const NARRATIVE_TIMEOUT_MS = 16_000
 
-export async function getWrappedPeriodNarrative(
+/** Build period facts purely from frozen daily snapshots — the single source the
+ *  stat card and the narrative both read. */
+function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): WrappedPeriodFacts {
+  const range = computePeriodRange(period, anchorDate)
+  const snapshots = getDaySnapshotsForRange(range.startDate, range.endDate)
+  const prevSnapshots = getDaySnapshotsForRange(range.prevStartDate, range.prevEndDate)
+  const rollup = rollupSnapshots(snapshots, range.dayLabel)
+
+  const previousPeriodSeconds = prevSnapshots.reduce((s, snap) => s + snap.totalActiveSeconds, 0)
+
+  const bySnapshotDate = new Map(snapshots.map((s) => [s.date, s]))
+  const bucketInput = range.buckets.map((b) => ({
+    label: b.label,
+    snapshots: snapshots.filter((s) => s.date >= b.startDate && s.date <= b.endDate),
+  }))
+  void bySnapshotDate
+  const { buckets, busiestBucket } = bucketTotals(bucketInput)
+
+  return {
+    period,
+    anchorDate,
+    rangeLabel: range.rangeLabel,
+    totalSeconds: rollup.totalSeconds,
+    workSeconds: rollup.workSeconds,
+    leisureSeconds: rollup.leisureSeconds,
+    personalSeconds: rollup.personalSeconds,
+    previousPeriodSeconds,
+    daysWithActivity: rollup.daysWithActivity,
+    dominantWorkCategory: rollup.dominantWorkCategory,
+    dominantWorkCategoryPct: rollup.dominantWorkCategoryPct,
+    categories: rollup.categories,
+    topApps: rollup.topApps,
+    threads: rollup.threads,
+    leisureSurfaces: rollup.leisureSurfaces,
+    busiestDay: rollup.busiestDay,
+    quietestActiveDay: rollup.quietestActiveDay,
+    longestStretch: rollup.longestStretch,
+    buckets,
+    busiestBucket,
+  }
+}
+
+/** Facts + narrative for a period. Facts always come from snapshots; the
+ *  narrative is AI when a provider is configured, else the deterministic
+ *  baseline (the renderer gates on provider state and shows the connect message
+ *  when none is connected — §7). */
+export async function getWrappedPeriodWrap(
+  period: WrappedPeriod,
+  anchorDate: string,
+): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative }> {
+  const facts = buildWrappedPeriodFacts(period, anchorDate)
+  const narrative = await getWrappedPeriodNarrative(facts)
+  return { facts, narrative }
+}
+
+async function getWrappedPeriodNarrative(
   facts: WrappedPeriodFacts,
 ): Promise<WrappedPeriodNarrative> {
   const factsHash = computePeriodFactsHash(facts)

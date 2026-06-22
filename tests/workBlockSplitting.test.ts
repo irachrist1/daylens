@@ -260,9 +260,11 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
 test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
   // timeline.md §3.1: missing idle telemetry must not erase a real 15+ minute
-  // absence merely because the same app resumes afterward.
-  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 1 })
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 18, durationMinutes: 63 })
+  // absence merely because the same app resumes afterward. Both stretches sit
+  // above the 15-min calendar floor (DEV-99), so this isolates the gap boundary
+  // from the floor — a 1-minute opener would (correctly) fold as a sliver.
+  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 16 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 33, durationMinutes: 63 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 

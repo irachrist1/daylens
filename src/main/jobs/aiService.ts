@@ -137,6 +137,7 @@ import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
+import { converse, looksLikeGreeting } from '../ai/converse'
 import { getCurrentTrace, maybeStartTrace, setCurrentTrace } from '../ai/trace'
 
 const GOOGLE_CLIENT_HEADER = 'daylens-windows/1.0.0'
@@ -4277,13 +4278,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     console.log(`[ai:chat] ← "${userMessage.slice(0, 120)}"`)
   }
 
-  if (/^\s*(hey|hi|hello|sup|yo|howdy|hiya|helo|test|testing)\s*[!.?]?\s*$/i.test(effectiveUserMessage)) {
-    const greetingText = 'Hey! What would you like to know about your day?'
-    await stream.streamText(greetingText)
+  const prior = sanitizeConversationHistory(history)
+
+  // A bare greeting or check-in ("hi", "how's it going") gets a real, warm
+  // reply from the model — never a canned line (ai.md §5). The fast-path regex
+  // only spares the planner round-trip; the answer itself is still generated.
+  if (looksLikeGreeting(effectiveUserMessage)) {
+    const greetingText = await converse({
+      message: effectiveUserMessage,
+      runner: sendWithProvider,
+      prior,
+      onDelta: (delta) => stream.push(delta),
+    })
+    if (!greetingText.trim()) {
+      throw new Error('The AI returned an empty response. Please try again.')
+    }
     return persistChatTurn(db, conversationId, userMessage, {
       assistantText: greetingText,
       answerKind: 'freeform_chat',
-      sourceKind: 'deterministic',
+      sourceKind: 'freeform',
       resolvedTemporalContext: null,
       conversationState: null,
       suggestedFollowUps: [],
@@ -4295,8 +4308,6 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     await stream.streamText(focusIntent.assistantText)
     return persistChatTurn(db, conversationId, userMessage, focusIntent, threadId)
   }
-
-  const prior = sanitizeConversationHistory(history)
 
   // FB7: an explicit "Turn into…" transform rewrites the SPECIFIC prior answer.
   // It bypasses the router + generic report bundle so the output is a faithful
@@ -4497,14 +4508,21 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       ? new Date(firstSessionRow.t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
       : null
 
-    const plan = await planQuestion(effectiveUserMessage, sendWithProvider, { now, trackingStart })
+    const plan = await planQuestion(effectiveUserMessage, sendWithProvider, { now, trackingStart, prior })
     if (process.env.NODE_ENV === 'development') {
       console.log(`[ai:chat] plan→resolve→phrase → provider=${chatProvider} model=${chatModel} plan=${plan.kind}`)
     }
 
     if (plan.kind === 'fallback') {
-      assistantText = plan.message
-      await stream.streamText(assistantText)
+      // No resolver mapped — an aside, a feeling, general chat. Answer it for
+      // real, in character, instead of streaming a capability menu (ai.md §5).
+      assistantText = await converse({
+        message: effectiveUserMessage,
+        runner: sendWithProvider,
+        prior,
+        extraSystem: threadInstructionBlock || undefined,
+        onDelta: (delta) => stream.push(delta),
+      })
     } else {
       const facts = runResolverQueries(plan.queries, db)
       assistantText = (await phraseAnswer({

@@ -5,9 +5,9 @@
 //
 // The long tail uses a SINGLE constrained model call that only emits a
 // structured resolver query against the schema below. If it can't map the
-// question to any resolver, it returns a `fallback` line offering the nearest
-// answerable thing — it never falls back to free-form tool calls and never
-// begs the user (ai.md §4.2).
+// question to any resolver, it returns `{ kind: 'fallback' }` and the caller
+// answers conversationally with a real model call (converse.ts) — it never
+// falls back to free-form tool calls and never begs the user (ai.md §4.2).
 import {
   executeTextAIJob,
   type AITextJobExecutionOptions,
@@ -27,7 +27,10 @@ export type PlannerRunner = (
 
 export type PlannerResult =
   | { kind: 'queries'; queries: ResolverQuery[] }
-  | { kind: 'fallback'; message: string }
+  // No resolver maps (a greeting, an aside, general chat). The caller answers
+  // this with a real conversational model call (converse.ts) — never a static
+  // line (ai.md §4.2, §5).
+  | { kind: 'fallback' }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const TIME_RE = /^\d{2}:\d{2}$/
@@ -35,11 +38,6 @@ const TIME_RE = /^\d{2}:\d{2}$/
 function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-
-// The nearest-answerable line. Never a refusal, never a request for the user to
-// paste data — it names what the resolvers CAN do (ai.md §4.2).
-const PLANNER_FALLBACK_MESSAGE =
-  "I can tell you what you worked on (a day, a week, a month), how long you spent in a specific app, what you were doing at a given time, or find a page or link you saw. Which of those are you after?"
 
 function sanitizeQuery(raw: unknown): ResolverQuery | null {
   if (!raw || typeof raw !== 'object') return null
@@ -117,9 +115,11 @@ function buildPlannerPrompt(now: Date, trackingStart: string | null): string {
     '',
     'Rules:',
     '- Pick the fewest resolvers that fully answer the question. Usually one.',
+    '- Read the conversation so far. People are casual and lean on context. If the user bounces the question back ("you tell me", "go on", "surprise me", "idk you tell me", "what do you think"), or answers vaguely right after you offered to talk about their day, they want their day — default to today: [{"resolver":"getDay","date":"' + today + '"}].',
+    '- A bare "what did I do" / "catch me up" / "how was my day" with no timeframe means today.',
     '- For "that link/article/video I saw about X", use recall with the topic keywords (drop filler words).',
     '- For time-per-app questions over a period, use getApp with from/to.',
-    '- If the question is NOT about tracked activity at all (greetings, general knowledge, math), return {"queries": []}.',
+    '- Only return {"queries": []} when there is truly nothing about their activity to fetch — a greeting, general knowledge, math, or pure chit-chat with no pull toward their day.',
     'Output the JSON now.',
   ].filter(Boolean).join('\n')
 }
@@ -144,7 +144,13 @@ function recallShortcut(question: string, now: Date): ResolverQuery | null {
 export async function planQuestion(
   question: string,
   runner: PlannerRunner,
-  options: { now?: Date; trackingStart?: string | null } = {},
+  options: {
+    now?: Date
+    trackingStart?: string | null
+    /** Recent conversation, so the planner can resolve context-bound asks like
+     *  "you tell me" or "go on" to the day they really mean (usually today). */
+    prior?: Array<{ role: 'user' | 'assistant'; content: string }>
+  } = {},
 ): Promise<PlannerResult> {
   const now = options.now ?? new Date()
   const trace = getCurrentTrace()
@@ -164,6 +170,7 @@ export async function planQuestion(
         triggerSource: 'user',
         systemPrompt: buildPlannerPrompt(now, options.trackingStart ?? null),
         userMessage: question,
+        prior: options.prior,
       },
       runner,
     )
@@ -178,5 +185,5 @@ export async function planQuestion(
   }
 
   if (trace) trace.addEvent({ kind: 'planner_decision', source: 'fallback', queries: [] })
-  return { kind: 'fallback', message: PLANNER_FALLBACK_MESSAGE }
+  return { kind: 'fallback' }
 }

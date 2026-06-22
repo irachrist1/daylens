@@ -4,6 +4,9 @@ import Database from 'better-sqlite3'
 import type { AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { buildTimelineBlocksFromSessions } from '../src/main/services/workBlocks.ts'
+import { blockActiveSeconds } from '../src/shared/blockDuration.ts'
+
+const FLOOR_SECONDS = 15 * 60
 
 // Local-time millis on a fixed day, so block boundaries are deterministic.
 function at(hour: number, minute: number): number {
@@ -232,20 +235,23 @@ test('contentless browsing sliver chooses the nearest neighbour', () => {
 
 // GUARD (page artifacts): a titleless browser fragment that has page evidence is
 // not contentless, so it must not be swallowed across unrelated categories.
+// Durations sit above the 15-min calendar floor (DEV-99) so this exercises the
+// contentless-vs-page-backed distinction, not the floor: an 18-min page-backed
+// browsing block between unrelated work stays its own block.
 test('browser sliver with a page artifact stays separate', () => {
   const db = freshDb()
   seedWebsiteVisit(db, {
     domain: 'example.com',
     pageTitle: 'Architecture review notes',
     url: 'https://example.com/architecture',
-    visitTime: at(9, 10),
-    durationSec: 8 * 60,
+    visitTime: at(9, 24),
+    durationSec: 12 * 60,
     browserBundleId: 'com.apple.Safari',
   })
   const sessions = [
-    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 0), endTime: at(9, 8), windowTitle: 'PERF-COHERENCE-MAP.md — daylens' }),
-    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing', startTime: at(9, 9), endTime: at(9, 21), windowTitle: null }),
-    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 22), endTime: at(10, 5), windowTitle: 'codex · daylens architecture' }),
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 0), endTime: at(9, 22), windowTitle: 'PERF-COHERENCE-MAP.md — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing', startTime: at(9, 23), endTime: at(9, 41), windowTitle: null }),
+    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 42), endTime: at(10, 25), windowTitle: 'codex · daylens architecture' }),
   ]
   const result = labels(db, sessions)
   assert.equal(result.count, 3, `page-backed browser sliver must remain separate, got ${result.count}: ${result.spans.join(', ')}`)
@@ -254,13 +260,15 @@ test('browser sliver with a page artifact stays separate', () => {
 
 // GUARD (scope): the special bypass is for titleless browser slivers. A
 // titleless non-browser activity may still be meaningful and must not disappear
-// merely because it lacks a captured title.
+// merely because it lacks a captured title. Durations sit above the 15-min
+// calendar floor (DEV-99) so this guards the bypass scope, not the floor: an
+// 18-min titleless Mail block between unrelated work stays its own block.
 test('titleless non-browser short activity is not contentless sliver absorption', () => {
   const db = freshDb()
   const sessions = [
-    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 0), endTime: at(9, 8), windowTitle: 'PERF-COHERENCE-MAP.md — daylens' }),
-    session({ bundleId: 'com.apple.mail', appName: 'Mail', category: 'email', startTime: at(9, 9), endTime: at(9, 21), windowTitle: null }),
-    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 22), endTime: at(10, 5), windowTitle: 'codex · daylens architecture' }),
+    session({ bundleId: 'com.microsoft.VSCode', appName: 'Code', category: 'development', startTime: at(9, 0), endTime: at(9, 22), windowTitle: 'PERF-COHERENCE-MAP.md — daylens' }),
+    session({ bundleId: 'com.apple.mail', appName: 'Mail', category: 'email', startTime: at(9, 23), endTime: at(9, 41), windowTitle: null }),
+    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 42), endTime: at(10, 25), windowTitle: 'codex · daylens architecture' }),
   ]
   const result = labels(db, sessions)
   assert.equal(result.count, 3, `titleless Mail activity must stay separate, got ${result.count}: ${result.spans.join(', ')}`)
@@ -270,11 +278,13 @@ test('titleless non-browser short activity is not contentless sliver absorption'
 // GUARD (true sliver): the special case is a fragment between other activity.
 // A titleless browser block at the edge of a segment may be the user's actual
 // activity and should not be erased just because it lacks a captured page title.
+// Durations sit above the 15-min calendar floor (DEV-99) so this guards the
+// "edge fragment is not a sliver" rule, not the floor.
 test('edge titleless browser activity is not absorbed as a sliver', () => {
   const db = freshDb()
   const sessions = [
-    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing', startTime: at(9, 0), endTime: at(9, 12), windowTitle: null }),
-    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 13), endTime: at(10, 0), windowTitle: 'codex · daylens architecture' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'browsing', startTime: at(9, 0), endTime: at(9, 18), windowTitle: null }),
+    session({ bundleId: 'com.openai.codex', appName: 'Codex', category: 'aiTools', startTime: at(9, 19), endTime: at(10, 6), windowTitle: 'codex · daylens architecture' }),
   ]
   const result = labels(db, sessions)
   assert.equal(result.count, 2, `edge browser activity must stay separate, got ${result.count}: ${result.spans.join(', ')}`)
@@ -294,5 +304,58 @@ test('same video with a short detour is one block', () => {
   ]
   const result = labels(db, sessions)
   assert.equal(result.count, 1, `same video either side of a 2-min detour should be one block, got ${result.count}: ${result.spans.join(', ')}`)
+  db.close()
+})
+
+// FLOOR (DEV-99 / timeline.md §3.4): no block under fifteen minutes stands alone.
+// An off-kind sliver isolated by real idle gaps on both sides survives every
+// earlier pass — foldBriefPeeks needs no idle gap around it, and the short-block
+// absorption needs a *related* neighbour, which an unrelated entertainment blip
+// isn't. The final calendar-floor pass folds it into the nearest work block, so
+// the day comes back as real blocks, never a 35-second sliver.
+test('a sub-15-minute sliver isolated by gaps is folded by the floor', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 40), windowTitle: 'workBlocks.ts — daylens' }),
+    session({ bundleId: 'com.spotify.client', appName: 'Spotify', category: 'entertainment', startTime: at(10, 0), endTime: at(10, 8), windowTitle: 'Discover Weekly' }),
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(10, 28), endTime: at(11, 8), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 2, `the 8-min sliver must fold away, got ${blocks.length}`)
+  for (const block of blocks) {
+    assert.ok(blockActiveSeconds(block) >= FLOOR_SECONDS, `no block may sit under the 15-min floor, got ${blockActiveSeconds(block)}s`)
+  }
+  db.close()
+})
+
+// FLOOR (exemption): a short block with no non-meeting neighbour to fold into is
+// the one thing allowed under the floor — a lone short day can't fold into
+// nothing.
+test('a lone short block with no neighbour stays', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 8), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 1, `a lone short block has nothing to fold into, got ${blocks.length}`)
+  db.close()
+})
+
+// FLOOR (meeting boundary): the floor never folds a sliver *into* a meeting —
+// that would pollute the meeting block. A sub-15 sliver next to a meeting folds
+// into the work side instead, leaving the meeting clean.
+test('the floor folds a sliver into work, never into an adjacent meeting', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'us.zoom.xos', appName: 'zoom.us', category: 'meetings', startTime: at(9, 0), endTime: at(9, 25), windowTitle: 'Zoom Meeting' }),
+    session({ bundleId: 'com.spotify.client', appName: 'Spotify', category: 'entertainment', startTime: at(9, 26), endTime: at(9, 34), windowTitle: 'Discover Weekly' }),
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 35), endTime: at(10, 5), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 2, `the sliver must fold into the work block, leaving meeting + work, got ${blocks.length}`)
+  assert.equal(blocks[0].dominantCategory, 'meetings', `the meeting block must stay a clean meeting, got ${blocks[0].dominantCategory}`)
+  for (const block of blocks) {
+    assert.ok(blockActiveSeconds(block) >= FLOOR_SECONDS, `no block may sit under the 15-min floor, got ${blockActiveSeconds(block)}s`)
+  }
   db.close()
 })

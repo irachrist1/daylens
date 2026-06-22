@@ -21,6 +21,7 @@ const REPO_ROOT = path.resolve(HERE, '..')
 // prompt site and must honour the voice contract."
 const PROMPT_SITES: Array<{ path: string; label: string }> = [
   { path: 'src/main/jobs/aiService.ts', label: 'aiService (chat_answer, day_summary, week_review, app_narrative, reports, block_insight, suggest_category, weekly_brief)' },
+  { path: 'src/main/ai/converse.ts', label: 'converse (greetings, check-ins, no-resolver chat)' },
   { path: 'src/main/lib/wrappedNarrative.ts', label: 'wrappedNarrative (daily Wrapped)' },
   { path: 'src/main/lib/wrappedPeriodNarrative.ts', label: 'wrappedPeriodNarrative (weekly/monthly Wrapped)' },
 ]
@@ -57,8 +58,8 @@ test('every chat-facing prompt site imports and uses VOICE_SYSTEM_PROMPT', () =>
   }
 })
 
-test('PROMPT_SITES coverage: at least three curated prompt sites', () => {
+test('PROMPT_SITES coverage: at least four curated prompt sites', () => {
   // Guard rail against someone deleting the coverage list. If the product
   // grows more prompt sites, add them here explicitly.
-  assert.ok(PROMPT_SITES.length >= 3, `expected >= 3 prompt sites, got ${PROMPT_SITES.length}`)
+  assert.ok(PROMPT_SITES.length >= 4, `expected >= 4 prompt sites, got ${PROMPT_SITES.length}`)
 })

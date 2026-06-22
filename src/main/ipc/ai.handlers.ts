@@ -17,7 +17,9 @@ import {
   testCLITool,
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
-import { getWrappedPeriodNarrative } from '../services/wrappedPeriodNarrative'
+import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
+import { getWrapProviderState } from '../services/aiOrchestration'
+import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
@@ -36,7 +38,7 @@ import {
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriodFacts } from '@shared/types'
+import { IPC, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -70,7 +72,12 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.GENERATE_DAY_SUMMARY, async (_e, date: string) => {
-    return generateDaySummary(date)
+    const result = await generateDaySummary(date)
+    // Record that the user generated a recap for this day: suppresses the next
+    // morning's "yesterday's recap" notification (§4.1) and freezes the day's
+    // snapshot so wraps sum a finalized day (invariant 4).
+    markRecapGenerated(date)
+    return result
   })
 
   ipcMain.handle(IPC.AI.GET_WEEK_REVIEW, async (_e, payload: { weekStart: string; force?: boolean }) => {
@@ -104,8 +111,12 @@ export function registerAIHandlers(): void {
     return getWrappedNarrative(dayPayload)
   })
 
-  ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { facts: WrappedPeriodFacts }) => {
-    return getWrappedPeriodNarrative(payload.facts)
+  ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { period: WrappedPeriod; anchorDate: string }) => {
+    return getWrappedPeriodWrap(payload.period, payload.anchorDate)
+  })
+
+  ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
+    return getWrapProviderState()
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {

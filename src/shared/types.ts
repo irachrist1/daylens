@@ -931,32 +931,111 @@ export interface AIWrappedNarrative {
   factsHash: string
 }
 
-type WrappedPeriod = 'week' | 'month'
+// ─── Frozen daily snapshots (Briefs & Wraps, invariant 4) ──────────────────────
+// A day's numbers, frozen once the day is finalized. Weekly/monthly/annual wraps
+// SUM these frozen snapshots instead of re-summarizing — so the stat card and the
+// narrative on a wrap can never disagree (the 20h7m-vs-20h53m bug). Every number
+// here comes from the same trusted timeline blocks the Timeline view reads.
+
+export interface DaySnapshotThread {
+  /** What the user was doing, named for the work — never a raw app/page title. */
+  subject: string
+  role: WorkIntentRole
+  seconds: number
+}
+
+export interface DaySnapshot {
+  date: string
+  /** Total active seconds across trusted blocks — the load-bearing day total. */
+  totalActiveSeconds: number
+  /** The one reconciled kind split. work+leisure+personal+idle. */
+  kind: { work: number; leisure: number; personal: number; idle: number }
+  /** Dominant WORK category — never leisure. null when no real work. */
+  dominantWorkCategory: AppCategory | null
+  /** Per-category active seconds (work-relevant categories), most time first. */
+  categories: Array<{ category: AppCategory; seconds: number }>
+  /** Top apps by active seconds, most first. */
+  apps: Array<{ appName: string; seconds: number; category: AppCategory; isBrowser: boolean }>
+  /** Top domains by active seconds, most first. */
+  domains: Array<{ domain: string; seconds: number }>
+  /** Friendly leisure surfaces ("YouTube", "Netflix"), most time first. */
+  leisureSurfaces: string[]
+  /** Named work threads (what mattered), most time first. */
+  threads: DaySnapshotThread[]
+  /** The single longest trusted work stretch of the day. */
+  longestBlock: { label: string; seconds: number; startClock: string } | null
+  /** Hash of the source facts — lets us detect when a frozen day needs refreezing. */
+  factsHash: string
+  /** ms epoch when frozen; 0 means provisional (today, still live). */
+  finalizedAt: number
+}
+
+export type WrappedPeriod = 'week' | 'month' | 'year'
+
+export interface WrappedPeriodThread {
+  subject: string
+  seconds: number
+  /** How many days in the period this thread showed up — "across four days". */
+  daysActive: number
+}
 
 export interface WrappedPeriodFacts {
   period: WrappedPeriod
+  /** Any date inside the period; the period is derived from it. */
   anchorDate: string
+  /** Human label for the range, e.g. "Jun 16 – Jun 22" or "June 2026". */
+  rangeLabel: string
+  /** SUM of the frozen day totals — this is THE stat-card number. */
   totalSeconds: number
+  workSeconds: number
+  leisureSeconds: number
+  personalSeconds: number
   previousPeriodSeconds: number
   daysWithActivity: number
-  dominantCategory: AppCategory | 'unknown'
-  dominantCategoryPct: number
-  busiestDay: { dateStr: string; dayLabel: string; totalSeconds: number; dominantCategory: AppCategory | 'unknown' } | null
-  longestBlock: { dateStr: string; dayLabel: string; durationSeconds: number; dominantCategory: AppCategory | 'unknown' } | null
-  /** Compact per-day rollup. For week: 7 entries. For month: weekly buckets. */
-  buckets: Array<{ label: string; totalSeconds: number; dominantCategory: AppCategory | 'unknown' }>
+  /** Main mode = the dominant WORK category, never leisure. */
+  dominantWorkCategory: AppCategory | 'unknown'
+  dominantWorkCategoryPct: number
+  /** Where the work time went, most time first — for the "story", with a legend. */
+  categories: Array<{ category: AppCategory; seconds: number }>
+  topApps: Array<{ appName: string; seconds: number }>
+  /** The biggest named threads — what mattered. */
+  threads: WrappedPeriodThread[]
+  leisureSurfaces: string[]
+  busiestDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
+  quietestActiveDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
+  /** Longest single work stretch in the period — a real superlative. */
+  longestStretch: { dateStr: string; dayLabel: string; seconds: number; label: string } | null
+  /** Sub-rollup: week → 7 days; month → weeks; year → months. */
+  buckets: Array<{ label: string; totalSeconds: number; dominantWorkCategory: AppCategory | 'unknown' }>
+  busiestBucket: { label: string; totalSeconds: number } | null
 }
 
 export interface WrappedPeriodNarrative {
   period: WrappedPeriod
+  /** The period in one line — the headline story. Always present. */
   lead: string
   slides: {
-    chart: string | null
-    record: string | null
-    comparison: string | null
+    /** What mattered — the biggest threads, named for the work. */
+    whatMattered: string | null
+    /** Where the time went, as a story (not a chart readout). */
+    whereTimeWent: string | null
+    /** A real superlative — the standout. */
+    standout: string | null
+    /** What's carrying forward / the arc. */
+    carrying: string | null
   }
   source: 'ai' | 'fallback'
   factsHash: string
+}
+
+/** The no-credits rule (briefs-wraps.md §7): with no provider connected, no brief
+ *  or wrap is generated — the surface shows one message pointing to Settings and
+ *  nothing else. The renderer reads this before rendering any wrap. */
+export interface WrapProviderState {
+  /** A provider/model is configured for the wrapped job. */
+  connected: boolean
+  /** The provider name to show in the "connect" / error message. */
+  provider: string | null
 }
 
 export type AISurface =
@@ -1412,6 +1491,7 @@ export const IPC = {
     PREPARE_DAILY_REPORT: 'ai:prepare-daily-report',
     GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
+    GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
