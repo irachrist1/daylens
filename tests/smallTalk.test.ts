@@ -11,8 +11,11 @@ test('recognizes short greetings and conversational check-ins', () => {
     'Hello!',
     'Good morning',
     'How are you?',
+    'How’s your day going?',
     "Hey? how's it going?",
+    'Hey? how’s it going?',
     "Hi — what's up?",
+    'Hi — what’s up?',
   ]) {
     assert.equal(isConversationalGreeting(message), true, message)
   }

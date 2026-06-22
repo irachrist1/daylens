@@ -4,10 +4,10 @@ const SIMPLE_GREETING_RE =
   /^\s*(?:hey|hi|hello|howdy|hiya|helo|yo|sup|good\s+(?:morning|afternoon|evening)|test|testing)\s*[!?.]*\s*$/i
 
 const CHECK_IN_RE =
-  /^\s*(?:how(?:'s| is) it going|how are you|what(?:'s| is) up|how(?:'s| is) your day(?: going)?)\s*[!?.]*\s*$/i
+  /^\s*(?:how(?:['’]s| is) it going|how are you|what(?:['’]s| is) up|how(?:['’]s| is) your day(?: going)?)\s*[!?.]*\s*$/i
 
 const GREETING_WITH_CHECK_IN_RE =
-  /^\s*(?:hey|hi|hello|howdy|hiya|helo|yo|sup|good\s+(?:morning|afternoon|evening))[\s,!?.—-]+(?:how(?:'s| is) it going|how are you|what(?:'s| is) up|how(?:'s| is) your day(?: going)?)\s*[!?.]*\s*$/i
+  /^\s*(?:hey|hi|hello|howdy|hiya|helo|yo|sup|good\s+(?:morning|afternoon|evening))[\s,!?.—-]+(?:how(?:['’]s| is) it going|how are you|what(?:['’]s| is) up|how(?:['’]s| is) your day(?: going)?)\s*[!?.]*\s*$/i
 
 export function isConversationalGreeting(message: string): boolean {
   const normalized = message.trim().replace(/\s+/g, ' ')
