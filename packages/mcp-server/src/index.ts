@@ -11,6 +11,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 import os from 'node:os'
 import path from 'node:path'
 import { executeTool } from '../../../src/main/services/aiTools'
+import type { TrackingControlsState } from '../../../src/shared/trackingControls'
 import { anthropicTools } from './tools'
 
 const dbPath =
@@ -20,6 +21,27 @@ const dbPath =
 const db = new Database(dbPath, { readonly: true })
 db.pragma('journal_mode = WAL')
 db.pragma('busy_timeout = 5000')
+
+// The subprocess can't reach the Electron settings store, so the current
+// exclusion set is handed in by env (see mcpServer.ts). Without this the MCP
+// boundary would have no exclusion list and excluded apps/sites could leave the
+// machine through an MCP client. System noise is stripped regardless.
+function envList(name: string): string[] {
+  try {
+    const parsed = JSON.parse(process.env[name] ?? '[]') as unknown
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const trackingControls: TrackingControlsState = {
+  enabled: process.env.DAYLENS_TRACKING_CONTROLS_ENABLED === '1',
+  paused: false,
+  excludedApps: envList('DAYLENS_TRACKING_EXCLUDED_APPS'),
+  excludedSites: envList('DAYLENS_TRACKING_EXCLUDED_SITES'),
+  skipIncognito: true,
+}
 
 process.on('exit', () => { try { db.close() } catch { /* ignore */ } })
 process.on('SIGTERM', () => { db.close(); process.exit(0) })
@@ -45,6 +67,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       name as Parameters<typeof executeTool>[0],
       (args ?? {}) as Record<string, unknown>,
       db,
+      trackingControls,
     )
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

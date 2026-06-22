@@ -5,6 +5,7 @@ import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { getAppSummariesForRange, getSessionsForRange } from '../src/main/db/queries.ts'
 import { localDayBounds } from '../src/main/lib/localDate.ts'
 import { getTimelineDayPayload } from '../src/main/services/workBlocks.ts'
+import { isSystemNoiseApp } from '../src/shared/systemNoise.ts'
 
 function ensureFocusEventsTable(db: Database.Database): void {
   db.exec(`
@@ -159,6 +160,14 @@ test('legacy and current Zen identities collapse into one browsing row', () => {
   assert.equal(summaries[0].category, 'browsing')
   assert.equal(summaries[0].totalSeconds, 60 * 60)
   db.close()
+})
+
+test('shared system-noise policy covers bundle and display-name variants', () => {
+  assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.loginwindow', appName: 'LoginWindow' }), true)
+  assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.UserNotificationCenter', appName: 'Notifications' }), true)
+  assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.WindowManager', appName: 'WindowManager' }), true)
+  assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.finder', appName: 'Finder' }), true)
+  assert.equal(isSystemNoiseApp({ bundleId: 'com.microsoft.VSCode', appName: 'Cursor' }), false)
 })
 
 test('overlapping capture rows are coalesced before engagement totals are counted', () => {

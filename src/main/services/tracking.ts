@@ -35,6 +35,7 @@ import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './b
 import { resolveBrowserApplication } from './browserRegistry'
 import { getSettings } from './settings'
 import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { isSystemNoiseApp } from '@shared/systemNoise'
 import { runAttributionForRange } from './attribution'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -987,39 +988,9 @@ function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): ActiveWinResult | nu
 // ─── OS noise filter ─────────────────────────────────────────────────────────
 // System processes that appear as "frontmost app" but are not user-initiated.
 // Writing these to the DB creates junk sessions that inflate totals and
-// pollute the category breakdown.
-
-const OS_NOISE_BUNDLE_IDS = new Set([
-  'com.apple.loginwindow',
-  'com.apple.dock',
-  'com.apple.systemuiserver',
-  'com.apple.notificationcenterui',
-  'com.apple.controlcenter',
-  'com.apple.screensaver.engine',
-  'com.apple.backgroundtaskmanagementagent',
-  'com.apple.usernotificationcenter',
-  'com.apple.finder',
-  'com.apple.siri',
-  'com.apple.siri.agent',
-  'com.apple.WindowManager',
-])
-
-// Lowercase app name exact matches (covers both macOS and Windows noise)
-const OS_NOISE_APP_NAMES = new Set([
-  'loginwindow',
-  'windowserver',
-  'universalaccessd',
-  'dock',
-  'systemuiserver',
-  'finder',
-  'siri',
-  'usernotificationcenter',
-  'notification center',
-  // Windows OS-level processes
-  'dwm.exe',
-  'csrss.exe',
-  'svchost.exe',
-])
+// pollute the category breakdown. The invisible-OS-identity list lives in
+// @shared/systemNoise so capture, queries, projections, and the AI/MCP
+// boundary all share one policy that can't drift between layers.
 
 // Self-exclusion: only this app's own exe names, not all Electron-based apps.
 // Previously matched 'electron' as a substring which filtered VS Code, Discord,
@@ -1104,9 +1075,8 @@ export function persistTrackedForegroundSession(
 }
 
 function isOsNoise(bundleId: string, appName: string, winPath?: string): boolean {
-  if (OS_NOISE_BUNDLE_IDS.has(bundleId)) return true
+  if (isSystemNoiseApp({ bundleId, appName })) return true
   const lowerName = appName.toLowerCase()
-  if (OS_NOISE_APP_NAMES.has(lowerName)) return true
   // Exact exe name match — allows VS Code, Discord, Slack etc. through
   const exeName = (winPath ? path.basename(winPath) : appName).toLowerCase()
   if (SELF_NOISE_EXE_NAMES.has(exeName)) return true
@@ -1650,7 +1620,7 @@ async function poll(): Promise<void> {
     // no app session AND no browser context for this foreground window.
     const trackingDecision = decideAppCapture(
       trackingControlsStateFromSettings(getSettings()),
-      { bundleId, appName, windowTitle: resolvedWindowTitle },
+      { bundleId, canonicalAppId: identity.canonicalAppId, appName, windowTitle: resolvedWindowTitle },
     )
     if (!trackingDecision.capture) {
       if (currentSession) flushCurrent(undefined, `tracking_controls:${trackingDecision.reason}`)

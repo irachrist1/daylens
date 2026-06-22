@@ -48,6 +48,25 @@ test('app exclusion matches bundle id or app name, case-insensitively, only when
   assert.equal(isAppExcluded({ ...s, enabled: false }, { bundleId: 'com.tinyspeck.slackmacgap' }), false)
 })
 
+test('app exclusion matches canonical identity and browser profile variants', () => {
+  const s = {
+    ...base,
+    enabled: true,
+    excludedApps: ['chrome', 'app.zen-browser.zen'],
+  }
+  // Excluding the canonical id "chrome" drops a profile-suffixed bundle.
+  assert.equal(decideAppCapture(s, {
+    bundleId: 'com.google.Chrome:Profile 1',
+    canonicalAppId: 'chrome',
+    appName: 'Google Chrome (Profile 1)',
+  }).reason, 'excluded_app')
+  // Excluding the base bundle id drops a profile variant even without canonical.
+  assert.equal(decideAppCapture(s, {
+    bundleId: 'app.zen-browser.zen:work',
+    appName: 'Zen (work)',
+  }).reason, 'excluded_app')
+})
+
 // ── Site exclusion incl. subdomains + www (acceptance #3) ──────────────────────
 
 test('site exclusion matches the host and its subdomains, ignoring www', () => {

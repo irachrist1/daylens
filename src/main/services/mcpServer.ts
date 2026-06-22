@@ -7,6 +7,7 @@ import type { ChildProcess } from 'node:child_process'
 import { app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
+import { getSettings } from './settings'
 
 export interface McpServerConfig {
   command: string
@@ -49,6 +50,7 @@ export function getMcpServerConfig(): McpServerConfig | null {
   if (!paths) return null
 
   const dbPath = path.join(app.getPath('userData'), 'daylens.sqlite')
+  const settings = getSettings()
   const args = paths.loaderPath
     ? ['--loader', `file://${paths.loaderPath}`, paths.serverPath]
     : [paths.serverPath]
@@ -59,6 +61,13 @@ export function getMcpServerConfig(): McpServerConfig | null {
     env: {
       ELECTRON_RUN_AS_NODE: '1',
       DAYLENS_DB_PATH: dbPath,
+      // The MCP subprocess reads the same store read-only and has no access to
+      // the settings file, so the current exclusion set is handed in by env.
+      // The Daylens-managed subprocess is respawned with a fresh snapshot on
+      // every start, so exclusions stay current for the in-app server.
+      DAYLENS_TRACKING_CONTROLS_ENABLED: settings.trackingControlsEnabled ? '1' : '0',
+      DAYLENS_TRACKING_EXCLUDED_APPS: JSON.stringify(settings.trackingExcludedApps ?? []),
+      DAYLENS_TRACKING_EXCLUDED_SITES: JSON.stringify(settings.trackingExcludedSites ?? []),
     },
     isPackaged: app.isPackaged,
     dbPath,

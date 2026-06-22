@@ -17,6 +17,7 @@ export interface TrackingControlsState {
 
 export interface AppCaptureCandidate {
   bundleId?: string | null
+  canonicalAppId?: string | null
   appName?: string | null
   windowTitle?: string | null
 }
@@ -54,14 +55,19 @@ function normalizeHost(value: string | null | undefined): string {
 }
 
 // An app matches an exclusion entry when the entry equals (case-insensitively)
-// either its bundle id or its display name.
+// its bundle id, its bundle id without a browser-profile suffix
+// (`com.google.Chrome:Profile 1` → `com.google.chrome`), its canonical app id,
+// or its display name. Profile-aware matching means excluding "chrome" or the
+// base bundle drops every profile variant, not just the one currently open.
 export function isAppExcluded(state: TrackingControlsState, candidate: AppCaptureCandidate): boolean {
   if (!state.enabled || state.excludedApps.length === 0) return false
   const bundle = normalizeToken(candidate.bundleId)
+  const baseBundle = bundle.split(':', 1)[0]
+  const canonical = normalizeToken(candidate.canonicalAppId)
   const name = normalizeToken(candidate.appName)
   return state.excludedApps.some((entry) => {
     const e = normalizeToken(entry)
-    return e !== '' && (e === bundle || e === name)
+    return e !== '' && (e === bundle || e === baseBundle || e === canonical || e === name)
   })
 }
 

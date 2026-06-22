@@ -9,6 +9,9 @@
 // them. New question types are served by ADDING a resolver here, never by
 // loosening the model.
 import type Database from 'better-sqlite3'
+import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
+import { trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
+import { getSettings } from '../services/settings'
 import {
   execGetAppUsage,
   execGetBlockAtTime,
@@ -94,14 +97,16 @@ export interface GetRangeResult {
   days: RangeDaySummary[]
   /** Block labels rolled up across the whole range, by total seconds. */
   topActivities: Array<{ label: string; totalSeconds: number }>
-  /** Apps rolled up across the range, by total seconds. */
-  topApps: Array<{ appName: string; totalSeconds: number }>
+  /** Apps rolled up across the range, by total seconds. bundleId is carried so
+   *  the privacy filter can drop apps excluded by bundle id, not only by name. */
+  topApps: Array<{ appName: string; bundleId: string | null; totalSeconds: number }>
 }
 
 function getRange(from: string, to: string, db: Database.Database): GetRangeResult {
   const days: RangeDaySummary[] = []
   const activitySeconds = new Map<string, number>()
   const appSeconds = new Map<string, number>()
+  const appBundleIds = new Map<string, string | null>()
   let totalTrackedSeconds = 0
 
   // The effective window may be narrower than requested for very long spans
@@ -132,6 +137,7 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
     }
     for (const app of summary._evidence.topApps) {
       appSeconds.set(app.appName, (appSeconds.get(app.appName) ?? 0) + app.totalSeconds)
+      if (!appBundleIds.has(app.appName)) appBundleIds.set(app.appName, app.bundleId ?? null)
     }
   }
 
@@ -140,7 +146,7 @@ function getRange(from: string, to: string, db: Database.Database): GetRangeResu
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
     .slice(0, 12)
   const topApps = [...appSeconds.entries()]
-    .map(([appName, totalSeconds]) => ({ appName, totalSeconds }))
+    .map(([appName, totalSeconds]) => ({ appName, bundleId: appBundleIds.get(appName) ?? null, totalSeconds }))
     .sort((a, b) => b.totalSeconds - a.totalSeconds)
     .slice(0, 12)
 
@@ -230,7 +236,11 @@ function isEmptyResult(query: ResolverQuery, data: unknown): boolean {
   }
 }
 
-export function runResolverQuery(query: ResolverQuery, db: Database.Database): ResolvedFact {
+export function runResolverQuery(
+  query: ResolverQuery,
+  db: Database.Database,
+  controls: TrackingControlsState = trackingControlsStateFromSettings(getSettings()),
+): ResolvedFact {
   let data: unknown
   switch (query.resolver) {
     case 'getDay':
@@ -255,11 +265,20 @@ export function runResolverQuery(query: ResolverQuery, db: Database.Database): R
       data = execListClients({ startDate: query.from, endDate: query.to }, db)
       break
   }
-  return { query, data, isEmpty: isEmptyResult(query, data) }
+  // Last-line privacy boundary: nothing excluded (or system-noise) is allowed
+  // into a fact before it is serialized and handed to the model. isEmpty stays
+  // on the raw result so "the day had activity" is reported honestly even when
+  // every surfaced row was an excluded one.
+  const filtered = filterTrackingExcludedEvidence(data, controls)
+  return { query, data: filtered, isEmpty: isEmptyResult(query, data) }
 }
 
-export function runResolverQueries(queries: ResolverQuery[], db: Database.Database): ResolvedFact[] {
-  return queries.map((query) => runResolverQuery(query, db))
+export function runResolverQueries(
+  queries: ResolverQuery[],
+  db: Database.Database,
+  controls: TrackingControlsState = trackingControlsStateFromSettings(getSettings()),
+): ResolvedFact[] {
+  return queries.map((query) => runResolverQuery(query, db, controls))
 }
 
 // ---------------------------------------------------------------------------

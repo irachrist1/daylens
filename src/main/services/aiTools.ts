@@ -24,6 +24,9 @@ import {
 import { searchFileMentions as execSearchFileMentions, type SearchFileMentionsResult } from '../lib/windowTitleFilenames'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from './workBlocks'
 import { sanitizeToolResult } from '@shared/aiSanitize'
+import { filterTrackingExcludedEvidence } from '@shared/evidencePrivacy'
+import { trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
+import { getSettings } from './settings'
 
 // ---------------------------------------------------------------------------
 // TypeScript parameter interfaces
@@ -1082,12 +1085,18 @@ export function executeTool(
   name: ToolName,
   params: Record<string, unknown>,
   db: Database.Database,
+  controls: TrackingControlsState = trackingControlsStateFromSettings(getSettings()),
 ): unknown {
-  // Every tool result passes through sanitizeToolResult before leaving the
-  // executor: deep-walks every string field and strips OAuth tokens, JWTs,
-  // hex blobs, base64 blobs, and URL query strings. This is the load-bearing
-  // defense against the OAuth-callback leak repro from V1-PHASE-6-AI §1.
-  // sanitizeForRender (renderer streaming path) is the second backstop.
+  // Every tool result passes through two boundaries before leaving the
+  // executor:
+  //   1. filterTrackingExcludedEvidence — drops excluded apps/sites and system
+  //      noise (and redacts excluded names embedded in free text). This is the
+  //      last line if capture-time deletion or projection cleanup missed a
+  //      stale row, and it is what makes exclusions hold over MCP.
+  //   2. sanitizeToolResult — deep-walks every string field and strips OAuth
+  //      tokens, JWTs, hex blobs, base64 blobs, and URL query strings. The
+  //      load-bearing defense against the OAuth-callback leak repro from
+  //      V1-PHASE-6-AI §1. sanitizeForRender (renderer path) is the backstop.
   const raw = (() => {
     switch (name) {
       case 'searchSessions': return execSearchSessions(params as unknown as SearchSessionsParams, db)
@@ -1101,5 +1110,5 @@ export function executeTool(
       case 'listClients': return execListClients(params as unknown as ListClientsParams, db)
     }
   })()
-  return sanitizeToolResult(raw)
+  return sanitizeToolResult(filterTrackingExcludedEvidence(raw, controls))
 }
