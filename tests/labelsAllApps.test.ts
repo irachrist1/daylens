@@ -90,7 +90,7 @@ test('A relabel reports the days/sessions it touched', () => {
 
     const effect = getCategoryOverrideEffect(db, 'com.zen.browser')
     assert.equal(effect.sessionsAffected, 3)
-    assert.ok(effect.daysAffected >= 1, 'should report at least one affected day')
+    assert.equal(effect.daysAffected, 3, 'three distinct local days were seeded')
   } finally {
     db.close()
   }

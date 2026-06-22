@@ -1089,7 +1089,7 @@ function execGetAttributionContext(params: GetAttributionContextParams, db: Data
     // tell the AI to offer setting it up as a client in Settings.
     const sessionHits = dbSearchSessions(db, params.entityName, { limit: 8 })
     const pageHits = dbSearchBrowser(db, params.entityName, { limit: 8 })
-    const inferredActivity = [
+    const allInferred = [
       ...sessionHits.map((h) => ({
         label: h.windowTitle ?? h.appName,
         date: h.date,
@@ -1100,15 +1100,16 @@ function execGetAttributionContext(params: GetAttributionContextParams, db: Data
         date: h.date,
         durationSeconds: Math.max(0, Math.round((h.endTime - h.startTime) / 1000)),
       })),
-    ]
-      .sort((a, b) => b.durationSeconds - a.durationSeconds)
-      .slice(0, 10)
+    ].sort((a, b) => b.durationSeconds - a.durationSeconds)
+    // Total over the full matched set; only the display list is truncated.
+    const inferredTotalSeconds = allInferred.reduce((s, a) => s + a.durationSeconds, 0)
+    const inferredActivity = allInferred.slice(0, 10)
 
     return {
       entityName: params.entityName,
       entityType: 'unknown',
       matchedEntityId: null,
-      totalTrackedSeconds: inferredActivity.reduce((s, a) => s + a.durationSeconds, 0),
+      totalTrackedSeconds: inferredTotalSeconds,
       last30DaysSeconds: 0,
       recentSessions: [],
       inferredActivity,

@@ -1280,6 +1280,18 @@ export type AppCategory =
   | 'system'
   | 'uncategorized'
 
+// The full set of valid categories, for validating untrusted input (e.g. an
+// IPC payload) before it's persisted or cast to AppCategory.
+export const APP_CATEGORIES: readonly AppCategory[] = [
+  'development', 'communication', 'research', 'writing', 'aiTools', 'design',
+  'browsing', 'meetings', 'entertainment', 'email', 'productivity', 'social',
+  'system', 'uncategorized',
+]
+
+export function isAppCategory(value: unknown): value is AppCategory {
+  return typeof value === 'string' && (APP_CATEGORIES as readonly string[]).includes(value)
+}
+
 export const FOCUSED_CATEGORIES: AppCategory[] = [
   'development',
   'research',

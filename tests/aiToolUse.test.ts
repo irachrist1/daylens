@@ -92,15 +92,18 @@ test('executeTool: getAttributionContext never dead-ends for an unknown client',
   // get an inferred breakdown + a setup hint rather than an empty answer
   // (settings spec §5 / ai §8.2).
   const db = setupDb()
-  const result = executeTool('getAttributionContext', { entityName: 'Figma' }, db) as {
-    entityType: string
-    inferredActivity?: Array<{ label: string; durationSeconds: number }>
-    setupHint?: string
+  try {
+    const result = executeTool('getAttributionContext', { entityName: 'Figma' }, db) as {
+      entityType: string
+      inferredActivity?: Array<{ label: string; durationSeconds: number }>
+      setupHint?: string
+    }
+    assert.equal(result.entityType, 'unknown')
+    assert.ok(result.inferredActivity && result.inferredActivity.length > 0, 'expected an inferred breakdown')
+    assert.match(result.setupHint ?? '', /client/i)
+  } finally {
+    db.close()
   }
-  assert.equal(result.entityType, 'unknown')
-  assert.ok(result.inferredActivity && result.inferredActivity.length > 0, 'expected an inferred breakdown')
-  assert.match(result.setupHint ?? '', /client/i)
-  db.close()
 })
 
 test('executeTool: searchSessions returns browser page hits from website visits', () => {

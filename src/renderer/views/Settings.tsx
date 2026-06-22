@@ -1062,6 +1062,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                   const draft = factDrafts[fact.id]
                   const isEditing = draft !== undefined
                   const busy = workMemoryBusy === fact.id
+                  // Any in-flight work-memory mutation disables every control, so
+                  // two writes can't race and clobber each other's returned state.
+                  const anyBusy = workMemoryBusy !== null
                   return (
                     <div key={fact.id} style={{ ...infoPanelStyle, display: 'grid', gap: 8 }}>
                       <textarea
@@ -1090,20 +1093,20 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                         {isEditing && (
                           <button
                             type="button"
-                            disabled={busy}
+                            disabled={anyBusy}
                             onClick={() => void saveWorkMemoryFact(fact.id)}
-                            style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                            style={{ ...inlineButtonStyle, opacity: anyBusy ? 0.6 : 1, cursor: anyBusy ? 'default' : 'pointer' }}
                           >
                             {busy ? 'Saving…' : 'Save'}
                           </button>
                         )}
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={anyBusy}
                           onClick={() => void forgetWorkMemoryFact(fact.id)}
-                          style={{ ...inlineButtonStyle, color: '#f87171', opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                          style={{ ...inlineButtonStyle, color: '#f87171', opacity: anyBusy ? 0.6 : 1, cursor: anyBusy ? 'default' : 'pointer' }}
                         >
-                          Forget
+                          {busy ? 'Forgetting…' : 'Forget'}
                         </button>
                       </div>
                     </div>
@@ -1135,12 +1138,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   type="button"
-                  disabled={workMemoryBusy === 'add' || newFactText.trim() === ''}
+                  disabled={workMemoryBusy !== null || newFactText.trim() === ''}
                   onClick={() => void addWorkMemoryFact()}
                   style={{
                     ...inlineButtonStyle,
-                    opacity: workMemoryBusy === 'add' || newFactText.trim() === '' ? 0.6 : 1,
-                    cursor: workMemoryBusy === 'add' || newFactText.trim() === '' ? 'default' : 'pointer',
+                    opacity: workMemoryBusy !== null || newFactText.trim() === '' ? 0.6 : 1,
+                    cursor: workMemoryBusy !== null || newFactText.trim() === '' ? 'default' : 'pointer',
                   }}
                 >
                   {workMemoryBusy === 'add' ? 'Adding…' : 'Add fact'}

@@ -51,7 +51,7 @@ import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
-import { IPC } from '@shared/types'
+import { IPC, isAppCategory } from '@shared/types'
 import {
   getTrackingPermissionDetails,
   getTrackingPermissionState,
@@ -470,7 +470,11 @@ export function registerDbHandlers(): void {
   })
 
   ipcMain.handle(IPC.DB.SET_CATEGORY_OVERRIDE, (_e, bundleId: string, category: string) => {
-    setCategoryOverride(getDb(), bundleId, category as import('@shared/types').AppCategory)
+    // Validate at the boundary — never persist an arbitrary renderer string as a category.
+    if (!isAppCategory(category)) {
+      throw new Error(`Invalid category: ${String(category)}`)
+    }
+    setCategoryOverride(getDb(), bundleId, category)
     invalidateProjectionScope('timeline', 'category_override')
     invalidateProjectionScope('apps', 'category_override')
     invalidateProjectionScope('insights', 'category_override')

@@ -144,21 +144,29 @@ function draftFactsFromEvidence(db: Database.Database): DraftFact[] {
   const facts: DraftFact[] = []
   const lookback = now() - 30 * 86_400_000
 
-  // Top apps by time, grouped into a "you spend most of your day in X and Y on
-  // <category>" sentence.
+  // Top apps by time → the names for the sentence (group by app only).
   const topApps = db.prepare(`
-    SELECT app_name AS appName, category, SUM(duration_sec) AS total
+    SELECT app_name AS appName, SUM(duration_sec) AS total
     FROM app_sessions
     WHERE start_time >= ? AND app_name IS NOT NULL AND app_name != ''
     GROUP BY app_name
     ORDER BY total DESC
     LIMIT 5
-  `).all(lookback) as Array<{ appName: string; category: AppCategory; total: number }>
+  `).all(lookback) as Array<{ appName: string; total: number }>
+
+  // Dominant category → grouped by category (not a non-grouped column), so the
+  // phrase reflects real totals rather than an arbitrary per-app category value.
+  const categoryTotals = db.prepare(`
+    SELECT category, SUM(duration_sec) AS total
+    FROM app_sessions
+    WHERE start_time >= ? AND category IS NOT NULL
+    GROUP BY category
+  `).all(lookback) as Array<{ category: AppCategory; total: number }>
 
   const focusApps = topApps.filter((row) => (row.total ?? 0) > 1800)
   if (focusApps.length > 0) {
     const names = focusApps.slice(0, 3).map((row) => row.appName)
-    const topCategory = mostCommonCategory(focusApps)
+    const topCategory = mostCommonCategory(categoryTotals)
     const categoryPhrase = topCategory ? ` on ${CATEGORY_PHRASE[topCategory] ?? topCategory}` : ''
     facts.push({
       topicKey: 'top-apps',

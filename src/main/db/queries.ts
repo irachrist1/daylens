@@ -1319,7 +1319,8 @@ export function getAllAppsForLabeling(db: Database.Database): AppUsageSummary[] 
   `).all() as Array<{ bundleId: string; totalSeconds: number; sessionCount: number; lastSeen: number }>
 
   // The most recent name + detected category for each bundle, so a relabelled
-  // app still shows the name we last saw it under.
+  // app still shows the name we last saw it under. Tie-break on the row id so
+  // two sessions sharing the same max start_time pick one row deterministically.
   const latest = db.prepare(`
     SELECT s.bundle_id AS bundleId, s.app_name AS appName, s.category AS category
     FROM app_sessions s
@@ -1329,6 +1330,10 @@ export function getAllAppsForLabeling(db: Database.Database): AppUsageSummary[] 
       WHERE bundle_id IS NOT NULL AND bundle_id != ''
       GROUP BY bundle_id
     ) l ON l.bundle_id = s.bundle_id AND l.ms = s.start_time
+    WHERE s.id = (
+      SELECT MAX(s2.id) FROM app_sessions s2
+      WHERE s2.bundle_id = s.bundle_id AND s2.start_time = s.start_time
+    )
   `).all() as Array<{ bundleId: string; appName: string; category: AppCategory }>
 
   const latestByBundle = new Map(latest.map((row) => [row.bundleId, row]))
