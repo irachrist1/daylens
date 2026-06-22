@@ -4,6 +4,8 @@ import {
   setBlockLabelOverride,
   getAppCharacter,
   getAppSummariesForRange,
+  getAllAppsForLabeling,
+  getCategoryOverrideEffect,
   getPeakHours,
   getSessionsForRange,
   getSessionsForApp,
@@ -456,11 +458,17 @@ export function registerDbHandlers(): void {
     return getAppSummariesForRange(getDb(), from, to)
   })
 
+  ipcMain.handle(IPC.DB.GET_ALL_APPS_FOR_LABELING, () => {
+    return getAllAppsForLabeling(getDb())
+  })
+
   ipcMain.handle(IPC.DB.SET_CATEGORY_OVERRIDE, (_e, bundleId: string, category: string) => {
     setCategoryOverride(getDb(), bundleId, category as import('@shared/types').AppCategory)
     invalidateProjectionScope('timeline', 'category_override')
     invalidateProjectionScope('apps', 'category_override')
     invalidateProjectionScope('insights', 'category_override')
+    // Report what the relabel touched so Settings never changes silently.
+    return getCategoryOverrideEffect(getDb(), bundleId)
   })
 
   ipcMain.handle(IPC.DB.CLEAR_CATEGORY_OVERRIDE, (_e, bundleId: string) => {

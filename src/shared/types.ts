@@ -37,6 +37,13 @@ export interface AppUsageSummary {
   sessionCount?: number   // populated from DB queries; absent for live/synthetic entries
 }
 
+// What a category relabel touched, so Settings can report its effect instead of
+// changing silently (settings spec §4).
+export interface CategoryOverrideEffect {
+  daysAffected: number
+  sessionsAffected: number
+}
+
 // D5: each Apps row leads with what was accomplished, not how long.
 // This compact digest provides the headline activity per app over a range —
 // the top work block the app participated in and the top artifact it touched.
@@ -1370,6 +1377,7 @@ export const IPC = {
     REBUILD_TIMELINE_DAY: 'db:rebuild-timeline-day',
     GET_APP_SUMMARIES: 'db:get-app-summaries',
     GET_APP_SUMMARIES_FOR_DATE: 'db:get-app-summaries-for-date',
+    GET_ALL_APPS_FOR_LABELING: 'db:get-all-apps-for-labeling',
     GET_CATEGORY_OVERRIDES: 'db:get-category-overrides',
     SET_CATEGORY_OVERRIDE: 'db:set-category-override',
     CLEAR_CATEGORY_OVERRIDE: 'db:clear-category-override',

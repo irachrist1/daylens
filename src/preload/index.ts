@@ -23,6 +23,7 @@ import type {
   AppSettings,
   AIProviderMode,
   BrowserLinkResult,
+  CategoryOverrideEffect,
   ClientRecord,
   BreakRecommendation,
   DayTimelinePayload,
@@ -134,8 +135,9 @@ const api = {
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSummariesForDate: (date: string): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, date),
+    getAllAppsForLabeling: (): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_ALL_APPS_FOR_LABELING),
     getCategoryOverrides: (): Promise<Record<string, AppCategory>> => ipcRenderer.invoke(IPC.DB.GET_CATEGORY_OVERRIDES),
-    setCategoryOverride: (bundleId: string, category: AppCategory): Promise<void> =>
+    setCategoryOverride: (bundleId: string, category: AppCategory): Promise<CategoryOverrideEffect> =>
       ipcRenderer.invoke(IPC.DB.SET_CATEGORY_OVERRIDE, bundleId, category),
     clearCategoryOverride: (bundleId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_CATEGORY_OVERRIDE, bundleId),
     setBlockLabelOverride: (payload: { blockId: string; date?: string | null; label: string; narrative?: string | null }): Promise<void> =>

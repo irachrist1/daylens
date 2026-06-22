@@ -1298,6 +1298,89 @@ export function setCategoryOverride(
   invalidateCategoryOverridesCache(db)
 }
 
+// Every app the user has actually used, each with its effective category —
+// including the uncategorized ones (settings spec §4, invariant #3). Unlike the
+// Apps view this is NOT capped or windowed: a browser like Zen that only shows a
+// little time must still be reachable here so it can be categorized. System
+// noise (Finder, loginwindow, notification centre) is excluded — it is never a
+// user app (invariant #11).
+export function getAllAppsForLabeling(db: Database.Database): AppUsageSummary[] {
+  const overrides = getCategoryOverrides(db)
+
+  // Totals per bundle across all history.
+  const totals = db.prepare(`
+    SELECT bundle_id AS bundleId,
+           SUM(duration_sec) AS totalSeconds,
+           COUNT(*) AS sessionCount,
+           MAX(start_time) AS lastSeen
+    FROM app_sessions
+    WHERE bundle_id IS NOT NULL AND bundle_id != ''
+    GROUP BY bundle_id
+  `).all() as Array<{ bundleId: string; totalSeconds: number; sessionCount: number; lastSeen: number }>
+
+  // The most recent name + detected category for each bundle, so a relabelled
+  // app still shows the name we last saw it under.
+  const latest = db.prepare(`
+    SELECT s.bundle_id AS bundleId, s.app_name AS appName, s.category AS category
+    FROM app_sessions s
+    JOIN (
+      SELECT bundle_id, MAX(start_time) AS ms
+      FROM app_sessions
+      WHERE bundle_id IS NOT NULL AND bundle_id != ''
+      GROUP BY bundle_id
+    ) l ON l.bundle_id = s.bundle_id AND l.ms = s.start_time
+  `).all() as Array<{ bundleId: string; appName: string; category: AppCategory }>
+
+  const latestByBundle = new Map(latest.map((row) => [row.bundleId, row]))
+
+  const summaries: AppUsageSummary[] = []
+  for (const row of totals) {
+    const meta = latestByBundle.get(row.bundleId)
+    const appName = meta?.appName ?? row.bundleId
+    if (isUxNoise(appName)) continue
+    // Drop sub-dwell blips (brief app transitions) — they aren't apps the user
+    // "used", just focus flicker — but keep genuinely low-usage real apps.
+    if ((row.totalSeconds ?? 0) < MIN_CAPTURE_DWELL_SEC) continue
+
+    const identity = resolveCanonicalApp(row.bundleId, appName)
+    const category = resolvedSessionCategory(
+      { bundle_id: row.bundleId, app_name: appName, category: meta?.category ?? 'uncategorized' },
+      overrides,
+    )
+    summaries.push({
+      bundleId: row.bundleId,
+      canonicalAppId: identity.canonicalAppId ?? row.bundleId,
+      appName: identity.displayName || appName,
+      category,
+      totalSeconds: row.totalSeconds ?? 0,
+      isFocused: isCategoryFocused(category),
+      sessionCount: row.sessionCount ?? 0,
+    })
+  }
+
+  return summaries.sort((a, b) => b.totalSeconds - a.totalSeconds)
+}
+
+// How much captured history a relabel touches, so Settings can report its
+// effect ("updated 3 days of blocks") instead of changing silently
+// (settings spec §4). Days come straight from the app's own sessions, so the
+// number reflects real data already on disk — not a guess.
+export function getCategoryOverrideEffect(
+  db: Database.Database,
+  bundleId: string,
+): { daysAffected: number; sessionsAffected: number } {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS sessions,
+           COUNT(DISTINCT date(start_time / 1000, 'unixepoch', 'localtime')) AS days
+    FROM app_sessions
+    WHERE bundle_id = ?
+  `).get(bundleId) as { sessions: number; days: number } | undefined
+  return {
+    daysAffected: row?.days ?? 0,
+    sessionsAffected: row?.sessions ?? 0,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // AI conversations
 // ---------------------------------------------------------------------------

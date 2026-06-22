@@ -647,6 +647,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
+  // What the last relabel touched, shown inline so a change is never silent.
+  const [relabelEffect, setRelabelEffect] = useState<{ bundleId: string; message: string } | null>(null)
   const [workMemorySummary, setWorkMemorySummary] = useState<WorkMemorySettingsSummary | null>(null)
   const [workMemoryBusy, setWorkMemoryBusy] = useState<string | null>(null)
   const [workMemoryError, setWorkMemoryError] = useState<string | null>(null)
@@ -691,12 +693,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       void ipc.tracking.getDiagnostics().catch(() => null).then((tracking) => {
         if (!cancelled) setTrackingDiagnostics(tracking as TrackingDiagnosticsPayload | null)
       })
-      void ipc.db.getAppSummaries(30).catch(() => []).then((summaries) => {
+      // Every app the user has used — including uncategorized ones — so any app
+      // (e.g. Zen) is reachable and categorizable (settings spec §4, invariant #3).
+      // Not capped or windowed like the Apps view.
+      void ipc.db.getAllAppsForLabeling().catch(() => []).then((summaries) => {
         if (cancelled) return
-        setRecentApps((summaries as AppUsageSummary[])
-          .filter((summary) => summary.totalSeconds > 0 && summary.bundleId)
-          .sort((left, right) => right.totalSeconds - left.totalSeconds)
-          .slice(0, 8))
+        setRecentApps((summaries as AppUsageSummary[]).filter((summary) => summary.bundleId))
       })
       void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
         if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
@@ -832,8 +834,16 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   async function handleCategoryOverrideChange(bundleId: string, category: AppCategory) {
     setCategoryBusyBundleId(bundleId)
     try {
-      await ipc.db.setCategoryOverride(bundleId, category)
+      const effect = await ipc.db.setCategoryOverride(bundleId, category)
       setCategoryOverrides((current) => ({ ...current, [bundleId]: category }))
+      // Report what it touched — never change silently (settings spec §4).
+      const days = effect?.daysAffected ?? 0
+      setRelabelEffect({
+        bundleId,
+        message: days > 0
+          ? `Updated ${days} ${days === 1 ? 'day' : 'days'} of activity — Apps, Timeline and the AI now read this label.`
+          : 'Saved — new activity for this app will use this label.',
+      })
     } finally {
       setCategoryBusyBundleId(null)
     }
@@ -848,6 +858,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         delete next[bundleId]
         return next
       })
+      setRelabelEffect((current) => (current?.bundleId === bundleId ? null : current))
     } finally {
       setCategoryBusyBundleId(null)
     }
@@ -1134,33 +1145,40 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 const override = categoryOverrides[summary.bundleId]
                 const effectiveCategory = override ?? summary.category
                 const busy = categoryBusyBundleId === summary.bundleId
+                const effectMessage = relabelEffect?.bundleId === summary.bundleId ? relabelEffect.message : null
                 return (
-                  <SettingsRow
-                    key={summary.bundleId}
-                    first={index === 0}
-                    title={summary.appName}
-                    description={`${formatDurationShort(summary.totalSeconds)} over 30 days${override ? ` · override: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}` : ''}`}
-                    control={
-                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-                        <Select<AppCategory>
-                          value={effectiveCategory}
-                          width={150}
-                          options={CATEGORY_OPTIONS}
-                          onChange={(value) => void handleCategoryOverrideChange(summary.bundleId, value)}
-                        />
-                        {override && (
-                          <button
-                            type="button"
-                            onClick={() => void handleCategoryOverrideClear(summary.bundleId)}
-                            disabled={busy}
-                            style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
-                          >
-                            Reset
-                          </button>
-                        )}
+                  <div key={summary.bundleId}>
+                    <SettingsRow
+                      first={index === 0}
+                      title={summary.appName}
+                      description={`${formatDurationShort(summary.totalSeconds)} tracked${override ? ` · override: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}` : ''}`}
+                      control={
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                          <Select<AppCategory>
+                            value={effectiveCategory}
+                            width={150}
+                            options={CATEGORY_OPTIONS}
+                            onChange={(value) => void handleCategoryOverrideChange(summary.bundleId, value)}
+                          />
+                          {override && (
+                            <button
+                              type="button"
+                              onClick={() => void handleCategoryOverrideClear(summary.bundleId)}
+                              disabled={busy}
+                              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      }
+                    />
+                    {effectMessage && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', padding: '0 0 10px 2px', lineHeight: 1.5 }}>
+                        {effectMessage}
                       </div>
-                    }
-                  />
+                    )}
+                  </div>
                 )
               })
             )}
