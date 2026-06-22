@@ -8,6 +8,7 @@ import type {
 import { capture, captureException } from './analytics'
 import { getSettings, setSettings } from './settings'
 import { requestTrackingPermission } from './tracking'
+import { isWindowsFocusCaptureRunning } from './windowsFocusCapture'
 
 const MAC_SCREEN_RECORDING_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 const MAC_ACCESSIBILITY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
@@ -26,6 +27,17 @@ function normalizeMacScreenPermissionStatus(status: string): CapturePermissionSt
 }
 
 export function getTrackingPermissionDetails(): TrackingPermissionDetails {
+  if (process.platform === 'win32') {
+    const helperRunning = isWindowsFocusCaptureRunning()
+    return {
+      accessibility: 'unsupported_or_unknown',
+      screenRecording: 'unsupported_or_unknown',
+      combined: helperRunning ? 'granted' : 'missing',
+      platformNote: 'Windows does not use macOS Accessibility. Daylens relies on its capture helper and foreground polling.',
+      captureHelperRunning: helperRunning,
+    }
+  }
+
   if (process.platform !== 'darwin') {
     return {
       accessibility: 'granted',

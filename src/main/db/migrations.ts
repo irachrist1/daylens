@@ -1833,6 +1833,75 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 35,
+    description: 'Expand focus_events for Windows UIA capture sources and window_changed',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE focus_events_v35 (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          ts_ms         INTEGER NOT NULL,
+          mono_ns       INTEGER NOT NULL,
+          event_type    TEXT    NOT NULL CHECK(event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock',
+            'tab_changed',
+            'tab_sampled'
+          )),
+          app_bundle_id TEXT,
+          app_name      TEXT,
+          pid           INTEGER,
+          window_title  TEXT,
+          url           TEXT,
+          page_title    TEXT,
+          source        TEXT    NOT NULL CHECK(source IN (
+            'nsworkspace_event',
+            'apple_events_tab',
+            'uia_foreground',
+            'uia_tab'
+          )),
+          confidence    TEXT    NOT NULL CHECK(confidence IN ('observed', 'unknown')),
+          platform      TEXT    NOT NULL DEFAULT 'darwin',
+          schema_ver    INTEGER NOT NULL DEFAULT 1 CHECK(schema_ver = 1),
+          CHECK(confidence <> 'unknown' OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground') OR (url IS NULL AND page_title IS NULL)),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR confidence <> 'observed' OR url IS NOT NULL),
+          CHECK(source NOT IN ('apple_events_tab', 'uia_tab') OR event_type IN ('tab_changed', 'tab_sampled')),
+          CHECK(source NOT IN ('nsworkspace_event', 'uia_foreground') OR event_type IN (
+            'app_activated',
+            'app_deactivated',
+            'window_changed',
+            'space_changed',
+            'sleep',
+            'wake',
+            'lock',
+            'unlock'
+          ))
+        );
+
+        INSERT INTO focus_events_v35 (
+          id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform, schema_ver
+        )
+        SELECT
+          id, ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+          window_title, url, page_title, source, confidence, platform, schema_ver
+        FROM focus_events;
+
+        DROP TABLE focus_events;
+        ALTER TABLE focus_events_v35 RENAME TO focus_events;
+        CREATE INDEX IF NOT EXISTS idx_focus_events_ts ON focus_events(ts_ms);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_type ON focus_events(event_type);
+        CREATE INDEX IF NOT EXISTS idx_focus_events_platform ON focus_events(platform);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

@@ -2,6 +2,12 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  getLinuxBrowserHistoryLocations,
+  isLinuxBrowserApplication,
+  resolveLinuxBrowserApplication,
+} from './linuxBrowserRegistry'
+import { isWindowsBrowserApplication, resolveWindowsBrowserApplication } from './windowsBrowserRegistry'
 
 export type BrowserFamily = 'chromium' | 'firefox' | 'webkit'
 
@@ -263,6 +269,8 @@ function candidateMatchesApplication(candidate: BrowserCandidate, application: B
 }
 
 export function resolveBrowserApplication(candidate: BrowserCandidate): BrowserApplication | null {
+  if (process.platform === 'win32') return resolveWindowsBrowserApplication(candidate)
+  if (process.platform === 'linux') return resolveLinuxBrowserApplication(candidate)
   if (process.platform !== 'darwin') return null
 
   for (const possiblePath of [candidate.executablePath, candidate.bundleId]) {
@@ -283,6 +291,8 @@ export function resolveBrowserApplication(candidate: BrowserCandidate): BrowserA
 }
 
 export function isBrowserApplication(candidate: BrowserCandidate): boolean {
+  if (process.platform === 'win32') return isWindowsBrowserApplication(candidate)
+  if (process.platform === 'linux') return isLinuxBrowserApplication(candidate)
   return resolveBrowserApplication(candidate) !== null
 }
 
@@ -415,6 +425,8 @@ export function getMacBrowserHistoryLocations(): BrowserHistoryLocation[] {
   }
   return historyCache.locations
 }
+
+export { getLinuxBrowserHistoryLocations }
 
 export function __resetBrowserRegistryForTests(): void {
   registryCache = null

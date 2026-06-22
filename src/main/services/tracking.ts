@@ -1565,13 +1565,11 @@ async function poll(): Promise<void> {
     }
 
     const resolvedWin = resolveWindowIdentity(win)
-    const browserApplication = process.platform === 'darwin'
-      ? resolveBrowserApplication({
-          bundleId: resolvedWin.bundleId,
-          appName: resolvedWin.appName,
-          executablePath: resolvedWin.path,
-        })
-      : null
+    const browserApplication = resolveBrowserApplication({
+      bundleId: resolvedWin.bundleId,
+      appName: resolvedWin.appName,
+      executablePath: resolvedWin.path,
+    })
     const bundleId = browserApplication?.bundleId ?? resolvedWin.bundleId
     const appName = browserApplication?.name ?? resolvedWin.appName
     const rawResolvedTitle = resolvedWin.title?.trim() || null

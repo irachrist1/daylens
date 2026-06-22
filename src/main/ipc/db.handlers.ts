@@ -43,6 +43,8 @@ import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
 import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
+import { getBrowserStatus } from '../services/browser'
+import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
@@ -655,13 +657,14 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.TRACKING.GET_LIVE, () => getCurrentSession())
   ipcMain.handle(IPC.TRACKING.GET_DIAGNOSTICS, () => {
     const since = Date.now() - 15 * 60_000
-    const titleRows = getDb().prepare(`
+    const db = getDb()
+    const titleRows = db.prepare(`
       SELECT
         COUNT(*) AS recent_samples,
         SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
         MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN ts_ms ELSE NULL END) AS last_captured_at
       FROM focus_events
-      WHERE source = 'nsworkspace_event'
+      WHERE source IN ('nsworkspace_event', 'uia_foreground')
         AND event_type IN ('app_activated', 'window_changed', 'space_changed')
         AND ts_ms >= ?
     `).get(since) as {
@@ -669,7 +672,31 @@ export function registerDbHandlers(): void {
       with_title: number | null
       last_captured_at: number | null
     }
-    const recentSamplesWithTitle = titleRows.with_title ?? 0
+
+    let recentSamples = titleRows.recent_samples
+    let recentSamplesWithTitle = titleRows.with_title ?? 0
+    let lastCapturedAt = titleRows.last_captured_at
+
+    if (process.platform === 'win32' && recentSamplesWithTitle === 0) {
+      const sessionRows = db.prepare(`
+        SELECT
+          COUNT(*) AS recent_samples,
+          SUM(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN 1 ELSE 0 END) AS with_title,
+          MAX(CASE WHEN window_title IS NOT NULL AND trim(window_title) <> '' THEN start_time ELSE NULL END) AS last_captured_at
+        FROM app_sessions
+        WHERE start_time >= ?
+      `).get(since) as {
+        recent_samples: number
+        with_title: number | null
+        last_captured_at: number | null
+      }
+      recentSamples = Math.max(recentSamples, sessionRows.recent_samples)
+      recentSamplesWithTitle = Math.max(recentSamplesWithTitle, sessionRows.with_title ?? 0)
+      lastCapturedAt = lastCapturedAt ?? sessionRows.last_captured_at
+    }
+
+    const browserStatus = getBrowserStatus()
+    const captureHelperRunning = process.platform === 'win32' ? isWindowsFocusCaptureRunning() : null
 
     return {
       platform: process.platform,
@@ -679,13 +706,18 @@ export function registerDbHandlers(): void {
         windowTitles: {
           status: recentSamplesWithTitle > 0
             ? 'healthy'
-            : titleRows.recent_samples > 0
+            : recentSamples > 0
               ? 'missing'
               : 'waiting',
-          recentSamples: titleRows.recent_samples,
+          recentSamples,
           recentSamplesWithTitle,
-          lastCapturedAt: titleRows.last_captured_at,
+          lastCapturedAt,
         },
+        browsers: {
+          discoveredCount: browserStatus.discoveredBrowsers.length,
+          names: browserStatus.discoveredBrowsers.map((browser) => browser.name),
+        },
+        captureHelperRunning,
       },
       linuxTracking: getLinuxTrackingDiagnostics(),
       linuxDesktop: getLinuxDesktopDiagnostics(),

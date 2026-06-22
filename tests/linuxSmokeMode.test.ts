@@ -32,10 +32,10 @@ test('linux smoke mode disables gpu-dependent renderer startup paths', () => {
 
 test('linux smoke readiness signals are registered before the renderer starts loading', () => {
   const source = fs.readFileSync(MAIN_PROCESS_SOURCE, 'utf8')
-  const didFinishLoadListener = source.indexOf("win.webContents.once('did-finish-load', () => maybeRunLinuxSmokeValidation('did-finish-load'))")
-  const watchdog = source.indexOf("setTimeout(() => maybeRunLinuxSmokeValidation('watchdog'), 20_000)")
+  const didFinishLoadListener = source.indexOf("win.webContents.once('did-finish-load', () => maybeRunSmokeValidation('did-finish-load'))")
+  const watchdog = source.indexOf("setTimeout(() => maybeRunSmokeValidation('watchdog'), 20_000)")
   const readyToShow = source.indexOf("win.once('ready-to-show'")
-  const readyToShowSignal = source.indexOf("maybeRunLinuxSmokeValidation('ready-to-show')")
+  const readyToShowSignal = source.indexOf("maybeRunSmokeValidation('ready-to-show')")
   const loadFile = source.indexOf('void win.loadFile(rendererPath)')
   const loadUrl = source.indexOf('win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL)')
 

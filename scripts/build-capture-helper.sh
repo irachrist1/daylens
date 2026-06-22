@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
-# Compiles the macOS capture helper to build/capture-helper.
-# Ships to the packaged app via electron-builder's extraResources (build/ -> resources/build).
-# No-op on non-macOS so cross-platform `build:all` stays green.
+# Builds platform capture helpers into build/.
+# macOS: Swift capture-helper
+# Windows: .NET UIA windows-capture-helper.exe
 set -euo pipefail
 
-if [[ "$(uname)" != "Darwin" ]]; then
-  echo "[build-capture-helper] skipping on $(uname); macOS-only"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+mkdir -p "$ROOT/build"
+
+if [[ "$(uname)" == "Darwin" ]]; then
+  SRC="$ROOT/src/native/capture-helper/main.swift"
+  OUT="$ROOT/build/capture-helper"
+  swiftc -O -o "$OUT" "$SRC"
+  echo "[build-capture-helper] built $OUT"
   exit 0
 fi
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/src/native/capture-helper/main.swift"
-OUT="$ROOT/build/capture-helper"
+if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "${OS:-}" == "Windows_NT" ]]; then
+  dotnet publish "$ROOT/src/native/windows-capture-helper/WindowsCaptureHelper.csproj" \
+    -c Release \
+    -r win-x64 \
+    --self-contained true \
+    -p:PublishSingleFile=true \
+    -o "$ROOT/build"
+  echo "[build-capture-helper] built $ROOT/build/windows-capture-helper.exe"
+  exit 0
+fi
 
-mkdir -p "$ROOT/build"
-swiftc -O -o "$OUT" "$SRC"
-echo "[build-capture-helper] built $OUT"
+echo "[build-capture-helper] skipping on $(uname); helpers are platform-specific"
+exit 0

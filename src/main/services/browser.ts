@@ -24,9 +24,11 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { capture, captureRateLimited } from './analytics'
 import {
+  getLinuxBrowserHistoryLocations,
   getMacBrowserHistoryLocations,
   type BrowserFamily,
 } from './browserRegistry'
+import { getWindowsBrowserHistoryLocations } from './windowsBrowserRegistry'
 import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { getSettings } from './settings'
 
@@ -176,7 +178,20 @@ function parseFirefoxProfilesIni(iniPath: string): string[] {
   return profileDirs
 }
 
-function windowsBrowsers(): BrowserEntry[] {
+function windowsBrowsersFromRegistry(): BrowserEntry[] {
+  return getWindowsBrowserHistoryLocations().map((location) => ({
+    name: location.profileId === 'default'
+      ? location.name
+      : `${location.name} (${location.profileId})`,
+    bundleId: location.profileId === 'default'
+      ? location.bundleId
+      : `${location.bundleId}:${location.profileId}`,
+    historyPath: location.historyPath,
+    type: location.family,
+  }))
+}
+
+function windowsBrowsersStatic(): BrowserEntry[] {
   const local = path.join(os.homedir(), 'AppData', 'Local')
   const roaming = path.join(os.homedir(), 'AppData', 'Roaming')
   const entries: BrowserEntry[] = []
@@ -257,9 +272,29 @@ function windowsBrowsers(): BrowserEntry[] {
   return entries
 }
 
+function windowsBrowsers(): BrowserEntry[] {
+  const registryEntries = windowsBrowsersFromRegistry()
+  if (registryEntries.length > 0) return registryEntries
+  return windowsBrowsersStatic()
+}
+
+function linuxBrowsers(): BrowserEntry[] {
+  return getLinuxBrowserHistoryLocations().map((location) => ({
+    name: location.profileId === 'default'
+      ? location.name
+      : `${location.name} (${location.profileId})`,
+    bundleId: location.profileId === 'default'
+      ? location.bundleId
+      : `${location.bundleId}:${location.profileId}`,
+    historyPath: location.historyPath,
+    type: location.family,
+  }))
+}
+
 export function getBrowserEntries(): BrowserEntry[] {
   if (process.platform === 'darwin') return macBrowsers()
   if (process.platform === 'win32') return windowsBrowsers()
+  if (process.platform === 'linux') return linuxBrowsers()
   return []
 }
 

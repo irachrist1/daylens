@@ -1059,6 +1059,8 @@ export interface TrackingPermissionDetails {
   accessibility: CapturePermissionStatus
   screenRecording: CapturePermissionStatus
   combined: TrackingPermissionState
+  platformNote?: string | null
+  captureHelperRunning?: boolean | null
 }
 
 export type OnboardingStage =
@@ -1266,6 +1268,11 @@ export interface TrackingDiagnosticsPayload {
       recentSamplesWithTitle: number
       lastCapturedAt: number | null
     }
+    browsers?: {
+      discoveredCount: number
+      names: string[]
+    }
+    captureHelperRunning?: boolean | null
   }
   linuxTracking: LinuxTrackingDiagnostics | null
   linuxDesktop: LinuxDesktopDiagnostics | null

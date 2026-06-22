@@ -5,7 +5,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import type BetterSqlite from 'better-sqlite3'
 import { insertWebsiteVisit } from '../db/queries'
-import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
@@ -16,6 +16,7 @@ import {
   type BrowserApplication,
   type BrowserCandidate,
 } from './browserRegistry'
+import { getDb } from './database'
 
 const MIN_CONTEXT_SEC = 10
 const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
@@ -24,20 +25,6 @@ const RECENT_HISTORY_LOOKBACK_MS = 2 * 60_000
 // still cutting the per-5s-poll osascript/history reads during steady reading.
 const TAB_CACHE_TRUST_MS = 30_000
 const CHROME_OFFSET_US = 11_644_473_600_000_000n
-
-const WINDOWS_BROWSER_APP_IDS = new Set([
-  'arc',
-  'brave',
-  'chrome',
-  'chromium',
-  'comet',
-  'dia',
-  'edge',
-  'firefox',
-  'opera',
-  'safari',
-  'vivaldi',
-])
 
 export interface ActiveBrowserWindowSnapshot {
   bundleId: string
@@ -76,31 +63,14 @@ function extractDomain(url: string): string | null {
   }
 }
 
-function macBrowserApplicationFor(snapshot: ActiveBrowserWindowSnapshot): BrowserApplication | null {
-  return resolveBrowserApplication({
+function browserAppIdFor(snapshot: ActiveBrowserWindowSnapshot): string | null {
+  const application = resolveBrowserApplication({
     bundleId: snapshot.bundleId,
     appName: snapshot.appName,
     executablePath: snapshot.executablePath,
   })
-}
-
-function browserAppIdFor(snapshot: ActiveBrowserWindowSnapshot): string | null {
-  if (process.platform === 'darwin') {
-    const application = macBrowserApplicationFor(snapshot)
-    if (!application) return null
-    return resolveCanonicalBrowser(application.bundleId).canonicalBrowserId ?? application.bundleId.toLowerCase()
-  }
-
-  const identity = resolveCanonicalApp(snapshot.bundleId, snapshot.appName)
-  if (identity.canonicalAppId && WINDOWS_BROWSER_APP_IDS.has(identity.canonicalAppId)) {
-    return identity.canonicalAppId
-  }
-
-  const fallback = `${snapshot.bundleId} ${snapshot.appName}`.toLowerCase()
-  for (const browserId of WINDOWS_BROWSER_APP_IDS) {
-    if (fallback.includes(browserId)) return browserId
-  }
-  return null
+  if (!application) return null
+  return resolveCanonicalBrowser(application.bundleId).canonicalBrowserId ?? application.bundleId.toLowerCase()
 }
 
 function sameContext(left: InFlightBrowserContext, right: ActiveBrowserTab, normalizedUrl: string | null): boolean {
@@ -132,8 +102,16 @@ function runOsaScript(script: string): ActiveBrowserTab | null {
   }
 }
 
+function browserApplicationFor(snapshot: ActiveBrowserWindowSnapshot): BrowserApplication | null {
+  return resolveBrowserApplication({
+    bundleId: snapshot.bundleId,
+    appName: snapshot.appName,
+    executablePath: snapshot.executablePath,
+  })
+}
+
 function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
-  const application = macBrowserApplicationFor(snapshot)
+  const application = browserApplicationFor(snapshot)
   if (!application || application.family === 'firefox') return null
 
   if (application.family === 'webkit') {
@@ -235,15 +213,44 @@ function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string 
   }
 }
 
+function winActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
+  try {
+    const row = getDb().prepare(`
+      SELECT url, page_title
+      FROM focus_events
+      WHERE source = 'uia_tab'
+        AND confidence = 'observed'
+        AND url IS NOT NULL
+        AND ts_ms >= ?
+        AND (
+          (? IS NOT NULL AND app_bundle_id = ?)
+          OR (? IS NOT NULL AND app_name = ?)
+        )
+      ORDER BY ts_ms DESC, id DESC
+      LIMIT 1
+    `).get(
+      snapshot.capturedAt - TAB_CACHE_TRUST_MS,
+      snapshot.bundleId || null,
+      snapshot.bundleId || null,
+      snapshot.appName || null,
+      snapshot.appName || null,
+    ) as { url: string; page_title: string | null } | undefined
+    if (!row?.url) return null
+    return { url: row.url, title: row.page_title ?? null }
+  } catch {
+    return null
+  }
+}
+
 function recentHistoryTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
   const browserId = browserAppIdFor(snapshot)
   if (!browserId) return null
-  const macApplication = process.platform === 'darwin' ? macBrowserApplicationFor(snapshot) : null
+  const application = browserApplicationFor(snapshot)
 
   const entries = getBrowserEntries()
     .filter((entry) => fs.existsSync(entry.historyPath))
     .filter((entry) => {
-      if (macApplication) return entry.bundleId.split(':', 1)[0] === macApplication.bundleId
+      if (application) return entry.bundleId.split(':', 1)[0] === application.bundleId
       return resolveCanonicalBrowser(entry.bundleId).canonicalBrowserId === browserId
     })
 
@@ -265,6 +272,10 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
   }
 
   if (process.platform === 'win32') {
+    return winActiveTab(snapshot) ?? recentHistoryTab(snapshot)
+  }
+
+  if (process.platform === 'linux') {
     return recentHistoryTab(snapshot)
   }
 
@@ -272,15 +283,7 @@ export function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): Act
 }
 
 export function isBrowserWindowCandidate(candidate: BrowserCandidate): boolean {
-  if (process.platform === 'darwin') return resolveBrowserApplication(candidate) !== null
-  const snapshot: ActiveBrowserWindowSnapshot = {
-    bundleId: candidate.bundleId ?? '',
-    appName: candidate.appName ?? '',
-    windowTitle: null,
-    capturedAt: Date.now(),
-    executablePath: candidate.executablePath,
-  }
-  return browserAppIdFor(snapshot) !== null
+  return resolveBrowserApplication(candidate) !== null
 }
 
 export class ActiveBrowserContextTracker {

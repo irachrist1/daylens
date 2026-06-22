@@ -555,6 +555,57 @@ function ExclusionEditor({
   )
 }
 
+function CaptureHealthSection({
+  diagnostics,
+}: {
+  diagnostics: TrackingDiagnosticsPayload | null
+}) {
+  const captureHealth = diagnostics?.captureHealth
+  if (!captureHealth) return null
+
+  const titleStatus = captureHealth.windowTitles.status
+  const titleLabel = titleStatus === 'healthy'
+    ? 'Healthy'
+    : titleStatus === 'missing'
+      ? 'Missing titles'
+      : 'Waiting for data'
+  const browserNames = captureHealth.browsers?.names ?? []
+  const permissions = captureHealth.permissions
+
+  return (
+    <SettingsSection title="Capture health">
+      <div>
+        <SettingsRow
+          first
+          title="Window titles"
+          description="Whether Daylens is capturing what you are working on, not just which app is open."
+          control={<StatusPill label={titleLabel} tone={titleStatus === 'healthy' ? 'success' : titleStatus === 'missing' ? 'warning' : 'neutral'} />}
+        />
+        <SettingsRow
+          title="Recent samples"
+          description={`${captureHealth.windowTitles.recentSamplesWithTitle} of ${captureHealth.windowTitles.recentSamples} samples in the last 15 minutes carried a title.`}
+          control={<StatusPill label={`${captureHealth.windowTitles.recentSamplesWithTitle}/${captureHealth.windowTitles.recentSamples}`} />}
+        />
+        <SettingsRow
+          title="Browsers discovered"
+          description={browserNames.length > 0 ? browserNames.join(', ') : 'No browser history locations found yet.'}
+          control={<StatusPill label={String(captureHealth.browsers?.discoveredCount ?? 0)} />}
+        />
+        {permissions.platformNote && (
+          <div style={infoPanelStyle}>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+              {permissions.platformNote}
+              {typeof captureHealth.captureHelperRunning === 'boolean' && (
+                <> Capture helper: {captureHealth.captureHelperRunning ? 'running' : 'not running'}.</>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </SettingsSection>
+  )
+}
+
 function TrackingControlsSection({
   settings,
   persist,
@@ -1622,6 +1673,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             )}
           </div>
         </SettingsSection>
+
+        <CaptureHealthSection diagnostics={trackingDiagnostics} />
 
         <TrackingControlsSection settings={settings} persist={persist} />
 

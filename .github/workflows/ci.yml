@@ -62,3 +62,18 @@ jobs:
       # the Electron binary never trips on a missing X server during startup.
       - name: Run hermetic test suite
         run: xvfb-run -a npm test
+
+  windows:
+    name: windows-native-rebuild
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+      - run: npm run typecheck
+      - run: npm test

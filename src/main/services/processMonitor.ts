@@ -1,23 +1,43 @@
 import { execFile } from 'node:child_process'
 import type { ProcessSnapshot } from '@shared/types'
+import { observeProcessSnapshots } from './backgroundProcessEvidence'
 
 export type { ProcessSnapshot } from '@shared/types'
 
 const PROCESS_POLL_MS = 30_000
-const WMIC_ARGS = ['process', 'get', 'ProcessId,Name,WorkingSetSize,PageFileUsage', '/format:csv']
 
 let monitorInterval: ReturnType<typeof setInterval> | null = null
 let latestSnapshot: ProcessSnapshot[] = []
 let refreshInFlight = false
 
+export function parseCimProcessOutput(output: string): ProcessSnapshot[] {
+  const now = Date.now()
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const snapshots: ProcessSnapshot[] = []
+
+  for (const line of lines) {
+    const parts = line.split('|')
+    if (parts.length < 3) continue
+    const name = parts[0]?.trim()
+    const pid = parseInt(parts[1]?.trim() ?? '0', 10)
+    const workingSetSize = parseInt(parts[2]?.trim() ?? '0', 10)
+    if (!name || pid <= 0 || workingSetSize <= 0) continue
+    snapshots.push({
+      pid,
+      name: name.replace(/\.exe$/i, ''),
+      cpuPercent: 0,
+      memoryMb: Math.round(workingSetSize / 1024 / 1024),
+      capturedAt: now,
+    })
+  }
+
+  return snapshots
+}
+
 export function parseWmicOutput(output: string): ProcessSnapshot[] {
   const now = Date.now()
   const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
 
-  // WMIC /format:csv emits a header row and orders columns alphabetically (not in
-  // the requested order), always prefixed with "Node". Resolve column positions
-  // from the header instead of hardcoding indices, so parsing is correct
-  // regardless of WMIC's ordering.
   const headerIdx = lines.findIndex((line) => line.startsWith('Node,') && /ProcessId/i.test(line))
   if (headerIdx === -1) return []
   const columns = lines[headerIdx].split(',').map((col) => col.trim().toLowerCase())
@@ -45,25 +65,47 @@ export function parseWmicOutput(output: string): ProcessSnapshot[] {
     .filter((process) => process.pid > 0 && process.memoryMb > 0)
 }
 
-// Async refresh so the wmic subprocess never blocks the main thread (the old
-// execSync stalled startup and every poll tick). Result is cached in
-// latestSnapshot for the diagnostics IPC to read.
-function refreshSnapshot(): void {
-  if (process.platform !== 'win32' || refreshInFlight) return
-  refreshInFlight = true
-  execFile('wmic', WMIC_ARGS, { timeout: 5_000, windowsHide: true }, (error, stdout) => {
+function enrichCpuPercent(snapshots: ProcessSnapshot[]): ProcessSnapshot[] {
+  return snapshots
+}
+
+function refreshSnapshotCim(): void {
+  execFile(
+    'powershell',
+    ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.Name)|$($_.ProcessId)|$($_.WorkingSetSize)" }'],
+    { timeout: 8_000, windowsHide: true },
+    (error, stdout) => {
+      refreshInFlight = false
+      if (error) return
+      try {
+        latestSnapshot = enrichCpuPercent(parseCimProcessOutput(stdout))
+        observeProcessSnapshots(latestSnapshot)
+      } catch {
+        // keep previous snapshot
+      }
+    },
+  )
+}
+
+function refreshSnapshotWmic(): void {
+  execFile('wmic', ['process', 'get', 'ProcessId,Name,WorkingSetSize', '/format:csv'], { timeout: 5_000, windowsHide: true }, (error, stdout) => {
     refreshInFlight = false
     if (error) return
     try {
       latestSnapshot = parseWmicOutput(stdout)
+      observeProcessSnapshots(latestSnapshot)
     } catch {
-      // leave the previous snapshot in place
+      // keep previous snapshot
     }
   })
 }
 
-// Lazy-start: only spin up the poller when diagnostics actually ask for process
-// metrics (via getProcessMetrics), not on every app launch.
+function refreshSnapshot(): void {
+  if (process.platform !== 'win32' || refreshInFlight) return
+  refreshInFlight = true
+  refreshSnapshotCim()
+}
+
 export function ensureProcessMonitor(): void {
   if (process.platform !== 'win32') {
     latestSnapshot = []
@@ -80,9 +122,6 @@ export function stopProcessMonitor(): void {
   monitorInterval = null
 }
 
-// Called by the diagnostics IPC handler. Starts the monitor on first use and
-// returns whatever the last async poll captured (empty on the very first call,
-// populated on subsequent polls).
 export function getProcessMetrics(): ProcessSnapshot[] {
   ensureProcessMonitor()
   return latestSnapshot
@@ -91,3 +130,6 @@ export function getProcessMetrics(): ProcessSnapshot[] {
 export function getLatestSnapshot(): ProcessSnapshot[] {
   return latestSnapshot
 }
+
+// Test-only export for WMIC fallback verification.
+export { refreshSnapshotWmic }

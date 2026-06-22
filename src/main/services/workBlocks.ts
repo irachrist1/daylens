@@ -72,6 +72,7 @@ import {
   memoryEnabled,
 } from './workMemory'
 import { isBrowserApplication } from './browserRegistry'
+import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -261,7 +262,7 @@ function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'ca
   if (session.category === 'browsing') return true
   const identity = resolveCanonicalApp(session.bundleId, session.appName)
   if (identity.isBrowser || identity.defaultCategory === 'browsing') return true
-  return process.platform === 'darwin' && isBrowserApplication({
+  return (process.platform === 'darwin' || process.platform === 'win32') && isBrowserApplication({
     bundleId: session.bundleId,
     appName: session.appName,
     executablePath: session.bundleId,
@@ -1978,7 +1979,7 @@ function buildWindowTitleEvidence(
     capturedRows = db.prepare(`
       SELECT ts_ms, app_bundle_id, app_name, window_title
       FROM focus_events
-      WHERE source = 'nsworkspace_event'
+      WHERE source IN ('nsworkspace_event', 'uia_foreground')
         AND event_type IN ('app_activated', 'window_changed', 'space_changed')
         AND window_title IS NOT NULL
         AND trim(window_title) <> ''
@@ -2133,6 +2134,23 @@ function buildBlockFromCandidate(
   const storedInsight = isLive ? null : getWorkContextInsightForRange(db, blockStart, blockEnd)
   const confidence = confidenceForCandidate(candidate, coherence)
   const topApps = topAppsFromSessions(candidate.sessions)
+  const backgroundApps = getBackgroundProcessEvidence(blockStart, blockEnd).map((process) => ({
+    bundleId: `${process.name}.exe`,
+    appName: process.name,
+    category: 'development' as AppCategory,
+    totalSeconds: process.totalSeconds,
+    sessionCount: 1,
+    isBrowser: false,
+  }))
+  const mergedTopApps = [...topApps]
+  for (const backgroundApp of backgroundApps) {
+    const existing = mergedTopApps.find((app) => app.appName.toLowerCase() === backgroundApp.appName.toLowerCase())
+    if (existing) {
+      existing.totalSeconds = Math.max(existing.totalSeconds, backgroundApp.totalSeconds)
+      continue
+    }
+    mergedTopApps.push(backgroundApp)
+  }
   const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
   const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
@@ -2143,7 +2161,7 @@ function buildBlockFromCandidate(
   const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
   const windowTitles = buildWindowTitleEvidence(db, blockStart, blockEnd, candidate.sessions)
   const evidenceSummary = {
-    apps: topApps,
+    apps: mergedTopApps,
     pages: pageRefs,
     documents: documentRefs,
     domains: websites.map((site) => site.domain),
@@ -2168,7 +2186,7 @@ function buildBlockFromCandidate(
     ruleBasedLabel: rawRuleLabel,
     aiLabel: storedInsight?.label ?? null,
     sessions: candidate.sessions,
-    topApps,
+    topApps: mergedTopApps,
     websites,
     keyPages,
     pageRefs,

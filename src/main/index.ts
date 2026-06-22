@@ -62,6 +62,8 @@ import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { startTracking, stopTracking, trackingStatus } from './services/tracking'
 import { startFocusCapture, stopFocusCapture } from './services/focusCapture'
+import { startWindowsFocusCapture, stopWindowsFocusCapture } from './services/windowsFocusCapture'
+import { ensureProcessMonitor } from './services/processMonitor'
 import { getBrowserStatus, startBrowserTracking, stopBrowserTracking } from './services/browser'
 import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './services/syncUploader'
 import { backfillWindowsHistory } from './services/windowsHistory'
@@ -328,7 +330,11 @@ function startBackgroundServices(): void {
   if (!shouldStartTrackingForSettings(getSettings())) return
 
   startTracking()
-  startFocusCapture()
+  if (process.platform === 'darwin') startFocusCapture()
+  if (process.platform === 'win32') {
+    startWindowsFocusCapture()
+    ensureProcessMonitor()
+  }
   if (!SMOKE_TEST) {
     startSync()
     startDailySummaryNotifier(mainWindow)
@@ -454,6 +460,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopMcpServer()
   stopTracking()
   stopFocusCapture()
+  stopWindowsFocusCapture()
   stopBrowserTracking()
   stopSync()
   stopProcessMonitor()
@@ -545,8 +552,8 @@ function createWindow(): BrowserWindow {
   })
 
   let smokeValidationStarted = false
-  const maybeRunLinuxSmokeValidation = (trigger: SmokeValidationTrigger) => {
-    if (!SMOKE_TEST || process.platform !== 'linux') return
+  const maybeRunSmokeValidation = (trigger: SmokeValidationTrigger) => {
+    if (!SMOKE_TEST || (process.platform !== 'linux' && process.platform !== 'win32')) return
     if (smokeValidationStarted) return
     smokeValidationStarted = true
     void runSmokeValidation(win, trigger)
@@ -554,11 +561,11 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => {
     win.show()
-    maybeRunLinuxSmokeValidation('ready-to-show')
+    maybeRunSmokeValidation('ready-to-show')
   })
-  win.webContents.once('did-finish-load', () => maybeRunLinuxSmokeValidation('did-finish-load'))
-  if (SMOKE_TEST && process.platform === 'linux') {
-    setTimeout(() => maybeRunLinuxSmokeValidation('watchdog'), 20_000)
+  win.webContents.once('did-finish-load', () => maybeRunSmokeValidation('did-finish-load'))
+  if (SMOKE_TEST && (process.platform === 'linux' || process.platform === 'win32')) {
+    setTimeout(() => maybeRunSmokeValidation('watchdog'), 20_000)
   }
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {

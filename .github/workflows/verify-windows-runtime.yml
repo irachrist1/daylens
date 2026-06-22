@@ -1,0 +1,81 @@
+name: Verify Windows Runtime
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify-windows-runtime:
+    timeout-minutes: 90
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Vite bundles and Windows capture helper
+        run: npm run build:all
+
+      - name: Package Windows installer
+        run: npx electron-builder --win nsis --x64 --config electron-builder.config.js --publish never
+
+      - name: Verify packaged native modules
+        run: node scripts/verify-packaged-natives.js
+
+      - name: Smoke-test packaged runtime
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $setup = "dist-release/Daylens-$version-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "Missing installer: $setup" }
+          $installDir = Join-Path $env:RUNNER_TEMP "daylens-smoke"
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          New-Item -ItemType Directory -Path $installDir | Out-Null
+          Start-Process -FilePath $setup -ArgumentList '/S', "/D=$installDir" -Wait
+          $appExe = Get-ChildItem -Path $installDir -Filter Daylens.exe -Recurse | Select-Object -First 1
+          if (-not $appExe) { throw 'Daylens.exe not found after install' }
+          $env:DAYLENS_SMOKE_TEST = '1'
+          $env:DAYLENS_SMOKE_REPORT_PATH = Join-Path $env:RUNNER_TEMP 'daylens-windows-smoke.json'
+          $proc = Start-Process -FilePath $appExe.FullName -PassThru -Wait
+          if ($proc.ExitCode -ne 0) { throw "Smoke run exited with code $($proc.ExitCode)" }
+          node scripts/verify-windows-smoke.js --report $env:DAYLENS_SMOKE_REPORT_PATH
+
+      - name: Upload Windows runtime diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-runtime-diagnostics
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+          path: |
+            dist-release/**
+            ${{ runner.temp }}/daylens-windows-smoke.json
+            builder-debug.yml
+            electron-builder-debug.yml
+            npm-debug.log*
