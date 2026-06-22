@@ -647,6 +647,10 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
+  // The full app list can be long, so keep Labels tidy: show a handful by default,
+  // expand to reveal the rest, and let a search jump straight to any app (DEV-102).
+  const [labelsExpanded, setLabelsExpanded] = useState(false)
+  const [labelSearch, setLabelSearch] = useState('')
   // What the last relabel touched, shown inline so a change is never silent.
   const [relabelEffect, setRelabelEffect] = useState<{ bundleId: string; message: string } | null>(null)
   const [workMemoryProfile, setWorkMemoryProfile] = useState<WorkMemoryFact[] | null>(null)
@@ -1185,13 +1189,53 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         <SettingsSection
           title="Labels"
         >
+          {(() => {
+            const COLLAPSED_COUNT = 5
+            const query = labelSearch.trim().toLowerCase()
+            const searching = query.length > 0
+            const matchedApps = searching
+              ? recentApps.filter((summary) => summary.appName.toLowerCase().includes(query))
+              : recentApps
+            // When searching, show every match. Otherwise show the most-used handful
+            // until the list is expanded, so Settings opens scannable.
+            const visibleApps = searching || labelsExpanded
+              ? matchedApps
+              : matchedApps.slice(0, COLLAPSED_COUNT)
+            return (
           <div>
             {recentApps.length === 0 ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
                 Needs a little more tracked history first.
               </div>
             ) : (
-              recentApps.map((summary, index) => {
+              <>
+                {recentApps.length > COLLAPSED_COUNT && (
+                  <input
+                    type="text"
+                    value={labelSearch}
+                    onChange={(event) => setLabelSearch(event.target.value)}
+                    placeholder="Search apps to label…"
+                    aria-label="Search apps"
+                    style={{
+                      width: '100%',
+                      height: 34,
+                      marginBottom: 14,
+                      padding: '0 12px',
+                      borderRadius: 8,
+                      border: '1px solid var(--color-border-ghost)',
+                      background: 'var(--color-surface-high)',
+                      color: 'var(--color-text-primary)',
+                      fontSize: 12.5,
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                )}
+                {visibleApps.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                    No apps match “{labelSearch.trim()}”.
+                  </div>
+                ) : (
+                  visibleApps.map((summary, index) => {
                 const appIdentity = summary.canonicalAppId ?? summary.bundleId
                 const override = categoryOverrides[appIdentity] ?? categoryOverrides[summary.bundleId]
                 const effectiveCategory = override ?? summary.category
@@ -1231,9 +1275,22 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     )}
                   </div>
                 )
-              })
+                  })
+                )}
+                {!searching && recentApps.length > COLLAPSED_COUNT && (
+                  <button
+                    type="button"
+                    onClick={() => setLabelsExpanded((value) => !value)}
+                    style={{ ...inlineButtonStyle, marginTop: 12, alignSelf: 'flex-start' }}
+                  >
+                    {labelsExpanded ? 'Show less' : `Show all ${recentApps.length} apps`}
+                  </button>
+                )}
+              </>
             )}
           </div>
+            )
+          })()}
         </SettingsSection>
 
         <SettingsSection
