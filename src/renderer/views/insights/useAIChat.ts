@@ -244,12 +244,17 @@ export function useAIChat() {
   // effect below owns which thread loads and we must not race it.
   useEffect(() => {
     if (threadsHydratedRef.current) return
-    threadsHydratedRef.current = true
     const deepLinkThreadId = Number(new URLSearchParams(location.search).get('threadId'))
     const hasDeepLink = Number.isFinite(deepLinkThreadId) && deepLinkThreadId > 0
     let cancelled = false
     ipc.ai.listThreads({ includeArchived: true }).then((rows) => {
+      // Mark hydrated only on a load that actually lands. Setting the guard up
+      // front meant a cancelled first run (StrictMode's mount→cleanup→mount, or
+      // any remount mid-flight) blocked the remount from ever fetching, so the
+      // sidebar stayed empty until a send refreshed it. Now a cancelled run
+      // leaves the guard down and the next mount hydrates for real.
       if (cancelled) return
+      threadsHydratedRef.current = true
       setThreads(rows)
       const firstId = firstActiveThreadId(rows)
       if (firstId != null && !hasDeepLink) void loadThread(firstId)
