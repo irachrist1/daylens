@@ -344,6 +344,7 @@ function IconChevronRight() {
 }
 
 function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
+  const trackedSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   return (
     <div style={{
       display: 'flex',
@@ -354,7 +355,7 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
       color: 'var(--color-text-tertiary)',
     }}>
       <span>
-        <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(payload.totalSeconds)}</strong> tracked
+        <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(trackedSeconds)}</strong> tracked
       </span>
       <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
       <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
@@ -402,12 +403,10 @@ const TimelineRow = memo(function TimelineRow({
   const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
   // timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long — a
   // 3-hour block is 3× a 1-hour block. Height is linear in the block's active
-  // minutes; the floor keeps a short block's content legible, the ceiling keeps
-  // a marathon block from dwarfing the day. Within the common 1–3h range the
-  // proportionality is exact (60m→66px, 180m→198px).
+  // minutes with no floor or ceiling: the invariant is exact for short and long
+  // blocks too, not only the common 1–3h range.
   const PX_PER_MINUTE = 1.1
-  const proportionalHeight = Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE)
-  const blockMinHeight = Math.max(44, Math.min(360, proportionalHeight))
+  const proportionalHeight = Math.max(1, Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE))
   const ignored = block.review.state === 'ignored'
   // Leisure / personal rows are muted so the eye finds work first. Work is
   // full-strength; everything else recedes. This is the whole point of the
@@ -424,6 +423,8 @@ const TimelineRow = memo(function TimelineRow({
     <button
       type="button"
       data-timeline-block-id={block.id}
+      aria-label={`Open ${userVisibleBlockLabel(block)}, ${duration}`}
+      aria-pressed={isSelected}
       style={{
         display: 'grid',
         gridTemplateColumns: '104px minmax(0, 1fr)',
@@ -453,7 +454,7 @@ const TimelineRow = memo(function TimelineRow({
         transition: 'border-color 120ms, background 120ms',
         overflow: 'hidden',
         minWidth: 0,
-        minHeight: blockMinHeight,
+        height: proportionalHeight,
         opacity: ignored ? 0.5 : muted ? 0.72 : 1,
       }}>
         <div style={{
@@ -702,24 +703,26 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
                   Today is still going. Analyze the day to turn it into named blocks and a recap.
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => { void handleGenerateRecap() }}
-                disabled={recapLoading}
-                style={{
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-high)',
-                  color: 'var(--color-text-primary)',
-                  borderRadius: 10,
-                  padding: '8px 13px',
-                  fontSize: 13,
-                  fontWeight: 650,
-                  cursor: recapLoading ? 'default' : 'pointer',
-                  opacity: recapLoading ? 0.6 : 1,
-                }}
-              >
-                {recapLoading ? 'Generating recap…' : 'Generate recap'}
-              </button>
+              {!provisional && (
+                <button
+                  type="button"
+                  onClick={() => { void handleGenerateRecap() }}
+                  disabled={recapLoading}
+                  style={{
+                    border: '1px solid var(--color-border-ghost)',
+                    background: 'var(--color-surface-high)',
+                    color: 'var(--color-text-primary)',
+                    borderRadius: 10,
+                    padding: '8px 13px',
+                    fontSize: 13,
+                    fontWeight: 650,
+                    cursor: recapLoading ? 'default' : 'pointer',
+                    opacity: recapLoading ? 0.6 : 1,
+                  }}
+                >
+                  {recapLoading ? 'Generating recap…' : 'Generate recap'}
+                </button>
+              )}
             </div>
           )}
 
@@ -805,7 +808,10 @@ function BlockInspector({
   const hasOverride = Boolean(block.label.override?.trim())
   // The name this block had before the user renamed it — shown so they can see
   // what changed and undo it (timeline.md acceptance: previous name + undo).
-  const previousName = block.label.ruleBased?.trim() || block.label.aiSuggested?.trim() || null
+  const previousName = block.review.originalLabel?.trim()
+    || block.label.aiSuggested?.trim()
+    || block.label.ruleBased?.trim()
+    || null
   // A provisional (live, not-yet-analyzed) block is never renamed or merged —
   // those controls appear once the day is analyzed (timeline.md §4).
   const correctable = !block.provisional
@@ -991,12 +997,12 @@ function BlockInspector({
                 Rename
               </button>
               {previousBlock && (
-                <button type="button" title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <button type="button" aria-label={`Merge with block above: ${userVisibleBlockLabel(previousBlock)}`} title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                   <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge'}
                 </button>
               )}
               {nextBlock && (
-                <button type="button" title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <button type="button" aria-label={`Merge with block below: ${userVisibleBlockLabel(nextBlock)}`} title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '2px 4px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                   <ArrowDown size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge'}
                 </button>
               )}

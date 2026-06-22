@@ -138,17 +138,8 @@
       "intentRole": "coordination"
     },
     {
-      "id": "social-detour",
-      "start": "10:26",
-      "end": "10:34",
-      "label": "X detour",
-      "labelIncludes": ["X", "Twitter", "Social"],
-      "category": "social",
-      "intentRole": "ambient"
-    },
-    {
       "id": "budget-tracker",
-      "start": "10:34",
+      "start": "10:26",
       "end": "10:48",
       "label": "Budget tracker",
       "labelIncludes": ["Budget tracker"],

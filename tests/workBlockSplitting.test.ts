@@ -257,20 +257,31 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
   db.close()
 })
 
-test('same-app work bridges a moderate untracked gap into one block', () => {
+test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
-  // A 50-second terminal sliver, then a 17-minute untracked gap, then an hour
-  // of the same app. This is one coding session resuming, not two blocks.
+  // timeline.md §3.1: missing idle telemetry must not erase a real 15+ minute
+  // absence merely because the same app resumes afterward.
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 1 })
   insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 18, durationMinutes: 63 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 1, `same-app work across a 17m gap should bridge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `same-app work across a 17m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
-test('sparse AI/dev tool spans fold into surrounding development work by active time', () => {
+test('same-app work can still bridge below the 15-minute idle boundary', () => {
+  const db = createDb()
+  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 10 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 24, durationMinutes: 40 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+
+  assert.equal(blocks.length, 1, `same-app work across a 14m gap may remain one intent; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  db.close()
+})
+
+test('sparse AI/dev tool spans do not cross a 15+ minute idle boundary', () => {
   const db = createDb()
   const sessions: AppSession[] = [
     {
@@ -301,7 +312,7 @@ test('sparse AI/dev tool spans fold into surrounding development work by active 
 
   const blocks = buildTimelineBlocksFromSessions(db, sessions)
 
-  assert.equal(blocks.length, 1, `low-active Antigravity span should fold into dev work; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `a 23m untracked gap must split even sparse AI/dev evidence; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   assert.equal(blocks[0].dominantCategory, 'development')
   db.close()
 })

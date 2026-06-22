@@ -123,9 +123,19 @@ test('falls back to the category name when nothing more specific is present', ()
   assert.equal(userVisibleBlockLabel(block), 'Research')
 })
 
-test('falls back to Untitled block only when the category is contentless', () => {
-  assert.equal(userVisibleBlockLabel(makeBlock({ dominantCategory: 'uncategorized' })), 'Untitled block')
-  assert.equal(userVisibleBlockLabel(makeBlock({ dominantCategory: 'system' })), 'Untitled block')
+test('contentless categories use an honest evidence-based fallback', () => {
+  assert.equal(userVisibleBlockLabel(makeBlock({
+    dominantCategory: 'uncategorized',
+    topApps: [{
+      bundleId: 'company.thebrowser.arc',
+      appName: 'Arc',
+      category: 'uncategorized',
+      totalSeconds: 60,
+      sessionCount: 1,
+      isBrowser: true,
+    }],
+  })), 'Arc — activity')
+  assert.equal(userVisibleBlockLabel(makeBlock({ dominantCategory: 'system', topApps: [] })), 'Untracked time')
 })
 
 test('naturalizeLabel strips leading notification counts like "(1) Instagram"', () => {

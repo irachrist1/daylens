@@ -47,6 +47,11 @@ export function dateStringFromMs(ms: number): string {
   return `${y}-${m}-${day}`
 }
 
+export function shiftDateString(dateStr: string, offsetDays: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return dateStringFromMs(new Date(y, m - 1, d + offsetDays).getTime())
+}
+
 // Returns today's date as a local YYYY-MM-DD string.
 // DO NOT use new Date().toISOString().split('T')[0] — that returns the UTC date
 // which is wrong in UTC- timezones after ~7 pm local time.
@@ -71,11 +76,14 @@ export function percentOf(part: number, total: number): number {
 export function dayBounds(dateStr: string): [number, number] {
   const [y, m, d] = dateStr.split('-').map(Number)
   const from = new Date(y, m - 1, d).getTime()
-  return [from, from + 86_400_000]
+  const to = new Date(y, m - 1, d + 1).getTime()
+  return [from, to]
 }
 
 export function rollingDayBounds(days: number): [number, number] {
-  const [todayFrom, todayTo] = dayBounds(todayString())
+  const today = todayString()
+  const [todayFrom, todayTo] = dayBounds(today)
   if (days <= 1) return [todayFrom, todayTo]
-  return [todayFrom - (days - 1) * 86_400_000, todayTo]
+  const [from] = dayBounds(shiftDateString(today, -(days - 1)))
+  return [from, todayTo]
 }

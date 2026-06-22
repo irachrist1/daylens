@@ -98,7 +98,6 @@ function sanitizeBlockLabel(label: string | null | undefined): string | null {
 }
 
 const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
-const RUNAWAY_GAP_THRESHOLD_MS = 40 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
@@ -181,6 +180,9 @@ interface CandidateBlock {
   formation: FormationReason
   boundedBeforeGap: boolean
   boundedAfterGap: boolean
+  // A brief detour may be absorbed into one neighboring intent without
+  // joining two genuinely different intents around it.
+  forcedBoundaryBefore?: boolean
   forcedLabel?: string
   // Set by the boundary-scoring reconciliation pass: why this candidate's
   // start and end edges were cut. Projected onto the block as `boundary`.
@@ -569,12 +571,11 @@ function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[
     const current = sessions[index]
     const previousEnd = sessionEndMs(previous)
     const gap = current.startTime - previousEnd
-    // A logged sleep/lock/away event makes a >15-min gap a hard boundary. But a
-    // long quiet stretch with no logged event is still idle — runaway guard: a
-    // 40-min+ gap is treated as idle on its own so a browser session left open
-    // across an afternoon cannot stretch one episode over an 8-hour span.
-    const isRunawayGap = gap >= RUNAWAY_GAP_THRESHOLD_MS
-    if (gap > IDLE_GAP_THRESHOLD_MS && (isRunawayGap || gapHasHardActivityBoundary(db, previousEnd, current.startTime))) {
+    // timeline.md §3.1: a roughly 15-minute idle/lock gap is a strong boundary
+    // on its own. Activity-state events can also force a boundary for shorter
+    // gaps; missing telemetry must never make a 15+ minute absence disappear.
+    const hasHardActivityBoundary = gapHasHardActivityBoundary(db, previousEnd, current.startTime)
+    if (gap >= IDLE_GAP_THRESHOLD_MS || hasHardActivityBoundary) {
       segments.push({
         sessions: sessions.slice(startIndex, index),
         boundedBeforeGap: startIndex > 0,
@@ -2457,6 +2458,7 @@ function mergeCandidatePair(left: CandidateBlock, right: CandidateBlock): Candid
     formation: 'heuristic',
     boundedBeforeGap: left.boundedBeforeGap,
     boundedAfterGap: right.boundedAfterGap,
+    forcedBoundaryBefore: left.forcedBoundaryBefore,
   }
 }
 
@@ -2849,6 +2851,9 @@ function scoreBoundary(
   // A user merge erases this boundary and overrides every heuristic below it,
   // including a kind change — the user's intent always wins over segmentation.
   if (corrections.lookup(left, right) === 'merge') return { score: -BOUNDARY_HARD_SCORE, reasons: [] }
+  if (right.forcedBoundaryBefore) {
+    return { score: BOUNDARY_HARD_SCORE, reasons: ['subject-change'] }
+  }
 
   // Hard cuts — never erased.
   // A kind change (work↔leisure↔personal) is the hardest boundary of all: it is
@@ -2959,15 +2964,24 @@ function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, con
     // `left` is read from the running result so a chain (work / peek / work /
     // peek / work) collapses in one forward pass.
     const isWorkAnchor = (mode: RunMode | undefined): boolean =>
-      mode === 'execution' || mode === 'research'
+      mode === 'execution' || mode === 'research' || mode === 'admin'
     const noIdleGapAround = Boolean(
       left && right
       && current.formation !== 'meeting'
       && isWorkAnchor(leftSig?.mode)
       && isWorkAnchor(rightSig?.mode)
+      && !(left.boundedAfterGap && current.boundedBeforeGap)
+      && !(current.boundedAfterGap && right.boundedBeforeGap)
       && gapBetweenCandidates(left, current) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS
       && gapBetweenCandidates(current, right) < TIMELINE_SAME_WORK_BRIDGE_GAP_MS,
     )
+    const sameIntentAround = Boolean(left && right && (
+      candidatesAreAssistedWorkPair(left, right, db, context)
+      || (
+        candidateDominantCategory(left, db, context) === candidateDominantCategory(right, db, context)
+        && dominantContentContext(left.sessions) === dominantContentContext(right.sessions)
+      )
+    ))
     // The research-peek fold (a) is conservative: it requires the SAME app on
     // both sides (look up a PR in the editor's browser, back to the editor).
     const sandwichedBySameWork = noIdleGapAround
@@ -2980,6 +2994,7 @@ function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, con
     // then merge on app continuity in scoring.
     const researchPeek =
       sandwichedBySameWork
+      && sameIntentAround
       && briefMiddle
       && candidatesShareKind(left, current, context)
       && signals[index].mode === 'research'
@@ -3000,16 +3015,37 @@ function foldBriefPeeks(candidates: CandidateBlock[], db: Database.Database, con
     // brief Netflix peek pollutes the merged block's dominant app, so insisting
     // on it would strand the next sliver. Bounded to under the §3.2 cutoff and
     // the coherent span ceiling so a *sustained* detour still stands alone.
-    const driftPeek =
+    const briefDetour =
       noIdleGapAround
       && briefMiddle
       && (signals[index].mode === 'drift' || signals[index].mode === 'browse')
       && combinedSpanMs(left, right) <= TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS
-    if (driftPeek && right) {
-      const fused = mergeCandidatePair(mergeCandidatePair(left, current), right)
-      result[result.length - 1] = fused
-      sig[sig.length - 1] = runSignalsFor(fused, db, context)
-      index += 1 // `right` is already fused in — consume it
+    if (briefDetour && right) {
+      if (sameIntentAround) {
+        const fused = mergeCandidatePair(mergeCandidatePair(left, current), right)
+        result[result.length - 1] = fused
+        sig[sig.length - 1] = runSignalsFor(fused, db, context)
+        index += 1 // `right` is already fused in — consume it
+        continue
+      }
+
+      // The activity on either side is genuinely different. The detour still
+      // must not become its own block, but absorbing it must preserve the real
+      // intent boundary. Attach it to the stronger adjacent anchor only.
+      if (candidateActiveMs(left) >= candidateActiveMs(right)) {
+        const absorbedLeft = mergeCandidatePair(left, current)
+        result[result.length - 1] = absorbedLeft
+        sig[sig.length - 1] = runSignalsFor(absorbedLeft, db, context)
+        candidates[index + 1] = { ...right, forcedBoundaryBefore: true }
+      } else {
+        const absorbedRight = {
+          ...mergeCandidatePair(current, right),
+          forcedBoundaryBefore: true,
+        }
+        result.push(absorbedRight)
+        sig.push(runSignalsFor(absorbedRight, db, context))
+        index += 1
+      }
       continue
     }
 
@@ -4481,7 +4517,10 @@ export function getTimelineDayPayload(
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
-  const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
+  // Invariant 7: the blocks are the canonical day facts. Every downstream
+  // total (Timeline, Apps, AI, recap) reads this same partition instead of
+  // independently summing raw sessions.
+  const totalSeconds = blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   const focusSeconds = sessions
     .filter((session) => session.isFocused)
     .reduce((sum, session) => sum + session.durationSeconds, 0)

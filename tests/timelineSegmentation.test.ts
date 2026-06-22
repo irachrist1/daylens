@@ -173,6 +173,32 @@ test('a sustained Netflix stretch inside coding stays its own block', () => {
   db.close()
 })
 
+test('a brief social peek folds into the same productivity intent', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.notion.id', appName: 'Notion', category: 'productivity', startTime: at(9, 0), endTime: at(9, 30), windowTitle: 'Q3 launch checklist' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'social', startTime: at(9, 30), endTime: at(9, 36), windowTitle: 'Home / X' }),
+    session({ bundleId: 'com.notion.id', appName: 'Notion', category: 'productivity', startTime: at(9, 36), endTime: at(10, 6), windowTitle: 'Q3 launch checklist' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 1, `brief social peek should fold into the same productivity block, got ${blocks.length}`)
+  assert.equal(blocks[0].dominantCategory, 'productivity')
+  db.close()
+})
+
+test('a brief detour does not merge different intents on either side', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 30), windowTitle: 'workBlocks.ts — daylens' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'social', startTime: at(9, 30), endTime: at(9, 36), windowTitle: 'Home / X' }),
+    session({ bundleId: 'com.microsoft.Word', appName: 'Word', category: 'writing', startTime: at(9, 36), endTime: at(10, 6), windowTitle: 'Quarterly report' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 2, `the detour should be absorbed without erasing the development→writing intent change, got ${blocks.length}`)
+  assert.deepEqual(blocks.map((block) => block.dominantCategory), ['development', 'writing'])
+  db.close()
+})
+
 // FIX (contentless sliver): a sub-30-min Safari fragment with no window titles
 // and no page artifacts sits between two stretches of architecture-review work.
 // It carries no independent meaning, so it folds into a neighbour even though
