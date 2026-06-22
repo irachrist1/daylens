@@ -257,7 +257,8 @@ const GENERIC_LABELS = new Set([
 
 function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
   if (session.category === 'browsing') return true
-  if (resolveCanonicalApp(session.bundleId, session.appName).defaultCategory === 'browsing') return true
+  const identity = resolveCanonicalApp(session.bundleId, session.appName)
+  if (identity.isBrowser || identity.defaultCategory === 'browsing') return true
   return process.platform === 'darwin' && isBrowserApplication({
     bundleId: session.bundleId,
     appName: session.appName,

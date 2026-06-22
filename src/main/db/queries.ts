@@ -116,27 +116,30 @@ function resolvedRowIdentity(
   row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'canonical_app_id'>,
 ): CanonicalAppIdentity {
   const staticIdentity = resolveCanonicalApp(row.bundle_id, row.app_name)
-  if (row.canonical_app_id) {
-    return {
-      ...staticIdentity,
-      canonicalAppId: row.canonical_app_id,
+  if (staticIdentity.canonicalAppId) {
+    return staticIdentity
+  }
+
+  if (process.platform === 'darwin') {
+    const browser = resolveBrowserApplication({
+      bundleId: row.bundle_id,
+      appName: row.app_name,
+      executablePath: row.bundle_id,
+    })
+    if (browser) {
+      return {
+        ...staticIdentity,
+        canonicalAppId: row.canonical_app_id ?? browser.bundleId.toLowerCase(),
+        appInstanceId: browser.bundleId,
+        displayName: browser.name,
+        defaultCategory: 'browsing',
+      }
     }
   }
-  if (staticIdentity.canonicalAppId || process.platform !== 'darwin') return staticIdentity
 
-  const browser = resolveBrowserApplication({
-    bundleId: row.bundle_id,
-    appName: row.app_name,
-    executablePath: row.bundle_id,
-  })
-  if (!browser) return staticIdentity
-  return {
-    ...staticIdentity,
-    canonicalAppId: browser.bundleId.toLowerCase(),
-    appInstanceId: browser.bundleId,
-    displayName: browser.name,
-    defaultCategory: 'browsing',
-  }
+  return row.canonical_app_id
+    ? { ...staticIdentity, canonicalAppId: row.canonical_app_id }
+    : staticIdentity
 }
 
 function resolvedSessionCategory(
@@ -212,7 +215,7 @@ function clipRowToRange(
     isFocused: isCategoryFocused(category),
     windowTitle: row.window_title ?? null,
     rawAppName: row.raw_app_name ?? row.app_name,
-    canonicalAppId: row.canonical_app_id ?? identity.canonicalAppId,
+    canonicalAppId: identity.canonicalAppId ?? row.canonical_app_id ?? null,
     appInstanceId: row.app_instance_id ?? identity.appInstanceId,
     captureSource: row.capture_source ?? 'foreground_poll',
     endedReason: row.ended_reason ?? null,
@@ -648,6 +651,10 @@ export function getAppSummariesForRange(
     const existing = summaryMap.get(mapKey)
     if (existing) {
       existing.totalSeconds += session.durationSeconds
+      if (existing.category === 'uncategorized' && session.category !== 'uncategorized') {
+        existing.category = session.category
+        existing.isFocused = isCategoryFocused(session.category)
+      }
       const previousEnd = lastEngagementEnd.get(mapKey) ?? session.startTime
       if (session.startTime - previousEnd >= ENGAGEMENT_RETURN_GAP_MS) {
         existing.sessionCount = (existing.sessionCount ?? 0) + 1

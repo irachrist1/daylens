@@ -12,6 +12,23 @@ test('mac-specific app aliases resolve to the right canonical app identities', (
   assert.equal(resolveCanonicalApp('com.daylens.app.dev', 'Daylens').displayName, 'Daylens')
 })
 
+test('browser capability stays separate from the app category on every platform', () => {
+  const dia = resolveCanonicalApp('company.thebrowser.dia', 'Dia')
+  assert.equal(dia.defaultCategory, 'aiTools')
+  assert.equal(dia.isBrowser, true)
+
+  const safari = resolveCanonicalApp('com.apple.Safari', 'Safari')
+  assert.equal(safari.defaultCategory, 'browsing')
+  assert.equal(safari.isBrowser, true)
+
+  const zen = resolveCanonicalApp('/Applications/Zen.app/Contents/MacOS/zen', 'Zen')
+  assert.equal(zen.canonicalAppId, 'zen')
+  assert.equal(zen.isBrowser, true)
+
+  const claude = resolveCanonicalApp('com.anthropic.claudefordesktop', 'Claude')
+  assert.equal(claude.isBrowser, false)
+})
+
 test('catalog names collapse legacy executable-path rows to one canonical identity', () => {
   assert.equal(resolveCanonicalApp('/Applications/Warp.app/Contents/MacOS/stable', 'Warp').canonicalAppId, 'warp')
   assert.equal(resolveCanonicalApp('/Applications/Claude.app/Contents/MacOS/Claude', 'Claude').canonicalAppId, 'claude')

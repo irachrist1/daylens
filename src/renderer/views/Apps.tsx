@@ -551,6 +551,8 @@ export default function Apps() {
               {DAYS_OPTIONS.map((option) => (
                 <button
                   key={option}
+                  type="button"
+                  aria-pressed={(dateMode && option === 1) || (!dateMode && days === option)}
                   onClick={() => {
                     setDays(option)
                     if (option === 1) setSelectedDate(todayString())
@@ -580,6 +582,8 @@ export default function Apps() {
         {categories.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <button
+              type="button"
+              aria-pressed={selectedCategory === null}
               onClick={() => setSelectedCategory(null)}
               style={{
                 padding: '6px 11px',
@@ -596,6 +600,8 @@ export default function Apps() {
             {categories.map((category) => (
               <button
                 key={category}
+                type="button"
+                aria-pressed={selectedCategory === category}
                 onClick={() => setSelectedCategory(category)}
                 style={{
                   padding: '6px 11px',
@@ -653,6 +659,8 @@ export default function Apps() {
                 return (
                   <button
                     key={key}
+                    type="button"
+                    aria-pressed={selected}
                     onClick={() => setSelectedAppId(key)}
                     style={{
                       width: '100%',
@@ -701,6 +709,8 @@ export default function Apps() {
                       return (
                         <button
                           key={key}
+                          type="button"
+                          aria-pressed={selected}
                           onClick={() => setSelectedAppId(key)}
                           style={{
                             width: '100%',
@@ -795,7 +805,7 @@ export default function Apps() {
                       </div>
                     )}
                     {isUserGenerating && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
+                      <div aria-live="polite" style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
                         Generating a stronger app narrative…
                       </div>
                     )}
