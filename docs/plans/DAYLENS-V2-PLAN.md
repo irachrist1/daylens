@@ -1,8 +1,7 @@
 # Daylens v2 — the plan
 
-This file summarizes the plan. Detailed specs live in `docs/specs/`. The feature
-registry at `docs/plans/FEATURE-REGISTRY.md` tracks what's broken, what's unverified,
-and what's missing — with screenshot evidence.
+This file summarizes the plan. Detailed specs live in `docs/specs/`, and the live work
+is tracked as the issues in the "Daylens v2" Linear project.
 
 ## What's broken
 

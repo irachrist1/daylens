@@ -283,7 +283,7 @@ Boundary edits live in `timeline_boundary_corrections` (split/merge, keyed by se
 
 **Problem.** The data to show "what it was before" and "who named this" exists but isn't
 surfaced; there's no undo affordance, and the app must never let re-analysis overwrite a
-human name (invariant 8, FEATURE-REGISTRY "Locked / protected user edits" = broken).
+human name (invariant 8; locked / protected user edits must survive re-analysis).
 
 **Recommendation.** Use `label_source` as the authority flag: `user` and an active
 `block_label_overrides` row are human-authoritative and re-analysis/rebuild must skip them
