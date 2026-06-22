@@ -24,7 +24,6 @@ import {
   rebuildWorkMemory,
 } from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
-import { readDerivedAppSummariesForDate } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
   resolveClientQuery,
@@ -58,7 +57,6 @@ import {
   requestScreenTrackingPermission,
 } from '../services/trackingPermissions'
 import type {
-  AppUsageSummary,
   AppSession,
   WorkSessionPayload,
   WorkSessionApp,
@@ -75,7 +73,7 @@ import type {
   TimelineBlockReviewUpdate,
   WorkMemorySettingsSummary,
 } from '@shared/types'
-import { FOCUSED_CATEGORIES } from '@shared/types'
+import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -96,7 +94,8 @@ function localDateString(): string {
 function dayBounds(dateStr: string): [number, number] {
   const [y, m, d] = dateStr.split('-').map(Number)
   const from = new Date(y, m - 1, d).getTime()  // local midnight
-  return [from, from + 86_400_000]
+  const to = new Date(y, m - 1, d + 1).getTime()
+  return [from, to]
 }
 
 function shiftLocalDate(dateStr: string, offset: number): string {
@@ -108,43 +107,6 @@ function shiftLocalDate(dateStr: string, offset: number): string {
 function localDateStringForTimestamp(timestamp: number): string {
   const date = new Date(timestamp)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function mergeAppSummaryRows(rows: AppUsageSummary[]): AppUsageSummary[] {
-  const map = new Map<string, AppUsageSummary>()
-  for (const row of rows) {
-    const key = row.canonicalAppId ?? row.bundleId
-    const existing = map.get(key)
-    if (existing) {
-      existing.totalSeconds += row.totalSeconds
-      existing.sessionCount = (existing.sessionCount ?? 0) + (row.sessionCount ?? 0)
-      existing.isFocused = existing.isFocused || row.isFocused
-      continue
-    }
-    map.set(key, { ...row })
-  }
-  return [...map.values()]
-    .filter((summary) => summary.totalSeconds > 0)
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
-}
-
-function getCachedRangeAppSummaries(days: number): AppUsageSummary[] {
-  const db = getDb()
-  const today = localDateString()
-  const rows: AppUsageSummary[] = []
-  for (let offset = Math.max(1, days) - 1; offset >= 0; offset--) {
-    const dateStr = shiftLocalDate(today, -offset)
-    if (dateStr !== today) {
-      const derived = readDerivedAppSummariesForDate(db, dateStr)
-      if (derived) {
-        rows.push(...derived)
-        continue
-      }
-    }
-    const [from, to] = dayBounds(dateStr)
-    rows.push(...getAppSummariesForRange(db, from, to))
-  }
-  return mergeAppSummaryRows(rows)
 }
 
 function getWorkMemorySettingsSummary(db: ReturnType<typeof getDb>): WorkMemorySettingsSummary {
@@ -447,20 +409,27 @@ export function registerDbHandlers(): void {
   // days=1 → today since local midnight (not rolling 24h)
   // days=7/30 → rolling window ending at end of today
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
+    // Normalize at the boundary so every period reaches one canonical query.
+    const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
     const [todayFrom, todayTo] = dayBounds(localDateString())
-    if (days <= 1) {
+    if (normalizedDays <= 1) {
       return getAppSummariesForRange(getDb(), todayFrom, todayTo)
     }
-    return getCachedRangeAppSummaries(days)
+    // All-time: one query over all captured history. Avoids the day-by-day
+    // cache loop, which would iterate ~36,500 times for this sentinel.
+    if (normalizedDays >= ALL_TIME_DAYS) {
+      return getAppSummariesForRange(getDb(), 0, todayTo)
+    }
+    const [from] = dayBounds(shiftLocalDate(localDateString(), -(normalizedDays - 1)))
+    return getAppSummariesForRange(getDb(), from, todayTo)
   })
 
   // C23 / D6: Apps view date switcher. Returns summaries for a specific
-  // calendar day. Today is raw foreground totals; past days are equivalent.
+  // calendar day through the same canonical query as Today/7d/30d/All-time.
+  // Derived sessions are a Timeline projection and use a different concept of
+  // session count; reading them here caused past days to resurrect system noise
+  // and thousands of micro-sessions.
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, (_e, dateStr: string) => {
-    if (dateStr !== localDateString()) {
-      const derived = readDerivedAppSummariesForDate(getDb(), dateStr)
-      if (derived) return derived
-    }
     const [from, to] = dayBounds(dateStr)
     return getAppSummariesForRange(getDb(), from, to)
   })
@@ -527,12 +496,9 @@ export function registerDbHandlers(): void {
     return getAppDetailProjection(getDb(), canonicalAppId, days, getCurrentSession())
   })
 
-  // D5: per-app activity digest used by the Apps list view to lead with what
-  // was accomplished in each app, not how long. Walks each day in the range,
-  // builds canonical-app → best block label + best artifact title pairs.
-  // Artifact/page attribution respects ownership: a page captured in Safari
-  // never bleeds onto a non-browser app in the same block, and an artifact
-  // with ownerBundleId=VS Code never attaches to Dia.
+  // Per-app activity digest. Retained for reuse though the Apps list no longer
+  // leads with it (DEV-89 made the app name the row title); the artifact-
+  // surfacing policy it encodes is covered by appActivityDigest tests.
   ipcMain.handle(IPC.DB.GET_APP_ACTIVITY_DIGEST, (_e, days: number = 1): import('@shared/types').AppActivityDigest[] => {
     const db = getDb()
     const today = localDateString()
@@ -748,6 +714,8 @@ export function registerDbHandlers(): void {
     appName?: string | null
     domain?: string | null
     url?: string | null
+    normalizedUrl?: string | null
+    pageKey?: string | null
     startTime?: number | null
     endTime?: number | null
     date?: string | null

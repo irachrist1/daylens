@@ -10,7 +10,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import os from 'node:os'
 import path from 'node:path'
-import { anthropicTools, executeTool } from '../../../src/main/services/aiTools'
+import { executeTool } from '../../../src/main/services/aiTools'
+import { anthropicTools } from './tools'
 
 const dbPath =
   process.env.DAYLENS_DB_PATH ??

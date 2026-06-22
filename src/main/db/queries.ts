@@ -20,8 +20,8 @@ import type {
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
 import { localDayBounds } from '../lib/localDate'
-import { resolveCanonicalApp } from '../lib/appIdentity'
-import { isBrowserApplication } from '../services/browserRegistry'
+import { resolveCanonicalApp, type CanonicalAppIdentity } from '../lib/appIdentity'
+import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
@@ -94,26 +94,64 @@ const LEGACY_WEAK_AI_LABELS = [
   'Writing',
 ]
 
-function isUxNoise(appName: string): boolean {
-  const lower = appName.toLowerCase()
-  return UX_NOISE_EXACT_NAMES.has(lower) || UX_NOISE_SUBSTRINGS.some((s) => lower.includes(s))
+function normalizedNoiseIdentity(value: string | null | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function isUxNoise(row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'raw_app_name' | 'canonical_app_id'>): boolean {
+  const values = [row.bundle_id, row.app_name, row.raw_app_name, row.canonical_app_id]
+    .filter((value): value is string => Boolean(value?.trim()))
+  const normalizedExactNames = new Set([...UX_NOISE_EXACT_NAMES].map(normalizedNoiseIdentity))
+  return values.some((value) => {
+    const lower = value.toLowerCase()
+    const normalized = normalizedNoiseIdentity(value)
+    return UX_NOISE_EXACT_NAMES.has(lower)
+      || normalizedExactNames.has(normalized)
+      || UX_NOISE_SUBSTRINGS.some((substring) =>
+        lower.includes(substring) || normalized.includes(normalizedNoiseIdentity(substring)))
+  })
+}
+
+function resolvedRowIdentity(
+  row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'canonical_app_id'>,
+): CanonicalAppIdentity {
+  const staticIdentity = resolveCanonicalApp(row.bundle_id, row.app_name)
+  if (staticIdentity.canonicalAppId) {
+    return staticIdentity
+  }
+
+  if (process.platform === 'darwin') {
+    const browser = resolveBrowserApplication({
+      bundleId: row.bundle_id,
+      appName: row.app_name,
+      executablePath: row.bundle_id,
+    })
+    if (browser) {
+      return {
+        ...staticIdentity,
+        canonicalAppId: row.canonical_app_id ?? browser.bundleId.toLowerCase(),
+        appInstanceId: browser.bundleId,
+        displayName: browser.name,
+        defaultCategory: 'browsing',
+      }
+    }
+  }
+
+  return row.canonical_app_id
+    ? { ...staticIdentity, canonicalAppId: row.canonical_app_id }
+    : staticIdentity
 }
 
 function resolvedSessionCategory(
   row: Pick<AppSessionRow, 'bundle_id' | 'app_name' | 'category'>,
   overrides: Record<string, AppCategory>,
+  identity: CanonicalAppIdentity,
 ): AppCategory {
   const override = overrides[row.bundle_id]
+    ?? (identity.canonicalAppId ? overrides[identity.canonicalAppId] : undefined)
   if (override) return override
   if (row.category && row.category !== 'uncategorized') return row.category
-  if (process.platform === 'darwin' && isBrowserApplication({
-    bundleId: row.bundle_id,
-    appName: row.app_name,
-  })) {
-    return 'browsing'
-  }
-  return resolveCanonicalApp(row.bundle_id, row.app_name).defaultCategory
-    ?? 'uncategorized'
+  return identity.defaultCategory ?? 'uncategorized'
 }
 
 interface AppSessionRow {
@@ -160,7 +198,7 @@ function clipRowToRange(
   fromMs: number,
   toMs: number,
   category: AppCategory,
-  resolvedName?: string,
+  identity: CanonicalAppIdentity,
 ): AppSession | null {
   const clippedStart = Math.max(row.start_time, fromMs)
   const clippedEnd = Math.min(sessionEndTime(row), toMs)
@@ -169,7 +207,7 @@ function clipRowToRange(
   return {
     id: row.id,
     bundleId: row.bundle_id,
-    appName: resolvedName ?? row.app_name,
+    appName: identity.displayName || row.app_name,
     startTime: clippedStart,
     endTime: clippedEnd,
     durationSeconds: Math.max(1, Math.round((clippedEnd - clippedStart) / 1_000)),
@@ -177,8 +215,8 @@ function clipRowToRange(
     isFocused: isCategoryFocused(category),
     windowTitle: row.window_title ?? null,
     rawAppName: row.raw_app_name ?? row.app_name,
-    canonicalAppId: row.canonical_app_id ?? null,
-    appInstanceId: row.app_instance_id ?? row.bundle_id,
+    canonicalAppId: identity.canonicalAppId ?? row.canonical_app_id ?? null,
+    appInstanceId: row.app_instance_id ?? identity.appInstanceId,
     captureSource: row.capture_source ?? 'foreground_poll',
     endedReason: row.ended_reason ?? null,
     captureVersion: row.capture_version ?? 1,
@@ -592,12 +630,13 @@ export function getAppSummariesForRange(
 
   const clippedSessions = mergeSessions(
     rows
-      .filter((row) => !isUxNoise(row.app_name))
+      .filter((row) => !isUxNoise(row))
       .map((row) => {
         // User overrides first; fall through to catalog's default category for
         // sessions that were captured before the catalog was fully populated.
-        const category = resolvedSessionCategory(row, overrides)
-        return clipRowToRange(row, fromMs, toMs, category)
+        const identity = resolvedRowIdentity(row)
+        const category = resolvedSessionCategory(row, overrides, identity)
+        return clipRowToRange(row, fromMs, toMs, category, identity)
       })
       .filter((session): session is AppSession => session !== null),
   ).filter((session) => session.durationSeconds >= MIN_CAPTURE_DWELL_SEC)
@@ -612,6 +651,10 @@ export function getAppSummariesForRange(
     const existing = summaryMap.get(mapKey)
     if (existing) {
       existing.totalSeconds += session.durationSeconds
+      if (existing.category === 'uncategorized' && session.category !== 'uncategorized') {
+        existing.category = session.category
+        existing.isFocused = isCategoryFocused(session.category)
+      }
       const previousEnd = lastEngagementEnd.get(mapKey) ?? session.startTime
       if (session.startTime - previousEnd >= ENGAGEMENT_RETURN_GAP_MS) {
         existing.sessionCount = (existing.sessionCount ?? 0) + 1
@@ -653,10 +696,11 @@ export function getSessionsForRange(
 
   return mergeSessions(
     rows
-      .filter((row) => !isUxNoise(row.app_name))
+      .filter((row) => !isUxNoise(row))
       .map((row) => {
-        const category = resolvedSessionCategory(row, overrides)
-        return clipRowToRange(row, fromMs, toMs, category, resolveDisplayName(row.bundle_id, row.app_name))
+        const identity = resolvedRowIdentity(row)
+        const category = resolvedSessionCategory(row, overrides, identity)
+        return clipRowToRange(row, fromMs, toMs, category, identity)
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
   ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
@@ -1342,16 +1386,20 @@ export function getAllAppsForLabeling(db: Database.Database): AppUsageSummary[] 
   for (const row of totals) {
     const meta = latestByBundle.get(row.bundleId)
     const appName = meta?.appName ?? row.bundleId
-    if (isUxNoise(appName)) continue
+    const identity = resolveCanonicalApp(row.bundleId, appName)
+    const sessionRow = {
+      bundle_id: row.bundleId,
+      app_name: appName,
+      raw_app_name: appName,
+      canonical_app_id: identity.canonicalAppId ?? null,
+      category: meta?.category ?? 'uncategorized',
+    }
+    if (isUxNoise(sessionRow)) continue
     // Drop sub-dwell blips (brief app transitions) — they aren't apps the user
     // "used", just focus flicker — but keep genuinely low-usage real apps.
     if ((row.totalSeconds ?? 0) < MIN_CAPTURE_DWELL_SEC) continue
 
-    const identity = resolveCanonicalApp(row.bundleId, appName)
-    const category = resolvedSessionCategory(
-      { bundle_id: row.bundleId, app_name: appName, category: meta?.category ?? 'uncategorized' },
-      overrides,
-    )
+    const category = resolvedSessionCategory(sessionRow, overrides, identity)
     summaries.push({
       bundleId: row.bundleId,
       canonicalAppId: identity.canonicalAppId ?? row.bundleId,
@@ -1851,10 +1899,11 @@ export function getSessionsForApp(
     .all(bundleId, fromMs - SESSION_OVERLAP_LOOKBACK_MS, toMs, fromMs) as AppSessionRow[]
 
   const clipped = rows
-    .filter((r) => !isUxNoise(r.app_name))
+    .filter((r) => !isUxNoise(r))
     .map((r) => {
-      const category: AppCategory = overrides[r.bundle_id] ?? r.category
-      return clipRowToRange(r, fromMs, toMs, category, resolveDisplayName(r.bundle_id, r.app_name))
+      const identity = resolvedRowIdentity(r)
+      const category = resolvedSessionCategory(r, overrides, identity)
+      return clipRowToRange(r, fromMs, toMs, category, identity)
     })
     .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
 
@@ -1983,6 +2032,67 @@ export function getDomainSummariesForBrowser(
     topTitle:        r.top_title,
     browserBundleId: r.browser_id,
     canonicalBrowserId: r.canonical_browser_id,
+  }))
+}
+
+export interface BrowserPageSummary {
+  domain: string
+  url: string
+  normalizedUrl: string | null
+  pageKey: string | null
+  title: string | null
+  totalSeconds: number
+  visitCount: number
+  browserBundleId: string | null
+  canonicalBrowserId: string | null
+}
+
+export function getPageSummariesForBrowser(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  canonicalBrowserId: string,
+  limit = 40,
+): BrowserPageSummary[] {
+  const rows = db.prepare(`
+    SELECT
+      domain,
+      url,
+      MAX(normalized_url) AS normalized_url,
+      MAX(page_key) AS page_key,
+      MAX(page_title) AS title,
+      SUM(duration_sec) AS total_sec,
+      COUNT(*) AS visit_count,
+      MIN(browser_bundle_id) AS browser_id,
+      MIN(canonical_browser_id) AS canonical_browser_id
+    FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ?
+      AND canonical_browser_id = ?
+    GROUP BY domain, COALESCE(normalized_url, page_key, url)
+    ORDER BY total_sec DESC, visit_count DESC
+    LIMIT ?
+  `).all(fromMs, toMs, canonicalBrowserId, limit) as Array<{
+    domain: string
+    url: string
+    normalized_url: string | null
+    page_key: string | null
+    title: string | null
+    total_sec: number
+    visit_count: number
+    browser_id: string | null
+    canonical_browser_id: string | null
+  }>
+
+  return rows.map((row) => ({
+    domain: row.domain,
+    url: row.url,
+    normalizedUrl: row.normalized_url,
+    pageKey: row.page_key,
+    title: row.title,
+    totalSeconds: row.total_sec,
+    visitCount: row.visit_count,
+    browserBundleId: row.browser_id,
+    canonicalBrowserId: row.canonical_browser_id,
   }))
 }
 

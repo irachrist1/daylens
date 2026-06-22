@@ -1192,28 +1192,29 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </div>
             ) : (
               recentApps.map((summary, index) => {
-                const override = categoryOverrides[summary.bundleId]
+                const appIdentity = summary.canonicalAppId ?? summary.bundleId
+                const override = categoryOverrides[appIdentity] ?? categoryOverrides[summary.bundleId]
                 const effectiveCategory = override ?? summary.category
-                const busy = categoryBusyBundleId === summary.bundleId
-                const effectMessage = relabelEffect?.bundleId === summary.bundleId ? relabelEffect.message : null
+                const busy = categoryBusyBundleId === appIdentity
+                const effectMessage = relabelEffect?.bundleId === appIdentity ? relabelEffect.message : null
                 return (
-                  <div key={summary.bundleId}>
+                  <div key={appIdentity}>
                     <SettingsRow
                       first={index === 0}
                       title={summary.appName}
-                      description={`${formatDurationShort(summary.totalSeconds)} tracked${override ? ` · override: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}` : ''}`}
+                      description={`${formatDurationShort(summary.totalSeconds)} over 30 days${override ? ` · override: ${CATEGORY_OPTIONS.find((option) => option.value === override)?.label ?? override}` : ''}`}
                       control={
                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                           <Select<AppCategory>
                             value={effectiveCategory}
                             width={150}
                             options={CATEGORY_OPTIONS}
-                            onChange={(value) => void handleCategoryOverrideChange(summary.bundleId, value)}
+                            onChange={(value) => void handleCategoryOverrideChange(appIdentity, value)}
                           />
                           {override && (
                             <button
                               type="button"
-                              onClick={() => void handleCategoryOverrideClear(summary.bundleId)}
+                              onClick={() => void handleCategoryOverrideClear(appIdentity)}
                               disabled={busy}
                               style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
                             >

@@ -5,6 +5,7 @@ import type { AppCategory } from '@shared/types'
 interface NormalizationEntry {
   displayName: string
   defaultCategory: AppCategory
+  capabilities?: string[]
 }
 
 interface NormalizationMap {
@@ -43,6 +44,7 @@ export interface CanonicalAppIdentity {
   displayName: string
   rawAppName: string
   defaultCategory: AppCategory | null
+  isBrowser: boolean
 }
 
 let cachedNormalizationMap: NormalizationMap | null = null
@@ -111,7 +113,11 @@ export function resolveCanonicalApp(bundleId: string, appName: string): Canonica
 
   let canonicalAppId: string | null = null
   for (const candidate of candidates) {
-    const resolved = map.aliases[candidate] ?? map.aliases[candidate.toLowerCase()]
+    const normalizedCandidate = candidate.toLowerCase()
+    const resolved = map.aliases[candidate]
+      ?? map.aliases[normalizedCandidate]
+      ?? (map.catalog[candidate] ? candidate : null)
+      ?? (map.catalog[normalizedCandidate] ? normalizedCandidate : null)
     if (resolved) {
       canonicalAppId = resolved
       break
@@ -125,6 +131,7 @@ export function resolveCanonicalApp(bundleId: string, appName: string): Canonica
     displayName: catalogEntry?.displayName ?? trimmedName,
     rawAppName: trimmedName,
     defaultCategory: catalogEntry?.defaultCategory ?? null,
+    isBrowser: catalogEntry?.capabilities?.includes('browser') ?? false,
   }
   if (canonicalAppCache.size >= CANONICAL_APP_CACHE_LIMIT) {
     canonicalAppCache.clear()

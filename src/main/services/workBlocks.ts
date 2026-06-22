@@ -7,6 +7,7 @@ import {
   getBlockLabelOverride,
   getDomainSummariesForBrowser,
   getFocusSessionsForDateRange,
+  getPageSummariesForBrowser,
   getSessionsForRange,
   getTopPagesForDomains,
   getWebsiteVisitsForRange,
@@ -70,6 +71,7 @@ import {
   matchPromotedPatterns,
   memoryEnabled,
 } from './workMemory'
+import { isBrowserApplication } from './browserRegistry'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -233,17 +235,6 @@ interface AppDetailBlockSlice {
   workflowRefs: WorkflowRef[]
 }
 
-const BROWSER_KEYWORDS = [
-  'chrome',
-  'edge',
-  'firefox',
-  'brave',
-  'arc',
-  'dia',
-  'browser',
-  'safari',
-]
-
 const GENERIC_LABELS = new Set([
   'AI Tools',
   'Browsing',
@@ -266,8 +257,13 @@ const GENERIC_LABELS = new Set([
 
 function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
   if (session.category === 'browsing') return true
-  const haystack = `${session.bundleId} ${session.appName}`.toLowerCase()
-  return BROWSER_KEYWORDS.some((keyword) => haystack.includes(keyword))
+  const identity = resolveCanonicalApp(session.bundleId, session.appName)
+  if (identity.isBrowser || identity.defaultCategory === 'browsing') return true
+  return process.platform === 'darwin' && isBrowserApplication({
+    bundleId: session.bundleId,
+    appName: session.appName,
+    executablePath: session.bundleId,
+  })
 }
 
 function prettyCategory(category: AppCategory): string {
@@ -1781,8 +1777,10 @@ function buildPageCandidates(
     displayTitle: string
     pageTitle: string | null
     normalizedUrl: string | null
+    pageKey: string | null
     url: string | null
     totalSeconds: number
+    visitCount: number
   }>()
 
   for (const visit of websiteVisitsForRange(db, startTime, endTime, context)) {
@@ -1801,6 +1799,7 @@ function buildPageCandidates(
 
     if (existing) {
       existing.totalSeconds += visit.durationSec
+      existing.visitCount += 1
       if (!existing.pageTitle && pageTitle) {
         existing.pageTitle = pageTitle
         existing.displayTitle = displayTitle
@@ -1816,14 +1815,20 @@ function buildPageCandidates(
       displayTitle,
       pageTitle,
       normalizedUrl: visit.normalizedUrl ?? null,
+      pageKey: visit.pageKey ?? null,
       url: visit.url ?? null,
       totalSeconds: visit.durationSec,
+      visitCount: 1,
     })
   }
 
   return Array.from(grouped.values())
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
-    .slice(0, 5)
+    .sort((left, right) => {
+      const kindDelta = Number(kindForDomain(left.domain) === 'leisure')
+        - Number(kindForDomain(right.domain) === 'leisure')
+      return kindDelta || right.totalSeconds - left.totalSeconds
+    })
+    .slice(0, 8)
     .map((page) => {
       const pageRef: PageRef = {
         id: artifactIdFor(`page:${page.canonicalKey}`),
@@ -1850,7 +1855,9 @@ function buildPageCandidates(
         browserBundleId: page.browserBundleId,
         canonicalBrowserId: page.canonicalBrowserId,
         normalizedUrl: page.normalizedUrl,
+        pageKey: page.pageKey,
         pageTitle: page.pageTitle,
+        visitCount: page.visitCount,
       }
 
       return {
@@ -5011,20 +5018,31 @@ export function getAppDetailPayload(
 ): AppDetailPayload {
   const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
   const today = isDate ? (daysOrDate as string) : localDateStringForOffset(0)
-  const days = isDate ? 1 : Number(daysOrDate)
+  const rawDays = isDate ? 1 : Number(daysOrDate)
+  const days = Number.isFinite(rawDays) ? Math.max(1, Math.floor(rawDays)) : 7
 
   const [todayFrom, todayTo] = localDayBounds(today)
-  const fromMs = todayFrom - Math.max(0, days - 1) * 86_400_000
+  const anchor = new Date(todayFrom)
+  const fromMs = days >= 36500
+    ? 0
+    : new Date(
+      anchor.getFullYear(),
+      anchor.getMonth(),
+      anchor.getDate() - Math.max(0, days - 1),
+    ).getTime()
   const rangeKey = isDate ? `1d:${today}` : `${days}d:${today}`
+  const effectiveLiveSession = !isDate || today === localDateStringForOffset(0)
+    ? liveSession
+    : null
 
-  const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), liveSession)
+  const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), effectiveLiveSession)
   const sessions = allSessions.filter((session) => {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
   })
 
   const relevantDates = Array.from(new Set(sessions.map((session) => localDateKeyForTimestamp(session.startTime))))
-  const historicalDates = relevantDates.filter((date) => !(date === today && liveSession))
+  const historicalDates = relevantDates.filter((date) => !(date === today && effectiveLiveSession))
   const persistedBlocksByDate = loadPersistedAppDetailBlocksForDates(db, historicalDates)
   const blocksByDate = new Map<string, AppDetailBlockSlice[]>(persistedBlocksByDate)
   const sessionDerivedBlocksByDate = buildSessionDerivedAppDetailBlocksByDate(sessions, canonicalAppId)
@@ -5042,7 +5060,7 @@ export function getAppDetailPayload(
 
     // For today with a live session, prefer the session-derived slices so the
     // currently running block is reflected immediately in the app panel.
-    if (date === today && liveSession && fallbackBlocks.length > 0) {
+    if (date === today && effectiveLiveSession && fallbackBlocks.length > 0) {
       blocksByDate.set(date, fallbackBlocks)
     }
   }
@@ -5108,15 +5126,49 @@ export function getAppDetailPayload(
       const existing = pageTotals.get(page.id)
       if (existing) {
         existing.totalSeconds += page.totalSeconds
+        existing.visitCount = (existing.visitCount ?? 0) + (page.visitCount ?? 0)
       } else {
         pageTotals.set(page.id, { ...page })
       }
     }
   }
 
-  const topPages = Array.from(pageTotals.values())
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
-    .slice(0, 8)
+  const blockTopPages = Array.from(pageTotals.values())
+  const directTopPages: PageRef[] = sessions.some((session) => isBrowserSession(session))
+    ? getPageSummariesForBrowser(db, fromMs, todayTo, canonicalAppId, 40).map((page) => {
+      const normalizedTitle = normalizeWebsiteTitleForDisplay(page.domain, page.title)
+      const displayTitle = normalizedTitle ?? websiteDisplayLabel(page.domain)
+      const canonicalKey = page.normalizedUrl ?? page.pageKey ?? page.url
+      return {
+        id: artifactIdFor(`page:${canonicalKey}`),
+        artifactType: 'page',
+        canonicalKey: `page:${canonicalKey}`,
+        displayTitle,
+        subtitle: page.domain,
+        totalSeconds: page.totalSeconds,
+        confidence: 0.9,
+        canonicalAppId,
+        url: page.url,
+        host: page.domain,
+        openTarget: { kind: 'external_url', value: page.url },
+        metadata: { normalizedUrl: page.normalizedUrl },
+        domain: page.domain,
+        browserBundleId: page.browserBundleId,
+        canonicalBrowserId: page.canonicalBrowserId,
+        normalizedUrl: page.normalizedUrl,
+        pageKey: page.pageKey,
+        pageTitle: normalizedTitle,
+        visitCount: page.visitCount,
+      }
+    })
+    : []
+  const topPages = (directTopPages.length > 0 ? directTopPages : blockTopPages)
+    .sort((left, right) => {
+      const kindDelta = Number(kindForDomain(left.domain) === 'leisure')
+        - Number(kindForDomain(right.domain) === 'leisure')
+      return kindDelta || right.totalSeconds - left.totalSeconds
+    })
+    .slice(0, 16)
 
   const pairedAppsMap = new Map<string, { canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>()
   for (const block of relatedBlocks) {
@@ -5201,10 +5253,10 @@ export function getAppDetailPayload(
   // running app's total/sessionCount also agrees.
   let liveExtraSeconds = 0
   let liveExtraSessions = 0
-  if (liveSession) {
-    const liveCanonicalId = liveSession.canonicalAppId ?? liveSession.bundleId
+  if (effectiveLiveSession) {
+    const liveCanonicalId = effectiveLiveSession.canonicalAppId ?? effectiveLiveSession.bundleId
     if (liveCanonicalId === canonicalAppId) {
-      const liveStart = Math.max(liveSession.startTime, fromMs)
+      const liveStart = Math.max(effectiveLiveSession.startTime, fromMs)
       liveExtraSeconds = Math.max(0, Math.round((Date.now() - liveStart) / 1000))
       liveExtraSessions = canonicalSummary ? 0 : 1
     }
@@ -5253,14 +5305,21 @@ function topDomainsForBrowser(
   if (sessions.length === 0) return undefined
   const isBrowser = sessions.some((session) => isBrowserSession(session))
   if (!isBrowser) return undefined
-  const summaries = getDomainSummariesForBrowser(db, fromMs, toMs, canonicalAppId, 8)
+  const summaries = getDomainSummariesForBrowser(db, fromMs, toMs, canonicalAppId, 40)
   if (summaries.length === 0) return []
-  return summaries.map((summary) => ({
-    domain: summary.domain,
-    totalSeconds: summary.totalSeconds,
-    visitCount: summary.visitCount,
-    topTitle: summary.topTitle,
-  }))
+  return summaries
+    .sort((left, right) => {
+      const kindDelta = Number(kindForDomain(left.domain) === 'leisure')
+        - Number(kindForDomain(right.domain) === 'leisure')
+      return kindDelta || right.totalSeconds - left.totalSeconds
+    })
+    .slice(0, 16)
+    .map((summary) => ({
+      domain: summary.domain,
+      totalSeconds: summary.totalSeconds,
+      visitCount: summary.visitCount,
+      topTitle: summary.topTitle,
+    }))
 }
 
 export function getDistractionCostPayload(
