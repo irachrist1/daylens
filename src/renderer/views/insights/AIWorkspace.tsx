@@ -54,6 +54,7 @@ export default function AIWorkspace() {
     settings,
     cliTools,
     hasApiKey,
+    billingAccess,
     activeFocusSession,
     actionFeedback,
     messageActionState,
@@ -299,6 +300,7 @@ export default function AIWorkspace() {
       ? !cliTools?.codex
       : false
   const hasMessages = messages.length > 0
+  const managedAccess = Boolean(billingAccess?.managed)
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -346,15 +348,15 @@ export default function AIWorkspace() {
           {hasApiKey && (
             <button
               type="button"
-              onClick={() => setModelSelectorOpen(true)}
-              title="Change the model for this chat"
+              onClick={() => { if (!managedAccess) setModelSelectorOpen(true) }}
+              title={managedAccess ? 'Daylens chooses and manages the model for this plan' : 'Change the model for this chat'}
               className="ai-model-subline"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 1, padding: '1px 5px', marginLeft: -5, borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, cursor: 'pointer', maxWidth: '100%', overflow: 'hidden' }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 1, padding: '1px 5px', marginLeft: -5, borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', fontSize: 11, cursor: managedAccess ? 'default' : 'pointer', maxWidth: '100%', overflow: 'hidden' }}
             >
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {displayProviderMeta.shortLabel} · {displayModelLabel}{overrideActive ? ' · custom' : ''}
+                {managedAccess ? 'Daylens managed AI' : `${displayProviderMeta.shortLabel} · ${displayModelLabel}${overrideActive ? ' · custom' : ''}`}
               </span>
-              <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.8 }}><IconChevronDown /></span>
+              {!managedAccess && <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.8 }}><IconChevronDown /></span>}
             </button>
           )}
         </div>
@@ -369,7 +371,7 @@ export default function AIWorkspace() {
           <span style={{ display: 'inline-flex', color: 'var(--color-text-tertiary)' }}><IconSparkleSearch /></span>
           <span style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '0.02em' }}>{isMac ? '⌘K' : 'Ctrl K'}</span>
         </button>
-        {activeThreadId != null && (
+        {activeThreadId != null && !managedAccess && (
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -472,7 +474,7 @@ export default function AIWorkspace() {
         </div>
       )}
       </div>
-      {modelSelectorOpen && (
+      {modelSelectorOpen && !managedAccess && (
         <ModelSelector
           providerAvailability={providerAvailability}
           currentProvider={displayProviderMeta.id}
@@ -483,7 +485,7 @@ export default function AIWorkspace() {
           onClose={() => setModelSelectorOpen(false)}
         />
       )}
-      {settingsOpen && activeThreadId != null && (
+      {settingsOpen && activeThreadId != null && !managedAccess && (
         <ThreadSettingsPanel
           threadId={activeThreadId}
           initial={threadSettings}

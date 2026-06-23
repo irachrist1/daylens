@@ -92,6 +92,65 @@ test('runMigrations is idempotent on an up-to-date database', () => {
   }
 })
 
+test('v36 database boots before the work-memory scope migration runs', () => {
+  const db = new Database(':memory:')
+  db.pragma('foreign_keys = ON')
+  db.exec(`
+    CREATE TABLE schema_version (
+      version    INTEGER PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    );
+    INSERT INTO schema_version (version, applied_at) VALUES (36, 0);
+
+    CREATE TABLE work_memory_facts (
+      id          TEXT PRIMARY KEY,
+      fact_text   TEXT NOT NULL,
+      origin      TEXT NOT NULL CHECK(origin IN ('drafted', 'user')),
+      status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deleted')),
+      topic_key   TEXT,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX idx_work_memory_facts_status
+      ON work_memory_facts (status, sort_order);
+
+    CREATE TABLE ai_usage_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL UNIQUE,
+      job_type TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      latency_ms INTEGER,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      cache_hit INTEGER NOT NULL DEFAULT 0
+    );
+  `)
+
+  assert.doesNotThrow(() => db.exec(SCHEMA_SQL))
+
+  setTestDb(db)
+  try {
+    assert.doesNotThrow(() => runMigrations())
+
+    const columns = db.prepare(`PRAGMA table_info(work_memory_facts)`).all() as { name: string }[]
+    assert.ok(columns.some((column) => column.name === 'source'))
+    assert.ok(columns.some((column) => column.name === 'scope'))
+
+    const indexes = indexNames(db)
+    assert.ok(indexes.has('idx_work_memory_facts_scope'))
+  } finally {
+    clearTestDb()
+    db.close()
+  }
+})
+
 test('migration ladder does not drop any required base table', () => {
   const db = new Database(':memory:')
   db.pragma('foreign_keys = ON')

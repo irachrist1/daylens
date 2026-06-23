@@ -13,15 +13,49 @@ import type { AppCategory } from '@shared/types'
 import { tableExists } from './database'
 
 type WorkMemoryFactOrigin = 'drafted' | 'user'
+// Display provenance (memory.md §2.1 "marked as such"). Durability is keyed on
+// origin/topic_key, never on source — source only tells the user where a fact
+// came from in the Manage-memory view.
+type WorkMemoryFactSource = 'evidence' | 'chat' | 'hand'
 
 interface WorkMemoryFact {
   id: string
   text: string
   origin: WorkMemoryFactOrigin
+  source: WorkMemoryFactSource
 }
 
 export interface WorkMemoryProfile {
   facts: WorkMemoryFact[]
+}
+
+// One plain-language entry in the memory audit (memory.md §3 / invariant 7).
+export interface MemoryAuditEntry {
+  id: string
+  action: 'remembered' | 'updated' | 'forgot'
+  text: string
+  source: 'chat' | 'hand'
+  createdAt: number
+}
+
+// A single extract→update operation (mem0's ADD / UPDATE / DELETE loop). The
+// memory extractor (ai/memoryWrite.ts) turns a chat instruction into these;
+// applyMemoryWriteOps writes them and records the audit.
+export type MemoryWriteAction = 'add' | 'update' | 'delete'
+
+export interface MemoryWriteOp {
+  action: MemoryWriteAction
+  /** New text for add/update. */
+  text?: string
+  /** Existing fact id for update/delete. */
+  targetId?: string
+}
+
+export interface MemoryWriteResult {
+  facts: WorkMemoryFact[]
+  applied: Array<{ action: MemoryWriteAction; text: string }>
+  /** One plain-language line confirming what changed, for the chat reply. */
+  summary: string
 }
 
 export interface RebuildResult {
@@ -39,9 +73,17 @@ interface FactRow {
   id: string
   fact_text: string
   origin: WorkMemoryFactOrigin
+  source: WorkMemoryFactSource
   status: 'active' | 'deleted'
   topic_key: string | null
   sort_order: number
+}
+
+// Older databases (pre-DEV-107) won't have the source column until the v37
+// migration runs; default to 'evidence' so reads never throw on a stale row.
+function rowSource(row: { source?: string | null; origin: WorkMemoryFactOrigin }): WorkMemoryFactSource {
+  if (row.source === 'chat' || row.source === 'hand' || row.source === 'evidence') return row.source
+  return row.origin === 'user' ? 'hand' : 'evidence'
 }
 
 function now(): number {
@@ -56,15 +98,28 @@ function ready(db: Database.Database): boolean {
   return tableExists(db, 'work_memory_facts')
 }
 
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return rows.some((row) => row.name === column)
+}
+
 export function getWorkMemoryProfile(db: Database.Database): WorkMemoryProfile {
   if (!ready(db)) return { facts: [] }
+  const sourceCol = hasColumn(db, 'work_memory_facts', 'source') ? 'source' : `NULL AS source`
   const rows = db.prepare(`
-    SELECT id, fact_text, origin, status, topic_key, sort_order
+    SELECT id, fact_text, origin, ${sourceCol}, status, topic_key, sort_order
     FROM work_memory_facts
     WHERE status = 'active'
     ORDER BY sort_order ASC, created_at ASC
   `).all() as FactRow[]
-  return { facts: rows.map((row) => ({ id: row.id, text: row.fact_text, origin: row.origin })) }
+  return {
+    facts: rows.map((row) => ({
+      id: row.id,
+      text: row.fact_text,
+      origin: row.origin,
+      source: rowSource(row),
+    })),
+  }
 }
 
 // Hand-editing a fact makes it a user correction — origin flips to 'user' so a
@@ -73,11 +128,8 @@ export function updateWorkMemoryFact(db: Database.Database, id: string, text: st
   if (!ready(db)) return { facts: [] }
   const trimmed = text.trim()
   if (!trimmed) return getWorkMemoryProfile(db)
-  db.prepare(`
-    UPDATE work_memory_facts
-    SET fact_text = ?, origin = 'user', updated_at = ?
-    WHERE id = ?
-  `).run(trimmed, now(), id)
+  applyUpdate(db, id, trimmed, 'hand')
+  recordAudit(db, 'updated', trimmed, 'hand')
   return getWorkMemoryProfile(db)
 }
 
@@ -85,11 +137,8 @@ export function addWorkMemoryFact(db: Database.Database, text: string): WorkMemo
   if (!ready(db)) return { facts: [] }
   const trimmed = text.trim()
   if (!trimmed) return getWorkMemoryProfile(db)
-  const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
-  db.prepare(`
-    INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, sort_order, created_at, updated_at)
-    VALUES (?, ?, 'user', 'active', NULL, ?, ?, ?)
-  `).run(newId(), trimmed, (max.m ?? 0) + 1, now(), now())
+  applyAdd(db, trimmed, 'hand')
+  recordAudit(db, 'remembered', trimmed, 'hand')
   return getWorkMemoryProfile(db)
 }
 
@@ -103,11 +152,8 @@ export function forgetWorkMemoryFact(db: Database.Database, id: string): ForgetR
   const row = db.prepare(`SELECT id, fact_text, origin, status, topic_key, sort_order FROM work_memory_facts WHERE id = ?`).get(id) as FactRow | undefined
   if (!row) return { facts: getWorkMemoryProfile(db).facts, changeSummary: 'Nothing to forget.' }
 
-  if (row.topic_key) {
-    db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), id)
-  } else {
-    db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(id)
-  }
+  applyDelete(db, row)
+  recordAudit(db, 'forgot', row.fact_text, 'hand')
   return {
     facts: getWorkMemoryProfile(db).facts,
     changeSummary: `Forgot "${truncate(row.fact_text)}".`,
@@ -116,6 +162,154 @@ export function forgetWorkMemoryFact(db: Database.Database, id: string): ForgetR
 
 function truncate(text: string, max = 60): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+// ── Shared mutators (used by both the hand path and the conversation path) ──
+
+function hasSourceColumn(db: Database.Database): boolean {
+  return hasColumn(db, 'work_memory_facts', 'source')
+}
+
+function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand'): string {
+  const id = newId()
+  const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
+  if (hasSourceColumn(db)) {
+    db.prepare(`
+      INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, source, scope, sort_order, created_at, updated_at)
+      VALUES (?, ?, 'user', 'active', NULL, ?, 'general', ?, ?, ?)
+    `).run(id, text, source, (max.m ?? 0) + 1, now(), now())
+  } else {
+    db.prepare(`
+      INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, sort_order, created_at, updated_at)
+      VALUES (?, ?, 'user', 'active', NULL, ?, ?, ?)
+    `).run(id, text, (max.m ?? 0) + 1, now(), now())
+  }
+  return id
+}
+
+// A hand edit or a chat correction flips origin to 'user' so a rebuild never
+// overwrites it (the correction rule). topic_key is preserved so an
+// edit-then-forget still tombstones a drafted topic.
+function applyUpdate(db: Database.Database, id: string, text: string, source: 'chat' | 'hand'): void {
+  if (hasSourceColumn(db)) {
+    db.prepare(`UPDATE work_memory_facts SET fact_text = ?, origin = 'user', source = ?, updated_at = ? WHERE id = ?`)
+      .run(text, source, now(), id)
+  } else {
+    db.prepare(`UPDATE work_memory_facts SET fact_text = ?, origin = 'user', updated_at = ? WHERE id = ?`)
+      .run(text, now(), id)
+  }
+}
+
+// A drafted topic is tombstoned (status=deleted) so a rebuild won't drag it
+// back; a purely hand/chat-added fact has no topic_key and is removed outright.
+function applyDelete(db: Database.Database, row: Pick<FactRow, 'id' | 'topic_key'>): void {
+  if (row.topic_key) {
+    db.prepare(`UPDATE work_memory_facts SET status = 'deleted', updated_at = ? WHERE id = ?`).run(now(), row.id)
+  } else {
+    db.prepare(`DELETE FROM work_memory_facts WHERE id = ?`).run(row.id)
+  }
+}
+
+// ── The conversation write path (memory.md §2.1) ────────────────────────────
+// Daylens writes to its own memory from a chat instruction. The ops come from
+// the extractor (ai/memoryWrite.ts); this applies them durably and records the
+// audit. Everything written here is origin='user' so it survives every rebuild.
+export function applyMemoryWriteOps(
+  db: Database.Database,
+  ops: MemoryWriteOp[],
+  source: 'chat' | 'hand' = 'chat',
+): MemoryWriteResult {
+  if (!ready(db)) return { facts: [], applied: [], summary: '' }
+  const applied: Array<{ action: MemoryWriteAction; text: string }> = []
+
+  const tx = db.transaction(() => {
+    for (const op of ops) {
+      if (op.action === 'add') {
+        const text = (op.text ?? '').trim()
+        if (!text) continue
+        applyAdd(db, text, source)
+        recordAudit(db, 'remembered', text, source)
+        applied.push({ action: 'add', text })
+      } else if (op.action === 'update') {
+        const text = (op.text ?? '').trim()
+        if (!text || !op.targetId) continue
+        const exists = db.prepare(`SELECT id FROM work_memory_facts WHERE id = ?`).get(op.targetId)
+        if (!exists) {
+          // The target vanished — record it as a fresh memory instead of dropping it.
+          applyAdd(db, text, source)
+          recordAudit(db, 'remembered', text, source)
+          applied.push({ action: 'add', text })
+          continue
+        }
+        applyUpdate(db, op.targetId, text, source)
+        recordAudit(db, 'updated', text, source)
+        applied.push({ action: 'update', text })
+      } else if (op.action === 'delete') {
+        if (!op.targetId) continue
+        const row = db.prepare(
+          `SELECT id, fact_text, topic_key FROM work_memory_facts WHERE id = ?`,
+        ).get(op.targetId) as Pick<FactRow, 'id' | 'fact_text' | 'topic_key'> | undefined
+        if (!row) continue
+        applyDelete(db, row)
+        recordAudit(db, 'forgot', row.fact_text, source)
+        applied.push({ action: 'delete', text: row.fact_text })
+      }
+    }
+  })
+  tx()
+
+  return {
+    facts: getWorkMemoryProfile(db).facts,
+    applied,
+    summary: summarizeApplied(applied),
+  }
+}
+
+function summarizeApplied(applied: Array<{ action: MemoryWriteAction; text: string }>): string {
+  if (applied.length === 0) return ''
+  const parts = applied.map((entry) => {
+    const text = truncate(entry.text, 80)
+    if (entry.action === 'add') return `I'll remember that ${lowerFirst(text)}`
+    if (entry.action === 'update') return `Updated — ${lowerFirst(text)}`
+    return `Forgot "${text}"`
+  })
+  return `${parts.join('. ')}.`
+}
+
+function lowerFirst(text: string): string {
+  return text ? text.charAt(0).toLowerCase() + text.slice(1) : text
+}
+
+// ── The audit (memory.md §3 / invariant 7) ──────────────────────────────────
+
+function recordAudit(
+  db: Database.Database,
+  action: MemoryAuditEntry['action'],
+  text: string,
+  source: 'chat' | 'hand',
+): void {
+  if (!tableExists(db, 'memory_audit')) return
+  db.prepare(`
+    INSERT INTO memory_audit (id, action, fact_text, source, scope, created_at)
+    VALUES (?, ?, ?, ?, 'general', ?)
+  `).run(`mau_${crypto.randomBytes(8).toString('hex')}`, action, text.slice(0, 280), source, now())
+}
+
+export function getMemoryAudit(db: Database.Database, limit = 12): MemoryAuditEntry[] {
+  if (!tableExists(db, 'memory_audit')) return []
+  const rows = db.prepare(`
+    SELECT id, action, fact_text, source, created_at
+    FROM memory_audit
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit) as Array<{ id: string; action: MemoryAuditEntry['action']; fact_text: string; source: 'chat' | 'hand'; created_at: number }>
+  return rows.map((row) => ({
+    id: row.id,
+    action: row.action,
+    text: row.fact_text,
+    source: row.source,
+    createdAt: row.created_at,
+  }))
 }
 
 // ── Drafting from real evidence ────────────────────────────────────────────
@@ -259,6 +453,25 @@ export function rebuildWorkMemory(db: Database.Database): RebuildResult {
     ? `Rebuilt — added: ${added.map((text) => truncate(text, 50)).join('; ')}.`
     : 'Rebuilt — nothing new to add; your profile already matches your recent activity.'
   return { facts, added, changeSummary }
+}
+
+// A drafted fact Daylens noticed from real evidence that the user hasn't stored
+// or purposely forgotten — so the assistant can OFFER to remember it rather
+// than silently absorbing it (memory.md §2.1). Forgotten topics carry a
+// tombstone row (topic_key present, status='deleted'), so they're excluded and
+// never proposed again.
+export function proposeUnstoredMemoryFact(db: Database.Database): { topicKey: string; text: string } | null {
+  if (!ready(db)) return null
+  const drafts = draftFactsFromEvidence(db)
+  if (drafts.length === 0) return null
+  const known = new Set(
+    (db.prepare(`SELECT topic_key FROM work_memory_facts WHERE topic_key IS NOT NULL`)
+      .all() as Array<{ topic_key: string }>).map((row) => row.topic_key),
+  )
+  for (const draft of drafts) {
+    if (!known.has(draft.topicKey)) return { topicKey: draft.topicKey, text: draft.text }
+  }
+  return null
 }
 
 // The profile handed to every AI surface as context (naming, recaps, chat,

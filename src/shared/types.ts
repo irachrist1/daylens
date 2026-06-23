@@ -270,15 +270,28 @@ export interface WorkMemorySettingsSummary {
 // Work memory as an editable, human-readable profile (ChatGPT-style) — replaces
 // the opaque pattern table. See docs/specs/work-memory.md.
 type WorkMemoryFactOrigin = 'drafted' | 'user'
+// DEV-107: where a fact came from, shown in the Manage-memory view. Durability
+// is keyed on origin, never source.
+type WorkMemoryFactSource = 'evidence' | 'chat' | 'hand'
 
 export interface WorkMemoryFact {
   id: string
   text: string
   origin: WorkMemoryFactOrigin
+  source: WorkMemoryFactSource
 }
 
 export interface WorkMemoryProfile {
   facts: WorkMemoryFact[]
+}
+
+// DEV-107: one plain-language entry in the memory audit (memory.md §3).
+export interface MemoryAuditEntry {
+  id: string
+  action: 'remembered' | 'updated' | 'forgot'
+  text: string
+  source: 'chat' | 'hand'
+  createdAt: number
 }
 
 // Rebuild / forget each report what changed in one plain-language line.
@@ -1184,6 +1197,61 @@ export interface AppSettings {
   trackingExcludedSites?: string[]  // hosts/domains
   trackingSkipIncognito?: boolean   // effective only when controls enabled; defaults on
   trackingPaused?: boolean          // ad-hoc pause; blocks capture regardless of the master switch
+  billingInstallationId?: string    // random local install identity; raw activity never leaves with it
+}
+
+export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
+export type BillingUsageType = 'free_credit' | 'subscription' | 'local_pass' | 'own_key'
+
+export interface BillingAccessSnapshot {
+  mode: BillingAccessMode
+  canUseAI: boolean
+  managed: boolean
+  creditGrantedUsd: number
+  creditRemainingUsd: number
+  periodSpendUsd: number
+  paidSpendUsd: number
+  renewalAt: number | null
+  localPassExpiresAt: number | null
+  fairUseRemainingUsd: number | null
+  subscriptionStatus: string | null
+  providerLabel: string | null
+  checkoutAvailable: boolean
+  localCheckoutAvailable: boolean
+  portalAvailable: boolean
+  message: string
+}
+
+export interface BillingUsageRow {
+  id: string
+  occurredAt: number
+  type: BillingUsageType
+  feature: string
+  provider: string | null
+  model: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+  tokens: number | null
+  costUsd: number | null
+  success: boolean
+}
+
+export interface BillingUsagePoint {
+  day: string
+  model: string
+  spendUsd: number
+  tokens: number
+}
+
+export interface BillingUsageReport {
+  from: number
+  to: number
+  totalSpendUsd: number
+  totalTokens: number
+  freeCreditUsedUsd: number
+  paidSpendUsd: number
+  points: BillingUsagePoint[]
+  rows: BillingUsageRow[]
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1458,6 +1526,7 @@ export const IPC = {
     ADD_WORK_MEMORY_FACT: 'db:add-work-memory-fact',
     FORGET_WORK_MEMORY_FACT: 'db:forget-work-memory-fact',
     REBUILD_WORK_MEMORY: 'db:rebuild-work-memory',
+    GET_MEMORY_AUDIT: 'db:get-memory-audit',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
@@ -1520,6 +1589,15 @@ export const IPC = {
     CLEAR_API_KEY: 'settings:clear-api-key',
     VALIDATE_API_KEY: 'settings:validate-api-key',
   },
+  BILLING: {
+    GET_ACCESS: 'billing:get-access',
+    GET_USAGE: 'billing:get-usage',
+    CREATE_POLAR_CHECKOUT: 'billing:create-polar-checkout',
+    CREATE_FLUTTERWAVE_CHECKOUT: 'billing:create-flutterwave-checkout',
+    OPEN_PORTAL: 'billing:open-portal',
+    EXPORT_USAGE_CSV: 'billing:export-usage-csv',
+    REFRESH: 'billing:refresh',
+  },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',
   },
@@ -1574,5 +1652,8 @@ export const IPC = {
   },
   MCP: {
     GET_CONFIG: 'mcp:get-config',
+  },
+  SYSTEM: {
+    THEME_CHANGED: 'system:theme-changed',
   },
 } as const

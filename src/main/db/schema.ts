@@ -141,7 +141,9 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
   output_tokens INTEGER,
   cache_read_tokens INTEGER,
   cache_write_tokens INTEGER,
-  cache_hit INTEGER NOT NULL DEFAULT 0
+  cache_hit INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL,
+  billing_mode TEXT NOT NULL DEFAULT 'own_key'
 );
 
 CREATE INDEX IF NOT EXISTS idx_ai_usage_events_started_at ON ai_usage_events (started_at DESC);
@@ -764,8 +766,27 @@ CREATE TABLE IF NOT EXISTS work_memory_facts (
   status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'deleted')),
   topic_key   TEXT,
   sort_order  INTEGER NOT NULL DEFAULT 0,
+  -- DEV-107: where the fact came from (display provenance, not durability),
+  -- and which scope it belongs to. 'general' is always-in-prompt memory;
+  -- 'client:<id>' is per-client scoped memory pulled in only when relevant
+  -- (DEV-108 fills the client side — DEV-107 lays the column).
+  source      TEXT NOT NULL DEFAULT 'evidence' CHECK(source IN ('evidence', 'chat', 'hand')),
+  scope       TEXT NOT NULL DEFAULT 'general',
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_work_memory_facts_status ON work_memory_facts (status, sort_order);
+
+-- DEV-107: a short, plain-language audit of what memory remembered, changed,
+-- or forgot — so memory never feels like it's changing behind your back
+-- (memory.md §3, invariant 7). Display-only; never feeds the AI prompt.
+CREATE TABLE IF NOT EXISTS memory_audit (
+  id          TEXT PRIMARY KEY,
+  action      TEXT NOT NULL CHECK(action IN ('remembered', 'updated', 'forgot')),
+  fact_text   TEXT NOT NULL,
+  source      TEXT NOT NULL CHECK(source IN ('chat', 'hand')),
+  scope       TEXT NOT NULL DEFAULT 'general',
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_audit_created ON memory_audit (created_at DESC);
 `

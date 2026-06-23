@@ -88,6 +88,63 @@ test('getApp on an unknown app reports empty without throwing', (t) => {
   assert.equal(fact.isEmpty, true, 'no tracked time for an app that was never used')
 })
 
+function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {
+  const insert = db.prepare(`
+    INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'history')
+  `)
+  const visits = [
+    ['youtube.com', 'Redmi Watch 5 Review - YouTube', 'https://www.youtube.com/watch?v=a'],
+    ['youtube.com', 'Mercor - How it Works - YouTube', 'https://www.youtube.com/watch?v=b'],
+    ['www.youtube.com', 'Superhuman Review - YouTube', 'https://www.youtube.com/watch?v=c'],
+    ['m.youtube.com', 'YouTube', 'https://m.youtube.com/'],
+  ]
+  visits.forEach(([domain, title, url], i) => {
+    const t = localMs(day, 15, i * 5)
+    insert.run(domain, title, url, t, t * 1000, durationSec, 'com.apple.Safari')
+  })
+}
+
+// The youtube.com regression: "how many hours on youtube" is a SITE question.
+// There is no app called youtube.com, so app matching finds nothing — it must
+// fall back to website_visits (the same data ⌘K reads) instead of "zero".
+test('getApp on a site domain answers from website_visits, not "no tracked time"', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = seedCodingDay(db)
+  seedYouTubeVisits(db, today, 600)
+  const fact = runResolverQuery({ resolver: 'getApp', app: 'youtube.com', from: dateStr(today), to: dateStr(today) }, db)
+  assert.equal(fact.isEmpty, false, 'youtube.com visits are a real answer, not empty')
+  const data = fact.data as GetAppUsageResult
+  assert.equal(data.appName, 'youtube.com', 'reports the registrable domain')
+  assert.ok(data.totalSeconds > 0, 'sums duration across youtube.com + subdomains')
+  assert.equal(data.sessionCount, 4, 'counts every youtube visit including subdomains')
+})
+
+test('getApp on a bare site name ("youtube") matches the domain', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = seedCodingDay(db)
+  seedYouTubeVisits(db, today, 300)
+  const fact = runResolverQuery({ resolver: 'getApp', app: 'youtube', from: dateStr(today), to: dateStr(today) }, db)
+  assert.equal(fact.isEmpty, false)
+  assert.equal((fact.data as GetAppUsageResult).sessionCount, 4)
+})
+
+// Even when dwell time wasn't captured (history visits with 0 duration), visits
+// are still a real answer — never "you spent zero time".
+test('getApp on a site with visits but no duration is not empty', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = seedCodingDay(db)
+  seedYouTubeVisits(db, today, 0)
+  const fact = runResolverQuery({ resolver: 'getApp', app: 'youtube.com', from: dateStr(today), to: dateStr(today) }, db)
+  assert.equal(fact.isEmpty, false, 'visits with no duration are still a real answer')
+  const text = serializeFact(fact)
+  assert.match(text, /visit/i, 'the fact tells the model about the visits')
+  assert.doesNotMatch(text, /no tracked time/i, 'never claims zero when visits exist')
+})
+
 test('recall finds a session by a window-title keyword', (t) => {
   const db = setupDb()
   t.after(() => db.close())

@@ -22,6 +22,7 @@ import {
   addWorkMemoryFact,
   forgetWorkMemoryFact,
   rebuildWorkMemory,
+  getMemoryAudit,
 } from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -552,6 +553,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.REBUILD_WORK_MEMORY, () => {
     return rebuildWorkMemory(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.GET_MEMORY_AUDIT, () => {
+    return getMemoryAudit(getDb())
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {

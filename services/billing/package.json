@@ -1,0 +1,12 @@
+{
+  "name": "@daylens/billing-service",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node --check src/server.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

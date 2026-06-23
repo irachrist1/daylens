@@ -327,6 +327,8 @@ let HEARTBEAT_NS: UInt64 = 10_000_000_000
 let UNCERTAIN_MAX_NS: UInt64 = 10_000_000_000
 let BACKOFF_AFTER_SAMPLES = 5
 let internalKey = "__browser_internal__"
+let FOREGROUND_HEARTBEAT_NS: UInt64 = 10_000_000_000
+var lastForegroundEmitMono: UInt64 = 0
 
 func tabFields(eventType: String, url: String?, pageTitle: String?, confidence: String,
                mono: UInt64, ts: Int) {
@@ -455,8 +457,10 @@ func pollTick(_ epoch: Int) {
 // MARK: foreground events (main thread)
 
 func emitForeground(_ type: String, pid: pid_t, name: String?, bundle: String?, title: String?) {
+  let mono = monoNow()
+  lastForegroundEmitMono = mono
   emit(FocusEvent(
-    ts_ms: wallMs(), mono_ns: monoNow(), event_type: type,
+    ts_ms: wallMs(), mono_ns: mono, event_type: type,
     app_bundle_id: bundle, app_name: name, pid: Int(pid),
     window_title: title, url: nil, page_title: nil,
     source: "nsworkspace_event", confidence: "observed",
@@ -577,7 +581,8 @@ func pollFocusedWindowTitle() {
   let f = frontmost.get()
   if f.pid > 0 {
     let title = axFocusedWindowTitle(pid: f.pid)
-    if frontmost.setTitle(title) {
+    let shouldHeartbeat = monoNow() - lastForegroundEmitMono >= FOREGROUND_HEARTBEAT_NS
+    if frontmost.setTitle(title) || shouldHeartbeat {
       let updated = frontmost.get()
       emitForeground(
         "window_changed",

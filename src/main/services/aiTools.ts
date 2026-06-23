@@ -201,6 +201,11 @@ export interface GetAppUsageResult {
   endDate: string
   dailyBreakdown: AppUsageDailyBreakdown[]
   recentWindowTitles: string[]  // up to 10 most recent distinct window titles
+  /** True when the answer came from website_visits (a site, e.g. youtube.com)
+   *  rather than app sessions. Site time sums every visit, which includes a tab
+   *  left open/playing in the background while other work was in the foreground —
+   *  so the phrase step discloses that rather than implying pure active watching. */
+  fromWebsiteVisits?: boolean
 }
 
 interface ArtifactHit {
@@ -405,6 +410,78 @@ function appMatchesLoosely(
     if (normalized.includes(lookup)) return true
     return normalized.length >= 4 && lookup.includes(normalized)
   })
+}
+
+// Per-domain time + visit counts from website_visits, the same table the ⌘K
+// search and the Apps "sites under a browser" view read. Matches a site lookup
+// ("youtube", "youtube.com") against tracked domains and their subdomains, so
+// "how many hours on youtube" stops answering "zero" when the visits are right
+// there. Returns null when no tracked domain matches.
+interface SiteUsageAgg {
+  domain: string
+  totalSeconds: number
+  visitCount: number
+  dailyBreakdown: { date: string; totalSeconds: number; sessionCount: number }[]
+  titles: string[]
+}
+
+function aggregateSiteUsage(
+  db: Database.Database,
+  lookupRaw: string,
+  fromMs: number,
+  toMs: number,
+): SiteUsageAgg | null {
+  const needle = normalizeAppLookupValue(lookupRaw)
+  if (!needle || needle.length < 3) return null
+
+  const domainRows = db.prepare(`
+    SELECT DISTINCT domain FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ? AND domain IS NOT NULL AND domain != ''
+  `).all(fromMs, toMs) as { domain: string }[]
+
+  const matchedDomains = domainRows
+    .map((r) => r.domain)
+    .filter((domain) => {
+      const dn = normalizeAppLookupValue(domain)
+      if (!dn) return false
+      if (dn === needle) return true
+      if (needle.length >= 4 && dn.includes(needle)) return true
+      if (dn.length >= 4 && needle.includes(dn)) return true
+      return false
+    })
+  if (matchedDomains.length === 0) return null
+
+  const placeholders = matchedDomains.map(() => '?').join(', ')
+  const dayRows = db.prepare(`
+    SELECT strftime('%Y-%m-%d', visit_time / 1000, 'unixepoch', 'localtime') AS day,
+           SUM(duration_sec) AS sec,
+           COUNT(*) AS visits
+    FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ? AND domain IN (${placeholders})
+    GROUP BY day ORDER BY day DESC
+  `).all(fromMs, toMs, ...matchedDomains) as { day: string; sec: number; visits: number }[]
+
+  const totalSeconds = dayRows.reduce((s, r) => s + (r.sec ?? 0), 0)
+  const visitCount = dayRows.reduce((s, r) => s + (r.visits ?? 0), 0)
+  if (visitCount <= 0) return null
+
+  const titleRows = db.prepare(`
+    SELECT DISTINCT page_title FROM website_visits
+    WHERE visit_time >= ? AND visit_time < ? AND domain IN (${placeholders})
+      AND page_title IS NOT NULL AND page_title != ''
+    ORDER BY visit_time DESC LIMIT 10
+  `).all(fromMs, toMs, ...matchedDomains) as { page_title: string }[]
+
+  return {
+    // Show the shortest matched domain — usually the registrable host (youtube.com).
+    domain: matchedDomains.slice().sort((a, b) => a.length - b.length)[0],
+    totalSeconds,
+    visitCount,
+    dailyBreakdown: dayRows
+      .filter((r) => (r.sec ?? 0) > 0 || (r.visits ?? 0) > 0)
+      .map((r) => ({ date: r.day, totalSeconds: r.sec ?? 0, sessionCount: r.visits ?? 0 })),
+    titles: titleRows.map((r) => r.page_title),
+  }
 }
 
 function sessionIdentityWhereClause(canonicalIds: string[], bundleIds: string[]): { clause: string; params: string[] } {
@@ -698,6 +775,26 @@ export function execGetAppUsage(params: GetAppUsageParams, db: Database.Database
   const totalSeconds = matched.reduce((s, a) => s + a.totalSeconds, 0)
   const sessionCount = matched.reduce((s, a) => s + (a.sessionCount ?? 0), 0)
   const bundleId = matched[0]?.bundleId ?? ''
+
+  // Sites aren't apps. "how long on youtube.com" is a website question, and there
+  // is no app called youtube.com — so when nothing matched as an app, answer from
+  // the website_visits table (the same per-domain data the ⌘K search reads).
+  if (totalSeconds <= 0) {
+    const site = aggregateSiteUsage(db, params.appName, fromMs, toMs)
+    if (site) {
+      return {
+        appName: site.domain,
+        bundleId: '',
+        totalSeconds: site.totalSeconds,
+        sessionCount: site.visitCount,
+        startDate: params.startDate ?? toDateStr(fromMs),
+        endDate: params.endDate ?? toDateStr(toMs),
+        dailyBreakdown: site.dailyBreakdown,
+        recentWindowTitles: site.titles,
+        fromWebsiteVisits: true,
+      }
+    }
+  }
 
   // B4: daily breakdown must come from getAppSummariesForRange (the canonical
   // source) so per-day numbers agree with the Apps rail and detail header.

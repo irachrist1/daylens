@@ -269,9 +269,19 @@ export default function App() {
 
     window.addEventListener('daylens:theme-changed', onThemeChange as EventListener)
 
+    // When the OS appearance changes and the user has chosen 'system' theme,
+    // re-apply so the UI follows without a restart.
+    const offOsTheme = ipc.system.onThemeChanged((appearance) => {
+      // Only act when the user hasn't pinned a specific theme.
+      ipc.settings.get().then((s) => {
+        if (s.theme === 'system') applyTheme(appearance)
+      }).catch(() => { /* ignore — settings unavailable */ })
+    })
+
     return () => {
       active = false
       window.removeEventListener('daylens:theme-changed', onThemeChange as EventListener)
+      offOsTheme()
     }
   }, [])
 

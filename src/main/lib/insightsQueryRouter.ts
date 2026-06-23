@@ -98,6 +98,32 @@ function startOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), 1)
 }
 
+// Monday of the week containing `date`. Weeks run Monday→Sunday, matching the
+// Timeline and the AI planner (planner.ts mondayOf) — so "last week" here means
+// the SAME calendar week, never a drifting rolling-7-day window.
+function mondayOf(date: Date): Date {
+  const r = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  r.setDate(r.getDate() - ((r.getDay() + 6) % 7))
+  return r
+}
+
+// Calendar-week range for "this week" / "last week".
+//   this week → this Monday 00:00 .. end of `date`
+//   last week → previous Monday 00:00 .. previous Sunday 23:59:59.999
+function weeklyRange(date: Date, isLastWeek: boolean): { startMs: number; endMs: number } {
+  const thisMonday = mondayOf(date)
+  if (isLastWeek) {
+    const start = new Date(thisMonday)
+    start.setDate(start.getDate() - 7)
+    const end = new Date(thisMonday)
+    end.setMilliseconds(end.getMilliseconds() - 1) // last Sunday 23:59:59.999
+    return { startMs: start.getTime(), endMs: end.getTime() + 1 }
+  }
+  const end = new Date(date)
+  end.setHours(23, 59, 59, 999)
+  return { startMs: thisMonday.getTime(), endMs: end.getTime() + 1 }
+}
+
 function startOfQuarter(date: Date): Date {
   const quarterMonth = Math.floor(date.getMonth() / 3) * 3
   return new Date(date.getFullYear(), quarterMonth, 1)
@@ -1194,15 +1220,12 @@ function resolveQuestionRange(
   }
 
   if (normalized.includes('this week') || normalized.includes('last week')) {
-    const end = new Date(context.date)
-    end.setHours(23, 59, 59, 999)
-    const start = new Date(end)
-    start.setDate(start.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
+    const isLastWeek = normalized.includes('last week')
+    const { startMs, endMs } = weeklyRange(context.date, isLastWeek)
     return {
-      startMs: start.getTime(),
-      endMs: end.getTime() + 1,
-      label: normalized.includes('last week') ? 'last week' : 'this week',
+      startMs,
+      endMs,
+      label: isLastWeek ? 'last week' : 'this week',
     }
   }
 
@@ -2288,14 +2311,12 @@ export async function routeInsightsQuestion(
   }
 
   if (isWeeklyQuestion(normalized)) {
-    const end = new Date(resolvedContext.date)
-    end.setHours(23, 59, 59, 999)
-    const start = new Date(end)
-    start.setDate(end.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
-    const apps = getAppSummariesForRange(db, start.getTime(), end.getTime())
-    const sites = getWebsiteSummariesForRange(db, start.getTime(), end.getTime())
-    const sessions = getSessionsForRange(db, start.getTime(), end.getTime())
+    const { startMs, endMs } = weeklyRange(resolvedContext.date, normalized.includes('last week'))
+    const start = new Date(startMs)
+    const end = new Date(endMs) // exclusive end of the calendar week
+    const apps = getAppSummariesForRange(db, startMs, endMs)
+    const sites = getWebsiteSummariesForRange(db, startMs, endMs)
+    const sessions = getSessionsForRange(db, startMs, endMs)
     if (normalized.includes('what distracted me') || normalized.includes('biggest distraction')) {
       const topNonFocusApp = apps.find((app) => !isFocusedCategory(app.category))
       const topNonFocusSite = sites[0]
@@ -2695,6 +2716,24 @@ const NUMERIC_ROUTE_PATTERNS: RegExp[] = [
   /\bhow'?s? (my )?focus\b/,
 ]
 
+// Time-quantity questions aimed at a specific app or site ("how many hours on
+// youtube last week", "how long was I in Slack", "how much time did I spend on
+// twitter") must NOT route to the deterministic engine. Its site-time path reads
+// app window-titles and undercounts a website badly (it answered 1h31m for a real
+// 6h17m of youtube.com), and it treats "last week" as a rolling 7 days. The
+// planner→getApp resolver reads website_visits and uses calendar weeks, so it is
+// the single grounded source for app/site time — let it own these.
+const GENERIC_TIME_TARGETS = new Set([
+  'my', 'the', 'a', 'an', 'computer', 'laptop', 'mac', 'pc', 'screen',
+  'it', 'here', 'today', 'yesterday', 'total', 'focus', 'average', 'work', 'everything',
+])
+
+function looksLikeAppOrSiteTimeQuestion(lower: string): boolean {
+  if (!/\bhow\s+(?:long|much\s+time|many\s+(?:hours?|minutes?|sessions?|times?))\b/.test(lower)) return false
+  const target = lower.match(/\b(?:on|in|using|watching|browsing)\s+([a-z0-9][\w.-]*)/)?.[1]
+  return !!target && !GENERIC_TIME_TARGETS.has(target)
+}
+
 /**
  * Returns true only for pure numeric lookups that the deterministic router
  * can answer without open-ended synthesis. Everything else goes to the
@@ -2782,6 +2821,10 @@ export function shouldUseRouter(message: string): boolean {
   for (const prefix of SYNTHESIS_BLOCK_PREFIXES) {
     if (lower.startsWith(prefix)) return false
   }
+
+  // App/site time questions belong to the planner→getApp path (reads
+  // website_visits, calendar weeks), not the deterministic engine.
+  if (looksLikeAppOrSiteTimeQuestion(lower)) return false
 
   for (const pattern of NUMERIC_ROUTE_PATTERNS) {
     if (pattern.test(lower)) return true

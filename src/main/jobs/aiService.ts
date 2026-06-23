@@ -46,6 +46,12 @@ import {
   parseGeneratedReportResult,
 } from '../lib/dayReportFallback'
 import {
+  detectRequestedFormats,
+  formatDisplayName,
+  looksLikeBareFormatRequest,
+  type ReportExportFormat,
+} from '../lib/reportFormats'
+import {
   findClientByName,
   findProjectByName,
   listClients,
@@ -57,7 +63,8 @@ import {
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { getDb } from '../services/database'
-import { workMemoryPromptBlock } from '../services/workMemoryProfile'
+import { workMemoryPromptBlock, getWorkMemoryProfile, applyMemoryWriteOps, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
+import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
 import {
   createArtifact,
   createThread,
@@ -117,7 +124,7 @@ import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
 import { planQuestion } from '../ai/planner'
 import { phraseAnswer } from '../ai/phrase'
-import { runResolverQueries } from '../ai/resolvers'
+import { runResolverQueries, type ResolverQuery } from '../ai/resolvers'
 import {
   backgroundRelabelDispositionForBlock,
   fallbackNarrativeForBlock,
@@ -374,6 +381,56 @@ function buildFocusReviewNote(session: FocusSession, distractionCount: number): 
   }
 
   return `${parts.join(' · ')}.\nWhat went well, what interrupted you, and what should the next session keep or change?`
+}
+
+// One memory proposal per conversation context per session — Daylens offers a
+// noticed pattern once, then stops nudging (memory.md §2.1, no nagging).
+const proposedMemoryContexts = new Set<string>()
+
+// After a day/range answer, offer to remember ONE thing Daylens noticed (a
+// drafted fact the user hasn't stored or forgotten) — proposing, not silently
+// absorbing. Returns the line to append, or null. Marks the context so it only
+// offers once.
+function maybeMemoryProposalLine(queries: ResolverQuery[], contextKey: string): string | null {
+  if (proposedMemoryContexts.has(contextKey)) return null
+  const aboutTheDay = queries.some((q) => q.resolver === 'getDay' || q.resolver === 'getRange')
+  if (!aboutTheDay) return null
+  const proposal = proposeUnstoredMemoryFact(getDb())
+  if (!proposal) return null
+  proposedMemoryContexts.add(contextKey)
+  const noticed = proposal.text.charAt(0).toLowerCase() + proposal.text.slice(1)
+  return `By the way — ${noticed} Want me to remember that? Just say "remember that".`
+}
+
+// The conversation write path for memory (memory.md §2.1). When the user tells
+// Daylens to remember/forget/correct something, we extract the change, write it
+// to memory, and confirm in one line — the AI taking an action, not answering a
+// data question. Returns null when the message isn't a memory instruction or
+// the extractor found nothing durable to change, so the normal answer path runs
+// untouched.
+async function maybeHandleMemoryInstruction(
+  message: string,
+  runner: Parameters<typeof planQuestion>[1],
+  prior: ConversationMessage[],
+): Promise<AnswerEnvelope | null> {
+  if (!looksLikeMemoryInstruction(message)) return null
+  const db = getDb()
+  const currentFacts = getWorkMemoryProfile(db).facts.map((fact) => ({ id: fact.id, text: fact.text }))
+  const ops = await extractMemoryOps({ message, currentFacts, runner, prior })
+  if (ops.length === 0) return null
+  const result = applyMemoryWriteOps(db, ops, 'chat')
+  if (!result.summary.trim()) return null
+  // Lead with a plain confirmation and point at where to manage it — never a
+  // hidden write (invariant 2 / 7).
+  const assistantText = `${result.summary} You can see and edit this any time in Settings → Memory.`
+  return {
+    assistantText,
+    answerKind: 'freeform_chat',
+    sourceKind: 'freeform',
+    resolvedTemporalContext: null,
+    conversationState: null,
+    suggestedFollowUps: [],
+  }
 }
 
 function maybeHandleFocusIntent(message: string): AnswerEnvelope | null {
@@ -1012,6 +1069,69 @@ async function sendWithOpenRouter(
   return { text, usage }
 }
 
+async function sendWithManagedProxy(
+  config: ResolvedProviderConfig,
+  systemPrompt: string,
+  prior: ConversationMessage[],
+  userMessage: string,
+  options?: AITextJobExecutionOptions,
+): Promise<ProviderTextResponse> {
+  if (!config.baseUrl || !config.apiKey) throw new Error('Daylens managed AI session is unavailable.')
+  const client = new OpenAI({
+    apiKey: config.apiKey,
+    baseURL: config.baseUrl,
+    defaultHeaders: { 'X-Daylens-Feature': config.feature ?? 'ai' },
+  })
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: systemPrompt },
+    ...prior.map((message) => ({ role: message.role as 'user' | 'assistant', content: message.content })),
+    { role: 'user', content: userMessage },
+  ]
+  const stream = await client.chat.completions.create({
+    model: config.model,
+    messages,
+    max_tokens: options?.maxOutputTokens ?? 1024,
+    stream: true,
+    stream_options: { include_usage: true },
+  })
+  let text = ''
+  let inputTokens: number | null = null
+  let outputTokens: number | null = null
+  let cacheReadTokens: number | null = null
+  let costUsd: number | null = null
+  for await (const rawChunk of stream) {
+    const chunk = rawChunk as typeof rawChunk & {
+      daylens_cost_usd?: number
+      usage?: {
+        prompt_tokens?: number | null
+        completion_tokens?: number | null
+        prompt_tokens_details?: { cached_tokens?: number | null } | null
+      } | null
+    }
+    const delta = chunk.choices?.[0]?.delta?.content
+    if (delta) {
+      text += delta
+      await options?.onDelta?.(delta)
+    }
+    if (chunk.usage || typeof chunk.daylens_cost_usd === 'number') {
+      inputTokens = chunk.usage?.prompt_tokens ?? inputTokens
+      outputTokens = chunk.usage?.completion_tokens ?? outputTokens
+      cacheReadTokens = chunk.usage?.prompt_tokens_details?.cached_tokens ?? cacheReadTokens
+      costUsd = chunk.daylens_cost_usd ?? costUsd
+    }
+  }
+  return {
+    text,
+    usage: {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens: null,
+      costUsd,
+    },
+  }
+}
+
 async function sendWithOpenAI(
   config: ResolvedProviderConfig,
   systemPrompt: string,
@@ -1233,6 +1353,9 @@ async function sendWithProvider(
   userMessage: string,
   options?: AITextJobExecutionOptions,
 ): Promise<ProviderTextResponse> {
+  if (config.transport === 'managed') {
+    return sendWithManagedProxy(config, systemPrompt, prior, userMessage, options)
+  }
   switch (config.provider) {
     case 'claude-cli':
     case 'codex-cli': {
@@ -1328,6 +1451,12 @@ function detectRequestedOutputKinds(question: string): RequestedOutputKind[] {
   }
   if (/\bexport\b|\bdownload\b/.test(normalized)) {
     kinds.add('export')
+  }
+
+  // Naming a document format ("a word doc of my week", "pdf of today") implies a
+  // report output even without the word "report".
+  if (detectRequestedFormats(question).length > 0) {
+    kinds.add('report')
   }
 
   if (kinds.has('export') && !kinds.has('report') && !kinds.has('table') && !kinds.has('chart')) {
@@ -1575,6 +1704,53 @@ async function renderReportPdf(title: string, subtitle: string, markdown: string
     return pdf
   } finally {
     win.destroy()
+  }
+}
+
+// A real, editable Word document with zero dependencies. Word opens an HTML file
+// carrying the Office namespaces as a fully editable .doc — the same no-extra-dep
+// philosophy as our PDF (Electron printToPDF). Saved with a .doc extension.
+function renderReportDocx(title: string, subtitle: string, markdown: string): string {
+  return `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"/>
+  <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+  <style>
+    @page { margin: 1in; }
+    body { font-family: Calibri, "Segoe UI", Arial, sans-serif; color: #1a1c20; font-size: 11pt; line-height: 1.5; }
+    h1 { font-size: 20pt; margin: 0 0 4pt; }
+    h2 { font-size: 14pt; margin: 16pt 0 6pt; }
+    h3 { font-size: 12pt; margin: 12pt 0 4pt; }
+    .subtitle { color: #6b7280; font-size: 10pt; margin: 0 0 16pt; }
+    table { border-collapse: collapse; width: 100%; margin: 8pt 0; }
+    th, td { border: 1px solid #d1d5db; padding: 5pt 8pt; text-align: left; font-size: 10pt; }
+    th { background: #f3f4f6; }
+    p { margin: 0 0 8pt; }
+    ul, ol { margin: 0 0 8pt 0; }
+  </style></head><body>
+    <h1>${escapeHtml(title)}</h1>
+    <p class="subtitle">${escapeHtml(subtitle)}</p>
+    ${reportMarkdownToHtml(markdown)}
+  </body></html>`
+}
+
+// One report, any format. The single place that turns report markdown into a
+// downloadable artifact — so every path (fresh generation, transform, re-export)
+// produces identical files and they can never drift.
+async function buildReportArtifact(
+  format: ReportExportFormat,
+  reportTitle: string,
+  subtitle: string,
+  reportMarkdown: string,
+): Promise<ReportArtifactSpec> {
+  const base = { kind: 'report' as const, title: 'shareable-report', subtitle }
+  switch (format) {
+    case 'pdf':
+      return { ...base, format: 'pdf', extension: 'pdf', contents: await renderReportPdf(reportTitle, subtitle, reportMarkdown) }
+    case 'docx':
+      return { ...base, format: 'docx', extension: 'doc', contents: renderReportDocx(reportTitle, subtitle, reportMarkdown) }
+    case 'html':
+      return { ...base, format: 'html', extension: 'html', contents: buildReportHtml(reportTitle, subtitle, reportMarkdown) }
+    case 'markdown':
+      return { ...base, format: 'markdown', extension: 'md', contents: `# ${reportTitle}\n\n${reportMarkdown}` }
   }
 }
 
@@ -3215,6 +3391,8 @@ async function maybeGenerateRequestedOutput(params: {
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'Use only the facts in the scaffold below.',
+    'Copy every number, time, and date EXACTLY as it appears in the scaffold. Never compute, round, estimate, or move a figure from one day, app, block, or client to another. If a number is not in the scaffold, do not state it. The figures must match the Timeline exactly.',
+    'When the scaffold has per-day, per-app, or per-client rows, render them as a Markdown table so the exact numbers are easy to scan.',
     'Return strict JSON with keys "assistantResponse", "reportTitle", and "reportMarkdown".',
     '"assistantResponse" should be 1-3 short paragraphs for the in-app chat card.',
     '"reportMarkdown" should read like a thoughtful human reviewed the day with care: specific, calm, useful, and grounded.',
@@ -3235,81 +3413,64 @@ async function maybeGenerateRequestedOutput(params: {
     bundle.assistantScaffold,
   ].filter(Boolean).join('\n')
 
+  // Fully AI-written reports: the model writes the whole report — narrative and
+  // numbers — from the deterministic scaffold, fresh every time, so it never
+  // reads like a fixed template. The deterministic renderer is kept ONLY as a
+  // fallback when the model call fails or times out, so a bad provider moment
+  // degrades to a correct, templated report instead of nothing.
   let reportContent = fallbackGeneratedReportContent(bundle)
   const trace = getCurrentTrace()
-  const deterministic = bundle.renderDeterministic?.()
-  if (deterministic) {
-    // Bundles that ship a deterministic renderer (e.g. weekly review)
-    // skip the LLM entirely — the body is templated from structured data,
-    // so there's no fabrication surface. The LLM was producing fluent
-    // hallucinations across day rows (Tuesday focus % swap, made-up
-    // artifact names) even with "use only the scaffold" prompting.
-    reportContent = {
-      assistantResponse: deterministic.assistantResponse,
-      reportTitle: bundle.title,
-      reportMarkdown: deterministic.reportMarkdown,
-    }
+  try {
     if (trace) {
       trace.addEvent({
         kind: 'prose_pass',
-        input: `[deterministic_report_template ${bundle.title}]\nscaffold:\n${bundle.assistantScaffold}`,
-        output: deterministic.reportMarkdown,
+        input: `[report_generation_input]\nsystem:\n${systemPrompt}\n\nuser:\n${userMessage}`,
+        output: '(pending)',
       })
     }
-  } else {
-    try {
-      if (trace) {
-        trace.addEvent({
-          kind: 'prose_pass',
-          input: `[report_generation_input]\nsystem:\n${systemPrompt}\n\nuser:\n${userMessage}`,
-          output: '(pending)',
-        })
+    const { text } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'report_generation',
+          screen: 'ai_chat',
+          triggerSource: 'user',
+          systemPrompt,
+          userMessage,
+          prior: params.prior,
+        },
+        sendWithProvider,
+      ),
+      60_000,
+      'Report generation timed out',
+    )
+    if (trace) {
+      trace.addEvent({ kind: 'prose_pass', input: '[report_generation_raw_output]', output: text })
+    }
+    reportContent = parseGeneratedReportResult(text, bundle.title) ?? reportContent
+  } catch (error) {
+    console.warn('[ai] report_generation fell back to the deterministic template:', error)
+    const deterministic = bundle.renderDeterministic?.()
+    if (deterministic) {
+      reportContent = {
+        assistantResponse: deterministic.assistantResponse,
+        reportTitle: bundle.title,
+        reportMarkdown: deterministic.reportMarkdown,
       }
-      const { text } = await withTimeout(
-        executeTextAIJob(
-          {
-            jobType: 'report_generation',
-            screen: 'ai_chat',
-            triggerSource: 'user',
-            systemPrompt,
-            userMessage,
-            prior: params.prior,
-          },
-          sendWithProvider,
-        ),
-        60_000,
-        'Report generation timed out',
-      )
-      if (trace) {
-        trace.addEvent({
-          kind: 'prose_pass',
-          input: '[report_generation_raw_output]',
-          output: text,
-        })
-      }
-      reportContent = parseGeneratedReportResult(text, bundle.title) ?? reportContent
-    } catch (error) {
-      console.warn('[ai] report_generation fell back to deterministic export:', error)
-      if (trace) {
-        trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
-      }
+    }
+    if (trace) {
+      trace.addEvent({ kind: 'error', message: error instanceof Error ? error.message : String(error), phase: 'report_generation' })
     }
   }
 
-  const artifactSpecs: ReportArtifactSpec[] = [
-    {
-      kind: 'report',
-      title: 'shareable-report',
-      format: 'pdf',
-      extension: 'pdf',
-      subtitle: bundle.scopeLabel,
-      contents: await renderReportPdf(
-        reportContent.reportTitle,
-        bundle.scopeLabel,
-        reportContent.reportMarkdown.trim(),
-      ),
-    },
-  ]
+  // Build the report in every format the user named — Word, PDF, Markdown,
+  // HTML — defaulting to PDF when they didn't say.
+  const requestedFormats = detectRequestedFormats(params.question)
+  const reportFormats: ReportExportFormat[] = requestedFormats.length > 0 ? requestedFormats : ['pdf']
+  const reportMarkdownBody = reportContent.reportMarkdown.trim()
+  const artifactSpecs: ReportArtifactSpec[] = []
+  for (const format of reportFormats) {
+    artifactSpecs.push(await buildReportArtifact(format, reportContent.reportTitle, bundle.scopeLabel, reportMarkdownBody))
+  }
 
   if ((outputKinds.includes('table') || outputKinds.includes('export')) && bundle.tableRows.length > 0) {
     artifactSpecs.push({
@@ -3379,6 +3540,69 @@ async function maybeGenerateRequestedOutput(params: {
     resolvedTemporalContext,
     conversationState,
     suggestedFollowUps,
+    artifacts,
+  }
+}
+
+// "in word please?", "pdf version", "as markdown" — a bare format request that
+// points back at the answer we just gave. Re-render that answer as the requested
+// file(s) instead of dead-ending with "I can't export to Word". Returns null when
+// the message isn't a pure format ask, names a time period (that's a fresh
+// report), or there's nothing prior to export.
+async function maybeReExportInFormat(params: {
+  question: string
+  history: AIThreadMessage[]
+  previousContext: TemporalContext | null
+  restoredState: AIConversationState | null
+}): Promise<AnswerEnvelope | null> {
+  if (!looksLikeBareFormatRequest(params.question)) return null
+  const formats = detectRequestedFormats(params.question)
+
+  const source = latestAssistantAnswer(params.history)
+  if (!source || !source.trim()) return null
+
+  const titleMatch = /^#\s+(.+)$/m.exec(source)
+  const reportTitle = (titleMatch ? titleMatch[1] : 'Daylens report').trim()
+  const reportBody = source.replace(/^#\s+.+$/m, '').trim()
+
+  const specs: ReportArtifactSpec[] = []
+  for (const format of formats) {
+    specs.push(await buildReportArtifact(format, reportTitle, reportTitle, reportBody))
+  }
+  const artifacts = await writeGeneratedArtifacts(reportTitle, specs)
+
+  const names = formats.map(formatDisplayName)
+  const joined = names.length === 1
+    ? names[0]
+    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  const assistantText = `Here you go — ${joined} of that, ready to open.`
+
+  const resolvedTemporalContext: TemporalContext = params.previousContext ?? {
+    date: new Date(),
+    timeWindow: null,
+    weeklyBrief: null,
+    entity: null,
+  }
+  const conversationState = buildConversationState(
+    'generated_report',
+    'freeform',
+    resolvedTemporalContext,
+    inferFollowUpAffordances('generated_report'),
+    {
+      dateRange: params.restoredState?.dateRange ?? null,
+      lastIntent: params.restoredState?.lastIntent ?? null,
+      topic: params.restoredState?.topic ?? null,
+      responseMode: params.restoredState?.responseMode ?? null,
+      evidenceKey: params.restoredState?.evidenceKey ?? null,
+    },
+  )
+  return {
+    assistantText,
+    answerKind: 'generated_report',
+    sourceKind: 'freeform',
+    resolvedTemporalContext,
+    conversationState,
+    suggestedFollowUps: [],
     artifacts,
   }
 }
@@ -4309,6 +4533,27 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     return persistChatTurn(db, conversationId, userMessage, focusIntent, threadId)
   }
 
+  // "remember that…", "forget that I use Notion", "actually I work in…" — write
+  // it to memory and confirm, before the read-only answer path (memory.md §2.1).
+  const memoryEnvelope = await maybeHandleMemoryInstruction(effectiveUserMessage, sendWithProvider, prior)
+  if (memoryEnvelope) {
+    await stream.streamText(memoryEnvelope.assistantText)
+    return persistChatTurn(db, conversationId, userMessage, memoryEnvelope, threadId)
+  }
+
+  // "in word please?" / "pdf version" / "as markdown" — re-export the answer we
+  // just gave into the file the user wants, instead of refusing.
+  const reExportEnvelope = await maybeReExportInFormat({
+    question: effectiveUserMessage,
+    history,
+    previousContext,
+    restoredState,
+  })
+  if (reExportEnvelope) {
+    await stream.streamText(reExportEnvelope.assistantText)
+    return persistChatTurn(db, conversationId, userMessage, reExportEnvelope, threadId)
+  }
+
   // FB7: an explicit "Turn into…" transform rewrites the SPECIFIC prior answer.
   // It bypasses the router + generic report bundle so the output is a faithful
   // transform of that answer's real content, not a fresh generic day shell.
@@ -4533,6 +4778,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         extraSystem: threadInstructionBlock || undefined,
         onDelta: (delta) => stream.push(delta),
       })).trim()
+      // Offer to remember one noticed pattern (memory.md §2.1) — once per
+      // context, after a day/range answer. "remember that" then routes through
+      // the memory write path above, resolving "that" from this turn.
+      const proposalLine = maybeMemoryProposalLine(plan.queries, contextKey)
+      if (proposalLine && assistantText) {
+        await stream.streamText(`\n\n${proposalLine}`)
+        assistantText = `${assistantText}\n\n${proposalLine}`
+      }
     }
   }
 

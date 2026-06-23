@@ -10,6 +10,7 @@ const convexSiteUrl = JSON.stringify(
 const posthogKey = JSON.stringify(process.env.POSTHOG_KEY || '')
 const posthogHost = JSON.stringify(process.env.POSTHOG_HOST || '')
 const sentryDsn = JSON.stringify(process.env.SENTRY_DSN || '')
+const billingApiUrl = JSON.stringify(process.env.DAYLENS_BILLING_API_URL || '')
 
 export default defineConfig({
   resolve: {
@@ -26,12 +27,14 @@ export default defineConfig({
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
         __SENTRY_DSN__: sentryDsn,
+        __DAYLENS_BILLING_API_URL__: billingApiUrl,
       }
     : {
         __DAYLENS_CONVEX_SITE_URL__: convexSiteUrl,
         __POSTHOG_KEY__: posthogKey,
         __POSTHOG_HOST__: posthogHost,
         __SENTRY_DSN__: sentryDsn,
+        __DAYLENS_BILLING_API_URL__: billingApiUrl,
       },
   build: {
     // Build as Node (not browser) so node: builtins are not externalized

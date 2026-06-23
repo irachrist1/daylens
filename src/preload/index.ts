@@ -23,6 +23,8 @@ import type {
   AppSettings,
   AIProviderMode,
   BrowserLinkResult,
+  BillingAccessSnapshot,
+  BillingUsageReport,
   CategoryOverrideEffect,
   ClientRecord,
   BreakRecommendation,
@@ -44,6 +46,7 @@ import type {
   WorkMemorySettingsSummary,
   WorkMemoryProfile,
   WorkMemoryMutationResult,
+  MemoryAuditEntry,
   WorkspaceResult,
   WrappedPeriod,
   WrappedPeriodFacts,
@@ -171,6 +174,8 @@ const api = {
       ipcRenderer.invoke(IPC.DB.FORGET_WORK_MEMORY_FACT, id),
     rebuildWorkMemory: (): Promise<WorkMemoryMutationResult> =>
       ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
+    getMemoryAudit: (): Promise<MemoryAuditEntry[]> =>
+      ipcRenderer.invoke(IPC.DB.GET_MEMORY_AUDIT),
   },
   memory: {
     backfill: (): Promise<MemoryBackfillResult> =>
@@ -255,6 +260,18 @@ const api = {
     clearApiKey: (provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
     validateApiKey: (provider: AIProvider, key: string): Promise<ProviderConnectionResult> =>
       ipcRenderer.invoke(IPC.SETTINGS.VALIDATE_API_KEY, { provider, key }),
+  },
+  billing: {
+    getAccess: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.GET_ACCESS),
+    refresh: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.REFRESH),
+    getUsage: (from: number, to: number): Promise<BillingUsageReport> =>
+      ipcRenderer.invoke(IPC.BILLING.GET_USAGE, { from, to }),
+    createPolarCheckout: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.CREATE_POLAR_CHECKOUT),
+    createFlutterwaveCheckout: (email: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, { email }),
+    openPortal: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.OPEN_PORTAL),
+    exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
+      ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
@@ -383,6 +400,17 @@ const api = {
       ) => callback(event)
       ipcRenderer.on(IPC.PROJECTIONS.INVALIDATED, handler)
       return () => { ipcRenderer.removeListener(IPC.PROJECTIONS.INVALIDATED, handler) }
+    },
+  },
+  system: {
+    // Fired by main whenever nativeTheme changes. Carries the resolved OS
+    // appearance ('dark' | 'light') so the renderer can re-apply the theme
+    // without a full settings reload.
+    onThemeChanged: (callback: (appearance: 'dark' | 'light') => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, appearance: 'dark' | 'light') =>
+        callback(appearance)
+      ipcRenderer.on(IPC.SYSTEM.THEME_CHANGED, handler)
+      return () => { ipcRenderer.removeListener(IPC.SYSTEM.THEME_CHANGED, handler) }
     },
   },
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
@@ -7,9 +7,12 @@ import type {
   AppSettings,
   AppTheme,
   AppUsageSummary,
+  BillingAccessSnapshot,
+  BillingUsageReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
   WorkMemoryFact,
+  MemoryAuditEntry,
 } from '@shared/types'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
@@ -103,6 +106,22 @@ function SettingsRow({
         )}
       </div>
       {control && <div style={{ flexShrink: 0, maxWidth: '100%' }}>{control}</div>}
+    </div>
+  )
+}
+
+function GroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: '0.09em',
+      textTransform: 'uppercase',
+      color: 'var(--color-text-secondary)',
+      opacity: 0.65,
+      marginBottom: 10,
+    }}>
+      {children}
     </div>
   )
 }
@@ -243,13 +262,15 @@ function SectionPage({
   title,
   description,
   children,
+  maxWidth = 640,
 }: {
   title: string
   description?: string
   children: ReactNode
+  maxWidth?: number
 }) {
   return (
-    <section style={{ maxWidth: 640, display: 'grid', gap: 20 }}>
+    <section style={{ maxWidth, display: 'grid', gap: 20 }}>
       <header style={{ display: 'grid', gap: 6 }}>
         <h2 style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.02em', margin: 0, color: 'var(--color-text-primary)' }}>
           {title}
@@ -548,56 +569,81 @@ function CaptureHealthContent({
   }
 
   const titleStatus = captureHealth.windowTitles.status
-  const titleLabel = titleStatus === 'healthy'
-    ? 'Healthy'
-    : titleStatus === 'missing'
-      ? 'Missing titles'
-      : 'Waiting for data'
   const browserNames = captureHealth.browsers?.names ?? []
   const permissions = captureHealth.permissions
   const linuxTracking = diagnostics?.linuxTracking
 
+  const tone: 'success' | 'warning' | 'neutral' = titleStatus === 'healthy'
+    ? 'success'
+    : titleStatus === 'missing'
+      ? 'warning'
+      : 'neutral'
+  const headline = tone === 'success'
+    ? 'Daylens is seeing your work'
+    : tone === 'warning'
+      ? 'Daylens can’t see what you’re working on'
+      : 'Getting started'
+  const body = tone === 'success'
+    ? 'It’s capturing what you’re working on inside each app, not just which app is open.'
+    : tone === 'warning'
+      ? (permissions.platformNote
+          ? permissions.platformNote
+          : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
+      : 'Daylens needs a few minutes of activity to confirm it’s capturing properly.'
+  const accent = tone === 'success'
+    ? { border: '1px solid rgba(79, 219, 200, 0.24)', background: 'rgba(79, 219, 200, 0.08)' }
+    : tone === 'warning'
+      ? { border: '1px solid rgba(251, 191, 36, 0.28)', background: 'rgba(251, 191, 36, 0.08)' }
+      : { border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }
+
   return (
       <div>
-        {linuxTracking && (
-          <SettingsRow
-            first
-            title="Linux session"
-            description={linuxTracking.supportMessage}
-            control={
-              <StatusPill
-                label={linuxTracking.supportLevel === 'ready' ? 'Ready' : linuxTracking.supportLevel === 'limited' ? 'Limited' : 'Unsupported'}
-                tone={linuxTracking.supportLevel === 'ready' ? 'success' : linuxTracking.supportLevel === 'limited' ? 'warning' : 'neutral'}
-              />
-            }
-          />
-        )}
-        <SettingsRow
-          first={!linuxTracking}
-          title="Window titles"
-          description="Whether Daylens is capturing what you are working on, not just which app is open."
-          control={<StatusPill label={titleLabel} tone={titleStatus === 'healthy' ? 'success' : titleStatus === 'missing' ? 'warning' : 'neutral'} />}
-        />
-        <SettingsRow
-          title="Recent samples"
-          description={`${captureHealth.windowTitles.recentSamplesWithTitle} of ${captureHealth.windowTitles.recentSamples} samples in the last 15 minutes carried a title.`}
-          control={<StatusPill label={`${captureHealth.windowTitles.recentSamplesWithTitle}/${captureHealth.windowTitles.recentSamples}`} />}
-        />
-        <SettingsRow
-          title="Browsers discovered"
-          description={browserNames.length > 0 ? browserNames.join(', ') : 'No browser history locations found yet.'}
-          control={<StatusPill label={String(captureHealth.browsers?.discoveredCount ?? 0)} />}
-        />
-        {permissions.platformNote && (
-          <div style={infoPanelStyle}>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-              {permissions.platformNote}
-              {typeof captureHealth.captureHelperRunning === 'boolean' && (
-                <> Capture helper: {captureHealth.captureHelperRunning ? 'running' : 'not running'}.</>
-              )}
-            </div>
+        <div style={{ padding: '16px 18px', borderRadius: 14, display: 'grid', gap: 6, ...accent }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>{headline}</span>
+            <StatusPill label={tone === 'success' ? 'Healthy' : tone === 'warning' ? 'Needs attention' : 'Waiting'} tone={tone} />
           </div>
-        )}
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>{body}</div>
+        </div>
+
+        <details style={{ marginTop: 16 }}>
+          <summary style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', cursor: 'pointer', fontWeight: 600, listStyle: 'none' }}>
+            Troubleshooting details
+          </summary>
+          <div style={{ marginTop: 12 }}>
+            {linuxTracking && (
+              <SettingsRow
+                first
+                title="Linux session"
+                description={linuxTracking.supportMessage}
+                control={
+                  <StatusPill
+                    label={linuxTracking.supportLevel === 'ready' ? 'Ready' : linuxTracking.supportLevel === 'limited' ? 'Limited' : 'Unsupported'}
+                    tone={linuxTracking.supportLevel === 'ready' ? 'success' : linuxTracking.supportLevel === 'limited' ? 'warning' : 'neutral'}
+                  />
+                }
+              />
+            )}
+            <SettingsRow
+              first={!linuxTracking}
+              title="Recent samples with titles"
+              description={`${captureHealth.windowTitles.recentSamplesWithTitle} of ${captureHealth.windowTitles.recentSamples} samples in the last 15 minutes carried a title.`}
+              control={<StatusPill label={`${captureHealth.windowTitles.recentSamplesWithTitle}/${captureHealth.windowTitles.recentSamples}`} />}
+            />
+            <SettingsRow
+              title="Browsers discovered"
+              description={browserNames.length > 0 ? browserNames.join(', ') : 'No browser history locations found yet.'}
+              control={<StatusPill label={String(captureHealth.browsers?.discoveredCount ?? 0)} />}
+            />
+            {typeof captureHealth.captureHelperRunning === 'boolean' && (
+              <SettingsRow
+                title="Capture helper"
+                description="The background helper that reads window titles."
+                control={<StatusPill label={captureHealth.captureHelperRunning ? 'Running' : 'Not running'} tone={captureHealth.captureHelperRunning ? 'success' : 'warning'} />}
+              />
+            )}
+          </div>
+        </details>
       </div>
   )
 }
@@ -843,9 +889,6 @@ function SettingsRail({
         gap: 16,
       }}
     >
-      <h1 style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)', paddingLeft: 2 }}>
-        Settings
-      </h1>
       <input
         type="text"
         value={search}
@@ -925,13 +968,11 @@ function PlanCard({
   name,
   blurb,
   active,
-  comingSoon,
   action,
 }: {
   name: string
   blurb: string
   active?: boolean
-  comingSoon?: boolean
   action?: ReactNode
 }) {
   return (
@@ -946,7 +987,6 @@ function PlanCard({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>{name}</span>
         {active && <StatusPill label="Current" tone="success" />}
-        {comingSoon && <StatusPill label="Arriving with billing" />}
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>{blurb}</div>
       {action && <div style={{ marginTop: 2 }}>{action}</div>}
@@ -964,6 +1004,35 @@ function BillingPage({
   onGoToAI: () => void
 }) {
   const onOwnKey = hasAiAccess
+  const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = async () => {
+    const next = await ipc.billing.refresh()
+    setAccess(next)
+  }
+
+  useEffect(() => {
+    void ipc.billing.getAccess().then(setAccess).catch((reason) => {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }, [])
+
+  const run = async (key: string, action: () => Promise<unknown>) => {
+    setBusy(key)
+    setError(null)
+    try {
+      await action()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const mode = onOwnKey ? 'own_key' : access?.mode
   return (
     <SectionPage
       title="Billing"
@@ -972,13 +1041,53 @@ function BillingPage({
       <div style={{ display: 'grid', gap: 12 }}>
         <PlanCard
           name="Free credit"
-          comingSoon
-          blurb="$5 of AI on us when you start — no card, no key. Enough to feel what Daylens does before money is ever mentioned."
+          active={mode === 'free_credit'}
+          blurb={mode === 'free_credit'
+            ? `$${(access?.creditRemainingUsd ?? 0).toFixed(2)} of your $5 credit remains. No card and no provider key.`
+            : '$5 of AI on us when you start — no card, no key. It is granted once per person.'}
         />
         <PlanCard
           name="Subscription"
-          comingSoon
-          blurb="A flat monthly price and we keep handling the AI for you — no keys, no per-call cost to think about. Manage and cancel here."
+          active={mode === 'subscription'}
+          blurb={mode === 'subscription'
+            ? `Active${access?.renewalAt ? ` · renews ${new Date(access.renewalAt).toLocaleDateString()}` : ''}. Daylens handles the provider and tax; cancel whenever you want.`
+            : 'A flat monthly plan through Polar. Daylens handles the provider and tax; your local history remains yours if you cancel.'}
+          action={mode === 'subscription' && access?.portalAvailable ? (
+            <button type="button" disabled={busy != null} onClick={() => void run('portal', () => ipc.billing.openPortal())} style={inlineButtonStyle}>
+              {busy === 'portal' ? 'Opening…' : 'Manage subscription'}
+            </button>
+          ) : access?.checkoutAvailable ? (
+            <button type="button" disabled={busy != null} onClick={() => void run('polar', () => ipc.billing.createPolarCheckout())} style={{ ...inlineButtonStyle, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)' }}>
+              {busy === 'polar' ? 'Opening…' : 'See price and subscribe'}
+            </button>
+          ) : undefined}
+        />
+        <PlanCard
+          name="Rwanda mobile money"
+          active={mode === 'local_pass'}
+          blurb={mode === 'local_pass'
+            ? `Your 30-day access is active${access?.localPassExpiresAt ? ` until ${new Date(access.localPassExpiresAt).toLocaleDateString()}` : ''}.`
+            : 'Pay with MTN or Airtel through Flutterwave for 30 days of managed AI. You re-authorize each renewal; we do not pretend it auto-renews.'}
+          action={access?.localCheckoutAvailable ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="Email for receipt"
+                aria-label="Email for mobile money receipt"
+                style={inputStyle(220)}
+              />
+              <button
+                type="button"
+                disabled={busy != null || !email.trim()}
+                onClick={() => void run('flutterwave', () => ipc.billing.createFlutterwaveCheckout(email))}
+                style={inlineButtonStyle}
+              >
+                {busy === 'flutterwave' ? 'Opening…' : 'Pay with mobile money'}
+              </button>
+            </div>
+          ) : undefined}
         />
         <PlanCard
           name="Your own key"
@@ -997,10 +1106,12 @@ function BillingPage({
           }
         />
       </div>
+      {error && <div style={{ ...infoPanelStyle, color: '#f87171' }}>{error}</div>}
       <div style={infoPanelStyle}>
         <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-          Free credit and subscriptions arrive with the billing update. Today you can power Daylens with your own provider key — set it up in <strong>AI</strong>. Whichever mode you're in, only the handful of facts needed for one answer ever leaves your machine — never your whole history.
+          {access?.message ?? 'Checking your AI access…'} Whichever mode you're in, only the resolved facts needed for one answer leave your machine — never raw capture or your whole history. Managed usage stores the time, feature, model, tokens and cost; not the prompt or answer.
         </div>
+        <button type="button" onClick={() => void refresh()} disabled={busy != null} style={{ ...inlineButtonStyle, marginTop: 10 }}>Refresh status</button>
       </div>
     </SectionPage>
   )
@@ -1015,42 +1126,221 @@ function UsagePage({
   provider: string
   onGoToAI: () => void
 }) {
+  type RangeKey = '1d' | '7d' | '30d' | 'mtd' | 'last_month' | 'custom'
+  type GroupKey = 'model' | 'type' | 'day'
+  type MetricKey = 'spend' | 'tokens'
+  const [range, setRange] = useState<RangeKey>('30d')
+  const [groupBy, setGroupBy] = useState<GroupKey>('model')
+  const [metric, setMetric] = useState<MetricKey>('spend')
+  const [customFrom, setCustomFrom] = useState(() => new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10))
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [report, setReport] = useState<BillingUsageReport | null>(null)
+  const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const bounds = useMemo(() => {
+    const now = new Date()
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
+    if (range === '1d') return { from: end - 86400000, to: end }
+    if (range === '7d') return { from: end - 7 * 86400000, to: end }
+    if (range === '30d') return { from: end - 30 * 86400000, to: end }
+    if (range === 'mtd') return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to: end }
+    if (range === 'last_month') {
+      return {
+        from: new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime(),
+        to: new Date(now.getFullYear(), now.getMonth(), 1).getTime(),
+      }
+    }
+    return {
+      from: new Date(`${customFrom}T00:00:00`).getTime(),
+      to: new Date(`${customTo}T00:00:00`).getTime() + 86400000,
+    }
+  }, [range, customFrom, customTo])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void Promise.all([ipc.billing.getAccess(), ipc.billing.getUsage(bounds.from, bounds.to)])
+      .then(([nextAccess, nextReport]) => {
+        if (cancelled) return
+        setAccess(nextAccess)
+        setReport(nextReport)
+        if (nextAccess.mode === 'own_key') setMetric('tokens')
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [bounds])
+
+  const formatTokens = (value: number) => {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+    return String(value)
+  }
+
+  const chart = (() => {
+    if (!report?.rows.length) return null
+    const days = [...new Set(report.rows.map((row) => new Date(row.occurredAt).toISOString().slice(0, 10)))].sort()
+    const series = new Map<string, Map<string, number>>()
+    for (const row of report.rows) {
+      const day = new Date(row.occurredAt).toISOString().slice(0, 10)
+      const group = groupBy === 'model' ? row.model || 'Unknown model' : groupBy === 'type' ? row.type.replace('_', ' ') : 'All usage'
+      if (!series.has(group)) series.set(group, new Map())
+      const value = metric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0
+      series.get(group)!.set(day, (series.get(group)!.get(day) ?? 0) + value)
+    }
+    const cumulative = [...series.entries()].map(([name, values]) => {
+      let total = 0
+      return { name, values: days.map((day) => (total += values.get(day) ?? 0)) }
+    })
+    const totals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
+    return { days, cumulative, max: Math.max(...totals, 1) }
+  })()
+
+  const colors = ['#7c8cff', '#4fdbc8', '#f59e7a', '#c084fc', '#60a5fa', '#facc15']
+  const quickRanges: Array<{ key: Exclude<RangeKey, 'custom'>; label: string }> = [
+    { key: '1d', label: '1d' },
+    { key: '7d', label: '7d' },
+    { key: '30d', label: '30d' },
+    { key: 'mtd', label: 'MTD' },
+    { key: 'last_month', label: 'Last month' },
+  ]
+  const summaryCards: Array<[string, string]> = [
+    ['Total AI used', access?.mode === 'own_key' ? 'Provider billed' : report ? `$${report.totalSpendUsd.toFixed(2)}` : '—'],
+    ['Free credit left', access?.mode === 'own_key' ? 'Paused while using key' : access ? `$${access.creditRemainingUsd.toFixed(2)} of $${access.creditGrantedUsd.toFixed(0)}` : '—'],
+    ['Paid / on-demand', access?.mode === 'own_key' ? 'Provider billed' : report ? `$${report.paidSpendUsd.toFixed(2)}` : '—'],
+  ]
   return (
     <SectionPage
       title="Usage"
       description="An honest meter — how much AI you've used and what's left. Plain numbers, no surprises."
+      maxWidth={980}
     >
-      {hasAiAccess ? (
-        <div style={{ ...infoPanelStyle, marginTop: 0 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        {quickRanges.map(({ key, label }) => (
+          <button key={key} type="button" onClick={() => setRange(key)} style={{ ...inlineButtonStyle, background: range === key ? 'var(--color-accent-dim)' : 'var(--color-surface)' }}>
+            {label}
+          </button>
+        ))}
+        <button type="button" onClick={() => setRange('custom')} style={{ ...inlineButtonStyle, background: range === 'custom' ? 'var(--color-accent-dim)' : 'var(--color-surface)' }}>Custom</button>
+        {range === 'custom' && (
+          <>
+            <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} style={inputStyle(145)} />
+            <span style={{ color: 'var(--color-text-tertiary)', fontSize: 12 }}>to</span>
+            <input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} style={inputStyle(145)} />
+          </>
+        )}
+      </div>
+
+      {error && <div style={{ ...infoPanelStyle, color: '#f87171' }}>{error}</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+        {summaryCards.map(([label, value]) => (
+          <div key={label} style={{ padding: '16px 18px', border: '1px solid var(--color-border-ghost)', borderRadius: 14, background: 'var(--color-surface-low)' }}>
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{loading ? '…' : value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 14, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>Your Usage</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Cumulative usage across the selected period.</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(130)}>
+              <option value="model">Group: Model</option>
+              <option value="type">Group: Type</option>
+              <option value="day">Group: Day</option>
+            </select>
+            <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
+              <option value="spend">Spend</option>
+              <option value="tokens">Tokens</option>
+            </select>
+          </div>
+        </div>
+        {chart ? (
+          <>
+            <svg viewBox="0 0 760 240" role="img" aria-label={`Cumulative AI ${metric} chart`} style={{ width: '100%', minHeight: 220 }}>
+              {[0, 1, 2, 3, 4].map((line) => <line key={line} x1="48" x2="742" y1={20 + line * 48} y2={20 + line * 48} stroke="var(--color-border-ghost)" />)}
+              {chart.cumulative.map((series, seriesIndex) => {
+                const lower = chart.cumulative.slice(0, seriesIndex).map((item) => item.values)
+                const top = series.values.map((value, index) => value + lower.reduce((sum, values) => sum + values[index], 0))
+                const bottom = series.values.map((_, index) => lower.reduce((sum, values) => sum + values[index], 0))
+                const x = (index: number) => 48 + (index / Math.max(1, chart.days.length - 1)) * 694
+                const y = (value: number) => 212 - (value / chart.max) * 184
+                const points = [
+                  ...top.map((value, index) => `${x(index)},${y(value)}`),
+                  ...bottom.map((_, index) => `${x(chart.days.length - 1 - index)},${y(bottom[chart.days.length - 1 - index])}`),
+                ].join(' ')
+                return <polygon key={series.name} points={points} fill={colors[seriesIndex % colors.length]} opacity={0.68} />
+              })}
+              <line x1="742" x2="742" y1="16" y2="216" stroke="var(--color-text-tertiary)" strokeDasharray="4 4" />
+              <text x="735" y="14" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">Today</text>
+              <text x="48" y="232" fontSize="10" fill="var(--color-text-tertiary)">{chart.days[0]}</text>
+              <text x="742" y="232" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{chart.days[chart.days.length - 1]}</text>
+            </svg>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+              {chart.cumulative.map((series, index) => (
+                <span key={series.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: colors[index % colors.length] }} />{series.name}
+                </span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div style={{ height: 220, display: 'grid', placeItems: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>
+            {loading ? 'Loading usage…' : 'No AI calls in this range.'}
+          </div>
+        )}
+        <div>
+          <button type="button" onClick={() => void ipc.billing.exportUsageCsv(bounds.from, bounds.to)} style={inlineButtonStyle}>Export CSV</button>
+        </div>
+      </div>
+
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 14, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: 'var(--color-surface-low)', color: 'var(--color-text-tertiary)', textAlign: 'left' }}>
+              {['Date', 'Type', 'Model', 'Tokens', 'Cost'].map((heading) => <th key={heading} style={{ padding: '11px 14px', fontWeight: 620 }}>{heading}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {(report?.rows ?? []).slice(0, 200).map((row) => (
+              <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
+                <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
+                <td style={{ padding: '11px 14px', textTransform: 'capitalize' }}>{row.type.replace('_', ' ')}</td>
+                <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
+                <td style={{ padding: '11px 14px' }}>{row.tokens == null ? '—' : formatTokens(row.tokens)}</td>
+                <td style={{ padding: '11px 14px' }}>{row.type === 'free_credit' ? 'Free' : row.costUsd == null ? 'Provider billed' : `$${row.costUsd.toFixed(4)}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {(report?.rows.length ?? 0) > 200 && (
+          <div style={{ padding: '10px 14px', borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
+            Showing the latest 200 calls. Export CSV includes the full selected range.
+          </div>
+        )}
+        {!loading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
+      </div>
+
+      {hasAiAccess && access?.mode === 'own_key' && (
+        <div style={infoPanelStyle}>
           <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
             {providerName(provider) ? `On your own ${providerName(provider)} key` : 'On your own provider key'}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-            Usage and cost are billed by {providerLabel(provider)} directly — Daylens doesn't meter or charge for it. Check your provider's dashboard for spend.
+            Daylens can show tokens for direct calls, but only {providerLabel(provider)} knows the final bill. We leave cost blank instead of guessing.
           </div>
-        </div>
-      ) : (
-        <div style={{ ...infoPanelStyle, marginTop: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-            No AI connected yet
-          </div>
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-            Connect a provider to start using Daylens's AI features.
-          </div>
-          <div>
-            <button
-              type="button"
-              onClick={onGoToAI}
-              style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
-            >
-              Connect a provider →
-            </button>
-          </div>
+          <button type="button" onClick={onGoToAI} style={{ ...inlineButtonStyle, marginTop: 10 }}>Manage key in AI →</button>
         </div>
       )}
-      <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.65 }}>
-        When free credit and subscriptions arrive, your remaining credit and this period's usage will show here as a quiet number you can find when you look — never a countdown that pressures you mid-thought.
-      </div>
     </SectionPage>
   )
 }
@@ -1065,6 +1355,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     return isSectionId(requested) ? requested : 'general'
   })
   const [sectionSearch, setSectionSearch] = useState('')
+  const [navOrigin, setNavOrigin] = useState<SectionId | null>(null)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null }>({ claude: null, codex: null })
   const [trackingDiagnostics, setTrackingDiagnostics] = useState<TrackingDiagnosticsPayload | null>(null)
@@ -1085,12 +1376,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // Inline edit buffers, keyed by fact id; plus the "add a fact" draft.
   const [factDrafts, setFactDrafts] = useState<Record<string, string>>({})
   const [newFactText, setNewFactText] = useState('')
+  const [memoryExpanded, setMemoryExpanded] = useState(false)
+  // A short audit of what memory remembered/edited/forgot (memory.md §3).
+  const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
+  const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
   const [clients, setClients] = useState<ClientRecord[]>([])
   const [clientsLoaded, setClientsLoaded] = useState(false)
   const [newClientName, setNewClientName] = useState('')
   const [newClientColor, setNewClientColor] = useState('#7c8cff')
+  const [addingClient, setAddingClient] = useState(false)
   const [clientFormError, setClientFormError] = useState<string | null>(null)
   const [clientBusyId, setClientBusyId] = useState<string | null>(null)
   const [editingClientId, setEditingClientId] = useState<string | null>(null)
@@ -1138,6 +1434,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       })
       void ipc.db.getWorkMemoryProfile().catch(() => ({ facts: [] })).then((profile) => {
         if (!cancelled) setWorkMemoryProfile(profile.facts)
+      })
+      void ipc.db.getMemoryAudit().catch(() => []).then((audit) => {
+        if (!cancelled) setMemoryAudit(audit as MemoryAuditEntry[])
       })
       void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
         if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
@@ -1198,6 +1497,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
 
   // Save an inline edit to a fact. A hand edit becomes a correction (the backend
   // flips its origin to 'user') that a rebuild never overwrites.
+  async function reloadMemoryAudit() {
+    const audit = await ipc.db.getMemoryAudit().catch(() => [])
+    setMemoryAudit(audit as MemoryAuditEntry[])
+  }
+
   async function saveWorkMemoryFact(id: string) {
     const text = (factDrafts[id] ?? '').trim()
     if (!text) return
@@ -1212,6 +1516,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
         return next
       })
       setWorkMemoryChange('Saved — the AI will use this the next time it talks about you.')
+      void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1229,6 +1534,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       setWorkMemoryProfile(profile.facts)
       setNewFactText('')
       setWorkMemoryChange('Added — the AI will use this the next time it talks about you.')
+      void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1243,6 +1549,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const result = await ipc.db.forgetWorkMemoryFact(id)
       setWorkMemoryProfile(result.facts)
       setWorkMemoryChange(result.changeSummary)
+      void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1275,6 +1582,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       const profile = await ipc.db.getWorkMemoryProfile()
       setWorkMemoryProfile(profile.facts)
       setWorkMemoryChange('Forgot everything Daylens had learned about you.')
+      void reloadMemoryAudit()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1348,6 +1656,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       await ipc.attribution.createClient({ name, color: newClientColor || null })
       setNewClientName('')
       setNewClientColor('#7c8cff')
+      setAddingClient(false)
       await reloadClients()
     } catch (error) {
       setClientFormError(error instanceof Error ? error.message : String(error))
@@ -1417,13 +1726,15 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   const linuxDesktop = trackingDiagnostics?.linuxDesktop ?? null
+  const selectSection = (id: SectionId) => { setNavOrigin(null); setActiveSection(id) }
+  const crossLinkToAI = (from: SectionId) => { setNavOrigin(from); setActiveSection('ai') }
   let content: ReactNode = null
   switch (activeSection) {
     case 'billing':
-      content = <BillingPage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => setActiveSection('ai')} />
+      content = <BillingPage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => crossLinkToAI('billing')} />
       break
     case 'usage':
-      content = <UsagePage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => setActiveSection('ai')} />
+      content = <UsagePage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => crossLinkToAI('usage')} />
       break
     case 'general':
       content = (
@@ -1482,8 +1793,53 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'memory':
       content = (
-        <SectionPage title="Memory" description="What Daylens knows about you, in plain language. Edit any line, add a fact it couldn't infer, or delete one that's wrong — your edits win and the AI uses them everywhere it talks about you.">
+        <SectionPage title="Memory" description="What Daylens knows about you, in plain language. Your edits always win — the AI uses them everywhere it talks about you.">
           <div>
+            <button
+              type="button"
+              onClick={() => setMemoryExpanded((value) => !value)}
+              aria-expanded={memoryExpanded}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                width: '100%',
+                textAlign: 'left',
+                padding: '16px 18px',
+                borderRadius: 14,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-low)',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+                  View and manage memory
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                  {workMemoryProfile === null
+                    ? 'Loading…'
+                    : workMemoryProfile.length === 0
+                      ? 'Nothing learned yet'
+                      : `${workMemoryProfile.length} thing${workMemoryProfile.length === 1 ? '' : 's'} Daylens has learned about you`}
+                </span>
+              </span>
+              <span
+                aria-hidden
+                style={{
+                  fontSize: 18,
+                  lineHeight: 1,
+                  color: 'var(--color-text-tertiary)',
+                  transform: memoryExpanded ? 'rotate(90deg)' : 'none',
+                  transition: 'transform 140ms',
+                }}
+              >
+                ›
+              </span>
+            </button>
+            {memoryExpanded && (
+            <div style={{ marginTop: 16 }}>
             {workMemoryError && (
               <div style={{ fontSize: 12, color: '#f87171', lineHeight: 1.55, marginBottom: 10 }}>
                 {workMemoryError}
@@ -1531,9 +1887,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                         }}
                       />
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {fact.origin === 'user' && (
+                        {fact.source === 'chat' ? (
+                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Remembered from chat</span>
+                        ) : fact.origin === 'user' ? (
                           <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Edited by you</span>
-                        )}
+                        ) : null}
                         <div style={{ flex: 1 }} />
                         {isEditing && (
                           <button
@@ -1624,6 +1982,27 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 {workMemoryBusy === 'all' ? 'Forgetting…' : 'Forget everything'}
               </button>
             </div>
+
+            {memoryAudit && memoryAudit.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 12, fontWeight: 620, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+                  Recent changes
+                </div>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {memoryAudit.map((entry) => (
+                    <div key={entry.id} style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5, display: 'flex', gap: 8 }}>
+                      <span style={{ flexShrink: 0 }}>
+                        {entry.action === 'remembered' ? 'Remembered' : entry.action === 'updated' ? 'Updated' : 'Forgot'}
+                        {entry.source === 'chat' ? ' from chat' : ''}
+                      </span>
+                      <span style={{ color: 'var(--color-text-secondary)' }}>{entry.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            </div>
+            )}
           </div>
         </SectionPage>
       )
@@ -1738,58 +2117,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'clients':
       content = (
-        <SectionPage title="Clients" description={`Track work for specific clients or projects. Once a client exists, Daylens can resolve names like it in AI questions ("how much did I work on X this week") and attribute work sessions to it.`}>
+        <SectionPage title="Clients" description={`Name the things you work on so the AI can attribute time to them — once a client exists, Daylens can answer "how much did I work on X this week" with a real number.`}>
           <div>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                gap: 8,
-                padding: '12px 14px',
-                borderRadius: 12,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface-low)',
-                marginBottom: 14,
-              }}
-            >
-              <input
-                type="text"
-                placeholder="New client name"
-                value={newClientName}
-                onChange={(event) => setNewClientName(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateClient() }}
-                style={inputStyle(220)}
-              />
-              <input
-                type="color"
-                value={newClientColor}
-                onChange={(event) => setNewClientColor(event.target.value)}
-                style={{ width: 36, height: 34, padding: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 8, background: 'transparent', cursor: 'pointer' }}
-                aria-label="Client color"
-              />
-              <button
-                type="button"
-                onClick={() => void handleCreateClient()}
-                disabled={clientBusyId === '__new__' || !newClientName.trim()}
-                style={{
-                  ...inlineButtonStyle,
-                  opacity: clientBusyId === '__new__' || !newClientName.trim() ? 0.5 : 1,
-                  cursor: clientBusyId === '__new__' || !newClientName.trim() ? 'default' : 'pointer',
-                }}
-              >
-                {clientBusyId === '__new__' ? 'Adding…' : 'Add client'}
-              </button>
-              {clientFormError && (
-                <div style={{ flexBasis: '100%', fontSize: 12, color: 'var(--color-focus-amber, #d97706)' }}>{clientFormError}</div>
-              )}
-            </div>
-
             {!clientsLoaded ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading clients…</div>
-            ) : clients.length === 0 ? (
+            ) : clients.length === 0 && !addingClient ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                No clients yet. Add one above.
+                No clients yet. Add your first one to start attributing work to it.
               </div>
             ) : (
               clients.map((client, index) => {
@@ -1887,6 +2221,72 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 )
               })
             )}
+
+            {addingClient ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '14px 16px',
+                  borderRadius: 12,
+                  border: '1px solid var(--color-border-ghost)',
+                  background: 'var(--color-surface-low)',
+                  marginTop: 14,
+                }}
+              >
+                <input
+                  type="text"
+                  placeholder="Client or project name"
+                  value={newClientName}
+                  autoFocus
+                  onChange={(event) => setNewClientName(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateClient() }}
+                  style={inputStyle(220)}
+                />
+                <input
+                  type="color"
+                  value={newClientColor}
+                  onChange={(event) => setNewClientColor(event.target.value)}
+                  style={{ width: 36, height: 34, padding: 0, border: '1px solid var(--color-border-ghost)', borderRadius: 8, background: 'transparent', cursor: 'pointer' }}
+                  aria-label="Client color"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCreateClient()}
+                  disabled={clientBusyId === '__new__' || !newClientName.trim()}
+                  style={{
+                    ...inlineButtonStyle,
+                    background: 'var(--gradient-primary)',
+                    color: 'var(--color-primary-contrast)',
+                    border: 'none',
+                    opacity: clientBusyId === '__new__' || !newClientName.trim() ? 0.5 : 1,
+                    cursor: clientBusyId === '__new__' || !newClientName.trim() ? 'default' : 'pointer',
+                  }}
+                >
+                  {clientBusyId === '__new__' ? 'Adding…' : 'Add client'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAddingClient(false); setNewClientName(''); setNewClientColor('#7c8cff'); setClientFormError(null) }}
+                  style={inlineButtonStyle}
+                >
+                  Cancel
+                </button>
+                {clientFormError && (
+                  <div style={{ flexBasis: '100%', fontSize: 12, color: 'var(--color-focus-amber, #d97706)' }}>{clientFormError}</div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { setAddingClient(true); setClientFormError(null) }}
+                style={{ ...inlineButtonStyle, marginTop: clients.length > 0 ? 16 : 0, alignSelf: 'flex-start' }}
+              >
+                + Add client
+              </button>
+            )}
           </div>
         </SectionPage>
       )
@@ -1949,12 +2349,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'mcp':
       content = (
-        <SectionPage title="MCP server" description="Let Claude Desktop, Cursor, or Claude Code query your local activity data. Off by default; a packaged build never exposes developer paths.">
+        <SectionPage title="MCP server" description="Let other AI apps — Claude Desktop, Cursor, Claude Code — read your Daylens activity so you can ask them about your work. Off by default, and everything stays on your machine.">
           <div>
             <SettingsRow
               first
               title="Enable MCP server"
-              description="Lets Claude Desktop, Cursor, or Claude Code query your local activity data. Off by default."
+              description="When on, connected apps can query your local activity data (which apps and sites, for how long). They read only — nothing is written, and nothing leaves your machine except what you ask about."
               control={
                 <Toggle
                   checked={settings.mcpServerEnabled ?? false}
@@ -1964,6 +2364,20 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             />
             {(settings.mcpServerEnabled ?? false) && mcpConfig && (
               <div style={{ paddingTop: 14, borderTop: '1px solid var(--color-border-ghost)' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                  Daylens is ready to connect. In your AI app, add Daylens as an MCP server using the configuration below.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMcpAdvancedOpen((value) => !value)}
+                  aria-expanded={mcpAdvancedOpen}
+                  style={{ ...inlineButtonStyle, marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <span aria-hidden style={{ transform: mcpAdvancedOpen ? 'rotate(90deg)' : 'none', transition: 'transform 140ms' }}>›</span>
+                  {mcpAdvancedOpen ? 'Hide configuration' : 'Advanced — show configuration'}
+                </button>
+                {mcpAdvancedOpen && (
+                <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginBottom: 8, lineHeight: 1.55 }}>
                   Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>~/Library/Application Support/Claude/claude_desktop_config.json</code>):
                 </div>
@@ -2037,6 +2451,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.55 }}>
                   After updating the config, restart your MCP client for the changes to take effect.
                 </div>
+                </div>
+                )}
               </div>
             )}
           </div>
@@ -2052,35 +2468,67 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'privacy':
       content = (
-        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Exclusions are honored everywhere — including data already captured before you excluded them.">
-          <div>
-            <TrackingControlsContent settings={settings} persist={persist} />
-            <SettingsRow
-              title="Analytics"
-              description="Anonymous product telemetry."
-              control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
-            />
-            <SettingsRow
-              title="Local data"
-              description="Tracked history lives in the local Daylens database."
-              control={<StatusPill label="Local only" />}
-            />
+        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Your history stays on this machine, and exclusions are honored everywhere — including data already captured before you excluded them.">
+          <div style={{ display: 'grid', gap: 24 }}>
+            <div>
+              <GroupLabel>Preferences</GroupLabel>
+              <TrackingControlsContent settings={settings} persist={persist} />
+            </div>
+            <div>
+              <GroupLabel>Your data</GroupLabel>
+              <SettingsRow
+                first
+                title="Analytics"
+                description="Anonymous product telemetry."
+                control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
+              />
+              <SettingsRow
+                title="Local data"
+                description="Tracked history lives in the local Daylens database."
+                control={<StatusPill label="Local only" />}
+              />
+            </div>
           </div>
         </SectionPage>
       )
       break
   }
 
+  const originDef = navOrigin ? ALL_SECTIONS.find((s) => s.id === navOrigin) ?? null : null
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden', fontFamily: 'var(--font-sans)' }}>
       <SettingsRail
         active={activeSection}
-        onSelect={setActiveSection}
+        onSelect={selectSection}
         search={sectionSearch}
         onSearch={setSectionSearch}
       />
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-        <div style={{ padding: '34px 44px 72px' }}>
+        <div key={activeSection} style={{ padding: '34px 44px 72px' }}>
+          {originDef && (
+            <button
+              type="button"
+              onClick={() => selectSection(originDef.id)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 18,
+                padding: '5px 10px 5px 8px',
+                borderRadius: 8,
+                border: '1px solid var(--color-border-ghost)',
+                background: 'var(--color-surface-low)',
+                color: 'var(--color-text-secondary)',
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 14, lineHeight: 1 }}>←</span>
+              Back to {originDef.label}
+            </button>
+          )}
           {content}
         </div>
       </div>

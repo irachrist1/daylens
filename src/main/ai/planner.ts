@@ -91,17 +91,39 @@ function parsePlannerJson(raw: string): ResolverQuery[] | null {
   }
 }
 
+// Monday of the week containing `d` — the app counts weeks Monday→Sunday
+// (wrappedPeriodRange.ts), so the planner's "last week" must agree or the AI's
+// numbers drift from the Timeline.
+function mondayOf(d: Date): Date {
+  const r = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  r.setDate(r.getDate() - ((r.getDay() + 6) % 7))
+  return r
+}
+
 function buildPlannerPrompt(now: Date, trackingStart: string | null): string {
   const today = localDateStr(now)
   const weekday = now.toLocaleDateString('en-US', { weekday: 'long' })
   const last7 = localDateStr(new Date(now.getTime() - 6 * 86_400_000))
   const last30 = localDateStr(new Date(now.getTime() - 29 * 86_400_000))
+  // Exact calendar windows so "last week"/"this month" resolve to the SAME
+  // dates every call — never an improvised, drifting range.
+  const thisWeekMon = mondayOf(now)
+  const lastWeekMon = new Date(thisWeekMon); lastWeekMon.setDate(thisWeekMon.getDate() - 7)
+  const lastWeekSun = new Date(thisWeekMon); lastWeekSun.setDate(thisWeekMon.getDate() - 1)
+  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
   return [
     'You are the planner for a personal activity assistant. Map the user question to data-resolver calls.',
     'You DO NOT answer. You DO NOT have the data. You only choose which resolvers to run and with what parameters.',
     'Output ONLY a JSON object: {"queries": [ ... ]}. No prose, no code fences.',
     '',
     `Today is ${weekday}, ${today}. "Last 7 days" = ${last7}..${today}. "Last 30 days" = ${last30}..${today}.`,
+    `Weeks run Monday→Sunday. Use these EXACT windows — do not improvise a different range:`,
+    `- "this week" = ${localDateStr(thisWeekMon)}..${today}`,
+    `- "last week" = ${localDateStr(lastWeekMon)}..${localDateStr(lastWeekSun)} (the previous Monday–Sunday, NOT the last 7 days)`,
+    `- "this month" = ${localDateStr(thisMonthStart)}..${today}`,
+    `- "last month" = ${localDateStr(lastMonthStart)}..${localDateStr(lastMonthEnd)}`,
     trackingStart ? `Tracking started ${trackingStart}; never ask for dates before it.` : '',
     '',
     'Resolvers (use explicit YYYY-MM-DD local dates, and HH:MM 24h times):',
@@ -117,6 +139,7 @@ function buildPlannerPrompt(now: Date, trackingStart: string | null): string {
     '- Pick the fewest resolvers that fully answer the question. Usually one.',
     '- Read the conversation so far. People are casual and lean on context. If the user bounces the question back ("you tell me", "go on", "surprise me", "idk you tell me", "what do you think"), or answers vaguely right after you offered to talk about their day, they want their day — default to today: [{"resolver":"getDay","date":"' + today + '"}].',
     '- A bare "what did I do" / "catch me up" / "how was my day" with no timeframe means today.',
+    '- If the user doubts or challenges the last answer ("are you sure?", "look harder", "really?", "that can\'t be right", "double-check"), re-run the EXACT same query as the previous turn — same resolver, same app/site, same date window. Never widen the range to find a bigger number; the honest figure does not change because they pushed.',
     '- For "that link/article/video I saw about X", use recall with the topic keywords (drop filler words).',
     '- For time-per-app questions over a period, use getApp with from/to.',
     '- Only return {"queries": []} when there is truly nothing about their activity to fetch — a greeting, general knowledge, math, or pure chit-chat with no pull toward their day.',

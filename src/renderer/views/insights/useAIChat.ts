@@ -8,6 +8,7 @@ import type {
   AIProviderMode,
   AIThreadSummary,
   AppSettings,
+  BillingAccessSnapshot,
   FocusSession,
 } from '@shared/types'
 import { useProjectionResource } from '../../hooks/useProjectionResource'
@@ -95,6 +96,7 @@ export function useAIChat() {
     // concrete one-tap switch on a hard wall (R2).
     providerAvailability: Partial<Record<AIProviderMode, boolean>>
     activeFocusSession: FocusSession | null
+    billingAccess: BillingAccessSnapshot
   }>({
     scope: 'insights',
     load: async () => {
@@ -109,12 +111,13 @@ export function useAIChat() {
       // Probe every API provider's key once (cheap keytar reads) so we know
       // which alternates we can offer; CLI detection still only runs when a CLI
       // provider is actually in play (it spawns child processes).
-      const [cliToolsResult, apiKeyResults, activeFocusSession] = await Promise.all([
+      const [cliToolsResult, apiKeyResults, activeFocusSession, billingAccess] = await Promise.all([
         needsCliDetection
           ? ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null }))
           : Promise.resolve({ claude: null, codex: null }),
         Promise.all(API_PROVIDERS.map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
         ipc.focus.getActive().catch(() => null),
+        ipc.billing.getAccess(),
       ])
 
       const providerAvailability: Partial<Record<AIProviderMode, boolean>> = {}
@@ -122,7 +125,8 @@ export function useAIChat() {
       providerAvailability['claude-cli'] = !!cliToolsResult.claude
       providerAvailability['codex-cli'] = !!cliToolsResult.codex
 
-      const providerAccess = providersToCheck.some((provider) => providerAvailability[provider] ?? false)
+      const providerAccess = billingAccess.canUseAI
+        || providersToCheck.some((provider) => providerAvailability[provider] ?? false)
 
       return {
         settings: currentSettings,
@@ -130,6 +134,7 @@ export function useAIChat() {
         hasProviderAccess: providerAccess,
         providerAvailability,
         activeFocusSession: activeFocusSession as FocusSession | null,
+        billingAccess,
       }
     },
     dependencies: [],
@@ -139,6 +144,7 @@ export function useAIChat() {
   const cliTools = providerResource.data?.cliTools ?? null
   const hasApiKey = providerResource.data ? providerResource.data.hasProviderAccess : null
   const activeFocusSession = providerResource.data?.activeFocusSession ?? null
+  const billingAccess = providerResource.data?.billingAccess ?? null
   // `refresh` is stable across renders (useProjectionResource memoizes it), so
   // handlers can depend on it without churning their own identity each render.
   const refreshProvider = providerResource.refresh
@@ -712,6 +718,7 @@ export function useAIChat() {
     cliTools,
     hasApiKey,
     activeFocusSession,
+    billingAccess,
     actionFeedback,
     messageActionState,
     reducedMotion,

@@ -43,7 +43,7 @@ process.on('unhandledRejection', (reason) => {
   } catch { /* analytics may not be ready */ }
 })
 
-import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -54,6 +54,7 @@ import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
+import { registerBillingHandlers } from './ipc/billing.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
@@ -92,6 +93,11 @@ const SMOKE_TEST = process.env.DAYLENS_SMOKE_TEST === '1'
 const SMOKE_REPORT_PATH = process.env.DAYLENS_SMOKE_REPORT_PATH?.trim() || path.join(os.tmpdir(), 'daylens-smoke-report.json')
 
 function configureUserDataPath(): void {
+  if (process.env.DAYLENS_DEV_USERDATA) {
+    app.setPath('userData', process.env.DAYLENS_DEV_USERDATA)
+    console.log('[app] using DEV userData path', process.env.DAYLENS_DEV_USERDATA)
+    return
+  }
   const appDataPath = app.getPath('appData')
   const selectedPath = chooseUserDataPath(appDataPath, process.platform)
   app.setPath('userData', selectedPath)
@@ -543,8 +549,9 @@ function createWindow(): BrowserWindow {
     // On Windows this removes the native frame entirely — custom TitleBar handles drag.
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 16, y: 12 },
-    // Prevent white flash before the renderer paints
-    backgroundColor: '#0b0e14',
+    // Prevent white flash before the renderer paints. Match the OS appearance
+    // so there is no colour mismatch on light-mode systems.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0b0e14' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -790,6 +797,7 @@ app.whenReady()
     registerFocusHandlers()
     registerAIHandlers()
     registerSettingsHandlers()
+    registerBillingHandlers()
     registerSearchHandlers()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
@@ -805,6 +813,19 @@ app.whenReady()
     setDistractionAlertWindow(mainWindow)
     ensureTray()
     initUpdater(mainWindow)
+
+    // Push OS appearance changes to all renderer windows so the theme updates
+    // in real time when the user switches dark/light mode in System Settings.
+    // Only fires when the user setting is 'system' — the renderer ignores the
+    // push if a pinned theme is active (handled in App.tsx).
+    nativeTheme.on('updated', () => {
+      const appearance = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(IPC.SYSTEM.THEME_CHANGED, appearance)
+        }
+      }
+    })
     registerUpdaterShutdown(async () => {
       isQuitting = true
       await shutdownApp({ awaitFinalSync: true, backupBeforeExit: true })

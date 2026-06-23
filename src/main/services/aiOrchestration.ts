@@ -5,6 +5,7 @@ import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
+import { getBillingAccess, getManagedAIConfig } from './billing'
 import { selectJobProvider } from '../lib/providerRouting'
 import type {
   AIInvocationSource,
@@ -19,6 +20,10 @@ export interface ResolvedProviderConfig {
   provider: AIProviderMode
   apiKey: string | null
   model: string
+  transport?: 'direct' | 'managed'
+  baseUrl?: string | null
+  billingMode?: 'free_credit' | 'subscription' | 'local_pass' | 'own_key'
+  feature?: string
 }
 
 export interface AIProviderUsage {
@@ -26,6 +31,7 @@ export interface AIProviderUsage {
   outputTokens?: number | null
   cacheReadTokens?: number | null
   cacheWriteTokens?: number | null
+  costUsd?: number | null
 }
 
 export interface ProviderTextResponse {
@@ -351,11 +357,29 @@ async function resolveProviderConfigsForJob(
       provider,
       apiKey,
       model: modelForProvider(provider, definition.modelStrategy, settings),
+      transport: 'direct',
+      billingMode: 'own_key',
+      feature: jobType,
     })
   }
 
   if (configs.length === 0) {
-    throw new Error('No AI provider is configured for this job. Check AI Settings.')
+    const managed = await getManagedAIConfig()
+    if (managed) {
+      configs.push({
+        provider: managed.provider,
+        apiKey: managed.accessToken,
+        model: managed.model,
+        transport: 'managed',
+        baseUrl: managed.baseUrl,
+        billingMode: managed.mode,
+        feature: jobType,
+      })
+    }
+  }
+
+  if (configs.length === 0) {
+    throw new Error('AI access is paused. Subscribe or add your own key in Settings.')
   }
 
   return configs
@@ -372,7 +396,12 @@ export async function getWrapProviderState(): Promise<{ connected: boolean; prov
   const label = providerLabel(provider)
   if (providerUsesCLI(provider)) return { connected: true, provider: label }
   const apiKey = await getApiKey(provider)
-  return { connected: Boolean(apiKey), provider: label }
+  if (apiKey) return { connected: true, provider: label }
+  const billing = await getBillingAccess()
+  return {
+    connected: billing.canUseAI,
+    provider: billing.managed ? 'Daylens managed AI' : billing.providerLabel,
+  }
 }
 
 export async function executeTextAIJob(
@@ -448,6 +477,8 @@ export async function executeTextAIJob(
         cacheReadTokens: usage?.cacheReadTokens ?? null,
         cacheWriteTokens: usage?.cacheWriteTokens ?? null,
         cacheHit,
+        costUsd: usage?.costUsd ?? null,
+        billingMode: config.billingMode ?? 'own_key',
       })
       capture(ANALYTICS_EVENT.AI_JOB_COMPLETED, {
         job_type: payload.jobType,
@@ -488,6 +519,7 @@ export async function executeTextAIJob(
     failureReason: friendlyError.message,
     completedAt,
     latencyMs: completedAt - startedAt,
+    billingMode: lastConfig?.billingMode ?? 'own_key',
   })
   capture(ANALYTICS_EVENT.AI_JOB_FAILED, {
     failure_kind: classifyFailureKind(lastError),

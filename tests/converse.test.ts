@@ -38,3 +38,10 @@ test('the conversation prompt inherits the voice and refuses a capability menu',
   assert.match(CONVERSE_SYSTEM_PROMPT, /Never recite a list/i)
   assert.match(CONVERSE_SYSTEM_PROMPT, /never invent one/i)
 })
+
+test('the conversation prompt is fun: mirrors tone, allows emoji, does not interrogate', () => {
+  assert.match(CONVERSE_SYSTEM_PROMPT, /Mirror their energy/i)
+  assert.match(CONVERSE_SYSTEM_PROMPT, /if they joke, joke back/i)
+  assert.match(CONVERSE_SYSTEM_PROMPT, /emoji/i)
+  assert.match(CONVERSE_SYSTEM_PROMPT, /Don't interrogate/i)
+})

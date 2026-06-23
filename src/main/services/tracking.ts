@@ -51,6 +51,10 @@ interface ActiveWinResult {
   }
 }
 
+interface MacFocusEventWindow extends ActiveWinResult {
+  observedAt: number
+}
+
 interface InFlightSession {
   bundleId: string
   appName: string
@@ -841,7 +845,7 @@ function linuxShouldPreferFallback(): boolean {
     )
 }
 
-function windowHasMeaningfulIdentity(win: ActiveWinResult | null): boolean {
+function windowHasMeaningfulIdentity(win: Pick<ActiveWinResult, 'application' | 'path' | 'title'> | null): boolean {
   if (!win) return false
   return Boolean(win.application?.trim() || win.path?.trim() || win.title?.trim())
 }
@@ -982,14 +986,16 @@ function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundle
   return { ...win, bundleId, appName }
 }
 
-function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): ActiveWinResult | null {
+function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): MacFocusEventWindow | null {
   if (process.platform !== 'darwin') return null
   try {
     const row = getDb().prepare(`
       SELECT ts_ms, app_bundle_id, app_name, pid, window_title
       FROM focus_events
-      WHERE source = 'nsworkspace_event'
-        AND event_type IN ('app_activated', 'window_changed', 'space_changed')
+      WHERE (
+          (source = 'nsworkspace_event' AND event_type IN ('app_activated', 'window_changed', 'space_changed'))
+          OR (source = 'apple_events_tab' AND event_type IN ('tab_changed', 'tab_sampled'))
+        )
         AND (app_bundle_id IS NOT NULL OR app_name IS NOT NULL)
       ORDER BY ts_ms DESC, id DESC
       LIMIT 1
@@ -1017,10 +1023,36 @@ function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): ActiveWinResult | nu
       path: stablePath,
       pid: row.pid ?? 0,
       icon: '',
+      observedAt: row.ts_ms,
     }
   } catch {
     return null
   }
+}
+
+function normalizedMacAppToken(value: string | null | undefined): string {
+  const trimmed = value?.trim()
+  if (!trimmed) return ''
+  return path.basename(trimmed)
+    .replace(/\.app$/i, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+}
+
+export function shouldPreferMacFocusEventWindow(
+  activeWindow: Pick<ActiveWinResult, 'application' | 'path' | 'pid' | 'title'> | null,
+  focusWindow: Pick<MacFocusEventWindow, 'application' | 'path' | 'pid' | 'title' | 'observedAt'> | null,
+): boolean {
+  if (!focusWindow) return false
+  if (!windowHasMeaningfulIdentity(activeWindow)) return true
+
+  const activeApp = normalizedMacAppToken(activeWindow?.application || activeWindow?.path)
+  const focusApp = normalizedMacAppToken(focusWindow.application || focusWindow.path)
+  if (activeApp && focusApp && activeApp !== focusApp) return true
+
+  const activePid = activeWindow?.pid ?? 0
+  const focusPid = focusWindow.pid ?? 0
+  return Boolean(activePid && focusPid && activePid !== focusPid && !activeApp && !focusApp)
 }
 
 // ─── OS noise filter ─────────────────────────────────────────────────────────
@@ -1513,10 +1545,14 @@ async function poll(): Promise<void> {
 
       if (awMod) {
         try {
-          win = awMod.getActiveWindow() as ActiveWinResult | null
-          if (!windowHasMeaningfulIdentity(win)) {
-            const fallback = recentMacFocusEventWindow()
-            if (fallback) {
+          const activeWindowWin = awMod.getActiveWindow() as ActiveWinResult | null
+          const fallback = recentMacFocusEventWindow()
+          if (shouldPreferMacFocusEventWindow(activeWindowWin, fallback)) {
+            win = fallback
+            backend = 'focus_events'
+          } else {
+            win = activeWindowWin
+            if (!windowHasMeaningfulIdentity(win) && fallback) {
               win = fallback
               backend = 'focus_events'
             }

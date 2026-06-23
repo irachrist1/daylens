@@ -58,6 +58,7 @@ const DEFAULTS: AppSettings = {
   trackingExcludedSites: [],
   trackingSkipIncognito: true,
   trackingPaused: false,
+  billingInstallationId: '',
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -120,6 +121,7 @@ export function getSettings(): AppSettings {
     trackingExcludedSites: (_store.get('trackingExcludedSites', []) as string[]),
     trackingSkipIncognito: (_store.get('trackingSkipIncognito', true) as boolean),
     trackingPaused: (_store.get('trackingPaused', false) as boolean),
+    billingInstallationId: (_store.get('billingInstallationId', '') as string),
   }
 }
 

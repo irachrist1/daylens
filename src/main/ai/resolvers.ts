@@ -221,8 +221,12 @@ function isEmptyResult(query: ResolverQuery, data: unknown): boolean {
       return (data as { totalTrackedSeconds: number }).totalTrackedSeconds <= 0
     case 'getRange':
       return (data as GetRangeResult).totalTrackedSeconds <= 0
-    case 'getApp':
-      return (data as GetAppUsageResult).totalSeconds <= 0
+    case 'getApp': {
+      const r = data as GetAppUsageResult
+      // A site can have visits logged with no reliable dwell duration — that's
+      // still a real answer ("you opened youtube.com 40 times"), not "nothing".
+      return r.totalSeconds <= 0 && (r.sessionCount ?? 0) <= 0
+    }
     case 'getBlockAtTime':
       return !(data as GetBlockAtTimeResult).found
     case 'recall':
@@ -326,9 +330,20 @@ export function serializeFact(fact: ResolvedFact): string {
     case 'getApp': {
       const a = fact.data as GetAppUsageResult
       if (fact.isEmpty) return `getApp "${q.app}": no tracked time in range ${a.startDate}..${a.endDate}.`
-      const daily = a.dailyBreakdown.map((d) => `  ${d.date}: ${fmtDuration(d.totalSeconds)} (${d.sessionCount} sessions)`).join('\n')
+      const daily = a.dailyBreakdown.map((d) => d.totalSeconds > 0
+        ? `  ${d.date}: ${fmtDuration(d.totalSeconds)} (${d.sessionCount} sessions)`
+        : `  ${d.date}: ${d.sessionCount} visit${d.sessionCount === 1 ? '' : 's'}`).join('\n')
       const titles = a.recentWindowTitles.slice(0, 6).join('; ')
-      return `getApp "${a.appName}" ${a.startDate}..${a.endDate}: total ${fmtDuration(a.totalSeconds)}, ${a.sessionCount} sessions.\nPer day:\n${daily}${titles ? `\nRecent window titles: ${titles}` : ''}`
+      const headline = a.totalSeconds > 0
+        ? `total ${fmtDuration(a.totalSeconds)}, ${a.sessionCount} sessions`
+        : `${a.sessionCount} visit${a.sessionCount === 1 ? '' : 's'} logged, but active-time duration wasn't captured for them`
+      // Site time sums every visit, so it includes a tab left open/playing in the
+      // background while other work was foreground. Tell the model to disclose that
+      // (the user's "are you including Dia tracked things?" — yes, and say so).
+      const siteNote = a.fromWebsiteVisits && a.totalSeconds > 0
+        ? `\nNOTE: this is total time the ${a.appName} tab was open — it includes time it was playing or open in the background (e.g. in Dia) while you worked in another app, not only active foreground watching. Say so plainly; do not imply it was all active watching.`
+        : ''
+      return `getApp "${a.appName}" ${a.startDate}..${a.endDate}: ${headline}.\nPer day:\n${daily}${titles ? `\nRecent pages/titles: ${titles}` : ''}${siteNote}`
     }
     case 'getBlockAtTime': {
       const b = fact.data as GetBlockAtTimeResult

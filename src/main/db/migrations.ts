@@ -1921,6 +1921,49 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 37,
+    description: 'Memory v2 (DEV-107) — work_memory_facts.source/scope + memory_audit',
+    up: () => {
+      const db = getDb()
+      if (getTableSql('work_memory_facts') != null) {
+        if (!hasColumn('work_memory_facts', 'source')) {
+          db.exec(`ALTER TABLE work_memory_facts ADD COLUMN source TEXT NOT NULL DEFAULT 'evidence'`)
+          // Backfill provenance from the existing origin: drafted facts came
+          // from evidence; user-authored facts were hand edits/adds.
+          db.prepare(`UPDATE work_memory_facts SET source = 'hand' WHERE origin = 'user'`).run()
+        }
+        if (!hasColumn('work_memory_facts', 'scope')) {
+          db.exec(`ALTER TABLE work_memory_facts ADD COLUMN scope TEXT NOT NULL DEFAULT 'general'`)
+        }
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_work_memory_facts_scope ON work_memory_facts (scope, status);
+        CREATE TABLE IF NOT EXISTS memory_audit (
+          id          TEXT PRIMARY KEY,
+          action      TEXT NOT NULL CHECK(action IN ('remembered', 'updated', 'forgot')),
+          fact_text   TEXT NOT NULL,
+          source      TEXT NOT NULL CHECK(source IN ('chat', 'hand')),
+          scope       TEXT NOT NULL DEFAULT 'general',
+          created_at  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_audit_created ON memory_audit (created_at DESC);
+      `)
+    },
+  },
+  {
+    version: 38,
+    description: 'Add honest AI cost and billing-mode fields for Billing & Usage',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('ai_usage_events', 'cost_usd')) {
+        db.exec(`ALTER TABLE ai_usage_events ADD COLUMN cost_usd REAL`)
+      }
+      if (!hasColumn('ai_usage_events', 'billing_mode')) {
+        db.exec(`ALTER TABLE ai_usage_events ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'own_key'`)
+      }
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
