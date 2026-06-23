@@ -690,7 +690,7 @@ function TrackingControlsContent({
 // the content pane. Adding a future section (e.g. richer Billing in DEV-106) is
 // just a new entry here plus a case in renderSection — the shell holds it.
 type SectionId =
-  | 'general' | 'appearance' | 'notifications' | 'billing' | 'usage'
+  | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory'
   | 'labels' | 'clients' | 'privacy'
   | 'mcp' | 'capture' | 'updates'
@@ -702,8 +702,7 @@ const SECTION_GROUPS: SectionGroup[] = [
   {
     label: 'Account',
     items: [
-      { id: 'general', label: 'General', keywords: 'name profile display persona' },
-      { id: 'appearance', label: 'Appearance', keywords: 'theme light dark look system' },
+      { id: 'general', label: 'General', keywords: 'name profile display persona theme appearance light dark look system' },
       { id: 'notifications', label: 'Notifications', keywords: 'morning brief evening wrap distraction alerts' },
       { id: 'billing', label: 'Billing', keywords: 'plan subscription subscribe upgrade payment credit free key' },
       { id: 'usage', label: 'Usage', keywords: 'credit meter cost spend remaining' },
@@ -740,6 +739,30 @@ function isSectionId(value: string | null): value is SectionId {
   return value !== null && ALL_SECTIONS.some((section) => section.id === value)
 }
 
+// One line-icon per section — the visual anchor that makes the rail scan as
+// navigation (each row recognizable at a glance, the way Claude's settings do).
+function SectionIcon({ id }: { id: SectionId }) {
+  const p: Record<SectionId, ReactNode> = {
+    general: <><circle cx="8" cy="5.5" r="2.4" /><path d="M3.5 13c0-2.4 2-3.9 4.5-3.9s4.5 1.5 4.5 3.9" /></>,
+    notifications: <><path d="M4.5 6.5a3.5 3.5 0 0 1 7 0c0 3 1.3 4 1.3 4H3.2s1.3-1 1.3-4Z" /><path d="M6.6 13a1.5 1.5 0 0 0 2.8 0" /></>,
+    billing: <><rect x="2" y="4" width="12" height="8" rx="1.5" /><path d="M2 6.7h12" /></>,
+    usage: <><path d="M2.6 11.5a5.4 5.4 0 1 1 10.8 0" /><path d="M8 11.5 10.4 8" /></>,
+    ai: <path d="M8 2 L8.7 6 L12.8 7 L8.7 8 L8 12 L7.3 8 L3.2 7 L7.3 6 Z" />,
+    memory: <><rect x="4" y="4" width="8" height="8" rx="1.6" /><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6" /></>,
+    labels: <><path d="M2.6 7.4 7.2 2.8h4.2v4.2L6.8 11.6Z" /><circle cx="9.4" cy="5.6" r="0.85" fill="currentColor" stroke="none" /></>,
+    clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
+    privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
+    mcp: <><rect x="2" y="3" width="12" height="10" rx="1.6" /><path d="M4.6 6.6 7 8.5 4.6 10.4" /><path d="M8.4 10.4h3" /></>,
+    capture: <path d="M2 8h2.6l1.4-4.2 2.6 8.4 1.4-4.2H14" />,
+    updates: <><path d="M8 2.6v6.8" /><path d="M5.2 7 8 9.8 10.8 7" /><path d="M3.2 13h9.6" /></>,
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}>
+      {p[id]}
+    </svg>
+  )
+}
+
 function RailItem({
   item,
   active,
@@ -758,7 +781,9 @@ function RailItem({
       onMouseLeave={() => setHovered(false)}
       aria-current={active ? 'page' : undefined}
       style={{
-        display: 'block',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
         width: '100%',
         textAlign: 'left',
         padding: '7px 10px',
@@ -774,6 +799,9 @@ function RailItem({
         transition: 'all 140ms',
       }}
     >
+      <span style={{ display: 'flex', color: active ? 'var(--color-primary-glow)' : 'currentColor' }}>
+        <SectionIcon id={item.id} />
+      </span>
       {item.label}
     </button>
   )
@@ -837,21 +865,22 @@ function SettingsRail({
           boxSizing: 'border-box',
         }}
       />
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {groups.length === 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', padding: '4px 2px', lineHeight: 1.5 }}>
             No settings match “{search.trim()}”.
           </div>
         ) : (
           groups.map((group) => (
-            <div key={group.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div key={group.label} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <div style={{
-                fontSize: 10.5,
-                fontWeight: 800,
-                letterSpacing: '0.10em',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.09em',
                 textTransform: 'uppercase',
-                color: 'var(--color-text-tertiary)',
-                padding: '0 10px 4px',
+                color: 'var(--color-text-secondary)',
+                opacity: 0.65,
+                padding: '0 10px 6px',
               }}>
                 {group.label}
               </div>
@@ -1398,23 +1427,43 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'general':
       content = (
-        <SectionPage title="General" description="Your name — used in the AI persona line.">
-
-          <SettingsRow
-            first
-            title="Display name"
-            description="Used in the AI persona line. Leave blank if you prefer the generic Daylens voice."
-            control={
-              <input
-                type="text"
-                value={settings.userName}
-                placeholder={defaultUserName || 'Your name'}
-                maxLength={80}
-                onChange={(event) => void persist({ userName: event.target.value })}
-                style={inputStyle(240)}
-              />
-            }
-          />
+        <SectionPage title="General" description="Your name and how Daylens looks.">
+          <div>
+            <SettingsRow
+              first
+              title="Display name"
+              description="Used in the AI persona line. Leave blank if you prefer the generic Daylens voice."
+              control={
+                <input
+                  type="text"
+                  value={settings.userName}
+                  placeholder={defaultUserName || 'Your name'}
+                  maxLength={80}
+                  onChange={(event) => void persist({ userName: event.target.value })}
+                  style={inputStyle(240)}
+                />
+              }
+            />
+            <SettingsRow
+              align="start"
+              title="Theme"
+              description="Follow the system, or pin to light or dark."
+              control={
+                <Segmented<AppTheme>
+                  value={settings.theme}
+                  options={[
+                    { value: 'system', label: 'System' },
+                    { value: 'light', label: 'Light' },
+                    { value: 'dark', label: 'Dark' },
+                  ]}
+                  onChange={(value) => {
+                    void persist({ theme: value })
+                    window.dispatchEvent(new CustomEvent('daylens:theme-changed', { detail: value }))
+                  }}
+                />
+              }
+            />
+          </div>
         </SectionPage>
       )
       break
@@ -1887,34 +1936,6 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 </div>
               </div>
             )}
-          </div>
-        </SectionPage>
-      )
-      break
-    case 'appearance':
-      content = (
-        <SectionPage title="Appearance" description="How Daylens looks.">
-          <div>
-            <SettingsRow
-              first
-              align="start"
-              title="Theme"
-              description="Follow the system, or pin to light or dark."
-              control={
-                <Segmented<AppTheme>
-                  value={settings.theme}
-                  options={[
-                    { value: 'system', label: 'System' },
-                    { value: 'light', label: 'Light' },
-                    { value: 'dark', label: 'Dark' },
-                  ]}
-                  onChange={(value) => {
-                    void persist({ theme: value })
-                    window.dispatchEvent(new CustomEvent('daylens:theme-changed', { detail: value }))
-                  }}
-                />
-              }
-            />
           </div>
         </SectionPage>
       )
