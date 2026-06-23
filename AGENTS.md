@@ -122,3 +122,21 @@ scored baseline, not a pass/fail gate.
 Plain English. No role honorifics ("as requested, sir"), no agent-speak ("I shall now
 proceed to..."), no walls of text. Write like the specs are written — short, specific,
 grounded. Say what changed and what to test. That's it.
+
+## Plans you hand Tonny must be skimmable
+
+When you post a plan for Tonny to confirm, he should understand it in one read without
+re-reading. He is the founder, not the implementer — he decides *what* and *whether*, not
+*how*. So:
+
+- **Lead with the decision he's actually making**, in one plain sentence. If there's a real
+  choice (which payment vendor, which approach), state it and your recommendation up front.
+- **Plain language, not jargon.** If you must use a technical term, say what it means in
+  everyday words first. Skip implementation detail he doesn't need to decide.
+- **Short and scannable** — a few bullets or a tiny table, not paragraphs. The whole plan
+  should be readable in under a minute.
+- **End with one clear ask**: "Confirm this and I'll build it," or the specific question you
+  need answered. Don't make him hunt for what you need from him.
+
+Keep the deep technical detail for the PR and the code. The plan is for a human deciding
+yes/no, not a spec dump.
