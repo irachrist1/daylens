@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type {
   AppCategory,
@@ -31,21 +32,6 @@ const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
   { value: 'system', label: 'System' },
   { value: 'uncategorized', label: 'Uncategorized' },
 ]
-
-function sectionTitle(label: string) {
-  return (
-    <div style={{
-      fontSize: 11,
-      fontWeight: 800,
-      letterSpacing: '0.10em',
-      textTransform: 'uppercase',
-      color: 'var(--color-text-tertiary)',
-      marginBottom: 8,
-    }}>
-      {label}
-    </div>
-  )
-}
 
 function Toggle({
   checked,
@@ -249,36 +235,32 @@ function Select<T extends string>({
   )
 }
 
-const settingsSurfaceStyle: CSSProperties = {
-  borderRadius: 28,
-  border: '1px solid var(--color-border-ghost)',
-  background: 'var(--color-surface)',
-  overflow: 'hidden',
-}
-
-function SettingsSection({
+// One focused settings page: a title + optional lead-in, then its controls
+// stacked in a single column. This replaces the old long-scroll layout where
+// every section shared one surface; now each section is its own page in the
+// content pane, selected from the left rail.
+function SectionPage({
   title,
+  description,
   children,
-  first = false,
 }: {
   title: string
+  description?: string
   children: ReactNode
-  first?: boolean
 }) {
   return (
-    <section
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 28,
-        padding: '26px 28px',
-        borderTop: first ? 'none' : '1px solid var(--color-border-ghost)',
-      }}
-    >
-      <div style={{ flex: '0 0 188px', maxWidth: 228 }}>
-        {sectionTitle(title)}
-      </div>
-      <div style={{ flex: '1 1 560px', minWidth: 0, display: 'grid', gap: 18 }}>
+    <section style={{ maxWidth: 640, display: 'grid', gap: 20 }}>
+      <header style={{ display: 'grid', gap: 6 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 680, letterSpacing: '-0.02em', margin: 0, color: 'var(--color-text-primary)' }}>
+          {title}
+        </h2>
+        {description && (
+          <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6, margin: 0 }}>
+            {description}
+          </p>
+        )}
+      </header>
+      <div style={{ display: 'grid', gap: 18 }}>
         {children}
       </div>
     </section>
@@ -338,7 +320,7 @@ const infoPanelStyle: CSSProperties = {
   gap: 8,
 }
 
-function UpdatesSection() {
+function UpdatesContent() {
   const [status, setStatus] = useState<UpdaterStatusInfo | null>(null)
   const [checking, setChecking] = useState(false)
   const [currentVersion, setCurrentVersion] = useState<string | null>(null)
@@ -371,9 +353,6 @@ function UpdatesSection() {
   const isBusy = checking || status?.status === 'checking' || status?.status === 'downloading' || status?.status === 'installing'
 
   return (
-    <SettingsSection
-      title="Updates"
-    >
       <div>
         <SettingsRow
           first
@@ -484,7 +463,6 @@ function UpdatesSection() {
           </div>
         )}
       </div>
-    </SettingsSection>
   )
 }
 
@@ -555,13 +533,19 @@ function ExclusionEditor({
   )
 }
 
-function CaptureHealthSection({
+function CaptureHealthContent({
   diagnostics,
 }: {
   diagnostics: TrackingDiagnosticsPayload | null
 }) {
   const captureHealth = diagnostics?.captureHealth
-  if (!captureHealth) return null
+  if (!captureHealth) {
+    return (
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+        Waiting for capture data — this fills in once Daylens has been tracking for a few minutes.
+      </div>
+    )
+  }
 
   const titleStatus = captureHealth.windowTitles.status
   const titleLabel = titleStatus === 'healthy'
@@ -574,7 +558,6 @@ function CaptureHealthSection({
   const linuxTracking = diagnostics?.linuxTracking
 
   return (
-    <SettingsSection title="Capture health">
       <div>
         {linuxTracking && (
           <SettingsRow
@@ -616,11 +599,10 @@ function CaptureHealthSection({
           </div>
         )}
       </div>
-    </SettingsSection>
   )
 }
 
-function TrackingControlsSection({
+function TrackingControlsContent({
   settings,
   persist,
 }: {
@@ -662,7 +644,7 @@ function TrackingControlsSection({
   const removeSite = (value: string) => void persist({ trackingExcludedSites: excludedSites.filter((s) => s !== value) })
 
   return (
-    <SettingsSection title="Tracking controls">
+    <>
       <SettingsRow
         first
         title="Pause tracking"
@@ -699,12 +681,361 @@ function TrackingControlsSection({
           />
         </>
       )}
-    </SettingsSection>
+    </>
+  )
+}
+
+// ─── Section model ──────────────────────────────────────────────────────────
+// The left rail is grouped, Claude-style. Each id maps to one focused page in
+// the content pane. Adding a future section (e.g. richer Billing in DEV-106) is
+// just a new entry here plus a case in renderSection — the shell holds it.
+type SectionId =
+  | 'general' | 'appearance' | 'notifications' | 'billing' | 'usage'
+  | 'ai' | 'memory'
+  | 'labels' | 'clients' | 'privacy'
+  | 'mcp' | 'capture' | 'updates'
+
+interface SectionDef { id: SectionId; label: string; keywords: string }
+interface SectionGroup { label: string; items: SectionDef[] }
+
+const SECTION_GROUPS: SectionGroup[] = [
+  {
+    label: 'Account',
+    items: [
+      { id: 'general', label: 'General', keywords: 'name profile display persona' },
+      { id: 'appearance', label: 'Appearance', keywords: 'theme light dark look system' },
+      { id: 'notifications', label: 'Notifications', keywords: 'morning brief evening wrap distraction alerts' },
+      { id: 'billing', label: 'Billing', keywords: 'plan subscription subscribe upgrade payment credit free key' },
+      { id: 'usage', label: 'Usage', keywords: 'credit meter cost spend remaining' },
+    ],
+  },
+  {
+    label: 'AI',
+    items: [
+      { id: 'ai', label: 'Provider & model', keywords: 'anthropic openai google claude api key model gpt gemini' },
+      { id: 'memory', label: 'Memory', keywords: 'work memory facts remember knows about you' },
+    ],
+  },
+  {
+    label: 'Activity & data',
+    items: [
+      { id: 'labels', label: 'Labels', keywords: 'category app override propagate zen browsing' },
+      { id: 'clients', label: 'Clients', keywords: 'project attribution company work' },
+      { id: 'privacy', label: 'Privacy & tracking', keywords: 'pause exclude excluded incognito private analytics local data' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
+      { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
+      { id: 'updates', label: 'Updates', keywords: 'version install download release' },
+    ],
+  },
+]
+
+const ALL_SECTIONS: SectionDef[] = SECTION_GROUPS.flatMap((group) => group.items)
+
+function isSectionId(value: string | null): value is SectionId {
+  return value !== null && ALL_SECTIONS.some((section) => section.id === value)
+}
+
+function RailItem({
+  item,
+  active,
+  onSelect,
+}: {
+  item: SectionDef
+  active: boolean
+  onSelect: (id: SectionId) => void
+}) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(item.id)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      aria-current={active ? 'page' : undefined}
+      style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        padding: '7px 10px',
+        borderRadius: 8,
+        fontSize: 13,
+        fontWeight: active ? 600 : 500,
+        letterSpacing: '-0.01em',
+        cursor: 'pointer',
+        color: active || hovered ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+        background: active ? 'var(--color-surface-low)' : hovered ? 'var(--color-pill-bg)' : 'transparent',
+        border: active ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
+        opacity: active ? 1 : 0.82,
+        transition: 'all 140ms',
+      }}
+    >
+      {item.label}
+    </button>
+  )
+}
+
+function SettingsRail({
+  active,
+  onSelect,
+  search,
+  onSearch,
+}: {
+  active: SectionId
+  onSelect: (id: SectionId) => void
+  search: string
+  onSearch: (value: string) => void
+}) {
+  const query = search.trim().toLowerCase()
+  const matches = (item: SectionDef) =>
+    query === ''
+    || item.label.toLowerCase().includes(query)
+    || item.keywords.includes(query)
+  const groups = SECTION_GROUPS
+    .map((group) => ({ ...group, items: group.items.filter(matches) }))
+    .filter((group) => group.items.length > 0)
+
+  return (
+    <aside
+      style={{
+        width: 232,
+        flexShrink: 0,
+        height: '100%',
+        overflowY: 'auto',
+        boxSizing: 'border-box',
+        borderRight: '1px solid var(--color-border-ghost)',
+        background: 'var(--color-sidebar-bg)',
+        padding: '30px 16px 24px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <h1 style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)', paddingLeft: 2 }}>
+        Settings
+      </h1>
+      <input
+        type="text"
+        value={search}
+        onChange={(event) => onSearch(event.target.value)}
+        placeholder="Search settings…"
+        aria-label="Search settings"
+        style={{
+          width: '100%',
+          height: 32,
+          padding: '0 10px',
+          borderRadius: 8,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface-high)',
+          color: 'var(--color-text-primary)',
+          fontSize: 12.5,
+          outline: 'none',
+          boxSizing: 'border-box',
+        }}
+      />
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {groups.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', padding: '4px 2px', lineHeight: 1.5 }}>
+            No settings match “{search.trim()}”.
+          </div>
+        ) : (
+          groups.map((group) => (
+            <div key={group.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{
+                fontSize: 10.5,
+                fontWeight: 800,
+                letterSpacing: '0.10em',
+                textTransform: 'uppercase',
+                color: 'var(--color-text-tertiary)',
+                padding: '0 10px 4px',
+              }}>
+                {group.label}
+              </div>
+              {group.items.map((item) => (
+                <RailItem key={item.id} item={item} active={item.id === active} onSelect={onSelect} />
+              ))}
+            </div>
+          ))
+        )}
+      </nav>
+    </aside>
+  )
+}
+
+// ─── Billing & Usage (the shell DEV-106 fills) ────────────────────────────────
+// Honest scaffolds: the structure billing plugs into, populated only with what's
+// true today (which AI mode you're in) and clearly-marked "arriving with billing"
+// notes. No fake numbers, no inert controls — every control here actually does
+// something (the "Set up in AI" button jumps to the AI page). Settings invariant
+// #1 and billing invariant #8 (no dark patterns) hold even while it's a scaffold.
+
+const KEY_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  'claude-cli': 'Claude CLI',
+  openai: 'OpenAI',
+  'codex-cli': 'Codex CLI',
+  google: 'Google',
+  openrouter: 'OpenRouter',
+}
+
+// The provider's display name, or null when we don't have a friendly label —
+// callers phrase the fallback so it never reads "your own your provider key".
+function providerName(provider: string): string | null {
+  return KEY_PROVIDER_LABELS[provider] ?? null
+}
+
+function providerLabel(provider: string): string {
+  return providerName(provider) ?? 'your provider'
+}
+
+function PlanCard({
+  name,
+  blurb,
+  active,
+  comingSoon,
+  action,
+}: {
+  name: string
+  blurb: string
+  active?: boolean
+  comingSoon?: boolean
+  action?: ReactNode
+}) {
+  return (
+    <div style={{
+      padding: '16px 18px',
+      borderRadius: 14,
+      border: active ? '1px solid var(--color-glass-border)' : '1px solid var(--color-border-ghost)',
+      background: active ? 'var(--color-accent-dim)' : 'var(--color-surface-low)',
+      display: 'grid',
+      gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>{name}</span>
+        {active && <StatusPill label="Current" tone="success" />}
+        {comingSoon && <StatusPill label="Arriving with billing" />}
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>{blurb}</div>
+      {action && <div style={{ marginTop: 2 }}>{action}</div>}
+    </div>
+  )
+}
+
+function BillingPage({
+  hasAiAccess,
+  provider,
+  onGoToAI,
+}: {
+  hasAiAccess: boolean
+  provider: string
+  onGoToAI: () => void
+}) {
+  const onOwnKey = hasAiAccess
+  return (
+    <SectionPage
+      title="Billing"
+      description="How Daylens powers its AI. Start on free credit, subscribe when it runs out, or bring your own provider key and pay the provider directly."
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <PlanCard
+          name="Free credit"
+          comingSoon
+          blurb="$5 of AI on us when you start — no card, no key. Enough to feel what Daylens does before money is ever mentioned."
+        />
+        <PlanCard
+          name="Subscription"
+          comingSoon
+          blurb="A flat monthly price and we keep handling the AI for you — no keys, no per-call cost to think about. Manage and cancel here."
+        />
+        <PlanCard
+          name="Your own key"
+          active={onOwnKey}
+          blurb={onOwnKey
+            ? `You're using your own ${providerLabel(provider)} key. Calls go straight to the provider — Daylens never bills you and never sees them.`
+            : 'Paste a provider key and pay the provider directly. Calls go straight from your machine to the provider.'}
+          action={
+            <button
+              type="button"
+              onClick={onGoToAI}
+              style={{ ...inlineButtonStyle, background: onOwnKey ? 'var(--color-surface-high)' : 'var(--gradient-primary)', color: onOwnKey ? 'var(--color-text-primary)' : 'var(--color-primary-contrast)', border: onOwnKey ? '1px solid var(--color-border-ghost)' : 'none' }}
+            >
+              {onOwnKey ? 'Manage key in AI →' : 'Set up your key in AI →'}
+            </button>
+          }
+        />
+      </div>
+      <div style={infoPanelStyle}>
+        <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+          Free credit and subscriptions arrive with the billing update. Today you can power Daylens with your own provider key — set it up in <strong>AI</strong>. Whichever mode you're in, only the handful of facts needed for one answer ever leaves your machine — never your whole history.
+        </div>
+      </div>
+    </SectionPage>
+  )
+}
+
+function UsagePage({
+  hasAiAccess,
+  provider,
+  onGoToAI,
+}: {
+  hasAiAccess: boolean
+  provider: string
+  onGoToAI: () => void
+}) {
+  return (
+    <SectionPage
+      title="Usage"
+      description="An honest meter — how much AI you've used and what's left. Plain numbers, no surprises."
+    >
+      {hasAiAccess ? (
+        <div style={{ ...infoPanelStyle, marginTop: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+            {providerName(provider) ? `On your own ${providerName(provider)} key` : 'On your own provider key'}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+            Usage and cost are billed by {providerLabel(provider)} directly — Daylens doesn't meter or charge for it. Check your provider's dashboard for spend.
+          </div>
+        </div>
+      ) : (
+        <div style={{ ...infoPanelStyle, marginTop: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+            No AI connected yet
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+            Connect a provider to start using Daylens's AI features.
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={onGoToAI}
+              style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
+            >
+              Connect a provider →
+            </button>
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.65 }}>
+        When free credit and subscriptions arrive, your remaining credit and this period's usage will show here as a quiet number you can find when you look — never a countdown that pressures you mid-thought.
+      </div>
+    </SectionPage>
   )
 }
 
 export default function Settings({ initialSettings = null }: { initialSettings?: AppSettings | null } = {}) {
   const [settings, setSettings] = useState<AppSettings | null>(initialSettings)
+  // Which section the content pane shows. Honors a ?section= deep link on first
+  // mount (so other surfaces can jump straight to e.g. Billing), then is local.
+  const [searchParams] = useSearchParams()
+  const [activeSection, setActiveSection] = useState<SectionId>(() => {
+    const requested = searchParams.get('section')
+    return isSectionId(requested) ? requested : 'general'
+  })
+  const [sectionSearch, setSectionSearch] = useState('')
   const [hasApiKey, setHasApiKey] = useState(false)
   const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null }>({ claude: null, codex: null })
   const [trackingDiagnostics, setTrackingDiagnostics] = useState<TrackingDiagnosticsPayload | null>(null)
@@ -1057,19 +1388,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   const linuxDesktop = trackingDiagnostics?.linuxDesktop ?? null
-  return (
-    <div style={{ padding: '30px 32px 48px', maxWidth: 1080 }}>
-      <div style={{ marginBottom: 24, maxWidth: 680 }}>
-        <h1 style={{ fontSize: 32, lineHeight: 1.05, letterSpacing: '-0.03em', margin: 0, color: 'var(--color-text-primary)' }}>
-          Settings
-        </h1>
-      </div>
+  let content: ReactNode = null
+  switch (activeSection) {
+    case 'billing':
+      content = <BillingPage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => setActiveSection('ai')} />
+      break
+    case 'usage':
+      content = <UsagePage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => setActiveSection('ai')} />
+      break
+    case 'general':
+      content = (
+        <SectionPage title="General" description="Your name — used in the AI persona line.">
 
-      <div style={settingsSurfaceStyle}>
-        <SettingsSection
-          first
-          title="Profile"
-        >
           <SettingsRow
             first
             title="Display name"
@@ -1085,11 +1415,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               />
             }
           />
-        </SettingsSection>
-
-        <SettingsSection
-          title="AI"
-        >
+        </SectionPage>
+      )
+      break
+    case 'ai':
+      content = (
+        <SectionPage title="AI" description="One provider, one model — used by every AI surface: chat, re-analyze, recaps, briefs, and wraps.">
           <ConnectAI
             variant="embedded"
             initialProvider={settings.aiProvider}
@@ -1097,17 +1428,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
             onConnected={() => { void refreshAIAccess() }}
             onModelChange={() => { void refreshAIAccess() }}
           />
-        </SettingsSection>
-
-        <SettingsSection
-          title="Work memory"
-        >
+        </SectionPage>
+      )
+      break
+    case 'memory':
+      content = (
+        <SectionPage title="Memory" description="What Daylens knows about you, in plain language. Edit any line, add a fact it couldn't infer, or delete one that's wrong — your edits win and the AI uses them everywhere it talks about you.">
           <div>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6, marginBottom: 14 }}>
-              What Daylens knows about you, in plain language. Edit any line, add a fact it couldn't infer, or
-              delete one that's wrong — your edits win and the AI uses them everywhere it talks about you.
-            </div>
-
             {workMemoryError && (
               <div style={{ fontSize: 12, color: '#f87171', lineHeight: 1.55, marginBottom: 10 }}>
                 {workMemoryError}
@@ -1249,11 +1576,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </button>
             </div>
           </div>
-        </SettingsSection>
-
-        <SettingsSection
-          title="Labels"
-        >
+        </SectionPage>
+      )
+      break
+    case 'labels':
+      content = (
+        <SectionPage title="Labels" description="Every app you've used and its category — including ones not categorized yet. Your override wins in Apps, Timeline, and the AI, and survives every rebuild.">
           {(() => {
             const COLLAPSED_COUNT = 5
             const query = labelSearch.trim().toLowerCase()
@@ -1356,16 +1684,13 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           </div>
             )
           })()}
-        </SettingsSection>
-
-        <SettingsSection
-          title="Clients"
-        >
+        </SectionPage>
+      )
+      break
+    case 'clients':
+      content = (
+        <SectionPage title="Clients" description={`Track work for specific clients or projects. Once a client exists, Daylens can resolve names like it in AI questions ("how much did I work on X this week") and attribute work sessions to it.`}>
           <div>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6, marginBottom: 14 }}>
-              Track work for specific clients or projects. Once a client exists, Daylens can resolve names like it in AI questions ("how much did I work on X this week") and attribute work sessions to it.
-            </div>
-
             <div
               style={{
                 display: 'flex',
@@ -1514,11 +1839,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               })
             )}
           </div>
-        </SettingsSection>
-
-        <SettingsSection
-          title="Notifications"
-        >
+        </SectionPage>
+      )
+      break
+    case 'notifications':
+      content = (
+        <SectionPage title="Notifications" description="Your morning brief, evening wrap, and focus alerts.">
           <div>
             <SettingsRow
               first
@@ -1562,11 +1888,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </div>
             )}
           </div>
-        </SettingsSection>
-
-        <SettingsSection
-          title="Appearance"
-        >
+        </SectionPage>
+      )
+      break
+    case 'appearance':
+      content = (
+        <SectionPage title="Appearance" description="How Daylens looks.">
           <div>
             <SettingsRow
               first
@@ -1589,13 +1916,19 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               }
             />
           </div>
-        </SettingsSection>
-
-        <UpdatesSection />
-
-        <SettingsSection
-          title="MCP Server"
-        >
+        </SectionPage>
+      )
+      break
+    case 'updates':
+      content = (
+        <SectionPage title="Updates" description="Daylens keeps itself up to date. In a dev build, updates come through the dev workflow.">
+          <UpdatesContent />
+        </SectionPage>
+      )
+      break
+    case 'mcp':
+      content = (
+        <SectionPage title="MCP server" description="Let Claude Desktop, Cursor, or Claude Code query your local activity data. Off by default; a packaged build never exposes developer paths.">
           <div>
             <SettingsRow
               first
@@ -1686,18 +2019,22 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               </div>
             )}
           </div>
-        </SettingsSection>
-
-        <CaptureHealthSection diagnostics={trackingDiagnostics} />
-
-        <TrackingControlsSection settings={settings} persist={persist} />
-
-        <SettingsSection
-          title="Privacy"
-        >
+        </SectionPage>
+      )
+      break
+    case 'capture':
+      content = (
+        <SectionPage title="Capture health" description="Whether Daylens is capturing what you're working on — not just which app is open.">
+          <CaptureHealthContent diagnostics={trackingDiagnostics} />
+        </SectionPage>
+      )
+      break
+    case 'privacy':
+      content = (
+        <SectionPage title="Privacy & tracking" description="Decide what Daylens sees. Exclusions are honored everywhere — including data already captured before you excluded them.">
           <div>
+            <TrackingControlsContent settings={settings} persist={persist} />
             <SettingsRow
-              first
               title="Analytics"
               description="Anonymous product telemetry."
               control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
@@ -1708,7 +2045,23 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               control={<StatusPill label="Local only" />}
             />
           </div>
-        </SettingsSection>
+        </SectionPage>
+      )
+      break
+  }
+
+  return (
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', fontFamily: 'var(--font-sans)' }}>
+      <SettingsRail
+        active={activeSection}
+        onSelect={setActiveSection}
+        search={sectionSearch}
+        onSearch={setSectionSearch}
+      />
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
+        <div style={{ padding: '34px 44px 72px' }}>
+          {content}
+        </div>
       </div>
     </div>
   )
