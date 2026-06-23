@@ -119,12 +119,6 @@ if (!gotTheLock) {
 // Pin taskbar icon correctly on Windows
 app.setAppUserModelId(APP_USER_MODEL_ID)
 
-// TEMP (DEV-103 verification): headless CDP for screenshotting the wrap. Revert before commit.
-if (process.env.DAYLENS_CDP_PORT) {
-  app.commandLine.appendSwitch('remote-debugging-port', process.env.DAYLENS_CDP_PORT)
-  app.commandLine.appendSwitch('remote-allow-origins', '*')
-}
-
 if (process.platform === 'linux' && SMOKE_TEST) {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('no-sandbox')
