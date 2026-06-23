@@ -67,6 +67,15 @@ Claude-settings bar) where you can read and steer everything:
 - **A short audit.** Like Claude's "manage edits" — you can see what was remembered, edited, or
   forgotten, so memory never feels like it's changing behind your back.
 
+**Visual bar (the first build looked like a debug dump — don't repeat it).** Match Claude's
+Capabilities/Memory panel: [`docs/research/settings-references/ref-claude-capabilities-memory.png`](../research/settings-references/ref-claude-capabilities-memory.png).
+The Memory *settings page* opens calm — a couple of clean toggle rows (each a bold title + a
+muted one-line description, control right-aligned) and a **prominent full-width
+"View and manage memory · Updated <relative time>" row with a chevron** that opens the
+auditable view above. The auditable view itself reads as plain organized sentences in
+sections, not a stack of bordered textareas with Save/Forget buttons on every line. Trustworthy,
+spacious, "set and forget" — see `settings.md` §10.4.
+
 ## 4. How memory shapes the AI
 
 Memory is handed to the model as **context** on every surface (chat, recaps, wraps, naming) —

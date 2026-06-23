@@ -108,3 +108,101 @@ off by default and safe in production.
 6. A packaged build ships with the MCP server off and never exposes developer filesystem paths.
 7. Settings reads and writes the same truth as the rest of the app — no separate settings
    world, no view that disagrees after a change.
+
+## 10. Visual direction — the sectioned layout (round-2 design notes)
+
+The shell from DEV-105 is structurally right (app sidebar → settings rail → content pane,
+each section its own page) but several pages are still rough. This section is the **agreed
+look** after Tonny tested the first build. Reference screenshots live in
+[`docs/research/settings-references/`](../research/settings-references/) — open them; they
+are the bar. The overall mood across every page: **calm, spacious, plain-language, native —
+Claude's settings, not a dense control panel.** Generous vertical rhythm, one clear job per
+page, a muted one-line description under each control, the control right-aligned. Never dump
+raw config, dev paths, or jargon at the user.
+
+### 10.1 The rail
+- **No "Settings" title at the top of the rail.** The app's own left nav already shows
+  Settings is the active surface — a second "Settings" header is redundant. Start the rail at
+  the search box, then the grouped sections.
+- Keep the grouped, **icon-per-item** rail (it tested well): icons are the visual anchor.
+- Keep search.
+
+### 10.2 Navigation — there must always be an obvious way back
+This is the one that bit us twice. The rail *is* the navigation, but on the AI / Provider &
+model page (and any page reached by a cross-link such as Billing's "Manage key in AI"), it
+**read as a dead-end** — the user felt there was no way back to where they came from.
+- Every page must have an unmistakable way back to the previous context. Acceptable solutions:
+  the rail selection always reflects where you are **and** cross-links don't silently teleport
+  you; OR an explicit breadcrumb/back affordance when a button navigates you to another
+  section. Pick one and make it obvious — do **not** explain the complaint away.
+- Prefer **not** to make Billing/Usage jump the user into a different rail section. If a card
+  needs the key, either surface the key control inline or use a clearly-labelled link that the
+  user understands will move them (and can return from).
+
+### 10.3 Known bug — stray rows bleed across pages (fix first)
+On the **Privacy & tracking** and **MCP server** pages, two **Labels** rows
+("Dia · 168h over 30 days · override: Browsing" with a category dropdown + Reset) render at
+the top of the page where they do not belong (see `daylens-privacy-CURRENT-strayrows-bug.png`
+and `daylens-mcp-CURRENT-too-technical.png`). Root cause: the content pane renders `{content}`
+with no stable identity, so React reuses DOM across section switches and leaves the previous
+section's first rows mounted. **Fix:** force a full remount per section — e.g. `key={activeSection}`
+on the content wrapper (or render each section behind its own keyed boundary). Verify by
+clicking Labels → Privacy → MCP and confirming no Labels rows survive.
+
+### 10.4 Per-section look
+
+- **General** — keep as is (name + theme on one page). Good.
+
+- **Memory** → match `ref-claude-capabilities-memory.png`. **Mood:** trustworthy, uncluttered,
+  "set and forget." Clean toggle rows, each a bold title + a muted one-line description (with
+  inline "Learn more" where useful) + a right-aligned toggle. A prominent **full-width
+  "View and manage memory · Updated <relative time>" row with a chevron** that opens the
+  auditable memory view. The raw editable-paragraph list we shipped looks like a debug dump —
+  replace it with this calm, sectioned treatment. (Behavior is DEV-107; this is the visual bar
+  for both the Memory settings page and the Manage-memory view.)
+
+- **Clients** → the current create-a-row form is the wrong interface. **Mood:** the clean,
+  grouped, action-oriented Claude style in `ref-claude-privacy.png` (sectioned, each item a
+  row with a clear right-aligned action). Behavior is already specified in §5 and `ai.md` §8.2
+  — a client/project with optional aliases and apps/domains, used for time attribution. Build
+  the interface to that spec, not a bare name+color+add row.
+
+- **Privacy & tracking** → simplify to `ref-claude-privacy.png`. **Mood:** transparent and
+  calm. Lead with a short "what Daylens sees / your data stays local" framing, then grouped
+  rows: **Preferences** (pause, limit tracking, skip incognito, excluded apps/sites) and
+  **Your data** (analytics, local-only, export if applicable) — clean rows, controls
+  right-aligned, no wall of inputs. Remove the stray Labels rows (10.3).
+
+- **MCP server** → simpler, far less technical (`ref-claude-connectors.png` mood). **Mood:**
+  powerful but approachable, like Claude's Connectors. Lead with a **plain-English** "what this
+  is and why you'd turn it on," a single clear on/off, and a friendly "what apps can do with
+  it." **Hide the raw JSON config, file paths, and `DAYLENS_*` env behind an "Advanced /
+  Show config" disclosure** — a normal user should never see a developer's filesystem path or a
+  config blob on the default view.
+
+- **Capture health** → today it's a diagnostic the user has no reason to care about. Either
+  **reframe it as a plain-language "Is Daylens seeing your work?" status** that only demands
+  attention when something is wrong (and then tells the user what to do — e.g. grant a
+  permission), or fold it into Privacy/General. Raw "198/203 samples" style metrics belong
+  behind an advanced/troubleshooting disclosure, not front and center.
+
+- **Updates** → a **beautifully designed changelog**, not a status line. Reference
+  `ref-dia-weekly-changelog.png` (Dia's "Dia Weekly" release notes). **Mood:** editorial,
+  premium, human — a crafted newsletter, not a dry "bug fixes" bullet list. Think a masthead,
+  an issue number + app version, a dated feature story with a headline and a hero image, and
+  short readable copy describing what each update adds. The user should feel the care. Keep the
+  actual "check / install / restart" controls, but wrap the *content* of an update in this
+  designed changelog. (This may warrant its own issue — it's more than a settings row.)
+
+- **Billing / Usage** — keep the honest scaffolds, but render them in the same calm, grouped
+  Claude style as the rest (no dark patterns; plain numbers).
+
+### 10.5 Mistakes from round 1 — do not repeat
+- Don't ship a page that doesn't match its reference screenshot and call it done. Open the
+  reference, build to it, compare side by side.
+- Don't dismiss a visible glitch as a "transition artifact" — the stray-rows bug was real and
+  shipped. If something looks wrong in a screenshot, it is wrong; reproduce and fix it.
+- Don't explain a UX complaint away ("the rail is the back button"). If the user felt stuck,
+  the design failed — fix the design.
+- Drive the real app and screenshot **every** section, then look at each screenshot critically
+  before claiming the work is ready.

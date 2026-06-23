@@ -85,7 +85,10 @@ scroll). Billing and Usage are new sections:
   numbers, no dark patterns.
 
 This redesign is design work — get reference screenshots and agree the look before building it
-(`AGENTS.md` "Design work"). The existing `settings.md` invariants still hold.
+(`AGENTS.md` "Design work"). The existing `settings.md` invariants still hold, as does the
+round-2 visual direction in `settings.md` §10: Billing and Usage render in the same calm,
+grouped, plain-number Claude style as every other section — current mode flagged honestly,
+future modes clearly "arriving", no dark patterns.
 
 ## 7. Invariants (rules this must always obey)
 
