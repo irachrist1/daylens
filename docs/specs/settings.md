@@ -192,7 +192,8 @@ clicking Labels → Privacy → MCP and confirming no Labels rows survive.
   an issue number + app version, a dated feature story with a headline and a hero image, and
   short readable copy describing what each update adds. The user should feel the care. Keep the
   actual "check / install / restart" controls, but wrap the *content* of an update in this
-  designed changelog. (This may warrant its own issue — it's more than a settings row.)
+  designed changelog. (Split into its own issue — **DEV-111** — since it's more than a
+  settings row; the Updates *controls* stay in this section, the changelog *content* is DEV-111.)
 
 - **Billing / Usage** — keep the honest scaffolds, but render them in the same calm, grouped
   Claude style as the rest (no dark patterns; plain numbers).
