@@ -84,6 +84,15 @@ function stripExecutableSuffix(value: string): string {
     .trim()
 }
 
+// Windows reports an executable's verbose FileDescription as the app name —
+// e.g. "Antigravity Agentic Desktop Application". For apps without a catalog
+// entry, trim the generic "(Agentic) Desktop Application" tail so the rail
+// shows the brand ("Antigravity"), not the installer's description.
+function prettifyRawAppName(name: string): string {
+  const cleaned = name.replace(/\s+(?:agentic\s+)?desktop\s+application$/i, '').trim()
+  return cleaned.length >= 2 ? cleaned : name
+}
+
 function basenameLower(value: string): string {
   const base = path.basename(value).trim()
   return base.toLowerCase()
@@ -128,7 +137,7 @@ export function resolveCanonicalApp(bundleId: string, appName: string): Canonica
   const identity = {
     canonicalAppId,
     appInstanceId: trimmedBundleId || lowerNameNoExe || trimmedName,
-    displayName: catalogEntry?.displayName ?? trimmedName,
+    displayName: catalogEntry?.displayName ?? prettifyRawAppName(trimmedName),
     rawAppName: trimmedName,
     defaultCategory: catalogEntry?.defaultCategory ?? null,
     isBrowser: catalogEntry?.capabilities?.includes('browser') ?? false,

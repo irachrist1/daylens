@@ -45,6 +45,13 @@ function firstActiveThreadId(rows: AIThreadSummary[]): number | null {
   return rows.find((row) => !row.archived)?.id ?? null
 }
 
+// Remembered across remounts (switching away from the AI tab and back) within a
+// session, so returning restores what you were on — including a fresh, unsent
+// new chat — instead of always re-adopting the most recent conversation.
+// `undefined` = never set this session (first open → adopt most recent);
+// `null` = you were on a new chat (stay empty).
+let rememberedThreadId: number | null | undefined = undefined
+
 type SendOptions = {
   contextOverride?: ThreadMessage['contextSnapshot']
   trigger?: 'freeform' | 'suggested' | 'retry'
@@ -232,6 +239,7 @@ export function useAIChat() {
     // which is exactly the "header changes, body stays empty" bug. Instead we
     // stale-guard by thread id: only the latest requested thread may write.
     setActiveThreadId(threadId)
+    rememberedThreadId = threadId
     latestRequestedThreadRef.current = threadId
     setThreadLoading(true)
     try {
@@ -266,8 +274,16 @@ export function useAIChat() {
       if (cancelled) return
       threadsHydratedRef.current = true
       setThreads(rows)
+      if (hasDeepLink) return // the deep-link effect owns which thread loads
+      // Restore the selection from earlier this session so a tab switch doesn't
+      // snap you back to the most recent conversation.
+      if (rememberedThreadId === null) return // you were on a new chat — stay empty
+      if (typeof rememberedThreadId === 'number' && rows.some((row) => row.id === rememberedThreadId)) {
+        void loadThread(rememberedThreadId)
+        return
+      }
       const firstId = firstActiveThreadId(rows)
-      if (firstId != null && !hasDeepLink) void loadThread(firstId)
+      if (firstId != null) void loadThread(firstId)
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [loadThread, location.search])
@@ -658,6 +674,7 @@ export function useAIChat() {
     latestRequestedThreadRef.current = null
     setThreadLoading(false)
     setActiveThreadId(null)
+    rememberedThreadId = null
     resetComposerState()
   }, [messages.length, activeThreadId, resetComposerState])
 
@@ -681,6 +698,7 @@ export function useAIChat() {
           void loadThread(nextId)
         } else {
           setActiveThreadId(null)
+          rememberedThreadId = null
           resetComposerState()
         }
       }
@@ -704,6 +722,7 @@ export function useAIChat() {
           void loadThread(nextId)
         } else {
           setActiveThreadId(null)
+          rememberedThreadId = null
           resetComposerState()
         }
       }

@@ -221,7 +221,24 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
       : { id: 'focus-start', group: 'Focus' as const, label: 'Start focus session', hint: 'Quiet distraction alerts', keywords: 'deep work', icon: <Timer size={15} strokeWidth={1.8} />, perform: async () => { await ipc.focus.start(null); setActiveFocus(await ipc.focus.getActive()) } },
     { id: 'updates-check', group: 'Tools', label: 'Check for updates', hint: 'Daylens update feed', keywords: 'upgrade version', icon: <Download size={15} strokeWidth={1.8} />, perform: () => { void ipc.updater.check() } },
     { id: 'updates-install', group: 'Tools', label: 'Install pending update', hint: 'If a newer build is ready', keywords: 'restart upgrade', icon: <RefreshCw size={15} strokeWidth={1.8} />, perform: () => { void ipc.updater.install() } },
-  ], [navigate, openWrappedFor, activeFocus])
+    { id: 'replay-onboarding', group: 'Tools', label: 'Replay onboarding', hint: 'Restart the welcome flow', keywords: 'onboarding welcome intro setup walkthrough getting started tour', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: async () => {
+      const current = await ipc.settings.get()
+      await ipc.settings.set({
+        onboardingComplete: false,
+        onboardingState: {
+          ...current.onboardingState,
+          stage: 'welcome',
+          trackingPermissionState: platform === 'macos' ? 'missing' : 'granted',
+          permissionRequestedAt: null,
+          proofState: 'idle',
+          personalizationState: 'pending',
+          aiSetupState: 'pending',
+          completedAt: null,
+        },
+      })
+      window.location.reload()
+    } },
+  ], [navigate, openWrappedFor, activeFocus, platform])
 
   const contextItems: PaletteItem[] = useMemo(() => contextActions.map((action: CommandSurfaceAction) => ({
     id: action.id,
