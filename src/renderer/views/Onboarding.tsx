@@ -14,25 +14,33 @@ import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import { todayString } from '../lib/format'
+import ConnectAI from '../components/ConnectAI'
 
-const GOALS = [
-  { id: 'deep-work', label: 'See where my focus actually went' },
-  { id: 'understand-habits', label: 'Understand my work patterns' },
-  { id: 'less-distraction', label: 'Spot noise before it takes over' },
-  { id: 'ai-insights', label: 'Ask better questions about my week' },
+// Intent chips double as goal ids (persisted to userGoals for back-compat) and as
+// sentences that auto-fill the free-text intent box (persisted to userIntent).
+const INTENTS = [
+  { id: 'billable', label: 'Track billable work', phrase: 'Track billable work across clients and projects.' },
+  { id: 'time', label: 'See where my time goes', phrase: 'Understand where my time actually goes.' },
+  { id: 'focus', label: 'Protect my focus', phrase: 'Protect my focus and catch distractions early.' },
+  { id: 'recall', label: 'Remember what I did', phrase: 'Remember what I worked on without taking notes.' },
+  { id: 'ask-ai', label: 'Ask AI about my work', phrase: 'Ask AI specific questions about my week.' },
 ]
 
 const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome'], label: 'Meet Daylens' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
-  { id: ['personalize'], label: 'Personalize' },
+  { id: ['personalize'], label: 'Make it yours' },
+  { id: ['ai_setup'], label: 'Set up AI' },
+  { id: ['ready'], label: 'Ready' },
 ]
 
 const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome'], label: 'Meet Daylens' },
   { id: ['proof'], label: 'First signal' },
-  { id: ['personalize'], label: 'Personalize' },
+  { id: ['personalize'], label: 'Make it yours' },
+  { id: ['ai_setup'], label: 'Set up AI' },
+  { id: ['ready'], label: 'Ready' },
 ]
 
 interface ProofSnapshot {
@@ -111,6 +119,8 @@ export default function Onboarding({
   const [settings, setSettings] = useState(initialSettings)
   const [goals, setGoals] = useState<Set<string>>(new Set(initialSettings.userGoals))
   const [nameDraft, setNameDraft] = useState(initialSettings.userName)
+  const [intentDraft, setIntentDraft] = useState(initialSettings.userIntent)
+  const [aiConnected, setAiConnected] = useState(initialSettings.onboardingState.aiSetupState === 'connected')
   // T3: opt-in to Tracking Controls during onboarding. Off by default —
   // declining (the default) changes nothing about capture.
   const [trackingOptIn, setTrackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
@@ -326,12 +336,24 @@ export default function Onboarding({
     })
   }, [proof.ready, proof.timeline])
 
-  function toggleGoal(id: string) {
+  function toggleIntent(id: string) {
+    const intent = INTENTS.find((item) => item.id === id)
+    if (!intent) return
+    const selecting = !goals.has(id)
     setGoals((previous) => {
       const next = new Set(previous)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (selecting) next.add(id)
+      else next.delete(id)
       return next
+    })
+    // Chips auto-fill the free-text box; the box stays the source of truth for userIntent.
+    setIntentDraft((current) => {
+      const trimmed = current.trim()
+      if (selecting) {
+        if (trimmed.includes(intent.phrase)) return current
+        return trimmed ? `${trimmed} ${intent.phrase}` : intent.phrase
+      }
+      return trimmed.replace(intent.phrase, '').replace(/\s{2,}/g, ' ').trim()
     })
   }
 
@@ -346,6 +368,7 @@ export default function Onboarding({
       stage: 'complete' as const,
       proofState: 'ready' as const,
       personalizationState: 'completed' as const,
+      aiSetupState: aiConnected ? ('connected' as const) : settings.onboardingState.aiSetupState,
       completedAt,
     }
 
@@ -355,6 +378,7 @@ export default function Onboarding({
         onboardingState: nextOnboardingState,
         userName: nameDraft.trim(),
         userGoals: Array.from(goals),
+        userIntent: intentDraft.trim(),
         trackingControlsEnabled: trackingOptIn,
       })
       await ipc.app.completeOnboarding()
@@ -420,6 +444,33 @@ export default function Onboarding({
     })
   }
 
+  async function continueFromPersonalize() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+      platform,
+      step: 'personalize',
+      surface: 'onboarding',
+    })
+    // Persist identity now so a reload mid-flow keeps it.
+    await ipc.settings.set({
+      userName: nameDraft.trim(),
+      userGoals: Array.from(goals),
+      userIntent: intentDraft.trim(),
+      trackingControlsEnabled: trackingOptIn,
+    })
+    await persistOnboarding('ai_setup', { personalizationState: 'completed' })
+  }
+
+  async function continueFromAiSetup() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+      platform,
+      step: 'ai_setup',
+      surface: 'onboarding',
+    })
+    await persistOnboarding('ready', {
+      aiSetupState: aiConnected ? 'connected' : 'dismissed',
+    })
+  }
+
   const permissionStatusLabel =
     permissionState === 'granted'
       ? 'Enabled'
@@ -444,15 +495,18 @@ export default function Onboarding({
         {stage === 'welcome' && (
           <div className="onboarding-screen">
             <h1 className="onboarding-title onboarding-title-large">
-              {isMac
-                ? 'Daylens watches how you work, so you don\'t have to.'
-                : 'Daylens watches how you work, so you don\'t have to.'}
+              An honest picture of your day — built privately on your own machine.
             </h1>
+            <p className="onboarding-sub">
+              Daylens quietly notices what you work on and turns it into a clear timeline.
+              Nothing leaves your computer unless you ask it to. No screenshots, no video, no scores.
+            </p>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void handleContinueFromWelcome()}>
                 {isMac ? 'Get started' : 'Start tracking'}
               </button>
             </div>
+            <p className="onboarding-reassurance">Private by default · stays on this device · no judgment</p>
           </div>
         )}
 
@@ -588,7 +642,10 @@ export default function Onboarding({
 
         {stage === 'personalize' && (
           <div className="onboarding-screen">
-            <StageHeading title="Make it yours." />
+            <StageHeading
+              title="Make it yours."
+              body="Your name is just for the morning brief. Tell Daylens why you're here so it points you at the right answers."
+            />
             <label className="onboarding-name-field">
               <input
                 value={nameDraft}
@@ -598,19 +655,32 @@ export default function Onboarding({
               />
             </label>
             <div className="onboarding-goals-grid">
-              {GOALS.map((goal) => {
-                const selected = goals.has(goal.id)
+              {INTENTS.map((intent) => {
+                const selected = goals.has(intent.id)
                 return (
                   <button
-                    key={goal.id}
+                    key={intent.id}
                     className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
-                    onClick={() => toggleGoal(goal.id)}
+                    onClick={() => toggleIntent(intent.id)}
                   >
-                    {goal.label}
+                    {intent.label}
                   </button>
                 )
               })}
             </div>
+            <textarea
+              value={intentDraft}
+              onChange={(event) => setIntentDraft(event.target.value)}
+              placeholder="Tap a few above, or write it in your own words…"
+              maxLength={400}
+              rows={3}
+              style={{
+                width: '100%', resize: 'none', fontFamily: 'inherit',
+                border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14,
+                background: 'rgba(255,255,255,0.03)', color: '#f0f4ff',
+                padding: '12px 14px', fontSize: 14, lineHeight: 1.6, outline: 'none',
+              }}
+            />
             <button
               type="button"
               onClick={() => setTrackingOptIn((v) => !v)}
@@ -636,33 +706,59 @@ export default function Onboarding({
                 </span>
               </span>
             </button>
-            <div style={{
-              display: 'grid', gap: 6, textAlign: 'left',
-              padding: '12px 14px', borderRadius: 12,
-              border: '1px solid rgba(173, 198, 255, 0.18)',
-              background: 'rgba(255,255,255,0.02)',
-              color: '#c2c6d6',
-            }}>
-              <span style={{ fontSize: 13.5, fontWeight: 650, color: '#f0f4ff' }}>Give your AI everything Daylens sees</span>
-              <span style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5, color: '#c2c6d6' }}>
-                TARS turns what Daylens captures into context for Claude or ChatGPT, so your AI preps
-                from what you actually did — not your memory. Optional, in your terminal:
-              </span>
-              <code style={{
-                fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                padding: '6px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.35)',
-                border: '1px solid rgba(173,198,255,0.14)', userSelect: 'all', justifySelf: 'start',
-                color: '#adc6ff',
-              }}>npx tars-chief-of-staff</code>
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void continueFromPersonalize()} disabled={busy}>
+                Continue
+              </button>
+            </div>
+          </div>
+        )}
+
+        {stage === 'ai_setup' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              title="Turn on AI so Daylens can answer on day one."
+              body="Connect your own provider key. It stays in your OS keychain, billing stays with your provider, and you can change it anytime in Settings. Optional — skip and add it later."
+            />
+            <ConnectAI
+              variant="embedded"
+              initialProvider={settings.aiProvider}
+              hasSavedAccess={aiConnected}
+              onConnected={() => setAiConnected(true)}
+            />
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void continueFromAiSetup()} disabled={busy}>
+                {aiConnected ? 'Continue' : 'Skip for now'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {stage === 'ready' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              title={nameDraft.trim() ? `You're all set, ${nameDraft.trim()}.` : "You're all set."}
+              body="Daylens is watching quietly in the background. As your day fills in, your timeline names each stretch by what you were actually doing."
+            />
+            {intentDraft.trim() && (
+              <div className="onboarding-summary-tile onboarding-summary-tile-highlight">
+                <div className="onboarding-summary-label">What you're here for</div>
+                <div className="onboarding-summary-detail" style={{ marginTop: 6 }}>{intentDraft.trim()}</div>
+              </div>
+            )}
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div className="onboarding-summary-label">
+                {aiConnected ? 'Try asking Daylens' : 'Once you connect AI, you can ask'}
+              </div>
+              {['What did I work on today?', 'Where did my time go this week?', 'Introduce me to how Daylens works.'].map((q) => (
+                <div key={q} className="onboarding-goal-chip" style={{ cursor: 'default' }}>{q}</div>
+              ))}
             </div>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
-                {busy ? 'Opening Timeline…' : 'Open Daylens'}
+                {busy ? 'Opening Daylens…' : 'Open Daylens'}
               </button>
             </div>
-            <button className="onboarding-skip-link" onClick={() => void finishOnboarding()} disabled={busy}>
-              Skip for now
-            </button>
           </div>
         )}
 

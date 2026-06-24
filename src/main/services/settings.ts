@@ -27,6 +27,7 @@ const DEFAULTS: AppSettings = {
   onboardingState: createDefaultOnboardingState(),
   userName: '',
   userGoals: [],
+  userIntent: '',
   firstLaunchDate: 0,
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
@@ -91,6 +92,7 @@ export function getSettings(): AppSettings {
     onboardingState,
     userName: (_store.get('userName', '') as string),
     userGoals: (_store.get('userGoals', []) as string[]),
+    userIntent: (_store.get('userIntent', '') as string),
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
@@ -135,6 +137,9 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
   const entries = { ...partial }
   if ('userName' in entries) {
     entries.userName = String(entries.userName ?? '').trim().slice(0, 80)
+  }
+  if ('userIntent' in entries) {
+    entries.userIntent = String(entries.userIntent ?? '').trim().slice(0, 400)
   }
   if (entries.onboardingState) {
     entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')

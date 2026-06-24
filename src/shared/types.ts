@@ -1204,6 +1204,8 @@ export type OnboardingStage =
   | 'verifying_permission'
   | 'proof'
   | 'personalize'
+  | 'ai_setup'
+  | 'ready'
   | 'complete'
 
 export type ProofState = 'idle' | 'collecting' | 'ready'
@@ -1268,6 +1270,7 @@ export interface AppSettings {
   onboardingState: OnboardingState
   userName: string
   userGoals: string[]
+  userIntent: string            // why the user is here, captured in onboarding; fed to AI suggestions
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
   aiProvider: AIProviderMode
