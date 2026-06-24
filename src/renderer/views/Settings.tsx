@@ -8,6 +8,7 @@ import type {
   AppTheme,
   AppUsageSummary,
   BillingAccessSnapshot,
+  BillingUsageCostSource,
   BillingUsageReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
@@ -19,6 +20,7 @@ import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
+import { formatUsdAmount } from '@shared/formatUsd'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
   { value: 'development', label: 'Development' },
@@ -1130,6 +1132,26 @@ function BillingPage({
   )
 }
 
+const JOB_FEATURE_LABELS: Record<string, string> = {
+  block_label_preview: 'Block label preview',
+  block_label_finalize: 'Block labeling',
+  block_cleanup_relabel: 'Block relabeling',
+  day_summary: 'Day summary',
+  week_review: 'Week review',
+  app_narrative: 'App narrative',
+  chat_answer: 'Chat',
+  chat_followup_suggestions: 'Chat suggestions',
+  report_generation: 'Report generation',
+  attribution_assist: 'Attribution assist',
+  wrapped_narrative: 'Wrapped narrative',
+  wrapped_period_narrative: 'Period wrap',
+  search_intent: 'Search intent',
+}
+
+function formatJobFeature(feature: string) {
+  return JOB_FEATURE_LABELS[feature] ?? feature.replace(/_/g, ' ')
+}
+
 function UsagePage() {
   type RangeKey = '1d' | '7d' | '30d' | 'mtd' | 'last_month' | 'custom'
   type GroupKey = 'model' | 'type'
@@ -1142,7 +1164,8 @@ function UsagePage() {
   const [report, setReport] = useState<BillingUsageReport | null>(null)
   const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const bounds = useMemo(() => {
@@ -1166,20 +1189,40 @@ function UsagePage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    void ipc.billing.getAccess()
+      .then((nextAccess) => { if (!cancelled) setAccess(nextAccess) })
+      .catch(() => { /* access is optional context for summary split */ })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setRefreshing(true)
     setError(null)
-    void Promise.all([ipc.billing.getAccess(), ipc.billing.getUsage(bounds.from, bounds.to)])
-      .then(([nextAccess, nextReport]) => {
+    void ipc.billing.getUsage(bounds.from, bounds.to)
+      .then((nextReport) => {
         if (cancelled) return
-        setAccess(nextAccess)
         setReport(nextReport)
       })
       .catch((reason) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
       })
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .finally(() => {
+        if (!cancelled) {
+          setRefreshing(false)
+          setInitialLoading(false)
+        }
+      })
     return () => { cancelled = true }
   }, [bounds])
+
+  const effectiveMetric = useMemo((): MetricKey => {
+    if (metric === 'tokens') return 'tokens'
+    if (!report) return metric
+    if (report.totalSpendUsd > 0) return 'spend'
+    if (report.totalTokens > 0) return 'tokens'
+    return 'spend'
+  }, [metric, report])
 
   const formatTokens = (value: number) => {
     if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
@@ -1188,8 +1231,8 @@ function UsagePage() {
   }
 
   const formatTokensExact = (value: number) => Math.round(value).toLocaleString()
-  const formatSpend = (value: number) => `$${value.toFixed(2)}`
-  const formatMetricExact = (value: number) => metric === 'spend' ? formatSpend(value) : formatTokensExact(value)
+  const formatSpend = (value: number) => formatUsdAmount(value)
+  const formatMetricExact = (value: number) => effectiveMetric === 'spend' ? formatSpend(value) : formatTokensExact(value)
   const formatPercent = (value: number, total: number) => total > 0 ? `${((value / total) * 100).toFixed(1)}%` : '0.0%'
   const formatDate = (day: string) => new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   const formatFullDate = (day: string) => new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -1198,14 +1241,18 @@ function UsagePage() {
     if (type === 'own_key') return 'On-demand'
     return type.replace(/_/g, ' ')
   }
-  const formatCost = (type: string, costUsd: number | null) => {
-    if (costUsd != null) return formatSpend(costUsd)
+  const formatCost = (type: string, costUsd: number | null, costSource?: BillingUsageCostSource) => {
+    if (costUsd != null && costUsd > 0) {
+      if (costSource === 'estimated') return `~${formatSpend(costUsd)}`
+      return formatSpend(costUsd)
+    }
     if (type === 'free_credit' || type === 'subscription' || type === 'local_pass') return 'Included'
     return 'Provider billed'
   }
 
   const chart = useMemo(() => {
     if (!report) return null
+    const chartMetric = effectiveMetric
     const days: string[] = []
     const start = new Date(bounds.from)
     start.setHours(0, 0, 0, 0)
@@ -1230,19 +1277,23 @@ function UsagePage() {
       values.set(day, (values.get(day) ?? 0) + value)
     }
 
-    if (groupBy === 'model' && report.points.length > 0) {
+    if (groupBy === 'type' && (report.featurePoints?.length ?? 0) > 0) {
+      for (const point of report.featurePoints ?? []) {
+        addValue(formatJobFeature(point.feature ?? point.model), point.day, chartMetric === 'spend' ? point.spendUsd : point.tokens)
+      }
+    } else if (groupBy === 'model' && report.points.length > 0) {
       for (const point of report.points) {
-        addValue(point.model || 'auto', point.day, metric === 'spend' ? point.spendUsd : point.tokens)
+        addValue(point.model || 'auto', point.day, chartMetric === 'spend' ? point.spendUsd : point.tokens)
       }
     } else if (report.rows.length > 0) {
       for (const row of report.rows) {
         const day = new Date(row.occurredAt).toISOString().slice(0, 10)
-        const name = groupBy === 'model' ? row.model || 'auto' : formatUsageType(row.type)
-        addValue(name, day, metric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
+        const name = groupBy === 'model' ? row.model || 'auto' : formatJobFeature(row.feature)
+        addValue(name, day, chartMetric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
       }
     } else {
       for (const point of report.points) {
-        addValue(groupBy === 'model' ? point.model || 'auto' : 'Usage', point.day, metric === 'spend' ? point.spendUsd : point.tokens)
+        addValue(groupBy === 'model' ? point.model || 'auto' : 'Usage', point.day, chartMetric === 'spend' ? point.spendUsd : point.tokens)
       }
     }
 
@@ -1262,7 +1313,7 @@ function UsagePage() {
     const totals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
     const dailyTotals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.daily[index], 0))
     return { days, cumulative, max: Math.max(...totals, 1), totals, dailyTotals }
-  }, [bounds.from, bounds.to, groupBy, metric, report])
+  }, [bounds.from, bounds.to, groupBy, effectiveMetric, report])
 
   const colors = ['#3aa17e', '#8fb4d8', '#5c80b6', '#c58bb8', '#9fbe83', '#d8a653']
   const quickRanges: Array<{ key: Exclude<RangeKey, 'custom'>; label: string }> = [
@@ -1272,15 +1323,26 @@ function UsagePage() {
     { key: 'mtd', label: 'MTD' },
     { key: 'last_month', label: 'Last month' },
   ]
-  const totalSpend = report?.totalSpendUsd ?? access?.periodSpendUsd ?? 0
-  const paidSpend = report?.paidSpendUsd ?? access?.paidSpendUsd ?? 0
-  const includedSpend = access?.mode === 'own_key' ? 0 : Math.max(0, totalSpend - paidSpend)
+  const totalSpend = report?.totalSpendUsd ?? 0
+  const paidSpend = report?.paidSpendUsd ?? 0
+  const freeCreditUsed = report?.freeCreditUsedUsd ?? 0
+  const includedSpend = access?.mode === 'own_key' ? 0 : (freeCreditUsed > 0 ? freeCreditUsed : Math.max(0, totalSpend - paidSpend))
   const onDemandSpend = access?.mode === 'own_key' ? totalSpend : paidSpend
+  const totalTokens = report?.totalTokens ?? 0
+  const showCardLoading = initialLoading && !report
   const summaryCards: Array<[string, string]> = [
     ['Total spend', formatSpend(totalSpend)],
     ['Included', formatSpend(includedSpend)],
     ['On-demand', formatSpend(onDemandSpend)],
+    ['Total tokens', formatTokens(totalTokens)],
   ]
+  const spendSourceNote = report?.source === 'anthropic_admin'
+    ? 'Spend from Anthropic platform report (platform.claude.com).'
+    : report?.source === 'daylens_managed'
+      ? 'Spend from Daylens managed billing.'
+      : report && totalSpend > 0
+        ? 'Spend estimated from token usage and published model pricing.'
+        : null
 
   return (
     <SectionPage
@@ -1312,11 +1374,19 @@ function UsagePage() {
       </div>
 
       {error && <div style={{ ...infoPanelStyle, color: '#f87171' }}>{error}</div>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
+      {(spendSourceNote || refreshing || report?.providerReport?.message) && (
+        <div style={{ fontSize: 11.5, color: report?.providerReport?.connected && report?.source !== 'anthropic_admin' ? '#f87171' : 'var(--color-text-tertiary)' }}>
+          {report?.providerReport?.connected && report?.source !== 'anthropic_admin' && report.providerReport.message
+            ? `Anthropic report failed: ${report.providerReport.message} `
+            : null}
+          {spendSourceNote}{spendSourceNote && refreshing ? ' ' : ''}{refreshing ? 'Updating…' : ''}
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>
         {summaryCards.map(([label, value]) => (
           <div key={label} style={{ padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{loading ? '…' : value}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{showCardLoading ? '…' : value}</div>
           </div>
         ))}
       </div>
@@ -1330,7 +1400,7 @@ function UsagePage() {
           <div style={{ display: 'flex', gap: 8 }}>
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(170)}>
               <option value="model">Group: Model</option>
-              <option value="type">Group: Type</option>
+              <option value="type">Group: Action</option>
             </select>
             <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
               <option value="spend">Spend</option>
@@ -1350,8 +1420,16 @@ function UsagePage() {
                 setHoveredChartIndex(index)
               }}
             >
-              <svg viewBox="0 0 760 240" role="img" aria-label={`Cumulative AI ${metric} chart`} style={{ width: '100%', minHeight: 220, display: 'block' }}>
+              <svg viewBox="0 0 760 240" role="img" aria-label={`Cumulative AI ${effectiveMetric} chart`} style={{ width: '100%', minHeight: 220, display: 'block' }}>
                 {[0, 1, 2, 3, 4].map((line) => <line key={line} x1="48" x2="742" y1={20 + line * 48} y2={20 + line * 48} stroke="var(--color-border-ghost)" />)}
+                {effectiveMetric === 'spend' && [0, 1, 2, 3, 4].map((line) => {
+                  const value = (chart.max * (4 - line)) / 4
+                  return (
+                    <text key={`y-${line}`} x="42" y={24 + line * 48} textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">
+                      {formatSpend(value)}
+                    </text>
+                  )
+                })}
                 {chart.cumulative.map((series, seriesIndex) => {
                   const lower = chart.cumulative.slice(0, seriesIndex).map((item) => item.values)
                   const top = series.values.map((value, index) => value + lower.reduce((sum, values) => sum + values[index], 0))
@@ -1451,15 +1529,15 @@ function UsagePage() {
                 </span>
               ))}
             </div>
-            {metric === 'spend' && access?.mode === 'own_key' && totalSpend === 0 && (
+            {metric === 'spend' && effectiveMetric === 'tokens' && totalTokens > 0 && (
               <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
-                Spend is unavailable for this range. Switch to Tokens to inspect exact token usage.
+                Spend is unavailable for this range. Showing token usage instead.
               </div>
             )}
           </>
         ) : (
           <div style={{ height: 220, display: 'grid', placeItems: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>
-            {loading ? 'Loading usage…' : 'No AI calls in this range.'}
+            {showCardLoading ? 'Loading usage…' : 'No AI calls in this range.'}
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -1481,7 +1559,7 @@ function UsagePage() {
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
                 <td style={{ padding: '11px 14px' }}>{row.tokens == null ? '—' : formatTokens(row.tokens)}</td>
-                <td style={{ padding: '11px 14px' }}>{formatCost(row.type, row.costUsd)}</td>
+                <td style={{ padding: '11px 14px' }}>{formatCost(row.type, row.costUsd, row.costSource)}</td>
               </tr>
             ))}
           </tbody>
@@ -1491,7 +1569,7 @@ function UsagePage() {
             Showing the latest 200 calls. Export CSV includes the full selected range.
           </div>
         )}
-        {!loading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
+        {!showCardLoading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
       </div>
     </SectionPage>
   )

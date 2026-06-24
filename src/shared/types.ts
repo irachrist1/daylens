@@ -1304,6 +1304,7 @@ export interface AppSettings {
   trackingSkipIncognito?: boolean   // effective only when controls enabled; defaults on
   trackingPaused?: boolean          // ad-hoc pause; blocks capture regardless of the master switch
   billingInstallationId?: string    // random local install identity; raw activity never leaves with it
+  anthropicUsageApiKeyId?: string   // optional filter for Anthropic Admin usage/cost reports
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -1365,6 +1366,15 @@ export interface BillingProviderReportStatus {
   source: BillingUsageSource
   message: string
   lastSyncedAt: number | null
+  selectedApiKeyId?: string | null
+  selectedApiKeyName?: string | null
+}
+
+export interface AnthropicApiKeySummary {
+  id: string
+  name: string
+  status: string
+  partialKeyHint: string | null
 }
 
 export interface BillingUsageJobSummary {
@@ -1759,6 +1769,8 @@ export const IPC = {
     GET_PROVIDER_REPORT_STATUS: 'billing:get-provider-report-status',
     SET_ANTHROPIC_ADMIN_KEY: 'billing:set-anthropic-admin-key',
     CLEAR_ANTHROPIC_ADMIN_KEY: 'billing:clear-anthropic-admin-key',
+    LIST_ANTHROPIC_API_KEYS: 'billing:list-anthropic-api-keys',
+    SET_ANTHROPIC_USAGE_API_KEY: 'billing:set-anthropic-usage-api-key',
     CREATE_POLAR_CHECKOUT: 'billing:create-polar-checkout',
     CREATE_FLUTTERWAVE_CHECKOUT: 'billing:create-flutterwave-checkout',
     OPEN_PORTAL: 'billing:open-portal',

@@ -59,6 +59,7 @@ const DEFAULTS: AppSettings = {
   trackingSkipIncognito: true,
   trackingPaused: false,
   billingInstallationId: '',
+  anthropicUsageApiKeyId: '',
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -122,6 +123,7 @@ export function getSettings(): AppSettings {
     trackingSkipIncognito: (_store.get('trackingSkipIncognito', true) as boolean),
     trackingPaused: (_store.get('trackingPaused', false) as boolean),
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
+    anthropicUsageApiKeyId: (_store.get('anthropicUsageApiKeyId', '') as string),
   }
 }
 
