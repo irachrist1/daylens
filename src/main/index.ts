@@ -733,6 +733,27 @@ ipcMain.handle(IPC.APP.COMPLETE_ONBOARDING, async () => {
   startBackgroundServices()
 })
 
+// The friendly computer name ("Christian's MacBook Pro") used to seed the
+// onboarding name field's placeholder. On macOS the pretty name comes from
+// `scutil --get ComputerName`; everywhere else (and on failure) fall back to the
+// hostname with the noisy `.local` suffix stripped.
+ipcMain.handle(IPC.APP.GET_COMPUTER_NAME, async (): Promise<string> => {
+  const hostnameFallback = (): string => os.hostname().replace(/\.local$/i, '').trim()
+  if (process.platform !== 'darwin') return hostnameFallback()
+  try {
+    const { execFile } = await import('node:child_process')
+    const name = await new Promise<string>((resolve, reject) => {
+      execFile('scutil', ['--get', 'ComputerName'], { timeout: 2000 }, (err, stdout) => {
+        if (err) reject(err)
+        else resolve(stdout.toString().trim())
+      })
+    })
+    return name || hostnameFallback()
+  } catch {
+    return hostnameFallback()
+  }
+})
+
 app.on('before-quit', (event) => {
   if (isInstallingUpdate()) {
     isQuitting = true

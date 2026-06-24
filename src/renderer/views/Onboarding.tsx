@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type {
   AppSettings,
@@ -10,11 +10,14 @@ import type {
   TrackingPermissionState,
   LinuxTrackingDiagnostics,
 } from '@shared/types'
+import type { AppCategory, SummaryVoice } from '@shared/types'
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
+import { VOICE_SAMPLES, DEFAULT_SUMMARY_VOICE } from '@shared/summaryVoice'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import { todayString } from '../lib/format'
 import ConnectAI from '../components/ConnectAI'
+import Mascot from '../components/Mascot'
 
 // Intent chips double as goal ids (persisted to userGoals for back-compat) and as
 // sentences that auto-fill the free-text intent box (persisted to userIntent).
@@ -27,20 +30,20 @@ const INTENTS = [
 ]
 
 const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
-  { id: ['welcome'], label: 'Meet Daylens' },
+  { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
   { id: ['tour'], label: 'How it works' },
-  { id: ['personalize'], label: 'Make it yours' },
+  { id: ['voice', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
 
 const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
-  { id: ['welcome'], label: 'Meet Daylens' },
+  { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['proof'], label: 'First signal' },
   { id: ['tour'], label: 'How it works' },
-  { id: ['personalize'], label: 'Make it yours' },
+  { id: ['voice', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
@@ -48,8 +51,45 @@ const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
 // The macro flow used for the Back button. The mac permission stage is omitted:
 // it auto-advances once access is granted, so stepping back into it would bounce
 // the user forward again.
-const STAGE_FLOW: OnboardingStage[] = ['welcome', 'proof', 'tour', 'personalize', 'ai_setup', 'ready']
+const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'voice', 'personalize', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
+
+// The "why am I installing this again?" story — answered as a few calm beats, in
+// plain language anyone can feel, not a feature list.
+const WHY_BEATS: Array<{ emoji: string; title: string; body: string }> = [
+  {
+    emoji: '🤔',
+    title: 'So… why let an app watch my whole laptop?',
+    body: "Fair question. Most trackers feel like a boss looking over your shoulder. Daylens isn't that — it's a quiet diary of your day that only you can read.",
+  },
+  {
+    emoji: '🔒',
+    title: 'It all stays on this device.',
+    body: 'No screenshots. No video. No screen recording. Just the names of what you had open — and none of it leaves your computer unless you ask it to.',
+  },
+  {
+    emoji: '✨',
+    title: 'At the end of the day, you get the good part.',
+    body: "Instead of “where did the day go?”, you get an honest little recap of what you actually got done — written like a friend caught you up, not a spreadsheet.",
+  },
+]
+
+// Categories a normal person recognises — chosen in onboarding so Daylens knows
+// what you care to see. Deliberately everyday, not developer jargon.
+const INTEREST_CATEGORIES: Array<{ id: AppCategory; label: string; emoji: string }> = [
+  { id: 'productivity', label: 'Focused work', emoji: '🎯' },
+  { id: 'writing', label: 'Writing', emoji: '✍️' },
+  { id: 'design', label: 'Design', emoji: '🎨' },
+  { id: 'communication', label: 'Email & messages', emoji: '✉️' },
+  { id: 'meetings', label: 'Meetings', emoji: '📞' },
+  { id: 'research', label: 'Reading & research', emoji: '📚' },
+  { id: 'social', label: 'Social media', emoji: '💬' },
+  { id: 'entertainment', label: 'Watching & music', emoji: '🎬' },
+]
+
+// Fallback focus-app suggestions for a brand-new user with no captured apps yet.
+// Real top apps replace these when available.
+const COMMON_FOCUS_APPS = ['Google Docs', 'Microsoft Word', 'Figma', 'Notion', 'Slack', 'Gmail', 'Zoom', 'Excel']
 
 interface ProofSnapshot {
   liveSession: LiveSession | null
@@ -122,19 +162,19 @@ function SettingsPreview() {
 // scene or Continue), so a tap never means anything but "next".
 
 const STORY_BEATS = [
-  { scene: 'intro', pos: 0, time: '', line: 'Here is one day — the way Daylens tells it back to you.' },
-  { scene: 'brief', pos: 0.08, time: '8:14 am', line: 'You open your laptop. Your brief is already written.' },
-  { scene: 'apps', pos: 0.22, time: '9:00 am', line: 'You move between Ubiquiti, Terminal, and Photos.' },
-  { scene: 'merge', pos: 0.34, time: '11:50 am', line: 'Daylens saw one thing, not three.' },
-  { scene: 'detour', pos: 0.46, time: '1:42 pm', line: 'A two-minute peek at X — folded in. Never flagged, never judged.' },
-  { scene: 'second', pos: 0.60, time: '4:00 pm', line: 'After lunch you ship the timeline rework. Your day: two clean blocks.' },
+  { scene: 'intro', pos: 0, time: '', line: 'Here is one ordinary day — the way Daylens tells it back to you.' },
+  { scene: 'brief', pos: 0.08, time: '8:14 am', line: 'You open your laptop. A short brief is already waiting.' },
+  { scene: 'apps', pos: 0.22, time: '9:00 am', line: 'You drift between Docs, Chrome, and Slack.' },
+  { scene: 'merge', pos: 0.34, time: '11:50 am', line: 'Daylens saw one thing, not three: writing the proposal.' },
+  { scene: 'detour', pos: 0.46, time: '1:42 pm', line: 'A two-minute peek at Instagram — folded in. Never flagged, never judged.' },
+  { scene: 'second', pos: 0.60, time: '4:00 pm', line: 'After your team call you finish the proposal. Your day: two clean blocks.' },
   { scene: 'ask', pos: 0.78, time: '9:00 pm', line: 'You wonder — what did I actually get done today?' },
-  { scene: 'wrap', pos: 0.86, time: '9:30 pm', line: 'An evening wrap, written fresh for the day you had.' },
-  { scene: 'week', pos: 0.95, time: 'Friday', line: 'And your week — Spotify-style. Months and years, too.' },
-  { scene: 'yours', pos: 1, time: '', line: 'Wrong name? Rename it — it sticks. And none of this ever left your machine.' },
+  { scene: 'wrap', pos: 0.86, time: '9:30 pm', line: 'An evening recap, written fresh for the day you had.' },
+  { scene: 'week', pos: 0.95, time: 'Friday', line: 'And your week — wrapped. Months and years, too.' },
+  { scene: 'yours', pos: 1, time: '', line: 'Got it wrong? Rename it — it sticks. And none of this ever left your machine.' },
 ] as const
 
-const STORY_ANSWER = 'You set up the work network this morning, then shipped the timeline rework after lunch — about 7 hours of focused work. The malaria notebook is still open from yesterday.'
+const STORY_ANSWER = 'You spent the morning writing the Q3 proposal, had the 2pm team call, then cleared your inbox — about 5 hours of real work. The trip plan you opened yesterday is still there when you want it.'
 
 function CountUp({ to, decimals = 0, suffix = '' }: { to: number; decimals?: number; suffix?: string }) {
   const [value, setValue] = useState(0)
@@ -191,13 +231,13 @@ function TourStory({ index, name }: { index: number; name: string }) {
         return (
           <div className="onboarding-tour-notif">
             <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · morning brief</div>
-            <div className="onboarding-tour-notif-body">Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up?</div>
+            <div className="onboarding-tour-notif-body">Good morning{name ? `, ${name}` : ''}. The trip plan was still open yesterday — pick it back up?</div>
           </div>
         )
       case 'apps':
         return (
           <div className="onboarding-story-apps">
-            {['Ubiquiti', 'Terminal', 'Photos'].map((app, i) => (
+            {['Docs', 'Chrome', 'Slack'].map((app, i) => (
               <span key={app} className="onboarding-story-appchip" style={{ animationDelay: `${i * 0.12}s` }}>{app}</span>
             ))}
           </div>
@@ -205,22 +245,22 @@ function TourStory({ index, name }: { index: number; name: string }) {
       case 'merge':
         return (
           <div className="onboarding-story-stack">
-            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
+            <StoryBlock label="Writing the Q3 proposal" time="9:00–12:00" tone="a" />
             <div className="onboarding-story-cap">3 apps · 1 block</div>
           </div>
         )
       case 'detour':
         return (
           <div className="onboarding-story-stack">
-            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
-            <div className="onboarding-story-cap"><span className="onboarding-story-pill">X.com · 2 min</span> absorbed — not a new block</div>
+            <StoryBlock label="Writing the Q3 proposal" time="9:00–12:00" tone="a" />
+            <div className="onboarding-story-cap"><span className="onboarding-story-pill">Instagram · 2 min</span> absorbed — not a new block</div>
           </div>
         )
       case 'second':
         return (
           <div className="onboarding-story-stack">
-            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
-            <StoryBlock label="Shipping the timeline rework" time="4:00–7:00" tone="c" />
+            <StoryBlock label="Writing the Q3 proposal" time="9:00–12:00" tone="a" />
+            <StoryBlock label="Team call, then inbox" time="2:00–4:00" tone="c" />
           </div>
         )
       case 'ask':
@@ -236,13 +276,13 @@ function TourStory({ index, name }: { index: number; name: string }) {
         return (
           <div className="onboarding-tour-notif">
             <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · evening wrap</div>
-            <div className="onboarding-tour-notif-body">Two clean blocks, 6h 12m of deep work. You closed out the timeline rework — solid day.</div>
+            <div className="onboarding-tour-notif-body">Two clean blocks, about 5 hours of real work. You finished the Q3 proposal — nice day.</div>
           </div>
         )
       case 'week':
         return (
           <div className="onboarding-tour-stats">
-            <div><strong><CountUp to={18} suffix="h" /></strong><span>deep work</span></div>
+            <div><strong><CountUp to={18} suffix="h" /></strong><span>focused</span></div>
             <div><strong><CountUp to={23} /></strong><span>sessions</span></div>
             <div><strong><CountUp to={4} /></strong><span>projects</span></div>
           </div>
@@ -252,7 +292,7 @@ function TourStory({ index, name }: { index: number; name: string }) {
           <div className="onboarding-story-stack">
             <div className="onboarding-tour-block onboarding-tour-block-static" data-tone="a" style={{ minHeight: 52 }}>
               <span className="onboarding-tour-block-row">
-                <span className="onboarding-tour-block-label onboarding-tour-relabel">Q3 board deck</span>
+                <span className="onboarding-tour-block-label onboarding-tour-relabel">Q3 proposal</span>
                 <span className="onboarding-tour-saved">edited by you</span>
               </span>
             </div>
@@ -302,10 +342,16 @@ export default function Onboarding({
   const [intentDraft, setIntentDraft] = useState(initialSettings.userIntent)
   const [aiConnected, setAiConnected] = useState(initialSettings.onboardingState.aiSetupState === 'connected')
   const [tourIndex, setTourIndex] = useState(0)
-  // T3: opt-in to Tracking Controls during onboarding. Off by default —
-  // declining (the default) changes nothing about capture.
-  const [trackingOptIn, setTrackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
+  // T3: opt-in to Tracking Controls during onboarding. Off by default — picking
+  // an app to keep private (below) flips it on implicitly at persist time.
+  const [trackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
   const [defaultUserName, setDefaultUserName] = useState('')
+  const [namePlaceholder, setNamePlaceholder] = useState('')
+  const [summaryVoice, setSummaryVoiceState] = useState<SummaryVoice>(initialSettings.summaryVoice ?? DEFAULT_SUMMARY_VOICE)
+  const [focusApps, setFocusApps] = useState<Set<string>>(new Set(initialSettings.focusApps ?? []))
+  const [interestedCategories, setInterestedCategories] = useState<Set<AppCategory>>(new Set(initialSettings.interestedCategories ?? []))
+  const [excludedApps, setExcludedApps] = useState<Set<string>>(new Set(initialSettings.trackingExcludedApps ?? []))
+  const [topApps, setTopApps] = useState<string[]>([])
   const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
   const [permissionDetails, setPermissionDetails] = useState<TrackingPermissionDetails | null>(null)
   const [busy, setBusy] = useState(false)
@@ -351,6 +397,37 @@ export default function Onboarding({
       .catch(() => {
         if (!cancelled) setDefaultUserName('')
       })
+    return () => { cancelled = true }
+  }, [])
+
+  // Seed the name field's placeholder from the computer's friendly name —
+  // "Christian's MacBook Pro" → "Christian" — so the greeting feels like Daylens
+  // already half-knows you. Falls back to the OS login name.
+  useEffect(() => {
+    let cancelled = false
+    ipc.app.getComputerName()
+      .then((computerName) => {
+        if (cancelled) return
+        const firstName = computerName.split(/['’]s\b/)[0].trim()
+        setNamePlaceholder(firstName.length >= 2 && firstName.length <= 24 ? firstName : '')
+      })
+      .catch(() => { if (!cancelled) setNamePlaceholder('') })
+    return () => { cancelled = true }
+  }, [])
+
+  // The user's real top apps (last 30 days) ground the focus-app and keep-private
+  // pickers in their actual life, not a generic list. Empty for a brand-new user.
+  useEffect(() => {
+    let cancelled = false
+    ipc.db.getAppSummaries(30)
+      .then((rows) => {
+        if (cancelled) return
+        const names = (rows ?? [])
+          .map((r) => r.appName ?? '')
+          .filter((n): n is string => Boolean(n && n.trim()))
+        setTopApps(Array.from(new Set(names)).slice(0, 12))
+      })
+      .catch(() => { if (!cancelled) setTopApps([]) })
     return () => { cancelled = true }
   }, [])
 
@@ -554,13 +631,18 @@ export default function Onboarding({
     }
 
     try {
+      const nextExcludedApps = Array.from(excludedApps)
       await ipc.settings.set({
         onboardingComplete: true,
         onboardingState: nextOnboardingState,
-        userName: nameDraft.trim(),
+        userName: nameDraft.trim() || namePlaceholder.trim(),
         userGoals: Array.from(goals),
         userIntent: intentDraft.trim(),
-        trackingControlsEnabled: trackingOptIn,
+        summaryVoice,
+        focusApps: Array.from(focusApps),
+        interestedCategories: Array.from(interestedCategories),
+        trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
+        trackingExcludedApps: nextExcludedApps,
       })
       await ipc.app.completeOnboarding()
       track(ANALYTICS_EVENT.ONBOARDING_COMPLETED, {
@@ -622,6 +704,16 @@ export default function Onboarding({
       step: 'welcome',
       surface: 'onboarding',
     })
+    // Persist the name as soon as it's given so the rest of the flow (and a
+    // mid-flow reload) is already personalized. Fall back to the placeholder.
+    const resolvedName = nameDraft.trim() || namePlaceholder.trim()
+    if (resolvedName && resolvedName !== nameDraft) setNameDraft(resolvedName)
+    await ipc.settings.set({ userName: resolvedName })
+    await persistOnboarding('why')
+  }
+
+  async function continueFromWhy() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'why', surface: 'onboarding' })
     await persistOnboarding(isMac ? 'permission' : 'proof', {
       proofState: isMac ? 'idle' : 'collecting',
     })
@@ -644,8 +736,32 @@ export default function Onboarding({
       return
     }
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'tour', surface: 'onboarding' })
-    void persistOnboarding('personalize')
+    void persistOnboarding('voice')
   }
+
+  async function chooseVoice(voice: SummaryVoice) {
+    setSummaryVoiceState(voice)
+    await ipc.settings.set({ summaryVoice: voice })
+  }
+
+  async function continueFromVoice() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'voice', surface: 'onboarding' })
+    await ipc.settings.set({ summaryVoice })
+    await persistOnboarding('personalize')
+  }
+
+  function toggleInSet<T>(value: T, setter: Dispatch<SetStateAction<Set<T>>>) {
+    setter((prev) => {
+      const next = new Set(prev)
+      if (next.has(value)) next.delete(value)
+      else next.add(value)
+      return next
+    })
+  }
+
+  // Ground the focus / keep-private pickers in the user's real apps; fall back to
+  // a common list for a brand-new user with nothing captured yet.
+  const appChoices = topApps.length > 0 ? topApps : COMMON_FOCUS_APPS
 
   const flowIndex = STAGE_FLOW.indexOf(stage)
   const canGoBack = !SYSTEM_STAGES.has(stage) && ((stage === 'tour' && tourIndex > 0) || flowIndex > 0)
@@ -666,12 +782,19 @@ export default function Onboarding({
       step: 'personalize',
       surface: 'onboarding',
     })
-    // Persist identity now so a reload mid-flow keeps it.
+    // Persist identity + personalization now so a reload mid-flow keeps it.
+    const nextExcludedApps = Array.from(excludedApps)
     await ipc.settings.set({
-      userName: nameDraft.trim(),
+      userName: nameDraft.trim() || namePlaceholder.trim(),
       userGoals: Array.from(goals),
       userIntent: intentDraft.trim(),
-      trackingControlsEnabled: trackingOptIn,
+      summaryVoice,
+      focusApps: Array.from(focusApps),
+      interestedCategories: Array.from(interestedCategories),
+      // Excluding specific apps requires the controls master switch on. Turn it
+      // on implicitly when the user actually picked something to keep private.
+      trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
+      trackingExcludedApps: nextExcludedApps,
     })
     await persistOnboarding('ai_setup', { personalizationState: 'completed' })
   }
@@ -714,20 +837,53 @@ export default function Onboarding({
         </div>
 
         {stage === 'welcome' && (
-          <div className="onboarding-screen">
+          <div className="onboarding-screen onboarding-screen-center">
+            <div className="onboarding-greeting-mascot"><Mascot expression="wave" size={108} /></div>
             <h1 className="onboarding-title onboarding-title-large">
-              An honest picture of your day — built privately on your own machine.
+              Hi{(nameDraft.trim() || namePlaceholder) ? ` ${nameDraft.trim() || namePlaceholder}` : ''} 👋 — great to have you on Daylens.
             </h1>
             <p className="onboarding-sub">
-              Daylens quietly notices what you work on and turns it into a clear timeline.
-              Nothing leaves your computer unless you ask it to. No screenshots, no video, no scores.
+              First, what should Daylens call you? It's only ever used to greet you — like the morning brief.
             </p>
+            <label className="onboarding-name-field onboarding-name-field-hero">
+              <input
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                placeholder={namePlaceholder || defaultUserName || 'Your name'}
+                maxLength={80}
+                autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleContinueFromWelcome() }}
+              />
+            </label>
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void handleContinueFromWelcome()}>
-                {isMac ? 'Get started' : 'Start tracking'}
+                {nameDraft.trim() || namePlaceholder ? "Nice to meet you" : 'Continue'}
               </button>
             </div>
             <p className="onboarding-reassurance">Private by default · stays on this device · no judgment</p>
+          </div>
+        )}
+
+        {stage === 'why' && (
+          <div className="onboarding-screen onboarding-screen-center">
+            <div className="onboarding-why-mascot"><Mascot expression="think" size={84} /></div>
+            <div className="onboarding-why-beats">
+              {WHY_BEATS.map((b) => (
+                <div key={b.title} className="onboarding-why-card">
+                  <div className="onboarding-why-emoji">{b.emoji}</div>
+                  <div>
+                    <div className="onboarding-why-title">{b.title}</div>
+                    <div className="onboarding-why-body">{b.body}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void continueFromWhy()}>
+                Makes sense — let's go
+              </button>
+            </div>
+            <button className="onboarding-skip-link" onClick={() => void continueFromWhy()}>Skip</button>
           </div>
         )}
 
@@ -866,85 +1022,138 @@ export default function Onboarding({
           const isLast = tourIndex >= STORY_BEATS.length - 1
           return (
             <div className="onboarding-screen">
-              <div className="onboarding-story-tap" onClick={() => advanceTour()}>
-                <TourStory index={tourIndex} name={nameDraft.trim()} />
-              </div>
+              <TourStory index={tourIndex} name={nameDraft.trim()} />
               <div className="onboarding-actions">
                 <button className="onboarding-btn-primary" onClick={() => advanceTour()}>
                   {isLast ? 'Make it mine' : tourIndex === 0 ? 'Begin' : 'Continue'}
                 </button>
-                <span className="onboarding-story-taphint">tap anywhere to continue</span>
               </div>
+              <button className="onboarding-skip-link" onClick={() => void persistOnboarding('voice')}>Skip the tour</button>
             </div>
           )
         })()}
 
-        {stage === 'personalize' && (
+        {stage === 'voice' && (
           <div className="onboarding-screen">
             <StageHeading
-              title="Make it yours."
-              body="Your name is just for the morning brief. Tell Daylens why you're here so it points you at the right answers."
+              title="How should Daylens sound?"
+              body="At the end of a day, Daylens writes you a short recap. Here's the same day in three voices — pick the one that feels like you."
             />
-            <label className="onboarding-name-field">
-              <input
-                value={nameDraft}
-                onChange={(event) => setNameDraft(event.target.value)}
-                placeholder={defaultUserName || 'Your name'}
-                maxLength={80}
-              />
-            </label>
-            <div className="onboarding-goals-grid">
-              {INTENTS.map((intent) => {
-                const selected = goals.has(intent.id)
+            <div className="onboarding-voice-grid">
+              {VOICE_SAMPLES.map((v) => {
+                const selected = summaryVoice === v.voice
                 return (
                   <button
-                    key={intent.id}
-                    className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
-                    onClick={() => toggleIntent(intent.id)}
+                    key={v.voice}
+                    className={`onboarding-voice-card${selected ? ' onboarding-voice-card-selected' : ''}`}
+                    onClick={() => void chooseVoice(v.voice)}
+                    aria-pressed={selected}
                   >
-                    {intent.label}
+                    <div className="onboarding-voice-head">
+                      <span className="onboarding-voice-label">{v.label}</span>
+                      <span className="onboarding-voice-tag">{v.tagline}</span>
+                      {selected && <span className="onboarding-voice-check">✓</span>}
+                    </div>
+                    <div className="onboarding-voice-sample">{v.sample}</div>
                   </button>
                 )
               })}
             </div>
-            <textarea
-              value={intentDraft}
-              onChange={(event) => setIntentDraft(event.target.value)}
-              placeholder="Tap a few above, or write it in your own words…"
-              maxLength={400}
-              rows={3}
-              style={{
-                width: '100%', resize: 'none', fontFamily: 'inherit',
-                border: '1px solid rgba(17,24,39,0.14)', borderRadius: 14,
-                background: '#ffffff', color: '#1f2633',
-                padding: '12px 14px', fontSize: 14, lineHeight: 1.6, outline: 'none',
-              }}
+            <div className="onboarding-actions">
+              <button className="onboarding-btn-primary" onClick={() => void continueFromVoice()}>Continue</button>
+            </div>
+            <p className="onboarding-reassurance">You can change this anytime in Settings.</p>
+          </div>
+        )}
+
+        {stage === 'personalize' && (
+          <div className="onboarding-screen">
+            <StageHeading
+              title={`Help Daylens read your day${nameDraft.trim() ? `, ${nameDraft.trim()}` : ''}.`}
+              body="Like briefing a friend who's about to do your timesheets — a few taps so the recap sounds like your work, not a stranger's."
             />
-            <button
-              type="button"
-              onClick={() => setTrackingOptIn((v) => !v)}
-              aria-pressed={trackingOptIn}
-              style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10, textAlign: 'left',
-                padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
-                border: `1px solid ${trackingOptIn ? 'rgba(26,111,212,0.5)' : 'rgba(17,24,39,0.12)'}`,
-                background: trackingOptIn ? 'rgba(26,111,212,0.08)' : '#fafafa',
-                color: '#5c6474',
-              }}
-            >
-              <span style={{
-                flexShrink: 0, marginTop: 1, width: 18, height: 18, borderRadius: 5,
-                border: `1.5px solid ${trackingOptIn ? '#1a6fd4' : 'rgba(17,24,39,0.3)'}`,
-                background: trackingOptIn ? '#1a6fd4' : 'transparent',
-                display: 'grid', placeItems: 'center', color: '#ffffff', fontSize: 12, fontWeight: 900,
-              }}>{trackingOptIn ? '✓' : ''}</span>
-              <span style={{ display: 'grid', gap: 2 }}>
-                <span style={{ fontSize: 13.5, fontWeight: 650, color: '#1f2633' }}>Keep private apps and sites out of Daylens</span>
-                <span style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.5, color: '#5c6474' }}>
-                  Optional. Lets you exclude specific apps and websites and skip incognito windows. You can add them now or later in Settings. Off skips nothing.
-                </span>
-              </span>
-            </button>
+
+            <div className="onboarding-section">
+              <div className="onboarding-section-label">What do you most want to see?</div>
+              <div className="onboarding-chip-wrap">
+                {INTEREST_CATEGORIES.map((c) => {
+                  const selected = interestedCategories.has(c.id)
+                  return (
+                    <button
+                      key={c.id}
+                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
+                      onClick={() => toggleInSet(c.id, setInterestedCategories)}
+                    >
+                      <span className="onboarding-chip-emoji">{c.emoji}</span> {c.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="onboarding-section">
+              <div className="onboarding-section-label">Which apps count as real work for you?</div>
+              <div className="onboarding-chip-wrap">
+                {appChoices.map((app) => {
+                  const selected = focusApps.has(app)
+                  return (
+                    <button
+                      key={app}
+                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
+                      onClick={() => toggleInSet(app, setFocusApps)}
+                    >
+                      {app}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="onboarding-section">
+              <div className="onboarding-section-label">Why are you here? (optional)</div>
+              <div className="onboarding-chip-wrap">
+                {INTENTS.map((intent) => {
+                  const selected = goals.has(intent.id)
+                  return (
+                    <button
+                      key={intent.id}
+                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
+                      onClick={() => toggleIntent(intent.id)}
+                    >
+                      {intent.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <textarea
+                value={intentDraft}
+                onChange={(event) => setIntentDraft(event.target.value)}
+                placeholder="Tap a few above, or write it in your own words…"
+                maxLength={400}
+                rows={2}
+                className="onboarding-intent-textarea"
+              />
+            </div>
+
+            <div className="onboarding-section">
+              <div className="onboarding-section-label">Anything Daylens should never track?</div>
+              <div className="onboarding-section-hint">Pick apps to keep fully private. Nothing here is recorded. You can change this anytime in Settings.</div>
+              <div className="onboarding-chip-wrap">
+                {appChoices.map((app) => {
+                  const selected = excludedApps.has(app)
+                  return (
+                    <button
+                      key={app}
+                      className={`onboarding-goal-chip onboarding-goal-chip-private${selected ? ' onboarding-goal-chip-private-on' : ''}`}
+                      onClick={() => toggleInSet(app, setExcludedApps)}
+                    >
+                      {selected ? '🔒 ' : ''}{app}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void continueFromPersonalize()} disabled={busy}>
                 Continue
@@ -974,13 +1183,20 @@ export default function Onboarding({
         )}
 
         {stage === 'ready' && (
-          <div className="onboarding-screen">
+          <div className="onboarding-screen onboarding-screen-center">
+            <div className="onboarding-greeting-mascot"><Mascot expression="happy" size={92} /></div>
             <StageHeading
               title={nameDraft.trim() ? `You're all set, ${nameDraft.trim()}.` : "You're all set."}
               body="Daylens is watching quietly in the background. As your day fills in, your timeline names each stretch by what you were actually doing."
             />
+            <div className="onboarding-summary-tile onboarding-summary-tile-highlight">
+              <div className="onboarding-summary-label">Your evening recaps will sound like this</div>
+              <div className="onboarding-summary-detail" style={{ marginTop: 6 }}>
+                {VOICE_SAMPLES.find((v) => v.voice === summaryVoice)?.sample}
+              </div>
+            </div>
             {intentDraft.trim() && (
-              <div className="onboarding-summary-tile onboarding-summary-tile-highlight">
+              <div className="onboarding-summary-tile">
                 <div className="onboarding-summary-label">What you're here for</div>
                 <div className="onboarding-summary-detail" style={{ marginTop: 6 }}>{intentDraft.trim()}</div>
               </div>
@@ -1692,6 +1908,61 @@ export default function Onboarding({
           border-color: rgba(173, 198, 255, 0.28);
           background: rgba(255, 255, 255, 0.04);
         }
+
+        /* ── redesign: greeting, why, voice, personalize ── */
+        .onboarding-screen-center { justify-items: center; text-align: center; }
+        .onboarding-greeting-mascot, .onboarding-why-mascot { display: flex; justify-content: center; }
+        .onboarding-name-field-hero { width: min(340px, 100%); }
+        .onboarding-name-field-hero input { text-align: center; font-size: 17px; height: 50px; }
+
+        .onboarding-why-beats { display: grid; gap: 10px; width: 100%; text-align: left; }
+        .onboarding-why-card {
+          display: flex; gap: 12px; align-items: flex-start;
+          padding: 14px 16px; border-radius: 14px;
+          background: #fafafa; border: 1px solid rgba(17,24,39,0.10);
+        }
+        .onboarding-why-emoji { font-size: 22px; line-height: 1.4; flex-shrink: 0; }
+        .onboarding-why-title { font-size: 14.5px; font-weight: 700; color: #1f2633; }
+        .onboarding-why-body { font-size: 13px; line-height: 1.55; color: #5c6474; margin-top: 3px; }
+
+        .onboarding-voice-grid { display: grid; gap: 10px; }
+        .onboarding-voice-card {
+          display: grid; gap: 7px; text-align: left; cursor: pointer;
+          padding: 14px 16px; border-radius: 14px;
+          background: #ffffff; border: 1px solid rgba(17,24,39,0.12);
+          transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+        }
+        .onboarding-voice-card:hover:not(.onboarding-voice-card-selected) { border-color: rgba(26,111,212,0.35); background: #f6f8fc; }
+        .onboarding-voice-card-selected {
+          border-color: rgba(26,111,212,0.6);
+          background: linear-gradient(180deg, rgba(26,111,212,0.06), rgba(90,179,255,0.03));
+          box-shadow: 0 8px 26px rgba(26,111,212,0.12);
+        }
+        .onboarding-voice-head { display: flex; align-items: center; gap: 8px; }
+        .onboarding-voice-label { font-size: 14px; font-weight: 750; color: #1f2633; }
+        .onboarding-voice-tag { font-size: 11.5px; color: #8b93a3; }
+        .onboarding-voice-check { margin-left: auto; color: #1a6fd4; font-weight: 900; }
+        .onboarding-voice-sample { font-size: 13px; line-height: 1.6; color: #5c6474; }
+
+        .onboarding-section { display: grid; gap: 9px; text-align: left; }
+        .onboarding-section-label { font-size: 13px; font-weight: 700; color: #1f2633; }
+        .onboarding-section-hint { font-size: 12px; line-height: 1.5; color: #8b93a3; margin-top: -4px; }
+        .onboarding-chip-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+        .onboarding-chip-wrap .onboarding-goal-chip { min-height: 36px; padding: 8px 12px; }
+        .onboarding-chip-emoji { font-size: 13px; }
+        .onboarding-goal-chip-private-on {
+          border-color: rgba(17,24,39,0.45) !important;
+          background: rgba(17,24,39,0.05) !important;
+          color: #1f2633 !important;
+        }
+        .onboarding-intent-textarea {
+          width: 100%; resize: none; font-family: inherit;
+          border: 1px solid rgba(17,24,39,0.14); border-radius: 14px;
+          background: #ffffff; color: #1f2633;
+          padding: 11px 14px; font-size: 13.5px; line-height: 1.6; outline: none;
+        }
+        .onboarding-intent-textarea:focus { border-color: rgba(26,111,212,0.5); }
+
         .onboarding-proof-visual {
           padding: 4px 0 0;
           min-height: 90px;

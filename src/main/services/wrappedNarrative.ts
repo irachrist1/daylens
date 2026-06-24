@@ -8,6 +8,8 @@
 // orchestration / settings chain.
 
 import type { AIInvocationSource, AIWrappedNarrative, DayTimelinePayload } from '@shared/types'
+import { voiceDirective } from '@shared/summaryVoice'
+import { getSettings } from './settings'
 import {
   executeTextAIJob,
   type ResolvedProviderConfig,
@@ -72,6 +74,9 @@ export async function getWrappedNarrative(
   }
 
   const { systemPrompt, userMessage } = buildWrappedPrompts(facts)
+  // Apply the user's chosen summary voice. The facts/validation stay untouched —
+  // this only steers wording, never the numbers.
+  const tunedSystemPrompt = `${systemPrompt}\n\n${voiceDirective(getSettings().summaryVoice)}`
 
   try {
     const { text } = await withTimeout(
@@ -80,7 +85,7 @@ export async function getWrappedNarrative(
           jobType: 'wrapped_narrative',
           screen: 'timeline_day',
           triggerSource: options.triggerSource ?? 'user',
-          systemPrompt,
+          systemPrompt: tunedSystemPrompt,
           userMessage,
         },
         providerRunner,

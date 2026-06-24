@@ -323,6 +323,7 @@ const api = {
   },
   app: {
     getDefaultUserName: (): Promise<string> => Promise.resolve(os.userInfo().username),
+    getComputerName: (): Promise<string> => ipcRenderer.invoke(IPC.APP.GET_COMPUTER_NAME),
     relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.APP.RELAUNCH),
     completeOnboarding: (): Promise<void> => ipcRenderer.invoke(IPC.APP.COMPLETE_ONBOARDING),
   },

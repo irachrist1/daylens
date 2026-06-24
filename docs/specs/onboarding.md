@@ -25,25 +25,42 @@ not *"okay, I've clicked through five slides about features I haven't tried."*
 
 ## 3. The flow
 
-Short, honest, and front-loaded with the permission grant because nothing works without it.
+Short, honest, warm, and front-loaded with the permission grant because nothing works
+without it. It should feel **minimal and delightful**, told as a small story, with our
+mascot **Lumen** (a friendly camera-lens character) present. Every example reads for a
+normal person — a proposal, a call, an inbox — **never developer-specific**.
 
-1. **What Daylens is** — one screen, one sentence: *"Daylens quietly watches what you do on
-   your computer and tells you what you actually got done. Nothing leaves your machine unless
-   you ask."* Privacy stated up front, because that's the first question.
-2. **Grant capture** — ask for **Accessibility** (window titles) and **Screen Recording** if
-   needed, each explained in plain terms ("so Daylens can see *what* you're working on, not
-   just which app"). Deep-link straight to the macOS settings pane; detect the grant and
-   advance automatically.
-3. **Wait for first capture** — a brief, honest "watching…" moment while real activity is
-   recorded. No fake progress bar.
-4. **Show the proof** — *"Here's what I can already see"*: the last few minutes of their real
-   activity, named the Daylens way (the app they're in, the page they're on). This is the
-   moment that earns trust — it must use **real captured data**, never a canned demo.
-5. **Done** — drop them on the Timeline, live block running. Optionally offer to connect an AI
-   provider now or later (briefs/recaps need it — `ai.md` §5), but capture works without it.
+1. **Greeting** — Lumen waves. *"Hi {name} 👋 — great to have you on Daylens."* A single
+   name input whose placeholder is derived from the computer's friendly name
+   ("Christian's MacBook Pro" → `Christian`, via `app.getComputerName()`). The name is only
+   ever used to greet the user.
+2. **Why (the story)** — answer the real first question, *"why let an app watch my whole
+   laptop?"*, in a few calm beats: it all stays on this device, no screenshots/video ever,
+   and at the end of the day you get an honest recap of what you actually got done. A small,
+   low-contrast **Skip** so the keen path is default but nobody is trapped.
+3. **Grant capture** — ask for **Accessibility** (window titles). Screen Recording is **not**
+   required — capture reads titles via the AX API only (see §7 inv. 1 / `trackingPermissions`).
+   Deep-link to the macOS pane; detect the grant and advance automatically; never trap.
+4. **Wait for first capture** — a brief, honest "watching…" moment. No fake progress bar.
+5. **Show the proof** — *"Here's what I can already see"*: real captured activity, named the
+   Daylens way. **Real captured data, never a canned demo.**
+6. **Narrated day (tour)** — one *relatable* everyday day told back the Daylens way (merge,
+   absorbed detour, two clean blocks, recap, weekly wrap). Advances by an explicit control,
+   small Skip — **no "tap anywhere"**.
+7. **Pick your voice** — three sample "tunes" of the same day (**Straight · Warm · Witty**,
+   default Warm); the choice drives every recap/wrap prompt (`src/shared/summaryVoice.ts`).
+8. **Make it yours** — light personalization, like briefing a friend doing your timesheets:
+   categories you care about, which apps count as *real work* (seeded from your actual top
+   apps), why you're here, and any apps to **keep fully private** (reuses tracking exclusions).
+9. **AI setup** — optional and clearly separate; capture and Timeline work without it.
+10. **Ready** — *"You're all set, {name}."* Reflects the chosen voice with a sample recap.
 
 Onboarding is skippable-forward but not fakeable: if permissions aren't granted, the proof
 step says so plainly and offers to fix it, rather than showing a fake success.
+
+> **Deferred:** a desktop "connect to Screen Time" cross-check (Opal-style) was considered
+> but skipped this pass — macOS exposes Screen Time only through an undocumented protected
+> store, so it isn't reliably readable by a third-party app yet.
 
 ## 4. Capture-health diagnostics
 
@@ -87,8 +104,9 @@ UI.
 
 ## 7. Invariants (rules this view must always obey)
 
-1. Onboarding secures the capture permissions (Accessibility, and Screen Recording where
-   needed) before handing the user the app.
+1. Onboarding secures the capture permission (**Accessibility** — the only one capture
+   uses; window titles come from the AX API, not Screen Recording) before handing the user
+   the app, and never traps them on the grant step.
 2. The proof step shows **real captured activity** from the user's own machine — never a
    canned or demo screen.
 3. If a permission isn't granted, onboarding says so plainly and offers to fix it; it never

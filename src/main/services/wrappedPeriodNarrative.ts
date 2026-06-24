@@ -14,6 +14,8 @@ import {
   type AITextJobExecutionOptions,
   type ProviderTextResponse,
 } from './aiOrchestration'
+import { voiceDirective } from '@shared/summaryVoice'
+import { getSettings } from './settings'
 import { getDaySnapshotsForRange } from './daySnapshots'
 import { computePeriodRange } from '../lib/wrappedPeriodRange'
 import { rollupSnapshots, bucketTotals } from '../lib/wrappedPeriodFacts'
@@ -119,6 +121,7 @@ async function getWrappedPeriodNarrative(
   }
 
   const { systemPrompt, userMessage } = buildPeriodPrompts(facts)
+  const tunedSystemPrompt = `${systemPrompt}\n\n${voiceDirective(getSettings().summaryVoice)}`
 
   try {
     const { text } = await withTimeout(
@@ -127,7 +130,7 @@ async function getWrappedPeriodNarrative(
           jobType: 'wrapped_period_narrative',
           screen: 'timeline_week',
           triggerSource: options.triggerSource ?? 'user',
-          systemPrompt,
+          systemPrompt: tunedSystemPrompt,
           userMessage,
         },
         providerRunner,

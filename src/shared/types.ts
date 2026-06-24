@@ -1199,15 +1199,21 @@ export interface TrackingPermissionDetails {
 
 export type OnboardingStage =
   | 'welcome'
+  | 'why'
   | 'permission'
   | 'relaunch_required'
   | 'verifying_permission'
   | 'proof'
   | 'tour'
+  | 'voice'
   | 'personalize'
   | 'ai_setup'
   | 'ready'
   | 'complete'
+
+/** How Daylens's written summaries should sound. Chosen in onboarding, applied
+ *  to every recap / wrap / brief prompt (`src/shared/summaryVoice.ts`). */
+export type SummaryVoice = 'straight' | 'warm' | 'witty'
 
 export type ProofState = 'idle' | 'collecting' | 'ready'
 type PersonalizationState = 'pending' | 'completed'
@@ -1272,6 +1278,9 @@ export interface AppSettings {
   userName: string
   userGoals: string[]
   userIntent: string            // why the user is here, captured in onboarding; fed to AI suggestions
+  summaryVoice?: SummaryVoice   // how recaps/wraps/briefs should sound; default 'warm'
+  focusApps?: string[]          // apps the user counts as "real work" (bundle ids and/or names)
+  interestedCategories?: AppCategory[] // categories the user said they care about; fed to AI context
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
   aiProvider: AIProviderMode
@@ -1778,6 +1787,7 @@ export const IPC = {
   APP: {
     RELAUNCH: 'app:relaunch',
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
+    GET_COMPUTER_NAME: 'app:get-computer-name',
   },
   SYNC: {
     GET_STATUS: 'sync:get-status',
