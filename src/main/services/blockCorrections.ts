@@ -10,7 +10,7 @@
 import type Database from 'better-sqlite3'
 import type { WorkContextBlock } from '@shared/types'
 import { setBlockLabelOverride, clearBlockLabelOverride } from '../db/queries'
-import { writeTimelineBlockReview, getBlockDetailPayload } from './workBlocks'
+import { writeTimelineBlockReview, getBlockDetailPayload, mergeTimelineEpisodes } from './workBlocks'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getCurrentSession } from './tracking'
@@ -56,6 +56,22 @@ export function applyBlockLabelCorrection(
   invalidateProjectionScope('apps', 'block_label_override')
   invalidateProjectionScope('insights', 'block_label_override')
   return { date: dateStr, priorOverride }
+}
+
+/** Merge two timeline blocks into one. Mirrors the manual Merge up/down path
+ *  (db.handlers MERGE_TIMELINE_EPISODES) — same write + same invalidations — so
+ *  an AI merge is the same known-safe edit (invariants 3, 5). There is no manual
+ *  "unmerge", so this has no undo and gets the stronger destructive confirm. */
+export function applyBlockMerge(
+  db: Database.Database,
+  date: string,
+  first: WorkContextBlock,
+  second: WorkContextBlock,
+): void {
+  mergeTimelineEpisodes(db, date, first, second)
+  invalidateProjectionScope('timeline', 'episode_boundary')
+  invalidateProjectionScope('apps', 'episode_boundary')
+  invalidateProjectionScope('insights', 'episode_boundary')
 }
 
 /** Undo a rename. Clears BOTH the override and the review correction, or the

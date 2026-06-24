@@ -538,7 +538,20 @@ export interface AIRenameBlockProposal extends AIActionProposalBase {
   timeRange: string
 }
 
-export type AIActionWidget = AIMemoryProposal | AIRenameBlockProposal
+export interface AIMergeBlocksProposal extends AIActionProposalBase {
+  kind: 'merge_blocks'
+  date: string
+  /** Earlier block first, later block second. */
+  blockIds: [string, string]
+  firstLabel: string
+  secondLabel: string
+  firstRange: string
+  secondRange: string
+  /** The combined span the merged block will cover. */
+  mergedRange: string
+}
+
+export type AIActionWidget = AIMemoryProposal | AIRenameBlockProposal | AIMergeBlocksProposal
 
 // The result of committing a proposal — drives the card's committed state and
 // the one-line confirmation / undo affordance.

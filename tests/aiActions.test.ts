@@ -6,7 +6,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { buildMemoryProposal, commitAction, undoAction } from '../src/main/ai/actions.ts'
+import { buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction } from '../src/main/ai/actions.ts'
+import { looksLikeRenameBlockInstruction } from '../src/main/ai/actions.ts'
 import { getWorkMemoryProfile } from '../src/main/services/workMemoryProfile.ts'
 
 test('buildMemoryProposal maps an add op to a non-destructive save preview', () => {
@@ -48,6 +49,23 @@ test('buildMemoryProposal marks a delete as destructive and shows the affected f
 
 test('buildMemoryProposal returns null when there is nothing durable to change', () => {
   assert.equal(buildMemoryProposal([], []), null)
+})
+
+test('rename detector flags "rename … to …" shapes, not unrelated questions', () => {
+  assert.equal(looksLikeRenameBlockInstruction('rename my afternoon block to networking'), true)
+  assert.equal(looksLikeRenameBlockInstruction('relabel this as deep work'), true)
+  // Permissive on purpose — the builder gates on a resolvable target/label, so a
+  // false positive here just falls through to the normal answer path.
+  assert.equal(looksLikeRenameBlockInstruction('how was my afternoon?'), false)
+  assert.equal(looksLikeRenameBlockInstruction('how much time on Cursor'), false)
+})
+
+test('merge detector flags merge instructions, not arbitrary text', () => {
+  assert.equal(looksLikeMergeBlocksInstruction('merge my last two blocks'), true)
+  assert.equal(looksLikeMergeBlocksInstruction('merge this block with the previous one'), true)
+  assert.equal(looksLikeMergeBlocksInstruction('merge the 2pm and 3pm blocks'), true)
+  assert.equal(looksLikeMergeBlocksInstruction('what did I merge yesterday'), false)
+  assert.equal(looksLikeMergeBlocksInstruction('how much time on Cursor'), false)
 })
 
 test('committing a memory proposal writes the fact and offers an undo that removes it', () => {

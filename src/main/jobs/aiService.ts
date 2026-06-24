@@ -65,7 +65,7 @@ import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } fr
 import { getDb } from '../services/database'
 import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
-import { buildMemoryProposal, buildRenameBlockProposal } from '../ai/actions'
+import { buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal } from '../ai/actions'
 import {
   createArtifact,
   createThread,
@@ -456,6 +456,24 @@ function maybeHandleRenameInstruction(message: string, contextDate: string | nul
   if (!proposal) return null
   return {
     assistantText: "Here's the rename — confirm and it sticks across your timeline.",
+    answerKind: 'deterministic_stats',
+    sourceKind: 'deterministic',
+    resolvedTemporalContext: null,
+    conversationState: null,
+    suggestedFollowUps: [],
+    actionWidgets: [proposal],
+  }
+}
+
+// The merge-blocks action (ai-actions.md §5). "Merge my last two blocks" →
+// resolve two adjacent blocks and PREVIEW the merge; it commits only on confirm.
+// Merge is destructive (no manual unmerge), so the card uses the stronger
+// confirm. Returns null when it can't pin two adjacent blocks.
+function maybeHandleMergeInstruction(message: string, contextDate: string | null): AnswerEnvelope | null {
+  const proposal = buildMergeBlocksProposal(getDb(), message, contextDate)
+  if (!proposal) return null
+  return {
+    assistantText: "Here's the merge — confirm and these two become one block on your timeline.",
     answerKind: 'deterministic_stats',
     sourceKind: 'deterministic',
     resolvedTemporalContext: null,
@@ -4586,6 +4604,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   if (renameEnvelope) {
     await stream.streamText(renameEnvelope.assistantText)
     return persistChatTurn(db, conversationId, userMessage, renameEnvelope, threadId)
+  }
+
+  // "merge my last two blocks" — preview the merge in a card; commits only on
+  // confirm (ai-actions.md §5). Checked after rename so "rename" wins its verb.
+  const mergeEnvelope = maybeHandleMergeInstruction(effectiveUserMessage, null)
+  if (mergeEnvelope) {
+    await stream.streamText(mergeEnvelope.assistantText)
+    return persistChatTurn(db, conversationId, userMessage, mergeEnvelope, threadId)
   }
 
   // "in word please?" / "pdf version" / "as markdown" — re-export the answer we

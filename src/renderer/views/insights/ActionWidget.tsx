@@ -2,6 +2,7 @@ import type {
   AIActionWidget,
   AIMemoryOpPreview,
   AIMemoryProposal,
+  AIMergeBlocksProposal,
   AIRenameBlockProposal,
 } from '@shared/types'
 import type { ActionWidgetStateEntry } from './types'
@@ -139,10 +140,33 @@ function RenamePreview({ proposal }: { proposal: AIRenameBlockProposal }) {
   )
 }
 
+function MergePreview({ proposal }: { proposal: AIMergeBlocksProposal }) {
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'grid', gap: 4 }}>
+        {[
+          { range: proposal.firstRange, label: proposal.firstLabel },
+          { range: proposal.secondRange, label: proposal.secondLabel },
+        ].map((b, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 600, minWidth: 96 }}>{b.range}</span>
+            <span style={{ fontSize: 13, color: 'var(--color-text-primary)' }}>{b.label}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4, borderTop: '1px solid var(--color-border-ghost)' }}>
+        <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 700, minWidth: 96 }}>{proposal.mergedRange}</span>
+        <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>becomes one block</span>
+      </div>
+    </div>
+  )
+}
+
 function headerLabel(widget: AIActionWidget): string {
   switch (widget.kind) {
     case 'memory_write': return memoryHeader(widget)
     case 'rename_block': return 'Rename block'
+    case 'merge_blocks': return 'Merge blocks'
   }
 }
 
@@ -185,6 +209,7 @@ export function ActionWidget({ widget, state, onConfirm, onUndo, onDismiss }: Ac
 
       {widget.kind === 'memory_write' && <MemoryPreview proposal={widget} />}
       {widget.kind === 'rename_block' && <RenamePreview proposal={widget} />}
+      {widget.kind === 'merge_blocks' && <MergePreview proposal={widget} />}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button

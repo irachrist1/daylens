@@ -14,6 +14,7 @@ import type {
   AIActionWidget,
   AIMemoryOpPreview,
   AIMemoryProposal,
+  AIMergeBlocksProposal,
   AIRenameBlockProposal,
   WorkContextBlock,
 } from '@shared/types'
@@ -24,7 +25,7 @@ import {
   applyMemoryWriteOps,
   type MemoryWriteOp,
 } from '../services/workMemoryProfile'
-import { applyBlockLabelCorrection, clearBlockLabelCorrection } from '../services/blockCorrections'
+import { applyBlockLabelCorrection, applyBlockMerge, clearBlockLabelCorrection } from '../services/blockCorrections'
 
 function newProposalId(): string {
   return `act_${crypto.randomBytes(6).toString('hex')}`
@@ -196,6 +197,82 @@ export function buildRenameBlockProposal(
   }
 }
 
+// ── Merge two blocks ────────────────────────────────────────────────────────
+
+const MERGE_RE = /\bmerge\b/i
+
+export function looksLikeMergeBlocksInstruction(message: string): boolean {
+  const m = message.trim()
+  if (!m || m.length > 300) return false
+  return MERGE_RE.test(m) && /\bblock|episode|these|last two|this (?:one|block) (?:with|into)|previous|above|below|next\b/i.test(m)
+}
+
+// Resolve the two blocks to merge. Only adjacent blocks merge (mirrors the
+// manual Merge up/down control, invariant 5) — returns the pair in time order,
+// or null if it can't pin two adjacent editable blocks.
+function resolveMergePair(blocks: WorkContextBlock[], message: string): [WorkContextBlock, WorkContextBlock] | null {
+  const editable = blocks.filter((b) => !b.provisional)
+  if (editable.length < 2) return null
+  const m = message.toLowerCase()
+
+  // "merge the last two blocks" / "merge my last two"
+  if (/last two|past two|recent two|two most recent/.test(m)) {
+    return [editable[editable.length - 2], editable[editable.length - 1]]
+  }
+
+  // "merge this/the current block with the previous/above one"
+  if (/\b(this|current|last|latest)\b/.test(m) && /\b(previous|above|prior|before)\b/.test(m)) {
+    return [editable[editable.length - 2], editable[editable.length - 1]]
+  }
+
+  // Two clock times → the two blocks covering them, if adjacent.
+  const times = [...m.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi)].map((mt) => parseClockToMinutes(mt[0]))
+    .filter((v): v is number => v !== null)
+  if (times.length >= 2) {
+    const findIdx = (min: number) => editable.findIndex((b) => {
+      const start = blockMinuteOfDay(b.startTime)
+      const end = blockMinuteOfDay(b.endTime)
+      return min >= start && min <= end
+    })
+    const i1 = findIdx(times[0])
+    const i2 = findIdx(times[1])
+    if (i1 >= 0 && i2 >= 0 && Math.abs(i1 - i2) === 1) {
+      const [a, b] = i1 < i2 ? [i1, i2] : [i2, i1]
+      return [editable[a], editable[b]]
+    }
+  }
+
+  return null
+}
+
+/** Build a merge proposal, or null if the message isn't a resolvable merge. */
+export function buildMergeBlocksProposal(
+  db: Database.Database,
+  message: string,
+  contextDate: string | null,
+): AIMergeBlocksProposal | null {
+  if (!looksLikeMergeBlocksInstruction(message)) return null
+  const date = contextDate ?? dateFromMessage(message)
+  const blocks = loadDayBlocks(db, date)
+  const pair = resolveMergePair(blocks, message)
+  if (!pair) return null
+  const [first, second] = pair
+  return {
+    kind: 'merge_blocks',
+    proposalId: newProposalId(),
+    surface: 'card',
+    confirmLabel: 'Merge blocks',
+    destructive: true,
+    date,
+    blockIds: [first.id, second.id],
+    firstLabel: labelOf(first),
+    secondLabel: labelOf(second),
+    firstRange: formatRange(first.startTime, first.endTime),
+    secondRange: formatRange(second.startTime, second.endTime),
+    mergedRange: formatRange(first.startTime, second.endTime),
+  }
+}
+
 // ── Memory (preview built from extracted ops; extraction lives in the caller) ─
 
 /** Turn extracted memory ops into a preview proposal. Returns null when there's
@@ -271,10 +348,24 @@ function commitMemory(db: Database.Database, action: AIMemoryProposal): AIAction
   return { ok: true, summary: result.summary, undo }
 }
 
+function commitMerge(db: Database.Database, action: AIMergeBlocksProposal): AIActionCommitResult {
+  const blocks = loadDayBlocks(db, action.date)
+  const first = blocks.find((b) => b.id === action.blockIds[0])
+  const second = blocks.find((b) => b.id === action.blockIds[1])
+  if (!first || !second) {
+    return { ok: false, summary: '', error: 'One of those blocks is no longer there.' }
+  }
+  applyBlockMerge(db, action.date, first, second)
+  // No manual unmerge exists, so no inline undo (invariant 5).
+  return { ok: true, summary: `Merged into one block (${action.mergedRange}).` }
+}
+
 export function commitAction(db: Database.Database, action: AIActionWidget): AIActionCommitResult {
   switch (action.kind) {
     case 'rename_block':
       return commitRename(db, action)
+    case 'merge_blocks':
+      return commitMerge(db, action)
     case 'memory_write':
       return commitMemory(db, action)
   }
