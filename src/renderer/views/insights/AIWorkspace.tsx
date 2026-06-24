@@ -30,6 +30,13 @@ const STARTER_PROMPTS = [
   "Export today's work sessions as CSV.",
 ]
 
+// Shown when there is no tracked history yet — these don't depend on data.
+const EMPTY_DB_PROMPTS = [
+  'Introduce me to how Daylens works',
+  'What can I ask you once my day fills in?',
+  'How does Daylens keep my data private?',
+]
+
 // Map a chat provider to the settings key holding its chosen model, so picking a
 // model for a brand-new (thread-less) chat updates the right global default.
 const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel' | 'googleModel' | 'openrouterModel'> = {
@@ -119,6 +126,32 @@ export default function AIWorkspace() {
       .catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [activeThreadId])
+
+  // Empty-database awareness: a brand-new user has no tracked history yet, so the
+  // data-dependent starter prompts ("What did I work on today?") would all
+  // dead-end. Detect that once and swap to onboarding-focused prompts until real
+  // activity exists. Fail open (assume history) so a query hiccup never hides the
+  // normal prompts.
+  const [hasHistory, setHasHistory] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void ipc.db.getAppSummaries(365)
+      .then((rows) => { if (!cancelled) setHasHistory((rows?.length ?? 0) > 0) })
+      .catch(() => { if (!cancelled) setHasHistory(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Starter chips: lead with the intent captured during onboarding (so day-one
+  // users get a question tailored to why they're here), then either the normal
+  // history prompts or, for an empty database, prompts that explain Daylens.
+  const starterPrompts = useMemo(() => {
+    const intent = settings?.userIntent?.trim()
+    const intentPrompt = intent
+      ? `Help me ${intent.replace(/\.+$/, '').replace(/^i want to\s+/i, '').toLowerCase()}`
+      : null
+    const base = hasHistory === false ? EMPTY_DB_PROMPTS : STARTER_PROMPTS
+    return Array.from(new Set(intentPrompt ? [intentPrompt, ...base] : base)).slice(0, 4)
+  }, [settings?.userIntent, hasHistory])
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -453,11 +486,13 @@ export default function AIWorkspace() {
                   Ask Daylens about your work
                 </h1>
                 <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)', margin: '6px 0 0', lineHeight: 1.5 }}>
-                  Grounded in your local history. Ask a question, or request a report, table, or export.
+                  {hasHistory === false
+                    ? 'Daylens is still learning your day. Ask how it works while your timeline fills in.'
+                    : 'Grounded in your local history. Ask a question, or request a report, table, or export.'}
                 </p>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 540 }}>
-                {STARTER_PROMPTS.map((prompt) => (
+                {starterPrompts.map((prompt) => (
                   <button
                     key={prompt}
                     type="button"
