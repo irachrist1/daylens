@@ -51,23 +51,12 @@ const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
 const STAGE_FLOW: OnboardingStage[] = ['welcome', 'proof', 'tour', 'personalize', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
-// The guided tour: every surface, as few words as possible, one visual each.
+// The guided tour: every surface, as few words as possible, one interaction each.
 const TOUR_CARDS = [
-  {
-    key: 'timeline',
-    title: 'Your day, in blocks',
-    body: 'Daylens groups activity by what you were doing — not which app was open. One block is one stretch of one thing. Taller means longer.',
-  },
-  {
-    key: 'ask',
-    title: 'Open an app, or just ask',
-    body: 'Pick any app to see what you actually did in it. Or ask in plain words — answers come from your real activity, never guesses.',
-  },
-  {
-    key: 'briefs',
-    title: 'Briefs and wraps, written fresh',
-    body: 'A morning brief on what to pick up. An evening wrap of what got done. Weekly and monthly wraps, Spotify-style — all from the same numbers.',
-  },
+  { key: 'timeline', title: 'Your day becomes blocks', body: 'Tap a block — the apps you used are evidence inside it, not separate rows.' },
+  { key: 'ask', title: 'Just ask', body: 'Answers come from your real activity, never guesses. Try one.' },
+  { key: 'briefs', title: 'Briefs & wraps', body: 'A brief to start the day, a wrap to close it, Spotify-style recaps for the week.' },
+  { key: 'yours', title: 'Yours, and private', body: 'Rename anything and it sticks. Nothing leaves your machine.' },
 ] as const
 
 interface ProofSnapshot {
@@ -136,53 +125,193 @@ function SettingsPreview() {
 }
 
 
-function TourVisual({ kind, name }: { kind: string; name: string }) {
-  if (kind === 'timeline') {
-    const rows = [
-      { label: 'Configuring the work network', h: 64, tone: 'a' },
-      { label: 'ML pipeline class', h: 40, tone: 'b' },
-      { label: 'Networking in Ghostty', h: 52, tone: 'c' },
-    ]
-    return (
-      <div className="onboarding-tour-visual" aria-hidden="true">
-        <div className="onboarding-tour-timeline">
-          {rows.map((row) => (
-            <div key={row.label} className="onboarding-tour-block" style={{ height: row.h }} data-tone={row.tone}>
-              <span>{row.label}</span>
-            </div>
-          ))}
-        </div>
+// ── Interactive tour: show, don't tell ──────────────────────────────────────
+
+// Card 1 — tap a block to reveal the apps that are evidence *inside* it.
+function TourTimeline() {
+  const [open, setOpen] = useState<string | null>('net')
+  const blocks = [
+    { id: 'net', label: 'Configuring the work network', time: '9:00–12:00', h: 72, tone: 'a', apps: ['Ubiquiti', 'Terminal', 'Photos'] },
+    { id: 'class', label: 'ML pipeline class', time: '1:00–3:00', h: 46, tone: 'b', apps: ['Zoom', 'Notion'] },
+    { id: 'ship', label: 'Shipping the timeline rework', time: '4:00–7:00', h: 60, tone: 'c', apps: ['Cursor', 'Claude', 'Ghostty'] },
+  ]
+  return (
+    <div className="onboarding-tour-visual">
+      <div className="onboarding-tour-timeline">
+        {blocks.map((block, index) => {
+          const isOpen = open === block.id
+          return (
+            <button
+              key={block.id}
+              type="button"
+              className={`onboarding-tour-block onboarding-tour-block-btn${isOpen ? ' is-open' : ''}`}
+              data-tone={block.tone}
+              style={{ minHeight: isOpen ? 0 : block.h, animationDelay: `${index * 0.09}s` }}
+              onClick={() => setOpen(isOpen ? null : block.id)}
+            >
+              <span className="onboarding-tour-block-row">
+                <span className="onboarding-tour-block-label">{block.label}</span>
+                <span className="onboarding-tour-block-time">{block.time}</span>
+              </span>
+              {isOpen && (
+                <span className="onboarding-tour-evidence">
+                  {block.apps.map((app) => <span key={app} className="onboarding-tour-evi-chip">{app}</span>)}
+                  <span className="onboarding-tour-evi-note">evidence inside · not separate blocks</span>
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
-    )
+      <div className="onboarding-tour-hint">Tap a block ↑</div>
+    </div>
+  )
+}
+
+const ASK_QA = [
+  { q: 'What did I ship today?', a: 'You shipped the timeline rework and fixed the Windows capture bugs — about 5h 40m across Cursor, Claude, and Ghostty. The malaria notebook is still open from yesterday.' },
+  { q: 'Where did my time go this week?', a: 'Mostly deep work: 18h on Daylens, 6h in meetings, 3h research. Tuesday was your most focused day.' },
+  { q: 'Which video did I watch about aliens?', a: '“Why the Fermi Paradox keeps physicists up at night” on YouTube — Wednesday around 3pm, about 22 minutes.' },
+]
+
+// Card 2 — a simulated assistant: pick a question, watch the answer stream in.
+function TourAsk() {
+  const [active, setActive] = useState<number | null>(null)
+  const [phase, setPhase] = useState<'idle' | 'thinking' | 'typing' | 'done'>('idle')
+  const [typed, setTyped] = useState('')
+  const timers = useRef<number[]>([])
+  const clearTimers = () => { timers.current.forEach((id) => window.clearTimeout(id)); timers.current = [] }
+  useEffect(() => clearTimers, [])
+
+  function ask(index: number) {
+    clearTimers()
+    setActive(index)
+    setTyped('')
+    setPhase('thinking')
+    const answer = ASK_QA[index].a
+    timers.current.push(window.setTimeout(() => {
+      setPhase('typing')
+      let n = 0
+      const step = () => {
+        n += 2
+        setTyped(answer.slice(0, n))
+        if (n < answer.length) timers.current.push(window.setTimeout(step, 14))
+        else setPhase('done')
+      }
+      step()
+    }, 650))
   }
-  if (kind === 'ask') {
-    return (
-      <div className="onboarding-tour-visual" aria-hidden="true">
-        <div className="onboarding-tour-chat">
-          <div className="onboarding-tour-bubble onboarding-tour-bubble-q">What did I ship this week?</div>
+
+  return (
+    <div className="onboarding-tour-visual onboarding-tour-ask">
+      <div className="onboarding-tour-chatlog">
+        {active === null && <div className="onboarding-tour-ask-empty">Pick a question — Daylens answers from your real activity.</div>}
+        {active !== null && <div className="onboarding-tour-bubble onboarding-tour-bubble-q">{ASK_QA[active].q}</div>}
+        {phase === 'thinking' && (
+          <div className="onboarding-tour-bubble onboarding-tour-bubble-a onboarding-tour-thinking"><span /><span /><span /></div>
+        )}
+        {(phase === 'typing' || phase === 'done') && (
           <div className="onboarding-tour-bubble onboarding-tour-bubble-a">
-            You shipped the timeline rework and fixed the Windows capture bugs — about 12h across Cursor and Ghostty.
+            {typed}{phase === 'typing' && <span className="onboarding-tour-caret" />}
+          </div>
+        )}
+        {phase === 'done' && (
+          <div className="onboarding-tour-followups">
+            <span className="onboarding-tour-followup">＋ Make a table</span>
+            <span className="onboarding-tour-followup">↓ Export CSV</span>
+          </div>
+        )}
+      </div>
+      <div className="onboarding-tour-chips">
+        {ASK_QA.map((qa, index) => (
+          <button key={qa.q} type="button" className={`onboarding-tour-chip${active === index ? ' is-active' : ''}`} onClick={() => ask(index)}>
+            {qa.q}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function CountUp({ to, decimals = 0, suffix = '' }: { to: number; decimals?: number; suffix?: string }) {
+  const [value, setValue] = useState(0)
+  useEffect(() => {
+    let current = 0
+    const increment = to / 26
+    const id = window.setInterval(() => {
+      current += increment
+      if (current >= to) { current = to; window.clearInterval(id) }
+      setValue(current)
+    }, 22)
+    return () => window.clearInterval(id)
+  }, [to])
+  return <>{value.toFixed(decimals)}{suffix}</>
+}
+
+// Card 3 — switch between the morning brief, the evening wrap, and the weekly wrap.
+function TourBriefs({ name }: { name: string }) {
+  const [view, setView] = useState<'morning' | 'evening' | 'weekly'>('morning')
+  const tabs: Array<{ id: 'morning' | 'evening' | 'weekly'; label: string }> = [
+    { id: 'morning', label: 'Morning' },
+    { id: 'evening', label: 'Evening' },
+    { id: 'weekly', label: 'Weekly' },
+  ]
+  return (
+    <div className="onboarding-tour-visual">
+      <div className="onboarding-seg">
+        {tabs.map((tab) => (
+          <button key={tab.id} type="button" className={`onboarding-seg-btn${view === tab.id ? ' on' : ''}`} onClick={() => setView(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {view === 'morning' && (
+        <div className="onboarding-tour-notif" key="morning">
+          <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · morning brief</div>
+          <div className="onboarding-tour-notif-body">
+            Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up where you left off?
           </div>
         </div>
-      </div>
-    )
-  }
+      )}
+      {view === 'evening' && (
+        <div className="onboarding-tour-notif" key="evening">
+          <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · evening wrap</div>
+          <div className="onboarding-tour-notif-body">
+            Five blocks today, 6h 12m of deep work. You closed out the timeline rework — solid day. Rest well.
+          </div>
+        </div>
+      )}
+      {view === 'weekly' && (
+        <div className="onboarding-tour-stats" key="weekly">
+          <div><strong><CountUp to={18} suffix="h" /></strong><span>deep work</span></div>
+          <div><strong><CountUp to={23} /></strong><span>sessions</span></div>
+          <div><strong><CountUp to={4} /></strong><span>projects</span></div>
+        </div>
+      )}
+      <div className="onboarding-tour-hint">Monthly and yearly wraps too — Spotify-style.</div>
+    </div>
+  )
+}
+
+// Card 4 — your corrections stick; nothing leaves the machine.
+function TourYours() {
+  const [renamed, setRenamed] = useState(false)
   return (
-    <div className="onboarding-tour-visual" aria-hidden="true">
-      <div className="onboarding-tour-notif">
-        <div className="onboarding-tour-notif-head">
-          <span className="onboarding-tour-notif-dot" />
-          Daylens · morning brief
-        </div>
-        <div className="onboarding-tour-notif-body">
-          Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up?
-        </div>
+    <div className="onboarding-tour-visual">
+      <div className="onboarding-tour-block onboarding-tour-block-static" data-tone="a" style={{ minHeight: 54 }}>
+        <span className="onboarding-tour-block-row">
+          <span className={`onboarding-tour-block-label${renamed ? ' onboarding-tour-relabel' : ''}`}>
+            {renamed ? 'Q3 board deck' : 'Untitled work · 2:00–3:10'}
+          </span>
+          {renamed
+            ? <span className="onboarding-tour-saved">✓ saved</span>
+            : <button type="button" className="onboarding-tour-pencil" onClick={() => setRenamed(true)}>Rename</button>}
+        </span>
       </div>
-      <div className="onboarding-tour-stats">
-        <div><strong>6h 12m</strong><span>deep work</span></div>
-        <div><strong>4</strong><span>projects</span></div>
-        <div><strong>Tue</strong><span>busiest day</span></div>
+      <div className="onboarding-tour-hint">
+        {renamed ? 'Your edits always win — across every rebuild.' : 'Rename, merge, or hide anything — tap Rename.'}
       </div>
+      <div className="onboarding-tour-privacy">Private by default · stays on this device · no scores</div>
     </div>
   )
 }
@@ -751,8 +880,11 @@ export default function Onboarding({
           const isLast = tourIndex >= TOUR_CARDS.length - 1
           return (
             <div className="onboarding-screen">
-              <TourVisual kind={card.key} name={nameDraft.trim()} />
               <StageHeading title={card.title} body={card.body} />
+              {card.key === 'timeline' && <TourTimeline />}
+              {card.key === 'ask' && <TourAsk />}
+              {card.key === 'briefs' && <TourBriefs name={nameDraft.trim()} />}
+              {card.key === 'yours' && <TourYours />}
               <div className="onboarding-tour-progress" aria-hidden="true">
                 {TOUR_CARDS.map((tourCard, index) => (
                   <span key={tourCard.key} className={`onboarding-tour-pip${index === tourIndex ? ' onboarding-tour-pip-active' : ''}`} />
@@ -1019,6 +1151,84 @@ export default function Onboarding({
         .onboarding-tour-progress { display: flex; gap: 6px; }
         .onboarding-tour-pip { width: 6px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14); transition: width 240ms ease, background 240ms ease; }
         .onboarding-tour-pip-active { width: 16px; background: linear-gradient(145deg, #1a6fd4, #5ab3ff); }
+
+        /* Interactive tour */
+        .onboarding-tour-block-btn,
+        .onboarding-tour-block-static {
+          -webkit-app-region: no-drag;
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: center;
+          gap: 10px;
+          padding: 12px;
+          border: none;
+          width: 100%;
+          text-align: left;
+          cursor: pointer;
+          overflow: hidden;
+          transition: min-height 280ms cubic-bezier(.2,.8,.2,1), background 200ms ease, transform 140ms ease;
+        }
+        .onboarding-tour-block-static { cursor: default; }
+        .onboarding-tour-block-btn:hover { transform: translateY(-1px); }
+        .onboarding-tour-block-btn.is-open { box-shadow: inset 0 0 0 1px rgba(125,191,255,0.4); }
+        .onboarding-tour-block-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .onboarding-tour-block-label { font-size: 13px; font-weight: 650; color: #f3f7ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .onboarding-tour-block-time { font-size: 11px; color: rgba(255,255,255,0.55); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+        .onboarding-tour-evidence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; animation: onboardingFadeUp 260ms ease both; }
+        .onboarding-tour-evi-chip {
+          font-size: 11px; font-weight: 600; color: #eaf1ff;
+          padding: 3px 9px; border-radius: 999px;
+          background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.14);
+        }
+        .onboarding-tour-evi-note { font-size: 10.5px; color: rgba(255,255,255,0.6); margin-left: 2px; }
+        .onboarding-tour-hint { font-size: 11.5px; color: rgba(194,198,214,0.6); text-align: center; }
+        .onboarding-tour-privacy {
+          font-size: 11.5px; color: rgba(173,198,255,0.85); text-align: center;
+          padding: 8px 12px; border-radius: 10px;
+          background: rgba(90,179,255,0.08); border: 1px solid rgba(173,198,255,0.16);
+        }
+        .onboarding-tour-pencil {
+          -webkit-app-region: no-drag;
+          flex-shrink: 0; font-size: 11px; font-weight: 700; color: #07090f;
+          padding: 4px 10px; border-radius: 999px; border: none; cursor: pointer;
+          background: #bcd6ff;
+        }
+        .onboarding-tour-saved { flex-shrink: 0; font-size: 11px; font-weight: 700; color: #4fdbc8; animation: onboardingFadeUp 240ms ease both; }
+        .onboarding-tour-relabel { animation: onboardingFadeUp 260ms ease both; }
+
+        .onboarding-tour-ask { gap: 14px; }
+        .onboarding-tour-chatlog { display: grid; gap: 8px; min-height: 96px; align-content: start; }
+        .onboarding-tour-ask-empty { font-size: 12.5px; color: rgba(194,198,214,0.6); align-self: center; text-align: center; padding: 24px 0; }
+        .onboarding-tour-thinking { display: inline-flex; gap: 5px; align-items: center; width: max-content; }
+        .onboarding-tour-thinking span { width: 7px; height: 7px; border-radius: 50%; background: rgba(173,198,255,0.7); animation: onboardingBreath 1.2s ease-in-out infinite; }
+        .onboarding-tour-thinking span:nth-child(2) { animation-delay: 0.18s; }
+        .onboarding-tour-thinking span:nth-child(3) { animation-delay: 0.36s; }
+        .onboarding-tour-caret { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: #5ab3ff; border-radius: 1px; animation: onboardingCaret 0.9s steps(1) infinite; }
+        .onboarding-tour-followups { display: flex; gap: 8px; animation: onboardingFadeUp 260ms ease both; }
+        .onboarding-tour-followup { font-size: 11px; font-weight: 600; color: #c8d6f5; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.04); border: 1px solid rgba(173,198,255,0.14); }
+        .onboarding-tour-chips { display: flex; flex-direction: column; gap: 7px; }
+        .onboarding-tour-chip {
+          -webkit-app-region: no-drag;
+          text-align: left; font-size: 12.5px; font-weight: 550; color: #e7edfb;
+          padding: 9px 12px; border-radius: 10px; cursor: pointer;
+          background: rgba(255,255,255,0.03); border: 1px solid rgba(173,198,255,0.16);
+          transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
+        }
+        .onboarding-tour-chip:hover { border-color: rgba(173,198,255,0.4); background: rgba(255,255,255,0.06); }
+        .onboarding-tour-chip:active { transform: scale(0.99); }
+        .onboarding-tour-chip.is-active { border-color: rgba(90,179,255,0.55); background: rgba(26,111,212,0.16); color: #ffffff; }
+
+        .onboarding-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 11px; background: rgba(0,0,0,0.28); border: 1px solid rgba(173,198,255,0.12); align-self: center; }
+        .onboarding-seg-btn {
+          -webkit-app-region: no-drag;
+          font-size: 12px; font-weight: 650; color: rgba(194,198,214,0.7);
+          padding: 6px 16px; border-radius: 8px; border: none; cursor: pointer; background: transparent;
+          transition: background 160ms ease, color 160ms ease;
+        }
+        .onboarding-seg-btn.on { background: linear-gradient(145deg, #1a6fd4, #5ab3ff); color: #fff; }
+        .onboarding-tour-notif, .onboarding-tour-stats { animation: onboardingFadeUp 300ms ease both; }
+        @keyframes onboardingFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes onboardingCaret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
         .onboarding-shell {
           width: min(780px, 100%);
           border-radius: 32px;
