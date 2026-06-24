@@ -20,17 +20,16 @@ These are the immediate issues identified from the Rize onboarding analysis and 
 
 ---
 
-## Appendix: Reference Analysis of Rize Onboarding
-Rize uses onboarding as an engine for capturing user intent and integrating external data before the user ever sees the dashboard. A screen-by-screen breakdown:
+## Proposed Daylens Onboarding Flow
+Daylens currently uses an onboarding technique that is very concise and almost non-existent. It should instead act as an engine for capturing user intent and integrating external data before the user ever sees the dashboard. A screen-by-screen blueprint:
 
-- **Name capture:** Starts immediately with identity ("What's your name?") on a clean, single-input card.
-- **Personalized welcome:** Greets the user with their name and uses a dynamic typing effect to explain exactly what the app is about to do for them, building anticipation.
-- **Workspace setup:** Builds a profile of the user's environment by asking for company name, size, job title, and whether they work solo or on a team.
-- **Intent capture (Crucial):** Asks "How can Rize help you?" The user clicks intent chips (Track billable work, Improve focus) which auto-fill into a text box, capturing exactly *why* the user downloaded the app.
-- **Time settings:** Collects basic utility preferences (12h/24h, Timezone).
-- **Integrations introduction:** Introduces the ecosystem (Google Calendar, Outlook, ClickUp, Linear, Zapier).
-- **Meeting detection:** Walks the user through connecting their calendar specifically to detect meetings, proving the connection worked with a clear success state.
-- **Linear workspace sync:** Deep integration flow that connects Linear, asks which workspace to sync, and starts pulling in tasks immediately.
-- **Team invites:** Uses the momentum of setup to ask for team invites.
-- **Recommendation synthesis:** Plays back the user's intent ("You're set up to track projects...") and reveals the specific workspace modules and productivity rules it has enabled based on their answers.
-- **App download:** The final step to get the actual desktop client running.
+- **Name capture:** Start immediately with identity ("What's your name?") on a clean, single-input card.
+- **Personalized welcome:** Greet the user with their name and use a dynamic typing effect to explain exactly what Daylens is about to do for them, building anticipation.
+- **Workspace setup:** Build a profile of the user's environment by asking for company name, size, job title, and whether they work solo or on a team.
+- **Intent capture (Crucial):** Ask "How can Daylens help you?" Let the user click intent chips (e.g., Track billable work, Improve focus) which auto-fill into a text box, capturing exactly *why* the user downloaded the app.
+- **Time & AI settings:** Collect basic utility preferences (12h/24h, Timezone) and immediately prompt for an AI API key so the assistant works on day one.
+- **Integrations introduction:** Introduce the ecosystem (Google Calendar, Outlook, ClickUp, Linear).
+- **Meeting detection:** Walk the user through connecting their calendar specifically to detect meetings, proving the connection worked with a clear success state.
+- **Task workspace sync:** Deep integration flow that connects task trackers (like Linear), asks which workspace to sync, and starts pulling in tasks immediately.
+- **Team invites:** Use the momentum of setup to ask for team invites.
+- **Recommendation synthesis:** Play back the user's intent ("You're set up to track projects...") and reveal the specific workspace modules and productivity rules it has enabled based on their answers.
