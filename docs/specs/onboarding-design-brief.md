@@ -60,6 +60,69 @@ disappears halfway through. It reads as two designs taped together.
 The fix: **one layout system for all ten screens** — same header zone, same type scale, same
 alignment logic, Lumen present throughout. Detailed in §4 and §5.
 
+### The full issue inventory
+
+Problems A and B are the two structural ones. Below is **everything else** worth fixing,
+caught reviewing each screen on a real machine. Severity: **P1** = breaks or looks broken,
+**P2** = feels off / cheap, **P3** = polish. Fixing A and B resolves several of these; the
+rest are their own decisions.
+
+**Personalize screen (the one in the screenshot — the worst offender):**
+
+- **(P1) The same app list appears twice.** "Which apps count as real work for you?" and
+  "Anything Daylens should never track?" render the *identical* set of app chips. It's
+  confusing (why am I picking from the same list twice?) and it roughly doubles the screen's
+  height — half the reason it overflows. Rethink this: e.g. one app list where each app can be
+  marked *focus* / *normal* / *private*, or make "never track" a small "+ add an app to keep
+  private" affordance instead of repeating the whole list.
+- **(P1) Four sections stacked on one screen.** Categories, focus apps, "why are you here?" +
+  a textarea, and keep-private — all at once. It's the opposite of "one idea per screen" and
+  is the tall screen that breaks the frame. Decide: condense to the essentials on one calm
+  screen, or split into two short ones. Don't just shrink it.
+- **(P2) Sections are cramped.** Labels sit right on top of the chips above them; the groups
+  don't breathe, so it reads as a wall of buttons.
+- **(P3) Seeded apps can skew technical.** The chips come from the user's real top apps, so a
+  developer sees Ghostty/Codex/Cursor and a writer sees Word/Docs — that's correct and good.
+  Just make sure the design looks intentional with 3 apps *and* with 12.
+
+**"Why" story screen:**
+
+- **(P2) It isn't storytelling yet — it's an FAQ.** Three flat gray boxes of left-aligned text.
+  The copy is warm but the layout is a list. This is the emotional "why am I installing this?"
+  beat; it should *feel* like a story (one thought at a time, an illustration or Lumen acting
+  it out, a little motion), not three stacked paragraphs.
+
+**Mascot (Lumen):**
+
+- **(P2) Reads as a placeholder, not a character.** Small, sitting inside a plain white rounded
+  square that looks like a default macOS app-icon placeholder. Lumen needs to feel
+  *hand-made and alive* — a real little character with personality, not an app glyph in a box.
+- **(P2) Disappears for most of the flow.** Present on greeting/why/ready, absent on permission/
+  proof/tour/voice/personalize. Part of Problem B; calling it out so it's explicit on the
+  shot list: Lumen on **every** screen.
+
+**The stage in the window:**
+
+- **(P2) The card floats in a large dark void.** In the default 1100×720 window the light card
+  is small and centered with wide empty margins, which both wastes the space and exaggerates
+  the size-jump between short and tall screens. Decide how the stage uses the window — fill it
+  more confidently, or make the surround a deliberate, designed backdrop rather than dead space.
+
+**Progress / orientation:**
+
+- **(P3) Progress is a row of tiny dots, top-right.** Easy to miss, and gives no sense of how
+  far along you are or how much is left. Consider a clearer, friendlier progress treatment so
+  the user always knows the end is near.
+
+**Consistency of "pick from chips" moments:**
+
+- **(P3) Several different chip/card treatments.** Intent chips, category chips, app chips, and
+  the voice cards are all "choose from these," but don't share one selected/hover/spacing
+  language yet. Unify (see §4).
+
+If anything here conflicts with the built copy or step order, the copy/steps win — but every
+*visual* and *layout* issue above is fair game.
+
 ---
 
 ## 3. The frame — one stage, every screen
@@ -213,11 +276,19 @@ A designer can consider this finished when:
       steps, at any window size down to 820×580.
 - [ ] The tall screen (personalize) **scrolls inside the frame**; its title never clips and the
       footer button is always visible.
+- [ ] **Personalize no longer repeats the same app list twice**, and no longer crams four
+      sections — it's condensed or split into calm, breathing groups.
+- [ ] The **"why" screen feels like a story** (one thought at a time, illustrated/animated),
+      not three stacked FAQ boxes.
+- [ ] **Lumen looks like a character**, not an app-icon placeholder, and is **present on every
+      screen** with expressions that fit the moment.
 - [ ] All ten screens share **one type scale, one alignment, one chip/card/input/button
       language, one spacing rhythm.**
-- [ ] **Lumen is present on every screen**, with expressions that fit the moment.
+- [ ] The **stage uses the window well** — no small card floating in dead dark space — and
+      progress reads clearly.
 - [ ] The front (greeting/why) and the back (voice/personalize/ready) feel like **one
       continuous piece**, not two designs.
 - [ ] Transitions are calm — content changes inside a still frame; reduced-motion is respected.
+- [ ] Every **P1/P2 item in the §2 issue inventory** is resolved.
 - [ ] It still obeys every rule in [`onboarding.md`](onboarding.md) §7 (real proof, honest
       permissions, AI optional, never bluffs).
