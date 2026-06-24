@@ -34,7 +34,7 @@ import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './b
 import { resolveBrowserApplication } from './browserRegistry'
 import { getSettings } from './settings'
 import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
-import { isSystemNoiseApp } from '@shared/systemNoise'
+import { isSystemNoiseApp, isSystemNoiseTitle } from '@shared/systemNoise'
 import { runAttributionForRange } from './attribution'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1674,8 +1674,11 @@ async function poll(): Promise<void> {
       return
     }
 
-    // Skip OS infrastructure processes
-    if (isOsNoise(bundleId, appName, resolvedWin.path)) {
+    // Skip OS infrastructure processes — by app identity, or by a window title
+    // that belongs to the OS itself (lock screen, notification toast) even when
+    // the reported process looks like a normal app. Either way the time is not
+    // work and must not accumulate (invariant 11).
+    if (isOsNoise(bundleId, appName, resolvedWin.path) || isSystemNoiseTitle(resolvedWindowTitle)) {
       if (currentSession) flushCurrent(undefined, 'system_noise')
       flushActiveBrowserContext(getDb())
       clearPersistedLiveSnapshot()

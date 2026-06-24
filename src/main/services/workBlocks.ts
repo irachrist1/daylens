@@ -52,6 +52,7 @@ import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForApp
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
+import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { localDayBounds, localDateString } from '../lib/localDate'
@@ -1597,6 +1598,9 @@ function usefulWindowTitle(session: AppSession): string | null {
   if (lowerTitle === session.appName.toLowerCase()) return null
   if (lowerTitle === (session.rawAppName ?? '').toLowerCase()) return null
   if (looksLikeShellPromptTitle(title)) return null
+  // Never let an OS surface title (lock screen, notification toast) name a
+  // block — invariant 5/11 (defense in depth; capture also drops these).
+  if (isSystemNoiseTitle(title)) return null
   return title
 }
 
@@ -5508,7 +5512,7 @@ export function getAppDetailPayload(
     topBlockIds: relatedBlocks.slice(0, 8).map((block) => block.id),
     computedAt: Date.now(),
   }
-  const blockAppearances = Array.from(sessionDerivedBlocksByDate.values())
+  const rawAppearances = Array.from(sessionDerivedBlocksByDate.values())
     .flat()
     .sort((left, right) => right.startTime - left.startTime)
     .map((block) => {
@@ -5523,6 +5527,25 @@ export function getAppDetailPayload(
       }
     })
     .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
+
+  // Collapse identical labels so "What you did there" doesn't repeat the same
+  // generic line for every session (e.g. eight rows all reading "Running
+  // Daylens Locally"). Same-label sessions merge into one entry spanning their
+  // combined time range. The memory-rollup path handles pattern-based grouping;
+  // this is the fallback for when no learned pattern matched.
+  const mergedByLabel = new Map<string, typeof rawAppearances[number]>()
+  for (const appearance of rawAppearances) {
+    const key = appearance.label.toLowerCase()
+    const existing = mergedByLabel.get(key)
+    if (existing) {
+      existing.startTime = Math.min(existing.startTime, appearance.startTime)
+      existing.endTime = Math.max(existing.endTime, appearance.endTime)
+    } else {
+      mergedByLabel.set(key, { ...appearance })
+    }
+  }
+  const blockAppearances = Array.from(mergedByLabel.values())
+    .sort((left, right) => right.startTime - left.startTime)
     .slice(0, 12)
 
   const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)

@@ -1252,10 +1252,14 @@ function normalizeArtifactRequest(request: ArtifactIconRequest): ArtifactIconReq
   return {
     kind: 'artifact',
     artifactType: request.artifactType,
+    // Identity must come from identity fields, never the artifact's title. Using
+    // the title let content text ("Widget", "Getting Started") resolve to an
+    // unrelated app and inherit its icon. Title-only artifacts now fall back to
+    // a host/site icon or a neutral placeholder instead of a wrong app icon.
     canonicalAppId: normalizeCanonicalAppId(
       request.canonicalAppId,
       ownerBundleId,
-      ownerAppName ?? request.title?.trim() ?? null,
+      ownerAppName,
     ),
     ownerBundleId,
     ownerAppName,

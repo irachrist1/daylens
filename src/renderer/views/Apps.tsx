@@ -249,11 +249,16 @@ export default function Apps() {
 
   useEffect(() => {
     if (!selectedAppId) return
-    const current = filteredSummaries.find((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId)
-    if (!current) {
+    // Check against the FULL summary set, not the category-filtered one. Clearing
+    // on the filtered list blanked the detail pane whenever a category switch or
+    // a live refresh re-bucketed the selected app out of view. Skip while data is
+    // still loading so a transient empty list doesn't drop the selection.
+    if (summaries.length === 0) return
+    const stillExists = summaries.some((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId)
+    if (!stillExists) {
       setSelectedAppId(null)
     }
-  }, [filteredSummaries, selectedAppId])
+  }, [summaries, selectedAppId])
 
   useEffect(() => {
     const node = contentRef.current
@@ -261,7 +266,9 @@ export default function Apps() {
     node.scrollTop = 0
   }, [days, selectedCategory, selectedAppId])
 
-  const selectedSummary = filteredSummaries.find((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId) ?? null
+  // Resolve against the full summary list so a selected app keeps its detail
+  // pane even when the active category filter would exclude it.
+  const selectedSummary = summaries.find((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId) ?? null
   const selectedCanonicalId = selectedSummary ? (selectedSummary.canonicalAppId ?? selectedSummary.bundleId) : null
 
 

@@ -216,6 +216,19 @@ function stripNotificationBadgePrefix(title: string): string {
   return compactWhitespace(title.replace(/^\(\d+\)\s*/, ''))
 }
 
+// Some browsers leak a raw URL or query string into the page-title field — e.g.
+// "9917state=%7B%22successPath%22..." — which must never surface as a readable
+// "title". These are never human page titles; the caller falls back to the
+// site name instead.
+function looksLikeRawUrlParams(value: string): boolean {
+  if (/%[0-9a-fA-F]{2}/.test(value)) return true            // percent-encoding
+  if (/^https?:\/\//i.test(value) || value.includes('://')) return true
+  const ampParts = value.split('&').filter((part) => part.includes('='))
+  if (ampParts.length >= 2) return true                      // key=val&key=val
+  if (!/\s/.test(value) && value.length > 24 && /[=%?&]/.test(value)) return true
+  return false
+}
+
 export function normalizeWebsiteTitleForDisplay(
   domain: string,
   rawTitle: string | null | undefined,
@@ -226,6 +239,7 @@ export function normalizeWebsiteTitleForDisplay(
   const domainLabel = websiteDisplayLabel(normalizedDomain)
   const cleaned = stripNotificationBadgePrefix(rawTitle)
   if (!cleaned) return null
+  if (looksLikeRawUrlParams(cleaned)) return null
 
   const lower = cleaned.toLowerCase()
   const simplifiedDomain = normalizedDomain.replace(/\.(com|org|io|net|ai|dev|app|so)$/g, '')
