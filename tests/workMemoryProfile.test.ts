@@ -8,11 +8,22 @@ import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import {
   getWorkMemoryProfile,
   addWorkMemoryFact,
+  addClientMemoryFact,
   updateWorkMemoryFact,
   forgetWorkMemoryFact,
   rebuildWorkMemory,
   workMemoryPromptBlock,
+  chatMemoryPromptBlock,
 } from '../src/main/services/workMemoryProfile.ts'
+
+// A client is matched in chat only via a client_aliases row (the read path JOINs
+// clients → client_aliases), so seed both — the name doubles as its own alias.
+function seedClient(db: Database.Database, id: string, name: string): void {
+  const now = Date.now()
+  db.prepare(`INSERT INTO clients (id, name, color, status, created_at, updated_at) VALUES (?, ?, NULL, 'active', ?, ?)`).run(id, name, now, now)
+  db.prepare(`INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at) VALUES (?, ?, ?, ?, 'name', ?)`)
+    .run(`${id}-alias`, id, name, name.toLowerCase(), now)
+}
 
 // Recent timestamps — the draft only looks at the last 30 days of evidence.
 const BASE = Date.now() - 5 * 86_400_000
@@ -118,6 +129,29 @@ test('an edited-then-forgotten drafted fact does not resurrect on rebuild', () =
     const facts = getWorkMemoryProfile(db).facts
     assert.ok(!facts.some((f) => /spend most of your day/.test(f.text)), 'forgotten topic must stay gone after editing')
     assert.ok(!facts.some((f) => f.text === 'Cursor is where I live.'))
+  } finally {
+    db.close()
+  }
+})
+
+test('client-scoped memory reaches a chat answer only when the question names that client (memory.md invariant 4)', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  try {
+    seedClient(db, 'client-acme', 'Acme')
+    addClientMemoryFact(db, 'client-acme', 'Acme prefers Friday demos.')
+    addWorkMemoryFact(db, 'I treat YouTube as background, not focus.')
+
+    // A question that names the client pulls general memory PLUS that client's scope.
+    const aboutAcme = chatMemoryPromptBlock(db, 'how is the Acme work going this week?')
+    assert.match(aboutAcme, /Acme prefers Friday demos\./, 'client scope should be injected for a client question')
+    assert.match(aboutAcme, /YouTube/, 'general memory should always be present')
+
+    // A question that does NOT name the client gets general memory only — the
+    // client scope must not leak into unrelated answers.
+    const general = chatMemoryPromptBlock(db, 'what did I work on today?')
+    assert.match(general, /YouTube/)
+    assert.ok(!/Friday demos/.test(general), 'client-scoped memory must not leak into unrelated questions')
   } finally {
     db.close()
   }
