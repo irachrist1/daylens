@@ -38,6 +38,10 @@ const SYSTEM_NOISE_APP_NAMES = new Set([
   'dwm.exe',
   'csrss.exe',
   'svchost.exe',
+  // Windows lock screen and screensaver
+  'lockapp',
+  'lockapp.exe',
+  'scrnsave.scr',
 ])
 
 export function isSystemNoiseApp(candidate: AppIdentityCandidate): boolean {

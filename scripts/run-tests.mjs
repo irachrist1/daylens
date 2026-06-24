@@ -72,9 +72,11 @@ const concurrency = Number(process.env.TEST_CONCURRENCY) || Math.max(2, Math.min
 
 function runFile(file) {
   return new Promise((resolve) => {
+    const relLoader = './' + path.relative(projectRoot, loader).replace(/\\/g, '/')
+    const relFile = './' + path.relative(projectRoot, file).replace(/\\/g, '/')
     const child = spawn(
       electronBin,
-      ['--loader', loader, '--test', file],
+      ['--loader', relLoader, '--test', relFile],
       { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] },
     )
     let out = ''

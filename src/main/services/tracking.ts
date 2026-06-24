@@ -65,6 +65,7 @@ interface InFlightSession {
   captureSource: string
   startTime: number
   category: AppCategory
+  windowTitles?: { title: string | null; ticks: number }[]
 }
 
 interface LinuxProcessSnapshot {
@@ -1702,6 +1703,7 @@ async function poll(): Promise<void> {
           : 'foreground_poll',
         startTime: startedAt,
         category,
+        windowTitles: [{ title: resolvedWindowTitle, ticks: 1 }],
       }
       upsertAppIdentityObservation(getDb(), {
         bundleId,
@@ -1718,6 +1720,16 @@ async function poll(): Promise<void> {
       persistLiveSnapshot(true)
     } else {
       currentSession.windowTitle = resolvedWindowTitle
+      if (!currentSession.windowTitles) {
+        currentSession.windowTitles = [{ title: resolvedWindowTitle, ticks: 1 }]
+      } else {
+        const existing = currentSession.windowTitles.find((t) => t.title === resolvedWindowTitle)
+        if (existing) {
+          existing.ticks++
+        } else {
+          currentSession.windowTitles.push({ title: resolvedWindowTitle, ticks: 1 })
+        }
+      }
       persistLiveSnapshot()
     }
 
@@ -1755,6 +1767,34 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     clearPersistedLiveSnapshot()
     currentSession = null
     return
+  }
+
+  // Split sessions that cross midnight into two records so that each calendar
+  // day's totals only include time that actually fell within that day.
+  const startDate = localDateString(new Date(currentSession.startTime))
+  const endDate   = localDateString(new Date(endTime))
+  if (startDate !== endDate) {
+    const [, midnightMs] = localDayBounds(startDate)
+    // Snapshot fields before the recursive call — flushCurrent sets
+    // currentSession = null so we can't read it afterwards.
+    const snapshot = { ...currentSession }
+    flushCurrent(midnightMs, 'midnight_split')
+    // Restore for the second slice (midnight → endTime).
+    currentSession = { ...snapshot, startTime: midnightMs }
+    flushCurrent(endTime, endedReason)
+    return
+  }
+
+  if (currentSession.windowTitles && currentSession.windowTitles.length > 0) {
+    let dominantTitle = currentSession.windowTitle
+    let maxTicks = 0
+    for (const item of currentSession.windowTitles) {
+      if (item.ticks > maxTicks) {
+        maxTicks = item.ticks
+        dominantTitle = item.title
+      }
+    }
+    currentSession.windowTitle = dominantTitle
   }
 
   const durationSeconds = Math.round((endTime - currentSession.startTime) / 1_000)
@@ -1816,6 +1856,7 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
   clearPersistedLiveSnapshot()
   currentSession = null
 }
+
 
 // ─── Classifier ───────────────────────────────────────────────────────────────
 // Rules are matched in order — first match wins.

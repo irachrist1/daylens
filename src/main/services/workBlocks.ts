@@ -1995,7 +1995,119 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
     })
 }
 
+// Reads real-time tab events (tab_changed / tab_sampled) from focus_events for
+// the block's time range. This is the live source of URL + page-title data —
+// it's populated immediately by the capture helper, unlike website_visits which
+// is populated by a background browser-history poll that can lag by minutes.
+// A 10-second floor is applied so sub-10s tab flickers don't inflate the list.
+function buildTabEvidenceFromFocusEvents(
+  db: Database.Database,
+  startTime: number,
+  endTime: number,
+): PageRef[] {
+  type TabRow = {
+    ts_ms: number
+    url: string
+    page_title: string | null
+    app_bundle_id: string | null
+  }
+  let rows: TabRow[] = []
+  try {
+    rows = db.prepare(`
+      SELECT ts_ms, url, page_title, app_bundle_id
+      FROM focus_events
+      WHERE event_type IN ('tab_changed', 'tab_sampled')
+        AND url IS NOT NULL
+        AND trim(url) <> ''
+        AND ts_ms >= ?
+        AND ts_ms < ?
+      ORDER BY ts_ms ASC, id ASC
+    `).all(startTime, endTime) as TabRow[]
+  } catch {
+    return []
+  }
+
+  const MIN_TAB_DWELL_MS = 10_000 // match the session dwell floor
+  const grouped = new Map<string, {
+    url: string
+    normalizedUrl: string | null
+    domain: string
+    pageTitle: string | null
+    browserBundleId: string | null
+    totalMs: number
+    visitCount: number
+  }>()
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const nextTs = rows[i + 1]?.ts_ms ?? endTime
+    const dwellMs = Math.max(0, Math.min(nextTs - row.ts_ms, endTime - row.ts_ms))
+    if (dwellMs < MIN_TAB_DWELL_MS) continue
+
+    let domain: string
+    try {
+      domain = new URL(row.url).hostname.replace(/^www\./, '')
+    } catch {
+      continue
+    }
+    if (!domain) continue
+
+    const normalizedUrl = normalizeUrlForStorage(row.url) ?? null
+    const key = normalizedUrl ?? row.url
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.totalMs += dwellMs
+      existing.visitCount += 1
+      if (!existing.pageTitle && row.page_title) existing.pageTitle = row.page_title
+      continue
+    }
+    grouped.set(key, {
+      url: row.url,
+      normalizedUrl,
+      domain,
+      pageTitle: row.page_title ?? null,
+      browserBundleId: row.app_bundle_id ?? null,
+      totalMs: dwellMs,
+      visitCount: 1,
+    })
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => {
+      // Work before leisure
+      const aLeisure = Number(kindForDomain(a.domain) === 'leisure')
+      const bLeisure = Number(kindForDomain(b.domain) === 'leisure')
+      return (aLeisure - bLeisure) || (b.totalMs - a.totalMs)
+    })
+    .slice(0, 10)
+    .map((entry): PageRef => {
+      const canonicalKey = `page:${entry.normalizedUrl ?? entry.url}`
+      const displayTitle = entry.pageTitle ?? websiteDisplayLabel(entry.domain)
+      return {
+        id: artifactIdFor(canonicalKey),
+        artifactType: 'page',
+        canonicalKey,
+        displayTitle,
+        subtitle: entry.domain,
+        totalSeconds: Math.round(entry.totalMs / 1_000),
+        confidence: 0.85,
+        url: entry.url,
+        host: entry.domain,
+        openTarget: { kind: 'external_url', value: entry.url },
+        domain: entry.domain,
+        normalizedUrl: entry.normalizedUrl,
+        pageKey: null,
+        pageTitle: entry.pageTitle ?? null,
+        browserBundleId: entry.browserBundleId,
+        canonicalBrowserId: null,
+        visitCount: entry.visitCount,
+      }
+    })
+}
+
+
 function buildWindowTitleEvidence(
+
   db: Database.Database,
   startTime: number,
   endTime: number,
@@ -2186,22 +2298,42 @@ function buildBlockFromCandidate(
   }
   const pageCandidates = buildPageCandidates(db, blockStart, blockEnd, context)
   const windowCandidates = buildWindowArtifactCandidates(candidate.sessions)
-  const pageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
+  const visitPageRefs = pageCandidates.flatMap((candidate) => candidate.pageRef ? [candidate.pageRef] : [])
+  // Supplement website_visits pages with real-time tab evidence from focus_events.
+  // Tab evidence is populated immediately by the capture helper; website_visits
+  // lags by the browser-history poll interval and can be empty for today's blocks.
+  const tabPageRefs = buildTabEvidenceFromFocusEvents(db, blockStart, blockEnd)
+  // Merge: tab evidence first (richer, more timely), then add any visit-based
+  // pages whose URL isn't already covered by the tab evidence.
+  const seenUrls = new Set(tabPageRefs.map((p) => p.normalizedUrl ?? p.url ?? '').filter(Boolean))
+  const mergedPageRefs = [
+    ...tabPageRefs,
+    ...visitPageRefs.filter((p) => {
+      const key = p.normalizedUrl ?? p.url ?? ''
+      return key && !seenUrls.has(key)
+    }),
+  ].slice(0, 12)
   const documentRefs = windowCandidates.flatMap((candidate) => candidate.documentRef ? [candidate.documentRef] : [])
-  const topArtifacts = [...pageRefs, ...documentRefs]
+  const topArtifacts = [...mergedPageRefs, ...documentRefs]
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 6)
   const dominantCategory = dominantCategoryForBlock(distribution, topArtifacts)
   const windowTitles = buildWindowTitleEvidence(db, blockStart, blockEnd, candidate.sessions)
+  // Derive domains from both sources so blocks with only focus_events tab data
+  // still have a meaningful domain summary.
+  const websiteDomains = websites.map((site) => site.domain)
+  const tabDomains = [...new Set(tabPageRefs.map((p) => p.domain).filter(Boolean))]
+  const allDomains = [...new Set([...websiteDomains, ...tabDomains])].slice(0, 5)
   const evidenceSummary = {
     apps: mergedTopApps,
-    pages: pageRefs,
+    pages: mergedPageRefs,
     documents: documentRefs,
-    domains: websites.map((site) => site.domain),
+    domains: allDomains,
     windowTitles,
-    sites: pageRefs,
+    sites: mergedPageRefs,
     files: buildFileEvidence(windowTitles),
   }
+
   const blockId = blockIdFor(
     blockStart,
     blockEnd,
@@ -2222,7 +2354,7 @@ function buildBlockFromCandidate(
     topApps: mergedTopApps,
     websites,
     keyPages,
-    pageRefs,
+    pageRefs: mergedPageRefs,
     documentRefs,
     topArtifacts,
     workflowRefs: [],
