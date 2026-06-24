@@ -1203,6 +1203,7 @@ export type OnboardingStage =
   | 'relaunch_required'
   | 'verifying_permission'
   | 'proof'
+  | 'tour'
   | 'personalize'
   | 'ai_setup'
   | 'ready'

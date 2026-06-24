@@ -30,6 +30,7 @@ const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome'], label: 'Meet Daylens' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
+  { id: ['tour'], label: 'How it works' },
   { id: ['personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
@@ -38,10 +39,36 @@ const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
 const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome'], label: 'Meet Daylens' },
   { id: ['proof'], label: 'First signal' },
+  { id: ['tour'], label: 'How it works' },
   { id: ['personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
+
+// The macro flow used for the Back button. The mac permission stage is omitted:
+// it auto-advances once access is granted, so stepping back into it would bounce
+// the user forward again.
+const STAGE_FLOW: OnboardingStage[] = ['welcome', 'proof', 'tour', 'personalize', 'ai_setup', 'ready']
+const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
+
+// The guided tour: every surface, as few words as possible, one visual each.
+const TOUR_CARDS = [
+  {
+    key: 'timeline',
+    title: 'Your day, in blocks',
+    body: 'Daylens groups activity by what you were doing — not which app was open. One block is one stretch of one thing. Taller means longer.',
+  },
+  {
+    key: 'ask',
+    title: 'Open an app, or just ask',
+    body: 'Pick any app to see what you actually did in it. Or ask in plain words — answers come from your real activity, never guesses.',
+  },
+  {
+    key: 'briefs',
+    title: 'Briefs and wraps, written fresh',
+    body: 'A morning brief on what to pick up. An evening wrap of what got done. Weekly and monthly wraps, Spotify-style — all from the same numbers.',
+  },
+] as const
 
 interface ProofSnapshot {
   liveSession: LiveSession | null
@@ -109,6 +136,57 @@ function SettingsPreview() {
 }
 
 
+function TourVisual({ kind, name }: { kind: string; name: string }) {
+  if (kind === 'timeline') {
+    const rows = [
+      { label: 'Configuring the work network', h: 64, tone: 'a' },
+      { label: 'ML pipeline class', h: 40, tone: 'b' },
+      { label: 'Networking in Ghostty', h: 52, tone: 'c' },
+    ]
+    return (
+      <div className="onboarding-tour-visual" aria-hidden="true">
+        <div className="onboarding-tour-timeline">
+          {rows.map((row) => (
+            <div key={row.label} className="onboarding-tour-block" style={{ height: row.h }} data-tone={row.tone}>
+              <span>{row.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  if (kind === 'ask') {
+    return (
+      <div className="onboarding-tour-visual" aria-hidden="true">
+        <div className="onboarding-tour-chat">
+          <div className="onboarding-tour-bubble onboarding-tour-bubble-q">What did I ship this week?</div>
+          <div className="onboarding-tour-bubble onboarding-tour-bubble-a">
+            You shipped the timeline rework and fixed the Windows capture bugs — about 12h across Cursor and Ghostty.
+          </div>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="onboarding-tour-visual" aria-hidden="true">
+      <div className="onboarding-tour-notif">
+        <div className="onboarding-tour-notif-head">
+          <span className="onboarding-tour-notif-dot" />
+          Daylens · morning brief
+        </div>
+        <div className="onboarding-tour-notif-body">
+          Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up?
+        </div>
+      </div>
+      <div className="onboarding-tour-stats">
+        <div><strong>6h 12m</strong><span>deep work</span></div>
+        <div><strong>4</strong><span>projects</span></div>
+        <div><strong>Tue</strong><span>busiest day</span></div>
+      </div>
+    </div>
+  )
+}
+
 export default function Onboarding({
   initialSettings,
   onComplete,
@@ -121,6 +199,7 @@ export default function Onboarding({
   const [nameDraft, setNameDraft] = useState(initialSettings.userName)
   const [intentDraft, setIntentDraft] = useState(initialSettings.userIntent)
   const [aiConnected, setAiConnected] = useState(initialSettings.onboardingState.aiSetupState === 'connected')
+  const [tourIndex, setTourIndex] = useState(0)
   // T3: opt-in to Tracking Controls during onboarding. Off by default —
   // declining (the default) changes nothing about capture.
   const [trackingOptIn, setTrackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
@@ -439,9 +518,31 @@ export default function Onboarding({
       step: 'proof',
       surface: 'onboarding',
     })
-    await persistOnboarding('personalize', {
+    await persistOnboarding('tour', {
       proofState: proof.ready ? 'ready' : settings.onboardingState.proofState,
     })
+  }
+
+  function advanceTour() {
+    if (tourIndex < TOUR_CARDS.length - 1) {
+      setTourIndex((index) => index + 1)
+      return
+    }
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'tour', surface: 'onboarding' })
+    void persistOnboarding('personalize')
+  }
+
+  const flowIndex = STAGE_FLOW.indexOf(stage)
+  const canGoBack = !SYSTEM_STAGES.has(stage) && ((stage === 'tour' && tourIndex > 0) || flowIndex > 0)
+
+  function goBack() {
+    if (stage === 'tour' && tourIndex > 0) {
+      setTourIndex((index) => index - 1)
+      return
+    }
+    const previous = STAGE_FLOW[flowIndex - 1]
+    if (!previous) return
+    void persistOnboarding(previous)
   }
 
   async function continueFromPersonalize() {
@@ -490,7 +591,12 @@ export default function Onboarding({
   return (
     <div className="onboarding-root">
       <div className="onboarding-shell">
-        <ProgressDots count={steps.length} activeIndex={activeStepIndex} />
+        <div className="onboarding-topbar">
+          {canGoBack
+            ? <button className="onboarding-back" onClick={goBack}>← Back</button>
+            : <span className="onboarding-back-placeholder" />}
+          <ProgressDots count={steps.length} activeIndex={activeStepIndex} />
+        </div>
 
         {stage === 'welcome' && (
           <div className="onboarding-screen">
@@ -640,6 +746,27 @@ export default function Onboarding({
           </div>
         )}
 
+        {stage === 'tour' && (() => {
+          const card = TOUR_CARDS[Math.min(tourIndex, TOUR_CARDS.length - 1)]
+          const isLast = tourIndex >= TOUR_CARDS.length - 1
+          return (
+            <div className="onboarding-screen">
+              <TourVisual kind={card.key} name={nameDraft.trim()} />
+              <StageHeading title={card.title} body={card.body} />
+              <div className="onboarding-tour-progress" aria-hidden="true">
+                {TOUR_CARDS.map((tourCard, index) => (
+                  <span key={tourCard.key} className={`onboarding-tour-pip${index === tourIndex ? ' onboarding-tour-pip-active' : ''}`} />
+                ))}
+              </div>
+              <div className="onboarding-actions">
+                <button className="onboarding-btn-primary" onClick={() => advanceTour()}>
+                  {isLast ? 'Make it mine' : 'Next'}
+                </button>
+              </div>
+            </div>
+          )
+        })()}
+
         {stage === 'personalize' && (
           <div className="onboarding-screen">
             <StageHeading
@@ -778,7 +905,120 @@ export default function Onboarding({
           justify-content: center;
           padding: 36px 24px;
           -webkit-app-region: drag;
+          /* Onboarding is always dark — pin the dark palette so embedded
+             components (e.g. ConnectAI) never render light-on-dark, regardless
+             of the app theme the user picks later. */
+          --color-surface: #10131a;
+          --color-surface-low: #191c22;
+          --color-surface-container: #1d2026;
+          --color-surface-high: #272a32;
+          --color-surface-highest: #32353c;
+          --color-surface-card: #1d2026;
+          --color-border-ghost: rgba(255,255,255,0.10);
+          --color-text-primary: #f0f4ff;
+          --color-text-secondary: #c2c6d6;
+          --color-text-tertiary: rgba(194,198,214,0.55);
+          --color-primary: #adc6ff;
+          --color-primary-contrast: #001a42;
+          --color-accent: #adc6ff;
+          --color-accent-dim: rgba(173,198,255,0.12);
+          --color-focus-green: #4fdbc8;
+          --gradient-primary: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
         }
+        .onboarding-topbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          min-height: 24px;
+        }
+        .onboarding-back {
+          -webkit-app-region: no-drag;
+          background: none;
+          border: none;
+          color: rgba(194,198,214,0.7);
+          font-size: 12.5px;
+          font-weight: 600;
+          cursor: pointer;
+          padding: 4px 8px;
+          margin-left: -8px;
+          border-radius: 8px;
+          transition: color 140ms ease, background 140ms ease;
+        }
+        .onboarding-back:hover { color: #f0f4ff; background: rgba(255,255,255,0.04); }
+        .onboarding-back-placeholder { width: 1px; }
+        .onboarding-tour-visual {
+          border-radius: 18px;
+          border: 1px solid rgba(173, 198, 255, 0.12);
+          background: linear-gradient(180deg, rgba(14, 24, 34, 0.7), rgba(9, 14, 22, 0.7));
+          padding: 20px;
+          min-height: 150px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          gap: 12px;
+        }
+        .onboarding-tour-timeline { display: grid; gap: 8px; }
+        .onboarding-tour-block {
+          border-radius: 9px;
+          display: flex;
+          align-items: center;
+          padding: 0 12px;
+          font-size: 12.5px;
+          font-weight: 600;
+          color: #eaf1ff;
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+          animation: onboardingBlockIn 0.5s cubic-bezier(.2,.8,.2,1) both;
+        }
+        .onboarding-tour-block[data-tone="a"] { background: linear-gradient(135deg, rgba(125,191,255,0.34), rgba(79,220,200,0.22)); }
+        .onboarding-tour-block[data-tone="b"] { background: rgba(255,255,255,0.06); color: rgba(210,222,240,0.8); animation-delay: 0.08s; }
+        .onboarding-tour-block[data-tone="c"] { background: linear-gradient(135deg, rgba(178,160,255,0.32), rgba(125,191,255,0.22)); animation-delay: 0.16s; }
+        .onboarding-tour-chat { display: grid; gap: 10px; }
+        .onboarding-tour-bubble {
+          font-size: 13px;
+          line-height: 1.55;
+          padding: 10px 13px;
+          border-radius: 13px;
+          max-width: 86%;
+        }
+        .onboarding-tour-bubble-q {
+          justify-self: end;
+          background: linear-gradient(145deg, #1a6fd4, #5ab3ff);
+          color: #fff;
+          border-bottom-right-radius: 4px;
+        }
+        .onboarding-tour-bubble-a {
+          justify-self: start;
+          background: rgba(255,255,255,0.05);
+          color: #d9e2f2;
+          border: 1px solid rgba(173,198,255,0.12);
+          border-bottom-left-radius: 4px;
+        }
+        .onboarding-tour-notif {
+          border-radius: 13px;
+          border: 1px solid rgba(173,198,255,0.16);
+          background: rgba(255,255,255,0.04);
+          padding: 12px 14px;
+        }
+        .onboarding-tour-notif-head {
+          display: flex; align-items: center; gap: 7px;
+          font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+          color: rgba(194,198,214,0.6); text-transform: uppercase;
+        }
+        .onboarding-tour-notif-dot { width: 7px; height: 7px; border-radius: 50%; background: #5ab3ff; }
+        .onboarding-tour-notif-body { margin-top: 7px; font-size: 13.5px; line-height: 1.55; color: #eaf1ff; }
+        .onboarding-tour-stats { display: flex; gap: 10px; }
+        .onboarding-tour-stats > div {
+          flex: 1; text-align: center;
+          border-radius: 11px; padding: 10px 6px;
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(173,198,255,0.10);
+        }
+        .onboarding-tour-stats strong { display: block; font-size: 16px; font-weight: 740; color: #f0f4ff; }
+        .onboarding-tour-stats span { font-size: 10.5px; color: rgba(194,198,214,0.6); }
+        .onboarding-tour-progress { display: flex; gap: 6px; }
+        .onboarding-tour-pip { width: 6px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14); transition: width 240ms ease, background 240ms ease; }
+        .onboarding-tour-pip-active { width: 16px; background: linear-gradient(145deg, #1a6fd4, #5ab3ff); }
         .onboarding-shell {
           width: min(780px, 100%);
           border-radius: 32px;
