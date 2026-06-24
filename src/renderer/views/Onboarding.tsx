@@ -620,7 +620,7 @@ export default function Onboarding({
                 padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
                 border: `1px solid ${trackingOptIn ? 'rgba(90,179,255,0.45)' : 'rgba(173,198,255,0.18)'}`,
                 background: trackingOptIn ? 'rgba(90,179,255,0.10)' : 'rgba(255,255,255,0.02)',
-                color: 'inherit',
+                color: '#c2c6d6',
               }}
             >
               <span style={{
@@ -630,8 +630,8 @@ export default function Onboarding({
                 display: 'grid', placeItems: 'center', color: '#07090f', fontSize: 12, fontWeight: 900,
               }}>{trackingOptIn ? '✓' : ''}</span>
               <span style={{ display: 'grid', gap: 2 }}>
-                <span style={{ fontSize: 13.5, fontWeight: 650 }}>Keep private apps and sites out of Daylens</span>
-                <span style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
+                <span style={{ fontSize: 13.5, fontWeight: 650, color: '#f0f4ff' }}>Keep private apps and sites out of Daylens</span>
+                <span style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5, color: '#c2c6d6' }}>
                   Optional. Lets you exclude specific apps and websites and skip incognito windows. You can add them now or later in Settings. Off skips nothing.
                 </span>
               </span>
@@ -639,11 +639,12 @@ export default function Onboarding({
             <div style={{
               display: 'grid', gap: 6, textAlign: 'left',
               padding: '12px 14px', borderRadius: 12,
-              border: '1px solid rgba(173,198,255,0.18)',
+              border: '1px solid rgba(173, 198, 255, 0.18)',
               background: 'rgba(255,255,255,0.02)',
+              color: '#c2c6d6',
             }}>
-              <span style={{ fontSize: 13.5, fontWeight: 650 }}>Give your AI everything Daylens sees</span>
-              <span style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.5 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 650, color: '#f0f4ff' }}>Give your AI everything Daylens sees</span>
+              <span style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5, color: '#c2c6d6' }}>
                 TARS turns what Daylens captures into context for Claude or ChatGPT, so your AI preps
                 from what you actually did — not your memory. Optional, in your terminal:
               </span>
@@ -651,6 +652,7 @@ export default function Onboarding({
                 fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                 padding: '6px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.35)',
                 border: '1px solid rgba(173,198,255,0.14)', userSelect: 'all', justifySelf: 'start',
+                color: '#adc6ff',
               }}>npx tars-chief-of-staff</code>
             </div>
             <div className="onboarding-actions">
@@ -687,11 +689,11 @@ export default function Onboarding({
           border: 1px solid rgba(173, 198, 255, 0.18);
           background: linear-gradient(180deg, rgba(12, 18, 27, 0.92), rgba(8, 12, 18, 0.92));
           box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
-          padding: 28px 32px 26px;
+          padding: 24px 32px 20px;
           -webkit-app-region: no-drag;
           backdrop-filter: blur(22px);
           display: grid;
-          gap: 22px;
+          gap: 16px;
         }
         .onboarding-dots {
           display: flex;
@@ -714,7 +716,7 @@ export default function Onboarding({
         }
         .onboarding-screen {
           display: grid;
-          gap: 22px;
+          gap: 16px;
         }
         .onboarding-eyebrow {
           font-size: 10.5px;
@@ -1067,11 +1069,15 @@ export default function Onboarding({
         .onboarding-status-waiting .onboarding-status-dot { background: #f5c662; animation: onboardingPulse 1.6s ease-out infinite; }
         .onboarding-status-label { font-weight: 600; color: #f0f4ff; }
         .onboarding-status-note { color: rgba(194,198,214,0.5); }
-        .onboarding-summary-grid,
-        .onboarding-goals-grid {
+        .onboarding-summary-grid {
           display: grid;
           grid-template-columns: minmax(0, 1fr);
           gap: 12px;
+        }
+        .onboarding-goals-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
         }
         .onboarding-name-field {
           display: grid;
@@ -1089,6 +1095,9 @@ export default function Onboarding({
           letter-spacing: 0;
           text-transform: none;
           outline: none;
+        }
+        .onboarding-name-field input::placeholder {
+          color: rgba(194, 198, 214, 0.45);
         }
         .onboarding-name-field input:focus {
           border-color: rgba(90, 179, 255, 0.58);
@@ -1114,13 +1123,13 @@ export default function Onboarding({
           color: #f0f4ff;
         }
         .onboarding-goal-chip {
-          min-height: 48px;
-          padding: 13px 17px;
+          min-height: 40px;
+          padding: 10px 14px;
           border-radius: 10px;
           border: 1px solid rgba(255,255,255,0.08);
           background: rgba(255, 255, 255, 0.025);
           color: #f0f4ff;
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 500;
           text-align: left;
           cursor: pointer;

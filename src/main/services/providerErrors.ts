@@ -56,6 +56,15 @@ export function classifyProviderError(error: unknown): AIProviderErrorMeta {
     return { code: 'credit_exhausted' }
   }
 
+  // Custom spend/usage limit walls (e.g. Anthropic's "reached your specified API usage limits")
+  if (
+    haystack.includes('usage limits')
+    || haystack.includes('usage limit')
+    || haystack.includes('regain access on')
+  ) {
+    return { code: 'quota_exhausted' }
+  }
+
   if (isRateLimitError(error)) {
     const longRetry = retryAfterSeconds != null && retryAfterSeconds > 120
     const hardQuota = HARD_QUOTA_RE.test(haystack) && !PER_MINUTE_RE.test(haystack)
