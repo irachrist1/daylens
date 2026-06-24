@@ -51,14 +51,6 @@ const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
 const STAGE_FLOW: OnboardingStage[] = ['welcome', 'proof', 'tour', 'personalize', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
-// The guided tour: every surface, as few words as possible, one interaction each.
-const TOUR_CARDS = [
-  { key: 'timeline', title: 'Your day becomes blocks', body: 'Tap a block — the apps you used are evidence inside it, not separate rows.' },
-  { key: 'ask', title: 'Just ask', body: 'Answers come from your real activity, never guesses. Try one.' },
-  { key: 'briefs', title: 'Briefs & wraps', body: 'A brief to start the day, a wrap to close it, Spotify-style recaps for the week.' },
-  { key: 'yours', title: 'Yours, and private', body: 'Rename anything and it sticks. Nothing leaves your machine.' },
-] as const
-
 interface ProofSnapshot {
   liveSession: LiveSession | null
   timeline: DayTimelinePayload | null
@@ -125,113 +117,24 @@ function SettingsPreview() {
 }
 
 
-// ── Interactive tour: show, don't tell ──────────────────────────────────────
+// ── The tour is a story: one real day, told back to you ─────────────────────
+// Every beat auto-animates on entry; advancing is always "forward" (tap the
+// scene or Continue), so a tap never means anything but "next".
 
-// Card 1 — tap a block to reveal the apps that are evidence *inside* it.
-function TourTimeline() {
-  const [open, setOpen] = useState<string | null>('net')
-  const blocks = [
-    { id: 'net', label: 'Configuring the work network', time: '9:00–12:00', h: 72, tone: 'a', apps: ['Ubiquiti', 'Terminal', 'Photos'] },
-    { id: 'class', label: 'ML pipeline class', time: '1:00–3:00', h: 46, tone: 'b', apps: ['Zoom', 'Notion'] },
-    { id: 'ship', label: 'Shipping the timeline rework', time: '4:00–7:00', h: 60, tone: 'c', apps: ['Cursor', 'Claude', 'Ghostty'] },
-  ]
-  return (
-    <div className="onboarding-tour-visual">
-      <div className="onboarding-tour-timeline">
-        {blocks.map((block, index) => {
-          const isOpen = open === block.id
-          return (
-            <button
-              key={block.id}
-              type="button"
-              className={`onboarding-tour-block onboarding-tour-block-btn${isOpen ? ' is-open' : ''}`}
-              data-tone={block.tone}
-              style={{ minHeight: isOpen ? 0 : block.h, animationDelay: `${index * 0.09}s` }}
-              onClick={() => setOpen(isOpen ? null : block.id)}
-            >
-              <span className="onboarding-tour-block-row">
-                <span className="onboarding-tour-block-label">{block.label}</span>
-                <span className="onboarding-tour-block-time">{block.time}</span>
-              </span>
-              {isOpen && (
-                <span className="onboarding-tour-evidence">
-                  {block.apps.map((app) => <span key={app} className="onboarding-tour-evi-chip">{app}</span>)}
-                  <span className="onboarding-tour-evi-note">evidence inside · not separate blocks</span>
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-      <div className="onboarding-tour-hint">Tap a block ↑</div>
-    </div>
-  )
-}
+const STORY_BEATS = [
+  { scene: 'intro', pos: 0, time: '', line: 'Here is one day — the way Daylens tells it back to you.' },
+  { scene: 'brief', pos: 0.08, time: '8:14 am', line: 'You open your laptop. Your brief is already written.' },
+  { scene: 'apps', pos: 0.22, time: '9:00 am', line: 'You move between Ubiquiti, Terminal, and Photos.' },
+  { scene: 'merge', pos: 0.34, time: '11:50 am', line: 'Daylens saw one thing, not three.' },
+  { scene: 'detour', pos: 0.46, time: '1:42 pm', line: 'A two-minute peek at X — folded in. Never flagged, never judged.' },
+  { scene: 'second', pos: 0.60, time: '4:00 pm', line: 'After lunch you ship the timeline rework. Your day: two clean blocks.' },
+  { scene: 'ask', pos: 0.78, time: '9:00 pm', line: 'You wonder — what did I actually get done today?' },
+  { scene: 'wrap', pos: 0.86, time: '9:30 pm', line: 'An evening wrap, written fresh for the day you had.' },
+  { scene: 'week', pos: 0.95, time: 'Friday', line: 'And your week — Spotify-style. Months and years, too.' },
+  { scene: 'yours', pos: 1, time: '', line: 'Wrong name? Rename it — it sticks. And none of this ever left your machine.' },
+] as const
 
-const ASK_QA = [
-  { q: 'What did I ship today?', a: 'You shipped the timeline rework and fixed the Windows capture bugs — about 5h 40m across Cursor, Claude, and Ghostty. The malaria notebook is still open from yesterday.' },
-  { q: 'Where did my time go this week?', a: 'Mostly deep work: 18h on Daylens, 6h in meetings, 3h research. Tuesday was your most focused day.' },
-  { q: 'Which video did I watch about aliens?', a: '“Why the Fermi Paradox keeps physicists up at night” on YouTube — Wednesday around 3pm, about 22 minutes.' },
-]
-
-// Card 2 — a simulated assistant: pick a question, watch the answer stream in.
-function TourAsk() {
-  const [active, setActive] = useState<number | null>(null)
-  const [phase, setPhase] = useState<'idle' | 'thinking' | 'typing' | 'done'>('idle')
-  const [typed, setTyped] = useState('')
-  const timers = useRef<number[]>([])
-  const clearTimers = () => { timers.current.forEach((id) => window.clearTimeout(id)); timers.current = [] }
-  useEffect(() => clearTimers, [])
-
-  function ask(index: number) {
-    clearTimers()
-    setActive(index)
-    setTyped('')
-    setPhase('thinking')
-    const answer = ASK_QA[index].a
-    timers.current.push(window.setTimeout(() => {
-      setPhase('typing')
-      let n = 0
-      const step = () => {
-        n += 2
-        setTyped(answer.slice(0, n))
-        if (n < answer.length) timers.current.push(window.setTimeout(step, 14))
-        else setPhase('done')
-      }
-      step()
-    }, 650))
-  }
-
-  return (
-    <div className="onboarding-tour-visual onboarding-tour-ask">
-      <div className="onboarding-tour-chatlog">
-        {active === null && <div className="onboarding-tour-ask-empty">Pick a question — Daylens answers from your real activity.</div>}
-        {active !== null && <div className="onboarding-tour-bubble onboarding-tour-bubble-q">{ASK_QA[active].q}</div>}
-        {phase === 'thinking' && (
-          <div className="onboarding-tour-bubble onboarding-tour-bubble-a onboarding-tour-thinking"><span /><span /><span /></div>
-        )}
-        {(phase === 'typing' || phase === 'done') && (
-          <div className="onboarding-tour-bubble onboarding-tour-bubble-a">
-            {typed}{phase === 'typing' && <span className="onboarding-tour-caret" />}
-          </div>
-        )}
-        {phase === 'done' && (
-          <div className="onboarding-tour-followups">
-            <span className="onboarding-tour-followup">＋ Make a table</span>
-            <span className="onboarding-tour-followup">↓ Export CSV</span>
-          </div>
-        )}
-      </div>
-      <div className="onboarding-tour-chips">
-        {ASK_QA.map((qa, index) => (
-          <button key={qa.q} type="button" className={`onboarding-tour-chip${active === index ? ' is-active' : ''}`} onClick={() => ask(index)}>
-            {qa.q}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
+const STORY_ANSWER = 'You set up the work network this morning, then shipped the timeline rework after lunch — about 7 hours of focused work. The malaria notebook is still open from yesterday.'
 
 function CountUp({ to, decimals = 0, suffix = '' }: { to: number; decimals?: number; suffix?: string }) {
   const [value, setValue] = useState(0)
@@ -248,70 +151,140 @@ function CountUp({ to, decimals = 0, suffix = '' }: { to: number; decimals?: num
   return <>{value.toFixed(decimals)}{suffix}</>
 }
 
-// Card 3 — switch between the morning brief, the evening wrap, and the weekly wrap.
-function TourBriefs({ name }: { name: string }) {
-  const [view, setView] = useState<'morning' | 'evening' | 'weekly'>('morning')
-  const tabs: Array<{ id: 'morning' | 'evening' | 'weekly'; label: string }> = [
-    { id: 'morning', label: 'Morning' },
-    { id: 'evening', label: 'Evening' },
-    { id: 'weekly', label: 'Weekly' },
-  ]
+function StoryBlock({ label, time, tone }: { label: string; time: string; tone: string }) {
   return (
-    <div className="onboarding-tour-visual">
-      <div className="onboarding-seg">
-        {tabs.map((tab) => (
-          <button key={tab.id} type="button" className={`onboarding-seg-btn${view === tab.id ? ' on' : ''}`} onClick={() => setView(tab.id)}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      {view === 'morning' && (
-        <div className="onboarding-tour-notif" key="morning">
-          <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · morning brief</div>
-          <div className="onboarding-tour-notif-body">
-            Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up where you left off?
-          </div>
-        </div>
-      )}
-      {view === 'evening' && (
-        <div className="onboarding-tour-notif" key="evening">
-          <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · evening wrap</div>
-          <div className="onboarding-tour-notif-body">
-            Five blocks today, 6h 12m of deep work. You closed out the timeline rework — solid day. Rest well.
-          </div>
-        </div>
-      )}
-      {view === 'weekly' && (
-        <div className="onboarding-tour-stats" key="weekly">
-          <div><strong><CountUp to={18} suffix="h" /></strong><span>deep work</span></div>
-          <div><strong><CountUp to={23} /></strong><span>sessions</span></div>
-          <div><strong><CountUp to={4} /></strong><span>projects</span></div>
-        </div>
-      )}
-      <div className="onboarding-tour-hint">Monthly and yearly wraps too — Spotify-style.</div>
+    <div className="onboarding-tour-block onboarding-tour-block-static" data-tone={tone} style={{ minHeight: 52 }}>
+      <span className="onboarding-tour-block-row">
+        <span className="onboarding-tour-block-label">{label}</span>
+        <span className="onboarding-tour-block-time">{time}</span>
+      </span>
     </div>
   )
 }
 
-// Card 4 — your corrections stick; nothing leaves the machine.
-function TourYours() {
-  const [renamed, setRenamed] = useState(false)
+function TourStory({ index, name }: { index: number; name: string }) {
+  const beat = STORY_BEATS[Math.min(index, STORY_BEATS.length - 1)]
+  const [typed, setTyped] = useState('')
+  const timers = useRef<number[]>([])
+
+  useEffect(() => {
+    timers.current.forEach((id) => window.clearTimeout(id))
+    timers.current = []
+    setTyped('')
+    if (beat.scene !== 'ask') return
+    let n = 0
+    const step = () => {
+      n += 2
+      setTyped(STORY_ANSWER.slice(0, n))
+      if (n < STORY_ANSWER.length) timers.current.push(window.setTimeout(step, 16))
+    }
+    timers.current.push(window.setTimeout(step, 700))
+    return () => {
+      timers.current.forEach((id) => window.clearTimeout(id))
+      timers.current = []
+    }
+  }, [beat.scene])
+
+  function scene() {
+    switch (beat.scene) {
+      case 'brief':
+        return (
+          <div className="onboarding-tour-notif">
+            <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · morning brief</div>
+            <div className="onboarding-tour-notif-body">Good morning{name ? `, ${name}` : ''}. The malaria notebook was still open yesterday — pick it up?</div>
+          </div>
+        )
+      case 'apps':
+        return (
+          <div className="onboarding-story-apps">
+            {['Ubiquiti', 'Terminal', 'Photos'].map((app, i) => (
+              <span key={app} className="onboarding-story-appchip" style={{ animationDelay: `${i * 0.12}s` }}>{app}</span>
+            ))}
+          </div>
+        )
+      case 'merge':
+        return (
+          <div className="onboarding-story-stack">
+            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
+            <div className="onboarding-story-cap">3 apps · 1 block</div>
+          </div>
+        )
+      case 'detour':
+        return (
+          <div className="onboarding-story-stack">
+            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
+            <div className="onboarding-story-cap"><span className="onboarding-story-pill">X.com · 2 min</span> absorbed — not a new block</div>
+          </div>
+        )
+      case 'second':
+        return (
+          <div className="onboarding-story-stack">
+            <StoryBlock label="Configuring the work network" time="9:00–12:00" tone="a" />
+            <StoryBlock label="Shipping the timeline rework" time="4:00–7:00" tone="c" />
+          </div>
+        )
+      case 'ask':
+        return (
+          <div className="onboarding-tour-chatlog">
+            <div className="onboarding-tour-bubble onboarding-tour-bubble-q">What did I get done today?</div>
+            {typed === ''
+              ? <div className="onboarding-tour-bubble onboarding-tour-bubble-a onboarding-tour-thinking"><span /><span /><span /></div>
+              : <div className="onboarding-tour-bubble onboarding-tour-bubble-a">{typed}{typed.length < STORY_ANSWER.length && <span className="onboarding-tour-caret" />}</div>}
+          </div>
+        )
+      case 'wrap':
+        return (
+          <div className="onboarding-tour-notif">
+            <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · evening wrap</div>
+            <div className="onboarding-tour-notif-body">Two clean blocks, 6h 12m of deep work. You closed out the timeline rework — solid day.</div>
+          </div>
+        )
+      case 'week':
+        return (
+          <div className="onboarding-tour-stats">
+            <div><strong><CountUp to={18} suffix="h" /></strong><span>deep work</span></div>
+            <div><strong><CountUp to={23} /></strong><span>sessions</span></div>
+            <div><strong><CountUp to={4} /></strong><span>projects</span></div>
+          </div>
+        )
+      case 'yours':
+        return (
+          <div className="onboarding-story-stack">
+            <div className="onboarding-tour-block onboarding-tour-block-static" data-tone="a" style={{ minHeight: 52 }}>
+              <span className="onboarding-tour-block-row">
+                <span className="onboarding-tour-block-label onboarding-tour-relabel">Q3 board deck</span>
+                <span className="onboarding-tour-saved">edited by you</span>
+              </span>
+            </div>
+            <div className="onboarding-tour-privacy">Stays on this device · no scores · no judgment</div>
+          </div>
+        )
+      case 'intro':
+      default:
+        return (
+          <div className="onboarding-story-intro">
+            {[0.5, 0.3, 0.42].map((opacity, i) => (
+              <div key={i} className="onboarding-story-ghost" style={{ opacity, animationDelay: `${i * 0.12}s` }} />
+            ))}
+          </div>
+        )
+    }
+  }
+
   return (
-    <div className="onboarding-tour-visual">
-      <div className="onboarding-tour-block onboarding-tour-block-static" data-tone="a" style={{ minHeight: 54 }}>
-        <span className="onboarding-tour-block-row">
-          <span className={`onboarding-tour-block-label${renamed ? ' onboarding-tour-relabel' : ''}`}>
-            {renamed ? 'Q3 board deck' : 'Untitled work · 2:00–3:10'}
-          </span>
-          {renamed
-            ? <span className="onboarding-tour-saved">✓ saved</span>
-            : <button type="button" className="onboarding-tour-pencil" onClick={() => setRenamed(true)}>Rename</button>}
-        </span>
+    <div className="onboarding-story">
+      <div className="onboarding-daybar" aria-hidden="true">
+        <div className="onboarding-daybar-track">
+          <div className="onboarding-daybar-fill" style={{ width: `${beat.pos * 100}%` }} />
+          <div className="onboarding-daybar-marker" style={{ left: `${beat.pos * 100}%` }} />
+        </div>
+        <div className="onboarding-daybar-ends"><span>morning</span><span>night</span></div>
       </div>
-      <div className="onboarding-tour-hint">
-        {renamed ? 'Your edits always win — across every rebuild.' : 'Rename, merge, or hide anything — tap Rename.'}
+      <div className="onboarding-story-scene" key={beat.scene}>{scene()}</div>
+      <div className="onboarding-story-caption">
+        {beat.time && <span className="onboarding-story-time">{beat.time}</span>}
+        <span className="onboarding-story-line">{beat.line}</span>
       </div>
-      <div className="onboarding-tour-privacy">Private by default · stays on this device · no scores</div>
     </div>
   )
 }
@@ -653,7 +626,7 @@ export default function Onboarding({
   }
 
   function advanceTour() {
-    if (tourIndex < TOUR_CARDS.length - 1) {
+    if (tourIndex < STORY_BEATS.length - 1) {
       setTourIndex((index) => index + 1)
       return
     }
@@ -876,24 +849,17 @@ export default function Onboarding({
         )}
 
         {stage === 'tour' && (() => {
-          const card = TOUR_CARDS[Math.min(tourIndex, TOUR_CARDS.length - 1)]
-          const isLast = tourIndex >= TOUR_CARDS.length - 1
+          const isLast = tourIndex >= STORY_BEATS.length - 1
           return (
             <div className="onboarding-screen">
-              <StageHeading title={card.title} body={card.body} />
-              {card.key === 'timeline' && <TourTimeline />}
-              {card.key === 'ask' && <TourAsk />}
-              {card.key === 'briefs' && <TourBriefs name={nameDraft.trim()} />}
-              {card.key === 'yours' && <TourYours />}
-              <div className="onboarding-tour-progress" aria-hidden="true">
-                {TOUR_CARDS.map((tourCard, index) => (
-                  <span key={tourCard.key} className={`onboarding-tour-pip${index === tourIndex ? ' onboarding-tour-pip-active' : ''}`} />
-                ))}
+              <div className="onboarding-story-tap" onClick={() => advanceTour()}>
+                <TourStory index={tourIndex} name={nameDraft.trim()} />
               </div>
               <div className="onboarding-actions">
                 <button className="onboarding-btn-primary" onClick={() => advanceTour()}>
-                  {isLast ? 'Make it mine' : 'Next'}
+                  {isLast ? 'Make it mine' : tourIndex === 0 ? 'Begin' : 'Continue'}
                 </button>
+                <span className="onboarding-story-taphint">tap anywhere to continue</span>
               </div>
             </div>
           )
@@ -1229,6 +1195,28 @@ export default function Onboarding({
         .onboarding-tour-notif, .onboarding-tour-stats { animation: onboardingFadeUp 300ms ease both; }
         @keyframes onboardingFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes onboardingCaret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+        /* Story tour */
+        .onboarding-story-tap { cursor: pointer; -webkit-app-region: no-drag; }
+        .onboarding-story { display: grid; gap: 18px; }
+        .onboarding-daybar { display: grid; gap: 6px; }
+        .onboarding-daybar-track { position: relative; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08); }
+        .onboarding-daybar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: linear-gradient(90deg, #f5c662, #5ab3ff 60%, #8a7cff); transition: width 420ms cubic-bezier(.2,.8,.2,1); }
+        .onboarding-daybar-marker { position: absolute; top: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #eaf1ff; transform: translateY(-50%); box-shadow: 0 0 0 4px rgba(90,179,255,0.25); transition: left 420ms cubic-bezier(.2,.8,.2,1); }
+        .onboarding-daybar-ends { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(194,198,214,0.45); }
+        .onboarding-story-scene { min-height: 150px; display: flex; flex-direction: column; justify-content: center; gap: 10px; animation: onboardingFadeUp 360ms ease both; }
+        .onboarding-story-caption { display: grid; gap: 4px; min-height: 52px; }
+        .onboarding-story-time { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #7fb6ff; }
+        .onboarding-story-line { margin: 0; font-size: 17px; line-height: 1.5; color: #f0f4ff; max-width: 46ch; }
+        .onboarding-story-taphint { font-size: 11px; color: rgba(194,198,214,0.45); }
+        .onboarding-story-stack { display: grid; gap: 8px; }
+        .onboarding-story-cap { font-size: 11.5px; color: rgba(194,198,214,0.7); display: flex; align-items: center; gap: 7px; }
+        .onboarding-story-pill { font-size: 11px; font-weight: 600; color: #eaf1ff; padding: 2px 9px; border-radius: 999px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.14); }
+        .onboarding-story-apps { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 18px 0; }
+        .onboarding-story-appchip { font-size: 13px; font-weight: 600; color: #eaf1ff; padding: 10px 16px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(173,198,255,0.18); animation: onboardingChipFloat 420ms cubic-bezier(.2,.8,.2,1) both; }
+        .onboarding-story-intro { display: grid; gap: 8px; padding: 6px 0; }
+        .onboarding-story-ghost { height: 26px; border-radius: 9px; background: rgba(255,255,255,0.05); animation: onboardingFadeUp 500ms ease both; }
+        @keyframes onboardingChipFloat { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .onboarding-shell {
           width: min(780px, 100%);
           border-radius: 32px;
