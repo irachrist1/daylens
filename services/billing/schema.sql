@@ -40,8 +40,27 @@ CREATE TABLE IF NOT EXISTS billing_payment_events (
   provider TEXT NOT NULL,
   event_id TEXT NOT NULL,
   received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  last_error TEXT,
   PRIMARY KEY (provider, event_id)
 );
+
+CREATE TABLE IF NOT EXISTS billing_payment_intents (
+  provider TEXT NOT NULL,
+  tx_ref TEXT NOT NULL,
+  account_id UUID NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  provider_reference TEXT,
+  checkout_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (provider, tx_ref)
+);
+
+CREATE INDEX IF NOT EXISTS billing_payment_intents_account_time
+  ON billing_payment_intents (account_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS billing_bootstrap_attempts (
   ip_hash TEXT NOT NULL,

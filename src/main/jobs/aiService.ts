@@ -63,8 +63,9 @@ import {
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { getDb } from '../services/database'
-import { workMemoryPromptBlock, getWorkMemoryProfile, applyMemoryWriteOps, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
+import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
+import { buildMemoryProposal, buildRenameBlockProposal } from '../ai/actions'
 import {
   createArtifact,
   createThread,
@@ -85,8 +86,10 @@ import type {
   AIChatStreamEvent,
   AIMessageArtifact,
   AIMessageAction,
+  AIActionWidget,
   AIAnswerKind,
   AIAnswerTransformKind,
+  AIInvocationSource,
   AIChatTurnResult,
   AIConversationDateRange,
   AIConversationSourceKind,
@@ -163,6 +166,7 @@ interface AnswerEnvelope {
   conversationState: AIConversationState | null
   suggestedFollowUps: FollowUpSuggestion[]
   actions?: AIMessageAction[]
+  actionWidgets?: AIActionWidget[]
   artifacts?: AIMessageArtifact[]
 }
 
@@ -402,12 +406,12 @@ function maybeMemoryProposalLine(queries: ResolverQuery[], contextKey: string): 
   return `By the way — ${noticed} Want me to remember that? Just say "remember that".`
 }
 
-// The conversation write path for memory (memory.md §2.1). When the user tells
-// Daylens to remember/forget/correct something, we extract the change, write it
-// to memory, and confirm in one line — the AI taking an action, not answering a
-// data question. Returns null when the message isn't a memory instruction or
-// the extractor found nothing durable to change, so the normal answer path runs
-// untouched.
+// The conversation write path for memory (memory.md §2.1, ai-actions.md). When
+// the user tells Daylens to remember/forget/correct something, we extract the
+// change and PREVIEW it as a memory card — nothing is written until they
+// confirm (invariant 1: never a silent mutation). Returns null when the message
+// isn't a memory instruction or the extractor found nothing durable to change,
+// so the normal answer path runs untouched.
 async function maybeHandleMemoryInstruction(
   message: string,
   runner: Parameters<typeof planQuestion>[1],
@@ -418,11 +422,20 @@ async function maybeHandleMemoryInstruction(
   const currentFacts = getWorkMemoryProfile(db).facts.map((fact) => ({ id: fact.id, text: fact.text }))
   const ops = await extractMemoryOps({ message, currentFacts, runner, prior })
   if (ops.length === 0) return null
-  const result = applyMemoryWriteOps(db, ops, 'chat')
-  if (!result.summary.trim()) return null
-  // Lead with a plain confirmation and point at where to manage it — never a
-  // hidden write (invariant 2 / 7).
-  const assistantText = `${result.summary} You can see and edit this any time in Settings → Memory.`
+  const proposal = buildMemoryProposal(ops, currentFacts)
+  if (!proposal) return null
+
+  const opKinds = new Set(proposal.ops.map((op) => op.op))
+  const assistantText = opKinds.size === 1 && opKinds.has('add')
+    ? (proposal.ops.length === 1
+      ? 'Want me to remember this? Confirm and it goes into your memory.'
+      : 'Want me to remember these? Confirm and they go into your memory.')
+    : opKinds.size === 1 && opKinds.has('delete')
+      ? "Here's what I'd forget — confirm and it's gone for good."
+      : opKinds.size === 1 && opKinds.has('update')
+        ? "Here's the correction — confirm and I'll update your memory."
+        : "Here's the memory change — confirm and I'll apply it."
+
   return {
     assistantText,
     answerKind: 'freeform_chat',
@@ -430,6 +443,25 @@ async function maybeHandleMemoryInstruction(
     resolvedTemporalContext: null,
     conversationState: null,
     suggestedFollowUps: [],
+    actionWidgets: [proposal],
+  }
+}
+
+// The block-rename action (ai-actions.md §5). "Rename my afternoon block to
+// networking" → resolve the target block from the real day and PREVIEW the
+// rename in a block card; the write runs only on confirm. Returns null when it
+// can't pin a single block to a clear new name, so the normal path answers.
+function maybeHandleRenameInstruction(message: string, contextDate: string | null): AnswerEnvelope | null {
+  const proposal = buildRenameBlockProposal(getDb(), message, contextDate)
+  if (!proposal) return null
+  return {
+    assistantText: "Here's the rename — confirm and it sticks across your timeline.",
+    answerKind: 'deterministic_stats',
+    sourceKind: 'deterministic',
+    resolvedTemporalContext: null,
+    conversationState: null,
+    suggestedFollowUps: [],
+    actionWidgets: [proposal],
   }
 }
 
@@ -2016,7 +2048,7 @@ async function generateSuggestedFollowUps(
         {
           jobType: 'chat_followup_suggestions',
           screen: 'ai_chat',
-          triggerSource: 'system',
+          triggerSource: 'user',
           systemPrompt,
           userMessage: userPrompt,
           prior: [],
@@ -2073,6 +2105,7 @@ function buildAssistantMetadata(
   actions: AIMessageAction[] = [],
   artifacts: AIMessageArtifact[] = [],
   providerError = false,
+  actionWidgets: AIActionWidget[] = [],
 ): AIThreadMessageMetadata {
   return {
     answerKind,
@@ -2082,6 +2115,7 @@ function buildAssistantMetadata(
     contextSnapshot: conversationState,
     providerError,
     actions,
+    actionWidgets,
     artifacts,
   }
 }
@@ -2109,6 +2143,7 @@ async function persistChatTurn(
         envelope.actions ?? [],
         envelope.artifacts ?? [],
         envelope.answerKind === 'error',
+        envelope.actionWidgets ?? [],
       ),
     },
   )
@@ -2410,7 +2445,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
         {
           jobType: 'day_summary',
           screen: 'ai_chat',
-          triggerSource: 'system',
+          triggerSource: 'user',
           systemPrompt,
           userMessage,
         },
@@ -3005,7 +3040,7 @@ async function generateWeekReview(weekStartStr: string, force = false): Promise<
       {
         jobType: 'week_review',
         screen: 'timeline_week',
-        triggerSource: 'system',
+        triggerSource: 'user',
         systemPrompt,
         userMessage,
       },
@@ -3129,7 +3164,7 @@ async function generateAppNarrative(
       {
         jobType: 'app_narrative',
         screen: 'app_detail',
-        triggerSource: 'system',
+        triggerSource: 'user',
         systemPrompt,
         userMessage,
       },
@@ -3923,7 +3958,7 @@ export async function generateWorkBlockInsight(
   block: WorkContextBlock,
   options?: {
     jobType?: 'block_label_preview' | 'block_label_finalize' | 'block_cleanup_relabel'
-    triggerSource?: 'system' | 'background'
+    triggerSource?: AIInvocationSource
     throwOnError?: boolean
     // When the user explicitly rejects a label and asks for a new one, pass the
     // rejected text so the model is told not to repeat it. Without this the
@@ -4242,10 +4277,14 @@ function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
 }
 
 export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
-  scheduleHistoryHeuristicUpgrade(currentLocalDateString())
-
   const settings = getSettings()
   if (!settings.aiBackgroundEnrichment) return
+  // Emergency cost fuse: passive timeline reads happen on timers and week-view
+  // fan-outs. They must not spend provider tokens in production unless a dev
+  // deliberately opts into this background path.
+  if (process.env.DAYLENS_ENABLE_PASSIVE_AI !== '1') return
+
+  scheduleHistoryHeuristicUpgrade(currentLocalDateString())
   // Breaker: while rate-limited, schedule nothing and do not memoize, so the
   // next read after the cooldown retries cleanly.
   if (isBackgroundAIOnCooldown()) return
@@ -4541,6 +4580,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     return persistChatTurn(db, conversationId, userMessage, memoryEnvelope, threadId)
   }
 
+  // "rename my afternoon block to networking" — preview the rename in a block
+  // card; it commits only on confirm (ai-actions.md §5).
+  const renameEnvelope = maybeHandleRenameInstruction(effectiveUserMessage, null)
+  if (renameEnvelope) {
+    await stream.streamText(renameEnvelope.assistantText)
+    return persistChatTurn(db, conversationId, userMessage, renameEnvelope, threadId)
+  }
+
   // "in word please?" / "pdf version" / "as markdown" — re-export the answer we
   // just gave into the file the user wants, instead of refusing.
   const reExportEnvelope = await maybeReExportInFormat({
@@ -4732,6 +4779,22 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     ? `\n\nThe user set these additional instructions for this chat. Follow them unless they conflict with grounding or honesty:\n${threadSettings.instructions}`
     : ''
 
+  // Memory as context for the conversational answer (memory.md §4): general
+  // memory always, plus the scoped memory of any client the question names
+  // (DEV-108). Context only — it colors how Daylens reads the real evidence, the
+  // hours still come from tracked activity. This is what makes editing memory
+  // visibly change the next answer (invariant 6).
+  const memoryContextBlock = (() => {
+    try {
+      const block = chatMemoryPromptBlock(db, effectiveUserMessage)
+      return block ? `\n\n${block}` : ''
+    } catch (error) {
+      console.warn('[ai:chat] memory context failed:', error)
+      return ''
+    }
+  })()
+  const extraSystem = `${threadInstructionBlock}${memoryContextBlock}` || undefined
+
   // ── Router miss → plan → resolve → phrase (ADR 0002). The model may select
   //    and parameterize resolvers (the planner) and phrase their output, but it
   //    never executes a resolver, never loops on tools, and never decides
@@ -4765,7 +4828,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         message: effectiveUserMessage,
         runner: sendWithProvider,
         prior,
-        extraSystem: threadInstructionBlock || undefined,
+        extraSystem,
         onDelta: (delta) => stream.push(delta),
       })
     } else {
@@ -4775,7 +4838,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         facts,
         runner: sendWithProvider,
         prior,
-        extraSystem: threadInstructionBlock || undefined,
+        extraSystem,
         onDelta: (delta) => stream.push(delta),
       })).trim()
       // Offer to remember one noticed pattern (memory.md §2.1) — once per

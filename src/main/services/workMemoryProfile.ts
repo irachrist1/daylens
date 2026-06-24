@@ -9,7 +9,7 @@
 // confidence theater: a fact is stated plainly or left out.
 import crypto from 'node:crypto'
 import type Database from 'better-sqlite3'
-import type { AppCategory } from '@shared/types'
+import type { AppCategory, WorkMemoryCategory } from '@shared/types'
 import { tableExists } from './database'
 
 type WorkMemoryFactOrigin = 'drafted' | 'user'
@@ -23,6 +23,32 @@ interface WorkMemoryFact {
   text: string
   origin: WorkMemoryFactOrigin
   source: WorkMemoryFactSource
+  category: WorkMemoryCategory
+}
+
+// Group a fact into a readable section for the Manage-memory view (memory.md §3,
+// the Claude "Work context / Personal context" split). Deterministic and
+// derived — never stored, never a durability signal. Grouping is purely how the
+// view reads; getting it slightly wrong only moves a sentence to another heading.
+const PREFERENCE_RE = /\b(prefer|prefers|like|likes|favou?rite|enjoys?|rather|dark mode|light mode|concise|simple|straight-to-the-point|tone|style)\b/i
+const WORK_RE = /\b(work|works|working|workplace|job|role|company|employer|client|clients|project|projects|team|colleague|colleagues|office|deadline|manager|report to|engineer|operations|consult|account|business|professional)\b/i
+
+export function classifyWorkMemoryFact(text: string, topicKey?: string | null): WorkMemoryCategory {
+  // Drafted facts carry a stable topic_key — categorize by that, not keywords.
+  if (topicKey === 'top-apps') return 'work'
+  if (topicKey === 'background') return 'personal'
+  if (PREFERENCE_RE.test(text)) return 'preferences'
+  if (WORK_RE.test(text)) return 'work'
+  return 'personal'
+}
+
+// Memory scopes (memory.md §2.2 / invariant 3). General memory is always in the
+// prompt; a client is a NAMED scope (`client:<id>`) pulled in only when the
+// question is about that client. The `scope` column already exists (DEV-107
+// schema) — DEV-108 fills the client side, no new column needed.
+const GENERAL_SCOPE = 'general'
+export function clientScope(clientId: string): string {
+  return `client:${clientId}`
 }
 
 export interface WorkMemoryProfile {
@@ -103,23 +129,42 @@ function hasColumn(db: Database.Database, table: string, column: string): boolea
   return rows.some((row) => row.name === column)
 }
 
-export function getWorkMemoryProfile(db: Database.Database): WorkMemoryProfile {
-  if (!ready(db)) return { facts: [] }
+// Read active facts for one scope. General memory (the default) is everything
+// without a client scope; a client scope reads only that client's facts. Older
+// DBs without the `scope` column only have general memory, so a client read
+// returns nothing there.
+function readFactsForScope(db: Database.Database, scope: string): WorkMemoryFact[] {
   const sourceCol = hasColumn(db, 'work_memory_facts', 'source') ? 'source' : `NULL AS source`
+  const hasScope = hasColumn(db, 'work_memory_facts', 'scope')
+  if (!hasScope && scope !== GENERAL_SCOPE) return []
+  const scopeClause = hasScope ? `AND scope = ?` : ''
+  const params = hasScope ? [scope] : []
   const rows = db.prepare(`
     SELECT id, fact_text, origin, ${sourceCol}, status, topic_key, sort_order
     FROM work_memory_facts
-    WHERE status = 'active'
+    WHERE status = 'active' ${scopeClause}
     ORDER BY sort_order ASC, created_at ASC
-  `).all() as FactRow[]
-  return {
-    facts: rows.map((row) => ({
-      id: row.id,
-      text: row.fact_text,
-      origin: row.origin,
-      source: rowSource(row),
-    })),
-  }
+  `).all(...params) as FactRow[]
+  return rows.map((row) => ({
+    id: row.id,
+    text: row.fact_text,
+    origin: row.origin,
+    source: rowSource(row),
+    category: classifyWorkMemoryFact(row.fact_text, row.topic_key),
+  }))
+}
+
+export function getWorkMemoryProfile(db: Database.Database): WorkMemoryProfile {
+  if (!ready(db)) return { facts: [] }
+  return { facts: readFactsForScope(db, GENERAL_SCOPE) }
+}
+
+// One client's scoped memory — only pulled in when the question is about that
+// client (memory.md §2.2). Editing/forgetting works by fact id, so the general
+// updateWorkMemoryFact / forgetWorkMemoryFact handle client facts too.
+export function getClientMemory(db: Database.Database, clientId: string): WorkMemoryFact[] {
+  if (!ready(db) || !clientId) return []
+  return readFactsForScope(db, clientScope(clientId))
 }
 
 // Hand-editing a fact makes it a user correction — origin flips to 'user' so a
@@ -140,6 +185,19 @@ export function addWorkMemoryFact(db: Database.Database, text: string): WorkMemo
   applyAdd(db, trimmed, 'hand')
   recordAudit(db, 'remembered', trimmed, 'hand')
   return getWorkMemoryProfile(db)
+}
+
+// Add a fact by hand to one client's scoped memory (memory.md §2.2). Edits and
+// deletes still go through updateWorkMemoryFact / forgetWorkMemoryFact (by id),
+// so the durability rules are identical to general memory.
+export function addClientMemoryFact(db: Database.Database, clientId: string, text: string): WorkMemoryFact[] {
+  if (!ready(db) || !clientId) return getClientMemory(db, clientId)
+  const trimmed = text.trim()
+  if (!trimmed) return getClientMemory(db, clientId)
+  const scope = clientScope(clientId)
+  applyAdd(db, trimmed, 'hand', scope)
+  recordAudit(db, 'remembered', trimmed, 'hand', scope)
+  return getClientMemory(db, clientId)
 }
 
 // Forgetting a fact that came from a drafted topic tombstones that topic so a
@@ -170,14 +228,14 @@ function hasSourceColumn(db: Database.Database): boolean {
   return hasColumn(db, 'work_memory_facts', 'source')
 }
 
-function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand'): string {
+function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', scope: string = GENERAL_SCOPE): string {
   const id = newId()
   const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
   if (hasSourceColumn(db)) {
     db.prepare(`
       INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, source, scope, sort_order, created_at, updated_at)
-      VALUES (?, ?, 'user', 'active', NULL, ?, 'general', ?, ?, ?)
-    `).run(id, text, source, (max.m ?? 0) + 1, now(), now())
+      VALUES (?, ?, 'user', 'active', NULL, ?, ?, ?, ?, ?)
+    `).run(id, text, source, scope, (max.m ?? 0) + 1, now(), now())
   } else {
     db.prepare(`
       INSERT INTO work_memory_facts (id, fact_text, origin, status, topic_key, sort_order, created_at, updated_at)
@@ -287,12 +345,13 @@ function recordAudit(
   action: MemoryAuditEntry['action'],
   text: string,
   source: 'chat' | 'hand',
+  scope: string = GENERAL_SCOPE,
 ): void {
   if (!tableExists(db, 'memory_audit')) return
   db.prepare(`
     INSERT INTO memory_audit (id, action, fact_text, source, scope, created_at)
-    VALUES (?, ?, ?, ?, 'general', ?)
-  `).run(`mau_${crypto.randomBytes(8).toString('hex')}`, action, text.slice(0, 280), source, now())
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(`mau_${crypto.randomBytes(8).toString('hex')}`, action, text.slice(0, 280), source, scope, now())
 }
 
 export function getMemoryAudit(db: Database.Database, limit = 12): MemoryAuditEntry[] {
@@ -483,4 +542,101 @@ export function workMemoryPromptBlock(db: Database.Database): string {
     'What Daylens knows about this user (context only — never invent activity beyond the real evidence):',
     ...facts.map((fact) => `- ${fact.text}`),
   ].join('\n')
+}
+
+// One client's scoped memory as a prompt block — the archival tier, pulled in
+// only when the question is about that client (memory.md §2.2 / invariant 4).
+// Context only: it colors how Daylens reads that client's tracked activity, the
+// hours still come from the attribution evidence.
+export function clientMemoryPromptBlock(db: Database.Database, clientId: string, clientName: string): string {
+  const facts = getClientMemory(db, clientId)
+  if (facts.length === 0) return ''
+  return [
+    `What Daylens knows about ${clientName} (context only — never invent activity beyond the real evidence):`,
+    ...facts.map((fact) => `- ${fact.text}`),
+  ].join('\n')
+}
+
+interface ScopeMatchRow {
+  client_id: string
+  client_name: string
+  alias: string
+}
+
+// If a free-form question names a known client (by name or alias), return that
+// client's scoped memory block so the chat answer reads as someone on top of the
+// account (memory.md §2.2). Returns '' when no client is mentioned or the client
+// has no memory yet. Matching is word-boundary and case-insensitive; aliases
+// under 3 characters are ignored so a stray "AB" can't pull a scope in.
+export function scopedMemoryPromptBlock(db: Database.Database, question: string): string {
+  if (!ready(db) || !question.trim()) return ''
+  if (!tableExists(db, 'clients') || !tableExists(db, 'client_aliases')) return ''
+  const lowerQ = ` ${question.toLowerCase()} `
+  const rows = db.prepare(`
+    SELECT c.id AS client_id, c.name AS client_name, ca.alias AS alias
+    FROM clients c
+    JOIN client_aliases ca ON ca.client_id = c.id
+    WHERE c.status = 'active'
+  `).all() as ScopeMatchRow[]
+
+  const seen = new Set<string>()
+  const blocks: string[] = []
+  for (const row of rows) {
+    if (seen.has(row.client_id)) continue
+    const alias = row.alias.toLowerCase().trim()
+    if (alias.length < 3) continue
+    // Word-boundary contains: the alias appears as a whole token in the question.
+    const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(alias)}(?:$|[^a-z0-9])`)
+    if (!re.test(lowerQ)) continue
+    const block = clientMemoryPromptBlock(db, row.client_id, row.client_name)
+    if (block) {
+      blocks.push(block)
+      seen.add(row.client_id)
+    }
+  }
+  return blocks.join('\n\n')
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// The whole memory context for a chat turn: general memory always, plus any
+// mentioned client's scoped memory (memory.md §4). General-only callers keep
+// using workMemoryPromptBlock.
+export function chatMemoryPromptBlock(db: Database.Database, question: string): string {
+  const general = workMemoryPromptBlock(db)
+  const scoped = scopedMemoryPromptBlock(db, question)
+  return [general, scoped].filter((part) => part.trim().length > 0).join('\n\n')
+}
+
+// The full memory picture for the Manage-memory view: general facts plus each
+// active client's scoped facts, so memory reads "organized under each client"
+// (memory.md §3).
+export interface ClientMemoryGroup {
+  clientId: string
+  clientName: string
+  color: string | null
+  facts: WorkMemoryFact[]
+}
+
+export interface ScopedMemoryProfile {
+  general: WorkMemoryFact[]
+  clients: ClientMemoryGroup[]
+}
+
+export function getScopedMemoryProfile(db: Database.Database): ScopedMemoryProfile {
+  if (!ready(db)) return { general: [], clients: [] }
+  const general = readFactsForScope(db, GENERAL_SCOPE)
+  if (!tableExists(db, 'clients')) return { general, clients: [] }
+  const clientRows = db.prepare(`
+    SELECT id, name, color FROM clients WHERE status = 'active' ORDER BY name ASC
+  `).all() as Array<{ id: string; name: string; color: string | null }>
+  const clients = clientRows.map((row) => ({
+    clientId: row.id,
+    clientName: row.name,
+    color: row.color,
+    facts: getClientMemory(db, row.id),
+  }))
+  return { general, clients }
 }

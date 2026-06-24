@@ -273,16 +273,37 @@ type WorkMemoryFactOrigin = 'drafted' | 'user'
 // DEV-107: where a fact came from, shown in the Manage-memory view. Durability
 // is keyed on origin, never source.
 type WorkMemoryFactSource = 'evidence' | 'chat' | 'hand'
+// DEV-107: which readable section a fact belongs to in the Manage-memory view
+// (memory.md §3 — "general memory in its sections"). Derived deterministically
+// from the fact, never persisted — grouping is cosmetic, never durability.
+export type WorkMemoryCategory = 'work' | 'personal' | 'preferences'
 
 export interface WorkMemoryFact {
   id: string
   text: string
   origin: WorkMemoryFactOrigin
   source: WorkMemoryFactSource
+  category: WorkMemoryCategory
 }
 
 export interface WorkMemoryProfile {
   facts: WorkMemoryFact[]
+}
+
+// DEV-108: one client's scoped memory, shown under that client in the
+// Manage-memory view (memory.md §2.2 / §3). A client is a named memory scope.
+export interface ClientMemoryGroup {
+  clientId: string
+  clientName: string
+  color: string | null
+  facts: WorkMemoryFact[]
+}
+
+// The whole memory picture for the Manage-memory view: general memory plus each
+// client's scoped memory.
+export interface ScopedMemoryProfile {
+  general: WorkMemoryFact[]
+  clients: ClientMemoryGroup[]
 }
 
 // DEV-107: one plain-language entry in the memory audit (memory.md §3).
@@ -467,6 +488,73 @@ interface AIReviewFocusAction {
 
 export type AIMessageAction = AIStartFocusAction | AIStopFocusAction | AIReviewFocusAction
 
+// ── AI action widgets (DEV-109, ai-actions.md) ──────────────────────────────
+// The AI chat can ACT, not just answer. When you tell it to change something —
+// rename a block, remember a fact, attribute an afternoon to a client — the main
+// process resolves the instruction into one of these *proposals* and the chat
+// renders a preview widget. Nothing is written until you confirm; the commit
+// then runs through the SAME manual-edit pipeline (invariants 1, 3, 5). This is
+// separate from the read-only resolvers (ADR 0002) — acting is explicit.
+
+// The model picks the surface per action: a small inline card for a one-line
+// change, the side canvas for a richer multi-item edit.
+export type AIActionSurface = 'card' | 'canvas'
+
+interface AIActionProposalBase {
+  /** Stable id within the message — keys confirm/cancel/committed state. */
+  proposalId: string
+  surface: AIActionSurface
+  /** Confirm-button label, e.g. "Rename block" / "Save to memory". */
+  confirmLabel: string
+  /** Merge / forget / archive need the stronger confirm (invariant 6). */
+  destructive?: boolean
+}
+
+// One memory change inside a memory proposal, shown as a readable preview line.
+export interface AIMemoryOpPreview {
+  op: 'add' | 'update' | 'delete'
+  /** New text for add/update; the affected fact's text for delete. */
+  text: string
+  /** Current text being replaced/removed (update/delete). */
+  previousText?: string | null
+  /** Existing fact id for update/delete. */
+  targetId?: string | null
+  /** Scope label, e.g. "Work" (general memory for now). */
+  scope?: string | null
+}
+
+export interface AIMemoryProposal extends AIActionProposalBase {
+  kind: 'memory_write'
+  ops: AIMemoryOpPreview[]
+}
+
+export interface AIRenameBlockProposal extends AIActionProposalBase {
+  kind: 'rename_block'
+  blockId: string
+  date: string
+  previousLabel: string
+  nextLabel: string
+  /** Human time range for the card header, e.g. "2:00–5:30pm". */
+  timeRange: string
+}
+
+export type AIActionWidget = AIMemoryProposal | AIRenameBlockProposal
+
+// The result of committing a proposal — drives the card's committed state and
+// the one-line confirmation / undo affordance.
+export interface AIActionCommitResult {
+  ok: boolean
+  /** Plain-language confirmation, e.g. "Renamed to \"Networking\"." */
+  summary: string
+  /** Present when the change is reversible from the card. */
+  undo?: AIActionUndo | null
+  error?: string | null
+}
+
+export type AIActionUndo =
+  | { kind: 'restore_block_label'; blockId: string; date: string; previousLabel: string; hadOverride: boolean }
+  | { kind: 'forget_memory_fact'; factId: string }
+
 type AIMessageArtifactKind = 'report' | 'table' | 'chart' | 'export'
 type AIMessageArtifactFormat = 'markdown' | 'csv' | 'html' | 'json' | 'pdf' | 'docx'
 
@@ -507,6 +595,7 @@ export interface AIThreadMessageMetadata {
   contextSnapshot?: AIConversationState | null
   providerError?: boolean
   actions?: AIMessageAction[]
+  actionWidgets?: AIActionWidget[]
   artifacts?: AIMessageArtifact[]
   rating?: AIMessageRating | null
   ratingUpdatedAt?: number | null
@@ -524,6 +613,7 @@ export interface AIThreadMessage {
   contextSnapshot?: AIConversationState | null
   providerError?: boolean
   actions?: AIMessageAction[]
+  actionWidgets?: AIActionWidget[]
   artifacts?: AIMessageArtifact[]
   rating?: AIMessageRating | null
   ratingUpdatedAt?: number | null
@@ -1227,10 +1317,14 @@ export interface BillingUsageRow {
   occurredAt: number
   type: BillingUsageType
   feature: string
+  screen?: string | null
+  triggerSource?: string | null
   provider: string | null
   model: string | null
   inputTokens: number | null
   outputTokens: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   tokens: number | null
   costUsd: number | null
   success: boolean
@@ -1243,15 +1337,60 @@ export interface BillingUsagePoint {
   tokens: number
 }
 
+export type BillingUsageSource = 'local_meter' | 'daylens_managed' | 'anthropic_admin'
+
+export interface BillingProviderReportStatus {
+  provider: 'anthropic'
+  connected: boolean
+  source: BillingUsageSource
+  message: string
+  lastSyncedAt: number | null
+}
+
+export interface BillingUsageJobSummary {
+  feature: string
+  screen: string | null
+  triggerSource: string | null
+  provider: string | null
+  model: string | null
+  calls: number
+  successes: number
+  failures: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  tokens: number
+  costUsd: number | null
+}
+
+export interface BillingUsageHourlyPoint {
+  hour: number
+  label: string
+  feature: string
+  calls: number
+  tokens: number
+  costUsd: number | null
+}
+
 export interface BillingUsageReport {
   from: number
   to: number
+  source?: BillingUsageSource
+  sourceLabel?: string
+  providerReport?: BillingProviderReportStatus | null
   totalSpendUsd: number
   totalTokens: number
+  totalCalls?: number
+  failedCalls?: number
+  backgroundCalls?: number
+  backgroundTokens?: number
   freeCreditUsedUsd: number
   paidSpendUsd: number
   points: BillingUsagePoint[]
   rows: BillingUsageRow[]
+  jobSummaries?: BillingUsageJobSummary[]
+  hourlyPoints?: BillingUsageHourlyPoint[]
 }
 
 // In-flight session that has not yet been flushed to the DB.
@@ -1527,6 +1666,8 @@ export const IPC = {
     FORGET_WORK_MEMORY_FACT: 'db:forget-work-memory-fact',
     REBUILD_WORK_MEMORY: 'db:rebuild-work-memory',
     GET_MEMORY_AUDIT: 'db:get-memory-audit',
+    GET_SCOPED_MEMORY_PROFILE: 'db:get-scoped-memory-profile',
+    ADD_CLIENT_MEMORY_FACT: 'db:add-client-memory-fact',
     GET_BLOCK_DETAIL: 'db:get-block-detail',
     GET_WORKFLOW_SUMMARIES: 'db:get-workflow-summaries',
     GET_ARTIFACT_DETAILS: 'db:get-artifact-details',
@@ -1553,6 +1694,8 @@ export const IPC = {
   AI: {
     SEND_MESSAGE: 'ai:send-message',
     STREAM_EVENT: 'ai:stream-event',
+    COMMIT_ACTION: 'ai:commit-action',
+    UNDO_ACTION: 'ai:undo-action',
     SET_MESSAGE_FEEDBACK: 'ai:set-message-feedback',
     GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
     GET_WEEK_REVIEW: 'ai:get-week-review',
@@ -1592,6 +1735,9 @@ export const IPC = {
   BILLING: {
     GET_ACCESS: 'billing:get-access',
     GET_USAGE: 'billing:get-usage',
+    GET_PROVIDER_REPORT_STATUS: 'billing:get-provider-report-status',
+    SET_ANTHROPIC_ADMIN_KEY: 'billing:set-anthropic-admin-key',
+    CLEAR_ANTHROPIC_ADMIN_KEY: 'billing:clear-anthropic-admin-key',
     CREATE_POLAR_CHECKOUT: 'billing:create-polar-checkout',
     CREATE_FLUTTERWAVE_CHECKOUT: 'billing:create-flutterwave-checkout',
     OPEN_PORTAL: 'billing:open-portal',

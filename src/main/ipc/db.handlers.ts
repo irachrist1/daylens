@@ -23,6 +23,8 @@ import {
   forgetWorkMemoryFact,
   rebuildWorkMemory,
   getMemoryAudit,
+  getScopedMemoryProfile,
+  addClientMemoryFact,
 } from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
@@ -50,7 +52,7 @@ import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
-import { generateWorkBlockInsight, scheduleTimelineAIJobs } from '../services/ai'
+import { generateWorkBlockInsight } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC, isAppCategory } from '@shared/types'
@@ -359,7 +361,6 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_TIMELINE_DAY, (_e, dateStr: string) => {
     const payload = getTimelineDayProjection(getDb(), dateStr, getLiveSessionForDate(dateStr), { materialize: false })
-    scheduleTimelineAIJobs(payload)
     return payload
   })
 
@@ -380,7 +381,7 @@ export function registerDbHandlers(): void {
       try {
         const insight = await generateWorkBlockInsight(
           { ...block, label: { ...block.label, override: null } },
-          { jobType: 'block_cleanup_relabel', triggerSource: 'system', throwOnError: true },
+          { jobType: 'block_cleanup_relabel', triggerSource: 'user', throwOnError: true },
         )
         changed = applyAIInsightToTimelineBlock(db, block, insight) || changed
       } catch (error) {
@@ -400,7 +401,6 @@ export function registerDbHandlers(): void {
     }
 
     const refreshed = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
-    scheduleTimelineAIJobs(refreshed)
     return refreshed
   })
 
@@ -557,6 +557,16 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_MEMORY_AUDIT, () => {
     return getMemoryAudit(getDb())
+  })
+
+  // DEV-108: general memory + each client's scoped memory, for the Manage-memory
+  // view (memory.md §3 — "organized under each client").
+  ipcMain.handle(IPC.DB.GET_SCOPED_MEMORY_PROFILE, () => {
+    return getScopedMemoryProfile(getDb())
+  })
+
+  ipcMain.handle(IPC.DB.ADD_CLIENT_MEMORY_FACT, (_e, clientId: string, text: string) => {
+    return addClientMemoryFact(getDb(), clientId, text)
   })
 
   ipcMain.handle(IPC.DB.GET_BLOCK_DETAIL, (_e, blockId: string) => {

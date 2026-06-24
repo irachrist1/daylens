@@ -6,6 +6,9 @@ import type {
   AppUsageSummary,
   AIChatSendRequest,
   AIChatStreamEvent,
+  AIActionWidget,
+  AIActionUndo,
+  AIActionCommitResult,
   AIMessageFeedbackUpdate,
   AIChatTurnResult,
   AIDailyReportPreparationResult,
@@ -24,6 +27,7 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
+  BillingProviderReportStatus,
   BillingUsageReport,
   CategoryOverrideEffect,
   ClientRecord,
@@ -46,6 +50,8 @@ import type {
   WorkMemorySettingsSummary,
   WorkMemoryProfile,
   WorkMemoryMutationResult,
+  WorkMemoryFact,
+  ScopedMemoryProfile,
   MemoryAuditEntry,
   WorkspaceResult,
   WrappedPeriod,
@@ -176,6 +182,10 @@ const api = {
       ipcRenderer.invoke(IPC.DB.REBUILD_WORK_MEMORY),
     getMemoryAudit: (): Promise<MemoryAuditEntry[]> =>
       ipcRenderer.invoke(IPC.DB.GET_MEMORY_AUDIT),
+    getScopedMemoryProfile: (): Promise<ScopedMemoryProfile> =>
+      ipcRenderer.invoke(IPC.DB.GET_SCOPED_MEMORY_PROFILE),
+    addClientMemoryFact: (clientId: string, text: string): Promise<WorkMemoryFact[]> =>
+      ipcRenderer.invoke(IPC.DB.ADD_CLIENT_MEMORY_FACT, clientId, text),
   },
   memory: {
     backfill: (): Promise<MemoryBackfillResult> =>
@@ -193,6 +203,10 @@ const api = {
     },
     setMessageFeedback: (payload: AIMessageFeedbackUpdate): Promise<AIThreadMessage | null> =>
       ipcRenderer.invoke(IPC.AI.SET_MESSAGE_FEEDBACK, payload),
+    commitAction: (action: AIActionWidget): Promise<AIActionCommitResult> =>
+      ipcRenderer.invoke(IPC.AI.COMMIT_ACTION, action),
+    undoAction: (undo: AIActionUndo): Promise<AIActionCommitResult> =>
+      ipcRenderer.invoke(IPC.AI.UNDO_ACTION, undo),
     generateDaySummary: (date: string): Promise<AIDaySummaryResult> =>
       ipcRenderer.invoke(IPC.AI.GENERATE_DAY_SUMMARY, date),
     getWeekReview: (weekStart: string, force?: boolean): Promise<AISurfaceSummary | null> =>
@@ -266,6 +280,12 @@ const api = {
     refresh: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.REFRESH),
     getUsage: (from: number, to: number): Promise<BillingUsageReport> =>
       ipcRenderer.invoke(IPC.BILLING.GET_USAGE, { from, to }),
+    getProviderReportStatus: (): Promise<BillingProviderReportStatus> =>
+      ipcRenderer.invoke(IPC.BILLING.GET_PROVIDER_REPORT_STATUS),
+    setAnthropicAdminKey: (key: string): Promise<BillingProviderReportStatus> =>
+      ipcRenderer.invoke(IPC.BILLING.SET_ANTHROPIC_ADMIN_KEY, { key }),
+    clearAnthropicAdminKey: (): Promise<BillingProviderReportStatus> =>
+      ipcRenderer.invoke(IPC.BILLING.CLEAR_ANTHROPIC_ADMIN_KEY),
     createPolarCheckout: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.CREATE_POLAR_CHECKOUT),
     createFlutterwaveCheckout: (email: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, { email }),

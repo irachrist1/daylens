@@ -58,6 +58,7 @@ export default function AIWorkspace() {
     activeFocusSession,
     actionFeedback,
     messageActionState,
+    actionWidgetState,
     reducedMotion,
     latestCompletedAssistantId,
     initialLoading,
@@ -70,6 +71,9 @@ export default function AIWorkspace() {
     handleCopy,
     handleRate,
     handleMessageAction,
+    commitActionWidget,
+    undoActionWidget,
+    dismissActionWidget,
     handleNewChat,
     selectThread,
     deleteThread,
@@ -417,6 +421,7 @@ export default function AIWorkspace() {
                 latestCompletedAssistantId={latestCompletedAssistantId}
                 actionFeedback={actionFeedback}
                 messageActionState={messageActionState}
+                actionWidgetState={actionWidgetState}
                 reducedMotion={reducedMotion}
                 activeFocusSession={activeFocusSession}
                 onCopy={handleCopy}
@@ -426,6 +431,9 @@ export default function AIWorkspace() {
                 onSwitchProvider={switchProviderAndRetry}
                 onTransform={transformAnswer}
                 onMessageAction={handleMessageAction}
+                onCommitActionWidget={commitActionWidget}
+                onUndoActionWidget={undoActionWidget}
+                onDismissActionWidget={dismissActionWidget}
                 onFollowUpClick={onFollowUpClick}
                 scrollToBottom={scrollToBottom}
               />

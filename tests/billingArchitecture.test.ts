@@ -26,9 +26,20 @@ test('billing service source is valid JavaScript and includes both Rwanda paymen
   const checked = spawnSync(process.execPath, ['--check', serverPath], { encoding: 'utf8' })
   assert.equal(checked.status, 0, checked.stderr)
   const source = fs.readFileSync(serverPath, 'utf8')
-  assert.match(source, /api\.polar\.sh/)
-  assert.match(source, /api\.flutterwave\.com/)
+  assert.match(source, /POLAR_API_BASE_URL/)
+  assert.match(source, /FLUTTERWAVE_API_BASE_URL/)
   assert.match(source, /payment_options:\s*'mobilemoneyrwanda'/)
+  assert.match(source, /verifyFlutterwaveTransaction/)
+  assert.match(source, /customer-sessions/)
+})
+
+test('billing backend records payment intents and retryable webhook processing', () => {
+  const schema = fs.readFileSync(path.join(root, 'services/billing/schema.sql'), 'utf8')
+  const server = fs.readFileSync(path.join(root, 'services/billing/src/server.mjs'), 'utf8')
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS billing_payment_intents/)
+  assert.match(schema, /processed_at TIMESTAMPTZ/)
+  assert.match(server, /rememberPaymentEvent/)
+  assert.match(server, /processed_at FROM billing_payment_events/)
 })
 
 test('desktop keeps own-key access ahead of managed access', () => {

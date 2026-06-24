@@ -21,6 +21,7 @@ import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
 import { getWrapProviderState } from '../services/aiOrchestration'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
+import { commitAction, undoAction } from '../ai/actions'
 import { getCurrentSession } from '../services/tracking'
 import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
@@ -38,7 +39,7 @@ import {
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
+import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -60,6 +61,17 @@ export function registerAIHandlers(): void {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
     })
+  })
+
+  // DEV-109: commit an AI action proposal — the user confirmed the preview
+  // widget, so now run the real change through the manual-edit pipeline. The
+  // proposal carries everything needed; nothing was written before this call.
+  ipcMain.handle(IPC.AI.COMMIT_ACTION, (_e, action: AIActionWidget): AIActionCommitResult => {
+    return commitAction(getDb(), action)
+  })
+
+  ipcMain.handle(IPC.AI.UNDO_ACTION, (_e, undo: AIActionUndo): AIActionCommitResult => {
+    return undoAction(getDb(), undo)
   })
 
   ipcMain.handle(IPC.AI.SET_MESSAGE_FEEDBACK, (_e, payload: { messageId: number; rating: 'up' | 'down' | null }) => {
@@ -108,11 +120,11 @@ export function registerAIHandlers(): void {
     })()
     const liveSession = payload.date === today ? getCurrentSession() : null
     const dayPayload = getTimelineDayPayload(getDb(), payload.date, liveSession)
-    return getWrappedNarrative(dayPayload)
+    return getWrappedNarrative(dayPayload, { triggerSource: 'user' })
   })
 
   ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { period: WrappedPeriod; anchorDate: string }) => {
-    return getWrappedPeriodWrap(payload.period, payload.anchorDate)
+    return getWrappedPeriodWrap(payload.period, payload.anchorDate, { triggerSource: 'user' })
   })
 
   ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
@@ -128,7 +140,7 @@ export function registerAIHandlers(): void {
   })
 
   ipcMain.handle(IPC.AI.GENERATE_BLOCK_INSIGHT, async (_e, block: WorkContextBlock) => {
-    return generateWorkBlockInsight(block)
+    return generateWorkBlockInsight(block, { triggerSource: 'user' })
   })
 
   ipcMain.handle(IPC.AI.REGENERATE_BLOCK_LABEL, async (_e, blockId: string) => {
@@ -145,7 +157,7 @@ export function registerAIHandlers(): void {
     const rejectedLabel = block.label.override?.trim() || block.label.current?.trim() || block.aiLabel?.trim()
     const insight = await generateWorkBlockInsight(
       { ...block, label: { ...block.label, override: null } },
-      { jobType: 'block_label_finalize', triggerSource: 'system', throwOnError: true, rejectedLabel },
+      { jobType: 'block_label_finalize', triggerSource: 'user', throwOnError: true, rejectedLabel },
     )
     const label = insight.label?.trim()
     if (!label) throw new Error('AI did not return a label.')

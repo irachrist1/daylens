@@ -1,4 +1,4 @@
-import type { AIAnswerTransformKind, AIMessageAction, AIProviderMode, AIThreadMessage } from '@shared/types'
+import type { AIActionUndo, AIAnswerTransformKind, AIMessageAction, AIProviderMode, AIThreadMessage } from '@shared/types'
 import type { AIProviderErrorCode } from '@shared/aiProviderError'
 import { ANSWER_TRANSFORM_KINDS, TRANSFORM_LABELS } from '@shared/answerTransforms'
 
@@ -43,6 +43,17 @@ export interface MessageActionStateEntry {
   busy: boolean
   error: string | null
   successLabel: string | null
+}
+
+// DEV-109 — per-proposal state for an action widget (preview → confirm). Keyed
+// by AIActionWidget.proposalId.
+export interface ActionWidgetStateEntry {
+  status: 'idle' | 'committing' | 'committed' | 'undoing' | 'error'
+  summary?: string | null
+  undo?: AIActionUndo | null
+  error?: string | null
+  // Set when the user cancels the preview, so the card collapses to a quiet note.
+  dismissed?: boolean
 }
 
 export function actionFeedbackKey(messageId: string | number, action: MessageAction): string {

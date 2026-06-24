@@ -4,10 +4,13 @@ import { IPC } from '@shared/types'
 import {
   createFlutterwaveCheckout,
   createPolarCheckout,
+  clearAnthropicAdminKey,
   getBillingAccess,
   getBillingPortalUrl,
   getBillingUsage,
+  getProviderReportStatus,
   invalidateBillingAccess,
+  setAnthropicAdminKey,
 } from '../services/billing'
 
 function csvCell(value: unknown): string {
@@ -24,6 +27,15 @@ export function registerBillingHandlers(): void {
   ipcMain.handle(IPC.BILLING.GET_USAGE, (_event, payload: { from: number; to: number }) => (
     getBillingUsage(payload.from, payload.to)
   ))
+  ipcMain.handle(IPC.BILLING.GET_PROVIDER_REPORT_STATUS, () => getProviderReportStatus())
+  ipcMain.handle(IPC.BILLING.SET_ANTHROPIC_ADMIN_KEY, async (_event, payload: { key: string }) => {
+    await setAnthropicAdminKey(payload.key)
+    return getProviderReportStatus()
+  })
+  ipcMain.handle(IPC.BILLING.CLEAR_ANTHROPIC_ADMIN_KEY, async () => {
+    await clearAnthropicAdminKey()
+    return getProviderReportStatus()
+  })
   ipcMain.handle(IPC.BILLING.CREATE_POLAR_CHECKOUT, async () => {
     await shell.openExternal(await createPolarCheckout())
     return true
@@ -45,15 +57,19 @@ export function registerBillingHandlers(): void {
     })
     if (result.canceled || !result.filePath) return { canceled: true }
     const lines = [
-      ['Date', 'Type', 'Feature', 'Provider', 'Model', 'Input tokens', 'Output tokens', 'Total tokens', 'Cost USD', 'Success'],
+      ['Date', 'Type', 'Feature', 'Screen', 'Trigger', 'Provider', 'Model', 'Input tokens', 'Output tokens', 'Cache read tokens', 'Cache write tokens', 'Total tokens', 'Cost USD', 'Success'],
       ...report.rows.map((row) => [
         new Date(row.occurredAt).toISOString(),
         row.type,
         row.feature,
+        row.screen ?? '',
+        row.triggerSource ?? '',
         row.provider ?? '',
         row.model ?? '',
         row.inputTokens ?? '',
         row.outputTokens ?? '',
+        row.cacheReadTokens ?? '',
+        row.cacheWriteTokens ?? '',
         row.tokens ?? '',
         row.costUsd ?? '',
         row.success ? 'yes' : 'no',

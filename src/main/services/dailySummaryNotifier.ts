@@ -119,7 +119,7 @@ async function getAiNarrative(dateStr: string): Promise<AIWrappedNarrative | nul
     const liveSession = dateStr === today ? getCurrentSession() : null
     const payload = getTimelineDayPayload(getDb(), dateStr, liveSession)
     const narrative = await Promise.race([
-      getWrappedNarrative(payload),
+      getWrappedNarrative(payload, { triggerSource: 'system' }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), AI_REPORT_TIMEOUT_MS)),
     ])
     if (!narrative || narrative.source !== 'ai' || !narrative.lead) return null
@@ -174,7 +174,7 @@ async function checkDailySummary(): Promise<void> {
     now,
     state,
     todaySecondsTracked: secondsTrackedOn(today),
-    dailySummaryEnabled: settings.dailySummaryEnabled ?? true,
+    dailySummaryEnabled: settings.dailySummaryEnabled ?? false,
     todayDateString: today,
   })
   if (!decision.fire) return
@@ -207,7 +207,7 @@ async function checkYesterdayRecap(): Promise<void> {
     now,
     state,
     yesterdaySecondsTracked: secondsTrackedOn(yesterday),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
+    morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
     todayDateString: today,
     yesterdayDateString: yesterday,
   })
@@ -246,7 +246,7 @@ async function checkCarryoverNudge(): Promise<void> {
     now,
     state,
     todaySecondsTracked: secondsTrackedOn(today),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
+    morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
     todayDateString: today,
     yesterdayDateString: yesterday,
   })

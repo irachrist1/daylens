@@ -3,6 +3,8 @@ import { useLocation } from 'react-router-dom'
 import { ANALYTICS_EVENT, classifyAIOutputIntent } from '@shared/analytics'
 import { transformKindFromLabel, transformLabel } from '@shared/answerTransforms'
 import type {
+  AIActionUndo,
+  AIActionWidget,
   AIChatTurnResult,
   AIMessageAction,
   AIProviderMode,
@@ -25,6 +27,7 @@ import {
   type ActionFeedbackEntry,
   type AltProvider,
   type AnswerTransform,
+  type ActionWidgetStateEntry,
   type MessageAction,
   type MessageActionStateEntry,
   type ThreadMessage,
@@ -68,6 +71,7 @@ export function useAIChat() {
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
   const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
+  const [actionWidgetState, setActionWidgetState] = useState<Record<string, ActionWidgetStateEntry>>({})
   const [reducedMotion, setReducedMotion] = useState(false)
 
   const loadingRef = useRef(false)
@@ -588,6 +592,49 @@ export function useAIChat() {
     }
   }, [refreshProvider])
 
+  // DEV-109 — commit an action proposal (the user confirmed the preview). The
+  // real change runs in main through the manual-edit pipeline; the card flips to
+  // a committed state with the confirmation line and an undo when reversible.
+  const commitActionWidget = useCallback(async (proposal: AIActionWidget) => {
+    const id = proposal.proposalId
+    setActionWidgetState((current) => ({ ...current, [id]: { status: 'committing' } }))
+    try {
+      const result = await ipc.ai.commitAction(proposal)
+      if (!result.ok) {
+        setActionWidgetState((current) => ({ ...current, [id]: { status: 'error', error: result.error ?? 'Could not apply that.' } }))
+        return
+      }
+      setActionWidgetState((current) => ({
+        ...current,
+        [id]: { status: 'committed', summary: result.summary, undo: result.undo ?? null },
+      }))
+    } catch (error) {
+      setActionWidgetState((current) => ({
+        ...current,
+        [id]: { status: 'error', error: error instanceof Error ? error.message : String(error) },
+      }))
+    }
+  }, [])
+
+  const undoActionWidget = useCallback(async (proposalId: string, undo: AIActionUndo) => {
+    setActionWidgetState((current) => ({ ...current, [proposalId]: { ...current[proposalId], status: 'undoing' } }))
+    try {
+      await ipc.ai.undoAction(undo)
+      // Back to a confirmable preview — the user can re-apply if they change
+      // their mind. The summary line tells them the undo landed.
+      setActionWidgetState((current) => ({ ...current, [proposalId]: { status: 'idle', summary: 'Undone.' } }))
+    } catch (error) {
+      setActionWidgetState((current) => ({
+        ...current,
+        [proposalId]: { status: 'error', error: error instanceof Error ? error.message : String(error) },
+      }))
+    }
+  }, [])
+
+  const dismissActionWidget = useCallback((proposalId: string) => {
+    setActionWidgetState((current) => ({ ...current, [proposalId]: { status: 'idle', dismissed: true } }))
+  }, [])
+
   const clearFeedback = useCallback(() => {
     setActionFeedback({})
     setMessageActionState({})
@@ -721,6 +768,7 @@ export function useAIChat() {
     billingAccess,
     actionFeedback,
     messageActionState,
+    actionWidgetState,
     reducedMotion,
     latestCompletedAssistantId,
     // resource status (for the load gate + ConnectAI refresh)
@@ -735,6 +783,9 @@ export function useAIChat() {
     handleCopy,
     handleRate,
     handleMessageAction,
+    commitActionWidget,
+    undoActionWidget,
+    dismissActionWidget,
     handleNewChat,
     selectThread,
     deleteThread,

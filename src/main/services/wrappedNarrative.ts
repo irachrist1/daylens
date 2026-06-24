@@ -7,7 +7,7 @@
 // lives in `../lib/wrappedNarrative` so it can be tested without the AI
 // orchestration / settings chain.
 
-import type { AIWrappedNarrative, DayTimelinePayload } from '@shared/types'
+import type { AIInvocationSource, AIWrappedNarrative, DayTimelinePayload } from '@shared/types'
 import {
   executeTextAIJob,
   type ResolvedProviderConfig,
@@ -49,6 +49,7 @@ const NARRATIVE_TIMEOUT_MS = 12_000
 
 export async function getWrappedNarrative(
   payload: DayTimelinePayload,
+  options: { triggerSource?: AIInvocationSource } = {},
 ): Promise<AIWrappedNarrative> {
   const facts = buildWrappedFactsFromPayload(payload)
   const factsHash = computeFactsHash(facts)
@@ -78,7 +79,7 @@ export async function getWrappedNarrative(
         {
           jobType: 'wrapped_narrative',
           screen: 'timeline_day',
-          triggerSource: 'system',
+          triggerSource: options.triggerSource ?? 'user',
           systemPrompt,
           userMessage,
         },

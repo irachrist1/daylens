@@ -312,6 +312,10 @@ function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineS
       continue
     }
 
+    // Derived untracked spans (start/end of day, gaps between blocks) stay in the
+    // payload but are not drawn — only real Away / Machine off breaks surface.
+    if (segment.kind === 'idle_gap') continue
+
     const gapSeconds = segmentDurationSeconds(segment)
     if (gapSeconds < MIN_VISIBLE_GAP_SECONDS) continue
 
@@ -391,9 +395,8 @@ const TimelineRow = memo(function TimelineRow({
   if (!block) {
     const gapSegment = segment as TimelineGapSegment
 
-    // A break in the day reads as a thin divider, not a card — it's the empty
-    // space between events on a calendar, labelled so you know why the time is
-    // blank ("Away · 45m") without it competing with the real blocks.
+    // Away / Machine off breaks read as thin dividers, not cards — labelled so
+    // you know why the time is blank ("Away · 45m") without competing with blocks.
     return (
       <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'center' }}>
         <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>

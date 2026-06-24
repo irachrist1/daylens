@@ -1,10 +1,11 @@
 import { memo, useState } from 'react'
-import type { AIMessageAction, AIProviderMode, FocusSession } from '@shared/types'
+import type { AIActionUndo, AIActionWidget, AIMessageAction, AIProviderMode, FocusSession } from '@shared/types'
 import type { AIProviderErrorCode } from '@shared/aiProviderError'
 import { ipc } from '../../lib/ipc'
 import { MarkdownMessage } from './markdown'
 import { MentionText } from './mentions'
 import { StreamingMessage } from './StreamingMessage'
+import { ActionWidget } from './ActionWidget'
 import {
   IconActionButton,
   IconArtifactFile,
@@ -19,6 +20,7 @@ import {
   messageActionKey,
   ANSWER_TRANSFORMS,
   type ActionFeedbackEntry,
+  type ActionWidgetStateEntry,
   type AnswerTransform,
   type MessageActionStateEntry,
   type ThreadMessage,
@@ -70,6 +72,7 @@ export interface MessageListProps {
   latestCompletedAssistantId: string | number | undefined
   actionFeedback: Record<string, ActionFeedbackEntry>
   messageActionState: Record<string, MessageActionStateEntry>
+  actionWidgetState: Record<string, ActionWidgetStateEntry>
   reducedMotion: boolean
   activeFocusSession: FocusSession | null
   onCopy: (messageId: string | number, content: string, answerKind: ThreadMessage['answerKind']) => void
@@ -79,6 +82,9 @@ export interface MessageListProps {
   onSwitchProvider: (message: ThreadMessage, provider: AIProviderMode) => void
   onTransform: (kind: AnswerTransform) => void
   onMessageAction: (messageId: string | number, action: AIMessageAction, options?: { reviewNote?: string }) => void
+  onCommitActionWidget: (widget: AIActionWidget) => void
+  onUndoActionWidget: (proposalId: string, undo: AIActionUndo) => void
+  onDismissActionWidget: (proposalId: string) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
 }
@@ -138,6 +144,7 @@ function MessageListImpl({
   latestCompletedAssistantId,
   actionFeedback,
   messageActionState,
+  actionWidgetState,
   reducedMotion,
   activeFocusSession,
   onCopy,
@@ -147,6 +154,9 @@ function MessageListImpl({
   onSwitchProvider,
   onTransform,
   onMessageAction,
+  onCommitActionWidget,
+  onUndoActionWidget,
+  onDismissActionWidget,
   onFollowUpClick,
   scrollToBottom,
 }: MessageListProps) {
@@ -213,6 +223,21 @@ function MessageListImpl({
               ) : (
                 <>
                   <MarkdownMessage content={message.content} />
+
+                  {(message.actionWidgets?.length ?? 0) > 0 && (
+                    <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+                      {message.actionWidgets?.map((widget) => (
+                        <ActionWidget
+                          key={widget.proposalId}
+                          widget={widget}
+                          state={actionWidgetState[widget.proposalId]}
+                          onConfirm={onCommitActionWidget}
+                          onUndo={onUndoActionWidget}
+                          onDismiss={onDismissActionWidget}
+                        />
+                      ))}
+                    </div>
+                  )}
 
                   {(message.actions?.length ?? 0) > 0 && (
                     <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>

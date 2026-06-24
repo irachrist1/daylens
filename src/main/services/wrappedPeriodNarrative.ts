@@ -3,6 +3,7 @@
 // overlays the AI narrative. briefs-wraps.md §6, invariant 4.
 
 import type {
+  AIInvocationSource,
   WrappedPeriod,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
@@ -93,14 +94,16 @@ function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): Wra
 export async function getWrappedPeriodWrap(
   period: WrappedPeriod,
   anchorDate: string,
+  options: { triggerSource?: AIInvocationSource } = {},
 ): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative }> {
   const facts = buildWrappedPeriodFacts(period, anchorDate)
-  const narrative = await getWrappedPeriodNarrative(facts)
+  const narrative = await getWrappedPeriodNarrative(facts, options)
   return { facts, narrative }
 }
 
 async function getWrappedPeriodNarrative(
   facts: WrappedPeriodFacts,
+  options: { triggerSource?: AIInvocationSource } = {},
 ): Promise<WrappedPeriodNarrative> {
   const factsHash = computePeriodFactsHash(facts)
   const cacheKey = periodNarrativeCacheKey(facts, factsHash)
@@ -123,7 +126,7 @@ async function getWrappedPeriodNarrative(
         {
           jobType: 'wrapped_period_narrative',
           screen: 'timeline_week',
-          triggerSource: 'system',
+          triggerSource: options.triggerSource ?? 'user',
           systemPrompt,
           userMessage,
         },

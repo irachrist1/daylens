@@ -19,9 +19,31 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 })
 const port = Number(process.env.PORT || 8787)
 const publicBaseUrl = process.env.PUBLIC_BASE_URL.replace(/\/+$/, '')
 const litellmUrl = process.env.LITELLM_URL.replace(/\/+$/, '')
+const polarApiBaseUrl = (process.env.POLAR_API_BASE_URL || 'https://api.polar.sh/v1').replace(/\/+$/, '')
+const flutterwaveApiBaseUrl = (process.env.FLUTTERWAVE_API_BASE_URL || 'https://api.flutterwave.com/v3').replace(/\/+$/, '')
 const fairUseMicros = Math.round(Number(process.env.SUBSCRIPTION_FAIR_USE_USD || 20) * 1_000_000)
 const managedProvider = process.env.DAYLENS_MANAGED_PROVIDER || 'anthropic'
 const managedModel = process.env.DAYLENS_MANAGED_MODEL || 'daylens-default'
+const localPassAmount = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF || 15000)
+
+function assertProductionSafety() {
+  if (!Number.isFinite(port) || port <= 0) throw new Error('PORT must be a positive number')
+  if (!Number.isFinite(fairUseMicros) || fairUseMicros <= 0) throw new Error('SUBSCRIPTION_FAIR_USE_USD must be positive')
+  if (!Number.isInteger(localPassAmount) || localPassAmount <= 0) throw new Error('FLUTTERWAVE_LOCAL_PASS_RWF must be a positive integer')
+  if (!/^https:\/\//.test(publicBaseUrl) && process.env.NODE_ENV === 'production') {
+    throw new Error('PUBLIC_BASE_URL must be HTTPS in production')
+  }
+  for (const key of ['SESSION_SECRET', 'INSTALLATION_HASH_SECRET', 'LITELLM_KEY_ENCRYPTION_SECRET']) {
+    const value = process.env[key] || ''
+    if (value.length < 32 || /^replace-with/.test(value)) throw new Error(`${key} must be a real high-entropy secret`)
+  }
+  if (process.env.NODE_ENV === 'production') {
+    if (process.env.POLAR_ACCESS_TOKEN && !process.env.POLAR_WEBHOOK_SECRET) throw new Error('POLAR_WEBHOOK_SECRET is required when Polar is enabled')
+    if (process.env.FLUTTERWAVE_SECRET_KEY && !process.env.FLUTTERWAVE_SECRET_HASH) throw new Error('FLUTTERWAVE_SECRET_HASH is required when Flutterwave is enabled')
+  }
+}
+
+assertProductionSafety()
 
 function json(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -57,6 +79,12 @@ function bearer(req) {
 
 function hash(value, secret = process.env.INSTALLATION_HASH_SECRET) {
   return crypto.createHmac('sha256', secret).update(String(value)).digest('hex')
+}
+
+function safeEqualString(a, b) {
+  const left = Buffer.from(String(a || ''))
+  const right = Buffer.from(String(b || ''))
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
 }
 
 function encryptionKey() {
@@ -180,7 +208,7 @@ async function billingSnapshot(account) {
     providerLabel: 'Daylens managed AI',
     checkoutAvailable: Boolean(process.env.POLAR_ACCESS_TOKEN && process.env.POLAR_PRODUCT_ID),
     localCheckoutAvailable: Boolean(process.env.FLUTTERWAVE_SECRET_KEY),
-    portalAvailable: Boolean(account.polar_customer_id && process.env.POLAR_CUSTOMER_PORTAL_URL),
+    portalAvailable: Boolean(account.polar_customer_id && process.env.POLAR_ACCESS_TOKEN),
     message: mode === 'free_credit'
       ? `$${(Math.max(0, Number(account.free_credit_remaining_micros)) / 1_000_000).toFixed(2)} of AI credit left.`
       : mode === 'subscription'
@@ -238,14 +266,16 @@ async function bootstrap(req, res) {
 
 async function createPolarCheckout(account, res) {
   if (!process.env.POLAR_ACCESS_TOKEN || !process.env.POLAR_PRODUCT_ID) return json(res, 503, { error: 'Polar checkout is not configured.' })
-  const response = await fetch('https://api.polar.sh/v1/checkouts/', {
+  const response = await fetch(`${polarApiBaseUrl}/checkouts/`, {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env.POLAR_ACCESS_TOKEN}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       products: [process.env.POLAR_PRODUCT_ID],
       external_customer_id: account.id,
       success_url: process.env.CHECKOUT_SUCCESS_URL || 'https://daylens.app/billing/success',
+      return_url: process.env.CHECKOUT_RETURN_URL || process.env.CHECKOUT_SUCCESS_URL || 'https://daylens.app/billing',
       metadata: { account_id: account.id },
+      customer_metadata: { daylens_account_id: account.id },
     }),
   })
   const payload = await response.json()
@@ -258,13 +288,18 @@ async function createFlutterwaveCheckout(account, req, res) {
   const parsed = await body(req, 64_000)
   const email = String(parsed.json.email || '').trim()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(res, 400, { error: 'Enter a valid email for the payment receipt.' })
-  const txRef = `daylens-${account.id}-${Date.now()}`
-  const response = await fetch('https://api.flutterwave.com/v3/payments', {
+  const txRef = `daylens-${account.id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+  await pool.query(
+    `INSERT INTO billing_payment_intents (provider, tx_ref, account_id, amount, currency)
+     VALUES ('flutterwave', $1, $2, $3, 'RWF')`,
+    [txRef, account.id, localPassAmount],
+  )
+  const response = await fetch(`${flutterwaveApiBaseUrl}/payments`, {
     method: 'POST',
     headers: { authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       tx_ref: txRef,
-      amount: Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF || 15000),
+      amount: localPassAmount,
       currency: 'RWF',
       redirect_url: process.env.CHECKOUT_SUCCESS_URL || 'https://daylens.app/billing/success',
       payment_options: 'mobilemoneyrwanda',
@@ -275,9 +310,41 @@ async function createFlutterwaveCheckout(account, req, res) {
   })
   const payload = await response.json()
   const url = payload?.data?.link
-  if (!response.ok || !url) return json(res, 502, { error: payload.message || 'Flutterwave checkout could not be created.' })
+  if (!response.ok || !url) {
+    await pool.query(
+      `UPDATE billing_payment_intents SET status = 'checkout_failed', updated_at = now()
+       WHERE provider = 'flutterwave' AND tx_ref = $1`,
+      [txRef],
+    )
+    return json(res, 502, { error: payload.message || 'Flutterwave checkout could not be created.' })
+  }
+  await pool.query(
+    `UPDATE billing_payment_intents SET checkout_url = $1, updated_at = now()
+     WHERE provider = 'flutterwave' AND tx_ref = $2`,
+    [url, txRef],
+  )
   await pool.query('UPDATE billing_accounts SET customer_email = $1, updated_at = now() WHERE id = $2', [email, account.id])
   return json(res, 200, { url })
+}
+
+async function createPolarPortalSession(account, res) {
+  if (!process.env.POLAR_ACCESS_TOKEN) return json(res, 503, { error: 'Polar customer portal is not configured.' })
+  const body = account.polar_customer_id
+    ? { customer_id: account.polar_customer_id }
+    : { external_customer_id: account.id }
+  const response = await fetch(`${polarApiBaseUrl}/customer-sessions/`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.POLAR_ACCESS_TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...body,
+      return_url: process.env.CHECKOUT_RETURN_URL || process.env.CHECKOUT_SUCCESS_URL || 'https://daylens.app/billing',
+    }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok || !payload.customer_portal_url) {
+    return json(res, 502, { error: payload.detail || 'Polar portal could not be opened.' })
+  }
+  return json(res, 200, { url: payload.customer_portal_url })
 }
 
 function verifyStandardWebhook(req, raw, secret) {
@@ -285,80 +352,154 @@ function verifyStandardWebhook(req, raw, secret) {
   const timestamp = req.headers['webhook-timestamp']
   const signatures = String(req.headers['webhook-signature'] || '').split(' ')
   if (!id || !timestamp || !secret) return false
+  const ageSeconds = Math.abs(Date.now() / 1000 - Number(timestamp))
+  if (!Number.isFinite(ageSeconds) || ageSeconds > 5 * 60) return false
   const secretBytes = Buffer.from(secret.replace(/^whsec_/, ''), 'base64')
   const expected = crypto.createHmac('sha256', secretBytes).update(`${id}.${timestamp}.${raw}`).digest('base64')
   return signatures.some((entry) => {
     const candidate = entry.replace(/^v1,/, '')
-    return candidate.length === expected.length && crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(expected))
+    return safeEqualString(candidate, expected)
   })
+}
+
+async function rememberPaymentEvent(provider, eventId) {
+  if (!eventId) throw new Error('missing_payment_event_id')
+  const inserted = await pool.query(
+    `INSERT INTO billing_payment_events (provider, event_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING RETURNING event_id`,
+    [provider, eventId],
+  )
+  if (inserted.rows[0]) return true
+  const existing = await pool.query(
+    `SELECT processed_at FROM billing_payment_events WHERE provider = $1 AND event_id = $2`,
+    [provider, eventId],
+  )
+  return Boolean(existing.rows[0] && !existing.rows[0].processed_at)
+}
+
+async function markPaymentEventProcessed(provider, eventId) {
+  await pool.query(
+    `UPDATE billing_payment_events SET processed_at = now(), last_error = NULL WHERE provider = $1 AND event_id = $2`,
+    [provider, eventId],
+  )
+}
+
+async function markPaymentEventFailed(provider, eventId, error) {
+  await pool.query(
+    `UPDATE billing_payment_events SET last_error = $3 WHERE provider = $1 AND event_id = $2`,
+    [provider, eventId, String(error?.message || error).slice(0, 500)],
+  )
 }
 
 async function polarWebhook(req, res) {
   const parsed = await body(req)
   if (!verifyStandardWebhook(req, parsed.raw, process.env.POLAR_WEBHOOK_SECRET)) return json(res, 401, { error: 'invalid_signature' })
   const event = parsed.json
-  const inserted = await pool.query(
-    `INSERT INTO billing_payment_events (provider, event_id) VALUES ('polar', $1)
-     ON CONFLICT DO NOTHING RETURNING event_id`,
-    [event.id],
-  )
-  if (!inserted.rows[0]) return json(res, 200, { ok: true })
+  if (!await rememberPaymentEvent('polar', event.id)) return json(res, 200, { ok: true })
   const data = event.data || {}
   const accountId = data.external_customer_id || data.metadata?.account_id || data.customer?.external_id
-  if (accountId && ['subscription.active', 'subscription.created', 'subscription.updated'].includes(event.type)) {
-    await pool.query(
-      `UPDATE billing_accounts SET plan = 'subscription', subscription_status = $1,
-       period_started_at = COALESCE($2, now()), renewal_at = COALESCE($3, now() + interval '1 month'),
-       polar_customer_id = COALESCE($4, polar_customer_id),
-       polar_subscription_id = COALESCE($5, polar_subscription_id), updated_at = now()
-       WHERE id = $6`,
-      [
-        data.status || 'active',
-        data.current_period_start || null,
-        data.current_period_end || null,
-        data.customer_id || data.customer?.id || null,
-        data.id || null,
-        accountId,
-      ],
-    )
-    const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [accountId])
-    if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
-  }
-  if (accountId && ['subscription.canceled', 'subscription.revoked'].includes(event.type)) {
-    await pool.query(
-      `UPDATE billing_accounts SET subscription_status = 'canceled', updated_at = now() WHERE id = $1`,
-      [accountId],
-    )
+  try {
+    if (accountId && ['subscription.active', 'subscription.created', 'subscription.updated'].includes(event.type)) {
+      await pool.query(
+        `UPDATE billing_accounts SET plan = 'subscription', subscription_status = $1,
+         period_started_at = COALESCE($2, now()), renewal_at = COALESCE($3, now() + interval '1 month'),
+         polar_customer_id = COALESCE($4, polar_customer_id),
+         polar_subscription_id = COALESCE($5, polar_subscription_id), updated_at = now()
+         WHERE id = $6`,
+        [
+          data.status || 'active',
+          data.current_period_start || null,
+          data.current_period_end || null,
+          data.customer_id || data.customer?.id || null,
+          data.id || null,
+          accountId,
+        ],
+      )
+      const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [accountId])
+      if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
+    }
+    if (accountId && ['subscription.canceled', 'subscription.revoked'].includes(event.type)) {
+      await pool.query(
+        `UPDATE billing_accounts SET subscription_status = 'canceled', updated_at = now() WHERE id = $1`,
+        [accountId],
+      )
+    }
+    await markPaymentEventProcessed('polar', event.id)
+  } catch (error) {
+    await markPaymentEventFailed('polar', event.id, error)
+    throw error
   }
   return json(res, 200, { ok: true })
 }
 
 async function flutterwaveWebhook(req, res) {
   const parsed = await body(req)
-  if (!process.env.FLUTTERWAVE_SECRET_HASH || req.headers['verif-hash'] !== process.env.FLUTTERWAVE_SECRET_HASH) {
+  if (!process.env.FLUTTERWAVE_SECRET_HASH || !safeEqualString(req.headers['verif-hash'], process.env.FLUTTERWAVE_SECRET_HASH)) {
     return json(res, 401, { error: 'invalid_signature' })
   }
   const event = parsed.json
   const eventId = String(event.id || event.data?.id || event.data?.tx_ref || '')
-  const inserted = await pool.query(
-    `INSERT INTO billing_payment_events (provider, event_id) VALUES ('flutterwave', $1)
-     ON CONFLICT DO NOTHING RETURNING event_id`,
-    [eventId],
-  )
-  if (!inserted.rows[0]) return json(res, 200, { ok: true })
-  const accountId = event.data?.meta?.account_id
-  if (accountId && event.event === 'charge.completed' && event.data?.status === 'successful') {
+  if (!await rememberPaymentEvent('flutterwave', eventId)) return json(res, 200, { ok: true })
+  try {
+    const verified = await verifyFlutterwaveTransaction(event.data?.id)
+    const data = verified.data || {}
+    const txRef = String(data.tx_ref || event.data?.tx_ref || '')
+    const intent = await pool.query(
+      `SELECT * FROM billing_payment_intents WHERE provider = 'flutterwave' AND tx_ref = $1`,
+      [txRef],
+    )
+    const payment = intent.rows[0]
+    if (!payment) throw new Error('unknown_flutterwave_payment_intent')
+    if (payment.status === 'successful') {
+      const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [payment.account_id])
+      if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
+      await markPaymentEventProcessed('flutterwave', eventId)
+      return json(res, 200, { ok: true })
+    }
+    if (data.status !== 'successful') {
+      await pool.query(
+        `UPDATE billing_payment_intents SET status = $1, provider_reference = $2, updated_at = now()
+         WHERE provider = 'flutterwave' AND tx_ref = $3`,
+        [data.status || 'failed', String(data.id || ''), txRef],
+      )
+      await markPaymentEventProcessed('flutterwave', eventId)
+      return json(res, 200, { ok: true })
+    }
+    if (data.currency !== payment.currency || Number(data.amount) !== Number(payment.amount)) {
+      throw new Error('flutterwave_payment_mismatch')
+    }
+    await pool.query(
+      `UPDATE billing_payment_intents SET status = 'successful', provider_reference = $1, updated_at = now()
+       WHERE provider = 'flutterwave' AND tx_ref = $2`,
+      [String(data.id || ''), txRef],
+    )
     await pool.query(
       `UPDATE billing_accounts SET plan = 'local_pass',
        local_pass_expires_at = GREATEST(COALESCE(local_pass_expires_at, now()), now()) + interval '30 days',
        period_started_at = now(), customer_email = COALESCE($1, customer_email), updated_at = now()
        WHERE id = $2`,
-      [event.data?.customer?.email || null, accountId],
+      [data.customer?.email || event.data?.customer?.email || null, payment.account_id],
     )
-    const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [accountId])
+    const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [payment.account_id])
     if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
+    await markPaymentEventProcessed('flutterwave', eventId)
+  } catch (error) {
+    await markPaymentEventFailed('flutterwave', eventId, error)
+    throw error
   }
   return json(res, 200, { ok: true })
+}
+
+async function verifyFlutterwaveTransaction(id) {
+  if (!id) throw new Error('missing_flutterwave_transaction_id')
+  const response = await fetch(`${flutterwaveApiBaseUrl}/transactions/${encodeURIComponent(id)}/verify`, {
+    headers: { authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}` },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok || payload.status !== 'success') {
+    throw new Error(payload.message || 'flutterwave_verification_failed')
+  }
+  return payload
 }
 
 async function managedCompletion(req, res) {
@@ -512,8 +653,8 @@ async function route(req, res) {
   if (req.method === 'POST' && url.pathname === '/v1/checkout/polar') return createPolarCheckout(account, res)
   if (req.method === 'POST' && url.pathname === '/v1/checkout/flutterwave') return createFlutterwaveCheckout(account, req, res)
   if (req.method === 'POST' && url.pathname === '/v1/billing/portal') {
-    if (!account.polar_customer_id || !process.env.POLAR_CUSTOMER_PORTAL_URL) return json(res, 404, { error: 'No subscription portal is available yet.' })
-    return json(res, 200, { url: process.env.POLAR_CUSTOMER_PORTAL_URL })
+    if (!account.polar_customer_id) return json(res, 404, { error: 'No subscription portal is available yet.' })
+    return createPolarPortalSession(account, res)
   }
   return json(res, 404, { error: 'Not found' })
 }

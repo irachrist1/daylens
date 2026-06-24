@@ -12,6 +12,7 @@ import type {
   ClientRecord,
   TrackingDiagnosticsPayload,
   WorkMemoryFact,
+  ClientMemoryGroup,
   MemoryAuditEntry,
 } from '@shared/types'
 import { ipc } from '../lib/ipc'
@@ -339,6 +340,18 @@ const infoPanelStyle: CSSProperties = {
   background: 'var(--color-surface-low)',
   display: 'grid',
   gap: 8,
+}
+
+// A quiet, borderless text action (Edit / Forget) revealed on row hover in the
+// Manage-memory view — so memory reads as plain sentences, not a control panel.
+const memoryActionStyle: CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  padding: 0,
+  fontSize: 12,
+  fontWeight: 600,
+  color: 'var(--color-text-tertiary)',
+  cursor: 'pointer',
 }
 
 function UpdatesContent() {
@@ -1117,17 +1130,9 @@ function BillingPage({
   )
 }
 
-function UsagePage({
-  hasAiAccess,
-  provider,
-  onGoToAI,
-}: {
-  hasAiAccess: boolean
-  provider: string
-  onGoToAI: () => void
-}) {
+function UsagePage() {
   type RangeKey = '1d' | '7d' | '30d' | 'mtd' | 'last_month' | 'custom'
-  type GroupKey = 'model' | 'type' | 'day'
+  type GroupKey = 'model' | 'type'
   type MetricKey = 'spend' | 'tokens'
   const [range, setRange] = useState<RangeKey>('30d')
   const [groupBy, setGroupBy] = useState<GroupKey>('model')
@@ -1136,6 +1141,7 @@ function UsagePage({
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [report, setReport] = useState<BillingUsageReport | null>(null)
   const [access, setAccess] = useState<BillingAccessSnapshot | null>(null)
+  const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -1167,7 +1173,6 @@ function UsagePage({
         if (cancelled) return
         setAccess(nextAccess)
         setReport(nextReport)
-        if (nextAccess.mode === 'own_key') setMetric('tokens')
       })
       .catch((reason) => {
         if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
@@ -1182,26 +1187,84 @@ function UsagePage({
     return String(value)
   }
 
-  const chart = (() => {
-    if (!report?.rows.length) return null
-    const days = [...new Set(report.rows.map((row) => new Date(row.occurredAt).toISOString().slice(0, 10)))].sort()
-    const series = new Map<string, Map<string, number>>()
-    for (const row of report.rows) {
-      const day = new Date(row.occurredAt).toISOString().slice(0, 10)
-      const group = groupBy === 'model' ? row.model || 'Unknown model' : groupBy === 'type' ? row.type.replace('_', ' ') : 'All usage'
-      if (!series.has(group)) series.set(group, new Map())
-      const value = metric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0
-      series.get(group)!.set(day, (series.get(group)!.get(day) ?? 0) + value)
-    }
-    const cumulative = [...series.entries()].map(([name, values]) => {
-      let total = 0
-      return { name, values: days.map((day) => (total += values.get(day) ?? 0)) }
-    })
-    const totals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
-    return { days, cumulative, max: Math.max(...totals, 1) }
-  })()
+  const formatTokensExact = (value: number) => Math.round(value).toLocaleString()
+  const formatSpend = (value: number) => `$${value.toFixed(2)}`
+  const formatMetricExact = (value: number) => metric === 'spend' ? formatSpend(value) : formatTokensExact(value)
+  const formatPercent = (value: number, total: number) => total > 0 ? `${((value / total) * 100).toFixed(1)}%` : '0.0%'
+  const formatDate = (day: string) => new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const formatFullDate = (day: string) => new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  const formatUsageType = (type: string) => {
+    if (type === 'free_credit' || type === 'subscription' || type === 'local_pass') return 'Included'
+    if (type === 'own_key') return 'On-demand'
+    return type.replace(/_/g, ' ')
+  }
+  const formatCost = (type: string, costUsd: number | null) => {
+    if (costUsd != null) return formatSpend(costUsd)
+    if (type === 'free_credit' || type === 'subscription' || type === 'local_pass') return 'Included'
+    return 'Provider billed'
+  }
 
-  const colors = ['#7c8cff', '#4fdbc8', '#f59e7a', '#c084fc', '#60a5fa', '#facc15']
+  const chart = useMemo(() => {
+    if (!report) return null
+    const days: string[] = []
+    const start = new Date(bounds.from)
+    start.setHours(0, 0, 0, 0)
+    const end = new Date(bounds.to)
+    end.setHours(0, 0, 0, 0)
+    for (let cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 1)) {
+      days.push(cursor.toISOString().slice(0, 10))
+    }
+    if (days.length === 0 || days.length > 62) {
+      const dataDays = new Set<string>()
+      for (const point of report.points ?? []) dataDays.add(point.day)
+      for (const row of report.rows ?? []) dataDays.add(new Date(row.occurredAt).toISOString().slice(0, 10))
+      days.splice(0, days.length, ...[...dataDays].sort())
+    }
+    if (days.length === 0) return null
+
+    const series = new Map<string, Map<string, number>>()
+    const addValue = (name: string, day: string, value: number) => {
+      if (!Number.isFinite(value)) return
+      if (!series.has(name)) series.set(name, new Map())
+      const values = series.get(name)!
+      values.set(day, (values.get(day) ?? 0) + value)
+    }
+
+    if (groupBy === 'model' && report.points.length > 0) {
+      for (const point of report.points) {
+        addValue(point.model || 'auto', point.day, metric === 'spend' ? point.spendUsd : point.tokens)
+      }
+    } else if (report.rows.length > 0) {
+      for (const row of report.rows) {
+        const day = new Date(row.occurredAt).toISOString().slice(0, 10)
+        const name = groupBy === 'model' ? row.model || 'auto' : formatUsageType(row.type)
+        addValue(name, day, metric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
+      }
+    } else {
+      for (const point of report.points) {
+        addValue(groupBy === 'model' ? point.model || 'auto' : 'Usage', point.day, metric === 'spend' ? point.spendUsd : point.tokens)
+      }
+    }
+
+    const cumulative = [...series.entries()]
+      .map(([name, values]) => {
+        let running = 0
+        const daily = days.map((day) => values.get(day) ?? 0)
+        return {
+          name,
+          daily,
+          values: daily.map((value) => (running += value)),
+        }
+      })
+      .filter((item) => item.daily.some((value) => value > 0))
+    if (cumulative.length === 0) return null
+
+    const totals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
+    const dailyTotals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.daily[index], 0))
+    return { days, cumulative, max: Math.max(...totals, 1), totals, dailyTotals }
+  }, [bounds.from, bounds.to, groupBy, metric, report])
+
+  const colors = ['#3aa17e', '#8fb4d8', '#5c80b6', '#c58bb8', '#9fbe83', '#d8a653']
   const quickRanges: Array<{ key: Exclude<RangeKey, 'custom'>; label: string }> = [
     { key: '1d', label: '1d' },
     { key: '7d', label: '7d' },
@@ -1209,24 +1272,36 @@ function UsagePage({
     { key: 'mtd', label: 'MTD' },
     { key: 'last_month', label: 'Last month' },
   ]
+  const totalSpend = report?.totalSpendUsd ?? access?.periodSpendUsd ?? 0
+  const paidSpend = report?.paidSpendUsd ?? access?.paidSpendUsd ?? 0
+  const includedSpend = access?.mode === 'own_key' ? 0 : Math.max(0, totalSpend - paidSpend)
+  const onDemandSpend = access?.mode === 'own_key' ? totalSpend : paidSpend
   const summaryCards: Array<[string, string]> = [
-    ['Total AI used', access?.mode === 'own_key' ? 'Provider billed' : report ? `$${report.totalSpendUsd.toFixed(2)}` : '—'],
-    ['Free credit left', access?.mode === 'own_key' ? 'Paused while using key' : access ? `$${access.creditRemainingUsd.toFixed(2)} of $${access.creditGrantedUsd.toFixed(0)}` : '—'],
-    ['Paid / on-demand', access?.mode === 'own_key' ? 'Provider billed' : report ? `$${report.paidSpendUsd.toFixed(2)}` : '—'],
+    ['Total spend', formatSpend(totalSpend)],
+    ['Included', formatSpend(includedSpend)],
+    ['On-demand', formatSpend(onDemandSpend)],
   ]
+
   return (
     <SectionPage
       title="Usage"
-      description="An honest meter — how much AI you've used and what's left. Plain numbers, no surprises."
+      description="Your AI usage for this billing period."
       maxWidth={980}
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+        <select value={range} onChange={(event) => setRange(event.target.value as RangeKey)} style={inputStyle(150)}>
+          <option value="1d">Today</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="mtd">Month to date</option>
+          <option value="last_month">Last month</option>
+          <option value="custom">Custom</option>
+        </select>
         {quickRanges.map(({ key, label }) => (
-          <button key={key} type="button" onClick={() => setRange(key)} style={{ ...inlineButtonStyle, background: range === key ? 'var(--color-accent-dim)' : 'var(--color-surface)' }}>
+          <button key={key} type="button" onClick={() => setRange(key)} style={{ ...inlineButtonStyle, padding: '7px 10px', background: range === key ? 'var(--color-accent-dim)' : 'transparent', border: range === key ? '1px solid var(--color-border-ghost)' : '1px solid transparent' }}>
             {label}
           </button>
         ))}
-        <button type="button" onClick={() => setRange('custom')} style={{ ...inlineButtonStyle, background: range === 'custom' ? 'var(--color-accent-dim)' : 'var(--color-surface)' }}>Custom</button>
         {range === 'custom' && (
           <>
             <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} style={inputStyle(145)} />
@@ -1239,24 +1314,23 @@ function UsagePage({
       {error && <div style={{ ...infoPanelStyle, color: '#f87171' }}>{error}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12 }}>
         {summaryCards.map(([label, value]) => (
-          <div key={label} style={{ padding: '16px 18px', border: '1px solid var(--color-border-ghost)', borderRadius: 14, background: 'var(--color-surface-low)' }}>
+          <div key={label} style={{ padding: '18px 16px', border: '1px solid var(--color-border-ghost)', borderRadius: 10, background: 'var(--color-surface-low)' }}>
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>{label}</div>
             <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8, color: 'var(--color-text-primary)' }}>{loading ? '…' : value}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 14, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 16 }}>
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 16 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>Your Usage</div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Cumulative usage across the selected period.</div>
+            <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Your Usage</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Your usage per day across this billing period</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(130)}>
+            <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(170)}>
               <option value="model">Group: Model</option>
               <option value="type">Group: Type</option>
-              <option value="day">Group: Day</option>
             </select>
             <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
               <option value="spend">Spend</option>
@@ -1266,44 +1340,134 @@ function UsagePage({
         </div>
         {chart ? (
           <>
-            <svg viewBox="0 0 760 240" role="img" aria-label={`Cumulative AI ${metric} chart`} style={{ width: '100%', minHeight: 220 }}>
-              {[0, 1, 2, 3, 4].map((line) => <line key={line} x1="48" x2="742" y1={20 + line * 48} y2={20 + line * 48} stroke="var(--color-border-ghost)" />)}
-              {chart.cumulative.map((series, seriesIndex) => {
-                const lower = chart.cumulative.slice(0, seriesIndex).map((item) => item.values)
-                const top = series.values.map((value, index) => value + lower.reduce((sum, values) => sum + values[index], 0))
-                const bottom = series.values.map((_, index) => lower.reduce((sum, values) => sum + values[index], 0))
-                const x = (index: number) => 48 + (index / Math.max(1, chart.days.length - 1)) * 694
-                const y = (value: number) => 212 - (value / chart.max) * 184
-                const points = [
-                  ...top.map((value, index) => `${x(index)},${y(value)}`),
-                  ...bottom.map((_, index) => `${x(chart.days.length - 1 - index)},${y(bottom[chart.days.length - 1 - index])}`),
-                ].join(' ')
-                return <polygon key={series.name} points={points} fill={colors[seriesIndex % colors.length]} opacity={0.68} />
-              })}
-              <line x1="742" x2="742" y1="16" y2="216" stroke="var(--color-text-tertiary)" strokeDasharray="4 4" />
-              <text x="735" y="14" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">Today</text>
-              <text x="48" y="232" fontSize="10" fill="var(--color-text-tertiary)">{chart.days[0]}</text>
-              <text x="742" y="232" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{chart.days[chart.days.length - 1]}</text>
-            </svg>
+            <div
+              style={{ position: 'relative' }}
+              onMouseLeave={() => setHoveredChartIndex(null)}
+              onMouseMove={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect()
+                const raw = (event.clientX - rect.left) / Math.max(1, rect.width)
+                const index = Math.round(Math.min(1, Math.max(0, raw)) * Math.max(0, chart.days.length - 1))
+                setHoveredChartIndex(index)
+              }}
+            >
+              <svg viewBox="0 0 760 240" role="img" aria-label={`Cumulative AI ${metric} chart`} style={{ width: '100%', minHeight: 220, display: 'block' }}>
+                {[0, 1, 2, 3, 4].map((line) => <line key={line} x1="48" x2="742" y1={20 + line * 48} y2={20 + line * 48} stroke="var(--color-border-ghost)" />)}
+                {chart.cumulative.map((series, seriesIndex) => {
+                  const lower = chart.cumulative.slice(0, seriesIndex).map((item) => item.values)
+                  const top = series.values.map((value, index) => value + lower.reduce((sum, values) => sum + values[index], 0))
+                  const bottom = series.values.map((_, index) => lower.reduce((sum, values) => sum + values[index], 0))
+                  const x = (index: number) => 48 + (index / Math.max(1, chart.days.length - 1)) * 694
+                  const y = (value: number) => 212 - (value / chart.max) * 184
+                  const points = [
+                    ...top.map((value, index) => `${x(index)},${y(value)}`),
+                    ...bottom.map((_, index) => `${x(chart.days.length - 1 - index)},${y(bottom[chart.days.length - 1 - index])}`),
+                  ].join(' ')
+                  return <polygon key={series.name} points={points} fill={colors[seriesIndex % colors.length]} opacity={0.68} />
+                })}
+                {hoveredChartIndex != null && chart.days[hoveredChartIndex] && (
+                  <>
+                    <line
+                      x1={48 + (hoveredChartIndex / Math.max(1, chart.days.length - 1)) * 694}
+                      x2={48 + (hoveredChartIndex / Math.max(1, chart.days.length - 1)) * 694}
+                      y1="16"
+                      y2="216"
+                      stroke="var(--color-text-tertiary)"
+                      strokeDasharray="4 4"
+                    />
+                    <circle
+                      cx={48 + (hoveredChartIndex / Math.max(1, chart.days.length - 1)) * 694}
+                      cy={212 - ((chart.totals[hoveredChartIndex] ?? 0) / chart.max) * 184}
+                      r="5"
+                      fill="var(--color-accent)"
+                      stroke="var(--color-surface-low)"
+                      strokeWidth="3"
+                    />
+                  </>
+                )}
+                <line x1="742" x2="742" y1="16" y2="216" stroke="var(--color-text-tertiary)" strokeDasharray="4 4" opacity={0.45} />
+                <text x="735" y="14" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">Today</text>
+                <text x="48" y="232" fontSize="10" fill="var(--color-text-tertiary)">{formatDate(chart.days[0])}</text>
+                <text x="742" y="232" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{formatDate(chart.days[chart.days.length - 1])}</text>
+              </svg>
+              {hoveredChartIndex != null && chart.days[hoveredChartIndex] && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 42,
+                    left: `${Math.min(78, Math.max(8, (hoveredChartIndex / Math.max(1, chart.days.length - 1)) * 100))}%`,
+                    transform: 'translateX(-50%)',
+                    minWidth: 220,
+                    padding: 12,
+                    borderRadius: 10,
+                    border: '1px solid var(--color-border-ghost)',
+                    background: 'var(--color-surface)',
+                    boxShadow: '0 16px 36px rgba(0, 0, 0, 0.18)',
+                    pointerEvents: 'none',
+                    zIndex: 2,
+                  }}
+                >
+                  <div style={{ fontSize: 12.5, fontWeight: 720, color: 'var(--color-text-primary)' }}>
+                    {formatFullDate(chart.days[hoveredChartIndex])}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                    Daily breakdown
+                  </div>
+                  <div style={{ display: 'grid', gap: 5, marginTop: 9 }}>
+                    {chart.cumulative
+                      .map((series, index) => ({ name: series.name, value: series.daily[hoveredChartIndex] ?? 0, color: colors[index % colors.length] }))
+                      .filter((item) => item.value > 0)
+                      .sort((left, right) => right.value - left.value)
+                      .slice(0, 5)
+                      .map((item) => (
+                        <div key={item.name} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, background: item.color, flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                          </span>
+                          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'baseline' }}>
+                            <strong style={{ color: 'var(--color-text-primary)' }}>{formatMetricExact(item.value)}</strong>
+                            <span style={{ color: 'var(--color-text-tertiary)' }}>{formatPercent(item.value, chart.dailyTotals[hoveredChartIndex] ?? 0)}</span>
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--color-border-ghost)', marginTop: 9, paddingTop: 8, display: 'grid', gap: 4, fontSize: 11.5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                      <span style={{ color: 'var(--color-text-secondary)' }}>Daily total</span>
+                      <strong style={{ color: 'var(--color-text-primary)' }}>{formatMetricExact(chart.dailyTotals[hoveredChartIndex] ?? 0)}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                      <span style={{ color: 'var(--color-text-secondary)' }}>Cumulative total</span>
+                      <strong style={{ color: 'var(--color-text-primary)' }}>{formatMetricExact(chart.totals[hoveredChartIndex] ?? 0)}</strong>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
-              {chart.cumulative.map((series, index) => (
-                <span key={series.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 3, background: colors[index % colors.length] }} />{series.name}
+            {chart.cumulative.map((series, index) => (
+              <span key={series.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--color-text-secondary)' }}>
+                  <span style={{ width: 13, height: 2, background: colors[index % colors.length] }} />{series.name}
                 </span>
               ))}
             </div>
+            {metric === 'spend' && access?.mode === 'own_key' && totalSpend === 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
+                Spend is unavailable for this range. Switch to Tokens to inspect exact token usage.
+              </div>
+            )}
           </>
         ) : (
           <div style={{ height: 220, display: 'grid', placeItems: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>
             {loading ? 'Loading usage…' : 'No AI calls in this range.'}
           </div>
         )}
-        <div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button type="button" onClick={() => void ipc.billing.exportUsageCsv(bounds.from, bounds.to)} style={inlineButtonStyle}>Export CSV</button>
         </div>
       </div>
 
-      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 14, overflow: 'auto' }}>
+      <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-low)', color: 'var(--color-text-tertiary)', textAlign: 'left' }}>
@@ -1314,10 +1478,10 @@ function UsagePage({
             {(report?.rows ?? []).slice(0, 200).map((row) => (
               <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
                 <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
-                <td style={{ padding: '11px 14px', textTransform: 'capitalize' }}>{row.type.replace('_', ' ')}</td>
+                <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
                 <td style={{ padding: '11px 14px' }}>{row.tokens == null ? '—' : formatTokens(row.tokens)}</td>
-                <td style={{ padding: '11px 14px' }}>{row.type === 'free_credit' ? 'Free' : row.costUsd == null ? 'Provider billed' : `$${row.costUsd.toFixed(4)}`}</td>
+                <td style={{ padding: '11px 14px' }}>{formatCost(row.type, row.costUsd)}</td>
               </tr>
             ))}
           </tbody>
@@ -1329,18 +1493,6 @@ function UsagePage({
         )}
         {!loading && !report?.rows.length && <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 12.5 }}>No usage in this range.</div>}
       </div>
-
-      {hasAiAccess && access?.mode === 'own_key' && (
-        <div style={infoPanelStyle}>
-          <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-            {providerName(provider) ? `On your own ${providerName(provider)} key` : 'On your own provider key'}
-          </div>
-          <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
-            Daylens can show tokens for direct calls, but only {providerLabel(provider)} knows the final bill. We leave cost blank instead of guessing.
-          </div>
-          <button type="button" onClick={onGoToAI} style={{ ...inlineButtonStyle, marginTop: 10 }}>Manage key in AI →</button>
-        </div>
-      )}
     </SectionPage>
   )
 }
@@ -1376,7 +1528,14 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // Inline edit buffers, keyed by fact id; plus the "add a fact" draft.
   const [factDrafts, setFactDrafts] = useState<Record<string, string>>({})
   const [newFactText, setNewFactText] = useState('')
+  // The fact row currently under the pointer — quiet edit/forget controls only
+  // appear on hover so the view reads as plain sentences, not a control panel.
+  const [hoveredFactId, setHoveredFactId] = useState<string | null>(null)
   const [memoryExpanded, setMemoryExpanded] = useState(false)
+  // DEV-108: each client's scoped memory, shown under that client; plus the
+  // per-client "add a fact" drafts keyed by client id.
+  const [clientMemory, setClientMemory] = useState<ClientMemoryGroup[]>([])
+  const [clientFactDrafts, setClientFactDrafts] = useState<Record<string, string>>({})
   // A short audit of what memory remembered/edited/forgot (memory.md §3).
   const [memoryAudit, setMemoryAudit] = useState<MemoryAuditEntry[] | null>(null)
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
@@ -1432,8 +1591,10 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
         if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
       })
-      void ipc.db.getWorkMemoryProfile().catch(() => ({ facts: [] })).then((profile) => {
-        if (!cancelled) setWorkMemoryProfile(profile.facts)
+      void ipc.db.getScopedMemoryProfile().catch(() => ({ general: [], clients: [] })).then((profile) => {
+        if (cancelled) return
+        setWorkMemoryProfile(profile.general)
+        setClientMemory(profile.clients)
       })
       void ipc.db.getMemoryAudit().catch(() => []).then((audit) => {
         if (!cancelled) setMemoryAudit(audit as MemoryAuditEntry[])
@@ -1502,6 +1663,35 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     setMemoryAudit(audit as MemoryAuditEntry[])
   }
 
+  // Refresh the per-client groups after any edit/forget/add that could touch a
+  // client fact (edits/forgets go by id and return only the general profile).
+  async function reloadClientMemory() {
+    const profile = await ipc.db.getScopedMemoryProfile().catch(() => null)
+    if (profile) setClientMemory(profile.clients)
+  }
+
+  async function addClientMemoryFact(clientId: string) {
+    const text = (clientFactDrafts[clientId] ?? '').trim()
+    if (!text) return
+    setWorkMemoryBusy(`clientadd:${clientId}`)
+    setWorkMemoryError(null)
+    try {
+      await ipc.db.addClientMemoryFact(clientId, text)
+      setClientFactDrafts((current) => {
+        const next = { ...current }
+        delete next[clientId]
+        return next
+      })
+      setWorkMemoryChange('Added to this client — the AI uses it when you ask about them.')
+      await reloadClientMemory()
+      void reloadMemoryAudit()
+    } catch (error) {
+      setWorkMemoryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setWorkMemoryBusy(null)
+    }
+  }
+
   async function saveWorkMemoryFact(id: string) {
     const text = (factDrafts[id] ?? '').trim()
     if (!text) return
@@ -1517,11 +1707,127 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       })
       setWorkMemoryChange('Saved — the AI will use this the next time it talks about you.')
       void reloadMemoryAudit()
+      void reloadClientMemory()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
       setWorkMemoryBusy(null)
     }
+  }
+
+  function startEditFact(id: string, text: string) {
+    setWorkMemoryChange(null)
+    setFactDrafts((current) => ({ ...current, [id]: text }))
+  }
+
+  function cancelEditFact(id: string) {
+    setFactDrafts((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }
+
+  // One fact rendered as a plain sentence with quiet hover edit/forget — shared
+  // by the general sections and each client's scoped memory so they read the
+  // same. Edits/forgets go by id, so client facts use the same handlers.
+  function renderMemoryFactRow(fact: WorkMemoryFact) {
+    const draft = factDrafts[fact.id]
+    const isEditing = draft !== undefined
+    const busy = workMemoryBusy === fact.id
+    // Any in-flight mutation disables every control so two writes can't race.
+    const anyBusy = workMemoryBusy !== null
+    const hovered = hoveredFactId === fact.id
+    const provenance = fact.source === 'chat'
+      ? 'Remembered from chat'
+      : fact.origin === 'user' ? 'Edited by you' : null
+
+    if (isEditing) {
+      return (
+        <div key={fact.id} style={{ display: 'grid', gap: 8, padding: '8px 0' }}>
+          <textarea
+            value={draft}
+            autoFocus
+            onChange={(event) => setFactDrafts((current) => ({ ...current, [fact.id]: event.target.value }))}
+            rows={2}
+            style={{
+              width: '100%',
+              resize: 'vertical',
+              fontSize: 13.5,
+              lineHeight: 1.55,
+              color: 'var(--color-text-primary)',
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border-ghost)',
+              borderRadius: 8,
+              padding: '8px 10px',
+              fontFamily: 'inherit',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              disabled={anyBusy}
+              onClick={() => cancelEditFact(fact.id)}
+              style={{ ...inlineButtonStyle, opacity: anyBusy ? 0.6 : 1, cursor: anyBusy ? 'default' : 'pointer' }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={anyBusy || draft.trim() === ''}
+              onClick={() => void saveWorkMemoryFact(fact.id)}
+              style={{ ...inlineButtonStyle, opacity: anyBusy || draft.trim() === '' ? 0.6 : 1, cursor: anyBusy || draft.trim() === '' ? 'default' : 'pointer' }}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div
+        key={fact.id}
+        onMouseEnter={() => setHoveredFactId(fact.id)}
+        onMouseLeave={() => setHoveredFactId((current) => (current === fact.id ? null : current))}
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 10,
+          padding: '6px 8px',
+          marginLeft: -8,
+          marginRight: -8,
+          borderRadius: 8,
+          background: hovered ? 'var(--color-surface-high)' : 'transparent',
+          transition: 'background 120ms',
+        }}
+      >
+        <span style={{ flex: 1, fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-primary)' }}>
+          {fact.text}
+          {provenance && (
+            <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--color-text-tertiary)' }}>· {provenance}</span>
+          )}
+        </span>
+        <span
+          style={{
+            display: 'flex',
+            gap: 14,
+            flexShrink: 0,
+            opacity: hovered ? 1 : 0,
+            pointerEvents: hovered ? 'auto' : 'none',
+            transition: 'opacity 120ms',
+          }}
+        >
+          <button type="button" disabled={anyBusy} onClick={() => startEditFact(fact.id, fact.text)} style={memoryActionStyle}>
+            Edit
+          </button>
+          <button type="button" disabled={anyBusy} onClick={() => void forgetWorkMemoryFact(fact.id)} style={{ ...memoryActionStyle, color: '#f87171' }}>
+            {busy ? 'Forgetting…' : 'Forget'}
+          </button>
+        </span>
+      </div>
+    )
   }
 
   async function addWorkMemoryFact() {
@@ -1550,6 +1856,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       setWorkMemoryProfile(result.facts)
       setWorkMemoryChange(result.changeSummary)
       void reloadMemoryAudit()
+      void reloadClientMemory()
     } catch (error) {
       setWorkMemoryError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1734,7 +2041,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = <BillingPage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => crossLinkToAI('billing')} />
       break
     case 'usage':
-      content = <UsagePage hasAiAccess={hasApiKey} provider={settings.aiProvider} onGoToAI={() => crossLinkToAI('usage')} />
+      content = <UsagePage />
       break
     case 'general':
       content = (
@@ -1855,62 +2162,28 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Loading…</div>
             ) : workMemoryProfile.length === 0 ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                Nothing learned yet. Use Rebuild below once Daylens has some tracked history, or add a fact by hand.
+                Nothing learned yet. Tell Daylens something in chat — “remember that Acme is my biggest
+                client” — or add a fact by hand below.
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: 8 }}>
-                {workMemoryProfile.map((fact) => {
-                  const draft = factDrafts[fact.id]
-                  const isEditing = draft !== undefined
-                  const busy = workMemoryBusy === fact.id
-                  // Any in-flight work-memory mutation disables every control, so
-                  // two writes can't race and clobber each other's returned state.
-                  const anyBusy = workMemoryBusy !== null
+              // One calm panel: general memory read as plain sentences, grouped
+              // into readable sections (memory.md §3 / settings.md §10.4) — not a
+              // stack of bordered textareas. Quiet edit/forget appear on hover.
+              <div style={{ ...infoPanelStyle, marginTop: 0, padding: '6px 18px 14px', display: 'block' }}>
+                {([
+                  { key: 'work', label: 'Work' },
+                  { key: 'personal', label: 'Personal' },
+                  { key: 'preferences', label: 'Preferences' },
+                ] as const).map((section) => {
+                  const sectionFacts = workMemoryProfile.filter((fact) => fact.category === section.key)
+                  if (sectionFacts.length === 0) return null
                   return (
-                    <div key={fact.id} style={{ ...infoPanelStyle, display: 'grid', gap: 8 }}>
-                      <textarea
-                        value={isEditing ? draft : fact.text}
-                        onChange={(event) => setFactDrafts((current) => ({ ...current, [fact.id]: event.target.value }))}
-                        rows={2}
-                        style={{
-                          width: '100%',
-                          resize: 'vertical',
-                          fontSize: 13.5,
-                          lineHeight: 1.5,
-                          color: 'var(--color-text-primary)',
-                          background: 'transparent',
-                          border: '1px solid var(--color-border-ghost)',
-                          borderRadius: 8,
-                          padding: '8px 10px',
-                          fontFamily: 'inherit',
-                          boxSizing: 'border-box',
-                        }}
-                      />
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {fact.source === 'chat' ? (
-                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Remembered from chat</span>
-                        ) : fact.origin === 'user' ? (
-                          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>Edited by you</span>
-                        ) : null}
-                        <div style={{ flex: 1 }} />
-                        {isEditing && (
-                          <button
-                            type="button"
-                            disabled={anyBusy}
-                            onClick={() => void saveWorkMemoryFact(fact.id)}
-                            style={{ ...inlineButtonStyle, opacity: anyBusy ? 0.6 : 1, cursor: anyBusy ? 'default' : 'pointer' }}
-                          >
-                            {busy ? 'Saving…' : 'Save'}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={anyBusy}
-                          onClick={() => void forgetWorkMemoryFact(fact.id)}
-                          style={{ ...inlineButtonStyle, color: '#f87171', opacity: anyBusy ? 0.6 : 1, cursor: anyBusy ? 'default' : 'pointer' }}
-                        >
-                          {busy ? 'Forgetting…' : 'Forget'}
-                        </button>
+                    <div key={section.key} style={{ paddingTop: 16 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+                        {section.label}
+                      </div>
+                      <div style={{ display: 'grid' }}>
+                        {sectionFacts.map((fact) => renderMemoryFactRow(fact))}
                       </div>
                     </div>
                   )
@@ -1953,6 +2226,73 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 </button>
               </div>
             </div>
+
+            {/* DEV-108: each client's scoped memory, organized under the client
+                (memory.md §3). Only the named client's memory is pulled in when
+                you ask about that client. */}
+            {clientMemory.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 6 }}>
+                  Client memory
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5, marginBottom: 10 }}>
+                  What Daylens knows about each client — used only when you ask about that client.
+                </div>
+                <div style={{ ...infoPanelStyle, marginTop: 0, padding: '6px 18px 16px', display: 'block' }}>
+                  {clientMemory.map((group) => {
+                    const draft = clientFactDrafts[group.clientId] ?? ''
+                    const addBusy = workMemoryBusy === `clientadd:${group.clientId}`
+                    const canAdd = workMemoryBusy === null && draft.trim() !== ''
+                    return (
+                      <div key={group.clientId} style={{ paddingTop: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          {group.color && (
+                            <span style={{ width: 8, height: 8, borderRadius: 999, background: group.color, flexShrink: 0 }} />
+                          )}
+                          <span style={{ fontSize: 12.5, fontWeight: 680, color: 'var(--color-text-primary)' }}>{group.clientName}</span>
+                        </div>
+                        <div style={{ display: 'grid' }}>
+                          {group.facts.length === 0 ? (
+                            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6, padding: '2px 0 4px' }}>
+                              Nothing yet — add what Daylens should know about {group.clientName}.
+                            </div>
+                          ) : (
+                            group.facts.map((fact) => renderMemoryFactRow(fact))
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                          <input
+                            value={draft}
+                            onChange={(event) => setClientFactDrafts((current) => ({ ...current, [group.clientId]: event.target.value }))}
+                            onKeyDown={(event) => { if (event.key === 'Enter' && canAdd) void addClientMemoryFact(group.clientId) }}
+                            placeholder={`Add a fact about ${group.clientName}…`}
+                            style={{
+                              flex: 1,
+                              fontSize: 13,
+                              color: 'var(--color-text-primary)',
+                              background: 'transparent',
+                              border: '1px solid var(--color-border-ghost)',
+                              borderRadius: 8,
+                              padding: '7px 10px',
+                              fontFamily: 'inherit',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                          <button
+                            type="button"
+                            disabled={!canAdd}
+                            onClick={() => void addClientMemoryFact(group.clientId)}
+                            style={{ ...inlineButtonStyle, opacity: canAdd ? 1 : 0.6, cursor: canAdd ? 'pointer' : 'default' }}
+                          >
+                            {addBusy ? 'Adding…' : 'Add'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <div style={{ paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button
@@ -2299,12 +2639,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               first
               title="Evening wrap"
               description="End-of-day recap of what you worked on."
-              control={<Toggle checked={settings.dailySummaryEnabled ?? true} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
+              control={<Toggle checked={settings.dailySummaryEnabled ?? false} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
             />
             <SettingsRow
               title="Morning brief"
               description="Short morning recap of yesterday and the day ahead."
-              control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
+              control={<Toggle checked={settings.morningNudgeEnabled ?? false} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
             />
             <SettingsRow
               title="Distraction alerts"

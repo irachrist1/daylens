@@ -15,6 +15,9 @@ import {
   rebuildWorkMemory,
 } from '../src/main/services/workMemoryProfile.ts'
 import {
+  classifyWorkMemoryFact,
+} from '../src/main/services/workMemoryProfile.ts'
+import {
   looksLikeMemoryInstruction,
   parseMemoryOps,
 } from '../src/main/ai/memoryWrite.ts'
@@ -31,6 +34,30 @@ test('looksLikeMemoryInstruction flags remember/forget/correct but not recall qu
   assert.equal(looksLikeMemoryInstruction('what did I do today?'), false)
   assert.equal(looksLikeMemoryInstruction('how was my day?'), false)
   assert.equal(looksLikeMemoryInstruction('hi'), false)
+})
+
+test('classifyWorkMemoryFact groups facts into readable sections', () => {
+  // Drafted facts are grouped by their stable topic_key, not keywords.
+  assert.equal(classifyWorkMemoryFact('You spend most of your day in Cursor and Warp.', 'top-apps'), 'work')
+  assert.equal(classifyWorkMemoryFact('You treat YouTube as background, not focus.', 'background'), 'personal')
+  // Hand/chat facts are grouped by keyword.
+  assert.equal(classifyWorkMemoryFact('Andersen in Rwanda is your workplace.'), 'work')
+  assert.equal(classifyWorkMemoryFact('Acme is your biggest client.'), 'work')
+  assert.equal(classifyWorkMemoryFact('You prefer dark mode for late-night coding.'), 'preferences')
+  assert.equal(classifyWorkMemoryFact('You prefer simple, concise answers.'), 'preferences')
+  assert.equal(classifyWorkMemoryFact('You live in Kigali and train as a runner.'), 'personal')
+})
+
+test('getWorkMemoryProfile returns a category on every fact', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  try {
+    addWorkMemoryFact(db, 'Acme is your biggest client.')
+    const fact = getWorkMemoryProfile(db).facts[0]
+    assert.equal(fact.category, 'work')
+  } finally {
+    db.close()
+  }
 })
 
 test('parseMemoryOps maps add/update/delete/noop onto durable ops', () => {
