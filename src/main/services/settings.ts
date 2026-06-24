@@ -31,6 +31,8 @@ const DEFAULTS: AppSettings = {
   summaryVoice: 'warm',
   focusApps: [],
   interestedCategories: [],
+  userRole: '',
+  userClients: [],
   firstLaunchDate: 0,
   feedbackPromptShown: false,
   aiProvider: 'anthropic',
@@ -99,6 +101,9 @@ export function getSettings(): AppSettings {
     summaryVoice: (_store.get('summaryVoice', 'warm') as AppSettings['summaryVoice']),
     focusApps: (_store.get('focusApps', []) as string[]),
     interestedCategories: (_store.get('interestedCategories', []) as AppSettings['interestedCategories']),
+    userRole: (_store.get('userRole', '') as string),
+    userClients: (_store.get('userClients', []) as string[]),
+    workRhythm: (_store.get('workRhythm', undefined) as AppSettings['workRhythm']),
     firstLaunchDate: (_store.get('firstLaunchDate', 0) as number),
     feedbackPromptShown: (_store.get('feedbackPromptShown', false) as boolean),
     aiProvider: (_store.get('aiProvider', 'anthropic') as AIProviderMode),
@@ -146,6 +151,15 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
   }
   if ('userIntent' in entries) {
     entries.userIntent = String(entries.userIntent ?? '').trim().slice(0, 400)
+  }
+  if ('userRole' in entries) {
+    entries.userRole = String(entries.userRole ?? '').trim().slice(0, 80)
+  }
+  if ('userClients' in entries && Array.isArray(entries.userClients)) {
+    entries.userClients = entries.userClients
+      .map((name) => String(name ?? '').trim().slice(0, 80))
+      .filter((name) => name.length > 0)
+      .slice(0, 24)
   }
   if (entries.onboardingState) {
     entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')

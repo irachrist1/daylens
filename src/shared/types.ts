@@ -1205,11 +1205,19 @@ export type OnboardingStage =
   | 'verifying_permission'
   | 'proof'
   | 'tour'
+  | 'about'
   | 'voice'
-  | 'personalize'
+  | 'work'
+  | 'connections'
+  | 'privacy'
+  | 'personalize'   // legacy: split into about/work/connections/privacy; kept so stale state migrates cleanly
   | 'ai_setup'
   | 'ready'
   | 'complete'
+
+/** How the user's working day is shaped — tunes brief timing and day boundaries.
+ *  Captured in onboarding ("when do you work?"). */
+export type WorkRhythm = 'early' | 'standard' | 'night' | 'always'
 
 /** How Daylens's written summaries should sound. Chosen in onboarding, applied
  *  to every recap / wrap / brief prompt (`src/shared/summaryVoice.ts`). */
@@ -1281,6 +1289,9 @@ export interface AppSettings {
   summaryVoice?: SummaryVoice   // how recaps/wraps/briefs should sound; default 'warm'
   focusApps?: string[]          // apps the user counts as "real work" (bundle ids and/or names)
   interestedCategories?: AppCategory[] // categories the user said they care about; fed to AI context
+  userRole?: string             // what the user does (e.g. "Designer"); seeds suggestions + AI context
+  userClients?: string[]        // clients/projects the user works with; helps AI recognise & attribute work
+  workRhythm?: WorkRhythm       // shape of the working day; tunes brief timing / day boundaries
   firstLaunchDate: number       // Unix ms — set on first launch, used for day-7 feedback prompt
   feedbackPromptShown: boolean  // true once the day-7 prompt has been shown
   aiProvider: AIProviderMode

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type {
   AppSettings,
+  BillingAccessSnapshot,
   DayTimelinePayload,
   LiveSession,
   OnboardingStage,
@@ -10,14 +11,16 @@ import type {
   TrackingPermissionState,
   LinuxTrackingDiagnostics,
 } from '@shared/types'
-import type { AppCategory, SummaryVoice } from '@shared/types'
+import type { AppCategory, SummaryVoice, WorkRhythm } from '@shared/types'
 import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { VOICE_SAMPLES, DEFAULT_SUMMARY_VOICE } from '@shared/summaryVoice'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import { todayString } from '../lib/format'
 import ConnectAI from '../components/ConnectAI'
-import Mascot from '../components/Mascot'
+import Mascot, { type MascotExpression } from '../components/Mascot'
+
+// ── Content data ────────────────────────────────────────────────────────────
 
 // Intent chips double as goal ids (persisted to userGoals for back-compat) and as
 // sentences that auto-fill the free-text intent box (persisted to userIntent).
@@ -29,12 +32,47 @@ const INTENTS = [
   { id: 'ask-ai', label: 'Ask AI about my work', phrase: 'Ask AI specific questions about my week.' },
 ]
 
+// What the user does — single-select. Seeds the "your work" suggestions and gives
+// recaps a frame ("As a designer, your day…"). Deliberately everyday, not jargon.
+const ROLES: Array<{ id: string; label: string; emoji: string }> = [
+  { id: 'consultant', label: 'Consultant', emoji: '🧭' },
+  { id: 'designer', label: 'Designer', emoji: '🎨' },
+  { id: 'engineer', label: 'Engineer', emoji: '💻' },
+  { id: 'founder', label: 'Founder / operator', emoji: '🚀' },
+  { id: 'writer', label: 'Writer / creator', emoji: '✍️' },
+  { id: 'researcher', label: 'Researcher', emoji: '🔬' },
+  { id: 'manager', label: 'Manager / lead', emoji: '📊' },
+  { id: 'student', label: 'Student', emoji: '🎓' },
+  { id: 'other', label: 'Something else', emoji: '✨' },
+]
+
+// Picking a role gently pre-selects a couple of categories — an immediate "it gets
+// me" payoff. Only applied while the user hasn't touched categories themselves.
+const ROLE_SEED_CATEGORIES: Record<string, AppCategory[]> = {
+  consultant: ['meetings', 'communication', 'productivity'],
+  designer: ['design', 'productivity'],
+  engineer: ['productivity', 'research'],
+  founder: ['meetings', 'communication', 'productivity'],
+  writer: ['writing', 'research'],
+  researcher: ['research', 'writing'],
+  manager: ['meetings', 'communication'],
+  student: ['research', 'writing'],
+  other: [],
+}
+
+const RHYTHMS: Array<{ id: WorkRhythm; label: string; hint: string; emoji: string }> = [
+  { id: 'early', label: 'Early bird', hint: 'Mornings are my focus', emoji: '🌅' },
+  { id: 'standard', label: 'Nine to five', hint: 'Regular working hours', emoji: '🕘' },
+  { id: 'night', label: 'Night owl', hint: 'I do my best work late', emoji: '🌙' },
+  { id: 'always', label: 'Always on', hint: 'It varies, all hours', emoji: '⚡' },
+]
+
 const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
   { id: ['tour'], label: 'How it works' },
-  { id: ['voice', 'personalize'], label: 'Make it yours' },
+  { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
@@ -43,39 +81,46 @@ const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['proof'], label: 'First signal' },
   { id: ['tour'], label: 'How it works' },
-  { id: ['voice', 'personalize'], label: 'Make it yours' },
+  { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
 ]
 
+// The five "Make it yours" screens share a progress group; we show a sub-count
+// ("3 of 5") in the eyebrow so the user feels momentum without the bar lurching.
+const MAKE_IT_YOURS: OnboardingStage[] = ['about', 'voice', 'work', 'connections', 'privacy']
+
 // The macro flow used for the Back button. The mac permission stage is omitted:
 // it auto-advances once access is granted, so stepping back into it would bounce
 // the user forward again.
-const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'voice', 'personalize', 'ai_setup', 'ready']
+const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
-// The "why am I installing this again?" story — answered as a few calm beats, in
-// plain language anyone can feel, not a feature list.
-const WHY_BEATS: Array<{ emoji: string; title: string; body: string }> = [
+// The "why am I installing this?" story — told one calm beat at a time, with Lumen
+// acting it out, not three stacked FAQ boxes.
+const WHY_BEATS: Array<{ scene: 'diary' | 'device' | 'recap'; expression: MascotExpression; title: string; body: string }> = [
   {
-    emoji: '🤔',
-    title: 'So… why let an app watch my whole laptop?',
-    body: "Fair question. Most trackers feel like a boss looking over your shoulder. Daylens isn't that — it's a quiet diary of your day that only you can read.",
+    scene: 'diary',
+    expression: 'curious',
+    title: 'So… why let an app watch my laptop?',
+    body: "Fair question. Most trackers feel like a boss over your shoulder. Daylens is the opposite — a quiet diary of your day that only you can read.",
   },
   {
-    emoji: '🔒',
+    scene: 'device',
+    expression: 'idle',
     title: 'It all stays on this device.',
-    body: 'No screenshots. No video. No screen recording. Just the names of what you had open — and none of it leaves your computer unless you ask it to.',
+    body: 'No screenshots. No video. Just the names of what you had open — and none of it leaves your computer unless you ask it to.',
   },
   {
-    emoji: '✨',
+    scene: 'recap',
+    expression: 'happy',
     title: 'At the end of the day, you get the good part.',
-    body: "Instead of “where did the day go?”, you get an honest little recap of what you actually got done — written like a friend caught you up, not a spreadsheet.",
+    body: "Instead of “where did the day go?”, an honest little recap of what you actually got done — written like a friend caught you up, not a spreadsheet.",
   },
 ]
 
-// Categories a normal person recognises — chosen in onboarding so Daylens knows
-// what you care to see. Deliberately everyday, not developer jargon.
+// Categories a normal person recognises — chosen so Daylens knows what you care to
+// see. Deliberately everyday, not developer jargon.
 const INTEREST_CATEGORIES: Array<{ id: AppCategory; label: string; emoji: string }> = [
   { id: 'productivity', label: 'Focused work', emoji: '🎯' },
   { id: 'writing', label: 'Writing', emoji: '✍️' },
@@ -97,34 +142,91 @@ interface ProofSnapshot {
   ready: boolean
 }
 
-function StageHeading({
+// ── The stage: one fixed frame, identical on every screen ────────────────────
+// Only the content zone changes between screens, and it scrolls inside the frame
+// so the card never resizes or clips. Header (Lumen + title) and footer (action +
+// skip) hold their position the whole way through.
+
+function Stage({
+  expression = 'idle',
+  eyebrow,
   title,
-  body,
+  subtitle,
+  steps,
+  activeStepIndex,
+  canGoBack,
+  onBack,
+  children,
+  centered = false,
+  contentKey,
+  primary,
+  secondary,
+  skip,
+  note,
 }: {
-  title: string
-  body?: string
+  expression?: MascotExpression
+  eyebrow?: ReactNode
+  title: ReactNode
+  subtitle?: ReactNode
+  steps: Array<{ label: string }>
+  activeStepIndex: number
+  canGoBack: boolean
+  onBack: () => void
+  children?: ReactNode
+  centered?: boolean
+  contentKey?: string | number
+  primary?: { label: ReactNode; onClick: () => void; disabled?: boolean }
+  secondary?: { label: ReactNode; onClick: () => void; disabled?: boolean }
+  skip?: { label: ReactNode; onClick: () => void }
+  note?: ReactNode
 }) {
   return (
-    <div style={{ display: 'grid', gap: 10 }}>
-      <h1 className="onboarding-title">{title}</h1>
-      {body && <p className="onboarding-sub">{body}</p>}
+    <div className="ob-stage">
+      <div className="ob-rail">
+        {canGoBack
+          ? <button className="ob-back" onClick={onBack}>‹ Back</button>
+          : <span className="ob-back-ph" aria-hidden="true" />}
+        <div className="ob-progress" role="progressbar" aria-valuenow={activeStepIndex + 1} aria-valuemin={1} aria-valuemax={steps.length} aria-label="Setup progress">
+          {steps.map((s, i) => (
+            <span
+              key={`${s.label}-${i}`}
+              className={`ob-seg${i === activeStepIndex ? ' is-active' : i < activeStepIndex ? ' is-done' : ''}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="ob-header">
+        <span className="ob-lumen"><Mascot expression={expression} size={54} /></span>
+        <div className="ob-headtext">
+          {eyebrow && <div className="ob-eyebrow">{eyebrow}</div>}
+          <h1 className="ob-title">{title}</h1>
+          {subtitle && <p className="ob-sub">{subtitle}</p>}
+        </div>
+      </div>
+
+      <div className={`ob-content${centered ? ' ob-content-center' : ''}`} key={contentKey}>
+        {children}
+      </div>
+
+      <div className="ob-footer">
+        {primary && (
+          <button className="ob-btn-primary" onClick={primary.onClick} disabled={primary.disabled}>
+            {primary.label}
+          </button>
+        )}
+        {secondary && (
+          <button className="ob-btn-secondary" onClick={secondary.onClick} disabled={secondary.disabled}>
+            {secondary.label}
+          </button>
+        )}
+        <span className="ob-footer-spacer" />
+        {note && <span className="ob-note">{note}</span>}
+        {skip && <button className="ob-skip" onClick={skip.onClick}>{skip.label}</button>}
+      </div>
     </div>
   )
 }
-
-function ProgressDots({ count, activeIndex }: { count: number; activeIndex: number }) {
-  return (
-    <div className="onboarding-dots" aria-label="Setup progress">
-      {Array.from({ length: count }).map((_, i) => (
-        <div
-          key={i}
-          className={`onboarding-dot${i === activeIndex ? ' onboarding-dot-active' : i < activeIndex ? ' onboarding-dot-done' : ''}`}
-        />
-      ))}
-    </div>
-  )
-}
-
 
 function SettingsPreview() {
   return (
@@ -133,11 +235,11 @@ function SettingsPreview() {
         <div className="onboarding-settings-mock-dot" style={{ background: '#ff5f56' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#ffbd2e' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#27c93f' }} />
-        <div className="onboarding-settings-mock-title">Privacy & Security — Daylens capture</div>
+        <div className="onboarding-settings-mock-title">Privacy & Security — Accessibility</div>
       </div>
       <div className="onboarding-settings-mock-body">
         <div className="onboarding-settings-mock-row onboarding-settings-mock-row-other">
-          <span className="onboarding-settings-mock-app">Loom</span>
+          <span className="onboarding-settings-mock-app">Raycast</span>
           <span className="onboarding-settings-mock-toggle on" />
         </div>
         <div className="onboarding-settings-mock-row onboarding-settings-mock-row-target">
@@ -156,10 +258,7 @@ function SettingsPreview() {
   )
 }
 
-
 // ── The tour is a story: one real day, told back to you ─────────────────────
-// Every beat auto-animates on entry; advancing is always "forward" (tap the
-// scene or Continue), so a tap never means anything but "next".
 
 const STORY_BEATS = [
   { scene: 'intro', pos: 0, time: '', line: 'Here is one ordinary day — the way Daylens tells it back to you.' },
@@ -329,6 +428,50 @@ function TourStory({ index, name }: { index: number; name: string }) {
   )
 }
 
+// ── The "why" story scenes ───────────────────────────────────────────────────
+
+function WhyScene({ scene, name }: { scene: 'diary' | 'device' | 'recap'; name: string }) {
+  if (scene === 'device') {
+    return (
+      <div className="ob-why-scene">
+        <div className="ob-why-device">
+          <div className="ob-why-device-screen"><span className="ob-why-lock">🔒</span></div>
+          <div className="ob-why-device-base" />
+        </div>
+        <div className="ob-why-tags">
+          {['No screenshots', 'No video', 'Never the cloud'].map((t, i) => (
+            <span key={t} className="ob-why-tag" style={{ animationDelay: `${0.1 + i * 0.1}s` }}>{t}</span>
+          ))}
+        </div>
+      </div>
+    )
+  }
+  if (scene === 'recap') {
+    return (
+      <div className="ob-why-scene">
+        <div className="ob-why-recap">
+          <div className="ob-why-recap-label">Evening recap</div>
+          <div className="ob-why-recap-body">
+            A solid day{name ? `, ${name}` : ''} — about 5 hours in. You stayed with the proposal and got it finished, made your team call, and cleared the inbox. Nice work.
+          </div>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="ob-why-scene">
+      <div className="ob-why-diary">
+        <div className="ob-why-diary-line" style={{ width: '72%' }} />
+        <div className="ob-why-diary-line" style={{ width: '88%' }} />
+        <div className="ob-why-diary-line" style={{ width: '54%' }} />
+        <div className="ob-why-diary-seal">only you</div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main view ────────────────────────────────────────────────────────────────
+
 export default function Onboarding({
   initialSettings,
   onComplete,
@@ -342,6 +485,7 @@ export default function Onboarding({
   const [intentDraft, setIntentDraft] = useState(initialSettings.userIntent)
   const [aiConnected, setAiConnected] = useState(initialSettings.onboardingState.aiSetupState === 'connected')
   const [tourIndex, setTourIndex] = useState(0)
+  const [whyIndex, setWhyIndex] = useState(0)
   // T3: opt-in to Tracking Controls during onboarding. Off by default — picking
   // an app to keep private (below) flips it on implicitly at persist time.
   const [trackingOptIn] = useState(initialSettings.trackingControlsEnabled ?? false)
@@ -352,6 +496,13 @@ export default function Onboarding({
   const [interestedCategories, setInterestedCategories] = useState<Set<AppCategory>>(new Set(initialSettings.interestedCategories ?? []))
   const [excludedApps, setExcludedApps] = useState<Set<string>>(new Set(initialSettings.trackingExcludedApps ?? []))
   const [topApps, setTopApps] = useState<string[]>([])
+  const [userRole, setUserRole] = useState(initialSettings.userRole ?? '')
+  const [clients, setClients] = useState<string[]>(initialSettings.userClients ?? [])
+  const [clientDraft, setClientDraft] = useState('')
+  const [privateDraft, setPrivateDraft] = useState('')
+  const [workRhythm, setWorkRhythm] = useState<WorkRhythm | undefined>(initialSettings.workRhythm)
+  const [billing, setBilling] = useState<BillingAccessSnapshot | null>(null)
+  const [billingBusy, setBillingBusy] = useState(false)
   const [permissionState, setPermissionState] = useState<TrackingPermissionState>(initialSettings.onboardingState.trackingPermissionState)
   const [permissionDetails, setPermissionDetails] = useState<TrackingPermissionDetails | null>(null)
   const [busy, setBusy] = useState(false)
@@ -374,6 +525,15 @@ export default function Onboarding({
     return stage === 'complete' ? steps.length : 0
   }, [steps, stage])
 
+  // Friendly per-screen eyebrow: the group label, plus a sub-count for the
+  // multi-screen "Make it yours" group so progress reads as momentum.
+  const eyebrow = useMemo(() => {
+    const label = steps[activeStepIndex]?.label ?? ''
+    const myIdx = MAKE_IT_YOURS.indexOf(stage)
+    if (myIdx >= 0) return `${label} · ${myIdx + 1} of ${MAKE_IT_YOURS.length}`
+    return label
+  }, [steps, activeStepIndex, stage])
+
   useEffect(() => {
     if (onboardingTrackedRef.current) return
     onboardingTrackedRef.current = true
@@ -387,6 +547,13 @@ export default function Onboarding({
   useEffect(() => {
     onboardingStateRef.current = settings.onboardingState
   }, [settings.onboardingState])
+
+  // Migrate any state persisted on the old single "personalize" stage onto the
+  // first of its replacements so a mid-onboarding reload never lands nowhere.
+  useEffect(() => {
+    if (stage === 'personalize') void persistOnboarding('about')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage])
 
   useEffect(() => {
     let cancelled = false
@@ -430,6 +597,17 @@ export default function Onboarding({
       .catch(() => { if (!cancelled) setTopApps([]) })
     return () => { cancelled = true }
   }, [])
+
+  // The money moment reads from the real billing snapshot, so the AI screen shows
+  // what's actually true in this build (free credit / subscribe / unavailable).
+  useEffect(() => {
+    if (stage !== 'ai_setup' || billing) return
+    let cancelled = false
+    ipc.billing.getAccess()
+      .then((snapshot) => { if (!cancelled) setBilling(snapshot) })
+      .catch(() => { /* fall back to BYOK-only copy */ })
+    return () => { cancelled = true }
+  }, [stage, billing])
 
   async function persistOnboarding(
     nextStage: OnboardingStage,
@@ -615,6 +793,34 @@ export default function Onboarding({
     })
   }
 
+  function chooseRole(role: { id: string; label: string }) {
+    setUserRole(role.label)
+    // Gentle "it gets me" payoff: seed a couple of categories the first time, only
+    // if the user hasn't already curated them.
+    if (interestedCategories.size === 0) {
+      const seed = ROLE_SEED_CATEGORIES[role.id]
+      if (seed && seed.length > 0) setInterestedCategories(new Set(seed))
+    }
+  }
+
+  function addClient(raw: string) {
+    const name = raw.trim()
+    if (!name) return
+    setClients((prev) => (prev.some((c) => c.toLowerCase() === name.toLowerCase()) ? prev : [...prev, name].slice(0, 24)))
+    setClientDraft('')
+  }
+
+  function addPrivateApp(raw: string) {
+    const name = raw.trim()
+    if (!name) return
+    setExcludedApps((prev) => {
+      const next = new Set(prev)
+      next.add(name)
+      return next
+    })
+    setPrivateDraft('')
+  }
+
   async function finishOnboarding() {
     if (busy) return
     setBusy(true)
@@ -638,6 +844,9 @@ export default function Onboarding({
         userName: nameDraft.trim() || namePlaceholder.trim(),
         userGoals: Array.from(goals),
         userIntent: intentDraft.trim(),
+        userRole,
+        userClients: clients,
+        workRhythm,
         summaryVoice,
         focusApps: Array.from(focusApps),
         interestedCategories: Array.from(interestedCategories),
@@ -687,8 +896,7 @@ export default function Onboarding({
 
   // Escape hatch: the user is never trapped on the permission gate. They can
   // proceed without granting (capture simply has nothing to read until they do)
-  // and grant later in Settings. Critically, this also keeps the founder able to
-  // test the rest of onboarding when macOS is being stubborn about a grant.
+  // and grant later in Settings.
   async function skipPermission() {
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
       platform,
@@ -712,9 +920,20 @@ export default function Onboarding({
     await persistOnboarding('why')
   }
 
-  async function continueFromWhy() {
+  function advanceWhy() {
+    if (whyIndex < WHY_BEATS.length - 1) {
+      setWhyIndex((i) => i + 1)
+      return
+    }
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'why', surface: 'onboarding' })
-    await persistOnboarding(isMac ? 'permission' : 'proof', {
+    void persistOnboarding(isMac ? 'permission' : 'proof', {
+      proofState: isMac ? 'idle' : 'collecting',
+    })
+  }
+
+  function skipWhy() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'why', surface: 'onboarding' })
+    void persistOnboarding(isMac ? 'permission' : 'proof', {
       proofState: isMac ? 'idle' : 'collecting',
     })
   }
@@ -736,7 +955,17 @@ export default function Onboarding({
       return
     }
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'tour', surface: 'onboarding' })
-    void persistOnboarding('voice')
+    void persistOnboarding('about')
+  }
+
+  async function continueFromAbout() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'about', surface: 'onboarding' })
+    await ipc.settings.set({
+      userRole,
+      userGoals: Array.from(goals),
+      userIntent: intentDraft.trim(),
+    })
+    await persistOnboarding('voice')
   }
 
   async function chooseVoice(voice: SummaryVoice) {
@@ -747,7 +976,7 @@ export default function Onboarding({
   async function continueFromVoice() {
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'voice', surface: 'onboarding' })
     await ipc.settings.set({ summaryVoice })
-    await persistOnboarding('personalize')
+    await persistOnboarding('work')
   }
 
   function toggleInSet<T>(value: T, setter: Dispatch<SetStateAction<Set<T>>>) {
@@ -762,13 +991,23 @@ export default function Onboarding({
   // Ground the focus / keep-private pickers in the user's real apps; fall back to
   // a common list for a brand-new user with nothing captured yet.
   const appChoices = topApps.length > 0 ? topApps : COMMON_FOCUS_APPS
+  // Keep-private suggestions exclude anything already marked private.
+  const privateSuggestions = appChoices.filter((app) => !excludedApps.has(app))
 
   const flowIndex = STAGE_FLOW.indexOf(stage)
-  const canGoBack = !SYSTEM_STAGES.has(stage) && ((stage === 'tour' && tourIndex > 0) || flowIndex > 0)
+  const canGoBack = !SYSTEM_STAGES.has(stage) && (
+    (stage === 'tour' && tourIndex > 0)
+    || (stage === 'why' && whyIndex > 0)
+    || flowIndex > 0
+  )
 
   function goBack() {
     if (stage === 'tour' && tourIndex > 0) {
       setTourIndex((index) => index - 1)
+      return
+    }
+    if (stage === 'why' && whyIndex > 0) {
+      setWhyIndex((index) => index - 1)
       return
     }
     const previous = STAGE_FLOW[flowIndex - 1]
@@ -776,27 +1015,43 @@ export default function Onboarding({
     void persistOnboarding(previous)
   }
 
-  async function continueFromPersonalize() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-      platform,
-      step: 'personalize',
-      surface: 'onboarding',
-    })
-    // Persist identity + personalization now so a reload mid-flow keeps it.
-    const nextExcludedApps = Array.from(excludedApps)
+  async function continueFromWork() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'work', surface: 'onboarding' })
     await ipc.settings.set({
-      userName: nameDraft.trim() || namePlaceholder.trim(),
-      userGoals: Array.from(goals),
-      userIntent: intentDraft.trim(),
-      summaryVoice,
       focusApps: Array.from(focusApps),
       interestedCategories: Array.from(interestedCategories),
+    })
+    await persistOnboarding('connections')
+  }
+
+  async function continueFromConnections() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'connections', surface: 'onboarding' })
+    await ipc.settings.set({ userClients: clients, workRhythm })
+    await persistOnboarding('privacy')
+  }
+
+  async function continueFromPrivacy() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'privacy', surface: 'onboarding' })
+    const nextExcludedApps = Array.from(excludedApps)
+    await ipc.settings.set({
       // Excluding specific apps requires the controls master switch on. Turn it
       // on implicitly when the user actually picked something to keep private.
       trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
       trackingExcludedApps: nextExcludedApps,
     })
     await persistOnboarding('ai_setup', { personalizationState: 'completed' })
+  }
+
+  async function openCheckout() {
+    setBillingBusy(true)
+    setErrorMessage(null)
+    try {
+      await ipc.billing.createPolarCheckout()
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBillingBusy(false)
+    }
   }
 
   async function continueFromAiSetup() {
@@ -826,300 +1081,238 @@ export default function Onboarding({
         ? 'waiting'
         : 'pending'
 
-  return (
-    <div className="onboarding-root">
-      <div className="onboarding-shell">
-        <div className="onboarding-topbar">
-          {canGoBack
-            ? <button className="onboarding-back" onClick={goBack}>← Back</button>
-            : <span className="onboarding-back-placeholder" />}
-          <ProgressDots count={steps.length} activeIndex={activeStepIndex} />
-        </div>
+  const greetName = nameDraft.trim() || namePlaceholder
+  const railProps = { steps, activeStepIndex, canGoBack, onBack: goBack }
+  const voiceSample = VOICE_SAMPLES.find((v) => v.voice === summaryVoice)
+  // Managed AI is "available" when billing reports a real managed mode (not the
+  // unavailable fallback some builds ship with). Drives the $5 framing honestly.
+  const managedAvailable = billing != null && billing.mode !== 'unavailable'
 
-        {stage === 'welcome' && (
-          <div className="onboarding-screen onboarding-screen-center">
-            <div className="onboarding-greeting-mascot"><Mascot expression="wave" size={108} /></div>
-            <h1 className="onboarding-title onboarding-title-large">
-              Hi{(nameDraft.trim() || namePlaceholder) ? ` ${nameDraft.trim() || namePlaceholder}` : ''} 👋 — great to have you on Daylens.
-            </h1>
-            <p className="onboarding-sub">
-              First, what should Daylens call you? It's only ever used to greet you — like the morning brief.
-            </p>
-            <label className="onboarding-name-field onboarding-name-field-hero">
+  function renderStage() {
+    switch (stage) {
+      case 'welcome':
+        return (
+          <Stage
+            {...railProps}
+            expression="wave"
+            eyebrow={eyebrow}
+            title={<>Hi{greetName ? ` ${greetName}` : ''} <span className="ob-wave">👋</span></>}
+            subtitle="I'm Lumen — I'll set Daylens up with you. First, what should I call you?"
+            centered
+            contentKey="welcome"
+            primary={{ label: greetName ? 'Nice to meet you' : 'Continue', onClick: () => void handleContinueFromWelcome() }}
+          >
+            <label className="ob-name-field">
               <input
                 value={nameDraft}
-                onChange={(event) => setNameDraft(event.target.value)}
+                onChange={(e) => setNameDraft(e.target.value)}
                 placeholder={namePlaceholder || defaultUserName || 'Your name'}
                 maxLength={80}
                 autoFocus
                 onKeyDown={(e) => { if (e.key === 'Enter') void handleContinueFromWelcome() }}
               />
             </label>
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void handleContinueFromWelcome()}>
-                {nameDraft.trim() || namePlaceholder ? "Nice to meet you" : 'Continue'}
-              </button>
-            </div>
-            <p className="onboarding-reassurance">Private by default · stays on this device · no judgment</p>
-          </div>
-        )}
+            <p className="ob-reassure">Private by default · stays on this device · no judgment</p>
+          </Stage>
+        )
 
-        {stage === 'why' && (
-          <div className="onboarding-screen onboarding-screen-center">
-            <div className="onboarding-why-mascot"><Mascot expression="think" size={84} /></div>
-            <div className="onboarding-why-beats">
-              {WHY_BEATS.map((b) => (
-                <div key={b.title} className="onboarding-why-card">
-                  <div className="onboarding-why-emoji">{b.emoji}</div>
-                  <div>
-                    <div className="onboarding-why-title">{b.title}</div>
-                    <div className="onboarding-why-body">{b.body}</div>
-                  </div>
-                </div>
-              ))}
+      case 'why': {
+        const beat = WHY_BEATS[Math.min(whyIndex, WHY_BEATS.length - 1)]
+        const last = whyIndex >= WHY_BEATS.length - 1
+        return (
+          <Stage
+            {...railProps}
+            expression={beat.expression}
+            eyebrow={`${eyebrow} · ${whyIndex + 1} of ${WHY_BEATS.length}`}
+            title={beat.title}
+            subtitle={beat.body}
+            contentKey={`why-${beat.scene}`}
+            primary={{ label: last ? "Makes sense — let's go" : 'Continue', onClick: () => advanceWhy() }}
+            skip={{ label: 'Skip', onClick: () => skipWhy() }}
+          >
+            <WhyScene scene={beat.scene} name={greetName} />
+            <div className="ob-why-dots" aria-hidden="true">
+              {WHY_BEATS.map((_, i) => <span key={i} className={`ob-why-dot${i === whyIndex ? ' is-active' : ''}`} />)}
             </div>
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void continueFromWhy()}>
-                Makes sense — let's go
-              </button>
-            </div>
-            <button className="onboarding-skip-link" onClick={() => void continueFromWhy()}>Skip</button>
-          </div>
-        )}
+          </Stage>
+        )
+      }
 
-        {stage === 'permission' && (
-          <div className="onboarding-screen">
-            <StageHeading title="Daylens needs Accessibility to read window titles — no screenshots or video." />
+      case 'permission':
+        return (
+          <Stage
+            {...railProps}
+            expression="curious"
+            eyebrow={eyebrow}
+            title="One quick permission to read window titles"
+            subtitle="Daylens needs macOS Accessibility — just the names of what you have open. No screenshots, no video, ever."
+            contentKey="permission"
+            primary={{ label: busy ? 'Opening System Settings…' : 'Open Privacy & Security', onClick: () => void beginPermissionRequest(), disabled: busy }}
+            secondary={{ label: 'I already enabled it', onClick: () => void refreshPermissionState() }}
+            skip={{ label: 'Skip for now', onClick: () => void skipPermission() }}
+          >
             <SettingsPreview />
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void beginPermissionRequest()} disabled={busy}>
-                {busy ? 'Opening System Settings…' : 'Open Privacy & Security'}
-              </button>
-              <button className="onboarding-btn-secondary" onClick={() => void refreshPermissionState()}>
-                I already enabled it
-              </button>
-            </div>
-            <p className="onboarding-reassurance">Everything stays on your device. No screenshots, no video, ever.</p>
-            <div className={`onboarding-status onboarding-status-${permissionStatusTone}`}>
-              <span className="onboarding-status-dot" />
-              <span className="onboarding-status-label">{permissionStatusLabel}</span>
+            <div className={`ob-status ob-status-${permissionStatusTone}`}>
+              <span className="ob-status-dot" />
+              <span className="ob-status-label">{permissionStatusLabel}</span>
               {settingsHandoff && (
-                <span className="onboarding-status-note">
-                  Keep this window open — we will pick up the moment the toggle flips.
-                </span>
+                <span className="ob-status-note">Keep this window open — we'll pick up the moment the toggle flips.</span>
               )}
             </div>
             {permissionDetails && (
-              <div className="onboarding-status onboarding-status-pending">
-                <span className="onboarding-status-label">
+              <div className="ob-status ob-status-pending">
+                <span className="ob-status-label">
                   Accessibility: {permissionDetails.accessibility === 'granted' ? 'Enabled' : 'Missing'}
                 </span>
               </div>
             )}
-            <button className="onboarding-skip-link" onClick={() => void skipPermission()}>
-              Skip for now — you can grant this later in Settings
-            </button>
-          </div>
-        )}
+          </Stage>
+        )
 
-        {stage === 'relaunch_required' && (
-          <div className="onboarding-screen">
-            <StageHeading title="Daylens has the permission. macOS needs one restart to hand it over." />
-            <div className="onboarding-handoff">
-              <div className="onboarding-handoff-beam" aria-hidden="true">
-                <div className="onboarding-handoff-pulse" />
-              </div>
-              <div className="onboarding-handoff-copy">
-                <div className="onboarding-callout-title">What happens next</div>
-                <div className="onboarding-callout-body">
-                  Daylens closes and reopens. Your setup picks up exactly where you left it — no data resets, no lost progress.
-                </div>
+      case 'relaunch_required':
+        return (
+          <Stage
+            {...railProps}
+            expression="idle"
+            eyebrow={eyebrow}
+            title="One restart and we're set"
+            subtitle="Daylens has the permission — macOS just needs a quick restart to hand it over."
+            contentKey="relaunch"
+            primary={{ label: 'Restart Daylens', onClick: () => void ipc.app.relaunch() }}
+          >
+            <div className="ob-callout">
+              <div className="onboarding-handoff-beam" aria-hidden="true"><div className="onboarding-handoff-pulse" /></div>
+              <div>
+                <div className="ob-callout-title">What happens next</div>
+                <div className="ob-callout-body">Daylens closes and reopens. Your setup picks up exactly where you left it — no data resets, no lost progress.</div>
               </div>
             </div>
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void ipc.app.relaunch()}>
-                Restart Daylens
-              </button>
-            </div>
-          </div>
-        )}
+          </Stage>
+        )
 
-        {stage === 'verifying_permission' && (
-          <div className="onboarding-screen">
-            <StageHeading title="Checking in with macOS and warming up the tracker." />
-            <div className="onboarding-verify">
-              <div className="onboarding-breath" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="onboarding-verify-copy">
-                <div className="onboarding-callout-title">Verifying capture permissions</div>
-                <div className="onboarding-callout-body">
-                  This should take a second or two. If it is taking longer, macOS may not have saved the toggle — we will recover automatically.
-                </div>
+      case 'verifying_permission':
+        return (
+          <Stage
+            {...railProps}
+            expression="watch"
+            eyebrow={eyebrow}
+            title="Checking in with macOS…"
+            subtitle="Warming up the tracker. This takes a second or two."
+            contentKey="verifying"
+          >
+            <div className="ob-callout">
+              <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
+              <div>
+                <div className="ob-callout-title">Verifying capture permissions</div>
+                <div className="ob-callout-body">If it takes longer, macOS may not have saved the toggle — we'll recover automatically.</div>
               </div>
             </div>
-          </div>
-        )}
+          </Stage>
+        )
 
-        {stage === 'proof' && (
-          <div className="onboarding-screen">
+      case 'proof':
+        return (
+          <Stage
+            {...railProps}
+            expression={proof.ready ? 'happy' : 'watch'}
+            eyebrow={eyebrow}
+            title={proof.ready ? "Here's what I can already see" : 'Watching for your first signal…'}
+            subtitle={proof.ready
+              ? 'Real activity from this machine — captured the Daylens way, not a canned demo.'
+              : 'No fake progress bars. The moment real work shows up, it lands right here.'}
+            contentKey={proof.ready ? 'proof-ready' : 'proof-wait'}
+            primary={{ label: proof.ready ? 'Continue' : 'Waiting for the first signal…', onClick: () => void continueFromProof(), disabled: !proof.ready }}
+          >
             {proof.ready ? (
-              <>
-                <StageHeading title="Here's what we've picked up so far." />
-                <div className="onboarding-proof-visual">
-                  <div className="onboarding-live-activity">
-                    {proof.liveSession && (
-                      <div className="onboarding-live-row onboarding-live-row-active">
-                        <div className="onboarding-live-pulse" aria-hidden="true" />
-                        <div>
-                          <div className="onboarding-live-app">{proof.liveSession.appName}</div>
-                          {proof.liveSession.windowTitle && (
-                            <div className="onboarding-live-title">{proof.liveSession.windowTitle}</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {proof.timeline && proof.timeline.totalSeconds > 0 && (
-                      <div className="onboarding-live-row">
-                        <div className="onboarding-live-stat">{Math.round(proof.timeline.totalSeconds / 60)}m</div>
-                        <div className="onboarding-live-label">tracked today across {proof.timeline.blocks.length} session{proof.timeline.blocks.length !== 1 ? 's' : ''}</div>
-                      </div>
-                    )}
-                    {proof.timeline && proof.timeline.siteCount > 0 && (
-                      <div className="onboarding-live-row">
-                        <div className="onboarding-live-stat">{proof.timeline.siteCount}</div>
-                        <div className="onboarding-live-label">browser site{proof.timeline.siteCount !== 1 ? 's' : ''} already flowing in</div>
-                      </div>
-                    )}
+              <div className="onboarding-live-activity">
+                {proof.liveSession && (
+                  <div className="onboarding-live-row onboarding-live-row-active">
+                    <div className="onboarding-live-pulse" aria-hidden="true" />
+                    <div>
+                      <div className="onboarding-live-app">{proof.liveSession.appName}</div>
+                      {proof.liveSession.windowTitle && (
+                        <div className="onboarding-live-title">{proof.liveSession.windowTitle}</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </>
+                )}
+                {proof.timeline && proof.timeline.totalSeconds > 0 && (
+                  <div className="onboarding-live-row">
+                    <div className="onboarding-live-stat">{Math.round(proof.timeline.totalSeconds / 60)}m</div>
+                    <div className="onboarding-live-label">tracked today across {proof.timeline.blocks.length} session{proof.timeline.blocks.length !== 1 ? 's' : ''}</div>
+                  </div>
+                )}
+                {proof.timeline && proof.timeline.siteCount > 0 && (
+                  <div className="onboarding-live-row">
+                    <div className="onboarding-live-stat">{proof.timeline.siteCount}</div>
+                    <div className="onboarding-live-label">browser site{proof.timeline.siteCount !== 1 ? 's' : ''} already flowing in</div>
+                  </div>
+                )}
+              </div>
             ) : (
-              <div className="onboarding-proof-pending">
-                <div className="onboarding-breath" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </div>
+              <div className="ob-proof-pending">
+                <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
                 {isLinux && linuxTracking && linuxTracking.supportLevel !== 'ready' ? (
                   <p>{linuxTracking.supportMessage} Open Settings → Capture health after setup for the full picture.</p>
                 ) : (
-                  <p>Have a great day. Daylens will keep listening for real work signal.</p>
+                  <p>Go about your day. Daylens keeps listening for real work signal.</p>
                 )}
               </div>
             )}
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" disabled={!proof.ready} onClick={() => void continueFromProof()}>
-                {proof.ready ? 'Continue' : 'Waiting for the first signal…'}
-              </button>
-            </div>
-          </div>
-        )}
+          </Stage>
+        )
 
-        {stage === 'tour' && (() => {
-          const isLast = tourIndex >= STORY_BEATS.length - 1
-          return (
-            <div className="onboarding-screen">
-              <TourStory index={tourIndex} name={nameDraft.trim()} />
-              <div className="onboarding-actions">
-                <button className="onboarding-btn-primary" onClick={() => advanceTour()}>
-                  {isLast ? 'Make it mine' : tourIndex === 0 ? 'Begin' : 'Continue'}
-                </button>
-              </div>
-              <button className="onboarding-skip-link" onClick={() => void persistOnboarding('voice')}>Skip the tour</button>
-            </div>
-          )
-        })()}
+      case 'tour': {
+        const isLast = tourIndex >= STORY_BEATS.length - 1
+        return (
+          <Stage
+            {...railProps}
+            expression={isLast ? 'happy' : 'watch'}
+            eyebrow={eyebrow}
+            title="One ordinary day, told back to you"
+            subtitle="This is how Daylens turns scattered apps into a day you'd actually recognise."
+            contentKey="tour"
+            primary={{ label: isLast ? 'Make it mine' : tourIndex === 0 ? 'Begin' : 'Continue', onClick: () => advanceTour() }}
+            skip={{ label: 'Skip the tour', onClick: () => void persistOnboarding('about') }}
+          >
+            <TourStory index={tourIndex} name={greetName} />
+          </Stage>
+        )
+      }
 
-        {stage === 'voice' && (
-          <div className="onboarding-screen">
-            <StageHeading
-              title="How should Daylens sound?"
-              body="At the end of a day, Daylens writes you a short recap. Here's the same day in three voices — pick the one that feels like you."
-            />
-            <div className="onboarding-voice-grid">
-              {VOICE_SAMPLES.map((v) => {
-                const selected = summaryVoice === v.voice
-                return (
-                  <button
-                    key={v.voice}
-                    className={`onboarding-voice-card${selected ? ' onboarding-voice-card-selected' : ''}`}
-                    onClick={() => void chooseVoice(v.voice)}
-                    aria-pressed={selected}
-                  >
-                    <div className="onboarding-voice-head">
-                      <span className="onboarding-voice-label">{v.label}</span>
-                      <span className="onboarding-voice-tag">{v.tagline}</span>
-                      {selected && <span className="onboarding-voice-check">✓</span>}
-                    </div>
-                    <div className="onboarding-voice-sample">{v.sample}</div>
-                  </button>
-                )
-              })}
-            </div>
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void continueFromVoice()}>Continue</button>
-            </div>
-            <p className="onboarding-reassurance">You can change this anytime in Settings.</p>
-          </div>
-        )}
-
-        {stage === 'personalize' && (
-          <div className="onboarding-screen">
-            <StageHeading
-              title={`Help Daylens read your day${nameDraft.trim() ? `, ${nameDraft.trim()}` : ''}.`}
-              body="Like briefing a friend who's about to do your timesheets — a few taps so the recap sounds like your work, not a stranger's."
-            />
-
-            <div className="onboarding-section">
-              <div className="onboarding-section-label">What do you most want to see?</div>
-              <div className="onboarding-chip-wrap">
-                {INTEREST_CATEGORIES.map((c) => {
-                  const selected = interestedCategories.has(c.id)
+      case 'about':
+        return (
+          <Stage
+            {...railProps}
+            expression="curious"
+            eyebrow={eyebrow}
+            title={`A little about you${greetName ? `, ${greetName}` : ''}`}
+            subtitle="So your recaps sound like your work, not a stranger's. Two quick taps."
+            contentKey="about"
+            primary={{ label: 'Continue', onClick: () => void continueFromAbout() }}
+          >
+            <div className="ob-section">
+              <div className="ob-label">What do you do?</div>
+              <div className="ob-chipwrap">
+                {ROLES.map((r) => {
+                  const selected = userRole === r.label
                   return (
-                    <button
-                      key={c.id}
-                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
-                      onClick={() => toggleInSet(c.id, setInterestedCategories)}
-                    >
-                      <span className="onboarding-chip-emoji">{c.emoji}</span> {c.label}
+                    <button key={r.id} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => chooseRole(r)}>
+                      <span className="ob-chip-emoji">{r.emoji}</span> {r.label}
                     </button>
                   )
                 })}
               </div>
+              {userRole && <div className="ob-reflect">Lumen: nice — I'll tune your day for {userRole.toLowerCase()} work. ✨</div>}
             </div>
 
-            <div className="onboarding-section">
-              <div className="onboarding-section-label">Which apps count as real work for you?</div>
-              <div className="onboarding-chip-wrap">
-                {appChoices.map((app) => {
-                  const selected = focusApps.has(app)
-                  return (
-                    <button
-                      key={app}
-                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
-                      onClick={() => toggleInSet(app, setFocusApps)}
-                    >
-                      {app}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="onboarding-section">
-              <div className="onboarding-section-label">Why are you here? (optional)</div>
-              <div className="onboarding-chip-wrap">
+            <div className="ob-section">
+              <div className="ob-label">Why are you here? <span className="ob-label-opt">optional</span></div>
+              <div className="ob-chipwrap">
                 {INTENTS.map((intent) => {
                   const selected = goals.has(intent.id)
                   return (
-                    <button
-                      key={intent.id}
-                      className={`onboarding-goal-chip${selected ? ' onboarding-goal-chip-selected' : ''}`}
-                      onClick={() => toggleIntent(intent.id)}
-                    >
+                    <button key={intent.id} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => toggleIntent(intent.id)}>
                       {intent.label}
                     </button>
                   )
@@ -1127,1098 +1320,709 @@ export default function Onboarding({
               </div>
               <textarea
                 value={intentDraft}
-                onChange={(event) => setIntentDraft(event.target.value)}
+                onChange={(e) => setIntentDraft(e.target.value)}
                 placeholder="Tap a few above, or write it in your own words…"
                 maxLength={400}
                 rows={2}
-                className="onboarding-intent-textarea"
+                className="ob-textarea"
               />
             </div>
+          </Stage>
+        )
 
-            <div className="onboarding-section">
-              <div className="onboarding-section-label">Anything Daylens should never track?</div>
-              <div className="onboarding-section-hint">Pick apps to keep fully private. Nothing here is recorded. You can change this anytime in Settings.</div>
-              <div className="onboarding-chip-wrap">
-                {appChoices.map((app) => {
-                  const selected = excludedApps.has(app)
+      case 'voice':
+        return (
+          <Stage
+            {...railProps}
+            expression="happy"
+            eyebrow={eyebrow}
+            title="How should Daylens sound?"
+            subtitle="The same day, three voices. This really does change how every recap reads — pick the one that feels like you."
+            contentKey="voice"
+            primary={{ label: 'Continue', onClick: () => void continueFromVoice() }}
+            note="Change anytime in Settings"
+          >
+            <div className="ob-cards">
+              {VOICE_SAMPLES.map((v) => {
+                const selected = summaryVoice === v.voice
+                return (
+                  <button
+                    key={v.voice}
+                    className={`ob-card${selected ? ' is-selected' : ''}`}
+                    onClick={() => void chooseVoice(v.voice)}
+                    aria-pressed={selected}
+                  >
+                    <div className="ob-card-head">
+                      <span className="ob-card-title">{v.label}</span>
+                      <span className="ob-card-tag">{v.tagline}</span>
+                      {selected && <span className="ob-card-check">✓</span>}
+                    </div>
+                    <div className="ob-card-body">{v.sample}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </Stage>
+        )
+
+      case 'work':
+        return (
+          <Stage
+            {...railProps}
+            expression="idle"
+            eyebrow={eyebrow}
+            title="What counts as real work?"
+            subtitle="Pick what matters to you, and which of your own apps are the real thing. Daylens uses this to name your day."
+            contentKey="work"
+            primary={{ label: 'Continue', onClick: () => void continueFromWork() }}
+          >
+            <div className="ob-section">
+              <div className="ob-label">What do you most want to see?</div>
+              <div className="ob-chipwrap">
+                {INTEREST_CATEGORIES.map((c) => {
+                  const selected = interestedCategories.has(c.id)
                   return (
-                    <button
-                      key={app}
-                      className={`onboarding-goal-chip onboarding-goal-chip-private${selected ? ' onboarding-goal-chip-private-on' : ''}`}
-                      onClick={() => toggleInSet(app, setExcludedApps)}
-                    >
-                      {selected ? '🔒 ' : ''}{app}
+                    <button key={c.id} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => toggleInSet(c.id, setInterestedCategories)}>
+                      <span className="ob-chip-emoji">{c.emoji}</span> {c.label}
                     </button>
                   )
                 })}
               </div>
             </div>
 
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void continueFromPersonalize()} disabled={busy}>
-                Continue
-              </button>
-            </div>
-          </div>
-        )}
-
-        {stage === 'ai_setup' && (
-          <div className="onboarding-screen">
-            <StageHeading
-              title="Turn on AI so Daylens can answer on day one."
-              body="Connect your own provider key. It stays in your OS keychain, billing stays with your provider, and you can change it anytime in Settings. Optional — skip and add it later."
-            />
-            <ConnectAI
-              variant="embedded"
-              initialProvider={settings.aiProvider}
-              hasSavedAccess={aiConnected}
-              onConnected={() => setAiConnected(true)}
-            />
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void continueFromAiSetup()} disabled={busy}>
-                {aiConnected ? 'Continue' : 'Skip for now'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {stage === 'ready' && (
-          <div className="onboarding-screen onboarding-screen-center">
-            <div className="onboarding-greeting-mascot"><Mascot expression="happy" size={92} /></div>
-            <StageHeading
-              title={nameDraft.trim() ? `You're all set, ${nameDraft.trim()}.` : "You're all set."}
-              body="Daylens is watching quietly in the background. As your day fills in, your timeline names each stretch by what you were actually doing."
-            />
-            <div className="onboarding-summary-tile onboarding-summary-tile-highlight">
-              <div className="onboarding-summary-label">Your evening recaps will sound like this</div>
-              <div className="onboarding-summary-detail" style={{ marginTop: 6 }}>
-                {VOICE_SAMPLES.find((v) => v.voice === summaryVoice)?.sample}
+            <div className="ob-section">
+              <div className="ob-label">Which of your apps are real work?</div>
+              <div className="ob-hint">{topApps.length > 0 ? 'Pulled from what you actually use most.' : 'A few common ones to start — your real apps replace these as you go.'}</div>
+              <div className="ob-chipwrap">
+                {appChoices.map((app) => {
+                  const selected = focusApps.has(app)
+                  return (
+                    <button key={app} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => toggleInSet(app, setFocusApps)}>
+                      {app}
+                    </button>
+                  )
+                })}
               </div>
             </div>
-            {intentDraft.trim() && (
-              <div className="onboarding-summary-tile">
-                <div className="onboarding-summary-label">What you're here for</div>
-                <div className="onboarding-summary-detail" style={{ marginTop: 6 }}>{intentDraft.trim()}</div>
+          </Stage>
+        )
+
+      case 'connections':
+        return (
+          <Stage
+            {...railProps}
+            expression="curious"
+            eyebrow={eyebrow}
+            title="Who you work with, and when"
+            subtitle="Optional — but it helps Daylens group your time by client and time your morning brief right."
+            contentKey="connections"
+            primary={{ label: 'Continue', onClick: () => void continueFromConnections() }}
+            skip={{ label: 'Skip', onClick: () => void continueFromConnections() }}
+          >
+            <div className="ob-section">
+              <div className="ob-label">Clients & projects <span className="ob-label-opt">optional</span></div>
+              <div className="ob-hint">Add the ones you'd want time grouped under — Lumen will learn to recognise them.</div>
+              <div className="ob-addrow">
+                <input
+                  className="ob-input"
+                  value={clientDraft}
+                  onChange={(e) => setClientDraft(e.target.value)}
+                  placeholder="e.g. Acme Corp, Q3 launch…"
+                  maxLength={80}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addClient(clientDraft) } }}
+                />
+                <button className="ob-add-btn" onClick={() => addClient(clientDraft)} disabled={!clientDraft.trim()}>Add</button>
+              </div>
+              {clients.length > 0 && (
+                <div className="ob-chipwrap">
+                  {clients.map((c) => (
+                    <span key={c} className="ob-chip is-token">
+                      {c}
+                      <button className="ob-token-x" aria-label={`Remove ${c}`} onClick={() => setClients((prev) => prev.filter((x) => x !== c))}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="ob-section">
+              <div className="ob-label">When do you usually work?</div>
+              <div className="ob-cards ob-cards-tight">
+                {RHYTHMS.map((r) => {
+                  const selected = workRhythm === r.id
+                  return (
+                    <button
+                      key={r.id}
+                      className={`ob-card ob-card-row${selected ? ' is-selected' : ''}`}
+                      onClick={() => setWorkRhythm(selected ? undefined : r.id)}
+                      aria-pressed={selected}
+                    >
+                      <span className="ob-card-emoji">{r.emoji}</span>
+                      <span className="ob-card-rowtext">
+                        <span className="ob-card-title">{r.label}</span>
+                        <span className="ob-card-tag">{r.hint}</span>
+                      </span>
+                      {selected && <span className="ob-card-check">✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </Stage>
+        )
+
+      case 'privacy':
+        return (
+          <Stage
+            {...railProps}
+            expression="idle"
+            eyebrow={eyebrow}
+            title="Anything to keep private?"
+            subtitle="Pick apps Daylens should never track. Nothing here is ever recorded — and you can change it anytime in Settings."
+            contentKey="privacy"
+            primary={{ label: 'Continue', onClick: () => void continueFromPrivacy() }}
+            skip={excludedApps.size > 0 ? undefined : { label: 'Nothing to hide', onClick: () => void continueFromPrivacy() }}
+          >
+            <div className="ob-section">
+              <div className="ob-addrow">
+                <input
+                  className="ob-input"
+                  value={privateDraft}
+                  onChange={(e) => setPrivateDraft(e.target.value)}
+                  placeholder="Type an app to keep private…"
+                  maxLength={80}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPrivateApp(privateDraft) } }}
+                />
+                <button className="ob-add-btn" onClick={() => addPrivateApp(privateDraft)} disabled={!privateDraft.trim()}>Keep private</button>
+              </div>
+
+              {excludedApps.size > 0 && (
+                <div className="ob-chipwrap">
+                  {Array.from(excludedApps).map((app) => (
+                    <span key={app} className="ob-chip is-private">
+                      🔒 {app}
+                      <button className="ob-token-x" aria-label={`Stop keeping ${app} private`} onClick={() => toggleInSet(app, setExcludedApps)}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {privateSuggestions.length > 0 && (
+                <>
+                  <div className="ob-hint" style={{ marginTop: 4 }}>Quick add from your apps:</div>
+                  <div className="ob-chipwrap">
+                    {privateSuggestions.map((app) => (
+                      <button key={app} className="ob-chip is-ghost" onClick={() => addPrivateApp(app)}>+ {app}</button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </Stage>
+        )
+
+      case 'ai_setup':
+        return (
+          <Stage
+            {...railProps}
+            expression="happy"
+            eyebrow={eyebrow}
+            title={managedAvailable ? 'Your AI is on us to start' : 'Turn on Daylens AI'}
+            subtitle={managedAvailable
+              ? "You get $5 of AI every month, free — enough for your daily recaps, wraps and briefs. Add Plus anytime for unlimited chat, or bring your own key."
+              : 'Connect a provider so Daylens can answer questions about your work. Capture and your timeline work fully without it.'}
+            contentKey="ai"
+            primary={{ label: aiConnected ? 'Continue' : 'Skip for now', onClick: () => void continueFromAiSetup(), disabled: busy }}
+            note="Capture works without AI"
+          >
+            {managedAvailable && (
+              <div className="ob-ai-hero">
+                <div className="ob-ai-hero-badge">Free every month</div>
+                <div className="ob-ai-hero-amount">$5<span>/mo of AI, on us</span></div>
+                <div className="ob-ai-hero-body">No card, no key. Covers your recaps, wraps and briefs. It's just there when you open Daylens.</div>
+                <div className="ob-ai-hero-actions">
+                  {billing?.checkoutAvailable && (
+                    <button className="ob-btn-primary ob-btn-sm" onClick={() => void openCheckout()} disabled={billingBusy}>
+                      {billingBusy ? 'Opening…' : 'Go Plus — unlimited chat'}
+                    </button>
+                  )}
+                </div>
               </div>
             )}
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div className="onboarding-summary-label">
-                {aiConnected ? 'Try asking Daylens' : 'Once you connect AI, you can ask'}
+
+            <details className="ob-ai-byok" open={!managedAvailable}>
+              <summary>
+                <span className="ob-ai-byok-title">Bring your own key</span>
+                <span className="ob-ai-byok-sub">Already have a Claude, OpenAI, Gemini or OpenRouter key? Use it — you control billing.</span>
+              </summary>
+              <div className="ob-ai-byok-body">
+                <ConnectAI
+                  variant="embedded"
+                  initialProvider={settings.aiProvider}
+                  hasSavedAccess={aiConnected}
+                  onConnected={() => setAiConnected(true)}
+                />
               </div>
-              {['What did I work on today?', 'Where did my time go this week?', 'Introduce me to how Daylens works.'].map((q) => (
-                <div key={q} className="onboarding-goal-chip" style={{ cursor: 'default' }}>{q}</div>
+            </details>
+          </Stage>
+        )
+
+      case 'ready':
+        return (
+          <Stage
+            {...railProps}
+            expression="happy"
+            eyebrow={eyebrow}
+            title={greetName ? `You're all set, ${greetName}` : "You're all set"}
+            subtitle="Daylens is watching quietly in the background. Here's what I learned about you — your timeline names every stretch by what you were actually doing."
+            centered
+            contentKey="ready"
+            primary={{ label: busy ? 'Opening Daylens…' : 'Open Daylens', onClick: () => void finishOnboarding(), disabled: busy }}
+          >
+            <div className="ob-ready-recap">
+              <div className="ob-ready-recap-label">Your evening recaps will sound like this</div>
+              <div className="ob-ready-recap-body">{voiceSample?.sample}</div>
+            </div>
+
+            <div className="ob-profile">
+              {userRole && <div className="ob-profile-row"><span>You</span><strong>{userRole}</strong></div>}
+              {voiceSample && <div className="ob-profile-row"><span>Voice</span><strong>{voiceSample.label}</strong></div>}
+              {focusApps.size > 0 && <div className="ob-profile-row"><span>Real work</span><strong>{Array.from(focusApps).slice(0, 3).join(', ')}{focusApps.size > 3 ? ` +${focusApps.size - 3}` : ''}</strong></div>}
+              {clients.length > 0 && <div className="ob-profile-row"><span>Clients</span><strong>{clients.slice(0, 3).join(', ')}{clients.length > 3 ? ` +${clients.length - 3}` : ''}</strong></div>}
+              {excludedApps.size > 0 && <div className="ob-profile-row"><span>Private</span><strong>🔒 {excludedApps.size} app{excludedApps.size !== 1 ? 's' : ''}</strong></div>}
+            </div>
+
+            <div className="ob-try">
+              <div className="ob-label">{aiConnected || managedAvailable ? 'Try asking Daylens' : 'Once AI is on, you can ask'}</div>
+              {['What did I work on today?', 'Where did my time go this week?', 'How much did I spend on each client?'].map((q) => (
+                <div key={q} className="ob-try-chip">{q}</div>
               ))}
             </div>
-            <div className="onboarding-actions">
-              <button className="onboarding-btn-primary" onClick={() => void finishOnboarding()} disabled={busy}>
-                {busy ? 'Opening Daylens…' : 'Open Daylens'}
-              </button>
-            </div>
-          </div>
-        )}
+          </Stage>
+        )
 
-        {errorMessage && <div className="onboarding-error">{errorMessage}</div>}
-      </div>
+      default:
+        return null
+    }
+  }
 
-      <style>{`
-        .onboarding-root {
-          position: fixed;
-          inset: 0;
-          background:
-            radial-gradient(circle at 18% 12%, rgba(26, 111, 212, 0.14), transparent 42%),
-            radial-gradient(circle at 86% 88%, rgba(90, 179, 255, 0.10), transparent 40%),
-            #07090f;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 36px 24px;
-          -webkit-app-region: drag;
-          /* Onboarding is always dark — pin the dark palette so embedded
-             components (e.g. ConnectAI) never render light-on-dark, regardless
-             of the app theme the user picks later. */
-          --color-surface: #10131a;
-          --color-surface-low: #191c22;
-          --color-surface-container: #1d2026;
-          --color-surface-high: #272a32;
-          --color-surface-highest: #32353c;
-          --color-surface-card: #1d2026;
-          --color-border-ghost: rgba(255,255,255,0.10);
-          --color-text-primary: #f0f4ff;
-          --color-text-secondary: #c2c6d6;
-          --color-text-tertiary: rgba(194,198,214,0.55);
-          --color-primary: #adc6ff;
-          --color-primary-contrast: #001a42;
-          --color-accent: #adc6ff;
-          --color-accent-dim: rgba(173,198,255,0.12);
-          --color-focus-green: #4fdbc8;
-          --gradient-primary: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
-        }
-        .onboarding-topbar {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          min-height: 24px;
-        }
-        .onboarding-back {
-          -webkit-app-region: no-drag;
-          background: none;
-          border: none;
-          color: rgba(194,198,214,0.7);
-          font-size: 12.5px;
-          font-weight: 600;
-          cursor: pointer;
-          padding: 4px 8px;
-          margin-left: -8px;
-          border-radius: 8px;
-          transition: color 140ms ease, background 140ms ease;
-        }
-        .onboarding-back:hover { color: #f0f4ff; background: rgba(255,255,255,0.04); }
-        .onboarding-back-placeholder { width: 1px; }
-        .onboarding-tour-visual {
-          border-radius: 18px;
-          border: 1px solid rgba(173, 198, 255, 0.12);
-          background: linear-gradient(180deg, rgba(14, 24, 34, 0.7), rgba(9, 14, 22, 0.7));
-          padding: 20px;
-          min-height: 150px;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          gap: 12px;
-        }
-        .onboarding-tour-timeline { display: grid; gap: 8px; }
-        .onboarding-tour-block {
-          border-radius: 9px;
-          display: flex;
-          align-items: center;
-          padding: 0 12px;
-          font-size: 12.5px;
-          font-weight: 600;
-          color: #eaf1ff;
-          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
-          animation: onboardingBlockIn 0.5s cubic-bezier(.2,.8,.2,1) both;
-        }
-        .onboarding-tour-block[data-tone="a"] { background: linear-gradient(135deg, rgba(125,191,255,0.34), rgba(79,220,200,0.22)); }
-        .onboarding-tour-block[data-tone="b"] { background: rgba(255,255,255,0.06); color: rgba(210,222,240,0.8); animation-delay: 0.08s; }
-        .onboarding-tour-block[data-tone="c"] { background: linear-gradient(135deg, rgba(178,160,255,0.32), rgba(125,191,255,0.22)); animation-delay: 0.16s; }
-        .onboarding-tour-chat { display: grid; gap: 10px; }
-        .onboarding-tour-bubble {
-          font-size: 13px;
-          line-height: 1.55;
-          padding: 10px 13px;
-          border-radius: 13px;
-          max-width: 86%;
-        }
-        .onboarding-tour-bubble-q {
-          justify-self: end;
-          background: linear-gradient(145deg, #1a6fd4, #5ab3ff);
-          color: #fff;
-          border-bottom-right-radius: 4px;
-        }
-        .onboarding-tour-bubble-a {
-          justify-self: start;
-          background: rgba(255,255,255,0.05);
-          color: #d9e2f2;
-          border: 1px solid rgba(173,198,255,0.12);
-          border-bottom-left-radius: 4px;
-        }
-        .onboarding-tour-notif {
-          border-radius: 13px;
-          border: 1px solid rgba(173,198,255,0.16);
-          background: rgba(255,255,255,0.04);
-          padding: 12px 14px;
-        }
-        .onboarding-tour-notif-head {
-          display: flex; align-items: center; gap: 7px;
-          font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
-          color: rgba(194,198,214,0.6); text-transform: uppercase;
-        }
-        .onboarding-tour-notif-dot { width: 7px; height: 7px; border-radius: 50%; background: #5ab3ff; }
-        .onboarding-tour-notif-body { margin-top: 7px; font-size: 13.5px; line-height: 1.55; color: #eaf1ff; }
-        .onboarding-tour-stats { display: flex; gap: 10px; }
-        .onboarding-tour-stats > div {
-          flex: 1; text-align: center;
-          border-radius: 11px; padding: 10px 6px;
-          background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(173,198,255,0.10);
-        }
-        .onboarding-tour-stats strong { display: block; font-size: 16px; font-weight: 740; color: #f0f4ff; }
-        .onboarding-tour-stats span { font-size: 10.5px; color: rgba(194,198,214,0.6); }
-        .onboarding-tour-progress { display: flex; gap: 6px; }
-        .onboarding-tour-pip { width: 6px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14); transition: width 240ms ease, background 240ms ease; }
-        .onboarding-tour-pip-active { width: 16px; background: linear-gradient(145deg, #1a6fd4, #5ab3ff); }
-
-        /* Interactive tour */
-        .onboarding-tour-block-btn,
-        .onboarding-tour-block-static {
-          -webkit-app-region: no-drag;
-          flex-direction: column;
-          align-items: stretch;
-          justify-content: center;
-          gap: 10px;
-          padding: 12px;
-          border: none;
-          width: 100%;
-          text-align: left;
-          cursor: pointer;
-          overflow: hidden;
-          transition: min-height 280ms cubic-bezier(.2,.8,.2,1), background 200ms ease, transform 140ms ease;
-        }
-        .onboarding-tour-block-static { cursor: default; }
-        .onboarding-tour-block-btn:hover { transform: translateY(-1px); }
-        .onboarding-tour-block-btn.is-open { box-shadow: inset 0 0 0 1px rgba(125,191,255,0.4); }
-        .onboarding-tour-block-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-        .onboarding-tour-block-label { font-size: 13px; font-weight: 650; color: #f3f7ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .onboarding-tour-block-time { font-size: 11px; color: rgba(255,255,255,0.55); flex-shrink: 0; font-variant-numeric: tabular-nums; }
-        .onboarding-tour-evidence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; animation: onboardingFadeUp 260ms ease both; }
-        .onboarding-tour-evi-chip {
-          font-size: 11px; font-weight: 600; color: #eaf1ff;
-          padding: 3px 9px; border-radius: 999px;
-          background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.14);
-        }
-        .onboarding-tour-evi-note { font-size: 10.5px; color: rgba(255,255,255,0.6); margin-left: 2px; }
-        .onboarding-tour-hint { font-size: 11.5px; color: rgba(194,198,214,0.6); text-align: center; }
-        .onboarding-tour-privacy {
-          font-size: 11.5px; color: rgba(173,198,255,0.85); text-align: center;
-          padding: 8px 12px; border-radius: 10px;
-          background: rgba(90,179,255,0.08); border: 1px solid rgba(173,198,255,0.16);
-        }
-        .onboarding-tour-pencil {
-          -webkit-app-region: no-drag;
-          flex-shrink: 0; font-size: 11px; font-weight: 700; color: #07090f;
-          padding: 4px 10px; border-radius: 999px; border: none; cursor: pointer;
-          background: #bcd6ff;
-        }
-        .onboarding-tour-saved { flex-shrink: 0; font-size: 11px; font-weight: 700; color: #4fdbc8; animation: onboardingFadeUp 240ms ease both; }
-        .onboarding-tour-relabel { animation: onboardingFadeUp 260ms ease both; }
-
-        .onboarding-tour-ask { gap: 14px; }
-        .onboarding-tour-chatlog { display: grid; gap: 8px; min-height: 96px; align-content: start; }
-        .onboarding-tour-ask-empty { font-size: 12.5px; color: rgba(194,198,214,0.6); align-self: center; text-align: center; padding: 24px 0; }
-        .onboarding-tour-thinking { display: inline-flex; gap: 5px; align-items: center; width: max-content; }
-        .onboarding-tour-thinking span { width: 7px; height: 7px; border-radius: 50%; background: rgba(173,198,255,0.7); animation: onboardingBreath 1.2s ease-in-out infinite; }
-        .onboarding-tour-thinking span:nth-child(2) { animation-delay: 0.18s; }
-        .onboarding-tour-thinking span:nth-child(3) { animation-delay: 0.36s; }
-        .onboarding-tour-caret { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: #5ab3ff; border-radius: 1px; animation: onboardingCaret 0.9s steps(1) infinite; }
-        .onboarding-tour-followups { display: flex; gap: 8px; animation: onboardingFadeUp 260ms ease both; }
-        .onboarding-tour-followup { font-size: 11px; font-weight: 600; color: #c8d6f5; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.04); border: 1px solid rgba(173,198,255,0.14); }
-        .onboarding-tour-chips { display: flex; flex-direction: column; gap: 7px; }
-        .onboarding-tour-chip {
-          -webkit-app-region: no-drag;
-          text-align: left; font-size: 12.5px; font-weight: 550; color: #e7edfb;
-          padding: 9px 12px; border-radius: 10px; cursor: pointer;
-          background: rgba(255,255,255,0.03); border: 1px solid rgba(173,198,255,0.16);
-          transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
-        }
-        .onboarding-tour-chip:hover { border-color: rgba(173,198,255,0.4); background: rgba(255,255,255,0.06); }
-        .onboarding-tour-chip:active { transform: scale(0.99); }
-        .onboarding-tour-chip.is-active { border-color: rgba(90,179,255,0.55); background: rgba(26,111,212,0.16); color: #ffffff; }
-
-        .onboarding-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 11px; background: rgba(0,0,0,0.28); border: 1px solid rgba(173,198,255,0.12); align-self: center; }
-        .onboarding-seg-btn {
-          -webkit-app-region: no-drag;
-          font-size: 12px; font-weight: 650; color: rgba(194,198,214,0.7);
-          padding: 6px 16px; border-radius: 8px; border: none; cursor: pointer; background: transparent;
-          transition: background 160ms ease, color 160ms ease;
-        }
-        .onboarding-seg-btn.on { background: linear-gradient(145deg, #1a6fd4, #5ab3ff); color: #fff; }
-        .onboarding-tour-notif, .onboarding-tour-stats { animation: onboardingFadeUp 300ms ease both; }
-        @keyframes onboardingFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes onboardingCaret { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
-
-        /* Story tour */
-        .onboarding-story-tap { cursor: pointer; -webkit-app-region: no-drag; }
-        .onboarding-story { display: grid; gap: 18px; }
-        .onboarding-daybar { display: grid; gap: 6px; }
-        .onboarding-daybar-track { position: relative; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08); }
-        .onboarding-daybar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: linear-gradient(90deg, #f5c662, #5ab3ff 60%, #8a7cff); transition: width 420ms cubic-bezier(.2,.8,.2,1); }
-        .onboarding-daybar-marker { position: absolute; top: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #eaf1ff; transform: translateY(-50%); box-shadow: 0 0 0 4px rgba(90,179,255,0.25); transition: left 420ms cubic-bezier(.2,.8,.2,1); }
-        .onboarding-daybar-ends { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(194,198,214,0.45); }
-        .onboarding-story-scene { min-height: 150px; display: flex; flex-direction: column; justify-content: center; gap: 10px; animation: onboardingFadeUp 360ms ease both; }
-        .onboarding-story-caption { display: grid; gap: 4px; min-height: 52px; }
-        .onboarding-story-time { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #7fb6ff; }
-        .onboarding-story-line { margin: 0; font-size: 17px; line-height: 1.5; color: #f0f4ff; max-width: 46ch; }
-        .onboarding-story-taphint { font-size: 11px; color: rgba(194,198,214,0.45); }
-        .onboarding-story-stack { display: grid; gap: 8px; }
-        .onboarding-story-cap { font-size: 11.5px; color: rgba(194,198,214,0.7); display: flex; align-items: center; gap: 7px; }
-        .onboarding-story-pill { font-size: 11px; font-weight: 600; color: #eaf1ff; padding: 2px 9px; border-radius: 999px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.14); }
-        .onboarding-story-apps { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 18px 0; }
-        .onboarding-story-appchip { font-size: 13px; font-weight: 600; color: #eaf1ff; padding: 10px 16px; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(173,198,255,0.18); animation: onboardingChipFloat 420ms cubic-bezier(.2,.8,.2,1) both; }
-        .onboarding-story-intro { display: grid; gap: 8px; padding: 6px 0; }
-        .onboarding-story-ghost { height: 26px; border-radius: 9px; background: rgba(255,255,255,0.05); animation: onboardingFadeUp 500ms ease both; }
-        @keyframes onboardingChipFloat { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
-        .onboarding-shell {
-          width: min(780px, 100%);
-          border-radius: 32px;
-          border: 1px solid rgba(173, 198, 255, 0.18);
-          background: linear-gradient(180deg, rgba(12, 18, 27, 0.92), rgba(8, 12, 18, 0.92));
-          box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
-          padding: 24px 32px 20px;
-          -webkit-app-region: no-drag;
-          backdrop-filter: blur(22px);
-          display: grid;
-          gap: 16px;
-        }
-        .onboarding-dots {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .onboarding-dot {
-          height: 6px;
-          width: 6px;
-          border-radius: 3px;
-          background: rgba(255, 255, 255, 0.1);
-          transition: width 300ms ease, background 300ms ease;
-        }
-        .onboarding-dot-done {
-          background: rgba(90, 179, 255, 0.52);
-        }
-        .onboarding-dot-active {
-          width: 18px;
-          background: linear-gradient(145deg, #1a6fd4 0%, #5ab3ff 100%);
-        }
-        .onboarding-screen {
-          display: grid;
-          gap: 16px;
-        }
-        .onboarding-eyebrow {
-          font-size: 10.5px;
-          font-weight: 800;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          color: rgba(194,198,214,0.5);
-        }
-        .onboarding-title {
-          margin: 0;
-          font-size: 30px;
-          line-height: 1.1;
-          letter-spacing: -0.03em;
-          color: #f0f4ff;
-        }
-        .onboarding-title-large {
-          font-size: 40px;
-          line-height: 1.08;
-        }
-        .onboarding-sub {
-          margin: 0;
-          font-size: 14.5px;
-          line-height: 1.7;
-          color: #c2c6d6;
-          max-width: 62ch;
-        }
-        .onboarding-reassure {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-        .onboarding-reassure-pill {
-          font-size: 11px;
-          font-weight: 700;
-          letter-spacing: 0.04em;
-          padding: 5px 11px;
-          border-radius: 999px;
-          border: 1px solid rgba(173, 198, 255, 0.16);
-          background: rgba(255, 255, 255, 0.02);
-          color: #c2c6d6;
-        }
-        .onboarding-preview {
-          display: grid;
-          gap: 8px;
-          padding: 18px 18px 14px;
-          border-radius: 18px;
-          border: 1px solid rgba(173, 198, 255, 0.10);
-          background: linear-gradient(180deg, rgba(14, 24, 34, 0.82), rgba(9, 14, 22, 0.82));
-        }
-        .onboarding-preview-axis {
-          display: flex;
-          justify-content: space-between;
-          font-family: 'SF Mono', ui-monospace, monospace;
-          font-size: 10px;
-          color: rgba(180, 200, 220, 0.45);
-          letter-spacing: 0.08em;
-        }
-        .onboarding-preview-track {
-          position: relative;
-          height: 44px;
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.025);
-          overflow: hidden;
-        }
-        .onboarding-preview-block {
-          position: absolute;
-          top: 6px;
-          bottom: 6px;
-          border-radius: 7px;
-          display: flex;
-          align-items: center;
-          padding: 0 10px;
-          color: rgba(225, 236, 248, 0.88);
-          font-size: 10.5px;
-          font-weight: 600;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          animation: onboardingBlockIn 1.2s cubic-bezier(.2,.8,.2,1) both;
-          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-        }
-        .onboarding-preview-block-a { background: linear-gradient(135deg, rgba(125, 191, 255, 0.35), rgba(79, 220, 200, 0.25)); animation-delay: 0s; }
-        .onboarding-preview-block-b { background: rgba(255, 255, 255, 0.05); color: rgba(180, 200, 220, 0.5); animation-delay: 0.15s; }
-        .onboarding-preview-block-c { background: linear-gradient(135deg, rgba(79, 220, 200, 0.38), rgba(125, 191, 255, 0.26)); animation-delay: 0.3s; }
-        .onboarding-preview-block-d { background: linear-gradient(135deg, rgba(178, 160, 255, 0.32), rgba(125, 191, 255, 0.22)); animation-delay: 0.45s; }
-        .onboarding-preview-block-e { background: linear-gradient(135deg, rgba(255, 191, 143, 0.32), rgba(219, 146, 102, 0.22)); animation-delay: 0.6s; }
-        .onboarding-preview-caption {
-          font-size: 11.5px;
-          color: rgba(180, 200, 220, 0.55);
-        }
-        .onboarding-permission-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
-          gap: 16px;
-          align-items: start;
-        }
-        .onboarding-steps-list {
-          list-style: none;
-          margin: 0;
-          padding: 0;
-          display: grid;
-          gap: 12px;
-        }
-        .onboarding-steps-list li {
-          display: grid;
-          grid-template-columns: 28px 1fr;
-          gap: 12px;
-          align-items: start;
-        }
-        .onboarding-steps-index {
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          background: rgba(125, 191, 255, 0.12);
-          color: #b7d3ff;
-          font-size: 11.5px;
-          font-weight: 700;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          margin-top: 1px;
-        }
-        .onboarding-steps-title {
-          font-size: 13.5px;
-          font-weight: 650;
-          color: #f0f4ff;
-          letter-spacing: -0.01em;
-        }
-        .onboarding-steps-body {
-          font-size: 12.5px;
-          color: #c2c6d6;
-          line-height: 1.55;
-          margin-top: 2px;
-        }
-        .onboarding-settings-mock {
-          border-radius: 16px;
-          border: 1px solid rgba(173, 198, 255, 0.14);
-          background: linear-gradient(180deg, rgba(30, 36, 46, 0.96), rgba(18, 24, 32, 0.96));
-          overflow: hidden;
-          box-shadow: 0 18px 44px rgba(0, 0, 0, 0.4);
-        }
-        .onboarding-settings-mock-header {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 9px 12px;
-          background: rgba(255, 255, 255, 0.03);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-        }
-        .onboarding-settings-mock-dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-        }
-        .onboarding-settings-mock-title {
-          margin-left: 8px;
-          font-size: 10.5px;
-          color: rgba(220, 230, 240, 0.8);
-          font-weight: 600;
-        }
-        .onboarding-settings-mock-body {
-          padding: 8px 4px;
-        }
-        .onboarding-settings-mock-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 10px 14px;
-          border-radius: 8px;
-          margin: 0 6px;
-          transition: background 160ms ease;
-        }
-        .onboarding-settings-mock-row-target {
-          background: rgba(125, 191, 255, 0.10);
-          box-shadow: inset 0 0 0 1px rgba(125, 191, 255, 0.35);
-          animation: onboardingMockHighlight 2.8s ease-in-out infinite;
-        }
-        .onboarding-settings-mock-app {
-          font-size: 12px;
-          color: rgba(225, 235, 245, 0.82);
-          font-weight: 500;
-        }
-        .onboarding-settings-mock-badge {
-          font-weight: 700;
-          color: #eef6ff;
-        }
-        .onboarding-settings-mock-toggle {
-          width: 28px;
-          height: 17px;
-          border-radius: 999px;
-          position: relative;
-          transition: background 180ms ease;
-        }
-        .onboarding-settings-mock-toggle::after {
-          content: '';
-          position: absolute;
-          top: 2px;
-          width: 13px;
-          height: 13px;
-          border-radius: 50%;
-          background: #f5f7fa;
-          transition: left 240ms ease;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-        }
-        .onboarding-settings-mock-toggle.on { background: #4ac06e; }
-        .onboarding-settings-mock-toggle.on::after { left: 13px; }
-        .onboarding-settings-mock-toggle.off { background: rgba(255, 255, 255, 0.14); }
-        .onboarding-settings-mock-toggle.off::after { left: 2px; }
-        .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle {
-          animation: onboardingToggleTease 2.8s ease-in-out infinite;
-        }
-        .onboarding-settings-mock-hint {
-          padding: 10px 14px 14px;
-          font-size: 11px;
-          color: rgba(180, 200, 220, 0.65);
-          text-align: center;
-          border-top: 1px solid rgba(255, 255, 255, 0.04);
-        }
-        .onboarding-handoff,
-        .onboarding-verify,
-        .onboarding-callout,
-        .onboarding-proof-card {
-          border-radius: 18px;
-          border: 1px solid rgba(173, 198, 255, 0.12);
-          background: rgba(255, 255, 255, 0.02);
-          padding: 18px 18px 16px;
-        }
-        .onboarding-handoff {
-          display: grid;
-          grid-template-columns: 120px 1fr;
-          gap: 18px;
-          align-items: center;
-        }
-        .onboarding-handoff-beam {
-          height: 90px;
-          border-radius: 14px;
-          background:
-            radial-gradient(circle at 50% 50%, rgba(125, 191, 255, 0.22), transparent 65%),
-            linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
-          position: relative;
-          overflow: hidden;
-        }
-        .onboarding-handoff-pulse {
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(180deg, transparent, rgba(125, 191, 255, 0.35), transparent);
-          animation: onboardingBeam 2.4s linear infinite;
-        }
-        .onboarding-verify {
-          display: grid;
-          grid-template-columns: 120px 1fr;
-          gap: 18px;
-          align-items: center;
-        }
-        .onboarding-breath {
-          height: 90px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 10px;
-        }
-        .onboarding-breath span {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
-          animation: onboardingBreath 1.4s ease-in-out infinite;
-        }
-        .onboarding-breath span:nth-child(2) { animation-delay: 0.2s; }
-        .onboarding-breath span:nth-child(3) { animation-delay: 0.4s; }
-        .onboarding-callout-title,
-        .onboarding-summary-label {
-          font-size: 10.5px;
-          font-weight: 800;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          color: rgba(194,198,214,0.5);
-        }
-        .onboarding-callout-body,
-        .onboarding-summary-detail,
-        .onboarding-hint {
-          font-size: 12.5px;
-          line-height: 1.65;
-          color: #c2c6d6;
-        }
-        .onboarding-hint-quiet {
-          font-size: 11.5px;
-          color: rgba(194,198,214,0.5);
-          align-self: center;
-        }
-        .onboarding-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          align-items: center;
-        }
-        .onboarding-btn-primary,
-        .onboarding-btn-secondary {
-          height: 42px;
-          padding: 0 18px;
-          border-radius: 12px;
-          font-size: 13px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: transform 140ms ease, border-color 140ms ease, opacity 140ms ease, box-shadow 180ms ease;
-        }
-        .onboarding-btn-primary {
-          border: none;
-          background: linear-gradient(145deg, #1a6fd4 0%, #5ab3ff 100%);
-          color: #fff;
-          box-shadow: 0 10px 28px rgba(26, 111, 212, 0.32), 0 0 0 1px rgba(173, 198, 255, 0.10) inset;
-        }
-        .onboarding-btn-primary:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: 0 16px 36px rgba(26, 111, 212, 0.44), 0 0 0 1px rgba(240, 248, 255, 0.16) inset;
-        }
-        .onboarding-btn-secondary {
-          border: 1px solid rgba(255,255,255,0.08);
-          background: transparent;
-          color: #f0f4ff;
-        }
-        .onboarding-btn-secondary:hover:not(:disabled) {
-          border-color: rgba(173, 198, 255, 0.32);
-        }
-        .onboarding-btn-primary:disabled,
-        .onboarding-btn-secondary:disabled {
-          opacity: 0.55;
-          cursor: default;
-          box-shadow: none;
-        }
-        .onboarding-status {
-          display: inline-flex;
-          align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-          padding: 10px 14px;
-          border-radius: 12px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(255, 255, 255, 0.02);
-          font-size: 12.5px;
-          color: #c2c6d6;
-        }
-        .onboarding-status-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: rgba(180, 200, 220, 0.45);
-        }
-        .onboarding-status-ok .onboarding-status-dot { background: #4ad18b; box-shadow: 0 0 0 3px rgba(74, 209, 139, 0.18); }
-        .onboarding-status-waiting .onboarding-status-dot { background: #f5c662; animation: onboardingPulse 1.6s ease-out infinite; }
-        .onboarding-status-label { font-weight: 600; color: #f0f4ff; }
-        .onboarding-status-note { color: rgba(194,198,214,0.5); }
-        .onboarding-summary-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr);
-          gap: 12px;
-        }
-        .onboarding-goals-grid {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-        }
-        .onboarding-name-field {
-          display: grid;
-          gap: 0;
-        }
-        .onboarding-name-field input {
-          width: 100%;
-          border: 1px solid rgba(255,255,255,0.08);
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.03);
-          color: #f0f4ff;
-          padding: 12px 14px;
-          font-size: 15px;
-          font-weight: 600;
-          letter-spacing: 0;
-          text-transform: none;
-          outline: none;
-        }
-        .onboarding-name-field input::placeholder {
-          color: rgba(194, 198, 214, 0.45);
-        }
-        .onboarding-name-field input:focus {
-          border-color: rgba(90, 179, 255, 0.58);
-          box-shadow: 0 0 0 3px rgba(26, 111, 212, 0.14);
-        }
-        .onboarding-summary-tile,
-        .onboarding-goal-card {
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(255, 255, 255, 0.025);
-          padding: 14px 14px 12px;
-          transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
-        }
-        .onboarding-summary-tile-highlight {
-          border-color: rgba(125, 191, 255, 0.45);
-          background: linear-gradient(180deg, rgba(125, 191, 255, 0.08), rgba(79, 220, 200, 0.04));
-          box-shadow: 0 8px 26px rgba(79, 211, 198, 0.14);
-        }
-        .onboarding-summary-value {
-          margin-top: 8px;
-          font-size: 18px;
-          font-weight: 720;
-          color: #f0f4ff;
-        }
-        .onboarding-goal-chip {
-          min-height: 40px;
-          padding: 10px 14px;
-          border-radius: 10px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: rgba(255, 255, 255, 0.025);
-          color: #f0f4ff;
-          font-size: 13px;
-          font-weight: 500;
-          text-align: left;
-          cursor: pointer;
-          transition: border-color 160ms ease, background 160ms ease;
-        }
-        .onboarding-goal-chip-selected {
-          border-color: rgba(90, 179, 255, 0.52);
-          background: rgba(26, 111, 212, 0.13);
-          color: #d9edff;
-        }
-        .onboarding-goal-chip:hover:not(.onboarding-goal-chip-selected) {
-          border-color: rgba(173, 198, 255, 0.28);
-          background: rgba(255, 255, 255, 0.04);
-        }
-
-        /* ── redesign: greeting, why, voice, personalize ── */
-        .onboarding-screen-center { justify-items: center; text-align: center; }
-        .onboarding-greeting-mascot, .onboarding-why-mascot { display: flex; justify-content: center; }
-        .onboarding-name-field-hero { width: min(340px, 100%); }
-        .onboarding-name-field-hero input { text-align: center; font-size: 17px; height: 50px; }
-
-        .onboarding-why-beats { display: grid; gap: 10px; width: 100%; text-align: left; }
-        .onboarding-why-card {
-          display: flex; gap: 12px; align-items: flex-start;
-          padding: 14px 16px; border-radius: 14px;
-          background: #fafafa; border: 1px solid rgba(17,24,39,0.10);
-        }
-        .onboarding-why-emoji { font-size: 22px; line-height: 1.4; flex-shrink: 0; }
-        .onboarding-why-title { font-size: 14.5px; font-weight: 700; color: #1f2633; }
-        .onboarding-why-body { font-size: 13px; line-height: 1.55; color: #5c6474; margin-top: 3px; }
-
-        .onboarding-voice-grid { display: grid; gap: 10px; }
-        .onboarding-voice-card {
-          display: grid; gap: 7px; text-align: left; cursor: pointer;
-          padding: 14px 16px; border-radius: 14px;
-          background: #ffffff; border: 1px solid rgba(17,24,39,0.12);
-          transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
-        }
-        .onboarding-voice-card:hover:not(.onboarding-voice-card-selected) { border-color: rgba(26,111,212,0.35); background: #f6f8fc; }
-        .onboarding-voice-card-selected {
-          border-color: rgba(26,111,212,0.6);
-          background: linear-gradient(180deg, rgba(26,111,212,0.06), rgba(90,179,255,0.03));
-          box-shadow: 0 8px 26px rgba(26,111,212,0.12);
-        }
-        .onboarding-voice-head { display: flex; align-items: center; gap: 8px; }
-        .onboarding-voice-label { font-size: 14px; font-weight: 750; color: #1f2633; }
-        .onboarding-voice-tag { font-size: 11.5px; color: #8b93a3; }
-        .onboarding-voice-check { margin-left: auto; color: #1a6fd4; font-weight: 900; }
-        .onboarding-voice-sample { font-size: 13px; line-height: 1.6; color: #5c6474; }
-
-        .onboarding-section { display: grid; gap: 9px; text-align: left; }
-        .onboarding-section-label { font-size: 13px; font-weight: 700; color: #1f2633; }
-        .onboarding-section-hint { font-size: 12px; line-height: 1.5; color: #8b93a3; margin-top: -4px; }
-        .onboarding-chip-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
-        .onboarding-chip-wrap .onboarding-goal-chip { min-height: 36px; padding: 8px 12px; }
-        .onboarding-chip-emoji { font-size: 13px; }
-        .onboarding-goal-chip-private-on {
-          border-color: rgba(17,24,39,0.45) !important;
-          background: rgba(17,24,39,0.05) !important;
-          color: #1f2633 !important;
-        }
-        .onboarding-intent-textarea {
-          width: 100%; resize: none; font-family: inherit;
-          border: 1px solid rgba(17,24,39,0.14); border-radius: 14px;
-          background: #ffffff; color: #1f2633;
-          padding: 11px 14px; font-size: 13.5px; line-height: 1.6; outline: none;
-        }
-        .onboarding-intent-textarea:focus { border-color: rgba(26,111,212,0.5); }
-
-        .onboarding-proof-visual {
-          padding: 4px 0 0;
-          min-height: 90px;
-        }
-        .onboarding-live-activity {
-          display: grid;
-          gap: 14px;
-        }
-        .onboarding-live-row {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-        }
-        .onboarding-live-row-active {
-          padding: 4px 0 4px 13px;
-          border-left: 3px solid #5ab3ff;
-        }
-        .onboarding-live-pulse {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: #5ab3ff;
-          flex-shrink: 0;
-          box-shadow: 0 0 0 0 rgba(90, 179, 255, 0.55);
-          animation: onboardingPulse 1.6s ease-out infinite;
-        }
-        .onboarding-live-app {
-          font-size: 14px;
-          font-weight: 650;
-          color: #f0f4ff;
-        }
-        .onboarding-live-title {
-          font-size: 12px;
-          color: rgba(194,198,214,0.5);
-          margin-top: 2px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          max-width: 44ch;
-        }
-        .onboarding-live-stat {
-          font-size: 20px;
-          font-weight: 720;
-          color: #f0f4ff;
-          min-width: 36px;
-        }
-        .onboarding-live-label {
-          font-size: 13px;
-          color: #c2c6d6;
-        }
-        .onboarding-reassurance {
-          font-size: 12px;
-          color: rgba(194,198,214,0.5);
-          margin: 0;
-        }
-        .onboarding-skip-link {
-          background: none;
-          border: none;
-          color: rgba(194,198,214,0.5);
-          font-size: 12.5px;
-          cursor: pointer;
-          padding: 0;
-          text-align: center;
-          transition: color 140ms ease;
-        }
-        .onboarding-skip-link:hover {
-          color: #c2c6d6;
-        }
-        .onboarding-proof-pending {
-          display: grid;
-          justify-items: start;
-          gap: 10px;
-          padding: 12px 0 2px;
-        }
-        .onboarding-proof-pending .onboarding-breath {
-          height: auto;
-          justify-content: flex-start;
-        }
-        .onboarding-proof-pending p {
-          margin: 0;
-          color: #f0f4ff;
-          font-size: 20px;
-          line-height: 1.45;
-          max-width: 32ch;
-        }
-        .onboarding-error {
-          padding: 12px 14px;
-          border-radius: 14px;
-          border: 1px solid rgba(248, 113, 113, 0.26);
-          background: rgba(248, 113, 113, 0.08);
-          color: #fecaca;
-          font-size: 13px;
-          line-height: 1.6;
-        }
-        @keyframes onboardingSpin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes onboardingPulse {
-          0% { box-shadow: 0 0 0 0 rgba(125, 191, 255, 0.55); }
-          70% { box-shadow: 0 0 0 8px rgba(125, 191, 255, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(125, 191, 255, 0); }
-        }
-        @keyframes onboardingBreath {
-          0%, 100% { transform: scale(0.7); opacity: 0.5; }
-          50% { transform: scale(1.0); opacity: 1; }
-        }
-        @keyframes onboardingBeam {
-          0% { transform: translateY(-100%); }
-          100% { transform: translateY(100%); }
-        }
-        @keyframes onboardingBlockIn {
-          from { opacity: 0; transform: translateX(-6px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-        @keyframes onboardingMockHighlight {
-          0%, 100% { box-shadow: inset 0 0 0 1px rgba(125, 191, 255, 0.35); }
-          50% { box-shadow: inset 0 0 0 1px rgba(125, 191, 255, 0.6), 0 0 0 2px rgba(125, 191, 255, 0.18); }
-        }
-        @keyframes onboardingToggleTease {
-          0%, 40% { background: rgba(255, 255, 255, 0.14); }
-          50%, 100% { background: #4ac06e; }
-          0%, 40% {}
-          45% {}
-        }
-        .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle::after {
-          animation: onboardingToggleKnob 2.8s ease-in-out infinite;
-        }
-        @keyframes onboardingToggleKnob {
-          0%, 40% { left: 2px; }
-          50%, 100% { left: 13px; }
-        }
-        /* ── Langdock-style light theme + aurora gradient (overrides) ───────── */
-        .onboarding-root {
-          background:
-            radial-gradient(130% 70% at 50% -15%, rgba(123,143,247,0.10), transparent 60%),
-            #faf9f7;
-          --color-surface: #ffffff;
-          --color-surface-low: #fafafa;
-          --color-surface-container: #ffffff;
-          --color-surface-high: #f3f4f6;
-          --color-surface-highest: #e9ebef;
-          --color-surface-card: #ffffff;
-          --color-border-ghost: rgba(17,24,39,0.12);
-          --color-text-primary: #1f2633;
-          --color-text-secondary: #5c6474;
-          --color-text-tertiary: #8b93a3;
-          --color-primary: #1a6fd4;
-          --color-primary-contrast: #ffffff;
-          --color-accent: #1a6fd4;
-          --color-accent-dim: rgba(26,111,212,0.10);
-          --color-focus-green: #0f766e;
-          --gradient-primary: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
-        }
-        .onboarding-shell {
-          position: relative;
-          overflow: hidden;
-          background: #ffffff;
-          border: 1px solid rgba(17,24,39,0.08);
-          box-shadow: 0 24px 70px rgba(20,28,48,0.16);
-          backdrop-filter: none;
-        }
-        .onboarding-shell::before {
-          content: '';
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 168px;
-          background:
-            radial-gradient(120% 150% at 0% 0%, #6f86f0 0%, rgba(111,134,240,0) 56%),
-            radial-gradient(120% 150% at 100% 0%, #c8a7ef 0%, rgba(200,167,239,0) 58%),
-            radial-gradient(130% 130% at 50% 0%, #dfe4ff 0%, rgba(223,228,255,0) 62%);
-          filter: blur(24px);
-          -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.4) 55%, transparent 100%);
-          mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.4) 55%, transparent 100%);
-          pointer-events: none;
-          z-index: 0;
-        }
-        .onboarding-shell > * { position: relative; z-index: 1; }
-        .onboarding-title, .onboarding-status-label, .onboarding-live-app, .onboarding-live-stat,
-        .onboarding-steps-title, .onboarding-summary-value, .onboarding-proof-pending p { color: #1f2633; }
-        .onboarding-sub, .onboarding-callout-body, .onboarding-summary-detail, .onboarding-hint,
-        .onboarding-steps-body, .onboarding-live-label, .onboarding-status { color: #5c6474; }
-        .onboarding-eyebrow, .onboarding-callout-title, .onboarding-summary-label,
-        .onboarding-reassurance, .onboarding-status-note, .onboarding-hint-quiet,
-        .onboarding-live-title, .onboarding-skip-link { color: #8b93a3; }
-        .onboarding-skip-link:hover { color: #5c6474; }
-        .onboarding-dot { background: rgba(17,24,39,0.12); }
-        .onboarding-dot-done { background: rgba(26,111,212,0.5); }
-        .onboarding-back { color: #5c6474; }
-        .onboarding-back:hover { color: #1f2633; background: rgba(17,24,39,0.05); }
-        .onboarding-btn-secondary { border-color: rgba(17,24,39,0.14); color: #1f2633; }
-        .onboarding-btn-secondary:hover:not(:disabled) { border-color: rgba(26,111,212,0.4); }
-        .onboarding-status { background: #f6f7f9; border-color: rgba(17,24,39,0.10); }
-        .onboarding-name-field input { background: #ffffff; border-color: rgba(17,24,39,0.14); color: #1f2633; }
-        .onboarding-name-field input::placeholder { color: #a2a8b4; }
-        .onboarding-goal-chip { background: #ffffff; border-color: rgba(17,24,39,0.12); color: #1f2633; }
-        .onboarding-goal-chip:hover:not(.onboarding-goal-chip-selected) { border-color: rgba(26,111,212,0.35); background: #f6f8fc; }
-        .onboarding-goal-chip-selected { border-color: rgba(26,111,212,0.6); background: rgba(26,111,212,0.10); color: #14467f; }
-        .onboarding-summary-tile, .onboarding-goal-card { background: #fafafa; border-color: rgba(17,24,39,0.10); }
-        .onboarding-summary-tile-highlight { border-color: rgba(26,111,212,0.4); background: linear-gradient(180deg, rgba(26,111,212,0.07), rgba(90,179,255,0.04)); box-shadow: 0 8px 26px rgba(26,111,212,0.12); }
-        .onboarding-daybar-track { background: rgba(17,24,39,0.08); }
-        .onboarding-daybar-marker { background: #1a6fd4; box-shadow: 0 0 0 4px rgba(26,111,212,0.18); }
-        .onboarding-daybar-ends, .onboarding-story-taphint, .onboarding-story-cap { color: #8b93a3; }
-        .onboarding-story-line { color: #1f2633; }
-        .onboarding-story-time { color: #1a6fd4; }
-        .onboarding-story-pill { color: #1f2633; background: rgba(17,24,39,0.05); border-color: rgba(17,24,39,0.12); }
-        .onboarding-story-appchip { color: #1f2633; background: #ffffff; border-color: rgba(17,24,39,0.12); }
-        .onboarding-story-ghost { background: rgba(17,24,39,0.05); }
-        .onboarding-tour-block { color: #1f2633; box-shadow: inset 0 0 0 1px rgba(17,24,39,0.04); }
-        .onboarding-tour-block[data-tone="a"] { background: linear-gradient(135deg, rgba(123,143,247,0.22), rgba(90,179,255,0.16)); }
-        .onboarding-tour-block[data-tone="b"] { background: #f3f4f6; color: #5c6474; }
-        .onboarding-tour-block[data-tone="c"] { background: linear-gradient(135deg, rgba(178,160,255,0.22), rgba(123,143,247,0.16)); }
-        .onboarding-tour-block-label { color: #1f2633; }
-        .onboarding-tour-block-time { color: #8b93a3; }
-        .onboarding-tour-notif { background: #fafafa; border-color: rgba(17,24,39,0.10); }
-        .onboarding-tour-notif-head { color: #8b93a3; }
-        .onboarding-tour-notif-body { color: #1f2633; }
-        .onboarding-tour-bubble-a { background: #f3f4f6; color: #1f2633; border-color: rgba(17,24,39,0.08); }
-        .onboarding-tour-stats > div { background: #fafafa; border-color: rgba(17,24,39,0.10); }
-        .onboarding-tour-stats strong { color: #1f2633; }
-        .onboarding-tour-stats span { color: #8b93a3; }
-        .onboarding-tour-privacy { color: #14467f; background: rgba(26,111,212,0.07); border-color: rgba(26,111,212,0.16); }
-        .onboarding-tour-hint { color: #8b93a3; }
-        .onboarding-tour-saved { color: #0f766e; }
-        .onboarding-tour-thinking span { background: rgba(26,111,212,0.55); }
-        .onboarding-tour-caret { background: #1a6fd4; }
-        .onboarding-settings-mock { background: #ffffff; border-color: rgba(17,24,39,0.10); box-shadow: 0 18px 44px rgba(20,28,48,0.12); }
-        .onboarding-settings-mock-header { background: #f6f7f9; border-bottom-color: rgba(17,24,39,0.06); }
-        .onboarding-settings-mock-title { color: #5c6474; }
-        .onboarding-settings-mock-app { color: #1f2633; }
-        .onboarding-settings-mock-badge { color: #14467f; }
-        .onboarding-settings-mock-toggle.off { background: rgba(17,24,39,0.18); }
-        .onboarding-settings-mock-hint { color: #8b93a3; border-top-color: rgba(17,24,39,0.06); }
-        .onboarding-handoff, .onboarding-verify, .onboarding-callout, .onboarding-proof-card { background: #fafafa; border-color: rgba(17,24,39,0.10); }
-
-        @media (max-width: 720px) {
-          .onboarding-shell {
-            padding: 22px 20px 20px;
-            border-radius: 24px;
-          }
-          .onboarding-title {
-            font-size: 26px;
-          }
-          .onboarding-permission-grid {
-            grid-template-columns: minmax(0, 1fr);
-          }
-          .onboarding-handoff,
-          .onboarding-verify {
-            grid-template-columns: 1fr;
-          }
-          .onboarding-handoff-beam,
-          .onboarding-breath {
-            height: 72px;
-          }
-        }
-      `}</style>
+  return (
+    <div className="ob-root">
+      {renderStage()}
+      {errorMessage && <div className="ob-error">{errorMessage}</div>}
+      <style>{ONBOARDING_CSS}</style>
     </div>
   )
 }
+
+const ONBOARDING_CSS = `
+/* ── Surround: a designed, warm backdrop — light card never floats in a void ── */
+.ob-root {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  -webkit-app-region: drag;
+  background:
+    radial-gradient(120% 80% at 12% 0%, rgba(111,134,240,0.16), transparent 52%),
+    radial-gradient(120% 80% at 100% 8%, rgba(200,167,239,0.16), transparent 50%),
+    radial-gradient(140% 120% at 50% 120%, rgba(90,179,255,0.10), transparent 60%),
+    #f4f5fb;
+  /* Pin a light palette so embedded pieces (ConnectAI) never render light-on-dark. */
+  --color-surface: #ffffff;
+  --color-surface-low: #fafbff;
+  --color-surface-container: #ffffff;
+  --color-surface-high: #f3f4fa;
+  --color-surface-highest: #e9ebf4;
+  --color-surface-card: #ffffff;
+  --color-border-ghost: rgba(17,24,39,0.12);
+  --color-text-primary: #1f2633;
+  --color-text-secondary: #5c6474;
+  --color-text-tertiary: #8b93a3;
+  --color-primary: #4f6ef0;
+  --color-primary-contrast: #ffffff;
+  --color-accent: #4f6ef0;
+  --color-accent-dim: rgba(79,110,240,0.10);
+  --color-focus-green: #0f766e;
+  --gradient-primary: linear-gradient(135deg, #6f86f0 0%, #5ab3ff 100%);
+  --ob-ink: #1f2633;
+  --ob-ink-2: #5c6474;
+  --ob-ink-3: #8b93a3;
+  --ob-line: rgba(17,24,39,0.10);
+  --ob-accent: #4f6ef0;
+  --ob-grad: linear-gradient(135deg, #6f86f0 0%, #5ab3ff 100%);
+  font-feature-settings: 'cv01','ss01';
+}
+
+/* ── The stage: fixed size, identical every screen, footer always visible ── */
+.ob-stage {
+  -webkit-app-region: no-drag;
+  position: relative;
+  width: clamp(520px, 94vw, 600px);
+  height: min(680px, calc(100vh - 40px));
+  background: #ffffff;
+  border: 1px solid rgba(17,24,39,0.07);
+  border-radius: 26px;
+  box-shadow: 0 30px 80px rgba(26,33,68,0.18), 0 2px 8px rgba(26,33,68,0.06);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+}
+/* the one recurring flourish: an aurora bleed at the top of the stage */
+.ob-stage::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 180px;
+  background:
+    radial-gradient(120% 150% at 0% 0%, #6f86f0 0%, rgba(111,134,240,0) 55%),
+    radial-gradient(120% 150% at 100% 0%, #c8a7ef 0%, rgba(200,167,239,0) 56%),
+    radial-gradient(130% 130% at 50% 0%, #dfe4ff 0%, rgba(223,228,255,0) 60%);
+  opacity: 0.5;
+  filter: blur(20px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.35) 55%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.35) 55%, transparent 100%);
+  pointer-events: none; z-index: 0;
+}
+.ob-stage > * { position: relative; z-index: 1; }
+
+/* rail: back + progress segments */
+.ob-rail { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px 0; }
+.ob-back {
+  -webkit-app-region: no-drag; background: none; border: none; cursor: pointer;
+  color: var(--ob-ink-3); font-size: 12.5px; font-weight: 650; padding: 4px 8px; margin-left: -8px;
+  border-radius: 8px; transition: color 140ms ease, background 140ms ease;
+}
+.ob-back:hover { color: var(--ob-ink); background: rgba(17,24,39,0.05); }
+.ob-back-ph { width: 1px; height: 1px; }
+.ob-progress { display: flex; align-items: center; gap: 5px; }
+.ob-seg { width: 14px; height: 5px; border-radius: 999px; background: rgba(17,24,39,0.10); transition: width 320ms ease, background 320ms ease; }
+.ob-seg.is-done { background: rgba(79,110,240,0.42); }
+.ob-seg.is-active { width: 26px; background: var(--ob-grad); }
+
+/* header zone — same place every screen, Lumen a persistent companion */
+.ob-header { display: grid; grid-template-columns: 54px 1fr; gap: 14px; align-items: start; padding: 14px 26px 16px; }
+.ob-lumen { width: 54px; height: 54px; display: inline-grid; place-items: center; }
+.ob-headtext { min-width: 0; padding-top: 1px; }
+.ob-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ob-accent); opacity: 0.85; }
+.ob-title { margin: 6px 0 0; font-size: 25px; line-height: 1.14; letter-spacing: -0.02em; color: var(--ob-ink); font-weight: 760; }
+.ob-wave { display: inline-block; animation: obWave 1.8s ease-in-out infinite; transform-origin: 70% 70%; }
+.ob-sub { margin: 8px 0 0; font-size: 14.5px; line-height: 1.6; color: var(--ob-ink-2); max-width: 52ch; }
+
+/* content zone — the ONLY changing part; scrolls inside the frame with soft fades */
+.ob-content {
+  overflow-y: auto; overflow-x: hidden;
+  padding: 4px 26px 8px;
+  /* max-content auto-rows so an overflow:hidden child (profile, settings mock,
+     BYOK panel) can never collapse below its content and clip — the frame
+     scrolls instead. */
+  display: grid; align-content: start; grid-auto-rows: max-content; gap: 18px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  scrollbar-width: thin; scrollbar-color: rgba(17,24,39,0.18) transparent;
+  animation: obContentIn 380ms cubic-bezier(.2,.8,.2,1) both;
+}
+.ob-content::-webkit-scrollbar { width: 7px; }
+.ob-content::-webkit-scrollbar-thumb { background: rgba(17,24,39,0.16); border-radius: 999px; }
+.ob-content-center { justify-items: center; text-align: center; }
+.ob-content-center .ob-name-field { width: min(360px, 100%); }
+
+/* footer — pinned, never scrolls away */
+.ob-footer {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 26px 18px;
+  border-top: 1px solid rgba(17,24,39,0.06);
+  background: linear-gradient(180deg, rgba(255,255,255,0), #ffffff 40%);
+}
+.ob-footer-spacer { flex: 1 1 auto; }
+.ob-note { font-size: 11.5px; color: var(--ob-ink-3); }
+.ob-skip {
+  -webkit-app-region: no-drag; background: none; border: none; cursor: pointer;
+  color: var(--ob-ink-3); font-size: 12.5px; padding: 6px 6px; border-radius: 8px;
+  transition: color 140ms ease;
+}
+.ob-skip:hover { color: var(--ob-ink-2); }
+
+/* buttons */
+.ob-btn-primary, .ob-btn-secondary {
+  -webkit-app-region: no-drag; height: 42px; padding: 0 20px; border-radius: 12px;
+  font-size: 13.5px; font-weight: 720; cursor: pointer;
+  transition: transform 140ms ease, box-shadow 180ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+.ob-btn-primary { border: none; background: var(--ob-grad); color: #fff; box-shadow: 0 10px 26px rgba(79,110,240,0.30); }
+.ob-btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 34px rgba(79,110,240,0.40); }
+.ob-btn-primary:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+.ob-btn-secondary { background: #fff; border: 1px solid var(--ob-line); color: var(--ob-ink); }
+.ob-btn-secondary:hover:not(:disabled) { border-color: rgba(79,110,240,0.45); }
+.ob-btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.ob-btn-sm { height: 38px; font-size: 12.5px; padding: 0 16px; }
+
+/* name + inputs */
+.ob-name-field input {
+  width: 100%; border: 1px solid var(--ob-line); border-radius: 14px; background: #fff;
+  color: var(--ob-ink); padding: 13px 16px; font-size: 16px; font-weight: 600; outline: none;
+  text-align: center; transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.ob-name-field input::placeholder { color: #a2a8b4; font-weight: 500; }
+.ob-name-field input:focus { border-color: rgba(79,110,240,0.6); box-shadow: 0 0 0 4px rgba(79,110,240,0.12); }
+.ob-reassure { margin: 0; font-size: 11.5px; color: var(--ob-ink-3); }
+
+.ob-input {
+  flex: 1 1 auto; min-width: 0; border: 1px solid var(--ob-line); border-radius: 12px; background: #fff;
+  color: var(--ob-ink); padding: 11px 14px; font-size: 14px; outline: none;
+  transition: border-color 140ms ease;
+}
+.ob-input:focus { border-color: rgba(79,110,240,0.55); }
+.ob-textarea {
+  width: 100%; resize: none; font-family: inherit; border: 1px solid var(--ob-line); border-radius: 12px;
+  background: #fff; color: var(--ob-ink); padding: 11px 14px; font-size: 14px; line-height: 1.6; outline: none;
+}
+.ob-textarea:focus { border-color: rgba(79,110,240,0.55); }
+.ob-addrow { display: flex; gap: 8px; }
+.ob-add-btn {
+  -webkit-app-region: no-drag; flex-shrink: 0; height: 42px; padding: 0 16px; border-radius: 12px;
+  border: 1px solid var(--ob-line); background: #fff; color: var(--ob-ink); font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: border-color 140ms ease, opacity 140ms ease;
+}
+.ob-add-btn:hover:not(:disabled) { border-color: rgba(79,110,240,0.45); }
+.ob-add-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* sections & labels — one spacing rhythm */
+.ob-section { display: grid; gap: 10px; }
+.ob-label { font-size: 13.5px; font-weight: 700; color: var(--ob-ink); }
+.ob-label-opt { font-size: 11px; font-weight: 600; color: var(--ob-ink-3); text-transform: none; letter-spacing: 0; }
+.ob-hint { font-size: 12.5px; line-height: 1.5; color: var(--ob-ink-3); margin-top: -4px; }
+.ob-reflect { font-size: 12.5px; color: var(--ob-accent); font-weight: 600; animation: obContentIn 280ms ease both; }
+
+/* one chip language */
+.ob-chipwrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.ob-chip {
+  -webkit-app-region: no-drag; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 8px 13px; border-radius: 10px; border: 1px solid var(--ob-line);
+  background: #fff; color: var(--ob-ink); font-size: 13px; font-weight: 550; cursor: pointer; text-align: left;
+  transition: border-color 150ms ease, background 150ms ease, transform 120ms ease;
+}
+.ob-chip:hover:not(.is-selected) { border-color: rgba(79,110,240,0.38); background: #f7f8ff; }
+.ob-chip:active { transform: scale(0.98); }
+.ob-chip.is-selected { border-color: rgba(79,110,240,0.6); background: rgba(79,110,240,0.10); color: #2a3da8; }
+.ob-chip-emoji { font-size: 14px; }
+.ob-chip.is-token { padding-right: 6px; background: rgba(79,110,240,0.08); border-color: rgba(79,110,240,0.30); color: #2a3da8; cursor: default; }
+.ob-chip.is-private { padding-right: 6px; background: rgba(17,24,39,0.05); border-color: rgba(17,24,39,0.30); color: var(--ob-ink); cursor: default; }
+.ob-chip.is-ghost { border-style: dashed; color: var(--ob-ink-2); background: transparent; }
+.ob-chip.is-ghost:hover { border-color: rgba(17,24,39,0.32); background: rgba(17,24,39,0.03); }
+.ob-token-x {
+  -webkit-app-region: no-drag; border: none; background: rgba(17,24,39,0.10); color: var(--ob-ink-2);
+  width: 18px; height: 18px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1;
+  display: inline-grid; place-items: center; margin-left: 2px;
+}
+.ob-token-x:hover { background: rgba(17,24,39,0.18); }
+
+/* one selection-card language (voice, rhythm, AI) */
+.ob-cards { display: grid; gap: 10px; }
+.ob-cards-tight { gap: 8px; }
+.ob-card {
+  -webkit-app-region: no-drag; display: grid; gap: 7px; text-align: left; cursor: pointer;
+  padding: 14px 16px; border-radius: 14px; background: #fff; border: 1px solid var(--ob-line);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 120ms ease;
+}
+.ob-card:hover:not(.is-selected) { border-color: rgba(79,110,240,0.35); background: #f9faff; }
+.ob-card:active { transform: scale(0.995); }
+.ob-card.is-selected { border-color: rgba(79,110,240,0.6); background: linear-gradient(180deg, rgba(79,110,240,0.07), rgba(90,179,255,0.03)); box-shadow: 0 8px 24px rgba(79,110,240,0.12); }
+.ob-card-head { display: flex; align-items: center; gap: 8px; }
+.ob-card-title { font-size: 14px; font-weight: 740; color: var(--ob-ink); }
+.ob-card-tag { font-size: 11.5px; color: var(--ob-ink-3); }
+.ob-card-check { margin-left: auto; color: var(--ob-accent); font-weight: 900; }
+.ob-card-body { font-size: 13px; line-height: 1.6; color: var(--ob-ink-2); }
+.ob-card-row { grid-template-columns: 26px 1fr auto; align-items: center; gap: 12px; }
+.ob-card-emoji { font-size: 19px; }
+.ob-card-rowtext { display: grid; gap: 2px; }
+
+/* status (permission) */
+.ob-status {
+  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; border-radius: 12px; border: 1px solid var(--ob-line); background: #f7f8fb;
+  font-size: 12.5px; color: var(--ob-ink-2);
+}
+.ob-status-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(140,150,170,0.55); }
+.ob-status-ok .ob-status-dot { background: #1aa463; box-shadow: 0 0 0 3px rgba(26,164,99,0.16); }
+.ob-status-waiting .ob-status-dot { background: #e0a020; animation: obPulse 1.6s ease-out infinite; }
+.ob-status-label { font-weight: 650; color: var(--ob-ink); }
+.ob-status-note { color: var(--ob-ink-3); }
+
+/* callout (relaunch/verify) */
+.ob-callout { display: grid; grid-template-columns: 110px 1fr; gap: 16px; align-items: center; padding: 16px; border-radius: 16px; border: 1px solid var(--ob-line); background: #fafbff; }
+.ob-callout-title { font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ob-ink-3); }
+.ob-callout-body { font-size: 13px; line-height: 1.6; color: var(--ob-ink-2); margin-top: 4px; }
+
+/* proof */
+.onboarding-live-activity { display: grid; gap: 14px; padding: 4px 0; }
+.onboarding-live-row { display: flex; align-items: center; gap: 14px; }
+.onboarding-live-row-active { padding: 4px 0 4px 13px; border-left: 3px solid var(--ob-accent); }
+.onboarding-live-pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--ob-accent); flex-shrink: 0; box-shadow: 0 0 0 0 rgba(79,110,240,0.5); animation: obPulse 1.6s ease-out infinite; }
+.onboarding-live-app { font-size: 15px; font-weight: 680; color: var(--ob-ink); }
+.onboarding-live-title { font-size: 12.5px; color: var(--ob-ink-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42ch; }
+.onboarding-live-stat { font-size: 22px; font-weight: 740; color: var(--ob-ink); min-width: 44px; }
+.onboarding-live-label { font-size: 13.5px; color: var(--ob-ink-2); }
+.ob-proof-pending { display: grid; justify-items: start; gap: 12px; padding: 6px 0; }
+.ob-proof-pending .onboarding-breath { justify-content: flex-start; height: auto; }
+.ob-proof-pending p { margin: 0; color: var(--ob-ink); font-size: 19px; line-height: 1.45; max-width: 34ch; }
+
+/* AI money moment */
+.ob-ai-hero {
+  position: relative; padding: 18px 18px 16px; border-radius: 16px;
+  border: 1px solid rgba(79,110,240,0.28);
+  background: linear-gradient(135deg, rgba(111,134,240,0.10), rgba(90,179,255,0.06));
+  box-shadow: 0 10px 30px rgba(79,110,240,0.12);
+}
+.ob-ai-hero-badge {
+  display: inline-block; font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #fff; background: var(--ob-grad); padding: 4px 10px; border-radius: 999px;
+}
+.ob-ai-hero-amount { margin-top: 10px; font-size: 34px; font-weight: 800; letter-spacing: -0.03em; color: var(--ob-ink); }
+.ob-ai-hero-amount span { font-size: 15px; font-weight: 600; color: var(--ob-ink-2); margin-left: 6px; letter-spacing: 0; }
+.ob-ai-hero-body { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--ob-ink-2); max-width: 46ch; }
+.ob-ai-hero-actions { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.ob-ai-byok { border: 1px solid var(--ob-line); border-radius: 14px; background: #fff; overflow: hidden; }
+.ob-ai-byok > summary { list-style: none; cursor: pointer; padding: 14px 16px; display: grid; gap: 3px; }
+.ob-ai-byok > summary::-webkit-details-marker { display: none; }
+.ob-ai-byok-title { font-size: 14px; font-weight: 740; color: var(--ob-ink); }
+.ob-ai-byok-sub { font-size: 12.5px; line-height: 1.55; color: var(--ob-ink-2); }
+.ob-ai-byok[open] > summary { border-bottom: 1px solid var(--ob-line); }
+.ob-ai-byok-body { padding: 16px; }
+
+/* ready */
+.ob-ready-recap { padding: 16px; border-radius: 16px; border: 1px solid rgba(79,110,240,0.30); background: linear-gradient(180deg, rgba(79,110,240,0.07), rgba(90,179,255,0.03)); box-shadow: 0 8px 24px rgba(79,110,240,0.12); text-align: left; }
+.ob-ready-recap-label { font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ob-ink-3); }
+.ob-ready-recap-body { margin-top: 8px; font-size: 14px; line-height: 1.6; color: var(--ob-ink); }
+.ob-profile { display: grid; gap: 0; border: 1px solid var(--ob-line); border-radius: 14px; overflow: hidden; text-align: left; width: 100%; }
+.ob-profile-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; font-size: 13px; border-top: 1px solid var(--ob-line); }
+.ob-profile-row:first-child { border-top: none; }
+.ob-profile-row span { color: var(--ob-ink-3); }
+.ob-profile-row strong { color: var(--ob-ink); font-weight: 680; text-align: right; }
+.ob-try { display: grid; gap: 8px; text-align: left; width: 100%; }
+.ob-try-chip { font-size: 13px; color: var(--ob-ink-2); padding: 9px 13px; border-radius: 10px; border: 1px solid var(--ob-line); background: #fafbff; }
+
+/* why story scenes */
+.ob-why-scene { display: grid; place-items: center; min-height: 168px; padding: 6px 0; }
+.ob-why-diary { position: relative; width: 230px; padding: 22px 20px 26px; border-radius: 16px; background: #fff; border: 1px solid var(--ob-line); box-shadow: 0 16px 40px rgba(26,33,68,0.12); display: grid; gap: 10px; animation: obContentIn 420ms ease both; }
+.ob-why-diary-line { height: 9px; border-radius: 999px; background: rgba(17,24,39,0.10); }
+.ob-why-diary-seal { position: absolute; right: -10px; bottom: -10px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #fff; background: var(--ob-grad); padding: 6px 12px; border-radius: 999px; box-shadow: 0 8px 20px rgba(79,110,240,0.3); }
+.ob-why-device { display: grid; place-items: center; }
+.ob-why-device-screen { width: 168px; height: 104px; border-radius: 12px; background: linear-gradient(160deg, #eef1ff, #fff); border: 1px solid var(--ob-line); display: grid; place-items: center; box-shadow: 0 16px 40px rgba(26,33,68,0.12); }
+.ob-why-lock { font-size: 34px; animation: obFloat 3s ease-in-out infinite; }
+.ob-why-device-base { width: 200px; height: 9px; border-radius: 0 0 10px 10px; background: linear-gradient(180deg, #d9def0, #c7cde6); }
+.ob-why-tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+.ob-why-tag { font-size: 12px; font-weight: 600; color: var(--ob-ink-2); padding: 6px 12px; border-radius: 999px; background: #fff; border: 1px solid var(--ob-line); animation: obChipFloat 420ms cubic-bezier(.2,.8,.2,1) both; }
+.ob-why-recap { width: min(380px, 100%); padding: 16px; border-radius: 16px; background: linear-gradient(180deg, rgba(79,110,240,0.07), rgba(90,179,255,0.03)); border: 1px solid rgba(79,110,240,0.3); box-shadow: 0 12px 32px rgba(79,110,240,0.12); animation: obContentIn 420ms ease both; }
+.ob-why-recap-label { font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ob-ink-3); }
+.ob-why-recap-body { margin-top: 8px; font-size: 14px; line-height: 1.6; color: var(--ob-ink); }
+.ob-why-dots { display: flex; gap: 7px; justify-content: center; }
+.ob-why-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(17,24,39,0.14); transition: all 280ms ease; }
+.ob-why-dot.is-active { width: 22px; border-radius: 999px; background: var(--ob-grad); }
+
+/* error */
+.ob-error { position: absolute; bottom: 16px; max-width: 560px; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(220,80,80,0.3); background: #fff5f5; color: #b42323; font-size: 13px; line-height: 1.5; box-shadow: 0 10px 30px rgba(180,35,35,0.14); }
+
+/* ── Tour / story (light) — reused from the narrated-day component ── */
+.onboarding-story { display: grid; gap: 16px; }
+.onboarding-daybar { display: grid; gap: 6px; }
+.onboarding-daybar-track { position: relative; height: 4px; border-radius: 999px; background: rgba(17,24,39,0.08); }
+.onboarding-daybar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: linear-gradient(90deg, #f5c662, #5ab3ff 60%, #8a7cff); transition: width 420ms cubic-bezier(.2,.8,.2,1); }
+.onboarding-daybar-marker { position: absolute; top: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #4f6ef0; transform: translateY(-50%); box-shadow: 0 0 0 4px rgba(79,110,240,0.18); transition: left 420ms cubic-bezier(.2,.8,.2,1); }
+.onboarding-daybar-ends { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ob-ink-3); }
+.onboarding-story-scene { min-height: 132px; display: flex; flex-direction: column; justify-content: center; gap: 10px; animation: obContentIn 360ms ease both; }
+.onboarding-story-caption { display: grid; gap: 4px; min-height: 48px; }
+.onboarding-story-time { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ob-accent); }
+.onboarding-story-line { margin: 0; font-size: 16px; line-height: 1.5; color: var(--ob-ink); max-width: 46ch; }
+.onboarding-story-stack { display: grid; gap: 8px; }
+.onboarding-story-cap { font-size: 11.5px; color: var(--ob-ink-2); display: flex; align-items: center; gap: 7px; }
+.onboarding-story-pill { font-size: 11px; font-weight: 600; color: var(--ob-ink); padding: 2px 9px; border-radius: 999px; background: rgba(17,24,39,0.05); border: 1px solid var(--ob-line); }
+.onboarding-story-apps { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 14px 0; }
+.onboarding-story-appchip { font-size: 13px; font-weight: 600; color: var(--ob-ink); padding: 10px 16px; border-radius: 12px; background: #fff; border: 1px solid var(--ob-line); animation: obChipFloat 420ms cubic-bezier(.2,.8,.2,1) both; }
+.onboarding-story-intro { display: grid; gap: 8px; padding: 6px 0; }
+.onboarding-story-ghost { height: 26px; border-radius: 9px; background: rgba(17,24,39,0.05); animation: obContentIn 500ms ease both; }
+.onboarding-tour-block { border-radius: 10px; display: flex; align-items: center; padding: 0 12px; font-size: 12.5px; font-weight: 600; color: var(--ob-ink); box-shadow: inset 0 0 0 1px rgba(17,24,39,0.04); animation: obBlockIn 0.5s cubic-bezier(.2,.8,.2,1) both; }
+.onboarding-tour-block[data-tone="a"] { background: linear-gradient(135deg, rgba(123,143,247,0.22), rgba(90,179,255,0.16)); }
+.onboarding-tour-block[data-tone="c"] { background: linear-gradient(135deg, rgba(178,160,255,0.22), rgba(123,143,247,0.16)); }
+.onboarding-tour-block-static { flex-direction: column; align-items: stretch; justify-content: center; gap: 10px; padding: 12px; width: 100%; text-align: left; }
+.onboarding-tour-block-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.onboarding-tour-block-label { font-size: 13px; font-weight: 650; color: var(--ob-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.onboarding-tour-block-time { font-size: 11px; color: var(--ob-ink-3); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.onboarding-tour-relabel { animation: obFadeUp 260ms ease both; }
+.onboarding-tour-saved { flex-shrink: 0; font-size: 11px; font-weight: 700; color: var(--color-focus-green); animation: obFadeUp 240ms ease both; }
+.onboarding-tour-notif { border-radius: 13px; border: 1px solid var(--ob-line); background: #fafbff; padding: 12px 14px; animation: obFadeUp 300ms ease both; }
+.onboarding-tour-notif-head { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--ob-ink-3); text-transform: uppercase; }
+.onboarding-tour-notif-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ob-accent); }
+.onboarding-tour-notif-body { margin-top: 7px; font-size: 13.5px; line-height: 1.55; color: var(--ob-ink); }
+.onboarding-tour-stats { display: flex; gap: 10px; animation: obFadeUp 300ms ease both; }
+.onboarding-tour-stats > div { flex: 1; text-align: center; border-radius: 11px; padding: 12px 6px; background: #fafbff; border: 1px solid var(--ob-line); }
+.onboarding-tour-stats strong { display: block; font-size: 18px; font-weight: 760; color: var(--ob-ink); }
+.onboarding-tour-stats span { font-size: 10.5px; color: var(--ob-ink-3); }
+.onboarding-tour-chatlog { display: grid; gap: 8px; min-height: 96px; align-content: start; }
+.onboarding-tour-bubble { font-size: 13px; line-height: 1.55; padding: 10px 13px; border-radius: 13px; max-width: 86%; }
+.onboarding-tour-bubble-q { justify-self: end; background: var(--ob-grad); color: #fff; border-bottom-right-radius: 4px; }
+.onboarding-tour-bubble-a { justify-self: start; background: #f3f4f6; color: var(--ob-ink); border: 1px solid var(--ob-line); border-bottom-left-radius: 4px; }
+.onboarding-tour-thinking { display: inline-flex; gap: 5px; align-items: center; width: max-content; }
+.onboarding-tour-thinking span { width: 7px; height: 7px; border-radius: 50%; background: rgba(79,110,240,0.55); animation: obBreath 1.2s ease-in-out infinite; }
+.onboarding-tour-thinking span:nth-child(2) { animation-delay: 0.18s; }
+.onboarding-tour-thinking span:nth-child(3) { animation-delay: 0.36s; }
+.onboarding-tour-caret { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: var(--ob-accent); border-radius: 1px; animation: obCaret 0.9s steps(1) infinite; }
+.onboarding-tour-privacy { font-size: 11.5px; color: #2a3da8; text-align: center; padding: 8px 12px; border-radius: 10px; background: rgba(79,110,240,0.07); border: 1px solid rgba(79,110,240,0.16); }
+
+/* settings mock (permission) */
+.onboarding-settings-mock { border-radius: 14px; border: 1px solid var(--ob-line); background: #fff; overflow: hidden; box-shadow: 0 14px 36px rgba(26,33,68,0.10); }
+.onboarding-settings-mock-header { display: flex; align-items: center; gap: 6px; padding: 9px 12px; background: #f6f7fb; border-bottom: 1px solid rgba(17,24,39,0.05); }
+.onboarding-settings-mock-dot { width: 10px; height: 10px; border-radius: 50%; }
+.onboarding-settings-mock-title { margin-left: 8px; font-size: 10.5px; color: var(--ob-ink-2); font-weight: 600; }
+.onboarding-settings-mock-body { padding: 8px 4px; }
+.onboarding-settings-mock-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 8px; margin: 0 6px; }
+.onboarding-settings-mock-row-target { background: rgba(79,110,240,0.08); box-shadow: inset 0 0 0 1px rgba(79,110,240,0.32); animation: obMockHighlight 2.8s ease-in-out infinite; }
+.onboarding-settings-mock-app { font-size: 12px; color: var(--ob-ink); font-weight: 500; }
+.onboarding-settings-mock-badge { font-weight: 700; color: #2a3da8; }
+.onboarding-settings-mock-toggle { width: 28px; height: 17px; border-radius: 999px; position: relative; }
+.onboarding-settings-mock-toggle::after { content: ''; position: absolute; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: left 240ms ease; }
+.onboarding-settings-mock-toggle.on { background: #34c759; }
+.onboarding-settings-mock-toggle.on::after { left: 13px; }
+.onboarding-settings-mock-toggle.off { background: rgba(17,24,39,0.18); }
+.onboarding-settings-mock-toggle.off::after { left: 2px; }
+.onboarding-settings-mock-row-target .onboarding-settings-mock-toggle::after { animation: obToggleKnob 2.8s ease-in-out infinite; }
+.onboarding-settings-mock-row-target .onboarding-settings-mock-toggle { animation: obToggleTease 2.8s ease-in-out infinite; }
+.onboarding-settings-mock-hint { padding: 10px 14px 14px; font-size: 11px; color: var(--ob-ink-3); text-align: center; border-top: 1px solid rgba(17,24,39,0.05); }
+
+/* handoff/verify visuals */
+.onboarding-handoff-beam { height: 84px; border-radius: 12px; background: radial-gradient(circle at 50% 50%, rgba(79,110,240,0.18), transparent 65%); position: relative; overflow: hidden; }
+.onboarding-handoff-pulse { position: absolute; inset: 0; background: linear-gradient(180deg, transparent, rgba(79,110,240,0.32), transparent); animation: obBeam 2.4s linear infinite; }
+.onboarding-breath { height: 84px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.onboarding-breath span { width: 10px; height: 10px; border-radius: 50%; background: var(--ob-grad); animation: obBreath 1.4s ease-in-out infinite; }
+.onboarding-breath span:nth-child(2) { animation-delay: 0.2s; }
+.onboarding-breath span:nth-child(3) { animation-delay: 0.4s; }
+
+/* keyframes */
+@keyframes obContentIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes obFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes obBlockIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes obChipFloat { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes obPulse { 0% { box-shadow: 0 0 0 0 rgba(79,110,240,0.5); } 70% { box-shadow: 0 0 0 8px rgba(79,110,240,0); } 100% { box-shadow: 0 0 0 0 rgba(79,110,240,0); } }
+@keyframes obBreath { 0%,100% { transform: scale(0.7); opacity: 0.5; } 50% { transform: scale(1); opacity: 1; } }
+@keyframes obBeam { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }
+@keyframes obCaret { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+@keyframes obWave { 0%,100% { transform: rotate(0deg); } 25% { transform: rotate(16deg); } 75% { transform: rotate(-8deg); } }
+@keyframes obFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes obMockHighlight { 0%,100% { box-shadow: inset 0 0 0 1px rgba(79,110,240,0.32); } 50% { box-shadow: inset 0 0 0 1px rgba(79,110,240,0.6), 0 0 0 2px rgba(79,110,240,0.16); } }
+@keyframes obToggleTease { 0%,40% { background: rgba(17,24,39,0.18); } 50%,100% { background: #34c759; } }
+@keyframes obToggleKnob { 0%,40% { left: 2px; } 50%,100% { left: 13px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-content, .ob-wave, .ob-why-lock, .ob-why-tag, .onboarding-story-scene, .onboarding-story-appchip,
+  .onboarding-tour-block, .onboarding-tour-notif, .onboarding-tour-stats, .onboarding-handoff-pulse,
+  .onboarding-breath span, .onboarding-tour-thinking span, .onboarding-settings-mock-row-target,
+  .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle,
+  .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle::after,
+  .onboarding-live-pulse, .ob-reflect, .ob-why-diary, .ob-why-recap {
+    animation: none !important;
+  }
+}
+
+@media (max-height: 640px) {
+  .ob-title { font-size: 22px; }
+  .ob-sub { font-size: 13.5px; }
+  .ob-header { padding-top: 10px; padding-bottom: 12px; }
+}
+`

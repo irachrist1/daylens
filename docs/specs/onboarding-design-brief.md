@@ -1,5 +1,10 @@
 # Onboarding — design brief
 
+> **Status: implemented** (`src/renderer/views/Onboarding.tsx`, `src/renderer/components/Mascot.tsx`).
+> The fixed stage, one visual system, persistent Lumen, the why-as-story, the de-duplicated
+> personalize split (About you · Your work · Clients & rhythm · Keep it private), the care-first
+> AI money moment, and reduced-motion are all built. This brief is kept as the design rationale.
+
 **For the designer picking this up.** The flow, copy, and behavior are built and working
 (see [`onboarding.md`](onboarding.md) for what each step does and the rules it must obey).
 What's missing is the *craft*: it doesn't yet feel like one continuous, delightful thing.

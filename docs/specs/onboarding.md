@@ -47,13 +47,24 @@ normal person — a proposal, a call, an inbox — **never developer-specific**.
 6. **Narrated day (tour)** — one *relatable* everyday day told back the Daylens way (merge,
    absorbed detour, two clean blocks, recap, weekly wrap). Advances by an explicit control,
    small Skip — **no "tap anywhere"**.
-7. **Pick your voice** — three sample "tunes" of the same day (**Straight · Warm · Witty**,
+7. **About you** — `userRole` (Consultant · Designer · Engineer · Founder · Writer · …, single
+   pick) plus *why you're here* (intent chips + free text). The role seeds the next screen's
+   suggestions, so it pays off immediately. Lumen reflects the pick back ("I'll tune your day
+   for designer work").
+8. **Pick your voice** — three sample "tunes" of the same day (**Straight · Warm · Witty**,
    default Warm); the choice drives every recap/wrap prompt (`src/shared/summaryVoice.ts`).
-8. **Make it yours** — light personalization, like briefing a friend doing your timesheets:
-   categories you care about, which apps count as *real work* (seeded from your actual top
-   apps), why you're here, and any apps to **keep fully private** (reuses tracking exclusions).
-9. **AI setup** — optional and clearly separate; capture and Timeline work without it.
-10. **Ready** — *"You're all set, {name}."* Reflects the chosen voice with a sample recap.
+9. **Your work** — categories you care about + which apps count as *real work* (one deduped
+   list seeded from your actual top apps).
+10. **Who you work with, and when** — `userClients` (add chips, optional) + `workRhythm`
+    (early bird · nine-to-five · night owl · always on). Optional, skippable.
+11. **Keep it private** — apps to **never track**, added via a "+ keep private" affordance with
+    quick-add from your real apps (reuses tracking exclusions). Not a repeated full app list.
+12. **AI setup** — care-first money moment, adaptive to the real `getBillingAccess()` snapshot:
+    leads with **$5 of AI free every month, on us** (covers recaps/wraps/briefs), offers a paid
+    plan for unlimited chat when checkout is live, and **bring your own key** for anyone who'd
+    rather not pay. Optional and clearly separate; capture and Timeline work without it.
+13. **Ready** — *"You're all set, {name}."* Reflects the whole profile back — role, voice, real-work
+    apps, clients, private apps — plus a sample recap in the chosen voice.
 
 Onboarding is skippable-forward but not fakeable: if permissions aren't granted, the proof
 step says so plainly and offers to fix it, rather than showing a fake success.
@@ -102,9 +113,12 @@ one clear action per screen, no clutter, keyboard-friendly; **Dia** for warmth o
 Tonny for the specific onboarding flows he likes and agree a direction **before** writing any
 UI.
 
-The flow, copy, and behavior are now built; the remaining **visual craft** (one continuous
-stage, shared type/alignment/components, persistent mascot, motion) is specified for a
-designer in [`onboarding-design-brief.md`](onboarding-design-brief.md).
+The **visual craft is now implemented** (`src/renderer/views/Onboarding.tsx`,
+`src/renderer/components/Mascot.tsx`): one fixed *stage* frame that never resizes and scrolls
+its content inside the frame (fits the 820×580 floor with the footer visible), a single
+type/chip/card/input/button system, Lumen present on every screen with per-moment expressions,
+and calm reduced-motion-aware transitions. The original brief is kept for reference in
+[`onboarding-design-brief.md`](onboarding-design-brief.md).
 
 ## 7. Invariants (rules this view must always obey)
 
