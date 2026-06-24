@@ -901,8 +901,8 @@ export default function Onboarding({
               rows={3}
               style={{
                 width: '100%', resize: 'none', fontFamily: 'inherit',
-                border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14,
-                background: 'rgba(255,255,255,0.03)', color: '#f0f4ff',
+                border: '1px solid rgba(17,24,39,0.14)', borderRadius: 14,
+                background: '#ffffff', color: '#1f2633',
                 padding: '12px 14px', fontSize: 14, lineHeight: 1.6, outline: 'none',
               }}
             />
@@ -913,20 +913,20 @@ export default function Onboarding({
               style={{
                 display: 'flex', alignItems: 'flex-start', gap: 10, textAlign: 'left',
                 padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
-                border: `1px solid ${trackingOptIn ? 'rgba(90,179,255,0.45)' : 'rgba(173,198,255,0.18)'}`,
-                background: trackingOptIn ? 'rgba(90,179,255,0.10)' : 'rgba(255,255,255,0.02)',
-                color: '#c2c6d6',
+                border: `1px solid ${trackingOptIn ? 'rgba(26,111,212,0.5)' : 'rgba(17,24,39,0.12)'}`,
+                background: trackingOptIn ? 'rgba(26,111,212,0.08)' : '#fafafa',
+                color: '#5c6474',
               }}
             >
               <span style={{
                 flexShrink: 0, marginTop: 1, width: 18, height: 18, borderRadius: 5,
-                border: `1.5px solid ${trackingOptIn ? '#5ab3ff' : 'rgba(173,198,255,0.4)'}`,
-                background: trackingOptIn ? '#5ab3ff' : 'transparent',
-                display: 'grid', placeItems: 'center', color: '#07090f', fontSize: 12, fontWeight: 900,
+                border: `1.5px solid ${trackingOptIn ? '#1a6fd4' : 'rgba(17,24,39,0.3)'}`,
+                background: trackingOptIn ? '#1a6fd4' : 'transparent',
+                display: 'grid', placeItems: 'center', color: '#ffffff', fontSize: 12, fontWeight: 900,
               }}>{trackingOptIn ? '✓' : ''}</span>
               <span style={{ display: 'grid', gap: 2 }}>
-                <span style={{ fontSize: 13.5, fontWeight: 650, color: '#f0f4ff' }}>Keep private apps and sites out of Daylens</span>
-                <span style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5, color: '#c2c6d6' }}>
+                <span style={{ fontSize: 13.5, fontWeight: 650, color: '#1f2633' }}>Keep private apps and sites out of Daylens</span>
+                <span style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.5, color: '#5c6474' }}>
                   Optional. Lets you exclude specific apps and websites and skip incognito windows. You can add them now or later in Settings. Off skips nothing.
                 </span>
               </span>
@@ -1810,6 +1810,109 @@ export default function Onboarding({
           0%, 40% { left: 2px; }
           50%, 100% { left: 13px; }
         }
+        /* ── Langdock-style light theme + aurora gradient (overrides) ───────── */
+        .onboarding-root {
+          background:
+            radial-gradient(130% 70% at 50% -15%, rgba(123,143,247,0.10), transparent 60%),
+            #faf9f7;
+          --color-surface: #ffffff;
+          --color-surface-low: #fafafa;
+          --color-surface-container: #ffffff;
+          --color-surface-high: #f3f4f6;
+          --color-surface-highest: #e9ebef;
+          --color-surface-card: #ffffff;
+          --color-border-ghost: rgba(17,24,39,0.12);
+          --color-text-primary: #1f2633;
+          --color-text-secondary: #5c6474;
+          --color-text-tertiary: #8b93a3;
+          --color-primary: #1a6fd4;
+          --color-primary-contrast: #ffffff;
+          --color-accent: #1a6fd4;
+          --color-accent-dim: rgba(26,111,212,0.10);
+          --color-focus-green: #0f766e;
+          --gradient-primary: linear-gradient(135deg, #1a6fd4 0%, #5ab3ff 100%);
+        }
+        .onboarding-shell {
+          position: relative;
+          overflow: hidden;
+          background: #ffffff;
+          border: 1px solid rgba(17,24,39,0.08);
+          box-shadow: 0 24px 70px rgba(20,28,48,0.16);
+          backdrop-filter: none;
+        }
+        .onboarding-shell::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 168px;
+          background:
+            radial-gradient(120% 150% at 0% 0%, #6f86f0 0%, rgba(111,134,240,0) 56%),
+            radial-gradient(120% 150% at 100% 0%, #c8a7ef 0%, rgba(200,167,239,0) 58%),
+            radial-gradient(130% 130% at 50% 0%, #dfe4ff 0%, rgba(223,228,255,0) 62%);
+          filter: blur(24px);
+          -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.4) 55%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,0.4) 55%, transparent 100%);
+          pointer-events: none;
+          z-index: 0;
+        }
+        .onboarding-shell > * { position: relative; z-index: 1; }
+        .onboarding-title, .onboarding-status-label, .onboarding-live-app, .onboarding-live-stat,
+        .onboarding-steps-title, .onboarding-summary-value, .onboarding-proof-pending p { color: #1f2633; }
+        .onboarding-sub, .onboarding-callout-body, .onboarding-summary-detail, .onboarding-hint,
+        .onboarding-steps-body, .onboarding-live-label, .onboarding-status { color: #5c6474; }
+        .onboarding-eyebrow, .onboarding-callout-title, .onboarding-summary-label,
+        .onboarding-reassurance, .onboarding-status-note, .onboarding-hint-quiet,
+        .onboarding-live-title, .onboarding-skip-link { color: #8b93a3; }
+        .onboarding-skip-link:hover { color: #5c6474; }
+        .onboarding-dot { background: rgba(17,24,39,0.12); }
+        .onboarding-dot-done { background: rgba(26,111,212,0.5); }
+        .onboarding-back { color: #5c6474; }
+        .onboarding-back:hover { color: #1f2633; background: rgba(17,24,39,0.05); }
+        .onboarding-btn-secondary { border-color: rgba(17,24,39,0.14); color: #1f2633; }
+        .onboarding-btn-secondary:hover:not(:disabled) { border-color: rgba(26,111,212,0.4); }
+        .onboarding-status { background: #f6f7f9; border-color: rgba(17,24,39,0.10); }
+        .onboarding-name-field input { background: #ffffff; border-color: rgba(17,24,39,0.14); color: #1f2633; }
+        .onboarding-name-field input::placeholder { color: #a2a8b4; }
+        .onboarding-goal-chip { background: #ffffff; border-color: rgba(17,24,39,0.12); color: #1f2633; }
+        .onboarding-goal-chip:hover:not(.onboarding-goal-chip-selected) { border-color: rgba(26,111,212,0.35); background: #f6f8fc; }
+        .onboarding-goal-chip-selected { border-color: rgba(26,111,212,0.6); background: rgba(26,111,212,0.10); color: #14467f; }
+        .onboarding-summary-tile, .onboarding-goal-card { background: #fafafa; border-color: rgba(17,24,39,0.10); }
+        .onboarding-summary-tile-highlight { border-color: rgba(26,111,212,0.4); background: linear-gradient(180deg, rgba(26,111,212,0.07), rgba(90,179,255,0.04)); box-shadow: 0 8px 26px rgba(26,111,212,0.12); }
+        .onboarding-daybar-track { background: rgba(17,24,39,0.08); }
+        .onboarding-daybar-marker { background: #1a6fd4; box-shadow: 0 0 0 4px rgba(26,111,212,0.18); }
+        .onboarding-daybar-ends, .onboarding-story-taphint, .onboarding-story-cap { color: #8b93a3; }
+        .onboarding-story-line { color: #1f2633; }
+        .onboarding-story-time { color: #1a6fd4; }
+        .onboarding-story-pill { color: #1f2633; background: rgba(17,24,39,0.05); border-color: rgba(17,24,39,0.12); }
+        .onboarding-story-appchip { color: #1f2633; background: #ffffff; border-color: rgba(17,24,39,0.12); }
+        .onboarding-story-ghost { background: rgba(17,24,39,0.05); }
+        .onboarding-tour-block { color: #1f2633; box-shadow: inset 0 0 0 1px rgba(17,24,39,0.04); }
+        .onboarding-tour-block[data-tone="a"] { background: linear-gradient(135deg, rgba(123,143,247,0.22), rgba(90,179,255,0.16)); }
+        .onboarding-tour-block[data-tone="b"] { background: #f3f4f6; color: #5c6474; }
+        .onboarding-tour-block[data-tone="c"] { background: linear-gradient(135deg, rgba(178,160,255,0.22), rgba(123,143,247,0.16)); }
+        .onboarding-tour-block-label { color: #1f2633; }
+        .onboarding-tour-block-time { color: #8b93a3; }
+        .onboarding-tour-notif { background: #fafafa; border-color: rgba(17,24,39,0.10); }
+        .onboarding-tour-notif-head { color: #8b93a3; }
+        .onboarding-tour-notif-body { color: #1f2633; }
+        .onboarding-tour-bubble-a { background: #f3f4f6; color: #1f2633; border-color: rgba(17,24,39,0.08); }
+        .onboarding-tour-stats > div { background: #fafafa; border-color: rgba(17,24,39,0.10); }
+        .onboarding-tour-stats strong { color: #1f2633; }
+        .onboarding-tour-stats span { color: #8b93a3; }
+        .onboarding-tour-privacy { color: #14467f; background: rgba(26,111,212,0.07); border-color: rgba(26,111,212,0.16); }
+        .onboarding-tour-hint { color: #8b93a3; }
+        .onboarding-tour-saved { color: #0f766e; }
+        .onboarding-tour-thinking span { background: rgba(26,111,212,0.55); }
+        .onboarding-tour-caret { background: #1a6fd4; }
+        .onboarding-settings-mock { background: #ffffff; border-color: rgba(17,24,39,0.10); box-shadow: 0 18px 44px rgba(20,28,48,0.12); }
+        .onboarding-settings-mock-header { background: #f6f7f9; border-bottom-color: rgba(17,24,39,0.06); }
+        .onboarding-settings-mock-title { color: #5c6474; }
+        .onboarding-settings-mock-app { color: #1f2633; }
+        .onboarding-settings-mock-badge { color: #14467f; }
+        .onboarding-settings-mock-toggle.off { background: rgba(17,24,39,0.18); }
+        .onboarding-settings-mock-hint { color: #8b93a3; border-top-color: rgba(17,24,39,0.06); }
+        .onboarding-handoff, .onboarding-verify, .onboarding-callout, .onboarding-proof-card { background: #fafafa; border-color: rgba(17,24,39,0.10); }
+
         @media (max-width: 720px) {
           .onboarding-shell {
             padding: 22px 20px 20px;
