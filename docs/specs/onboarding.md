@@ -102,6 +102,10 @@ one clear action per screen, no clutter, keyboard-friendly; **Dia** for warmth o
 Tonny for the specific onboarding flows he likes and agree a direction **before** writing any
 UI.
 
+The flow, copy, and behavior are now built; the remaining **visual craft** (one continuous
+stage, shared type/alignment/components, persistent mascot, motion) is specified for a
+designer in [`onboarding-design-brief.md`](onboarding-design-brief.md).
+
 ## 7. Invariants (rules this view must always obey)
 
 1. Onboarding secures the capture permission (**Accessibility** — the only one capture
