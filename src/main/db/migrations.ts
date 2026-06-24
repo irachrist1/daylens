@@ -1,7 +1,9 @@
 import { getDb } from '../services/database'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalApp, resolveCanonicalBrowser } from '../lib/appIdentity'
+import { deriveClientAliasTokens } from '../lib/clientAliases'
 import { ensureAIMessageFeedbackSchema, ensureAIThreadSchema } from './aiThreadSchema'
 import type Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
 
 /**
  * Versioned migration system for Daylens.
@@ -1961,6 +1963,33 @@ const migrations: Migration[] = [
       }
       if (!hasColumn('ai_usage_events', 'billing_mode')) {
         db.exec(`ALTER TABLE ai_usage_events ADD COLUMN billing_mode TEXT NOT NULL DEFAULT 'own_key'`)
+      }
+    },
+  },
+  {
+    version: 39,
+    description: 'Backfill short client aliases (DEV-108) so "Andersen" resolves "Andersen in Rwanda"',
+    up: () => {
+      const db = getDb()
+      if (getTableSql('clients') == null || getTableSql('client_aliases') == null) return
+      const clients = db.prepare(`SELECT id, name FROM clients WHERE status = 'active'`).all() as Array<{ id: string; name: string }>
+      const now = Date.now()
+      const insert = db.prepare(`
+        INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
+        VALUES (?, ?, ?, ?, 'derived', ?)
+      `)
+      for (const client of clients) {
+        const tokens = deriveClientAliasTokens(client.name)
+        if (tokens.length === 0) continue
+        const existing = new Set(
+          (db.prepare(`SELECT alias_normalized FROM client_aliases WHERE client_id = ?`).all(client.id) as { alias_normalized: string }[])
+            .map((r) => r.alias_normalized),
+        )
+        for (const token of tokens) {
+          if (existing.has(token)) continue
+          insert.run(randomUUID(), client.id, token, token, now)
+          existing.add(token)
+        }
       }
     },
   },

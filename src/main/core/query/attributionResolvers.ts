@@ -7,6 +7,7 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../../services/database'
+import { deriveClientAliasTokens } from '../../lib/clientAliases'
 
 // ─── Shared row types ────────────────────────────────────────────────────────
 
@@ -1509,6 +1510,33 @@ function normalizeAlias(name: string): string {
   return name.toLowerCase().trim()
 }
 
+// Add the short single-word aliases for a client ("Andersen" for "Andersen in
+// Rwanda") so chat references resolve the scope without the full name. Skips any
+// already present; marks them source 'derived' so they're distinguishable from
+// user/observed aliases. Shared by create + rename, and backfilled by migration.
+export function seedClientAliasTokens(
+  db: Database.Database,
+  clientId: string,
+  name: string,
+  now: number,
+): void {
+  const tokens = deriveClientAliasTokens(name)
+  if (tokens.length === 0) return
+  const existing = new Set(
+    (db.prepare(`SELECT alias_normalized FROM client_aliases WHERE client_id = ?`).all(clientId) as { alias_normalized: string }[])
+      .map((r) => r.alias_normalized),
+  )
+  const insert = db.prepare(`
+    INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
+    VALUES (?, ?, ?, ?, 'derived', ?)
+  `)
+  for (const token of tokens) {
+    if (existing.has(token)) continue
+    insert.run(randomUUID(), clientId, token, token, now)
+    existing.add(token)
+  }
+}
+
 export function createClient(
   payload: { name: string; color?: string | null },
   db: Database.Database = getDb(),
@@ -1538,6 +1566,9 @@ export function createClient(
       INSERT INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
       VALUES (?, ?, ?, ?, 'user', ?)
     `).run(randomUUID(), id, name, normalizeAlias(name), now)
+    // Also seed short aliases ("Andersen" for "Andersen in Rwanda") so chat
+    // references resolve the scope without the full name (memory.md §2.2).
+    seedClientAliasTokens(db, id, name, now)
   })
   tx()
 
@@ -1579,6 +1610,8 @@ export function updateClient(
         INSERT OR IGNORE INTO client_aliases (id, client_id, alias, alias_normalized, source, created_at)
         VALUES (?, ?, ?, ?, 'user', ?)
       `).run(randomUUID(), payload.id, finalName, normalizeAlias(finalName), now)
+      // Keep short aliases in sync with the new name (memory.md §2.2).
+      seedClientAliasTokens(db, payload.id, finalName, now)
     }
   })
   tx()

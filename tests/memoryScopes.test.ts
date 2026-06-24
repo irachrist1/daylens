@@ -22,6 +22,7 @@ import {
 } from '../src/main/services/workMemoryProfile.ts'
 import { buildMemoryProposal, commitAction, undoAction } from '../src/main/ai/actions.ts'
 import { createClient } from '../src/main/core/query/attributionResolvers.ts'
+import { deriveClientAliasTokens } from '../src/main/lib/clientAliases.ts'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -169,6 +170,32 @@ test('applyMemoryWriteOps writes an add into the client scope, not general', () 
     assert.equal(clientFacts.length, 1)
     assert.match(clientFacts[0].text, /github\.com\/acme/)
     assert.equal(clientFacts[0].source, 'chat')
+  } finally {
+    db.close()
+  }
+})
+
+test('deriveClientAliasTokens makes a multi-word client answer to its short name', () => {
+  assert.deepEqual(deriveClientAliasTokens('Andersen in Rwanda').sort(), ['andersen', 'rwanda'])
+  assert.deepEqual(deriveClientAliasTokens('Acme Corp'), ['acme'])           // corp suffix dropped
+  assert.deepEqual(deriveClientAliasTokens('Acme'), [])                       // single word — full alias covers it
+  assert.deepEqual(deriveClientAliasTokens('The Globex Group'), ['globex'])  // stopwords dropped
+})
+
+test('a bare short name resolves a multi-word client for both read and write', () => {
+  const db = freshDb()
+  try {
+    const acme = createClient({ name: 'Andersen in Rwanda' }, db)
+    addClientMemoryFact(db, acme.id, 'Andersen in Rwanda’s deadline is the 30th.')
+
+    // Write: "remember Andersen's …" resolves the scope without the full name.
+    const match = findClientScopeForWrite(db, "remember Andersen's lead is Jordan")
+    assert.ok(match, 'bare "Andersen" should resolve the client for a write')
+    assert.equal(match!.clientId, acme.id)
+
+    // Read: a question naming just "Andersen" pulls the scoped memory.
+    const block = scopedMemoryPromptBlock(db, 'how is the Andersen work going?')
+    assert.match(block, /deadline is the 30th/)
   } finally {
     db.close()
   }
