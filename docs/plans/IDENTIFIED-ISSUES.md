@@ -1,6 +1,6 @@
-# Identified Issues (Onboarding, AI, and UI)
+# Identified Issues (Tested on Windows)
 
-These are the immediate issues identified from the Rize onboarding analysis and a review of the current UI state.
+These are the immediate issues identified from the Rize onboarding analysis and a review of the current UI state on Windows.
 
 ## 1. AI and Error Handling
 - **AI Missing API Key Error:** The AI feature works, but when a user tries to use it without an API key configured, the app throws a generic `COULDN'T COMPLETE THAT` error. It must show a proper, actionable error message directing the user to add their API key in Settings.
@@ -15,8 +15,14 @@ These are the immediate issues identified from the Rize onboarding analysis and 
 - **Repetitive block summaries:** The "What you did there" section repeats the exact same generic text (e.g., "Running Daylens Locally") for every single block instead of generating a unique, descriptive summary of what actually happened during that specific session.
 - **Empty state rendering bug:** Selecting an app in the left sidebar (like Rize) sometimes results in a broken UI where the right pane remains blank and just says "Select an app", failing to load the app's actual activity data.
 
-## 4. Timeline View
+## 4. Timeline View Bugs
 - **Useless default block names:** Before a day is fully analyzed, blocks are simply titled "Active now" with no summary. These placeholders are unhelpful. The system should either provide a more descriptive default title or ensure analysis happens fast enough that users aren't left looking at generic placeholders.
+- **Block details auto-closing:** When clicking on an active time block to view its details, the block abruptly auto-closes after about 2 seconds, kicking the user back to the overall daily summary.
+- **System noise tracked as work:** The timeline (and weekly view) is tracking system noise and naming blocks after it, such as a 1h 8m block named "New notification" or tracking "Windows Default Lock Screen". This violates the core invariant that system noise should be invisible and blocks shouldn't be named after window titles.
+
+## 5. UI and Asset Bugs
+- **Missing or incorrect icons:** Many app icons are failing to load or are assigned incorrectly. System processes (like `Vmmem Wsl`, `Memory Compression`) show generic placeholder letters, and some web pages/apps are inheriting incorrect icons (e.g., "Widget" or "Getting Started" inheriting the "Rize" icon).
+- **PDF Report duplicate date:** The generated PDF report has a layout bug where the date is printed twice.
 
 ---
 
