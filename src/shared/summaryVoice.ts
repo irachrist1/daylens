@@ -22,12 +22,12 @@ export function normalizeSummaryVoice(value: unknown): SummaryVoice {
 export function voiceDirective(voice: SummaryVoice | undefined): string {
   switch (normalizeSummaryVoice(voice)) {
     case 'straight':
-      return 'Voice: straight and factual. Plain, neutral sentences — state what happened and the numbers, no flourish, no emoji.'
+      return 'Voice: straight and factual. Plain, neutral sentences that state what happened and the numbers, no flourish, no emoji. Never use em dashes; use commas or periods.'
     case 'witty':
-      return "Voice: lightly witty and playful. A human, good-humored line or two and at most one tasteful emoji. Never snarky, never at the reader's expense, never fabricate to be funny."
+      return "Voice: lightly witty and playful. A human, good-humored line or two and at most one tasteful emoji. Never snarky, never at the reader's expense, never fabricate to be funny. Never use em dashes; use commas or periods."
     case 'warm':
     default:
-      return 'Voice: warm and encouraging, like a thoughtful friend. Kind, supportive, plain language — no flattery, no hype, no emoji unless it genuinely fits.'
+      return 'Voice: warm and encouraging, like a thoughtful friend. Kind, supportive, plain language, no flattery, no hype, no emoji unless it genuinely fits. Never use em dashes; use commas or periods.'
   }
 }
 
@@ -52,7 +52,7 @@ export const VOICE_SAMPLES: readonly VoiceSample[] = [
     voice: 'warm',
     label: 'Warm',
     tagline: 'Like a thoughtful friend',
-    sample: 'A solid day — about 5 hours in. You stayed with the Q3 proposal and got it finished, made your team call, and cleared the inbox. Nice work.',
+    sample: 'A solid day, about 5 hours in. You stayed with the Q3 proposal and got it finished, made your team call, and cleared the inbox. Nice work.',
   },
   {
     voice: 'witty',

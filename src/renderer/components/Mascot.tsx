@@ -150,6 +150,10 @@ export default function Mascot({
         .lumen-pupil { transform-box: fill-box; transform-origin: center; animation: lumen-pulse 3.6s ease-in-out infinite; }
         .lumen-lid {
           transform-box: fill-box; transform-origin: top center;
+          /* Default OPEN (scaleY 0). The blink only briefly closes it, so when the
+             animation isn't running (reduced-motion, paused frames) the eye stays
+             visible instead of the lid covering it. */
+          transform: scaleY(0);
           animation: lumen-blink 5.4s ease-in-out infinite;
         }
         .lumen-spark { transform-box: fill-box; transform-origin: center; animation: lumen-spark 1.9s ease-in-out infinite; }

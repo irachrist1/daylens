@@ -46,7 +46,7 @@ const ROLES: Array<{ id: string; label: string; emoji: string }> = [
   { id: 'other', label: 'Something else', emoji: '✨' },
 ]
 
-// Picking a role gently pre-selects a couple of categories — an immediate "it gets
+// Picking a role gently pre-selects a couple of categories, an immediate "it gets
 // me" payoff. Only applied while the user hasn't touched categories themselves.
 const ROLE_SEED_CATEGORIES: Record<string, AppCategory[]> = {
   consultant: ['meetings', 'communication', 'productivity'],
@@ -71,7 +71,7 @@ const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['permission', 'relaunch_required', 'verifying_permission'], label: 'Grant access' },
   { id: ['proof'], label: 'First signal' },
-  { id: ['tour'], label: 'How it works' },
+  { id: ['tour', 'superpowers'], label: 'How it works' },
   { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
@@ -80,7 +80,7 @@ const MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
 const NON_MAC_STEPS: Array<{ id: OnboardingStage[]; label: string }> = [
   { id: ['welcome', 'why'], label: 'Hello' },
   { id: ['proof'], label: 'First signal' },
-  { id: ['tour'], label: 'How it works' },
+  { id: ['tour', 'superpowers'], label: 'How it works' },
   { id: ['about', 'voice', 'work', 'connections', 'privacy', 'personalize'], label: 'Make it yours' },
   { id: ['ai_setup'], label: 'Set up AI' },
   { id: ['ready'], label: 'Ready' },
@@ -93,30 +93,81 @@ const MAKE_IT_YOURS: OnboardingStage[] = ['about', 'voice', 'work', 'connections
 // The macro flow used for the Back button. The mac permission stage is omitted:
 // it auto-advances once access is granted, so stepping back into it would bounce
 // the user forward again.
-const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
+const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
-// The "why am I installing this?" story — told one calm beat at a time, with Lumen
+// The "why am I installing this?" story, told one calm beat at a time, with Lumen
 // acting it out, not three stacked FAQ boxes.
 const WHY_BEATS: Array<{ scene: 'diary' | 'device' | 'recap'; expression: MascotExpression; title: string; body: string }> = [
   {
     scene: 'diary',
     expression: 'curious',
     title: 'So… why let an app watch my laptop?',
-    body: "Fair question. Most trackers feel like a boss over your shoulder. Daylens is the opposite — a quiet diary of your day that only you can read.",
+    body: "Fair question. Most trackers feel like a boss over your shoulder. Daylens is the opposite: a quiet diary of your day that only you can read.",
   },
   {
     scene: 'device',
     expression: 'idle',
     title: 'It all stays on this device.',
-    body: 'No screenshots. No video. Just the names of what you had open — and none of it leaves your computer unless you ask it to.',
+    body: 'No screenshots. No video. Just the names of what you had open, and none of it leaves your computer unless you ask it to.',
   },
   {
     scene: 'recap',
     expression: 'happy',
     title: 'At the end of the day, you get the good part.',
-    body: "Instead of “where did the day go?”, an honest little recap of what you actually got done — written like a friend caught you up, not a spreadsheet.",
+    body: "Instead of “where did the day go?”, an honest little recap of what you actually got done, written like a friend caught you up, not a spreadsheet.",
   },
+]
+
+// Multi-select roles get a playful Duolingo-style nudge when the combo is funny.
+// Keyed by the two role ids sorted alphabetically and joined with '+'.
+const ROLE_COMBO_JOKES: Record<string, string> = {
+  'consultant+designer': "A consultant AND a designer? Bold. What's wrong with you 😄",
+  'designer+engineer': 'Design AND code? The mythical unicorn 🦄',
+  'engineer+writer': 'An engineer who writes? Now I have seen everything.',
+  'founder+student': 'Founder and student? Sleep is clearly optional.',
+  'consultant+founder': 'Founder and consultant. Billing yourself by the hour? 😏',
+  'designer+engineer+founder': 'Designer, engineer AND founder. Okay, show off. 🙌',
+  'manager+writer': 'A manager who actually writes things down? Rare and precious.',
+  'researcher+student': 'Researcher and student. Professionally curious, got it.',
+}
+function comboJoke(ids: string[]): string | null {
+  if (ids.length < 2) return null
+  const key = [...ids].sort().join('+')
+  if (ROLE_COMBO_JOKES[key]) return ROLE_COMBO_JOKES[key]
+  if (ids.length >= 3) return 'A person of many hats. I will try to keep up. 🎩'
+  return null
+}
+
+// A small popular-apps + sites catalogue for the keep-private autosuggest, so a
+// user can quickly hide an app or website even if it is not in their captured
+// list yet. Mirrors the app-identity catalogue; everyday names, not jargon.
+const POPULAR_APPS_AND_SITES = [
+  'Slack', 'Discord', 'WhatsApp', 'Telegram', 'Signal', 'Messages', 'Zoom', 'Microsoft Teams',
+  'Gmail', 'Outlook', 'Spark', 'Notion', 'Obsidian', 'Evernote', 'Google Docs', 'Google Sheets',
+  'Microsoft Word', 'Microsoft Excel', 'Microsoft PowerPoint', 'Apple Notes', 'Figma', 'Sketch',
+  'Adobe Photoshop', 'Adobe Illustrator', 'Canva', 'Linear', 'Jira', 'Asana', 'Trello', 'ClickUp',
+  'Safari', 'Google Chrome', 'Arc', 'Firefox', 'Spotify', 'Apple Music', 'YouTube', 'Netflix',
+  'Instagram', 'X (Twitter)', 'Facebook', 'LinkedIn', 'Reddit', 'TikTok', 'ChatGPT', 'Claude',
+  'VS Code', 'Xcode', 'Terminal', 'GitHub', 'Calendar', 'Reminders', 'Things', 'Todoist',
+  'Tinder', 'Hinge', 'Bumble', 'Twitch', 'Steam', 'Photos', 'Mail', 'FaceTime',
+]
+
+// Day-one "try asking" questions, written for someone who has NOT tracked a full
+// day yet. They teach what Daylens is for instead of querying data that is not
+// there. Used on the Ready screen.
+const READY_QUESTIONS = [
+  'How does Daylens know what I worked on?',
+  'Can you write my weekly client report?',
+  'What can you do that ChatGPT cannot?',
+]
+
+// The delight beat: things only Daylens can answer because it actually sees your
+// day, contrasted with what a generic chatbot can do. Funny and honest.
+const SUPERPOWERS = [
+  { you: 'Which client did I actually spend the most time on last week?', them: 'ChatGPT has no idea. It never saw your week.' },
+  { you: 'Was I really “in meetings all day”, or did it just feel like it?', them: 'Daylens has the receipts. 🧾' },
+  { you: 'Write the timesheet for the 9 hours I lost to “quick” Slack threads.', them: 'It remembers every one of them, sadly for you.' },
 ]
 
 // Categories a normal person recognises — chosen so Daylens knows what you care to
@@ -196,18 +247,33 @@ function Stage({
         </div>
       </div>
 
-      <div className="ob-header">
-        <span className="ob-lumen"><Mascot expression={expression} size={54} /></span>
-        <div className="ob-headtext">
-          {eyebrow && <div className="ob-eyebrow">{eyebrow}</div>}
-          <h1 className="ob-title">{title}</h1>
-          {subtitle && <p className="ob-sub">{subtitle}</p>}
+      {centered ? (
+        // Hero screens (welcome, why, ready): Lumen, title and content centre as
+        // one group in the available space, so nothing floats with a dead gap.
+        <div className="ob-content ob-content-hero" key={contentKey}>
+          <div className="ob-hero">
+            <span className="ob-lumen-hero"><Mascot expression={expression} size={66} /></span>
+            {eyebrow && <div className="ob-eyebrow">{eyebrow}</div>}
+            <h1 className="ob-title">{title}</h1>
+            {subtitle && <p className="ob-sub">{subtitle}</p>}
+            {children}
+          </div>
         </div>
-      </div>
-
-      <div className={`ob-content${centered ? ' ob-content-center' : ''}`} key={contentKey}>
-        {children}
-      </div>
+      ) : (
+        <div className="ob-body">
+          <div className="ob-header">
+            <span className="ob-lumen"><Mascot expression={expression} size={54} /></span>
+            <div className="ob-headtext">
+              {eyebrow && <div className="ob-eyebrow">{eyebrow}</div>}
+              <h1 className="ob-title">{title}</h1>
+              {subtitle && <p className="ob-sub">{subtitle}</p>}
+            </div>
+          </div>
+          <div className="ob-content" key={contentKey}>
+            {children}
+          </div>
+        </div>
+      )}
 
       <div className="ob-footer">
         {primary && (
@@ -235,7 +301,7 @@ function SettingsPreview() {
         <div className="onboarding-settings-mock-dot" style={{ background: '#ff5f56' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#ffbd2e' }} />
         <div className="onboarding-settings-mock-dot" style={{ background: '#27c93f' }} />
-        <div className="onboarding-settings-mock-title">Privacy & Security — Accessibility</div>
+        <div className="onboarding-settings-mock-title">Privacy & Security · Accessibility</div>
       </div>
       <div className="onboarding-settings-mock-body">
         <div className="onboarding-settings-mock-row onboarding-settings-mock-row-other">
@@ -261,19 +327,19 @@ function SettingsPreview() {
 // ── The tour is a story: one real day, told back to you ─────────────────────
 
 const STORY_BEATS = [
-  { scene: 'intro', pos: 0, time: '', line: 'Here is one ordinary day — the way Daylens tells it back to you.' },
+  { scene: 'intro', pos: 0, time: '', line: 'Here is one ordinary day, the way Daylens tells it back to you.' },
   { scene: 'brief', pos: 0.08, time: '8:14 am', line: 'You open your laptop. A short brief is already waiting.' },
   { scene: 'apps', pos: 0.22, time: '9:00 am', line: 'You drift between Docs, Chrome, and Slack.' },
   { scene: 'merge', pos: 0.34, time: '11:50 am', line: 'Daylens saw one thing, not three: writing the proposal.' },
-  { scene: 'detour', pos: 0.46, time: '1:42 pm', line: 'A two-minute peek at Instagram — folded in. Never flagged, never judged.' },
+  { scene: 'detour', pos: 0.46, time: '1:42 pm', line: 'A two-minute peek at Instagram, folded in. Never flagged, never judged.' },
   { scene: 'second', pos: 0.60, time: '4:00 pm', line: 'After your team call you finish the proposal. Your day: two clean blocks.' },
-  { scene: 'ask', pos: 0.78, time: '9:00 pm', line: 'You wonder — what did I actually get done today?' },
+  { scene: 'ask', pos: 0.78, time: '9:00 pm', line: 'You wonder: what did I actually get done today?' },
   { scene: 'wrap', pos: 0.86, time: '9:30 pm', line: 'An evening recap, written fresh for the day you had.' },
-  { scene: 'week', pos: 0.95, time: 'Friday', line: 'And your week — wrapped. Months and years, too.' },
-  { scene: 'yours', pos: 1, time: '', line: 'Got it wrong? Rename it — it sticks. And none of this ever left your machine.' },
+  { scene: 'week', pos: 0.95, time: 'Friday', line: 'And your week, wrapped. Months and years, too.' },
+  { scene: 'yours', pos: 1, time: '', line: 'Got it wrong? Rename it, it sticks. And none of this ever left your machine.' },
 ] as const
 
-const STORY_ANSWER = 'You spent the morning writing the Q3 proposal, had the 2pm team call, then cleared your inbox — about 5 hours of real work. The trip plan you opened yesterday is still there when you want it.'
+const STORY_ANSWER = 'You spent the morning writing the Q3 proposal, had the 2pm team call, then cleared your inbox. About 5 hours of real work. The trip plan you opened yesterday is still there when you want it.'
 
 function CountUp({ to, decimals = 0, suffix = '' }: { to: number; decimals?: number; suffix?: string }) {
   const [value, setValue] = useState(0)
@@ -330,7 +396,7 @@ function TourStory({ index, name }: { index: number; name: string }) {
         return (
           <div className="onboarding-tour-notif">
             <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · morning brief</div>
-            <div className="onboarding-tour-notif-body">Good morning{name ? `, ${name}` : ''}. The trip plan was still open yesterday — pick it back up?</div>
+            <div className="onboarding-tour-notif-body">Good morning{name ? `, ${name}` : ''}. The trip plan was still open yesterday. Pick it back up?</div>
           </div>
         )
       case 'apps':
@@ -352,7 +418,7 @@ function TourStory({ index, name }: { index: number; name: string }) {
         return (
           <div className="onboarding-story-stack">
             <StoryBlock label="Writing the Q3 proposal" time="9:00–12:00" tone="a" />
-            <div className="onboarding-story-cap"><span className="onboarding-story-pill">Instagram · 2 min</span> absorbed — not a new block</div>
+            <div className="onboarding-story-cap"><span className="onboarding-story-pill">Instagram · 2 min</span> absorbed, not a new block</div>
           </div>
         )
       case 'second':
@@ -375,7 +441,7 @@ function TourStory({ index, name }: { index: number; name: string }) {
         return (
           <div className="onboarding-tour-notif">
             <div className="onboarding-tour-notif-head"><span className="onboarding-tour-notif-dot" />Daylens · evening wrap</div>
-            <div className="onboarding-tour-notif-body">Two clean blocks, about 5 hours of real work. You finished the Q3 proposal — nice day.</div>
+            <div className="onboarding-tour-notif-body">Two clean blocks, about 5 hours of real work. You finished the Q3 proposal. Nice day.</div>
           </div>
         )
       case 'week':
@@ -452,7 +518,7 @@ function WhyScene({ scene, name }: { scene: 'diary' | 'device' | 'recap'; name: 
         <div className="ob-why-recap">
           <div className="ob-why-recap-label">Evening recap</div>
           <div className="ob-why-recap-body">
-            A solid day{name ? `, ${name}` : ''} — about 5 hours in. You stayed with the proposal and got it finished, made your team call, and cleared the inbox. Nice work.
+            A solid day{name ? `, ${name}` : ''}, about 5 hours in. You stayed with the proposal and got it finished, made your team call, and cleared the inbox. Nice work.
           </div>
         </div>
       </div>
@@ -496,9 +562,16 @@ export default function Onboarding({
   const [interestedCategories, setInterestedCategories] = useState<Set<AppCategory>>(new Set(initialSettings.interestedCategories ?? []))
   const [excludedApps, setExcludedApps] = useState<Set<string>>(new Set(initialSettings.trackingExcludedApps ?? []))
   const [topApps, setTopApps] = useState<string[]>([])
-  const [userRole, setUserRole] = useState(initialSettings.userRole ?? '')
+  // Roles are multi-select. We seed from the persisted comma-joined label string.
+  const [roleIds, setRoleIds] = useState<Set<string>>(() => {
+    const saved = (initialSettings.userRole ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    return new Set(ROLES.filter((r) => saved.includes(r.label)).map((r) => r.id))
+  })
+  const [roleQuip, setRoleQuip] = useState<string | null>(null)
+  const quipTimer = useRef<number | null>(null)
   const [clients, setClients] = useState<string[]>(initialSettings.userClients ?? [])
   const [clientDraft, setClientDraft] = useState('')
+  const [customAppDraft, setCustomAppDraft] = useState('')
   const [privateDraft, setPrivateDraft] = useState('')
   const [workRhythm, setWorkRhythm] = useState<WorkRhythm | undefined>(initialSettings.workRhythm)
   const [billing, setBilling] = useState<BillingAccessSnapshot | null>(null)
@@ -793,14 +866,28 @@ export default function Onboarding({
     })
   }
 
-  function chooseRole(role: { id: string; label: string }) {
-    setUserRole(role.label)
-    // Gentle "it gets me" payoff: seed a couple of categories the first time, only
-    // if the user hasn't already curated them.
-    if (interestedCategories.size === 0) {
-      const seed = ROLE_SEED_CATEGORIES[role.id]
-      if (seed && seed.length > 0) setInterestedCategories(new Set(seed))
-    }
+  function flashQuip(message: string | null) {
+    if (quipTimer.current) window.clearTimeout(quipTimer.current)
+    setRoleQuip(message)
+    if (message) quipTimer.current = window.setTimeout(() => setRoleQuip(null), 3600)
+  }
+
+  function toggleRole(role: { id: string; label: string }) {
+    setRoleIds((prev) => {
+      const next = new Set(prev)
+      const selecting = !next.has(role.id)
+      if (selecting) next.add(role.id)
+      else next.delete(role.id)
+      // Gentle "it gets me" payoff: seed a couple of categories the first time,
+      // only if the user hasn't already curated them.
+      if (selecting && interestedCategories.size === 0) {
+        const seed = ROLE_SEED_CATEGORIES[role.id]
+        if (seed && seed.length > 0) setInterestedCategories(new Set(seed))
+      }
+      // Duolingo-style nudge for funny combos: fades up and away on its own.
+      flashQuip(selecting ? comboJoke([...next]) : null)
+      return next
+    })
   }
 
   function addClient(raw: string) {
@@ -808,6 +895,19 @@ export default function Onboarding({
     if (!name) return
     setClients((prev) => (prev.some((c) => c.toLowerCase() === name.toLowerCase()) ? prev : [...prev, name].slice(0, 24)))
     setClientDraft('')
+  }
+
+  // Add a custom "real work" app the user types in (Excel, PowerPoint, anything
+  // not in their captured list yet). Stored in focusApps like the rest.
+  function addCustomApp(raw: string) {
+    const name = raw.trim()
+    if (!name) return
+    setFocusApps((prev) => {
+      const next = new Set(prev)
+      next.add(name)
+      return next
+    })
+    setCustomAppDraft('')
   }
 
   function addPrivateApp(raw: string) {
@@ -844,7 +944,7 @@ export default function Onboarding({
         userName: nameDraft.trim() || namePlaceholder.trim(),
         userGoals: Array.from(goals),
         userIntent: intentDraft.trim(),
-        userRole,
+        userRole: userRoleLabel,
         userClients: clients,
         workRhythm,
         summaryVoice,
@@ -955,13 +1055,18 @@ export default function Onboarding({
       return
     }
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'tour', surface: 'onboarding' })
+    void persistOnboarding('superpowers')
+  }
+
+  function continueFromSuperpowers() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'superpowers', surface: 'onboarding' })
     void persistOnboarding('about')
   }
 
   async function continueFromAbout() {
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'about', surface: 'onboarding' })
     await ipc.settings.set({
-      userRole,
+      userRole: userRoleLabel,
       userGoals: Array.from(goals),
       userIntent: intentDraft.trim(),
     })
@@ -991,8 +1096,18 @@ export default function Onboarding({
   // Ground the focus / keep-private pickers in the user's real apps; fall back to
   // a common list for a brand-new user with nothing captured yet.
   const appChoices = topApps.length > 0 ? topApps : COMMON_FOCUS_APPS
-  // Keep-private suggestions exclude anything already marked private.
-  const privateSuggestions = appChoices.filter((app) => !excludedApps.has(app))
+  // Custom "real work" apps the user typed that aren't in their captured list.
+  const customFocusApps = Array.from(focusApps).filter((a) => !appChoices.includes(a))
+  // Persisted, human-readable role label ("Designer, Consultant").
+  const userRoleLabel = ROLES.filter((r) => roleIds.has(r.id)).map((r) => r.label).join(', ')
+  // Keep-private autosuggest: popular apps + the user's real apps, filtered by
+  // what they're typing, excluding anything already marked private.
+  const privatePool = Array.from(new Set([...appChoices, ...POPULAR_APPS_AND_SITES]))
+  const privateQuery = privateDraft.trim().toLowerCase()
+  const privateMatches = (privateQuery
+    ? privatePool.filter((a) => a.toLowerCase().includes(privateQuery))
+    : privatePool
+  ).filter((a) => !excludedApps.has(a)).slice(0, 8)
 
   const flowIndex = STAGE_FLOW.indexOf(stage)
   const canGoBack = !SYSTEM_STAGES.has(stage) && (
@@ -1097,7 +1212,7 @@ export default function Onboarding({
             expression="wave"
             eyebrow={eyebrow}
             title={<>Hi{greetName ? ` ${greetName}` : ''} <span className="ob-wave">👋</span></>}
-            subtitle="I'm Lumen — I'll set Daylens up with you. First, what should I call you?"
+            subtitle="Let's get Daylens set up together. First, what should it call you?"
             centered
             contentKey="welcome"
             primary={{ label: greetName ? 'Nice to meet you' : 'Continue', onClick: () => void handleContinueFromWelcome() }}
@@ -1126,8 +1241,9 @@ export default function Onboarding({
             eyebrow={`${eyebrow} · ${whyIndex + 1} of ${WHY_BEATS.length}`}
             title={beat.title}
             subtitle={beat.body}
+            centered
             contentKey={`why-${beat.scene}`}
-            primary={{ label: last ? "Makes sense — let's go" : 'Continue', onClick: () => advanceWhy() }}
+            primary={{ label: last ? "Makes sense, let's go" : 'Continue', onClick: () => advanceWhy() }}
             skip={{ label: 'Skip', onClick: () => skipWhy() }}
           >
             <WhyScene scene={beat.scene} name={greetName} />
@@ -1145,7 +1261,7 @@ export default function Onboarding({
             expression="curious"
             eyebrow={eyebrow}
             title="One quick permission to read window titles"
-            subtitle="Daylens needs macOS Accessibility — just the names of what you have open. No screenshots, no video, ever."
+            subtitle="Daylens needs macOS Accessibility to read just the names of what you have open. No screenshots, no video, ever."
             contentKey="permission"
             primary={{ label: busy ? 'Opening System Settings…' : 'Open Privacy & Security', onClick: () => void beginPermissionRequest(), disabled: busy }}
             secondary={{ label: 'I already enabled it', onClick: () => void refreshPermissionState() }}
@@ -1156,7 +1272,7 @@ export default function Onboarding({
               <span className="ob-status-dot" />
               <span className="ob-status-label">{permissionStatusLabel}</span>
               {settingsHandoff && (
-                <span className="ob-status-note">Keep this window open — we'll pick up the moment the toggle flips.</span>
+                <span className="ob-status-note">Keep this window open. We'll pick up the moment the toggle flips.</span>
               )}
             </div>
             {permissionDetails && (
@@ -1176,7 +1292,7 @@ export default function Onboarding({
             expression="idle"
             eyebrow={eyebrow}
             title="One restart and we're set"
-            subtitle="Daylens has the permission — macOS just needs a quick restart to hand it over."
+            subtitle="Daylens has the permission. macOS just needs a quick restart to hand it over."
             contentKey="relaunch"
             primary={{ label: 'Restart Daylens', onClick: () => void ipc.app.relaunch() }}
           >
@@ -1184,7 +1300,7 @@ export default function Onboarding({
               <div className="onboarding-handoff-beam" aria-hidden="true"><div className="onboarding-handoff-pulse" /></div>
               <div>
                 <div className="ob-callout-title">What happens next</div>
-                <div className="ob-callout-body">Daylens closes and reopens. Your setup picks up exactly where you left it — no data resets, no lost progress.</div>
+                <div className="ob-callout-body">Daylens closes and reopens. Your setup picks up exactly where you left it, no data resets, no lost progress.</div>
               </div>
             </div>
           </Stage>
@@ -1204,7 +1320,7 @@ export default function Onboarding({
               <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
               <div>
                 <div className="ob-callout-title">Verifying capture permissions</div>
-                <div className="ob-callout-body">If it takes longer, macOS may not have saved the toggle — we'll recover automatically.</div>
+                <div className="ob-callout-body">If it takes longer, macOS may not have saved the toggle, and we'll recover automatically.</div>
               </div>
             </div>
           </Stage>
@@ -1218,7 +1334,7 @@ export default function Onboarding({
             eyebrow={eyebrow}
             title={proof.ready ? "Here's what I can already see" : 'Watching for your first signal…'}
             subtitle={proof.ready
-              ? 'Real activity from this machine — captured the Daylens way, not a canned demo.'
+              ? 'Real activity from this machine, captured the Daylens way, not a canned demo.'
               : 'No fake progress bars. The moment real work shows up, it lands right here.'}
             contentKey={proof.ready ? 'proof-ready' : 'proof-wait'}
             primary={{ label: proof.ready ? 'Continue' : 'Waiting for the first signal…', onClick: () => void continueFromProof(), disabled: !proof.ready }}
@@ -1273,12 +1389,35 @@ export default function Onboarding({
             subtitle="This is how Daylens turns scattered apps into a day you'd actually recognise."
             contentKey="tour"
             primary={{ label: isLast ? 'Make it mine' : tourIndex === 0 ? 'Begin' : 'Continue', onClick: () => advanceTour() }}
-            skip={{ label: 'Skip the tour', onClick: () => void persistOnboarding('about') }}
+            skip={{ label: 'Skip the tour', onClick: () => void persistOnboarding('superpowers') }}
           >
             <TourStory index={tourIndex} name={greetName} />
           </Stage>
         )
       }
+
+      case 'superpowers':
+        return (
+          <Stage
+            {...railProps}
+            expression="happy"
+            eyebrow={eyebrow}
+            title="Things only Daylens can answer"
+            subtitle="ChatGPT can write you a poem. It just has no clue what you actually did on Tuesday. Daylens does."
+            contentKey="superpowers"
+            primary={{ label: 'Love it, keep going', onClick: () => continueFromSuperpowers() }}
+            skip={{ label: 'Skip', onClick: () => continueFromSuperpowers() }}
+          >
+            <div className="ob-super">
+              {SUPERPOWERS.map((s, i) => (
+                <div key={s.you} className="ob-super-row" style={{ animationDelay: `${i * 0.12}s` }}>
+                  <div className="ob-super-you">“{s.you}”</div>
+                  <div className="ob-super-them"><span className="ob-super-x">ChatGPT</span> {s.them}</div>
+                </div>
+              ))}
+            </div>
+          </Stage>
+        )
 
       case 'about':
         return (
@@ -1287,23 +1426,27 @@ export default function Onboarding({
             expression="curious"
             eyebrow={eyebrow}
             title={`A little about you${greetName ? `, ${greetName}` : ''}`}
-            subtitle="So your recaps sound like your work, not a stranger's. Two quick taps."
+            subtitle="So your recaps sound like your work, not a stranger's. Pick all that fit."
             contentKey="about"
             primary={{ label: 'Continue', onClick: () => void continueFromAbout() }}
           >
             <div className="ob-section">
-              <div className="ob-label">What do you do?</div>
+              <div className="ob-label">What do you do? <span className="ob-label-opt">pick any</span></div>
               <div className="ob-chipwrap">
                 {ROLES.map((r) => {
-                  const selected = userRole === r.label
+                  const selected = roleIds.has(r.id)
                   return (
-                    <button key={r.id} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => chooseRole(r)}>
+                    <button key={r.id} className={`ob-chip${selected ? ' is-selected' : ''}`} onClick={() => toggleRole(r)}>
                       <span className="ob-chip-emoji">{r.emoji}</span> {r.label}
                     </button>
                   )
                 })}
               </div>
-              {userRole && <div className="ob-reflect">Lumen: nice — I'll tune your day for {userRole.toLowerCase()} work. ✨</div>}
+              <div className="ob-quip-slot">
+                {roleQuip
+                  ? <div className="ob-quip" key={roleQuip}>{roleQuip}</div>
+                  : roleIds.size > 0 && <div className="ob-reflect">Got it. Daylens will tune your day for {userRoleLabel.toLowerCase()} work. ✨</div>}
+              </div>
             </div>
 
             <div className="ob-section">
@@ -1337,7 +1480,7 @@ export default function Onboarding({
             expression="happy"
             eyebrow={eyebrow}
             title="How should Daylens sound?"
-            subtitle="The same day, three voices. This really does change how every recap reads — pick the one that feels like you."
+            subtitle="The same day, three voices. This really does change how every recap reads, so pick the one that feels like you."
             contentKey="voice"
             primary={{ label: 'Continue', onClick: () => void continueFromVoice() }}
             note="Change anytime in Settings"
@@ -1392,7 +1535,7 @@ export default function Onboarding({
 
             <div className="ob-section">
               <div className="ob-label">Which of your apps are real work?</div>
-              <div className="ob-hint">{topApps.length > 0 ? 'Pulled from what you actually use most.' : 'A few common ones to start — your real apps replace these as you go.'}</div>
+              <div className="ob-hint">{topApps.length > 0 ? 'Pulled from what you actually use most.' : 'A few common ones to start; your real apps replace these as you go.'}</div>
               <div className="ob-chipwrap">
                 {appChoices.map((app) => {
                   const selected = focusApps.has(app)
@@ -1402,7 +1545,24 @@ export default function Onboarding({
                     </button>
                   )
                 })}
+                {customFocusApps.map((app) => (
+                  <button key={app} className="ob-chip is-selected" onClick={() => toggleInSet(app, setFocusApps)}>
+                    {app}
+                  </button>
+                ))}
               </div>
+              <div className="ob-addrow">
+                <input
+                  className="ob-input"
+                  value={customAppDraft}
+                  onChange={(e) => setCustomAppDraft(e.target.value)}
+                  placeholder="Add one: Excel, PowerPoint, Premiere…"
+                  maxLength={60}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomApp(customAppDraft) } }}
+                />
+                <button className="ob-add-btn" onClick={() => addCustomApp(customAppDraft)} disabled={!customAppDraft.trim()}>Add</button>
+              </div>
+              <div className="ob-hint ob-hint-wink">Don't see your favorite app? Add it, or don't. Daylens tracks them all anyway. I just got tired of listing them. 😅</div>
             </div>
           </Stage>
         )
@@ -1414,25 +1574,26 @@ export default function Onboarding({
             expression="curious"
             eyebrow={eyebrow}
             title="Who you work with, and when"
-            subtitle="Optional — but it helps Daylens group your time by client and time your morning brief right."
+            subtitle="Optional, and it helps Daylens group your time by client and time your morning brief right."
             contentKey="connections"
             primary={{ label: 'Continue', onClick: () => void continueFromConnections() }}
             skip={{ label: 'Skip', onClick: () => void continueFromConnections() }}
           >
             <div className="ob-section">
-              <div className="ob-label">Clients & projects <span className="ob-label-opt">optional</span></div>
-              <div className="ob-hint">Add the ones you'd want time grouped under — Lumen will learn to recognise them.</div>
+              <div className="ob-label">Add your clients or projects <span className="ob-label-opt">optional</span></div>
+              <div className="ob-hint">Name the ones you bill or want time grouped under. Daylens then spots them in your window titles and docs, so it can tell you "3.5h on Acme this week" without you logging a thing.</div>
               <div className="ob-addrow">
                 <input
                   className="ob-input"
                   value={clientDraft}
                   onChange={(e) => setClientDraft(e.target.value)}
-                  placeholder="e.g. Acme Corp, Q3 launch…"
+                  placeholder="Type a client or project name…"
                   maxLength={80}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addClient(clientDraft) } }}
                 />
                 <button className="ob-add-btn" onClick={() => addClient(clientDraft)} disabled={!clientDraft.trim()}>Add</button>
               </div>
+              {clients.length === 0 && <div className="ob-hint ob-hint-quiet">Nothing here yet. Add as many as you like, or skip and add them later.</div>}
               {clients.length > 0 && (
                 <div className="ob-chipwrap">
                   {clients.map((c) => (
@@ -1478,22 +1639,33 @@ export default function Onboarding({
             expression="idle"
             eyebrow={eyebrow}
             title="Anything to keep private?"
-            subtitle="Pick apps Daylens should never track. Nothing here is ever recorded — and you can change it anytime in Settings."
+            subtitle="Name any app or website Daylens should never track. Nothing here is ever recorded, and you can change it anytime in Settings."
             contentKey="privacy"
             primary={{ label: 'Continue', onClick: () => void continueFromPrivacy() }}
             skip={excludedApps.size > 0 ? undefined : { label: 'Nothing to hide', onClick: () => void continueFromPrivacy() }}
           >
             <div className="ob-section">
-              <div className="ob-addrow">
-                <input
-                  className="ob-input"
-                  value={privateDraft}
-                  onChange={(e) => setPrivateDraft(e.target.value)}
-                  placeholder="Type an app to keep private…"
-                  maxLength={80}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPrivateApp(privateDraft) } }}
-                />
-                <button className="ob-add-btn" onClick={() => addPrivateApp(privateDraft)} disabled={!privateDraft.trim()}>Keep private</button>
+              <div className="ob-addbox">
+                <div className="ob-addrow">
+                  <input
+                    className="ob-input"
+                    value={privateDraft}
+                    onChange={(e) => setPrivateDraft(e.target.value)}
+                    placeholder="Start typing an app or site… (Messages, reddit.com)"
+                    maxLength={80}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPrivateApp(privateDraft) } }}
+                  />
+                  <button className="ob-add-btn" onClick={() => addPrivateApp(privateDraft)} disabled={!privateDraft.trim()}>Keep private</button>
+                </div>
+                {privateMatches.length > 0 && (
+                  <div className="ob-suggest">
+                    {privateMatches.map((app) => (
+                      <button key={app} className="ob-suggest-item" onClick={() => addPrivateApp(app)}>
+                        <span>{app}</span><span className="ob-suggest-plus">+</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {excludedApps.size > 0 && (
@@ -1506,17 +1678,6 @@ export default function Onboarding({
                   ))}
                 </div>
               )}
-
-              {privateSuggestions.length > 0 && (
-                <>
-                  <div className="ob-hint" style={{ marginTop: 4 }}>Quick add from your apps:</div>
-                  <div className="ob-chipwrap">
-                    {privateSuggestions.map((app) => (
-                      <button key={app} className="ob-chip is-ghost" onClick={() => addPrivateApp(app)}>+ {app}</button>
-                    ))}
-                  </div>
-                </>
-              )}
             </div>
           </Stage>
         )
@@ -1527,33 +1688,40 @@ export default function Onboarding({
             {...railProps}
             expression="happy"
             eyebrow={eyebrow}
-            title={managedAvailable ? 'Your AI is on us to start' : 'Turn on Daylens AI'}
+            title={managedAvailable ? "Pick how you'll power AI" : 'Turn on Daylens AI'}
             subtitle={managedAvailable
-              ? "You get $5 of AI every month, free — enough for your daily recaps, wraps and briefs. Add Plus anytime for unlimited chat, or bring your own key."
+              ? 'Start free on us, go unlimited when you want, or bring your own key. Capture and your timeline work without any of this.'
               : 'Connect a provider so Daylens can answer questions about your work. Capture and your timeline work fully without it.'}
             contentKey="ai"
-            primary={{ label: aiConnected ? 'Continue' : 'Skip for now', onClick: () => void continueFromAiSetup(), disabled: busy }}
-            note="Capture works without AI"
+            primary={{ label: 'Continue', onClick: () => void continueFromAiSetup(), disabled: busy }}
+            note="Change anytime in Settings"
           >
             {managedAvailable && (
-              <div className="ob-ai-hero">
-                <div className="ob-ai-hero-badge">Free every month</div>
-                <div className="ob-ai-hero-amount">$5<span>/mo of AI, on us</span></div>
-                <div className="ob-ai-hero-body">No card, no key. Covers your recaps, wraps and briefs. It's just there when you open Daylens.</div>
-                <div className="ob-ai-hero-actions">
-                  {billing?.checkoutAvailable && (
-                    <button className="ob-btn-primary ob-btn-sm" onClick={() => void openCheckout()} disabled={billingBusy}>
-                      {billingBusy ? 'Opening…' : 'Go Plus — unlimited chat'}
-                    </button>
-                  )}
+              <>
+                <div className="ob-plan ob-plan-free">
+                  <div className="ob-plan-head">
+                    <span className="ob-plan-name">Free, on us</span>
+                    <span className="ob-plan-badge">$5 / month</span>
+                  </div>
+                  <div className="ob-plan-body">Enough AI for your daily recaps, wraps and briefs. No card, no key. You are on this the moment you open Daylens.</div>
                 </div>
-              </div>
+                <div className="ob-plan ob-plan-plus">
+                  <div className="ob-plan-head">
+                    <span className="ob-plan-name">Daylens Plus</span>
+                    <span className="ob-plan-badge ob-plan-badge-plus">Unlimited</span>
+                  </div>
+                  <div className="ob-plan-body">Unlimited AI chat, deeper weekly and monthly wraps, and bigger questions across your whole history.</div>
+                  <button className="ob-btn-primary ob-btn-sm" onClick={() => void openCheckout()} disabled={billingBusy}>
+                    {billingBusy ? 'Opening…' : 'Subscribe to Plus'}
+                  </button>
+                </div>
+              </>
             )}
 
             <details className="ob-ai-byok" open={!managedAvailable}>
               <summary>
                 <span className="ob-ai-byok-title">Bring your own key</span>
-                <span className="ob-ai-byok-sub">Already have a Claude, OpenAI, Gemini or OpenRouter key? Use it — you control billing.</span>
+                <span className="ob-ai-byok-sub">Already have a Claude, OpenAI, Gemini or OpenRouter key? Use it and you control billing.</span>
               </summary>
               <div className="ob-ai-byok-body">
                 <ConnectAI
@@ -1574,7 +1742,7 @@ export default function Onboarding({
             expression="happy"
             eyebrow={eyebrow}
             title={greetName ? `You're all set, ${greetName}` : "You're all set"}
-            subtitle="Daylens is watching quietly in the background. Here's what I learned about you — your timeline names every stretch by what you were actually doing."
+            subtitle="Daylens is watching quietly in the background. Here's what I learned about you, so your timeline names every stretch by what you were actually doing."
             centered
             contentKey="ready"
             primary={{ label: busy ? 'Opening Daylens…' : 'Open Daylens', onClick: () => void finishOnboarding(), disabled: busy }}
@@ -1585,7 +1753,7 @@ export default function Onboarding({
             </div>
 
             <div className="ob-profile">
-              {userRole && <div className="ob-profile-row"><span>You</span><strong>{userRole}</strong></div>}
+              {userRoleLabel && <div className="ob-profile-row"><span>You</span><strong>{userRoleLabel}</strong></div>}
               {voiceSample && <div className="ob-profile-row"><span>Voice</span><strong>{voiceSample.label}</strong></div>}
               {focusApps.size > 0 && <div className="ob-profile-row"><span>Real work</span><strong>{Array.from(focusApps).slice(0, 3).join(', ')}{focusApps.size > 3 ? ` +${focusApps.size - 3}` : ''}</strong></div>}
               {clients.length > 0 && <div className="ob-profile-row"><span>Clients</span><strong>{clients.slice(0, 3).join(', ')}{clients.length > 3 ? ` +${clients.length - 3}` : ''}</strong></div>}
@@ -1593,8 +1761,8 @@ export default function Onboarding({
             </div>
 
             <div className="ob-try">
-              <div className="ob-label">{aiConnected || managedAvailable ? 'Try asking Daylens' : 'Once AI is on, you can ask'}</div>
-              {['What did I work on today?', 'Where did my time go this week?', 'How much did I spend on each client?'].map((q) => (
+              <div className="ob-label">New here? Try asking Daylens</div>
+              {READY_QUESTIONS.map((q) => (
                 <div key={q} className="ob-try-chip">{q}</div>
               ))}
             </div>
@@ -1665,7 +1833,7 @@ const ONBOARDING_CSS = `
   box-shadow: 0 30px 80px rgba(26,33,68,0.18), 0 2px 8px rgba(26,33,68,0.06);
   overflow: hidden;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
 }
 /* the one recurring flourish: an aurora bleed at the top of the stage */
 .ob-stage::before {
@@ -1698,8 +1866,17 @@ const ONBOARDING_CSS = `
 .ob-seg.is-active { width: 26px; background: var(--ob-grad); }
 
 /* header zone — same place every screen, Lumen a persistent companion */
+/* normal (non-hero) middle: fixed header + scrolling content */
+.ob-body { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .ob-header { display: grid; grid-template-columns: 54px 1fr; gap: 14px; align-items: start; padding: 14px 26px 16px; }
 .ob-lumen { width: 54px; height: 54px; display: inline-grid; place-items: center; }
+/* hero middle: Lumen + title + content as one centred column */
+.ob-content-hero { text-align: center; }
+.ob-hero { display: grid; justify-items: center; gap: 13px; width: 100%; max-width: 44ch; margin: 0 auto; }
+.ob-hero .ob-title { margin: 2px 0 0; }
+.ob-hero .ob-sub { margin: 0 auto; }
+.ob-hero .ob-name-field { width: min(360px, 100%); margin-top: 4px; }
+.ob-lumen-hero { display: inline-grid; place-items: center; margin-bottom: 2px; }
 .ob-headtext { min-width: 0; padding-top: 1px; }
 .ob-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ob-accent); opacity: 0.85; }
 .ob-title { margin: 6px 0 0; font-size: 25px; line-height: 1.14; letter-spacing: -0.02em; color: var(--ob-ink); font-weight: 760; }
@@ -1711,9 +1888,10 @@ const ONBOARDING_CSS = `
   overflow-y: auto; overflow-x: hidden;
   padding: 4px 26px 8px;
   /* max-content auto-rows so an overflow:hidden child (profile, settings mock,
-     BYOK panel) can never collapse below its content and clip — the frame
-     scrolls instead. */
-  display: grid; align-content: start; grid-auto-rows: max-content; gap: 18px;
+     BYOK panel) can never collapse below its content and clip; the frame
+     scrolls instead. "safe center" vertically centres short screens but falls
+     back to top-aligned scrolling the moment content would overflow. */
+  display: grid; align-content: safe center; grid-auto-rows: max-content; gap: 18px;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
   scrollbar-width: thin; scrollbar-color: rgba(17,24,39,0.18) transparent;
@@ -1789,7 +1967,51 @@ const ONBOARDING_CSS = `
 .ob-label { font-size: 13.5px; font-weight: 700; color: var(--ob-ink); }
 .ob-label-opt { font-size: 11px; font-weight: 600; color: var(--ob-ink-3); text-transform: none; letter-spacing: 0; }
 .ob-hint { font-size: 12.5px; line-height: 1.5; color: var(--ob-ink-3); margin-top: -4px; }
+.ob-hint-quiet { color: var(--ob-ink-3); opacity: 0.8; }
+.ob-hint-wink { color: var(--ob-ink-3); font-style: italic; margin-top: 2px; }
 .ob-reflect { font-size: 12.5px; color: var(--ob-accent); font-weight: 600; animation: obContentIn 280ms ease both; }
+
+/* Duolingo-style joke toast: fades up from the bottom, then away on its own. */
+.ob-quip-slot { min-height: 22px; }
+.ob-quip {
+  display: inline-block; font-size: 12.5px; font-weight: 650; color: #8a4b16;
+  background: linear-gradient(180deg, #fff5e6, #ffeccf); border: 1px solid rgba(214,140,40,0.3);
+  padding: 8px 13px; border-radius: 12px; box-shadow: 0 8px 22px rgba(214,140,40,0.18);
+  animation: obQuipIn 360ms cubic-bezier(.2,1.2,.3,1) both;
+}
+@keyframes obQuipIn { from { opacity: 0; transform: translateY(14px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+/* keep-private autosuggest */
+.ob-addbox { position: relative; display: grid; gap: 0; }
+.ob-suggest {
+  margin-top: 8px; display: grid; gap: 2px; border: 1px solid var(--ob-line); border-radius: 12px;
+  background: #fff; overflow: hidden; box-shadow: 0 10px 26px rgba(26,33,68,0.08);
+}
+.ob-suggest-item {
+  -webkit-app-region: no-drag; display: flex; align-items: center; justify-content: space-between;
+  border: none; background: transparent; cursor: pointer; padding: 10px 14px; font-size: 13.5px;
+  color: var(--ob-ink); text-align: left; transition: background 120ms ease;
+}
+.ob-suggest-item:hover { background: #f5f7ff; }
+.ob-suggest-plus { color: var(--ob-accent); font-weight: 800; }
+
+/* AI plan cards */
+.ob-plan { padding: 15px 16px; border-radius: 16px; border: 1px solid var(--ob-line); background: #fff; display: grid; gap: 7px; }
+.ob-plan-free { border-color: rgba(79,110,240,0.3); background: linear-gradient(180deg, rgba(79,110,240,0.07), rgba(90,179,255,0.03)); }
+.ob-plan-plus { border-color: rgba(178,120,240,0.32); background: linear-gradient(180deg, rgba(178,120,240,0.06), rgba(111,134,240,0.03)); }
+.ob-plan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ob-plan-name { font-size: 14.5px; font-weight: 760; color: var(--ob-ink); }
+.ob-plan-badge { font-size: 11.5px; font-weight: 800; color: #2a3da8; background: rgba(79,110,240,0.12); padding: 3px 10px; border-radius: 999px; }
+.ob-plan-badge-plus { color: #6b32b0; background: rgba(178,120,240,0.14); }
+.ob-plan-body { font-size: 13px; line-height: 1.55; color: var(--ob-ink-2); }
+.ob-plan-plus .ob-btn-primary { margin-top: 4px; justify-self: start; background: linear-gradient(135deg, #8a7cff 0%, #6f86f0 100%); }
+
+/* superpowers: things only Daylens can answer */
+.ob-super { display: grid; gap: 12px; }
+.ob-super-row { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--ob-line); background: #fff; box-shadow: 0 6px 18px rgba(26,33,68,0.05); animation: obFadeUp 420ms cubic-bezier(.2,.8,.2,1) both; }
+.ob-super-you { font-size: 14.5px; font-weight: 680; color: var(--ob-ink); line-height: 1.5; }
+.ob-super-them { margin-top: 7px; font-size: 12.5px; line-height: 1.5; color: var(--ob-ink-3); }
+.ob-super-x { display: inline-block; font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #9aa0ad; background: rgba(17,24,39,0.05); padding: 2px 7px; border-radius: 999px; margin-right: 4px; }
 
 /* one chip language */
 .ob-chipwrap { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2015,7 +2237,7 @@ const ONBOARDING_CSS = `
   .onboarding-breath span, .onboarding-tour-thinking span, .onboarding-settings-mock-row-target,
   .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle,
   .onboarding-settings-mock-row-target .onboarding-settings-mock-toggle::after,
-  .onboarding-live-pulse, .ob-reflect, .ob-why-diary, .ob-why-recap {
+  .onboarding-live-pulse, .ob-reflect, .ob-why-diary, .ob-why-recap, .ob-quip, .ob-super-row {
     animation: none !important;
   }
 }

@@ -13,6 +13,7 @@ import { track } from './lib/analytics'
 import { todayString } from './lib/format'
 import { handleDailySummaryNavigation } from './lib/dailySummaryNavigation'
 import Onboarding from './views/Onboarding'
+import DashboardBuild from './components/DashboardBuild'
 import FeedbackModal from './components/FeedbackModal'
 import type { AppSettings, AppTheme, DayTimelinePayload, OnboardingState } from '@shared/types'
 
@@ -250,6 +251,8 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
 export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Plays the "building your dashboard" hand-off after onboarding completes.
+  const [building, setBuilding] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -302,23 +305,28 @@ export default function App() {
   // Loading — wait for settings before rendering anything
   if (!settings) return null
 
-  if (!settings.onboardingComplete || settings.onboardingState.stage !== 'complete') {
-    return (
-      <Onboarding
-        initialSettings={settings}
-        onComplete={() => {
-          void ipc.settings.get().then((next) => {
-            applyTheme(next.theme)
-            setSettings(next)
-          })
-        }}
-      />
-    )
-  }
+  const onboardingDone = settings.onboardingComplete && settings.onboardingState.stage === 'complete'
 
   return (
-    <HashRouter>
-      <AppContent settings={settings} />
-    </HashRouter>
+    <>
+      {!onboardingDone && !building ? (
+        <Onboarding
+          initialSettings={settings}
+          onComplete={() => {
+            // Show the build transition immediately, then swap settings under it.
+            setBuilding(true)
+            void ipc.settings.get().then((next) => {
+              applyTheme(next.theme)
+              setSettings(next)
+            })
+          }}
+        />
+      ) : (
+        <HashRouter>
+          <AppContent settings={settings} />
+        </HashRouter>
+      )}
+      {building && <DashboardBuild name={settings.userName} onDone={() => setBuilding(false)} />}
+    </>
   )
 }

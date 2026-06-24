@@ -1205,6 +1205,7 @@ export type OnboardingStage =
   | 'verifying_permission'
   | 'proof'
   | 'tour'
+  | 'superpowers'
   | 'about'
   | 'voice'
   | 'work'
