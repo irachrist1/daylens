@@ -17,3 +17,20 @@ These are the immediate issues identified from the Rize onboarding analysis and 
 
 ## 4. Timeline View
 - **Useless default block names:** Before a day is fully analyzed, blocks are simply titled "Active now" with no summary. These placeholders are unhelpful. The system should either provide a more descriptive default title or ensure analysis happens fast enough that users aren't left looking at generic placeholders.
+
+---
+
+## Appendix: Reference Analysis of Rize Onboarding
+Rize uses onboarding as an engine for capturing user intent and integrating external data before the user ever sees the dashboard. A screen-by-screen breakdown:
+
+- **Name capture:** Starts immediately with identity ("What's your name?") on a clean, single-input card.
+- **Personalized welcome:** Greets the user with their name and uses a dynamic typing effect to explain exactly what the app is about to do for them, building anticipation.
+- **Workspace setup:** Builds a profile of the user's environment by asking for company name, size, job title, and whether they work solo or on a team.
+- **Intent capture (Crucial):** Asks "How can Rize help you?" The user clicks intent chips (Track billable work, Improve focus) which auto-fill into a text box, capturing exactly *why* the user downloaded the app.
+- **Time settings:** Collects basic utility preferences (12h/24h, Timezone).
+- **Integrations introduction:** Introduces the ecosystem (Google Calendar, Outlook, ClickUp, Linear, Zapier).
+- **Meeting detection:** Walks the user through connecting their calendar specifically to detect meetings, proving the connection worked with a clear success state.
+- **Linear workspace sync:** Deep integration flow that connects Linear, asks which workspace to sync, and starts pulling in tasks immediately.
+- **Team invites:** Uses the momentum of setup to ask for team invites.
+- **Recommendation synthesis:** Plays back the user's intent ("You're set up to track projects...") and reveals the specific workspace modules and productivity rules it has enabled based on their answers.
+- **App download:** The final step to get the actual desktop client running.
