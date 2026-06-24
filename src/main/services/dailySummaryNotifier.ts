@@ -23,6 +23,7 @@ import {
   decideDailySummary,
   decideYesterdayRecap,
   decideCarryoverNudge,
+  workRhythmWindows,
   type DailyNotifierState,
 } from '../lib/dailySummaryScheduler'
 
@@ -170,12 +171,14 @@ async function checkDailySummary(): Promise<void> {
   const today = localDateString(now)
   const state = readState()
 
+  const windows = workRhythmWindows(settings.workRhythm)
   const decision = decideDailySummary({
     now,
     state,
     todaySecondsTracked: secondsTrackedOn(today),
     dailySummaryEnabled: settings.dailySummaryEnabled ?? false,
     todayDateString: today,
+    eveningWrapHour: windows.eveningWrapHour,
   })
   if (!decision.fire) return
 
@@ -203,6 +206,7 @@ async function checkYesterdayRecap(): Promise<void> {
   const yesterday = shiftLocalDateString(today, -1)
   const state = readState()
 
+  const windows = workRhythmWindows(settings.workRhythm)
   const decision = decideYesterdayRecap({
     now,
     state,
@@ -210,6 +214,8 @@ async function checkYesterdayRecap(): Promise<void> {
     morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
     todayDateString: today,
     yesterdayDateString: yesterday,
+    morningStartHour: windows.morningStartHour,
+    morningEndHour: windows.morningEndHour,
   })
   if (!decision.fire) return
 
@@ -242,6 +248,7 @@ async function checkCarryoverNudge(): Promise<void> {
   const yesterday = shiftLocalDateString(today, -1)
   const state = readState()
 
+  const windows = workRhythmWindows(settings.workRhythm)
   const decision = decideCarryoverNudge({
     now,
     state,
@@ -249,6 +256,7 @@ async function checkCarryoverNudge(): Promise<void> {
     morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
     todayDateString: today,
     yesterdayDateString: yesterday,
+    carryoverEndHour: windows.carryoverEndHour,
   })
   if (!decision.fire) return
 

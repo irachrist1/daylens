@@ -8,6 +8,39 @@
 // The notifier (`src/main/services/dailySummaryNotifier.ts`) gathers settings +
 // state + tracked seconds and asks these functions whether to fire.
 
+import type { WorkRhythm } from '@shared/types'
+
+// DEV-113: the user's working rhythm (chosen in onboarding) shifts when the
+// briefs and wrap fire. An early bird gets an earlier evening wrap and morning
+// recap window; a night owl gets later ones; "always on" stays wide. The
+// defaults match the standard nine-to-five day so behavior is unchanged when no
+// rhythm is set.
+export interface RhythmWindows {
+  /** Earliest hour the evening wrap may fire. */
+  eveningWrapHour: number
+  /** Morning-recap window: fires only between these hours. */
+  morningStartHour: number
+  morningEndHour: number
+  /** Carryover nudge stops offering once this hour passes. */
+  carryoverEndHour: number
+}
+
+export function workRhythmWindows(rhythm: WorkRhythm | undefined): RhythmWindows {
+  switch (rhythm) {
+    case 'early':
+      return { eveningWrapHour: 17, morningStartHour: 4, morningEndHour: 11, carryoverEndHour: 13 }
+    case 'night':
+      return { eveningWrapHour: 21, morningStartHour: 8, morningEndHour: 14, carryoverEndHour: 16 }
+    case 'always':
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 13, carryoverEndHour: 15 }
+    case 'standard':
+    default:
+      return { eveningWrapHour: 18, morningStartHour: 5, morningEndHour: 12, carryoverEndHour: 14 }
+  }
+}
+
+const STANDARD_WINDOWS = workRhythmWindows('standard')
+
 export interface DailyNotifierState {
   /** Evening wrap last fired for this date. */
   lastDailySummaryDate?: string
@@ -43,6 +76,8 @@ export interface DailySummaryDecisionInput {
   todaySecondsTracked: number
   dailySummaryEnabled: boolean
   todayDateString: string
+  /** Earliest hour the wrap may fire; defaults to the standard 18:00. */
+  eveningWrapHour?: number
 }
 
 export function decideDailySummary(input: DailySummaryDecisionInput): SchedulerDecision {
@@ -50,7 +85,8 @@ export function decideDailySummary(input: DailySummaryDecisionInput): SchedulerD
   if (input.state.lastDailySummaryDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
   }
-  if (!hasReachedLocalTime(input.now, 18)) return { fire: false, reason: 'before-18' }
+  const eveningWrapHour = input.eveningWrapHour ?? STANDARD_WINDOWS.eveningWrapHour
+  if (!hasReachedLocalTime(input.now, eveningWrapHour)) return { fire: false, reason: `before-${eveningWrapHour}` }
   if (input.todaySecondsTracked < NOTIFY_MIN_SECONDS) {
     return { fire: false, reason: 'insufficient-activity' }
   }
@@ -68,6 +104,9 @@ export interface YesterdayRecapDecisionInput {
   morningNudgeEnabled: boolean
   todayDateString: string
   yesterdayDateString: string
+  /** Morning-recap window; defaults to the standard 05:00–noon. */
+  morningStartHour?: number
+  morningEndHour?: number
 }
 
 export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): SchedulerDecision {
@@ -75,9 +114,11 @@ export function decideYesterdayRecap(input: YesterdayRecapDecisionInput): Schedu
   if (input.state.lastYesterdayRecapDate === input.todayDateString) {
     return { fire: false, reason: 'already-fired-today' }
   }
-  // Morning window: from early morning until noon.
-  if (!hasReachedLocalTime(input.now, 5)) return { fire: false, reason: 'before-5' }
-  if (input.now.getHours() >= 12) return { fire: false, reason: 'after-noon' }
+  // Morning window: from early morning until the rhythm's cutoff (noon by default).
+  const morningStartHour = input.morningStartHour ?? STANDARD_WINDOWS.morningStartHour
+  const morningEndHour = input.morningEndHour ?? STANDARD_WINDOWS.morningEndHour
+  if (!hasReachedLocalTime(input.now, morningStartHour)) return { fire: false, reason: `before-${morningStartHour}` }
+  if (input.now.getHours() >= morningEndHour) return { fire: false, reason: 'after-noon' }
   // The critical rule: if a recap was already generated yesterday, don't repeat it.
   if ((input.state.recapGeneratedDates ?? []).includes(input.yesterdayDateString)) {
     return { fire: false, reason: 'recap-already-generated' }
@@ -99,6 +140,8 @@ export interface CarryoverNudgeDecisionInput {
   morningNudgeEnabled: boolean
   todayDateString: string
   yesterdayDateString: string
+  /** Hour after which the carryover nudge stops offering; defaults to 14:00. */
+  carryoverEndHour?: number
 }
 
 export function decideCarryoverNudge(input: CarryoverNudgeDecisionInput): SchedulerDecision {
@@ -107,7 +150,8 @@ export function decideCarryoverNudge(input: CarryoverNudgeDecisionInput): Schedu
     return { fire: false, reason: 'already-fired-today' }
   }
   // Late morning / very early afternoon — once you're settled into the day.
-  if (input.now.getHours() >= 14) return { fire: false, reason: 'after-early-afternoon' }
+  const carryoverEndHour = input.carryoverEndHour ?? STANDARD_WINDOWS.carryoverEndHour
+  if (input.now.getHours() >= carryoverEndHour) return { fire: false, reason: 'after-early-afternoon' }
   if (input.todaySecondsTracked < CARRYOVER_MIN_WORK_SECONDS) {
     return { fire: false, reason: 'not-settled-in-yet' }
   }

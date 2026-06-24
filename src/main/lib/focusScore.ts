@@ -1,8 +1,24 @@
 import { FOCUSED_CATEGORIES } from '@shared/types'
 import type { AppCategory, FocusScoreBreakdown } from '@shared/types'
+import { appMatchesFocusList } from '@shared/userProfile'
 
 export function isCategoryFocused(category: AppCategory | string): boolean {
   return FOCUSED_CATEGORIES.includes(category as AppCategory)
+}
+
+/**
+ * Whether an app counts as real, focused work. A category in FOCUSED_CATEGORIES
+ * always counts; on top of that, an app the user explicitly marked as their real
+ * work in onboarding (`focusApps`) counts even if its category normally would
+ * not (e.g. a browser they live in, or a niche tool we classify as "other").
+ */
+export function isAppFocused(
+  category: AppCategory | string,
+  bundleId: string | null | undefined,
+  appName: string | null | undefined,
+  focusApps: string[] | undefined,
+): boolean {
+  return isCategoryFocused(category) || appMatchesFocusList(focusApps, bundleId, appName)
 }
 
 // ---------------------------------------------------------------------------

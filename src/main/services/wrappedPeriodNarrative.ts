@@ -15,6 +15,7 @@ import {
   type ProviderTextResponse,
 } from './aiOrchestration'
 import { voiceDirective } from '@shared/summaryVoice'
+import { userProfileDirective } from '@shared/userProfile'
 import { getSettings } from './settings'
 import { getDaySnapshotsForRange } from './daySnapshots'
 import { computePeriodRange } from '../lib/wrappedPeriodRange'
@@ -121,7 +122,10 @@ async function getWrappedPeriodNarrative(
   }
 
   const { systemPrompt, userMessage } = buildPeriodPrompts(facts)
-  const tunedSystemPrompt = `${systemPrompt}\n\n${voiceDirective(getSettings().summaryVoice)}`
+  const settings = getSettings()
+  const tunedSystemPrompt = [systemPrompt, userProfileDirective(settings), voiceDirective(settings.summaryVoice)]
+    .filter(Boolean)
+    .join('\n\n')
 
   try {
     const { text } = await withTimeout(

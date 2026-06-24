@@ -20,6 +20,7 @@ import { track } from '../lib/analytics'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
 import { formatUsdAmount } from '@shared/formatUsd'
+import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
   { value: 'development', label: 'Development' },
@@ -355,6 +356,101 @@ const memoryActionStyle: CSSProperties = {
   cursor: 'pointer',
 }
 
+const CHANGELOG_SERIF = 'Georgia, "Times New Roman", "Iowan Old Style", serif'
+
+// One release, told as a feature story: a dateline, a big serif headline, a
+// human paragraph, and a gradient hero illustration. The newest release is the
+// lead; older ones render compact below.
+function ChangelogHeroStory({ entry }: { entry: ChangelogEntry }) {
+  return (
+    <article style={{ display: 'grid', gap: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+        <span>{changelogIssueLabel(entry.issue)}</span>
+        <span style={{ opacity: 0.5 }}>·</span>
+        <span>{formatChangelogDate(entry.date)}</span>
+      </div>
+      <h3 style={{ fontFamily: CHANGELOG_SERIF, fontSize: 34, lineHeight: 1.12, fontWeight: 600, letterSpacing: '-0.01em', margin: 0, color: 'var(--color-text-primary)' }}>
+        {entry.headline}
+      </h3>
+      <p style={{ fontFamily: CHANGELOG_SERIF, fontSize: 17, lineHeight: 1.45, fontStyle: 'italic', margin: 0, color: 'var(--color-text-secondary)' }}>
+        {entry.dek}
+      </p>
+      <div
+        aria-hidden
+        style={{
+          position: 'relative',
+          height: 200,
+          borderRadius: 18,
+          overflow: 'hidden',
+          background: `linear-gradient(135deg, ${entry.hero.from}, ${entry.hero.to})`,
+          boxShadow: '0 18px 50px rgba(0,0,0,0.16)',
+        }}
+      >
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(120% 80% at 80% 0%, rgba(255,255,255,0.35), rgba(255,255,255,0) 60%)' }} />
+        <div style={{ position: 'absolute', left: 22, bottom: 18, right: 22, color: 'rgba(255,255,255,0.96)' }}>
+          <div style={{ fontSize: 11.5, letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 700, opacity: 0.9 }}>Daylens {entry.version}</div>
+          <div style={{ fontFamily: CHANGELOG_SERIF, fontSize: 22, fontWeight: 600, marginTop: 4, textShadow: '0 1px 12px rgba(0,0,0,0.25)' }}>{entry.headline}</div>
+        </div>
+      </div>
+      <p style={{ fontSize: 14, lineHeight: 1.7, margin: 0, color: 'var(--color-text-secondary)' }}>
+        {entry.body}
+      </p>
+      {entry.notes && entry.notes.length > 0 && (
+        <div style={{ display: 'grid', gap: 8, marginTop: 2 }}>
+          <div style={{ fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', fontWeight: 700 }}>Also in this release</div>
+          {entry.notes.map((note) => (
+            <div key={note} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.55 }}>
+              <span style={{ width: 5, height: 5, borderRadius: 999, background: entry.hero.accent, flexShrink: 0, transform: 'translateY(-2px)' }} />
+              <span>{note}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  )
+}
+
+function ChangelogContent({ appVersion }: { appVersion: string | null }) {
+  const latest = LATEST_CHANGELOG
+  const older = CHANGELOG.slice(1)
+  return (
+    <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 18, overflow: 'hidden', background: 'var(--color-surface)' }}>
+      {/* Masthead */}
+      <div style={{ padding: '22px 24px 18px', borderBottom: '1px solid var(--color-border-ghost)', textAlign: 'center', display: 'grid', gap: 6 }}>
+        <div style={{ fontFamily: CHANGELOG_SERIF, fontSize: 30, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--color-text-primary)' }}>
+          Daylens Notes
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', fontStyle: 'italic' }}>
+          New features · how Daylens keeps getting better
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 4, letterSpacing: '0.04em' }}>
+          {changelogIssueLabel(latest.issue)}{appVersion ? ` · Daylens ${appVersion}` : ` · Daylens ${latest.version}`}
+        </div>
+      </div>
+      {/* Lead story */}
+      <div style={{ padding: '24px' }}>
+        <ChangelogHeroStory entry={latest} />
+      </div>
+      {/* Older issues */}
+      {older.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--color-border-ghost)', padding: '18px 24px 22px', background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
+          <div style={{ fontSize: 11.5, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-tertiary)', fontWeight: 700 }}>Earlier issues</div>
+          {older.map((entry) => (
+            <div key={entry.issue} style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div aria-hidden style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: `linear-gradient(135deg, ${entry.hero.from}, ${entry.hero.to})`, boxShadow: '0 4px 14px rgba(0,0,0,0.12)' }} />
+              <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                <div style={{ fontFamily: CHANGELOG_SERIF, fontSize: 15.5, fontWeight: 600, color: 'var(--color-text-primary)' }}>{entry.headline}</div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>{entry.dek}</div>
+                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>{changelogIssueLabel(entry.issue)} · Daylens {entry.version} · {formatChangelogDate(entry.date)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function UpdatesContent() {
   const [status, setStatus] = useState<UpdaterStatusInfo | null>(null)
   const [checking, setChecking] = useState(false)
@@ -388,7 +484,8 @@ function UpdatesContent() {
   const isBusy = checking || status?.status === 'checking' || status?.status === 'downloading' || status?.status === 'installing'
 
   return (
-      <div>
+      <div style={{ display: 'grid', gap: 18 }}>
+        <ChangelogContent appVersion={currentVersion} />
         <SettingsRow
           first
           title="App updates"
@@ -1131,33 +1228,60 @@ function BillingPage({
   )
 }
 
-const JOB_FEATURE_LABELS: Record<string, string> = {
-  block_label_preview: 'Block label preview',
-  block_label_finalize: 'Block labeling',
-  block_cleanup_relabel: 'Block relabeling',
-  day_summary: 'Day summary',
+// Roll the raw `job_type` of each AI call up into a user-facing feature so spend
+// is attributed to things people recognise ("Timeline labeling", "AI chat")
+// rather than internal job names. Used by both the chart's "Group: Feature"
+// view and the per-feature breakdown below the chart.
+const JOB_FEATURE_GROUPS: Record<string, string> = {
+  block_label_preview: 'Timeline labeling',
+  block_label_finalize: 'Timeline labeling',
+  block_cleanup_relabel: 'Timeline labeling',
+  attribution_assist: 'Timeline labeling',
+  day_summary: 'Morning brief',
+  wrapped_narrative: 'Evening wrap-up',
+  wrapped_period_narrative: 'Weekly & monthly wrap',
   week_review: 'Week review',
-  app_narrative: 'App narrative',
-  chat_answer: 'Chat',
-  chat_followup_suggestions: 'Chat suggestions',
-  report_generation: 'Report generation',
-  attribution_assist: 'Attribution assist',
-  wrapped_narrative: 'Wrapped narrative',
-  wrapped_period_narrative: 'Period wrap',
-  search_intent: 'Search intent',
+  app_narrative: 'App insights',
+  chat_answer: 'AI chat',
+  chat_followup_suggestions: 'AI chat',
+  search_intent: 'Search',
+  report_generation: 'Reports',
 }
 
-function formatJobFeature(feature: string) {
-  return JOB_FEATURE_LABELS[feature] ?? feature.replace(/_/g, ' ')
+function formatJobFeature(feature: string | null | undefined) {
+  if (!feature) return 'Other'
+  return JOB_FEATURE_GROUPS[feature] ?? feature.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// Local-calendar day key (YYYY-MM-DD). Must match the backend's bucketing so a
+// call's day on the chart axis lines up with the day it was aggregated under.
+function dayKey(ms: number): string {
+  const date = new Date(ms)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function UsagePage() {
   type RangeKey = '1d' | '7d' | '30d' | 'mtd' | 'last_month' | 'custom'
   type GroupKey = 'model' | 'type'
   type MetricKey = 'spend' | 'tokens'
-  const [range, setRange] = useState<RangeKey>('30d')
-  const [groupBy, setGroupBy] = useState<GroupKey>('model')
-  const [metric, setMetric] = useState<MetricKey>('spend')
+  // Persist the view controls so navigating away and back keeps the user's
+  // chosen window/grouping instead of snapping back to the 30d/model/spend
+  // defaults every time.
+  const readPref = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
+    try {
+      const saved = localStorage.getItem(key)
+      return saved && (allowed as readonly string[]).includes(saved) ? (saved as T) : fallback
+    } catch { return fallback }
+  }
+  const [range, setRange] = useState<RangeKey>(() => readPref('daylens.usage.range', ['1d', '7d', '30d', 'mtd', 'last_month', 'custom'] as const, '30d'))
+  const [groupBy, setGroupBy] = useState<GroupKey>(() => readPref('daylens.usage.groupBy', ['model', 'type'] as const, 'model'))
+  const [metric, setMetric] = useState<MetricKey>(() => readPref('daylens.usage.metric', ['spend', 'tokens'] as const, 'spend'))
+  useEffect(() => { try { localStorage.setItem('daylens.usage.range', range) } catch { /* ignore */ } }, [range])
+  useEffect(() => { try { localStorage.setItem('daylens.usage.groupBy', groupBy) } catch { /* ignore */ } }, [groupBy])
+  useEffect(() => { try { localStorage.setItem('daylens.usage.metric', metric) } catch { /* ignore */ } }, [metric])
   const [customFrom, setCustomFrom] = useState(() => new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10))
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [report, setReport] = useState<BillingUsageReport | null>(null)
@@ -1249,31 +1373,59 @@ function UsagePage() {
   const chart = useMemo(() => {
     if (!report) return null
     const chartMetric = effectiveMetric
-    const days: string[] = []
-    const start = new Date(bounds.from)
-    start.setHours(0, 0, 0, 0)
-    const end = new Date(bounds.to)
-    end.setHours(0, 0, 0, 0)
-    for (let cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 1)) {
-      days.push(cursor.toISOString().slice(0, 10))
+    // Short windows (Today / ≤2-day custom) chart by the hour so a single day
+    // isn't a single zero-width point; longer windows chart by the day.
+    const hourly = (bounds.to - bounds.from) <= 2 * 86400000
+    const HOUR = 3_600_000
+
+    const buckets: string[] = []
+    if (hourly) {
+      // Bucket on UTC hour boundaries (what the backend keys on) so the axis and
+      // the per-hour aggregate line up even in half-hour-offset timezones.
+      for (let hour = Math.floor(bounds.from / HOUR) * HOUR; hour < bounds.to; hour += HOUR) {
+        buckets.push(String(hour))
+      }
+    } else {
+      const start = new Date(bounds.from)
+      start.setHours(0, 0, 0, 0)
+      const end = new Date(bounds.to)
+      end.setHours(0, 0, 0, 0)
+      for (let cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 1)) {
+        buckets.push(dayKey(cursor.getTime()))
+      }
+      if (buckets.length === 0 || buckets.length > 62) {
+        const dataDays = new Set<string>()
+        for (const point of report.points ?? []) dataDays.add(point.day)
+        for (const row of report.rows ?? []) dataDays.add(dayKey(row.occurredAt))
+        buckets.splice(0, buckets.length, ...[...dataDays].sort())
+      }
     }
-    if (days.length === 0 || days.length > 62) {
-      const dataDays = new Set<string>()
-      for (const point of report.points ?? []) dataDays.add(point.day)
-      for (const row of report.rows ?? []) dataDays.add(new Date(row.occurredAt).toISOString().slice(0, 10))
-      days.splice(0, days.length, ...[...dataDays].sort())
-    }
-    if (days.length === 0) return null
+    if (buckets.length === 0) return null
 
     const series = new Map<string, Map<string, number>>()
-    const addValue = (name: string, day: string, value: number) => {
-      if (!Number.isFinite(value)) return
+    const addValue = (name: string, bucket: string, value: number) => {
+      if (!Number.isFinite(value) || value === 0) return
       if (!series.has(name)) series.set(name, new Map())
       const values = series.get(name)!
-      values.set(day, (values.get(day) ?? 0) + value)
+      values.set(bucket, (values.get(bucket) ?? 0) + value)
     }
 
-    if (groupBy === 'type' && (report.featurePoints?.length ?? 0) > 0) {
+    if (hourly) {
+      // Per-hour aggregate carries both model and feature and is uncapped (the
+      // rows table only holds the latest 2000, which a busy day can exceed).
+      for (const point of report.hourlyPoints ?? []) {
+        const bucket = String(Math.floor(point.hour / HOUR) * HOUR)
+        const name = groupBy === 'model' ? point.model || 'auto' : formatJobFeature(point.feature)
+        addValue(name, bucket, chartMetric === 'spend' ? point.costUsd ?? 0 : point.tokens)
+      }
+      if (series.size === 0) {
+        for (const row of report.rows) {
+          const bucket = String(Math.floor(row.occurredAt / HOUR) * HOUR)
+          const name = groupBy === 'model' ? row.model || 'auto' : formatJobFeature(row.feature)
+          addValue(name, bucket, chartMetric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
+        }
+      }
+    } else if (groupBy === 'type' && (report.featurePoints?.length ?? 0) > 0) {
       for (const point of report.featurePoints ?? []) {
         addValue(formatJobFeature(point.feature ?? point.model), point.day, chartMetric === 'spend' ? point.spendUsd : point.tokens)
       }
@@ -1283,9 +1435,9 @@ function UsagePage() {
       }
     } else if (report.rows.length > 0) {
       for (const row of report.rows) {
-        const day = new Date(row.occurredAt).toISOString().slice(0, 10)
+        const bucket = dayKey(row.occurredAt)
         const name = groupBy === 'model' ? row.model || 'auto' : formatJobFeature(row.feature)
-        addValue(name, day, chartMetric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
+        addValue(name, bucket, chartMetric === 'spend' ? row.costUsd ?? 0 : row.tokens ?? 0)
       }
     } else {
       for (const point of report.points) {
@@ -1296,7 +1448,7 @@ function UsagePage() {
     const cumulative = [...series.entries()]
       .map(([name, values]) => {
         let running = 0
-        const daily = days.map((day) => values.get(day) ?? 0)
+        const daily = buckets.map((bucket) => values.get(bucket) ?? 0)
         return {
           name,
           daily,
@@ -1306,10 +1458,42 @@ function UsagePage() {
       .filter((item) => item.daily.some((value) => value > 0))
     if (cumulative.length === 0) return null
 
-    const totals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
-    const dailyTotals = days.map((_, index) => cumulative.reduce((sum, item) => sum + item.daily[index], 0))
-    return { days, cumulative, max: Math.max(...totals, 1), totals, dailyTotals }
+    const totals = buckets.map((_, index) => cumulative.reduce((sum, item) => sum + item.values[index], 0))
+    const dailyTotals = buckets.map((_, index) => cumulative.reduce((sum, item) => sum + item.daily[index], 0))
+    return { days: buckets, granularity: hourly ? 'hour' as const : 'day' as const, cumulative, max: Math.max(...totals, 1), totals, dailyTotals }
   }, [bounds.from, bounds.to, groupBy, effectiveMetric, report])
+
+  // Axis/tooltip labels adapt to the chart's granularity: clock time for hourly
+  // buckets (ms-keyed), calendar dates for daily buckets (YYYY-MM-DD-keyed).
+  const formatBucketShort = (key: string) => chart?.granularity === 'hour'
+    ? new Date(Number(key)).toLocaleTimeString(undefined, { hour: 'numeric' })
+    : formatDate(key)
+  const formatBucketFull = (key: string) => chart?.granularity === 'hour'
+    ? new Date(Number(key)).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' })
+    : formatFullDate(key)
+  const bucketWord = chart?.granularity === 'hour' ? 'Hourly' : 'Daily'
+
+  // Per-feature attribution: roll the per-(feature, screen, model) job summaries
+  // up into user-facing features so people can see exactly where spend goes.
+  const featureBreakdown = useMemo(() => {
+    const summaries = report?.jobSummaries ?? []
+    if (summaries.length === 0) return null
+    const map = new Map<string, { feature: string; costUsd: number; tokens: number; calls: number }>()
+    for (const summary of summaries) {
+      const feature = formatJobFeature(summary.feature)
+      const entry = map.get(feature) ?? { feature, costUsd: 0, tokens: 0, calls: 0 }
+      entry.costUsd += summary.costUsd ?? 0
+      entry.tokens += summary.tokens
+      entry.calls += summary.calls
+      map.set(feature, entry)
+    }
+    const items = [...map.values()]
+    const totalCost = items.reduce((sum, item) => sum + item.costUsd, 0)
+    const totalTokens = items.reduce((sum, item) => sum + item.tokens, 0)
+    const useSpend = totalCost > 0
+    items.sort((left, right) => useSpend ? right.costUsd - left.costUsd : right.tokens - left.tokens)
+    return { items, totalCost, totalTokens, useSpend }
+  }, [report])
 
   const colors = ['#3aa17e', '#8fb4d8', '#5c80b6', '#c58bb8', '#9fbe83', '#d8a653']
   const quickRanges: Array<{ key: Exclude<RangeKey, 'custom'>; label: string }> = [
@@ -1386,12 +1570,12 @@ function UsagePage() {
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Your Usage</div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Your usage per day across this billing period</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>Your usage {chart?.granularity === 'hour' ? 'per hour today' : 'per day across this range'}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupKey)} style={inputStyle(170)}>
               <option value="model">Group: Model</option>
-              <option value="type">Group: Action</option>
+              <option value="type">Group: Feature</option>
             </select>
             <select value={metric} onChange={(event) => setMetric(event.target.value as MetricKey)} style={inputStyle(125)}>
               <option value="spend">Spend</option>
@@ -1454,9 +1638,9 @@ function UsagePage() {
                   </>
                 )}
                 <line x1="742" x2="742" y1="16" y2="216" stroke="var(--color-text-tertiary)" strokeDasharray="4 4" opacity={0.45} />
-                <text x="735" y="14" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">Today</text>
-                <text x="48" y="232" fontSize="10" fill="var(--color-text-tertiary)">{formatDate(chart.days[0])}</text>
-                <text x="742" y="232" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{formatDate(chart.days[chart.days.length - 1])}</text>
+                <text x="735" y="14" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{chart.granularity === 'hour' ? 'Now' : 'Today'}</text>
+                <text x="48" y="232" fontSize="10" fill="var(--color-text-tertiary)">{formatBucketShort(chart.days[0])}</text>
+                <text x="742" y="232" textAnchor="end" fontSize="10" fill="var(--color-text-tertiary)">{formatBucketShort(chart.days[chart.days.length - 1])}</text>
               </svg>
               {hoveredChartIndex != null && chart.days[hoveredChartIndex] && (
                 <div
@@ -1476,10 +1660,10 @@ function UsagePage() {
                   }}
                 >
                   <div style={{ fontSize: 12.5, fontWeight: 720, color: 'var(--color-text-primary)' }}>
-                    {formatFullDate(chart.days[hoveredChartIndex])}
+                    {formatBucketFull(chart.days[hoveredChartIndex])}
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                    Daily breakdown
+                    {bucketWord} breakdown
                   </div>
                   <div style={{ display: 'grid', gap: 5, marginTop: 9 }}>
                     {chart.cumulative
@@ -1502,7 +1686,7 @@ function UsagePage() {
                   </div>
                   <div style={{ borderTop: '1px solid var(--color-border-ghost)', marginTop: 9, paddingTop: 8, display: 'grid', gap: 4, fontSize: 11.5 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                      <span style={{ color: 'var(--color-text-secondary)' }}>Daily total</span>
+                      <span style={{ color: 'var(--color-text-secondary)' }}>{bucketWord} total</span>
                       <strong style={{ color: 'var(--color-text-primary)' }}>{formatMetricExact(chart.dailyTotals[hoveredChartIndex] ?? 0)}</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
@@ -1536,17 +1720,60 @@ function UsagePage() {
         </div>
       </div>
 
+      {featureBreakdown && (
+        <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, padding: 18, background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 560, color: 'var(--color-text-primary)' }}>Spend by feature</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
+              Where your AI usage went across this range — cost and tokens per feature.
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {featureBreakdown.items.map((item, index) => {
+              const share = featureBreakdown.useSpend
+                ? (featureBreakdown.totalCost > 0 ? item.costUsd / featureBreakdown.totalCost : 0)
+                : (featureBreakdown.totalTokens > 0 ? item.tokens / featureBreakdown.totalTokens : 0)
+              return (
+                <div key={item.feature} style={{ display: 'grid', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12.5 }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--color-text-primary)', minWidth: 0 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: colors[index % colors.length], flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 540 }}>{item.feature}</span>
+                      <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11.5, flexShrink: 0 }}>
+                        {item.calls.toLocaleString()} {item.calls === 1 ? 'call' : 'calls'} · {formatTokens(item.tokens)} tokens
+                      </span>
+                    </span>
+                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'baseline', flexShrink: 0 }}>
+                      <strong style={{ color: 'var(--color-text-primary)' }}>
+                        {item.costUsd > 0 ? formatSpend(item.costUsd) : 'Included'}
+                      </strong>
+                      <span style={{ color: 'var(--color-text-tertiary)', fontSize: 11.5, minWidth: 42, textAlign: 'right' }}>
+                        {(share * 100).toFixed(1)}%
+                      </span>
+                    </span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 999, background: 'var(--color-border-ghost)', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.max(2, share * 100)}%`, height: '100%', borderRadius: 999, background: colors[index % colors.length], opacity: 0.85 }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={{ border: '1px solid var(--color-border-ghost)', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720, fontSize: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-low)', color: 'var(--color-text-tertiary)', textAlign: 'left' }}>
-              {['Date', 'Type', 'Model', 'Tokens', 'Cost'].map((heading) => <th key={heading} style={{ padding: '11px 14px', fontWeight: 620 }}>{heading}</th>)}
+              {['Date', 'Feature', 'Type', 'Model', 'Tokens', 'Cost'].map((heading) => <th key={heading} style={{ padding: '11px 14px', fontWeight: 620 }}>{heading}</th>)}
             </tr>
           </thead>
           <tbody>
             {(report?.rows ?? []).slice(0, 200).map((row) => (
               <tr key={row.id} style={{ borderTop: '1px solid var(--color-border-ghost)', color: 'var(--color-text-secondary)' }}>
                 <td style={{ padding: '11px 14px' }}>{new Date(row.occurredAt).toLocaleString()}</td>
+                <td style={{ padding: '11px 14px' }}>{formatJobFeature(row.feature)}</td>
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
                 <td style={{ padding: '11px 14px' }}>{row.tokens == null ? '—' : formatTokens(row.tokens)}</td>
@@ -2751,7 +2978,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'updates':
       content = (
-        <SectionPage title="Updates" description="Daylens keeps itself up to date. In a dev build, updates come through the dev workflow.">
+        <SectionPage title="Updates" description="Daylens keeps itself up to date. In a dev build, updates come through the dev workflow." maxWidth={760}>
           <UpdatesContent />
         </SectionPage>
       )

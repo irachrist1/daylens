@@ -17,8 +17,9 @@ import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForR
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString } from '../../lib/localDate'
 import { ownedDayBounds } from '../../lib/dayOwnership'
-import { isCategoryFocused } from '../../lib/focusScore'
+import { isAppFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
+import { getSettings } from '../../services/settings'
 
 const APP_CATEGORIES: ReadonlySet<string> = new Set([
   'development',
@@ -41,7 +42,10 @@ function toAppCategory(category: string | null | undefined): AppCategory {
   return category && APP_CATEGORIES.has(category) ? category as AppCategory : 'uncategorized'
 }
 
-function derivedSessionToAppSession(session: DerivedDayResult['sessions'][number]): AppSession {
+function derivedSessionToAppSession(
+  session: DerivedDayResult['sessions'][number],
+  focusApps: string[] | undefined,
+): AppSession {
   const bundleId = session.app_bundle_id ?? session.app_name ?? 'unknown'
   const appName = session.app_name ?? session.app_bundle_id ?? 'Unknown app'
   const category = toAppCategory(session.category)
@@ -54,7 +58,7 @@ function derivedSessionToAppSession(session: DerivedDayResult['sessions'][number
     endTime: session.end_ts_ms,
     durationSeconds: session.active_seconds,
     category,
-    isFocused: isCategoryFocused(category),
+    isFocused: isAppFocused(category, bundleId, identity.displayName || appName, focusApps),
     windowTitle: session.window_title,
     rawAppName: appName,
     canonicalAppId: identity.canonicalAppId ?? bundleId,
@@ -121,7 +125,8 @@ function getDerivedDayTimelinePayload(
   if (!day) return null
 
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const sessions = day.sessions.map(derivedSessionToAppSession)
+  const focusApps = getSettings().focusApps
+  const sessions = day.sessions.map((session) => derivedSessionToAppSession(session, focusApps))
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   // Past days must go through the same coalescing pipeline as today. The

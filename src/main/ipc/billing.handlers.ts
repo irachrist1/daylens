@@ -7,6 +7,7 @@ import {
   getBillingAccess,
   getBillingPortalUrl,
   getBillingUsage,
+  exportUsageRows,
   invalidateBillingAccess,
 } from '../services/billing'
 
@@ -37,7 +38,9 @@ export function registerBillingHandlers(): void {
     return true
   })
   ipcMain.handle(IPC.BILLING.EXPORT_USAGE_CSV, async (_event, payload: { from: number; to: number }) => {
-    const report = await getBillingUsage(payload.from, payload.to)
+    // Read every event in the range straight from the table, not the 2000-row
+    // display cap in the usage report, so the CSV truly covers the whole range.
+    const rows = exportUsageRows(payload.from, payload.to)
     const result = await dialog.showSaveDialog({
       title: 'Export AI usage',
       defaultPath: `daylens-ai-usage-${new Date(payload.from).toISOString().slice(0, 10)}.csv`,
@@ -46,7 +49,7 @@ export function registerBillingHandlers(): void {
     if (result.canceled || !result.filePath) return { canceled: true }
     const lines = [
       ['Date', 'Type', 'Feature', 'Screen', 'Trigger', 'Provider', 'Model', 'Input tokens', 'Output tokens', 'Cache read tokens', 'Cache write tokens', 'Total tokens', 'Cost USD', 'Success'],
-      ...report.rows.map((row) => [
+      ...rows.map((row) => [
         new Date(row.occurredAt).toISOString(),
         row.type,
         row.feature,

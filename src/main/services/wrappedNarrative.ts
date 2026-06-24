@@ -9,6 +9,7 @@
 
 import type { AIInvocationSource, AIWrappedNarrative, DayTimelinePayload } from '@shared/types'
 import { voiceDirective } from '@shared/summaryVoice'
+import { userProfileDirective } from '@shared/userProfile'
 import { getSettings } from './settings'
 import {
   executeTextAIJob,
@@ -74,9 +75,13 @@ export async function getWrappedNarrative(
   }
 
   const { systemPrompt, userMessage } = buildWrappedPrompts(facts)
-  // Apply the user's chosen summary voice. The facts/validation stay untouched —
-  // this only steers wording, never the numbers.
-  const tunedSystemPrompt = `${systemPrompt}\n\n${voiceDirective(getSettings().summaryVoice)}`
+  // Apply the user's chosen summary voice and who-they-are profile. The
+  // facts/validation stay untouched — this only steers wording, never the numbers.
+  const settings = getSettings()
+  const profile = userProfileDirective(settings)
+  const tunedSystemPrompt = [systemPrompt, profile, voiceDirective(settings.summaryVoice)]
+    .filter(Boolean)
+    .join('\n\n')
 
   try {
     const { text } = await withTimeout(

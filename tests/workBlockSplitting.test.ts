@@ -729,7 +729,7 @@ test('a user merge erases a boundary that survives a rebuild', () => {
   const before = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(before.length, 2, 'distinct browsing topics should be two blocks before the merge')
 
-  mergeTimelineEpisodes(db, TEST_DATE, before[0], before[1])
+  mergeTimelineEpisodes(db, TEST_DATE, [before[0], before[1]])
 
   const afterMerge = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(afterMerge.length, 1, 'the user merge should collapse the two episodes into one')
@@ -737,6 +737,29 @@ test('a user merge erases a boundary that survives a rebuild', () => {
   db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
   const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(afterRebuild.length, 1, 'the merge must survive a rebuild')
+  db.close()
+})
+
+test('merging a non-adjacent span absorbs the blocks in between and survives a rebuild', () => {
+  const db = createDb()
+  // Three distinct browsing topics → three blocks by default. Selecting the
+  // first and the last and merging must fuse the whole A→B→C span, not skip B.
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 20 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 20, durationMinutes: 20 })
+  insertSession(db, { title: 'Best hiking trails near Boulder - AllTrails - Google Chrome', startMinute: 40, durationMinutes: 20 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 3, 'three distinct browsing topics should be three blocks before the merge')
+
+  // Pass only the two endpoints, as the handler does after expanding the span.
+  mergeTimelineEpisodes(db, TEST_DATE, [before[0], before[1], before[2]])
+
+  const afterMerge = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterMerge.length, 1, 'merging the span should collapse all three episodes into one')
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterRebuild.length, 1, 'the span merge must survive a rebuild')
   db.close()
 })
 
@@ -751,7 +774,7 @@ test('a user merge overrides a kind-shift hard cut (work absorbs leisure)', () =
   const before = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(before.length, 2, 'a kind change should hard-cut work from leisure by default')
 
-  mergeTimelineEpisodes(db, TEST_DATE, before[0], before[1])
+  mergeTimelineEpisodes(db, TEST_DATE, [before[0], before[1]])
 
   const afterMerge = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(afterMerge.length, 1, 'a user merge must override the kind-shift cut')

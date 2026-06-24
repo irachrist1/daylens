@@ -68,7 +68,7 @@ export function applyBlockMerge(
   first: WorkContextBlock,
   second: WorkContextBlock,
 ): void {
-  mergeTimelineEpisodes(db, date, first, second)
+  mergeTimelineEpisodes(db, date, [first, second])
   invalidateProjectionScope('timeline', 'episode_boundary')
   invalidateProjectionScope('apps', 'episode_boundary')
   invalidateProjectionScope('insights', 'episode_boundary')

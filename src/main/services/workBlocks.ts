@@ -48,6 +48,8 @@ import type {
   WebsiteSummary,
 } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
+import { isAppFocused } from '../lib/focusScore'
+import { getSettings } from './settings'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
@@ -1518,26 +1520,35 @@ function writeBoundaryCorrection(
   `).run(id, dateStr, leftSessionId, rightSessionId, now, now)
 }
 
-// Merge two adjacent episodes into one: record a forced join between the last
-// session of the earlier block and the first session of the later block.
+// Merge a contiguous span of episodes into one. A timeline block is continuous
+// time, so merging non-adjacent blocks (A and C with B between them) has only
+// one coherent meaning: fuse the whole A→B→C span. We record a forced join at
+// every internal boundary — the last session of each block to the first session
+// of the next — not just the outer pair, so the in-between blocks are absorbed
+// too. The scorer keys each merge on those two straddling sessions, so a span
+// merge survives Analyze / rebuild exactly like an adjacent one.
 export function mergeTimelineEpisodes(
   db: Database.Database,
   dateStr: string,
-  firstBlock: WorkContextBlock,
-  secondBlock: WorkContextBlock,
+  blocks: WorkContextBlock[],
 ): void {
-  const [earlier, later] = firstBlock.startTime <= secondBlock.startTime
-    ? [firstBlock, secondBlock]
-    : [secondBlock, firstBlock]
-  const leftLast = [...earlier.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime).pop()
-  const rightFirst = [...later.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime)[0]
-  if (!leftLast || !rightFirst) {
-    // A boundary correction is keyed by two persisted sessions. The live block
-    // holds only its in-flight session until the tracker flushes it, so a merge
-    // touching a just-started episode has nothing to anchor on yet.
-    throw new Error('This episode is still live — give it a moment to settle, then merge.')
+  const ordered = [...blocks].sort((a, b) => a.startTime - b.startTime)
+  if (ordered.length < 2) {
+    throw new Error('Pick at least two blocks to merge.')
   }
-  writeBoundaryCorrection(db, dateStr, leftLast.id, rightFirst.id)
+  for (let i = 0; i < ordered.length - 1; i += 1) {
+    const earlier = ordered[i]
+    const later = ordered[i + 1]
+    const leftLast = [...earlier.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime).pop()
+    const rightFirst = [...later.sessions].filter((s) => s.id >= 0).sort((a, b) => a.startTime - b.startTime)[0]
+    if (!leftLast || !rightFirst) {
+      // A boundary correction is keyed by two persisted sessions. The live block
+      // holds only its in-flight session until the tracker flushes it, so a merge
+      // touching a just-started episode has nothing to anchor on yet.
+      throw new Error('This episode is still live — give it a moment to settle, then merge.')
+    }
+    writeBoundaryCorrection(db, dateStr, leftLast.id, rightFirst.id)
+  }
   invalidateTimelineDay(db, dateStr)
 }
 
@@ -4638,6 +4649,20 @@ function buildSegmentsForDay(
   return merged
 }
 
+// DEV-113: honor the apps the user marked as their real work in onboarding.
+// `isFocused` is otherwise purely category-based, so an app the user lives in
+// that we classify as "other" (a niche tool, a browser they work in) would not
+// count toward focus / real-work totals. We re-derive `isFocused` at read time
+// so a focus-app change takes effect the same day without recapturing anything.
+function withFocusApps(sessions: AppSession[]): AppSession[] {
+  const focusApps = getSettings().focusApps
+  if (!focusApps || focusApps.length === 0) return sessions
+  return sessions.map((session) => {
+    const focused = isAppFocused(session.category, session.bundleId, session.appName, focusApps)
+    return focused === session.isFocused ? session : { ...session, isFocused: focused }
+  })
+}
+
 function mergeLiveSession(sessions: AppSession[], liveSession?: LiveSession | null): AppSession[] {
   if (!liveSession) return sessions
 
@@ -4824,7 +4849,7 @@ export function getTimelineDayPayload(
   options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const sessions = mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession)
+  const sessions = withFocusApps(mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession))
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   // timeline.md §4: today, before it has been analyzed, shows as provisional
   // "Active now" stretches — not named per-activity blocks. The day finalizes

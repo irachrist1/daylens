@@ -40,6 +40,7 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
 import { kindForDomain } from '@shared/workKind'
+import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
   fallbackGeneratedReportContent,
@@ -2438,6 +2439,7 @@ export async function generateDaySummary(dateStr: string): Promise<AIDaySummaryR
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     memoryPrompt,
+    userProfileDirective(getSettings()),
     'You are Daylens, writing the opening daily briefing for a desktop work-intelligence app.',
     'Do not use emoji in any part of your response.',
     'Turn deterministic local work evidence into a concise, useful summary.',
@@ -3775,6 +3777,7 @@ function weeklyBriefPrompts(
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     'You are Daylens.',
+    userProfileDirective(getSettings()),
     'Do not use emoji in any part of your response.',
     USER_VISIBLE_ACTIVITY_PROSE_RULE,
     'You turn a deterministic weekly browsing evidence pack into a natural editorial briefing.',
@@ -3789,7 +3792,7 @@ function weeklyBriefPrompts(
     'Never fall back to dashboard language like top apps, top sites, or distraction time unless the user explicitly asked for stats.',
     'Never say you only have domains if the scaffold includes named pages or artifacts.',
     modeInstruction,
-  ].join(' ')
+  ].filter(Boolean).join(' ')
 
   const userPrompt = [
     `User question: ${userMessage}`,

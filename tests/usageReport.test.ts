@@ -82,7 +82,10 @@ test('aggregateUsageFromEvents maps subscription billing_mode to included type',
 test('aggregateUsageFromEvents builds distinct feature points for different job types', () => {
   const from = Date.parse('2026-06-24T00:00:00Z')
   const to = from + 86_400_000
-  const day = new Date(from + 3_600_000).toISOString().slice(0, 10)
+  // Usage is bucketed by the LOCAL calendar day, so derive the expected key the
+  // same way (keeps this assertion timezone-independent).
+  const at = new Date(from + 3_600_000)
+  const day = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`
   const report = aggregateUsageFromEvents([
     {
       id: 'evt-3',

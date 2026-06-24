@@ -656,7 +656,20 @@ export function registerDbHandlers(): void {
     const second = resolveTimelineBlockForEdit(db, payload.blockIds[1], dayPayload)
     if (!first || !second) throw new Error('Both blocks must exist to merge.')
     const dateStr = initialDate ?? localDateStringForTimestamp(first.startTime)
-    mergeTimelineEpisodes(db, dateStr, first, second)
+    // The renderer sends the two endpoints of the selection. Expand them into the
+    // full contiguous span from the freshly materialized projection — a timeline
+    // block can't have a hole, so every block between the endpoints is absorbed.
+    const [lo, hi] = first.startTime <= second.startTime ? [first, second] : [second, first]
+    const spanById = new Map<string, WorkContextBlock>()
+    for (const candidate of dayPayload?.blocks ?? []) {
+      if (candidate.startTime >= lo.startTime && candidate.startTime <= hi.startTime) {
+        spanById.set(candidate.id, candidate)
+      }
+    }
+    spanById.set(lo.id, lo)
+    spanById.set(hi.id, hi)
+    const span = [...spanById.values()].sort((a, b) => a.startTime - b.startTime)
+    mergeTimelineEpisodes(db, dateStr, span)
     invalidateProjectionScope('timeline', 'episode_boundary')
     invalidateProjectionScope('apps', 'episode_boundary')
     invalidateProjectionScope('insights', 'episode_boundary')

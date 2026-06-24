@@ -1405,6 +1405,7 @@ export interface BillingUsageHourlyPoint {
   hour: number
   label: string
   feature: string
+  model: string | null
   calls: number
   tokens: number
   costUsd: number | null

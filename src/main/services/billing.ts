@@ -189,8 +189,16 @@ export async function getManagedAIConfig(): Promise<ManagedAIConfig | null> {
 // the per-day chart are computed by aggregating that table over the FULL range
 // in SQL — not a capped sample. No external/admin API and no key required.
 
-function utcDay(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10)
+// Bucket a timestamp by the LOCAL calendar day. The renderer builds the chart's
+// day axis and the range bounds from the user's local calendar, so points have
+// to be keyed the same way — otherwise an evening call (whose UTC date is the
+// next day) lands on a day the axis doesn't contain and silently disappears.
+function localDayKey(ms: number): string {
+  const date = new Date(ms)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function billingModeToType(mode: string | null): BillingUsageType {
@@ -238,6 +246,28 @@ function jobSummaryKey(row: Pick<RawUsageEvent, 'job_type' | 'screen' | 'trigger
   return [row.job_type, row.screen ?? '', row.trigger_source ?? '', row.provider ?? '', row.model ?? ''].join('\0')
 }
 
+function normalizeUsageRow(row: RawUsageEvent): BillingUsageRow {
+  const { costUsd, costSource } = resolveRowCost(row)
+  return {
+    id: row.id,
+    occurredAt: row.started_at,
+    type: billingModeToType(row.billing_mode),
+    feature: row.job_type,
+    screen: row.screen,
+    triggerSource: row.trigger_source,
+    provider: row.provider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
+    tokens: rowTokens(row) || null,
+    costUsd,
+    costSource,
+    success: Boolean(row.success),
+  }
+}
+
 // Aggregate a concrete list of events into a report. Used for the unit tests and
 // reusable anywhere we already hold the rows; the live path uses the SQL
 // aggregation in `localUsage` so it never has to load every row into memory.
@@ -250,28 +280,7 @@ export function aggregateUsageFromEvents(
   const sorted = [...events].sort((left, right) => right.started_at - left.started_at)
   const displayRows = sorted.slice(0, 2000)
 
-  const normalized: BillingUsageRow[] = displayRows.map((row) => {
-    const { costUsd, costSource } = resolveRowCost(row)
-    const tokens = rowTokens(row) || null
-    return {
-      id: row.id,
-      occurredAt: row.started_at,
-      type: billingModeToType(row.billing_mode),
-      feature: row.job_type,
-      screen: row.screen,
-      triggerSource: row.trigger_source,
-      provider: row.provider,
-      model: row.model,
-      inputTokens: row.input_tokens,
-      outputTokens: row.output_tokens,
-      cacheReadTokens: row.cache_read_tokens,
-      cacheWriteTokens: row.cache_write_tokens,
-      tokens,
-      costUsd,
-      costSource,
-      success: Boolean(row.success),
-    }
-  })
+  const normalized: BillingUsageRow[] = displayRows.map(normalizeUsageRow)
 
   const jobMap = new Map<JobSummaryKey, BillingUsageJobSummary>()
   const hourlyMap = new Map<string, BillingUsageHourlyPoint>()
@@ -292,7 +301,7 @@ export function aggregateUsageFromEvents(
     const tokens = rowTokens(row)
     const type = billingModeToType(row.billing_mode)
     const spend = costUsd ?? 0
-    const day = utcDay(row.started_at)
+    const day = localDayKey(row.started_at)
     const model = row.model ?? 'Unknown model'
     const feature = row.job_type
 
@@ -336,11 +345,12 @@ export function aggregateUsageFromEvents(
     jobMap.set(summaryKey, existingSummary)
 
     const hour = Math.floor(row.started_at / 3_600_000) * 3_600_000
-    const hourKey = `${hour}:${feature}`
+    const hourKey = `${hour}:${feature}:${model}`
     const existingHour = hourlyMap.get(hourKey) ?? {
       hour,
       label: new Date(hour).toISOString(),
       feature,
+      model,
       calls: 0,
       tokens: 0,
       costUsd: 0,
@@ -451,7 +461,7 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
     const tokens = group.input_tokens + group.output_tokens + group.cache_read_tokens + group.cache_write_tokens
     const spend = priceTokensUsd(group.model, group.input_tokens, group.output_tokens, group.cache_read_tokens, group.cache_write_tokens)
     const type = billingModeToType(group.billing_mode)
-    const day = utcDay(group.hour)
+    const day = localDayKey(group.hour)
     const model = group.model ?? 'Unknown model'
     const feature = group.feature
     const isBackground = group.trigger_source === 'background' || group.trigger_source === 'system'
@@ -495,11 +505,12 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
     existingSummary.costUsd = (existingSummary.costUsd ?? 0) + spend
     jobMap.set(summaryKey, existingSummary)
 
-    const hourKey = `${group.hour}:${feature}`
+    const hourKey = `${group.hour}:${feature}:${model}`
     const existingHour = hourlyMap.get(hourKey) ?? {
       hour: group.hour,
       label: new Date(group.hour).toISOString(),
       feature,
+      model,
       calls: 0,
       tokens: 0,
       costUsd: 0,
@@ -531,27 +542,7 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
     LIMIT 2000
   `).all(from, to) as RawUsageEvent[]
 
-  const rows: BillingUsageRow[] = recent.map((row) => {
-    const { costUsd, costSource } = resolveRowCost(row)
-    return {
-      id: row.id,
-      occurredAt: row.started_at,
-      type: billingModeToType(row.billing_mode),
-      feature: row.job_type,
-      screen: row.screen,
-      triggerSource: row.trigger_source,
-      provider: row.provider,
-      model: row.model,
-      inputTokens: row.input_tokens,
-      outputTokens: row.output_tokens,
-      cacheReadTokens: row.cache_read_tokens,
-      cacheWriteTokens: row.cache_write_tokens,
-      tokens: rowTokens(row) || null,
-      costUsd,
-      costSource,
-      success: Boolean(row.success),
-    }
-  })
+  const rows: BillingUsageRow[] = recent.map(normalizeUsageRow)
 
   return {
     from,
@@ -572,6 +563,22 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
     jobSummaries: [...jobMap.values()].sort((a, b) => b.tokens - a.tokens || b.calls - a.calls),
     hourlyPoints: [...hourlyMap.values()].sort((a, b) => a.hour - b.hour || b.tokens - a.tokens),
   }
+}
+
+// Every event in the [from, to) window, normalized for export — NOT the 2000-row
+// display cap. A busy day (AI labeling alone can fire ~1800 calls/hour) blows past
+// 2000 easily, so the CSV must read straight from the table, oldest first, to
+// truly cover the whole selected range.
+export function exportUsageRows(from: number, to: number): BillingUsageRow[] {
+  const db = getDb()
+  const events = db.prepare(`
+    SELECT id, job_type, screen, trigger_source, provider, model, success, started_at,
+           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, billing_mode
+    FROM ai_usage_events
+    WHERE started_at >= ? AND started_at < ?
+    ORDER BY started_at ASC
+  `).all(from, to) as RawUsageEvent[]
+  return events.map(normalizeUsageRow)
 }
 
 function mergeRemoteWithLocal(remote: BillingUsageReport, local: BillingUsageReport): BillingUsageReport {

@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowDown, ArrowUp } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -385,10 +384,14 @@ const TimelineRow = memo(function TimelineRow({
   segment,
   block,
   isSelected,
+  inMergeRange = false,
 }: {
   segment: TimelineSegment
   block: WorkContextBlock | null
   isSelected: boolean
+  // True for blocks caught inside a shift-selected merge span but not the open
+  // (anchor) block — they get the selected highlight without the detail reveal.
+  inMergeRange?: boolean
 }) {
   const duration = formatDuration(segmentDurationSeconds(segment))
 
@@ -463,8 +466,10 @@ const TimelineRow = memo(function TimelineRow({
         position: 'relative',
         padding: '14px 16px 14px 18px',
         borderRadius: 16,
-        border: isSelected ? `1px solid ${accent}55` : '1px solid var(--color-border-ghost)',
-        background: isSelected ? 'var(--color-surface-low)' : 'var(--color-surface)',
+        // Both the open block and every block inside a merge span read as
+        // selected; only the open one gets the lifted shadow so it stays primary.
+        border: (isSelected || inMergeRange) ? `1px solid ${accent}55` : '1px solid var(--color-border-ghost)',
+        background: (isSelected || inMergeRange) ? 'var(--color-surface-low)' : 'var(--color-surface)',
         boxShadow: isSelected ? '0 10px 30px rgba(0,0,0,0.10)' : 'none',
         transition: 'border-color 120ms, background 120ms',
         overflow: 'hidden',
@@ -795,16 +800,24 @@ function BlockInspector({
   payload,
   onRefresh,
   onSelectBlock,
+  mergeSelection,
+  onMerged,
 }: {
   block: WorkContextBlock | null
   payload: DayTimelinePayload
   onRefresh: () => Promise<void>
   onSelectBlock?: (blockId: string) => void
+  // The blocks in the current shift-selected span (ordered, includes the anchor).
+  // Length ≥ 2 means a merge is on the table.
+  mergeSelection: WorkContextBlock[]
+  // Called after a successful merge with the merged span's start time, so the
+  // timeline can collapse the selection back onto the single merged block.
+  onMerged: (mergedStartTime: number) => void
 }) {
   const [overrideDraft, setOverrideDraft] = useState('')
   const [overrideSaving, setOverrideSaving] = useState(false)
   const [reviewError, setReviewError] = useState<string | null>(null)
-  const [boundarySaving, setBoundarySaving] = useState<'merge-prev' | 'merge-next' | null>(null)
+  const [merging, setMerging] = useState(false)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
   // The rename input is revealed only when the user clicks Rename — the panel
   // stays calm until then.
@@ -813,7 +826,6 @@ function BlockInspector({
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
     setReviewError(null)
-    setBoundarySaving(null)
     setBoundaryError(null)
     setRenaming(false)
   }, [block?.id, block?.label.current, block?.label.override])
@@ -833,10 +845,14 @@ function BlockInspector({
   // A provisional (live, not-yet-analyzed) block is never renamed or merged —
   // those controls appear once the day is analyzed (timeline.md §4).
   const correctable = !block.provisional
-  const sortedDayBlocks = [...payload.blocks].sort((a, b) => a.startTime - b.startTime)
-  const blockIndex = sortedDayBlocks.findIndex((candidate) => candidate.id === block.id)
-  const previousBlock = blockIndex > 0 ? sortedDayBlocks[blockIndex - 1] : null
-  const nextBlock = blockIndex >= 0 && blockIndex < sortedDayBlocks.length - 1 ? sortedDayBlocks[blockIndex + 1] : null
+
+  // A merge is on the table once the user has shift-selected a second block.
+  // Blocks are continuous time, so the span the user sees highlighted — first
+  // through last — is exactly what fuses, in-between blocks included.
+  const mergeStart = mergeSelection[0] ?? null
+  const mergeEnd = mergeSelection[mergeSelection.length - 1] ?? null
+  const hasMergeSpan = mergeSelection.length >= 2 && mergeStart != null && mergeEnd != null
+  const mergeHasLiveBlock = mergeSelection.some((candidate) => candidate.provisional)
 
   // Fixing a block (rename / undo / merge) makes any generated recap that named
   // the old version stale — drop the cached recap for the day so it regenerates
@@ -844,17 +860,21 @@ function BlockInspector({
   // recap). The backend already invalidates the insights projection scope.
   const invalidateDayRecap = () => { daySummaryRecapCache.delete(payload.date) }
 
-  const mergeEpisodeWith = async (other: WorkContextBlock, side: 'merge-prev' | 'merge-next') => {
-    setBoundarySaving(side)
+  const mergeSelectedBlocks = async () => {
+    if (!hasMergeSpan || !mergeStart || !mergeEnd) return
+    setMerging(true)
     setBoundaryError(null)
     try {
-      await ipc.db.mergeTimelineEpisodes({ blockIds: [block.id, other.id], date: payload.date })
+      await ipc.db.mergeTimelineEpisodes({ blockIds: [mergeStart.id, mergeEnd.id], date: payload.date })
       invalidateDayRecap()
+      // Hand the merged span's start time back so the timeline can reselect the
+      // single block that now covers it (block ids change when the span fuses).
+      onMerged(mergeStart.startTime)
       await onRefresh()
     } catch (error) {
       setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again in a moment.").message)
     } finally {
-      setBoundarySaving(null)
+      setMerging(false)
     }
   }
 
@@ -1007,25 +1027,50 @@ function BlockInspector({
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
-        {correctable && (
+        {(correctable || (mergeStart && mergeEnd && mergeSelection.length >= 2)) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-            <button
-              type="button"
-              onClick={() => setRenaming((value) => !value)}
-              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
-            >
-              Rename
-            </button>
-            {previousBlock && (
-              <button type="button" aria-label={`Merge with block above: ${userVisibleBlockLabel(previousBlock)}`} title={`Merge into ${userVisibleBlockLabel(previousBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(previousBlock, 'merge-prev') }} style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <ArrowUp size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-prev' ? 'Merging' : 'Merge up'}
+            {correctable && (
+              <button
+                type="button"
+                onClick={() => setRenaming((value) => !value)}
+                style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
+              >
+                Rename
               </button>
             )}
-            {nextBlock && (
-              <button type="button" aria-label={`Merge with block below: ${userVisibleBlockLabel(nextBlock)}`} title={`Merge into ${userVisibleBlockLabel(nextBlock)}`} disabled={boundarySaving !== null} onClick={() => { void mergeEpisodeWith(nextBlock, 'merge-next') }} style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: boundarySaving !== null ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <ArrowDown size={12} strokeWidth={2} aria-hidden="true" />{boundarySaving === 'merge-next' ? 'Merging' : 'Merge down'}
-              </button>
+            {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
+              <>
+                <button
+                  type="button"
+                  aria-label={`Merge ${mergeSelection.length} blocks into one, ${formatClockTime(mergeStart.startTime)} to ${formatClockTime(mergeEnd.endTime)}`}
+                  disabled={merging || mergeHasLiveBlock}
+                  onClick={() => { void mergeSelectedBlocks() }}
+                  style={{ border: 'none', background: accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: (merging || mergeHasLiveBlock) ? 'default' : 'pointer', padding: '4px 12px', borderRadius: 8, opacity: mergeHasLiveBlock ? 0.5 : 1 }}
+                >
+                  {merging ? 'Merging…' : `Merge ${mergeSelection.length} blocks`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectBlock?.(block.id)}
+                  disabled={merging}
+                  style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: merging ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8 }}
+                >
+                  Cancel
+                </button>
+              </>
             )}
+          </div>
+        )}
+        {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
+            {mergeHasLiveBlock
+              ? 'This selection includes a live block — give it a moment to settle, then merge.'
+              : `Fuses ${formatClockTime(mergeStart.startTime)} – ${formatClockTime(mergeEnd.endTime)} into one block.`}
+          </div>
+        )}
+        {mergeSelection.length < 2 && correctable && payload.blocks.length > 1 && (
+          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
+            Tip: Shift-click another block to merge them.
           </div>
         )}
         {hasOverride && previousName && (
@@ -1464,11 +1509,17 @@ function WeekView({
 export default function Timeline() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  // The far end of a shift-selected merge span. Null means a plain single
+  // selection; set means "select everything between the anchor and here".
+  const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastBlockOpenKeyRef = useRef<string | null>(null)
+  // After a merge the old block ids vanish; we stash the merged span's start
+  // time so the next payload can reselect the single block that now covers it.
+  const pendingSelectAtRef = useRef<number | null>(null)
 
   const searchSignature = searchParams.toString()
   const view = navState.view
@@ -1510,15 +1561,73 @@ export default function Timeline() {
     return map
   }, [payload])
 
+  // Blocks sorted by start — the order shift-selection ranges over.
+  const sortedBlocks = useMemo(
+    () => [...(payload?.blocks ?? [])].sort((a, b) => a.startTime - b.startTime),
+    [payload],
+  )
+
+  // The contiguous span the user has selected: just the anchor for a plain
+  // click, or the inclusive run of blocks between the anchor and the
+  // shift-clicked end. Everything in here renders selected and merges together.
+  const mergeSelection = useMemo<WorkContextBlock[]>(() => {
+    if (!selectedBlockId) return []
+    const anchor = blockMap.get(selectedBlockId)
+    if (!anchor) return []
+    if (!mergeRangeEndId || mergeRangeEndId === selectedBlockId || !blockMap.has(mergeRangeEndId)) return [anchor]
+    const i = sortedBlocks.findIndex((candidate) => candidate.id === selectedBlockId)
+    const j = sortedBlocks.findIndex((candidate) => candidate.id === mergeRangeEndId)
+    if (i < 0 || j < 0) return [anchor]
+    const [lo, hi] = i <= j ? [i, j] : [j, i]
+    return sortedBlocks.slice(lo, hi + 1)
+  }, [selectedBlockId, mergeRangeEndId, blockMap, sortedBlocks])
+
+  const selectedSpanIds = useMemo(
+    () => new Set(mergeSelection.map((candidate) => candidate.id)),
+    [mergeSelection],
+  )
+
   useEffect(() => {
     if (!selectedBlockId) return
     if (blockMap.has(selectedBlockId)) return
     setSelectedBlockId(null)
   }, [payload, selectedBlockId, blockMap])
 
+  // Drop a stale range end the moment its block leaves the day (e.g. after a
+  // rebuild) so the selection collapses cleanly to the anchor.
+  useEffect(() => {
+    if (mergeRangeEndId && !blockMap.has(mergeRangeEndId)) setMergeRangeEndId(null)
+  }, [blockMap, mergeRangeEndId])
+
   useEffect(() => {
     setSelectedBlockId(null)
+    setMergeRangeEndId(null)
   }, [date])
+
+  // Escape steps the selection down: first it drops a multi-block merge span,
+  // then it deselects entirely.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      if (mergeRangeEndId) setMergeRangeEndId(null)
+      else if (selectedBlockId) setSelectedBlockId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mergeRangeEndId, selectedBlockId])
+
+  // Once the post-merge payload lands, reselect the single block now covering
+  // the merged span and clear the pending marker.
+  useEffect(() => {
+    const at = pendingSelectAtRef.current
+    if (at == null || !payload) return
+    const hit = payload.blocks.find((candidate) => at >= candidate.startTime && at <= candidate.endTime)
+      ?? payload.blocks.find((candidate) => candidate.startTime >= at)
+    if (hit) {
+      pendingSelectAtRef.current = null
+      setSelectedBlockId(hit.id)
+    }
+  }, [payload])
 
   useEffect(() => {
     const node = scrollRef.current
@@ -1785,12 +1894,27 @@ export default function Timeline() {
                       return
                     }
                     const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
-                    const nextSelectedId = blockButton?.dataset.timelineBlockId ?? null
-                    if (nextSelectedId !== selectedBlockId) {
-                      setSelectedBlockId(nextSelectedId)
+                    const clickedId = blockButton?.dataset.timelineBlockId ?? null
+                    // Clicking empty track space deselects everything.
+                    if (!clickedId) {
+                      setSelectedBlockId(null)
+                      setMergeRangeEndId(null)
+                      return
+                    }
+                    // Shift- (or Cmd-) click with something already selected extends
+                    // the selection into a merge span instead of replacing it.
+                    if ((event.shiftKey || event.metaKey) && selectedBlockId && clickedId !== selectedBlockId) {
+                      setMergeRangeEndId(clickedId)
+                      return
+                    }
+                    setMergeRangeEndId(null)
+                    if (clickedId !== selectedBlockId) {
+                      setSelectedBlockId(clickedId)
                     }
                   }}>
-                    <div style={{ display: 'grid', gap: 14 }}>
+                    {/* Cards aren't text to select; killing user-select here keeps
+                        shift-click from smearing a text highlight across the run. */}
+                    <div style={{ display: 'grid', gap: 14, userSelect: 'none' }}>
                       {displaySegments.map((segment) => (
                         segment.kind === 'gap_group' ? (
                           <GapGroupRow
@@ -1803,6 +1927,7 @@ export default function Timeline() {
                             segment={segment}
                             block={segment.kind === 'work_block' ? blockMap.get(segment.blockId) ?? null : null}
                             isSelected={segment.kind === 'work_block' && selectedBlockId === segment.blockId}
+                            inMergeRange={segment.kind === 'work_block' && selectedBlockId !== segment.blockId && selectedSpanIds.has(segment.blockId)}
                           />
                         )
                       ))}
@@ -1811,7 +1936,14 @@ export default function Timeline() {
                       block={selectedBlock}
                       payload={payload}
                       onRefresh={timelineResource.refresh}
+                      mergeSelection={mergeSelection}
+                      onMerged={(mergedStartTime) => {
+                        pendingSelectAtRef.current = mergedStartTime
+                        setMergeRangeEndId(null)
+                        setSelectedBlockId(null)
+                      }}
                       onSelectBlock={(blockId) => {
+                        setMergeRangeEndId(null)
                         setSelectedBlockId(blockId)
                         requestAnimationFrame(() => {
                           const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
