@@ -276,6 +276,10 @@ export function applyMemoryWriteOps(
   db: Database.Database,
   ops: MemoryWriteOp[],
   source: 'chat' | 'hand' = 'chat',
+  // The scope new facts land in. General by default; a `client:<id>` scope when
+  // the user told Daylens about a specific client in chat (memory.md §2.2).
+  // Update/delete operate by fact id, so they ignore this — only `add` needs it.
+  scope: string = GENERAL_SCOPE,
 ): MemoryWriteResult {
   if (!ready(db)) return { facts: [], applied: [], summary: '' }
   const applied: Array<{ action: MemoryWriteAction; text: string }> = []
@@ -285,8 +289,8 @@ export function applyMemoryWriteOps(
       if (op.action === 'add') {
         const text = (op.text ?? '').trim()
         if (!text) continue
-        applyAdd(db, text, source)
-        recordAudit(db, 'remembered', text, source)
+        applyAdd(db, text, source, scope)
+        recordAudit(db, 'remembered', text, source, scope)
         applied.push({ action: 'add', text })
       } else if (op.action === 'update') {
         const text = (op.text ?? '').trim()
@@ -294,13 +298,13 @@ export function applyMemoryWriteOps(
         const exists = db.prepare(`SELECT id FROM work_memory_facts WHERE id = ?`).get(op.targetId)
         if (!exists) {
           // The target vanished — record it as a fresh memory instead of dropping it.
-          applyAdd(db, text, source)
-          recordAudit(db, 'remembered', text, source)
+          applyAdd(db, text, source, scope)
+          recordAudit(db, 'remembered', text, source, scope)
           applied.push({ action: 'add', text })
           continue
         }
         applyUpdate(db, op.targetId, text, source)
-        recordAudit(db, 'updated', text, source)
+        recordAudit(db, 'updated', text, source, scope)
         applied.push({ action: 'update', text })
       } else if (op.action === 'delete') {
         if (!op.targetId) continue
@@ -309,7 +313,7 @@ export function applyMemoryWriteOps(
         ).get(op.targetId) as Pick<FactRow, 'id' | 'fact_text' | 'topic_key'> | undefined
         if (!row) continue
         applyDelete(db, row)
-        recordAudit(db, 'forgot', row.fact_text, source)
+        recordAudit(db, 'forgot', row.fact_text, source, scope)
         applied.push({ action: 'delete', text: row.fact_text })
       }
     }
@@ -563,15 +567,19 @@ interface ScopeMatchRow {
   alias: string
 }
 
-// If a free-form question names a known client (by name or alias), return that
-// client's scoped memory block so the chat answer reads as someone on top of the
-// account (memory.md §2.2). Returns '' when no client is mentioned or the client
-// has no memory yet. Matching is word-boundary and case-insensitive; aliases
-// under 3 characters are ignored so a stray "AB" can't pull a scope in.
-export function scopedMemoryPromptBlock(db: Database.Database, question: string): string {
-  if (!ready(db) || !question.trim()) return ''
-  if (!tableExists(db, 'clients') || !tableExists(db, 'client_aliases')) return ''
-  const lowerQ = ` ${question.toLowerCase()} `
+export interface ClientScopeMatch {
+  clientId: string
+  clientName: string
+}
+
+// Every active client whose name/alias appears as a whole word in the text, in
+// the order they first match. Word-boundary, case-insensitive; aliases under 3
+// characters are ignored so a stray "AB" can't pull a scope in. Shared by the
+// read path (scopedMemoryPromptBlock) and the write path (chat "remember Acme…").
+function matchClientsInText(db: Database.Database, text: string): ClientScopeMatch[] {
+  if (!ready(db) || !text.trim()) return []
+  if (!tableExists(db, 'clients') || !tableExists(db, 'client_aliases')) return []
+  const lower = ` ${text.toLowerCase()} `
   const rows = db.prepare(`
     SELECT c.id AS client_id, c.name AS client_name, ca.alias AS alias
     FROM clients c
@@ -580,19 +588,36 @@ export function scopedMemoryPromptBlock(db: Database.Database, question: string)
   `).all() as ScopeMatchRow[]
 
   const seen = new Set<string>()
-  const blocks: string[] = []
+  const matches: ClientScopeMatch[] = []
   for (const row of rows) {
     if (seen.has(row.client_id)) continue
     const alias = row.alias.toLowerCase().trim()
     if (alias.length < 3) continue
-    // Word-boundary contains: the alias appears as a whole token in the question.
     const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(alias)}(?:$|[^a-z0-9])`)
-    if (!re.test(lowerQ)) continue
-    const block = clientMemoryPromptBlock(db, row.client_id, row.client_name)
-    if (block) {
-      blocks.push(block)
-      seen.add(row.client_id)
-    }
+    if (!re.test(lower)) continue
+    matches.push({ clientId: row.client_id, clientName: row.client_name })
+    seen.add(row.client_id)
+  }
+  return matches
+}
+
+// The single client a memory instruction is about, or null for general memory.
+// "remember Acme's deadline is the 30th" → Acme's scope. If the text names more
+// than one client we stay general rather than guess which scope to write to.
+export function findClientScopeForWrite(db: Database.Database, text: string): ClientScopeMatch | null {
+  const matches = matchClientsInText(db, text)
+  return matches.length === 1 ? matches[0] : null
+}
+
+// If a free-form question names a known client (by name or alias), return that
+// client's scoped memory block so the chat answer reads as someone on top of the
+// account (memory.md §2.2). Returns '' when no client is mentioned or the client
+// has no memory yet.
+export function scopedMemoryPromptBlock(db: Database.Database, question: string): string {
+  const blocks: string[] = []
+  for (const match of matchClientsInText(db, question)) {
+    const block = clientMemoryPromptBlock(db, match.clientId, match.clientName)
+    if (block) blocks.push(block)
   }
   return blocks.join('\n\n')
 }

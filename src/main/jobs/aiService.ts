@@ -63,7 +63,7 @@ import {
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { getDb } from '../services/database'
-import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
+import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
 import { buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal } from '../ai/actions'
 import {
@@ -419,17 +419,30 @@ async function maybeHandleMemoryInstruction(
 ): Promise<AnswerEnvelope | null> {
   if (!looksLikeMemoryInstruction(message)) return null
   const db = getDb()
-  const currentFacts = getWorkMemoryProfile(db).facts.map((fact) => ({ id: fact.id, text: fact.text }))
+  // If the instruction names one client ("remember Acme's deadline is the 30th"),
+  // the write goes to that client's scope and the extractor reasons against the
+  // client's facts (so a correction updates the right one) — memory.md §2.2.
+  // Otherwise it's general memory.
+  const clientScope = findClientScopeForWrite(db, message)
+  const scopeFacts = clientScope
+    ? getClientMemory(db, clientScope.clientId)
+    : getWorkMemoryProfile(db).facts
+  const currentFacts = scopeFacts.map((fact) => ({ id: fact.id, text: fact.text }))
   const ops = await extractMemoryOps({ message, currentFacts, runner, prior })
   if (ops.length === 0) return null
-  const proposal = buildMemoryProposal(ops, currentFacts)
+  const proposal = buildMemoryProposal(
+    ops,
+    currentFacts,
+    clientScope ? { scopeId: clientScopeId(clientScope.clientId), scopeName: clientScope.clientName } : null,
+  )
   if (!proposal) return null
 
+  const scopeNote = clientScope ? ` to ${clientScope.clientName}'s memory` : ''
   const opKinds = new Set(proposal.ops.map((op) => op.op))
   const assistantText = opKinds.size === 1 && opKinds.has('add')
     ? (proposal.ops.length === 1
-      ? 'Want me to remember this? Confirm and it goes into your memory.'
-      : 'Want me to remember these? Confirm and they go into your memory.')
+      ? `Want me to remember this${scopeNote}? Confirm and it goes into your memory.`
+      : `Want me to remember these${scopeNote}? Confirm and they go into your memory.`)
     : opKinds.size === 1 && opKinds.has('delete')
       ? "Here's what I'd forget — confirm and it's gone for good."
       : opKinds.size === 1 && opKinds.has('update')

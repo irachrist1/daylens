@@ -23,6 +23,7 @@ import { getCurrentSession } from '../services/tracking'
 import { localDateString } from '../lib/localDate'
 import {
   applyMemoryWriteOps,
+  getClientMemory,
   type MemoryWriteOp,
 } from '../services/workMemoryProfile'
 import { applyBlockLabelCorrection, applyBlockMerge, clearBlockLabelCorrection } from '../services/blockCorrections'
@@ -276,12 +277,15 @@ export function buildMergeBlocksProposal(
 // ── Memory (preview built from extracted ops; extraction lives in the caller) ─
 
 /** Turn extracted memory ops into a preview proposal. Returns null when there's
- *  nothing durable to change. */
+ *  nothing durable to change. `scope` targets a client's memory (memory.md
+ *  §2.2) when the instruction named one — otherwise it's general memory. */
 export function buildMemoryProposal(
   ops: MemoryWriteOp[],
   currentFacts: Array<{ id: string; text: string }>,
+  scope?: { scopeId: string; scopeName: string } | null,
 ): AIMemoryProposal | null {
   const byId = new Map(currentFacts.map((f) => [f.id, f.text]))
+  const scopeLabel = scope?.scopeName ?? 'Work'
   const previews: AIMemoryOpPreview[] = []
   for (const op of ops) {
     const prev = op.targetId ? byId.get(op.targetId) ?? null : null
@@ -292,7 +296,7 @@ export function buildMemoryProposal(
       text,
       previousText: op.action === 'add' ? null : prev,
       targetId: op.targetId ?? null,
-      scope: 'Work',
+      scope: scopeLabel,
     })
   }
   if (previews.length === 0) return null
@@ -304,6 +308,7 @@ export function buildMemoryProposal(
     confirmLabel: destructive ? 'Update memory' : 'Save to memory',
     destructive,
     ops: previews,
+    scopeId: scope?.scopeId ?? null,
   }
 }
 
@@ -334,15 +339,23 @@ function commitMemory(db: Database.Database, action: AIMemoryProposal): AIAction
     text: p.op === 'delete' ? undefined : p.text,
     targetId: p.targetId ?? undefined,
   }))
-  const result = applyMemoryWriteOps(db, ops, 'chat')
+  // Client-scoped writes (memory.md §2.2) land in the named client's scope; a
+  // general write uses the default. Update/delete operate by fact id regardless.
+  const result = action.scopeId
+    ? applyMemoryWriteOps(db, ops, 'chat', action.scopeId)
+    : applyMemoryWriteOps(db, ops, 'chat')
   if (!result.summary.trim()) {
     return { ok: false, summary: '', error: 'Nothing changed in memory.' }
   }
   // Offer an inline undo for the simple single-add case; richer edits are
-  // reversible from Settings → Memory.
+  // reversible from Settings → Memory. A scoped add lands in the client's facts,
+  // not the general profile, so look it up in the right scope.
   let undo: AIActionUndo | null = null
   if (action.ops.length === 1 && action.ops[0].op === 'add') {
-    const added = result.facts.find((f) => f.text === action.ops[0].text)
+    const facts = action.scopeId
+      ? getClientMemory(db, action.scopeId.replace(/^client:/, ''))
+      : result.facts
+    const added = facts.find((f) => f.text === action.ops[0].text)
     if (added) undo = { kind: 'forget_memory_fact', factId: added.id }
   }
   return { ok: true, summary: result.summary, undo }

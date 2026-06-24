@@ -16,7 +16,11 @@ import {
   scopedMemoryPromptBlock,
   chatMemoryPromptBlock,
   addWorkMemoryFact,
+  applyMemoryWriteOps,
+  findClientScopeForWrite,
+  clientScope,
 } from '../src/main/services/workMemoryProfile.ts'
+import { buildMemoryProposal, commitAction, undoAction } from '../src/main/ai/actions.ts'
 import { createClient } from '../src/main/core/query/attributionResolvers.ts'
 
 function freshDb(): Database.Database {
@@ -126,6 +130,77 @@ test('clientMemoryPromptBlock names the client and is empty when it has no memor
     const block = clientMemoryPromptBlock(db, acme.id, 'Acme')
     assert.match(block, /What Daylens knows about Acme/)
     assert.match(block, /Jordan/)
+  } finally {
+    db.close()
+  }
+})
+
+// DEV-108 deferred piece (now shipped): telling Daylens about a client in chat
+// writes to that client's scope, not general memory.
+
+test('findClientScopeForWrite resolves a single named client and stays general otherwise', () => {
+  const db = freshDb()
+  try {
+    const acme = createClient({ name: 'Acme' }, db)
+    createClient({ name: 'Globex' }, db)
+
+    const one = findClientScopeForWrite(db, "remember Acme's deadline is the 30th")
+    assert.ok(one)
+    assert.equal(one!.clientId, acme.id)
+    assert.equal(one!.clientName, 'Acme')
+
+    // No client named → general.
+    assert.equal(findClientScopeForWrite(db, 'remember I prefer dark mode'), null)
+    // Two clients named → ambiguous, stay general rather than guess.
+    assert.equal(findClientScopeForWrite(db, 'remember Acme and Globex are both behind'), null)
+  } finally {
+    db.close()
+  }
+})
+
+test('applyMemoryWriteOps writes an add into the client scope, not general', () => {
+  const db = freshDb()
+  try {
+    const acme = createClient({ name: 'Acme' }, db)
+    applyMemoryWriteOps(db, [{ action: 'add', text: 'Acme’s repo is at github.com/acme.' }], 'chat', clientScope(acme.id))
+
+    assert.equal(getWorkMemoryProfile(db).facts.length, 0, 'general memory stays empty')
+    const clientFacts = getClientMemory(db, acme.id)
+    assert.equal(clientFacts.length, 1)
+    assert.match(clientFacts[0].text, /github\.com\/acme/)
+    assert.equal(clientFacts[0].source, 'chat')
+  } finally {
+    db.close()
+  }
+})
+
+test('chat memory action commits a client-scoped fact and undo removes it from that scope', () => {
+  const db = freshDb()
+  try {
+    const acme = createClient({ name: 'Acme' }, db)
+    // Mirrors maybeHandleMemoryInstruction: detect scope, build the scoped proposal.
+    const match = findClientScopeForWrite(db, "remember Acme's deadline is the 30th")
+    assert.ok(match)
+    const proposal = buildMemoryProposal(
+      [{ action: 'add', text: 'Acme’s deadline is the 30th.' }],
+      getClientMemory(db, match!.clientId).map((f) => ({ id: f.id, text: f.text })),
+      { scopeId: clientScope(match!.clientId), scopeName: match!.clientName },
+    )
+    assert.ok(proposal)
+    assert.equal(proposal!.scopeId, clientScope(acme.id))
+    assert.equal(proposal!.ops[0].scope, 'Acme', 'preview card labels the scope with the client name')
+
+    // Nothing written until commit (preview-first).
+    assert.equal(getClientMemory(db, acme.id).length, 0)
+
+    const result = commitAction(db, proposal!)
+    assert.equal(result.ok, true)
+    assert.equal(getClientMemory(db, acme.id).length, 1, 'fact landed in Acme scope')
+    assert.equal(getWorkMemoryProfile(db).facts.length, 0, 'general memory untouched')
+
+    assert.ok(result.undo, 'a single scoped add offers undo')
+    undoAction(db, result.undo!)
+    assert.equal(getClientMemory(db, acme.id).length, 0, 'undo removed the scoped fact')
   } finally {
     db.close()
   }

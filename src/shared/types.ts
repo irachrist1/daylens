@@ -526,6 +526,9 @@ export interface AIMemoryOpPreview {
 export interface AIMemoryProposal extends AIActionProposalBase {
   kind: 'memory_write'
   ops: AIMemoryOpPreview[]
+  /** The scope new facts commit to: a `client:<id>` string for a client-scoped
+   *  write (memory.md §2.2), or null/absent for general memory. */
+  scopeId?: string | null
 }
 
 export interface AIRenameBlockProposal extends AIActionProposalBase {
@@ -1325,6 +1328,8 @@ export interface BillingAccessSnapshot {
   message: string
 }
 
+export type BillingUsageCostSource = 'provider' | 'anthropic_admin' | 'estimated' | 'unknown'
+
 export interface BillingUsageRow {
   id: string
   occurredAt: number
@@ -1340,12 +1345,14 @@ export interface BillingUsageRow {
   cacheWriteTokens?: number | null
   tokens: number | null
   costUsd: number | null
+  costSource?: BillingUsageCostSource
   success: boolean
 }
 
 export interface BillingUsagePoint {
   day: string
   model: string
+  feature?: string
   spendUsd: number
   tokens: number
 }
@@ -1401,6 +1408,7 @@ export interface BillingUsageReport {
   freeCreditUsedUsd: number
   paidSpendUsd: number
   points: BillingUsagePoint[]
+  featurePoints?: BillingUsagePoint[]
   rows: BillingUsageRow[]
   jobSummaries?: BillingUsageJobSummary[]
   hourlyPoints?: BillingUsageHourlyPoint[]
