@@ -4,15 +4,10 @@ import { IPC } from '@shared/types'
 import {
   createFlutterwaveCheckout,
   createPolarCheckout,
-  clearAnthropicAdminKey,
   getBillingAccess,
   getBillingPortalUrl,
   getBillingUsage,
-  getProviderReportStatus,
   invalidateBillingAccess,
-  listAnthropicApiKeys,
-  setAnthropicAdminKey,
-  setAnthropicUsageApiKeyId,
 } from '../services/billing'
 
 function csvCell(value: unknown): string {
@@ -28,21 +23,6 @@ export function registerBillingHandlers(): void {
   })
   ipcMain.handle(IPC.BILLING.GET_USAGE, (_event, payload: { from: number; to: number }) => (
     getBillingUsage(payload.from, payload.to)
-  ))
-  ipcMain.handle(IPC.BILLING.GET_PROVIDER_REPORT_STATUS, () => getProviderReportStatus())
-  ipcMain.handle(IPC.BILLING.SET_ANTHROPIC_ADMIN_KEY, async (_event, payload: { key: string }) => {
-    await setAnthropicAdminKey(payload.key)
-    invalidateBillingAccess()
-    return getProviderReportStatus()
-  })
-  ipcMain.handle(IPC.BILLING.CLEAR_ANTHROPIC_ADMIN_KEY, async () => {
-    await clearAnthropicAdminKey()
-    invalidateBillingAccess()
-    return getProviderReportStatus()
-  })
-  ipcMain.handle(IPC.BILLING.LIST_ANTHROPIC_API_KEYS, () => listAnthropicApiKeys())
-  ipcMain.handle(IPC.BILLING.SET_ANTHROPIC_USAGE_API_KEY, async (_event, payload: { apiKeyId: string | null }) => (
-    setAnthropicUsageApiKeyId(payload.apiKeyId)
   ))
   ipcMain.handle(IPC.BILLING.CREATE_POLAR_CHECKOUT, async () => {
     await shell.openExternal(await createPolarCheckout())

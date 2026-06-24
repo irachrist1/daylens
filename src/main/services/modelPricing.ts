@@ -17,7 +17,8 @@ const PRICING_TABLE: Array<{ pattern: RegExp; rates: ModelPricingRates }> = [
   },
   {
     pattern: /opus/i,
-    rates: { inputPerMillion: 15, outputPerMillion: 75, cacheReadPerMillion: 1.5, cacheWritePerMillion: 18.75 },
+    // Opus 4.x: $5 in / $25 out per MTok (cache read 0.1x, cache write 1.25x).
+    rates: { inputPerMillion: 5, outputPerMillion: 25, cacheReadPerMillion: 0.5, cacheWritePerMillion: 6.25 },
   },
   {
     pattern: /gpt-4o-mini|gpt-4\.1-mini/i,

@@ -8,7 +8,6 @@ import type {
   AppTheme,
   AppUsageSummary,
   BillingAccessSnapshot,
-  BillingUsageCostSource,
   BillingUsageReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
@@ -1241,11 +1240,8 @@ function UsagePage() {
     if (type === 'own_key') return 'On-demand'
     return type.replace(/_/g, ' ')
   }
-  const formatCost = (type: string, costUsd: number | null, costSource?: BillingUsageCostSource) => {
-    if (costUsd != null && costUsd > 0) {
-      if (costSource === 'estimated') return `~${formatSpend(costUsd)}`
-      return formatSpend(costUsd)
-    }
+  const formatCost = (type: string, costUsd: number | null) => {
+    if (costUsd != null && costUsd > 0) return formatSpend(costUsd)
     if (type === 'free_credit' || type === 'subscription' || type === 'local_pass') return 'Included'
     return 'Provider billed'
   }
@@ -1336,13 +1332,11 @@ function UsagePage() {
     ['On-demand', formatSpend(onDemandSpend)],
     ['Total tokens', formatTokens(totalTokens)],
   ]
-  const spendSourceNote = report?.source === 'anthropic_admin'
-    ? 'Spend from Anthropic platform report (platform.claude.com).'
-    : report?.source === 'daylens_managed'
-      ? 'Spend from Daylens managed billing.'
-      : report && totalSpend > 0
-        ? 'Spend estimated from token usage and published model pricing.'
-        : null
+  const spendSourceNote = report?.source === 'daylens_managed'
+    ? 'Spend from Daylens managed billing.'
+    : report && totalSpend > 0
+      ? 'Your AI spend — tokens used × Anthropic’s published per-model price.'
+      : null
 
   return (
     <SectionPage
@@ -1374,11 +1368,8 @@ function UsagePage() {
       </div>
 
       {error && <div style={{ ...infoPanelStyle, color: '#f87171' }}>{error}</div>}
-      {(spendSourceNote || refreshing || report?.providerReport?.message) && (
-        <div style={{ fontSize: 11.5, color: report?.providerReport?.connected && report?.source !== 'anthropic_admin' ? '#f87171' : 'var(--color-text-tertiary)' }}>
-          {report?.providerReport?.connected && report?.source !== 'anthropic_admin' && report.providerReport.message
-            ? `Anthropic report failed: ${report.providerReport.message} `
-            : null}
+      {(spendSourceNote || refreshing) && (
+        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>
           {spendSourceNote}{spendSourceNote && refreshing ? ' ' : ''}{refreshing ? 'Updating…' : ''}
         </div>
       )}
@@ -1559,7 +1550,7 @@ function UsagePage() {
                 <td style={{ padding: '11px 14px' }}>{formatUsageType(row.type)}</td>
                 <td style={{ padding: '11px 14px' }}>{row.model ?? '—'}</td>
                 <td style={{ padding: '11px 14px' }}>{row.tokens == null ? '—' : formatTokens(row.tokens)}</td>
-                <td style={{ padding: '11px 14px' }}>{formatCost(row.type, row.costUsd, row.costSource)}</td>
+                <td style={{ padding: '11px 14px' }}>{formatCost(row.type, row.costUsd)}</td>
               </tr>
             ))}
           </tbody>

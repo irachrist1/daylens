@@ -27,8 +27,6 @@ import type {
   AIProviderMode,
   BrowserLinkResult,
   BillingAccessSnapshot,
-  AnthropicApiKeySummary,
-  BillingProviderReportStatus,
   BillingUsageReport,
   CategoryOverrideEffect,
   ClientRecord,
@@ -281,16 +279,6 @@ const api = {
     refresh: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.REFRESH),
     getUsage: (from: number, to: number): Promise<BillingUsageReport> =>
       ipcRenderer.invoke(IPC.BILLING.GET_USAGE, { from, to }),
-    getProviderReportStatus: (): Promise<BillingProviderReportStatus> =>
-      ipcRenderer.invoke(IPC.BILLING.GET_PROVIDER_REPORT_STATUS),
-    setAnthropicAdminKey: (key: string): Promise<BillingProviderReportStatus> =>
-      ipcRenderer.invoke(IPC.BILLING.SET_ANTHROPIC_ADMIN_KEY, { key }),
-    clearAnthropicAdminKey: (): Promise<BillingProviderReportStatus> =>
-      ipcRenderer.invoke(IPC.BILLING.CLEAR_ANTHROPIC_ADMIN_KEY),
-    listAnthropicApiKeys: (): Promise<AnthropicApiKeySummary[]> =>
-      ipcRenderer.invoke(IPC.BILLING.LIST_ANTHROPIC_API_KEYS),
-    setAnthropicUsageApiKey: (apiKeyId: string | null): Promise<BillingProviderReportStatus> =>
-      ipcRenderer.invoke(IPC.BILLING.SET_ANTHROPIC_USAGE_API_KEY, { apiKeyId }),
     createPolarCheckout: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.CREATE_POLAR_CHECKOUT),
     createFlutterwaveCheckout: (email: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, { email }),
