@@ -584,17 +584,7 @@ function longSingleAppStreak(sessions: AppSession[]): AppStreak | null {
   return best
 }
 
-function gapHasHardActivityBoundary(db: Database.Database, fromMs: number, toMs: number): boolean {
-  const rows = db.prepare(`
-    SELECT event_type
-    FROM activity_state_events
-    WHERE event_ts >= ? AND event_ts <= ?
-    LIMIT 8
-  `).all(fromMs, toMs) as Array<{ event_type: string }>
-  return rows.some((row) => /^(sleep|wake|lock|unlock|lock_screen|unlock_screen|suspend|resume|away_start|away_end|idle_start|idle_end)$/.test(row.event_type))
-}
-
-function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[]): CoarseSegment[] {
+function coarseSegmentsFromSessions(sessions: AppSession[]): CoarseSegment[] {
   if (sessions.length === 0) return []
 
   const segments: CoarseSegment[] = []
@@ -605,11 +595,8 @@ function coarseSegmentsFromSessions(db: Database.Database, sessions: AppSession[
     const current = sessions[index]
     const previousEnd = sessionEndMs(previous)
     const gap = current.startTime - previousEnd
-    // timeline.md §3.1: a roughly 15-minute idle/lock gap is a strong boundary
-    // on its own. Activity-state events can also force a boundary for shorter
-    // gaps; missing telemetry must never make a 15+ minute absence disappear.
-    const hasHardActivityBoundary = gapHasHardActivityBoundary(db, previousEnd, current.startTime)
-    if (gap >= IDLE_GAP_THRESHOLD_MS || hasHardActivityBoundary) {
+    // timeline.md §3.1: a roughly 15-minute idle/lock gap is a strong boundary on its own.
+    if (gap >= IDLE_GAP_THRESHOLD_MS) {
       segments.push({
         sessions: sessions.slice(startIndex, index),
         boundedBeforeGap: startIndex > 0,
@@ -3366,7 +3353,7 @@ function enforceMinimumBlockFloor(
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
-  const candidates = coarseSegmentsFromSessions(db, sessions)
+  const candidates = coarseSegmentsFromSessions(sessions)
     .flatMap((segment) => {
       // A kind change (work↔leisure↔personal) is a hard boundary: split the
       // segment into same-kind runs before analysis so coding is never built
@@ -4367,7 +4354,7 @@ function buildProvisionalLiveBlocks(
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
-  const segments = coarseSegmentsFromSessions(db, sessions)
+  const segments = coarseSegmentsFromSessions(sessions)
   const coarse = segments.length > 0
     ? segments
     : [{ sessions, boundedBeforeGap: false, boundedAfterGap: false }]

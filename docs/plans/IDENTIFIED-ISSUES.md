@@ -39,3 +39,16 @@ Daylens currently uses an onboarding technique that is very concise and almost n
 - **Task workspace sync:** Deep integration flow that connects task trackers (like Linear), asks which workspace to sync, and starts pulling in tasks immediately.
 - **Team invites:** Use the momentum of setup to ask for team invites.
 - **Recommendation synthesis:** Play back the user's intent ("You're set up to track projects...") and reveal the specific workspace modules and productivity rules it has enabled based on their answers.
+
+---
+
+## DEV-87 Capture Foundation Documentation & Notes
+
+> [!WARNING]
+> Nothing works and this was written by a junior dev who doesn't know shit.
+
+### Implemented Solutions:
+* **System Noise Exclusion:** Added Windows screensaver and lock screen processes (`lockapp`, `lockapp.exe`, and `scrnsave.scr`) to `SYSTEM_NOISE_APP_NAMES` in `src/shared/systemNoise.ts` so they are excluded from tracking.
+* **Midnight Splits:** Added logic in `flushCurrent` in `src/main/services/tracking.ts` to split sessions that cross midnight into two distinct sessions at the midnight boundary.
+* **Dominant Window Title Accumulation:** Updated `InFlightSession` to track the window titles seen during a session and increment their tick counts. On flush, the title with the most ticks is recorded to avoid the "last-write-wins" title bug.
+* **Real-time Block Evidence:** Integrated `focus_events` querying into `buildBlockFromCandidate` in `src/main/services/workBlocks.ts` using the new `buildTabEvidenceFromFocusEvents` helper, enforcing a 10-second dwell floor for tab/URL changes.
