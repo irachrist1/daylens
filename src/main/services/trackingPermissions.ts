@@ -77,10 +77,16 @@ export function getTrackingPermissionDetails(): TrackingPermissionDetails {
     console.warn('[tracking-permissions] failed to read screen permission state:', err)
   }
 
+  // Accessibility is the only permission Daylens's capture actually uses: the
+  // helper reads window titles via the AX API (`axFocusedWindowTitle`) and never
+  // touches Screen Recording / CGWindowList. So Accessibility alone decides the
+  // combined gate. Screen Recording is still surfaced for diagnostics, but it
+  // must never block onboarding or flip a working install to "missing" — macOS
+  // also reports it stale within a session, which used to trap users forever.
   const combined: TrackingPermissionState =
-    accessibility === 'granted' && screenRecording === 'granted'
+    accessibility === 'granted'
       ? 'granted'
-      : accessibility === 'missing' || screenRecording === 'missing'
+      : accessibility === 'missing'
         ? 'missing'
         : 'unsupported_or_unknown'
   return { accessibility, screenRecording, combined }
@@ -117,12 +123,12 @@ export async function requestScreenTrackingPermission(): Promise<TrackingPermiss
 
   try {
     const accessibilityGranted = systemPreferences.isTrustedAccessibilityClient(true)
-    const screenGranted = requestTrackingPermission()
+    // Still ask the active-window module to request its permissions (harmless,
+    // and it nudges macOS to surface the prompt), but the gate is Accessibility
+    // only — that is the single permission capture reads from.
+    requestTrackingPermission()
     const details = getTrackingPermissionDetails()
-    const granted = accessibilityGranted
-      && screenGranted !== false
-      && details.accessibility === 'granted'
-      && details.screenRecording === 'granted'
+    const granted = accessibilityGranted && details.accessibility === 'granted'
     const permissionRequestedAt = Date.now()
     const nextState: TrackingPermissionState = granted ? 'awaiting_relaunch' : 'missing'
     await setSettings({
@@ -142,9 +148,7 @@ export async function requestScreenTrackingPermission(): Promise<TrackingPermiss
     })
 
     if (!granted) {
-      await openTrackingPermissionSettings(
-        details.accessibility !== 'granted' ? 'accessibility' : 'screenRecording',
-      )
+      await openTrackingPermissionSettings('accessibility')
     }
 
     return nextState

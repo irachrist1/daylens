@@ -603,6 +603,19 @@ export default function Onboarding({
     }
   }
 
+  // Escape hatch: the user is never trapped on the permission gate. They can
+  // proceed without granting (capture simply has nothing to read until they do)
+  // and grant later in Settings. Critically, this also keeps the founder able to
+  // test the rest of onboarding when macOS is being stubborn about a grant.
+  async function skipPermission() {
+    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+      platform,
+      step: 'permission',
+      surface: 'onboarding',
+    })
+    await persistOnboarding('proof', { proofState: 'collecting' })
+  }
+
   async function handleContinueFromWelcome() {
     track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
       platform,
@@ -720,7 +733,7 @@ export default function Onboarding({
 
         {stage === 'permission' && (
           <div className="onboarding-screen">
-            <StageHeading title="Daylens needs Accessibility and Screen Recording to read window titles — no screenshots or video." />
+            <StageHeading title="Daylens needs Accessibility to read window titles — no screenshots or video." />
             <SettingsPreview />
             <div className="onboarding-actions">
               <button className="onboarding-btn-primary" onClick={() => void beginPermissionRequest()} disabled={busy}>
@@ -744,11 +757,12 @@ export default function Onboarding({
               <div className="onboarding-status onboarding-status-pending">
                 <span className="onboarding-status-label">
                   Accessibility: {permissionDetails.accessibility === 'granted' ? 'Enabled' : 'Missing'}
-                  {' · '}
-                  Screen Recording: {permissionDetails.screenRecording === 'granted' ? 'Enabled' : 'Missing'}
                 </span>
               </div>
             )}
+            <button className="onboarding-skip-link" onClick={() => void skipPermission()}>
+              Skip for now — you can grant this later in Settings
+            </button>
           </div>
         )}
 

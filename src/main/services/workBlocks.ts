@@ -3846,6 +3846,72 @@ function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
   `).run(Date.now(), dateStr)
 }
 
+type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }
+
+// Re-attach AI block names across a re-segmentation. A block's id is derived from
+// its exact session set + boundaries (`blockIdFor`), so a day that grows or
+// re-segments on the next open mints brand-new ids and strands the AI labels
+// keyed to the old ones — the rebuilt block silently drops back to a raw artifact
+// title ("Jamie Duffy", "Labrinth"). That is the "timeline didn't save after a
+// restart" bug. Snapshot the day's current AI labels by the same stable,
+// session-set evidence key the review layer uses (`reviewEvidenceKeyForBlock`)
+// so a freshly rebuilt block whose evidence is unchanged inherits the name it
+// already earned, and re-persists it under its new id (stopping the orphan churn).
+export function snapshotCarryForwardAiLabels(
+  db: Database.Database,
+  dateStr: string,
+): Map<string, CarriedAiLabel> {
+  const out = new Map<string, CarriedAiLabel>()
+  const rows = db.prepare(`
+    SELECT l.block_id AS blockId, l.label AS label, l.narrative AS narrative, l.confidence AS confidence
+    FROM timeline_block_labels l
+    JOIN timeline_blocks tb ON tb.id = l.block_id
+    WHERE tb.date = ? AND tb.invalidated_at IS NULL AND tb.is_live = 0 AND l.source = 'ai'
+    ORDER BY l.created_at DESC
+  `).all(dateStr) as Array<{ blockId: string; label: string; narrative: string | null; confidence: number }>
+  if (rows.length === 0) return out
+
+  const memberStmt = db.prepare(`
+    SELECT member_id AS memberId
+    FROM timeline_block_members
+    WHERE block_id = ? AND member_type = 'app_session'
+  `)
+  for (const row of rows) {
+    const label = row.label?.trim()
+    if (!label) continue
+    const ids = (memberStmt.all(row.blockId) as Array<{ memberId: string }>)
+      .map((m) => Number(m.memberId))
+      .filter((id) => Number.isFinite(id) && id >= 0)
+      .sort((a, b) => a - b)
+    if (ids.length === 0) continue
+    const key = `sessions:${ids.join(',')}`
+    // created_at DESC — the first row seen for a key is the freshest; keep it.
+    if (!out.has(key)) out.set(key, { label, narrative: row.narrative ?? null, confidence: row.confidence })
+  }
+  return out
+}
+
+// A freshly rebuilt block with no AI label and no user override inherits a
+// carried-forward AI name when its evidence (the exact session set) is identical
+// to a block that already had one. Strict equality means we only re-attach to the
+// same stretch of work — a merge/split that changes the evidence gets re-named by
+// AI on the next pass instead, never mislabeled.
+function inheritCarriedAiLabel(
+  db: Database.Database,
+  block: WorkContextBlock,
+  carried: Map<string, CarriedAiLabel> | null,
+): WorkContextBlock {
+  if (!carried || carried.size === 0) return block
+  if (block.aiLabel?.trim() || block.label.override?.trim()) return block
+  const match = carried.get(reviewEvidenceKeyForBlock(block))
+  if (!match) return block
+  if (getBlockLabelOverride(db, block.id)?.label?.trim()) return block
+  const nextLabel = block.label.narrative?.trim()
+    ? block.label
+    : { ...block.label, narrative: match.narrative }
+  return { ...block, aiLabel: match.label, label: nextLabel }
+}
+
 function persistTimelineDay(
   db: Database.Database,
   dateStr: string,
@@ -3853,6 +3919,9 @@ function persistTimelineDay(
   options: { finalized?: boolean } = {},
 ): void {
   const validIds = blocks.filter((block) => !block.isLive).map((block) => block.id)
+  // Carry forward AI names from the day's current blocks before the invalidation
+  // below strands them. Skipped when finalized — those labels are already final.
+  const carriedAiLabels = options.finalized ? null : snapshotCarryForwardAiLabels(db, dateStr)
   const persist = db.transaction(() => {
     if (validIds.length > 0) {
       const placeholders = validIds.map(() => '?').join(', ')
@@ -3871,7 +3940,9 @@ function persistTimelineDay(
 
     for (const rawBlock of blocks) {
       if (rawBlock.isLive) continue
-      const block = options.finalized ? rawBlock : finalizedLabelForBlock(db, rawBlock, dateStr)
+      const block = options.finalized
+        ? rawBlock
+        : finalizedLabelForBlock(db, inheritCarriedAiLabel(db, rawBlock, carriedAiLabels), dateStr)
       db.prepare(`
         INSERT INTO timeline_blocks (
           id,
