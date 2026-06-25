@@ -131,3 +131,47 @@ test('framing labels are human and dated', () => {
   assert.equal(facts.weekday, 'TUESDAY')
   assert.equal(facts.dateLabel, 'JUN 23')
 })
+
+// ─── Variation engine + reconciliation (wrapped.md §6, invariant 1) ───────────
+
+test('the where-the-time-went distribution sums to the headline exactly', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Auth refactor', start: NINE_AM, durationSeconds: 90 * 60, category: 'development' }),
+    makeBlock({ label: 'Design review', start: NINE_AM + 100 * 60_000, durationSeconds: 40 * 60, category: 'design' }),
+  ]))
+  const sum = facts.appSites.reduce((s, slice) => s + slice.seconds, 0)
+  assert.equal(sum, facts.activeSeconds, 'app/site slices must reconcile to the headline')
+})
+
+test('the seed is stable for a date and differs for another date', () => {
+  const a = buildDayWrapFacts(makeDayPayload([makeBlock({ label: 'X', start: NINE_AM, durationSeconds: 90 * 60 })]))
+  const b = buildDayWrapFacts(makeDayPayload([makeBlock({ label: 'X', start: NINE_AM, durationSeconds: 90 * 60 })]))
+  assert.equal(a.seed, b.seed)
+  const c = buildDayWrapFacts({ ...makeDayPayload([makeBlock({ label: 'X', start: NINE_AM, durationSeconds: 90 * 60 })]), date: '2026-06-24' })
+  assert.notEqual(a.seed, c.seed)
+})
+
+test('every candidate hook is true: durations never exceed the day, wildcard is one of them', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Deep build', start: NINE_AM, durationSeconds: 134 * 60, category: 'development' }),
+    makeBlock({ label: 'Design review', start: NINE_AM + 140 * 60_000, durationSeconds: 40 * 60, category: 'design' }),
+  ]))
+  assert.ok(facts.candidateHooks.length >= 1, 'expected candidate hooks')
+  for (const hook of facts.candidateHooks) {
+    if (hook.seconds != null) assert.ok(hook.seconds <= facts.activeSeconds, `hook exceeds the day: ${hook.kind}`)
+  }
+  // The longest-stretch hook, when present, must match the computed standout.
+  const longest = facts.candidateHooks.find((h) => h.kind === 'longestStretch')
+  if (longest) assert.equal(longest.seconds, facts.standout!.seconds)
+  assert.ok(facts.wildcardHook && facts.candidateHooks.includes(facts.wildcardHook))
+})
+
+test('the day-as-a-story buckets the day and names the work, never a raw label', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'MLPipeline_Week2.ipynb', start: NINE_AM, durationSeconds: 80 * 60, category: 'development' }),
+  ]))
+  assert.ok(facts.dayStory.morning, 'a 9am block lands in the morning bucket')
+  for (const item of facts.dayStory.morning!.items) {
+    assert.ok(!looksLikeRawArtifactLabel(item), `raw label leaked into the story: ${item}`)
+  }
+})

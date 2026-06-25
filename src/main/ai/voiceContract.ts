@@ -60,9 +60,20 @@ export const VOICE_SYSTEM_PROMPT = [
   ...POSITIVE_VOICE_EXAMPLES,
 ].join('\n')
 
-export function assertNoBannedVocab(text: string): void {
+// The first banned phrase present in `text`, or null. Non-throwing: this is the
+// SOFT path the streaming chat answer uses — by the time an answer is assembled
+// it has already been streamed to the user, so a banned word is logged for voice
+// monitoring, never thrown (a throw here would crash a chat over one word that is
+// already on screen).
+export function findBannedVocab(text: string): string | null {
   const lower = text.toLowerCase()
-  const found = BANNED_VOCAB.find((phrase) => lower.includes(phrase.toLowerCase()))
+  return BANNED_VOCAB.find((phrase) => lower.includes(phrase.toLowerCase())) ?? null
+}
+
+// Hard variant — only for non-streaming, pre-commit checks (offline voice evals,
+// tests). Never call this in the live answer path.
+export function assertNoBannedVocab(text: string): void {
+  const found = findBannedVocab(text)
   if (found) {
     throw new Error(`Banned vocabulary found: ${found}`)
   }

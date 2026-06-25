@@ -72,9 +72,13 @@ The rest of this spec is how each of these should work instead.
 
 ## 3. The voice
 
-This is the whole game. A brief or wrap lives or dies on its words. The voice is the same
-calm, specific, grounded voice as the rest of Daylens — but with more warmth and more
-personality, because this is the moment Daylens talks *to* you.
+This is the whole game. A brief or wrap lives or dies on its words. The full voice spec is
+[`voice.md`](voice.md) and it governs here too; this section only adds what is specific to
+briefs and wraps. **Every example line below is directional, not a template.** Internalize
+the feel and write fresh; the same kind of day must never read the same way twice.
+
+The voice is the same grounded voice as the rest of Daylens, with more personality, because
+this is the moment Daylens talks *to* you.
 
 Think Spotify Wrapped: specific, personal, a little surprising. "You listened to Taylor
 Swift 847 times — top 0.5% of fans." Not "Your most-played artist was Taylor Swift."
@@ -84,8 +88,9 @@ Swift 847 times — top 0.5% of fans." Not "Your most-played artist was Taylor S
   AI tools."
 - **Insight over readout.** A number alone isn't a card. Tell the reader something they
   didn't already know or wouldn't have said themselves.
-- **Never grades.** No score, no focus percentage, no "you used 35% of your day," no
-  "drift." Daylens shows the day; it never judges it.
+- **No shaming scores.** No score, no focus percentage, no "you used 35% of your day," no
+  "drift." Not to be gentle, but because lecturing the reader is bad taste. A confident
+  flex on a real win is welcome; a lecture on a gap is not.
 - **Never hedges.** No "likely," no "approximately," no "it appears." If Daylens isn't sure,
   it leaves it out — it never guesses out loud.
 - **Never robotic.** No "captured your longest app engagement," no "matched the focus

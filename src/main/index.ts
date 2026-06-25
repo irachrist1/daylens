@@ -540,8 +540,12 @@ function createWindow(): BrowserWindow {
   const iconPath = path.join(__dirname, '..', '..', 'build', `icon.${iconExt}`)
 
   const win = new BrowserWindow({
-    width: 1100,
-    height: 720,
+    // Open wide enough to clear Timeline's compact breakpoint (innerWidth < 1120),
+    // so the "Today" side panel is visible on first launch instead of forcing the
+    // user to drag the window wider. minWidth stays below the breakpoint so the
+    // compact layout still kicks in for anyone who deliberately shrinks the window.
+    width: 1240,
+    height: 760,
     minWidth: 820,
     minHeight: 580,
     icon: iconPath,

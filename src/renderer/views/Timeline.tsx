@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
@@ -282,6 +283,29 @@ const MIN_BLOCK_HEIGHT = 48
 // Below this height a card shows only its title + meta line; taller cards add the
 // narrative so a short block stays legible instead of clipping mid-sentence.
 const BLOCK_NARRATIVE_MIN_HEIGHT = 104
+
+// Daylens won't shape a day into named blocks until there's enough to work with
+// (founder decision: at least 2 hours tracked). Below this the Analyze action
+// stays disabled with a gentle "keep going" nudge.
+const ANALYZE_MIN_SECONDS = 2 * 60 * 60
+
+// Lightly absurd statuses cycled while the AI shapes the day, so the wait feels
+// like Daylens having fun rather than spinning.
+const WRAP_LOADING_MESSAGES = [
+  'Computing…',
+  'Discombobulating…',
+  'Untangling your tabs…',
+  'Reticulating splines…',
+  'Consulting the timeline…',
+  'Making it make sense…',
+]
+
+// The day's tracked seconds, from the same blocks the timeline draws (invariant
+// 7) with the raw total as a floor. Shared by the recap footer and the gate.
+function trackedSecondsFor(payload: DayTimelinePayload): number {
+  const blockSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
+  return blockSeconds > 0 ? blockSeconds : payload.totalSeconds
+}
 
 function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineSegment[] {
   const compressed: DisplayTimelineSegment[] = []
@@ -629,35 +653,68 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   const [recapError, setRecapError] = useState<string | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null)
+  // The playful "done for the day?" confirm card, with its optional note box.
+  const [wrapOpen, setWrapOpen] = useState(false)
+  const [wrapNote, setWrapNote] = useState('')
+  const [userName, setUserName] = useState<string>('')
+  // Rotating, lightly absurd status while the AI shapes the day.
+  const [loadingMsg, setLoadingMsg] = useState(WRAP_LOADING_MESSAGES[0])
 
   const isToday = payload.date === todayString()
   const provisional = payload.blocks.some((block) => block.provisional)
+  // Daylens makes no claim about the day until it has enough to work with.
+  const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
+  const firstName = userName.trim().split(/\s+/)[0] ?? ''
 
   // Invariant 5: every number on the recap comes from the same blocks the
   // timeline draws. The headline tracked time is the sum of the blocks'
   // active seconds — never a separately-computed total that could disagree.
-  const blockSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
-  const trackedSeconds = blockSeconds > 0 ? blockSeconds : payload.totalSeconds
+  const trackedSeconds = trackedSecondsFor(payload)
   const countLine = countSummaryLine(payload.blocks.length, payload.appCount, payload.siteCount)
 
   useEffect(() => {
     setAnalyzeStatus(null)
     setRecapError(null)
+    setWrapOpen(false)
+    setWrapNote('')
     const cached = daySummaryRecapCache.get(payload.date)
     setRecap(cached ?? null)
     setRecapLoading(false)
   }, [payload.date])
 
+  // Load the user's name once so the wrap prompt can greet them by name.
+  useEffect(() => {
+    let alive = true
+    void ipc.settings.get().then((s) => { if (alive) setUserName(s?.userName ?? '') })
+    return () => { alive = false }
+  }, [])
+
+  // Cycle the funny loading copy every ~1.4s while analyzing; reset when idle.
+  useEffect(() => {
+    if (!analyzing) { setLoadingMsg(WRAP_LOADING_MESSAGES[0]); return }
+    let i = 0
+    const timer = setInterval(() => {
+      i = (i + 1) % WRAP_LOADING_MESSAGES.length
+      setLoadingMsg(WRAP_LOADING_MESSAGES[i])
+    }, 1400)
+    return () => clearInterval(timer)
+  }, [analyzing])
+
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
-  const handleAnalyze = async () => {
+  // An optional hint (what the user typed they did) grounds the AI when the
+  // evidence is thin.
+  const handleAnalyze = async (hint?: string) => {
     if (analyzing) return
     setAnalyzing(true)
     setAnalyzeStatus(null)
     try {
-      await ipc.db.rebuildTimelineDay(payload.date)
+      await ipc.db.rebuildTimelineDay(payload.date, hint)
+      daySummaryRecapCache.delete(payload.date)
       await onRefresh?.()
-      setAnalyzeStatus(provisional ? 'Day analyzed' : 'Labels refreshed')
+      setWrapOpen(false)
+      setWrapNote('')
+      setAnalyzeStatus(provisional ? 'Day shaped into blocks' : 'Labels refreshed')
     } catch (error) {
       const { message } = sanitizeIpcError(error, 'Analysis failed. Try again in a moment.')
       setAnalyzeStatus(message)
@@ -684,9 +741,19 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
     }
   }
 
-  const analyzeLabel = analyzing
-    ? (provisional ? 'Analyzing…' : 'Re-analyzing…')
-    : (provisional ? 'Analyze day' : 'Re-analyze with AI')
+  // A short, human summary of the day for the wrap prompt: "~3h across Cursor,
+  // Chrome and 2 more". Grounded in the same totals the footer shows.
+  const wrapSummary = (() => {
+    const topApps = [...payload.blocks.flatMap((b) => b.topApps)]
+      .reduce<Map<string, number>>((map, app) => {
+        map.set(app.appName, (map.get(app.appName) ?? 0) + app.totalSeconds)
+        return map
+      }, new Map())
+    const names = [...topApps.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => formatDisplayAppName(name))
+    const lead = names.slice(0, 2).join(', ')
+    const more = names.length > 2 ? ` and ${names.length - 2} more` : ''
+    return `${formatDuration(trackedSeconds)} tracked${lead ? ` across ${lead}${more}` : ''}.`
+  })()
 
   return (
     <div style={{
@@ -723,7 +790,7 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
             <div style={{ display: 'grid', gap: 10, justifyItems: 'start' }}>
               {provisional && (
                 <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  Today is still going. Analyze the day to turn it into named blocks and a recap.
+                  Today is one block while it’s still going. When you wrap up, Daylens shapes it into named blocks and a recap.
                 </div>
               )}
               {!provisional && (
@@ -762,27 +829,72 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
           </div>
 
           {onRefresh && (
-            <div style={{ display: 'grid', gap: 6, justifyItems: 'start' }}>
-              <button
-                type="button"
-                onClick={() => { void handleAnalyze() }}
-                disabled={analyzing}
-                style={{
-                  justifySelf: 'start',
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'transparent',
-                  color: 'var(--color-text-secondary)',
-                  borderRadius: 10,
-                  padding: '7px 12px',
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  cursor: analyzing ? 'default' : 'pointer',
-                  opacity: analyzing ? 0.6 : 1,
-                }}
-              >
-                {analyzeLabel}
-              </button>
-              {analyzeStatus && (
+            <div style={{ display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
+              {/* While analyzing, the whole control is the funny rotating status. */}
+              {analyzing ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>
+                  <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                  {loadingMsg}
+                </div>
+              ) : provisional ? (
+                // TODAY, unanalyzed: the playful "done for the day?" wrap flow,
+                // gated until there's at least 2 hours to work with.
+                !enoughToAnalyze ? (
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                    Keep going{firstName ? `, ${firstName}` : ''}. Daylens needs about 2 hours before it can shape your day.
+                  </div>
+                ) : !wrapOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setWrapOpen(true)}
+                    style={{ justifySelf: 'start', border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 10, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    {firstName ? `Done for the day, ${firstName}? 😄` : 'Done for the day? 😄'}
+                  </button>
+                ) : (
+                  <div style={{ display: 'grid', gap: 10, width: '100%', border: '1px solid var(--color-border-ghost)', borderRadius: 12, padding: 14, background: 'var(--color-surface-high)' }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                      Wrapping up? 😄
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
+                      {wrapSummary} I’ll shape this into named blocks and a recap.
+                    </div>
+                    <textarea
+                      value={wrapNote}
+                      onChange={(event) => setWrapNote(event.target.value)}
+                      placeholder="Optional: in a line, what were you actually working on today?"
+                      rows={2}
+                      style={{ width: '100%', resize: 'vertical', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '8px 10px', fontSize: 12.5, outline: 'none', fontFamily: 'inherit', lineHeight: 1.5 }}
+                    />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => { void handleAnalyze(wrapNote) }}
+                        style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 9, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Yes, wrap it up
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setWrapOpen(false); setWrapNote('') }}
+                        style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 9, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Not yet
+                      </button>
+                    </div>
+                  </div>
+                )
+              ) : (
+                // A past / already-analyzed day: plain re-analyze, no gate.
+                <button
+                  type="button"
+                  onClick={() => { void handleAnalyze() }}
+                  style={{ justifySelf: 'start', border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Re-analyze with AI
+                </button>
+              )}
+              {analyzeStatus && !analyzing && (
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
                   {analyzeStatus}
                 </div>
@@ -822,12 +934,15 @@ function BlockInspector({
   // The rename input is revealed only when the user clicks Rename — the panel
   // stays calm until then.
   const [renaming, setRenaming] = useState(false)
+  // The "let AI name it" sparkle inside the rename row.
+  const [suggesting, setSuggesting] = useState(false)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
     setReviewError(null)
     setBoundaryError(null)
     setRenaming(false)
+    setSuggesting(false)
   }, [block?.id, block?.label.current, block?.label.override])
 
   if (!block) {
@@ -897,6 +1012,27 @@ function BlockInspector({
       .then(() => { invalidateDayRecap(); return onRefresh() })
       .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't undo the rename. Try again in a moment.").message))
       .finally(() => setOverrideSaving(false))
+  }
+
+  // The sparkle in the rename row: ask the AI to write a fresh, accurate title
+  // from the block's evidence and drop it into the input for the user to keep or
+  // tweak before saving. The AI label is applied immediately (the model also
+  // persists it), and a manual edit + Save still overrides it.
+  const suggestName = async () => {
+    if (suggesting) return
+    setSuggesting(true)
+    setReviewError(null)
+    try {
+      const insight = await ipc.ai.regenerateBlockLabel(block.id)
+      const label = insight.label?.trim()
+      if (label) setOverrideDraft(label)
+      invalidateDayRecap()
+      await onRefresh()
+    } catch (error) {
+      setReviewError(sanitizeIpcError(error, "Couldn't name this with AI. Try again in a moment.").message)
+    } finally {
+      setSuggesting(false)
+    }
   }
 
   // One evidence view (timeline.md §2/§3.0): the apps, sites, and files behind
@@ -1098,9 +1234,19 @@ function BlockInspector({
           />
           <button
             type="button"
-            disabled={overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+            aria-label="Name this block with AI"
+            title="Let AI name this block"
+            disabled={suggesting || overrideSaving}
+            onClick={() => { void suggestName() }}
+            style={{ height: 32, width: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-primary)', cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
+          >
+            <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            disabled={overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
             onClick={submitRename}
-            style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+            style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
           >
             {overrideSaving ? 'Saving…' : 'Save'}
           </button>

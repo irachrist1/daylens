@@ -113,14 +113,14 @@ export function registerAIHandlers(): void {
     return prepareDailyReport(payload?.date ?? undefined)
   })
 
-  ipcMain.handle(IPC.AI.GET_WRAPPED_NARRATIVE, async (_e, payload: { date: string }) => {
+  ipcMain.handle(IPC.AI.GET_WRAPPED_NARRATIVE, async (_e, payload: { date: string; force?: boolean }) => {
     const today = (() => {
       const d = new Date()
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     })()
     const liveSession = payload.date === today ? getCurrentSession() : null
     const dayPayload = getTimelineDayPayload(getDb(), payload.date, liveSession)
-    return getWrappedNarrative(dayPayload, { triggerSource: 'user' })
+    return getWrappedNarrative(dayPayload, { triggerSource: 'user', force: payload.force === true })
   })
 
   ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { period: WrappedPeriod; anchorDate: string }) => {

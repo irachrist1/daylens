@@ -31,6 +31,55 @@ export const THEME = {
   rest:     { bg: 'linear-gradient(160deg,#0d111a 0%,#222e48 55%,#3a4f74 100%)', accent: '#cdd9f0', glow: 'rgba(160,185,230,0.34)' },
 } satisfies Record<string, Theme>
 
+export type WrapPalette = typeof THEME
+
+// ─── Seeded palette + layout (design variance, wrapped.md §7) ─────────────────
+// The same kind of day must never LOOK the same twice. A stable per-day seed
+// picks one palette family (so the colors change day to day but are identical on
+// reopen) and a layout flavor. The chosen voice is still the ceiling for tone;
+// this only varies the visual skin, never the words.
+
+function hsl(h: number, s: number, l: number): string { return `hsl(${h} ${s}% ${l}%)` }
+
+/** A complete scene gradient identity generated from one hue. Bottom stop stays
+ *  dark enough that white body text always clears AA. */
+function makeTheme(hue: number, finale = false): Theme {
+  const bottomL = finale ? 16 : 40
+  const midL = finale ? 11 : 22
+  return {
+    bg: `linear-gradient(160deg, ${hsl(hue, 58, 7)} 0%, ${hsl(hue, 54, midL)} 54%, ${hsl(hue, finale ? 30 : 60, bottomL)} 100%)`,
+    accent: hsl(hue, 82, 80),
+    glow: `hsl(${hue} 82% 62% / ${finale ? 0.28 : 0.42})`,
+  }
+}
+
+// Each family is an ordered set of hues for [cover, headline, did, shape,
+// standout, thread, finale, rest]. Deliberately distinct families, not random.
+const PALETTE_HUES: number[][] = [
+  [224, 230, 162, 285, 36, 196, 232, 220], // cool blue (the classic)
+  [268, 282, 150, 330, 28, 200, 256, 262], // violet
+  [156, 168, 200, 286, 36, 188, 168, 160], // forest
+  [16, 32, 152, 286, 200, 210, 18, 22],    // warm amber
+  [202, 320, 150, 268, 36, 188, 210, 206], // electric mixed
+]
+
+const PALETTE_KEYS = ['cover', 'headline', 'did', 'shape', 'standout', 'thread', 'finale', 'rest'] as const
+
+/** The palette for a given seed. Same shape as THEME, so callers swap THEME for
+ *  pickPalette(seed) and keep using .cover / .headline / ... unchanged. */
+export function pickPalette(seed: number): WrapPalette {
+  const hues = PALETTE_HUES[seed % PALETTE_HUES.length]
+  const out = {} as Record<(typeof PALETTE_KEYS)[number], Theme>
+  PALETTE_KEYS.forEach((key, i) => { out[key] = makeTheme(hues[i], key === 'finale') })
+  return out as WrapPalette
+}
+
+/** A small layout flavor (0..2) the seed selects among, so two similar days
+ *  still arrange differently. */
+export function layoutVariant(seed: number): number {
+  return Math.floor(seed / PALETTE_HUES.length) % 3
+}
+
 const CAT_COLOR: Partial<Record<AppCategory, string>> = {
   development: '#7eb2ff', aiTools: '#7eb2ff', writing: '#9b8cff', design: '#f472b6',
   research: '#b87aff', meetings: '#f59e0b', communication: '#34d9c4', email: '#22d3ee',
@@ -125,19 +174,40 @@ export function MessageScene({ kicker, title, body, theme, children }: { kicker:
 
 // ─── Scene model ────────────────────────────────────────────────────────────────
 
-export interface BuiltScene { theme: Theme; render: (onRestart: () => void) => ReactNode }
+export interface BuiltScene {
+  theme: Theme
+  render: (onRestart: () => void) => ReactNode
+  /** When present, the story shell shows a Save affordance on this slide that
+   *  exports this model as a watermarked image (wrapped.md §8: every slide
+   *  saveable, not just the finale). */
+  share?: ShareCardModel
+  /** A stable filename stem for the exported image. */
+  shareName?: string
+}
 
 // ─── Shareable card (canvas export, no extra deps) ──────────────────────────────
 // A 1080×1350 portrait image that exports cleanly to disk and the clipboard.
 
 export interface ShareCardModel {
-  eyebrow: string          // "TUE JUN 24" / "JUN 16 – JUN 22"
+  eyebrow: string          // "TUE JUN 24" / "JUN 16 to JUN 22"
   headline: string         // "8h 59m"
   caption: string          // "tracked across the day"
   rows: Array<{ name: string; value: string }>
   statLabel?: string       // "Longest stretch"
   statValue?: string       // "2h 14m"
   footer: string           // "wrapped by Daylens"
+  /** Seeded gradient stops + accent so each exported slide matches its palette. */
+  gradient?: [string, string, string]
+  accent?: string
+}
+
+/** Canvas gradient stops + accent for a seed, matching the on-screen cover. */
+export function shareGradient(seed: number): { gradient: [string, string, string]; accent: string } {
+  const hue = PALETTE_HUES[seed % PALETTE_HUES.length][0]
+  return {
+    gradient: [hsl(hue, 58, 7), hsl(hue, 54, 22), hsl(hue, 60, 40)],
+    accent: hsl(hue, 82, 80),
+  }
 }
 
 export async function renderShareCard(model: ShareCardModel): Promise<Blob | null> {
@@ -148,14 +218,15 @@ export async function renderShareCard(model: ShareCardModel): Promise<Blob | nul
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
 
+  const stops = model.gradient ?? ['#0a0f20', '#161f52', '#2a3fa6']
   const bg = ctx.createLinearGradient(0, 0, W, H)
-  bg.addColorStop(0, '#0a0f20')
-  bg.addColorStop(0.55, '#161f52')
-  bg.addColorStop(1, '#2a3fa6')
+  bg.addColorStop(0, stops[0])
+  bg.addColorStop(0.55, stops[1])
+  bg.addColorStop(1, stops[2])
   ctx.fillStyle = bg
   ctx.fillRect(0, 0, W, H)
 
-  const accent = '#bcd0ff'
+  const accent = model.accent ?? '#bcd0ff'
   const pad = 110
   let y = 200
 

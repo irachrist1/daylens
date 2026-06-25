@@ -5,6 +5,7 @@ import {
   CITATION_CONTRACT,
   VOICE_SYSTEM_PROMPT,
   assertNoBannedVocab,
+  findBannedVocab,
 } from '../src/main/ai/voiceContract.ts'
 
 test('banned vocabulary matches the voice contract', () => {
@@ -42,5 +43,12 @@ test('voice system prompt includes the citation contract', () => {
 test('banned vocabulary assertion catches golden output drift', () => {
   assert.doesNotThrow(() => assertNoBannedVocab('Cursor appeared in the 9am block with github.com open.'))
   assert.throws(() => assertNoBannedVocab('Great question, let us dive into your day.'))
+})
+
+test('findBannedVocab is the SOFT, non-throwing guard used in the live answer path', () => {
+  // It must NEVER throw — by the time a chat answer is checked it has already
+  // streamed to the user; the soft guard only reports for voice monitoring.
+  assert.equal(findBannedVocab('Cursor appeared in the 9am block with github.com open.'), null)
+  assert.equal(findBannedVocab('Great question, let us dive into your day.'), 'dive into')
 })
 

@@ -3,10 +3,12 @@ import type { WrappedPeriod, WrappedPeriodFacts, WrappedPeriodNarrative, WrapPro
 import { ipc } from '../lib/ipc'
 import WrapStory from './wrap/WrapStory'
 import {
-  BuiltScene, HmCountUp, Kicker, MessageScene, Scene, Theme, THEME,
-  categoryColor, formatHm, ghostButton, primaryButton, saveShareCard, subtleLine, type ShareCardModel,
+  BuiltScene, HmCountUp, Kicker, MessageScene, Scene, Theme,
+  categoryColor, formatHm, ghostButton, pickPalette, primaryButton, saveShareCard,
+  shareGradient, subtleLine, type ShareCardModel, type WrapPalette,
 } from './wrap/wrapKit'
 import { cardSurface, finaleActions } from './DayWrapped'
+import { seedFromDate } from '../lib/dayWrapScenes'
 import { looksLikeRawArtifactLabel } from '../lib/wrappedFacts'
 
 // ─── Weekly / Monthly / Annual Wrapped (DEV-103) ────────────────────────────────
@@ -17,6 +19,30 @@ import { looksLikeRawArtifactLabel } from '../lib/wrappedFacts'
 // Settings message and nothing else (§7).
 
 const NOUN: Record<WrappedPeriod, string> = { week: 'week', month: 'month', year: 'year' }
+
+// ─── Period gating (wrapped.md §3.2) ─────────────────────────────────────────
+// This month / this year cannot be generated while the period is open ("still
+// being written"); the user browses and opens PREVIOUS ones. This week is
+// generatable but labelled a live "week so far".
+
+function pad(n: number): string { return String(n).padStart(2, '0') }
+function ymd(d: Date): string { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` }
+function parseYmd(s: string): Date { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
+function weekStart(s: string): string { const d = parseYmd(s); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return ymd(d) }
+
+function periodIsOpen(period: WrappedPeriod, anchor: string): boolean {
+  const today = ymd(new Date())
+  if (period === 'week') return weekStart(anchor) === weekStart(today)
+  if (period === 'month') return anchor.slice(0, 7) === today.slice(0, 7)
+  return anchor.slice(0, 4) === today.slice(0, 4)
+}
+
+/** A date inside the previous period of the same cadence. */
+function previousPeriodAnchor(period: WrappedPeriod, anchor: string): string {
+  if (period === 'week') { const d = parseYmd(anchor); d.setDate(d.getDate() - 7); return ymd(d) }
+  if (period === 'month') { const d = parseYmd(anchor); d.setDate(1); d.setDate(0); return ymd(d) }
+  return `${Number(anchor.slice(0, 4)) - 1}-06-15`
+}
 
 function coverTeaser(facts: WrappedPeriodFacts): string {
   const days = facts.daysWithActivity
@@ -53,14 +79,14 @@ function standoutOf(facts: WrappedPeriodFacts): { seconds: number; caption: stri
 
 // ─── Scenes ─────────────────────────────────────────────────────────────────────
 
-function CoverScene({ facts, theme }: { facts: WrappedPeriodFacts; theme: Theme }) {
+function CoverScene({ facts, live, theme }: { facts: WrappedPeriodFacts; live?: boolean; theme: Theme }) {
   return (
     <Scene>
       <p style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.22em', color: theme.accent, margin: '0 0 16px', opacity: 0.9 }}>
         {facts.rangeLabel.toUpperCase()}
       </p>
       <h1 style={{ fontSize: 'clamp(40px, 6vw, 60px)', fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.03em', color: '#fff', margin: 0 }}>
-        Your {NOUN[facts.period]}, wrapped
+        {live ? `Your ${NOUN[facts.period]} so far` : `Your ${NOUN[facts.period]}, wrapped`}
       </h1>
       <p style={{ ...subtleLine, marginTop: 20, fontStyle: 'italic', opacity: 0.9 }}>“{coverTeaser(facts)}”</p>
       <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', marginTop: 34, letterSpacing: '0.02em' }}>tap to begin ›</p>
@@ -68,10 +94,10 @@ function CoverScene({ facts, theme }: { facts: WrappedPeriodFacts; theme: Theme 
   )
 }
 
-function HeadlineScene({ facts, lead, theme }: { facts: WrappedPeriodFacts; lead: string; theme: Theme }) {
+function HeadlineScene({ facts, lead, live, theme }: { facts: WrappedPeriodFacts; lead: string; live?: boolean; theme: Theme }) {
   return (
     <Scene>
-      <Kicker accent={theme.accent}>{`The ${NOUN[facts.period]}`}</Kicker>
+      <Kicker accent={theme.accent}>{live ? `The ${NOUN[facts.period]} so far` : `The ${NOUN[facts.period]}`}</Kicker>
       <HmCountUp seconds={facts.totalSeconds} style={{ fontSize: 'clamp(66px, 15vw, 124px)', fontWeight: 900, lineHeight: 0.95, letterSpacing: '-0.045em', color: theme.accent }} />
       <p style={{ ...subtleLine, marginTop: 30 }}>{lead}</p>
     </Scene>
@@ -160,16 +186,52 @@ function StandoutScene({ facts, line, theme }: { facts: WrappedPeriodFacts; line
   )
 }
 
-function CarryingScene({ line, theme }: { line: string; theme: Theme }) {
+// The nitty-gritty: which apps and sites actually held the time (wrapped.md
+// §5.2-5.4). Looks back, never ahead, so it replaces the banned "carrying
+// forward" card outright.
+function DistributionScene({ facts, line, theme, reduced }: { facts: WrappedPeriodFacts; line: string | null; theme: Theme; reduced: boolean }) {
+  const apps = facts.topApps.slice(0, 5)
+  const max = apps[0]?.seconds ?? 1
   return (
     <Scene>
-      <Kicker accent={theme.accent}>Carrying forward</Kicker>
-      <h1 style={{ fontSize: 'clamp(30px, 4.6vw, 46px)', fontWeight: 750, lineHeight: 1.2, letterSpacing: '-0.02em', color: '#fff', margin: 0, maxWidth: '22ch' }}>{line}</h1>
+      <Kicker accent={theme.accent}>Where the time actually went</Kicker>
+      <div style={{ width: '100%', maxWidth: 540, display: 'flex', flexDirection: 'column', gap: 13 }}>
+        {apps.map((app, i) => (
+          <PeriodDistRow key={app.appName} name={app.appName} seconds={app.seconds} max={max} accent={theme.accent} reduced={reduced} rank={i} />
+        ))}
+      </div>
+      {facts.leisureSurfaces.length > 0 && (
+        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 18 }}>
+          on the side: {facts.leisureSurfaces.slice(0, 3).join(', ')}
+        </p>
+      )}
+      {line && <p style={{ ...subtleLine, fontSize: 'clamp(16px,2.4vw,21px)', marginTop: 20 }}>{line}</p>}
     </Scene>
   )
 }
 
-function periodShareModel(facts: WrappedPeriodFacts): ShareCardModel {
+function PeriodDistRow({ name, seconds, max, accent, reduced, rank }: { name: string; seconds: number; max: number; accent: string; reduced: boolean; rank: number }) {
+  const [fill, setFill] = useState(reduced ? 1 : 0)
+  useEffect(() => {
+    if (reduced) { setFill(1); return }
+    const id = setTimeout(() => setFill(1), 120 + rank * 80)
+    return () => clearTimeout(id)
+  }, [reduced, rank])
+  const pct = Math.round((seconds / max) * 100)
+  return (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <span style={{ fontSize: 'clamp(15px, 2.2vw, 19px)', fontWeight: 650, color: '#fff', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'rgba(255,255,255,0.6)', whiteSpace: 'nowrap' }}>{formatHm(seconds)}</span>
+      </div>
+      <div style={{ height: 5, background: 'rgba(255,255,255,0.09)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${fill * pct}%`, height: '100%', background: accent, borderRadius: 3, transition: reduced ? 'none' : 'width 0.9s cubic-bezier(0.16,1,0.3,1)' }} />
+      </div>
+    </div>
+  )
+}
+
+function periodShareModel(facts: WrappedPeriodFacts, seed: number): ShareCardModel {
   const threads = cleanThreads(facts).slice(0, 3)
   const s = standoutOf(facts)
   return {
@@ -180,10 +242,11 @@ function periodShareModel(facts: WrappedPeriodFacts): ShareCardModel {
     statLabel: s ? 'Longest stretch' : undefined,
     statValue: s ? formatHm(s.seconds) : undefined,
     footer: `${NOUN[facts.period]}, wrapped by Daylens`,
+    ...shareGradient(seed),
   }
 }
 
-function FinaleScene({ facts, theme, onClose, onRestart }: { facts: WrappedPeriodFacts; theme: Theme; onClose: () => void; onRestart: () => void }) {
+function FinaleScene({ facts, seed, theme, onClose, onRestart }: { facts: WrappedPeriodFacts; seed: number; theme: Theme; onClose: () => void; onRestart: () => void }) {
   const [saved, setSaved] = useState(false)
   const threads = cleanThreads(facts).slice(0, 3)
   const s = standoutOf(facts)
@@ -212,7 +275,7 @@ function FinaleScene({ facts, theme, onClose, onRestart }: { facts: WrappedPerio
         )}
       </div>
       <div style={finaleActions}>
-        <button onClick={(e) => { e.stopPropagation(); void saveShareCard(periodShareModel(facts), `daylens-${facts.period}-${facts.anchorDate}.png`).then(setSaved) }} style={primaryButton(theme.accent)}>
+        <button onClick={(e) => { e.stopPropagation(); void saveShareCard(periodShareModel(facts, seed), `daylens-${facts.period}-${facts.anchorDate}.png`).then(setSaved) }} style={primaryButton(theme.accent)}>
           {saved ? 'Saved ✓' : 'Save image'}
         </button>
         <button onClick={(e) => { e.stopPropagation(); onRestart() }} style={ghostButton} aria-label="Replay">↺</button>
@@ -233,11 +296,22 @@ export default function PeriodWrapped({
   onOpenSettings?: () => void
 }) {
   const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // Internal anchor so "Open last month/year" can browse previous periods
+  // without leaving the wrap. Resets when the caller opens a different period.
+  const [anchor, setAnchor] = useState(anchorDate)
+  useEffect(() => { setAnchor(anchorDate) }, [anchorDate])
+
+  const seed = useMemo(() => seedFromDate(`${period}:${anchor}`), [period, anchor])
+  const palette = useMemo<WrapPalette>(() => pickPalette(seed), [seed])
+  // This month / this year are "still being written" and cannot be generated.
+  const blockedOpen = (period === 'month' || period === 'year') && periodIsOpen(period, anchor)
+  const liveWeek = period === 'week' && periodIsOpen(period, anchor)
   const [provider, setProvider] = useState<WrapProviderState | null>(null)
   const [wrap, setWrap] = useState<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null>(null)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
+    if (blockedOpen) { setLoaded(true); return }
     let cancelled = false
     setLoaded(false)
     setWrap(null)
@@ -246,32 +320,49 @@ export default function PeriodWrapped({
       if (cancelled) return
       setProvider(state)
       if (!state.connected) { setLoaded(true); return }
-      const res = await ipc.ai.getWrappedPeriodWrap(period, anchorDate).catch(() => null)
+      const res = await ipc.ai.getWrappedPeriodWrap(period, anchor).catch(() => null)
       if (cancelled) return
       setWrap(res)
       setLoaded(true)
     })()
     return () => { cancelled = true }
-  }, [period, anchorDate])
+  }, [period, anchor, blockedOpen])
 
   const scenes: BuiltScene[] = useMemo(() => {
-    if (!loaded || !provider) return [{ theme: THEME.rest, render: () => <MessageScene kicker="Wrapped" title="Writing your wrap…" theme={THEME.rest} /> }]
-    if (!provider.connected) return [{
-      theme: THEME.rest,
+    // This month / this year is still being written: no generation, but the user
+    // can open the previous one (wrapped.md §3.2).
+    if (blockedOpen) return [{
+      theme: palette.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="Connect a provider to see your wrap." theme={THEME.rest}
+        <MessageScene
+          kicker="Wrapped"
+          title={`This ${NOUN[period]} is still being written.`}
+          body={`Come back when it's done. You can open last ${NOUN[period]} any time.`}
+          theme={palette.rest}>
+          <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
+            <button onClick={(e) => { e.stopPropagation(); setAnchor(previousPeriodAnchor(period, anchor)) }} style={primaryButton(palette.rest.accent)}>Open last {NOUN[period]} →</button>
+            <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Done</button>
+          </div>
+        </MessageScene>
+      ),
+    }]
+    if (!loaded || !provider) return [{ theme: palette.rest, render: () => <MessageScene kicker="Wrapped" title="Writing your wrap…" theme={palette.rest} /> }]
+    if (!provider.connected) return [{
+      theme: palette.rest,
+      render: () => (
+        <MessageScene kicker="Wrapped" title="Connect a provider to see your wrap." theme={palette.rest}
           body={`Every word in a wrap comes from a real AI call${provider.provider ? ` to ${provider.provider}` : ''}. Connect one in Settings and your wraps start writing themselves.`}>
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
-            <button onClick={(e) => { e.stopPropagation(); if (onOpenSettings) onOpenSettings(); else onClose() }} style={primaryButton(THEME.rest.accent)}>Open Settings →</button>
+            <button onClick={(e) => { e.stopPropagation(); if (onOpenSettings) onOpenSettings(); else onClose() }} style={primaryButton(palette.rest.accent)}>Open Settings →</button>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Dismiss</button>
           </div>
         </MessageScene>
       ),
     }]
     if (!wrap || wrap.facts.totalSeconds <= 0) return [{
-      theme: THEME.rest,
+      theme: palette.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="Nothing to wrap yet." body={`Daylens needs a few tracked days before it can tell the story of your ${NOUN[period]}.`} theme={THEME.rest}>
+        <MessageScene kicker="Wrapped" title="Nothing to wrap yet." body={`Daylens needs a few tracked days before it can tell the story of your ${NOUN[period]}.`} theme={palette.rest}>
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Done</button>
           </div>
@@ -280,24 +371,27 @@ export default function PeriodWrapped({
     }]
 
     const { facts, narrative } = wrap
+    const share = periodShareModel(facts, seed)
+    const stem = `daylens-${facts.period}-${facts.anchorDate}`
     const out: BuiltScene[] = []
-    out.push({ theme: THEME.cover, render: () => <CoverScene facts={facts} theme={THEME.cover} /> })
-    out.push({ theme: THEME.headline, render: () => <HeadlineScene facts={facts} lead={narrative.lead} theme={THEME.headline} /> })
+    out.push({ theme: palette.cover, render: () => <CoverScene facts={facts} live={liveWeek} theme={palette.cover} /> })
+    out.push({ theme: palette.headline, render: () => <HeadlineScene facts={facts} lead={narrative.lead} live={liveWeek} theme={palette.headline} />, share, shareName: `${stem}-headline` })
     if (cleanThreads(facts).length > 0) {
-      out.push({ theme: THEME.did, render: () => <MatteredScene facts={facts} insight={narrative.slides.whatMattered} theme={THEME.did} reduced={reduced} /> })
+      out.push({ theme: palette.did, render: () => <MatteredScene facts={facts} insight={narrative.slides.whatMattered} theme={palette.did} reduced={reduced} />, share, shareName: `${stem}-mattered` })
     }
     if (facts.buckets.length >= 2) {
-      out.push({ theme: THEME.shape, render: () => <ShapeScene facts={facts} story={narrative.slides.whereTimeWent} theme={THEME.shape} reduced={reduced} /> })
+      out.push({ theme: palette.shape, render: () => <ShapeScene facts={facts} story={narrative.slides.whereTimeWent} theme={palette.shape} reduced={reduced} /> })
     }
     if (standoutOf(facts)) {
-      out.push({ theme: THEME.standout, render: () => <StandoutScene facts={facts} line={narrative.slides.standout} theme={THEME.standout} /> })
+      out.push({ theme: palette.standout, render: () => <StandoutScene facts={facts} line={narrative.slides.standout} theme={palette.standout} /> })
     }
-    if (narrative.slides.carrying) {
-      out.push({ theme: THEME.thread, render: () => <CarryingScene line={narrative.slides.carrying!} theme={THEME.thread} /> })
+    // The nitty-gritty distribution (replaces the banned carryover card).
+    if (facts.topApps.length > 0) {
+      out.push({ theme: palette.thread, render: () => <DistributionScene facts={facts} line={narrative.slides.distribution} theme={palette.thread} reduced={reduced} />, share, shareName: `${stem}-distribution` })
     }
-    out.push({ theme: THEME.finale, render: (onRestart) => <FinaleScene facts={facts} theme={THEME.finale} onClose={onClose} onRestart={onRestart} /> })
+    out.push({ theme: palette.finale, render: (onRestart) => <FinaleScene facts={facts} seed={seed} theme={palette.finale} onClose={onClose} onRestart={onRestart} />, share, shareName: `${stem}-finale` })
     return out
-  }, [loaded, provider, wrap, period, reduced, onClose, onOpenSettings])
+  }, [blockedOpen, liveWeek, anchor, loaded, provider, wrap, period, seed, palette, reduced, onClose, onOpenSettings])
 
   return <WrapStory scenes={scenes} onClose={onClose} />
 }

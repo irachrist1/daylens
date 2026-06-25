@@ -130,15 +130,12 @@ async function getAiNarrative(dateStr: string): Promise<AIWrappedNarrative | nul
   }
 }
 
-// One readable line for the evening wrap notification body — the recap lead,
-// paired with the open-thread nudge when both fit.
+// One readable line for the evening wrap notification body — the recap hook.
+// The hook IS the notification (voice.md §11): earn the open with the real thing,
+// never "your wrap is ready", never a prediction of tomorrow.
 async function tryGetWrappedTeaser(dateStr: string): Promise<string | null> {
   const narrative = await getAiNarrative(dateStr)
   if (!narrative) return null
-  if (narrative.nudge) {
-    const combined = `${narrative.lead.trim()} ${narrative.nudge.trim()}`
-    if (combined.length <= 160) return combined
-  }
   return narrative.lead
 }
 
@@ -271,22 +268,14 @@ async function checkCarryoverNudge(): Promise<void> {
   }
 }
 
-// What it sees this morning + yesterday's open thread — both AI-written. Returns
+// What it sees this morning, AI-written. Daylens never predicts tomorrow or
+// surfaces an "open thread to pick up" (locked decision: carryover is gone every
+// cadence), so the body is an honest read on the morning, nothing more. Returns
 // null when no AI content is available, so the nudge stays silent rather than
 // fabricating a brief.
-async function buildCarryoverBody(today: string, yesterday: string): Promise<string | null> {
-  const [todayNarrative, yesterdayNarrative] = await Promise.all([
-    getAiNarrative(today),
-    getAiNarrative(yesterday),
-  ])
-  const seeing = todayNarrative?.lead?.trim() ?? null
-  const openThread = yesterdayNarrative?.nudge?.trim() ?? null
-  if (!seeing && !openThread) return null
-  if (seeing && openThread) {
-    const combined = `${seeing} ${openThread}`
-    return combined.length <= 200 ? combined : seeing
-  }
-  return seeing ?? openThread
+async function buildCarryoverBody(today: string, _yesterday: string): Promise<string | null> {
+  const todayNarrative = await getAiNarrative(today)
+  return todayNarrative?.lead?.trim() ?? null
 }
 
 // Record that the user generated a recap for `date` (Generate Recap / Analyze

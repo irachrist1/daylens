@@ -22,6 +22,7 @@ import {
   resolveCanonicalBrowser,
   titleLooksUseful,
 } from '../lib/appIdentity'
+import { getClientMemory } from './workMemoryProfile'
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 const MIN_CONFIDENCE_TO_ATTRIBUTE = 0.75
@@ -104,7 +105,7 @@ interface SegmentAttributionRecord {
   score: number
   confidence: number
   rank: number
-  decisionSource: 'rule' | 'model' | 'neighbor_propagation' | 'user'
+  decisionSource: 'rule' | 'model' | 'neighbor_propagation' | 'user' | 'memory_assisted'
   matchedSignals: AttributionSignal[]
 }
 
@@ -611,6 +612,98 @@ function propagateAttribution(
   }
 }
 
+// ─── Step 5.5 — memory as a bounded tie-breaker (memory.md §4) ───────────────
+//
+// Stored per-client memory is CONTEXT, never fact-of-record (invariant 5): it
+// may help read which client an AMBIGUOUS-but-already-evidenced stretch belongs
+// to, but it can never invent an attribution the evidence doesn't support. So
+// this pass only ever RE-RANKS candidates a rule already produced for a segment
+// — it never adds a client. It fires only when the segment is ambiguous (top
+// candidate below the attribute bar), nudges a candidate the client's scoped
+// memory RECOGNIZES (a distinctive token from that memory appears in the
+// segment), caps the result below explicit-rule certainty, and tags it
+// `memory_assisted` so it's transparent and a user rule still overrides.
+const MEMORY_PRIOR_BONUS = 0.2
+const MEMORY_ASSISTED_CONFIDENCE_CAP = 0.8
+const MEMORY_HINT_MIN_TOKEN_LEN = 4
+// Common words that carry no client identity — a 4+ char token has to mean
+// something specific to recognise a client, not match "with"/"data"/"work".
+const MEMORY_HINT_STOPWORDS = new Set([
+  'with', 'this', 'that', 'from', 'into', 'about', 'their', 'them', 'they',
+  'work', 'working', 'data', 'project', 'projects', 'client', 'clients',
+  'using', 'have', 'when', 'where', 'which', 'while', 'main', 'biggest',
+])
+
+function tokenizeMemoryHint(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9.]+/)
+    .map((token) => token.replace(/^\.+|\.+$/g, ''))
+    .filter((token) =>
+      token.length >= MEMORY_HINT_MIN_TOKEN_LEN
+      && !MEMORY_HINT_STOPWORDS.has(token)
+      && !GENERIC_TITLE_WORDS.has(token))
+}
+
+// Distinctive tokens from each client's scoped memory — only for clients that
+// are already candidates somewhere, so we never read memory for a client the
+// evidence never points at.
+function memoryClientHints(db: Database.Database, clientIds: string[]): Map<string, Set<string>> {
+  const hints = new Map<string, Set<string>>()
+  for (const clientId of clientIds) {
+    const tokens = new Set<string>()
+    for (const fact of getClientMemory(db, clientId)) {
+      for (const token of tokenizeMemoryHint(fact.text)) tokens.add(token)
+    }
+    if (tokens.size > 0) hints.set(clientId, tokens)
+  }
+  return hints
+}
+
+function segmentMemoryHaystack(segment: ActivitySegmentRecord): string {
+  return `${segment.domain ?? ''} ${segment.windowTitle ?? ''} ${segment.filePath ?? ''}`.toLowerCase()
+}
+
+function applyMemoryPrior(
+  segments: ActivitySegmentRecord[],
+  candidatesBySegment: Map<string, ScoredCandidate[]>,
+  db: Database.Database,
+): void {
+  const candidateClientIds = new Set<string>()
+  for (const list of candidatesBySegment.values()) {
+    for (const candidate of list) if (candidate.clientId) candidateClientIds.add(candidate.clientId)
+  }
+  if (candidateClientIds.size === 0) return
+  const hints = memoryClientHints(db, [...candidateClientIds])
+  if (hints.size === 0) return
+
+  for (const segment of segments) {
+    const list = candidatesBySegment.get(segment.id)
+    if (!list || list.length === 0) continue
+    // Memory never overrides a confident, evidence-based attribution — only an
+    // ambiguous one.
+    if (list[0].confidence >= MIN_CONFIDENCE_TO_ATTRIBUTE) continue
+    const haystack = segmentMemoryHaystack(segment)
+    if (!haystack.trim()) continue
+
+    let changed = false
+    for (const candidate of list) {
+      if (!candidate.clientId) continue
+      const tokens = hints.get(candidate.clientId)
+      if (!tokens) continue
+      const recognised = [...tokens].some((token) => haystack.includes(token))
+      if (!recognised) continue
+      const nudged = Math.min(MEMORY_ASSISTED_CONFIDENCE_CAP, candidate.confidence + MEMORY_PRIOR_BONUS)
+      if (nudged > candidate.confidence) {
+        candidate.confidence = nudged
+        candidate.decisionSource = 'memory_assisted'
+        changed = true
+      }
+    }
+    if (changed) list.sort((left, right) => right.confidence - left.confidence)
+  }
+}
+
 function persistSegmentAttributions(
   db: Database.Database,
   deviceId: string,
@@ -951,6 +1044,9 @@ export function runAttributionForRange(
     const signals = extractSignals(segment)
     candidatesBySegment.set(segment.id, scoreSegment(segment, signals, rules))
   }
+  // Memory tips ambiguous segments toward a client it recognizes, before
+  // propagation can carry that decision to neighbours (memory.md §4).
+  applyMemoryPrior(segments, candidatesBySegment, db)
   propagateAttribution(segments, candidatesBySegment)
   persistSegmentAttributions(db, deviceId, fromMs, toMs, segments, candidatesBySegment)
 

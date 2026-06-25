@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { prefersReducedMotion, THEME, type BuiltScene } from './wrapKit'
+import { prefersReducedMotion, saveShareCard, THEME, type BuiltScene } from './wrapKit'
 
 // ─── WrapStory — the shared story shell ─────────────────────────────────────────
 // Owns everything that is the same for every Wrapped: full-bleed frame, the
@@ -86,6 +86,17 @@ export default function WrapStory({ scenes, onClose }: { scenes: BuiltScene[]; o
 
   const body: ReactNode = active ? active.render(restart) : null
 
+  // Per-slide save (wrapped.md §8). Shows briefly as "Saved" then resets.
+  const [savedIndex, setSavedIndex] = useState<number | null>(null)
+  useEffect(() => { setSavedIndex(null) }, [slideIndex])
+  const canSaveSlide = Boolean(active?.share)
+  const saveSlide = useCallback(() => {
+    if (!active?.share) return
+    void saveShareCard(active.share, `${active.shareName ?? 'daylens-slide'}.png`).then((ok) => {
+      if (ok) setSavedIndex(slideIndex)
+    })
+  }, [active, slideIndex])
+
   return (
     <div
       style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', cursor: 'default', animation: 'wrappedOverlayIn 280ms ease forwards' }}
@@ -121,6 +132,15 @@ export default function WrapStory({ scenes, onClose }: { scenes: BuiltScene[]; o
         style={{ position: 'absolute', top: 30, right: 16, zIndex: 10, width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.16)', color: 'rgba(255,255,255,0.7)', fontSize: 18, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
         aria-label="Close"
       >×</button>
+
+      {/* Per-slide save (every slide is a watermarked image, not just the finale) */}
+      {canSaveSlide && (
+        <button
+          onClick={(e) => { e.stopPropagation(); saveSlide() }}
+          style={{ position: 'absolute', bottom: 26, left: 22, zIndex: 10, padding: '10px 16px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          aria-label="Save this slide as an image"
+        >{savedIndex === slideIndex ? 'Saved ✓' : 'Save slide'}</button>
+      )}
 
       {/* Visible Next affordance (discoverability) */}
       {!isLast && (

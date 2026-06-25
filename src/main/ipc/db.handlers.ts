@@ -45,14 +45,14 @@ import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
-import { getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
+import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
-import { generateWorkBlockInsight } from '../services/ai'
+import { generateWorkBlockInsight, generateDayRegroupPlan } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC, isAppCategory } from '@shared/types'
@@ -364,16 +364,61 @@ export function registerDbHandlers(): void {
     return payload
   })
 
-  ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string) => {
+  ipcMain.handle(IPC.DB.REBUILD_TIMELINE_DAY, async (_e, dateStr: string, hint?: string) => {
     // "Rebuild" is intentionally no longer a destructive block wipe. Days
     // already self-heal on open; the useful manual action is to spend AI work
     // only where the day is still on a deterministic floor or low-confidence
-    // label, preserving curated AI labels and user overrides.
+    // label, preserving curated AI labels and user overrides. An optional hint
+    // (what the user says they actually did today) is passed to the model as a
+    // strong grounding signal when the evidence alone is thin.
     const db = getDb()
-    const payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+    const userHint = hint?.trim() || undefined
+    let payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
     let changed = false
     let attempted = 0
     const failures: string[] = []
+
+    // AI-driven Analyze (timeline.md §3.3 / §5): before re-naming, ask the AI to
+    // regroup the day's heuristic blocks — which adjacent blocks are the same
+    // continued intent and should become one. The AI decides only the grouping;
+    // the merge itself rides the same durable boundary-correction path as a manual
+    // shift-click merge (so it survives every rebuild), and each merged block is
+    // named below by the per-block namer from its full combined evidence — one
+    // coherent title across all the stretches. The engine over-splits on a real
+    // day, so this only ever makes the day FEWER, truer blocks (invariant 2). It
+    // falls back cleanly to the heuristic blocks when the AI is unavailable.
+    // User corrections always win: a user-renamed block is never merged away, and
+    // existing user merges are re-applied by the rebuild first.
+    const mergeable = payload.blocks.filter(
+      (block) => !block.isLive && !block.provisional && block.sessions.some((session) => session.id >= 0),
+    )
+    if (mergeable.length >= 2) {
+      try {
+        const groups = await generateDayRegroupPlan(mergeable, { userHint })
+        let mergedAny = false
+        for (const group of groups ?? []) {
+          if (group.length < 2) continue
+          const members = group.map((index) => mergeable[index])
+          if (members.some((member) => getBlockLabelOverride(db, member.id)?.label?.trim())) continue
+          if (members.some((member) => member.isLive || !member.sessions.some((session) => session.id >= 0))) continue
+          try {
+            mergeTimelineEpisodes(db, dateStr, members)
+            mergedAny = true
+          } catch (error) {
+            console.warn('[timeline] AI merge skipped for a group:', error)
+          }
+        }
+        if (mergedAny) {
+          invalidateProjectionScope('timeline', 'timeline-ai-regroup')
+          invalidateProjectionScope('apps', 'timeline-ai-regroup')
+          invalidateProjectionScope('insights', 'timeline-ai-regroup')
+          payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
+          changed = true
+        }
+      } catch (error) {
+        console.warn('[timeline] AI day regroup failed:', error)
+      }
+    }
 
     for (const block of payload.blocks) {
       if (!shouldReanalyzeBlockWithAI(block)) continue
@@ -381,7 +426,7 @@ export function registerDbHandlers(): void {
       try {
         const insight = await generateWorkBlockInsight(
           { ...block, label: { ...block.label, override: null } },
-          { jobType: 'block_cleanup_relabel', triggerSource: 'user', throwOnError: true },
+          { jobType: 'block_cleanup_relabel', triggerSource: 'user', throwOnError: true, userHint },
         )
         changed = applyAIInsightToTimelineBlock(db, block, insight) || changed
       } catch (error) {
@@ -649,11 +694,25 @@ export function registerDbHandlers(): void {
   ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {
     const db = getDb()
     const initialDate = payload.date ?? null
-    const dayPayload = initialDate
+    let dayPayload = initialDate
       ? materializeTimelineDayProjection(db, initialDate, getLiveSessionForDate(initialDate))
       : null
-    const first = resolveTimelineBlockForEdit(db, payload.blockIds[0], dayPayload)
-    const second = resolveTimelineBlockForEdit(db, payload.blockIds[1], dayPayload)
+    let first = resolveTimelineBlockForEdit(db, payload.blockIds[0], dayPayload)
+    let second = resolveTimelineBlockForEdit(db, payload.blockIds[1], dayPayload)
+
+    // If the selection touches the still-live block, close out the in-flight
+    // session to the DB first so the merge has a persisted block (real session
+    // ids) to anchor its boundary corrections to. Without this the live block
+    // re-splits on the very next tracking tick (the "it still splits" bug).
+    const touchesLive = [first, second].some(
+      (b) => b && (b.isLive || b.provisional || b.sessions.some((s) => s.id < 0)),
+    )
+    if (touchesLive && initialDate) {
+      flushCurrentSession()
+      dayPayload = materializeTimelineDayProjection(db, initialDate, getLiveSessionForDate(initialDate))
+      first = resolveTimelineBlockForEdit(db, payload.blockIds[0], dayPayload)
+      second = resolveTimelineBlockForEdit(db, payload.blockIds[1], dayPayload)
+    }
     if (!first || !second) throw new Error('Both blocks must exist to merge.')
     const dateStr = initialDate ?? localDateStringForTimestamp(first.startTime)
     // The renderer sends the two endpoints of the selection. Expand them into the
@@ -1079,7 +1138,12 @@ function resolveTimelineBlockForEdit(
     ?? getBlockDetailPayload(db, blockId, getCurrentSession())
   if (exact) return exact
   if (blockId.startsWith('live_')) {
-    return dayPayload?.blocks.find((candidate) => candidate.isLive) ?? null
+    // The live block's id embeds its end time, which drifts every second, so an
+    // exact match misses. Match the flagged live block if one still exists;
+    // otherwise (e.g. just after a flush turned it into a persisted block) fall
+    // back to the last block of the day, which now covers that trailing time.
+    return dayPayload?.blocks.find((candidate) => candidate.isLive)
+      ?? (dayPayload ? [...dayPayload.blocks].sort((a, b) => a.startTime - b.startTime).pop() ?? null : null)
   }
   return null
 }

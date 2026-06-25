@@ -1029,22 +1029,22 @@ export type AIJobType =
   | 'search_intent'
 
 export interface AIWrappedNarrative {
-  /** 1-sentence opening, used as the morning/evening lead. */
+  /** The hook: a one-line read on the shape of the day. Always present, and
+   *  reused verbatim as the morning/evening notification one-liner. */
   lead: string
-  /** Optional 1-sentence reflection tied to the peak block. */
-  peakInsight: string | null
-  /** Optional 1-sentence forward-looking nudge. */
-  nudge: string | null
-  /** Per-slide narration. Each slot is one short, grounded sentence; null means
-   *  the slide should keep its deterministic copy. */
-  slides: {
-    scale: string | null
-    focus: string | null
-    topApp: string | null
-    switching: string | null
-    identity: string | null
-    closing: string | null
+  /** The day as a story: morning / midday / evening, narrated like a friend who
+   *  was there. Each beat is null when that part of the day was thin. */
+  story: {
+    morning: string | null
+    midday: string | null
+    evening: string | null
   }
+  /** One short caption under the "where the time went" app/site chart. */
+  whereLine: string | null
+  /** The wildcard: one surprising true thing, phrased from a candidate hook. */
+  wildcard: string | null
+  /** A quiet factual sign-off for the finale. */
+  closing: string | null
   /** Tracks whether this came from a validated AI response or the deterministic fallback. */
   source: 'ai' | 'fallback'
   factsHash: string
@@ -1140,8 +1140,8 @@ export interface WrappedPeriodNarrative {
     whereTimeWent: string | null
     /** A real superlative — the standout. */
     standout: string | null
-    /** What's carrying forward / the arc. */
-    carrying: string | null
+    /** The nitty-gritty: which apps and sites actually held the time. */
+    distribution: string | null
   }
   source: 'ai' | 'fallback'
   factsHash: string

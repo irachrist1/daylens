@@ -26,21 +26,21 @@ const BANNED_PHRASES = [
   "you've got this", 'you got this', 'great work', 'great job', 'amazing job',
 ]
 
-// Grades the wrap must never speak (invariant 5).
+// Grades the wrap must never speak (invariant 5), plus carryover / next-period
+// prediction the locked decision bans every cadence.
 const GRADE_PATTERNS = [
   /\bfocus(?:ed)?\s+(?:score|percentage|signal)\b/i,
   /\b\d+\s*%\s*(?:of (?:your|the|a)\b|focused)/i,
   /\b\d+%\s*of (?:a|your)?\s*\d+\s*-?\s*hour/i,
   /\bdrift\b/i,
   /\bproductiv(?:e|ity)\s+score\b/i,
+  /\bpick (?:it|this|that|them) (?:back )?up\b/i,
+  /\bcarry(?:ing)?\b[^.]{0,16}\b(?:forward|over|into next)\b/i,
+  /\bnext (?:week|month|year)\b/i,
 ]
 
 function periodWord(period: WrappedPeriod): string {
   return period === 'week' ? 'week' : period === 'month' ? 'month' : 'year'
-}
-
-function prevWord(period: WrappedPeriod): string {
-  return period === 'week' ? 'last week' : period === 'month' ? 'last month' : 'last year'
 }
 
 export function computePeriodFactsHash(facts: WrappedPeriodFacts): string {
@@ -71,28 +71,26 @@ export function periodNarrativeCacheKey(facts: WrappedPeriodFacts, factsHash: st
 
 export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: string; userMessage: string } {
   const label = periodWord(facts.period)
-  const arcKey = facts.period === 'week' ? 'momentum and what is still open heading into next week'
-    : facts.period === 'month' ? 'the arc of the month and what carries into next month'
-    : 'the arc of the year — what you started on, what you ended on, what shifted'
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     `You are Daylens, narrating a Spotify-Wrapped-style ${label} recap for one person.`,
     `You will receive a compact JSON facts object summed from this ${label}'s frozen daily snapshots.`,
-    'Return STRICT JSON with exactly these keys: "lead" (string), "slides" (object with keys "whatMattered", "whereTimeWent", "standout", "carrying", each a string or null).',
-    'No prose outside the JSON. No code fences. No emoji. No markdown.',
-    'Never use an em dash (—) anywhere in the output. Use a comma, a period, or "and" instead.',
-    'Voice: warm but grounded, second-person, specific. Like Spotify Wrapped, personal and occasionally surprising. No motivational filler, no exclamation marks, no hedging ("likely", "approximately").',
+    'Return STRICT JSON with exactly these keys: "lead" (string), "slides" (object with keys "whatMattered", "whereTimeWent", "standout", "distribution", each a string or null).',
+    'No prose outside the JSON. No code fences. No emoji. No markdown. No exclamation marks.',
+    'Never use an em dash (—) anywhere in the output. Use a comma, a period, or "and" instead. Use "to" for ranges, never a dash.',
+    'Voice: warm but grounded, second-person, specific. Like Spotify Wrapped, personal and occasionally surprising. No motivational filler, no hedging ("likely", "approximately").',
     'Each string is one sentence, 24-200 characters. Never ask the user a question.',
     `lead — the ${label} in one line: the headline story, grounded in the facts. Name the biggest thread or the dominant work category if the signal is clear.`,
     'slides.whatMattered: name the biggest threads from facts.threads with their real hours ("12h on the timeline rework across four days"). null if facts.threads is empty.',
-    'slides.whereTimeWent: tell where the WORK time went as a story across facts.categories and facts.topApps — not a percentage readout. null if there is no real work.',
+    'slides.whereTimeWent: tell where the WORK time went as a story across facts.categories — not a percentage readout. null if there is no real work.',
     'slides.standout: one real superlative from facts.busiestDay or facts.longestStretch ("Wednesday was your longest day", "your single longest stretch was 3h on the 14th"). null if neither is present.',
-    `slides.carrying: ${arcKey}. Ground it in facts.threads. null if there is nothing to say.`,
+    'slides.distribution: the nitty-gritty, which apps and sites actually held the time, named from facts.topApps and facts.leisureSurfaces, friendly and skimmable, never a spreadsheet. null if there is nothing concrete.',
     'Main mode = facts.dominantWorkCategory — your actual WORK, never leisure. A working person\'s week is never "mostly entertainment" because a few videos played on the side; leisure is a quieter, separate note, never the headline.',
     'NEVER grade: no focus score, no focus percentage, no "X% of your day", no "drift", no productivity score.',
+    'NEVER predict the next period, NEVER say anything carries forward or needs picking up, NEVER assign homework. The recap looks back, never ahead.',
     `Never invent a duration. If a line claims hours, the number must match facts.totalSeconds/3600 or a sub-total within a small margin.`,
-    'Never invent app, domain, or project names. Only names present in the facts JSON (threads, topApps, categories, dates) may be referenced.',
+    'Never invent app, domain, or project names. Only names present in the facts JSON (threads, topApps, categories, leisureSurfaces, dates) may be referenced.',
     'Never describe yourself or the model.',
   ].join(' ')
 
@@ -133,12 +131,13 @@ export function validatePeriodNarrativeResponse(
   const whatMattered = facts.threads.length > 0 ? validateLine(slidesRaw.whatMattered, facts) : null
   const whereTimeWent = facts.workSeconds > 0 ? validateLine(slidesRaw.whereTimeWent, facts) : null
   const standout = (facts.busiestDay || facts.longestStretch) ? validateLine(slidesRaw.standout, facts) : null
-  const carrying = validateLine(slidesRaw.carrying, facts)
+  const distribution = (facts.topApps.length > 0 || facts.leisureSurfaces.length > 0)
+    ? validateLine(slidesRaw.distribution, facts) : null
 
   return {
     period: facts.period,
     lead,
-    slides: { whatMattered, whereTimeWent, standout, carrying },
+    slides: { whatMattered, whereTimeWent, standout, distribution },
     source: 'ai',
     factsHash,
   }
@@ -207,13 +206,12 @@ export function buildPeriodFallbackNarrative(
   factsHash: string,
 ): WrappedPeriodNarrative {
   const label = periodWord(facts.period)
-  const prevLabel = prevWord(facts.period)
 
   if (facts.totalSeconds <= 0) {
     return {
       period: facts.period,
       lead: `Daylens did not see enough activity this ${label} to tell a real story yet.`,
-      slides: { whatMattered: null, whereTimeWent: null, standout: null, carrying: null },
+      slides: { whatMattered: null, whereTimeWent: null, standout: null, distribution: null },
       source: 'fallback',
       factsHash,
     }
@@ -239,20 +237,21 @@ export function buildPeriodFallbackNarrative(
       ? `${facts.busiestDay.dayLabel} was the busiest, at ${formatHm(facts.busiestDay.totalSeconds)}.`
       : null
 
-  const carrying = facts.previousPeriodSeconds > 0
-    ? (() => {
-        const diff = facts.totalSeconds - facts.previousPeriodSeconds
-        const pct = Math.round((diff / facts.previousPeriodSeconds) * 100)
-        const abs = Math.abs(pct)
-        if (abs < 5) return `About the same shape as ${prevLabel}.`
-        return `Roughly ${abs}% ${pct > 0 ? 'more' : 'less'} tracked time than ${prevLabel}.`
-      })()
+  // The nitty-gritty: the apps and sites that actually held the time. Looks
+  // back, never ahead (no carryover, no next-period prediction).
+  const apps = facts.topApps.slice(0, 3).map((a) => a.appName)
+  const sites = facts.leisureSurfaces.slice(0, 2)
+  const distributionParts: string[] = []
+  if (apps.length > 0) distributionParts.push(apps.join(', '))
+  if (sites.length > 0) distributionParts.push(`with ${sites.join(' and ')} on the side`)
+  const distribution = distributionParts.length > 0
+    ? `Most of the time ran through ${distributionParts.join(' ')}.`
     : null
 
   return {
     period: facts.period,
     lead,
-    slides: { whatMattered, whereTimeWent, standout, carrying },
+    slides: { whatMattered, whereTimeWent, standout, distribution },
     source: 'fallback',
     factsHash,
   }

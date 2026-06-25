@@ -38,14 +38,14 @@ work, the AI says the same. **One truth, three views.**
 
 ## What Daylens is NOT
 
-- **No grades.** No "Score," no "Focused," no "Drift." We don't judge your day. We show it. It's a tool, not a judge. Minimal and focused.
+- **No grades.** No "Score," no "Focused," no "Drift," no "X% of your day." Those are gone. Daylens shows the day, it does not score it. Flexes (a real record, a real superlative) are welcome; lectures are not.
 - **No guessing out loud.** Daylens says what the evidence proves. If it doesn't know, it
-  says so plainly — it never pads with "likely…" or robotic precision like
+  says so plainly. It never pads with "likely…" or robotic precision like
   "32 minutes 22 seconds in Codex."
 
 ## How Daylens talks
 
-Like the Dia morning brief (read more about it here: https://www.diabrowser.com/start) daylens is short, specific, grounded. Every claim traces back to something real. It feels like a friend who is watching your day and is able to give you a concise summary of what you did today or last week or last month. 
+The voice has its own spec: [`docs/specs/voice.md`](docs/specs/voice.md). Read it before writing any copy. In one line: a sharp friend who watched your day, confident and a little playful, every word clearly chosen. Any example line in any spec is **directional**, never a template to copy.
 
 ## How we build it
 

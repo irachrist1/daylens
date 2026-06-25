@@ -6,36 +6,35 @@ import { todayString, shiftDateString } from '../lib/format'
 import Mascot from './Mascot'
 import WrapStory from './wrap/WrapStory'
 import {
-  BuiltScene, HmCountUp, Kicker, MessageScene, Scene, Theme, THEME,
-  categoryColor, formatHm, ghostButton, primaryButton, saveShareCard, subtleLine, type ShareCardModel,
+  BuiltScene, HmCountUp, Kicker, MessageScene, Scene, Theme,
+  formatHm, ghostButton, layoutVariant, pickPalette, primaryButton,
+  saveShareCard, shareGradient, subtleLine, type ShareCardModel, type WrapPalette,
 } from './wrap/wrapKit'
 import {
-  buildDayWrapFacts, type DayWrapFacts, type RibbonSegment, type WrapActivity,
+  buildDayWrapFacts, type AppSiteSlice, type DayStorySegment, type DayWrapFacts, type WrapActivity,
 } from '../lib/dayWrapScenes'
 
 // ─── Daily Wrapped (DEV-114) ───────────────────────────────────────────────────
-// Spotify Wrapped, for one day, on the shared <WrapStory> engine. Two modes —
-// today's (sign-off) and yesterday's (catch-up) — share scenes, data, and the
-// visual system, and differ only in framing copy, the cover, and the finale CTA.
+// Spotify Wrapped, for one day, on the shared <WrapStory> engine. The arc:
+// hook → a short "recap being cooked" build beat → the headline → what you did →
+// the day as a story (morning / midday / evening) → where the time went →
+// the wildcard → the shareable finale.
 //
-// Every number comes from ONE deterministic facts object (`buildDayWrapFacts`);
-// the AI narrative only writes prose on top, and is rejected outright when it
-// contradicts a number (briefs-wraps.md §8). With no provider connected we show
-// one Settings message and nothing else (§7).
+// Every number comes from ONE deterministic facts object (`buildDayWrapFacts`),
+// the same object the main process narrates from, so no card can disagree. The
+// AI writes prose on top; it never invents a number. Palette, layout, and which
+// hook leads vary by a per-day seed, so the same kind of day never looks the same
+// twice. With no provider connected we show one Settings message and nothing else.
 
 type WrapMode = 'today' | 'yesterday' | 'past'
+
+const WORK_THRESHOLD_SECONDS = 2 * 60 * 60
 
 function resolveMode(date: string): WrapMode {
   const today = todayString()
   if (date === today) return 'today'
   if (date === shiftDateString(today, -1)) return 'yesterday'
   return 'past'
-}
-
-function coverTitle(mode: WrapMode, inProgress: boolean): string {
-  if (mode === 'today') return inProgress ? 'Today so far' : 'Your day, wrapped'
-  if (mode === 'yesterday') return 'Yesterday, wrapped'
-  return 'That day, wrapped'
 }
 
 function coverTeaser(facts: DayWrapFacts, mode: WrapMode, inProgress: boolean): string {
@@ -49,20 +48,66 @@ function coverTeaser(facts: DayWrapFacts, mode: WrapMode, inProgress: boolean): 
   return 'A light one.'
 }
 
+// The under-threshold line for the live day, voiced loosely (the real voice
+// comes from Settings; this is the honest deterministic floor). Names the real
+// number, never dares the user.
+function underThresholdLine(workSeconds: number): string {
+  const m = Math.max(1, Math.round(workSeconds / 60))
+  const t = workSeconds >= 60 * 60 ? formatHm(workSeconds) : `${m} minutes`
+  return `${t} of work so far. Give the day a little more and come back.`
+}
+
 // ─── Scenes ─────────────────────────────────────────────────────────────────────
 
 function CoverScene({ facts, mode, inProgress, theme }: { facts: DayWrapFacts; mode: WrapMode; inProgress: boolean; theme: Theme }) {
+  const align = layoutVariant(facts.seed) === 1 ? 'flex-start' : 'center'
   return (
     <Scene>
-      <div style={{ marginBottom: 26 }}><Mascot expression="wave" size={92} /></div>
-      <p style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.22em', color: theme.accent, margin: '0 0 16px', opacity: 0.9 }}>
-        {facts.weekday} · {facts.dateLabel}
-      </p>
-      <h1 style={{ fontSize: 'clamp(40px, 6vw, 60px)', fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.03em', color: '#fff', margin: 0 }}>
-        {coverTitle(mode, inProgress)}
-      </h1>
-      <p style={{ ...subtleLine, marginTop: 20, fontStyle: 'italic', opacity: 0.9 }}>“{coverTeaser(facts, mode, inProgress)}”</p>
-      <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', marginTop: 34, letterSpacing: '0.02em' }}>tap to begin ›</p>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: align, textAlign: align === 'center' ? 'center' : 'left', width: '100%' }}>
+        <div style={{ marginBottom: 26 }}><Mascot expression="wave" size={92} /></div>
+        <p style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.22em', color: theme.accent, margin: '0 0 16px', opacity: 0.9 }}>
+          {facts.weekday} · {facts.dateLabel}
+        </p>
+        <h1 style={{ fontSize: 'clamp(40px, 6vw, 60px)', fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.03em', color: '#fff', margin: 0 }}>
+          {mode === 'yesterday' ? 'Yesterday, wrapped' : inProgress ? 'Today so far' : 'Your day, wrapped'}
+        </h1>
+        <p style={{ ...subtleLine, marginTop: 20, fontStyle: 'italic', opacity: 0.9 }}>“{coverTeaser(facts, mode, inProgress)}”</p>
+        <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', marginTop: 34, letterSpacing: '0.02em' }}>tap to begin ›</p>
+      </div>
+    </Scene>
+  )
+}
+
+// The "recap being cooked" beat, reusing the onboarding build motion: mock day
+// rows drop in and stack, then we move on. Calm and instant under reduced motion.
+function BuildBeatScene({ facts, theme, reduced }: { facts: DayWrapFacts; theme: Theme; reduced: boolean }) {
+  const rows = facts.workActivities.slice(0, 3).map((a) => a.name)
+  while (rows.length < 3) rows.push('')
+  const [stacked, setStacked] = useState(reduced)
+  useEffect(() => {
+    if (reduced) { setStacked(true); return }
+    const id = setTimeout(() => setStacked(true), 80)
+    return () => clearTimeout(id)
+  }, [reduced])
+  return (
+    <Scene>
+      <Kicker accent={theme.accent}>Looking at your day</Kicker>
+      <div style={{ width: 'min(420px, 78vw)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {rows.map((label, i) => (
+          <div key={i}
+            style={{
+              height: 40, borderRadius: 10, display: 'flex', alignItems: 'center', paddingLeft: 16,
+              background: i === 0 ? `linear-gradient(135deg, ${theme.accent}44, ${theme.accent}22)` : 'rgba(255,255,255,0.08)',
+              color: 'rgba(255,255,255,0.92)', fontSize: 14, fontWeight: 650,
+              opacity: stacked ? 1 : 0,
+              transform: stacked ? 'translateY(0)' : 'translateY(-28px)',
+              transition: reduced ? 'none' : `opacity 420ms ${i * 110}ms cubic-bezier(0.2,1.1,0.3,1), transform 420ms ${i * 110}ms cubic-bezier(0.2,1.1,0.3,1)`,
+            }}>
+            {label}
+          </div>
+        ))}
+      </div>
+      <p style={{ ...subtleLine, marginTop: 26 }}>A few things stood out.</p>
     </Scene>
   )
 }
@@ -102,7 +147,7 @@ function ActivityRow({ rank, item, max, accent, reduced }: { rank: number; item:
   )
 }
 
-function DidScene({ facts, insight, theme, reduced }: { facts: DayWrapFacts; insight: string | null; theme: Theme; reduced: boolean }) {
+function DidScene({ facts, theme, reduced }: { facts: DayWrapFacts; theme: Theme; reduced: boolean }) {
   const max = facts.workActivities[0]?.seconds ?? 1
   return (
     <Scene>
@@ -112,74 +157,73 @@ function DidScene({ facts, insight, theme, reduced }: { facts: DayWrapFacts; ins
           <ActivityRow key={item.name} rank={i + 1} item={item} max={max} accent={theme.accent} reduced={reduced} />
         ))}
       </div>
-      {insight && <p style={{ ...subtleLine, fontSize: 'clamp(16px,2.4vw,21px)', marginTop: 30 }}>{insight}</p>}
     </Scene>
   )
 }
 
-function RibbonScene({ facts, story, theme, reduced }: { facts: DayWrapFacts; story: string | null; theme: Theme; reduced: boolean }) {
-  const total = facts.ribbon.reduce((s, seg) => s + seg.seconds, 0) || 1
-  const [grown, setGrown] = useState(reduced)
-  useEffect(() => {
-    if (reduced) { setGrown(true); return }
-    const id = setTimeout(() => setGrown(true), 140)
-    return () => clearTimeout(id)
-  }, [reduced])
+const PART_LABEL: Record<DayStorySegment['part'], string> = { morning: 'Morning', midday: 'Midday', evening: 'Evening' }
+
+function StoryScene({ seg, line, theme }: { seg: DayStorySegment; line: string | null; theme: Theme }) {
+  const fallback = seg.items.length > 0
+    ? `${PART_LABEL[seg.part]} went to ${seg.items.slice(0, 2).map(lower).join(' and ')}.`
+    : `${PART_LABEL[seg.part]} was a quieter stretch.`
   return (
     <Scene>
-      <Kicker accent={theme.accent}>The shape of your day</Kicker>
-      <div style={{ width: '100%', maxWidth: 560 }}>
-        <div style={{ display: 'flex', width: '100%', height: 60, borderRadius: 12, overflow: 'hidden', background: 'rgba(255,255,255,0.06)' }}>
-          {facts.ribbon.map((seg, i) => (
-            <div key={`${seg.name}-${i}`} title={`${seg.name} · ${formatHm(seg.seconds)}`}
-              style={{
-                flexGrow: grown ? seg.seconds / total : 0, flexBasis: 0, minWidth: grown ? 4 : 0,
-                background: categoryColor(seg.category, seg.kind), opacity: 0.92,
-                borderRight: i < facts.ribbon.length - 1 ? '1px solid rgba(0,0,0,0.28)' : 'none',
-                transition: reduced ? 'none' : `flex-grow 0.9s ${i * 0.05}s cubic-bezier(0.16,1,0.3,1)`,
-              }} />
-          ))}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 9, fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: 600 }}>
-          <span>{facts.ribbonStartClock ?? ''}</span>
-          <span>{facts.ribbonEndClock ?? ''}</span>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px 18px', marginTop: 22 }}>
-          {dedupeLegend(facts.ribbon).slice(0, 4).map((seg) => (
-            <span key={seg.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'rgba(255,255,255,0.72)' }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, background: categoryColor(seg.category, seg.kind) }} />
-              {seg.name}
-            </span>
-          ))}
-        </div>
+      <Kicker accent={theme.accent}>{PART_LABEL[seg.part]} · {seg.clockStart} to {seg.clockEnd}</Kicker>
+      <h1 style={{ fontSize: 'clamp(26px, 4.2vw, 44px)', fontWeight: 750, lineHeight: 1.18, letterSpacing: '-0.02em', color: '#fff', margin: 0, maxWidth: '24ch' }}>
+        {line ?? fallback}
+      </h1>
+    </Scene>
+  )
+}
+
+function WhereScene({ facts, line, theme, reduced }: { facts: DayWrapFacts; line: string | null; theme: Theme; reduced: boolean }) {
+  const max = facts.appSites[0]?.seconds ?? 1
+  return (
+    <Scene>
+      <Kicker accent={theme.accent}>Where the time went</Kicker>
+      <div style={{ width: '100%', maxWidth: 540, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {facts.appSites.map((slice, i) => (
+          <DistRow key={`${slice.name}-${i}`} slice={slice} max={max} accent={slice.kind === 'other' ? 'rgba(255,255,255,0.34)' : theme.accent} reduced={reduced} rank={i} />
+        ))}
       </div>
-      {story && <p style={{ ...subtleLine, marginTop: 28 }}>{story}</p>}
+      {line && <p style={{ ...subtleLine, fontSize: 'clamp(16px,2.4vw,21px)', marginTop: 26 }}>{line}</p>}
     </Scene>
   )
 }
 
-function dedupeLegend(ribbon: RibbonSegment[]): RibbonSegment[] {
-  const byName = new Map<string, RibbonSegment>()
-  for (const seg of ribbon) {
-    const existing = byName.get(seg.name)
-    if (existing) existing.seconds += seg.seconds
-    else byName.set(seg.name, { ...seg })
-  }
-  return [...byName.values()].sort((a, b) => b.seconds - a.seconds)
+function DistRow({ slice, max, accent, reduced, rank }: { slice: AppSiteSlice; max: number; accent: string; reduced: boolean; rank: number }) {
+  const [fill, setFill] = useState(reduced ? 1 : 0)
+  useEffect(() => {
+    if (reduced) { setFill(1); return }
+    const id = setTimeout(() => setFill(1), 120 + rank * 80)
+    return () => clearTimeout(id)
+  }, [reduced, rank])
+  const pct = Math.round((slice.seconds / max) * 100)
+  return (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <span style={{ fontSize: 'clamp(15px, 2.2vw, 19px)', fontWeight: 650, color: slice.kind === 'other' ? 'rgba(255,255,255,0.6)' : '#fff', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slice.name}</span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'rgba(255,255,255,0.6)', whiteSpace: 'nowrap' }}>{formatHm(slice.seconds)}</span>
+      </div>
+      <div style={{ height: 5, background: 'rgba(255,255,255,0.09)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${fill * pct}%`, height: '100%', background: accent, borderRadius: 3, transition: reduced ? 'none' : 'width 0.9s cubic-bezier(0.16,1,0.3,1)' }} />
+      </div>
+    </div>
+  )
 }
 
-function StandoutScene({ facts, theme }: { facts: DayWrapFacts; theme: Theme }) {
-  const s = facts.standout!
+function WildcardScene({ facts, line, theme }: { facts: DayWrapFacts; line: string | null; theme: Theme }) {
+  const hook = facts.wildcardHook!
   return (
     <Scene>
-      <Kicker accent={theme.accent}>A standout</Kicker>
-      <HmCountUp
-        seconds={s.seconds}
-        style={{ fontSize: 'clamp(64px, 13vw, 112px)', fontWeight: 900, lineHeight: 0.95, letterSpacing: '-0.04em', color: theme.accent }}
-      />
-      <p style={{ ...subtleLine, marginTop: 26 }}>
-        your longest unbroken stretch, on {lower(s.name)}, {s.startClock} to {s.endClock}
-      </p>
+      <Kicker accent={theme.accent}>And one more thing</Kicker>
+      {hook.seconds != null ? (
+        <HmCountUp seconds={hook.seconds} style={{ fontSize: 'clamp(60px, 13vw, 110px)', fontWeight: 900, lineHeight: 0.95, letterSpacing: '-0.04em', color: theme.accent }} />
+      ) : (
+        <span style={{ fontSize: 'clamp(64px, 14vw, 120px)', fontWeight: 900, lineHeight: 0.95, letterSpacing: '-0.04em', color: theme.accent }}>{hook.value}</span>
+      )}
+      <p style={{ ...subtleLine, marginTop: 26 }}>{line ?? `${hook.caption}.`}</p>
     </Scene>
   )
 }
@@ -200,14 +244,16 @@ function dayShareModel(facts: DayWrapFacts, mode: WrapMode): ShareCardModel {
     statLabel: facts.standout ? 'Longest stretch' : undefined,
     statValue: facts.standout ? formatHm(facts.standout.seconds) : undefined,
     footer: mode === 'yesterday' ? 'yesterday, wrapped by Daylens' : 'wrapped by Daylens',
+    ...shareGradient(facts.seed),
   }
 }
 
 function FinaleScene({
-  facts, mode, theme, onClose, onOpenReport, onRestart, bridge,
+  facts, mode, theme, onClose, onOpenReport, onRestart, onRegenerate, generatedLabel,
 }: {
   facts: DayWrapFacts; mode: WrapMode; theme: Theme
-  onClose: () => void; onOpenReport: () => void; onRestart: () => void; bridge: string | null
+  onClose: () => void; onOpenReport: () => void; onRestart: () => void
+  onRegenerate: () => void; generatedLabel: string | null
 }) {
   const [saved, setSaved] = useState(false)
   const top3 = facts.isLeisureDay
@@ -239,7 +285,11 @@ function FinaleScene({
         )}
       </div>
 
-      {bridge && <p style={{ ...subtleLine, fontSize: 'clamp(15px,2.2vw,19px)', marginTop: 22 }}>{bridge}</p>}
+      {generatedLabel && (
+        <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', marginTop: 16, pointerEvents: 'all' }}>
+          generated {generatedLabel} · <button onClick={(e) => { e.stopPropagation(); onRegenerate() }} style={linkButton}>Regenerate</button>
+        </p>
+      )}
 
       <div style={finaleActions}>
         <button onClick={(e) => { e.stopPropagation(); void saveShareCard(dayShareModel(facts, mode), `daylens-${facts.date}.png`).then(setSaved) }} style={primaryButton(theme.accent)}>
@@ -260,6 +310,7 @@ export const cardSurface: CSSProperties = {
   textAlign: 'left', pointerEvents: 'none',
 }
 export const finaleActions: CSSProperties = { display: 'flex', gap: 12, marginTop: 28, pointerEvents: 'all', flexWrap: 'wrap', justifyContent: 'center' }
+const linkButton: CSSProperties = { background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, padding: 0 }
 
 // ─── Main component ─────────────────────────────────────────────────────────────
 
@@ -278,12 +329,21 @@ export default function DayWrapped({
   const facts = useMemo(() => buildDayWrapFacts(data), [data])
   const mode = useMemo(() => resolveMode(data.date), [data.date])
   const inProgress = mode === 'today' && new Date().getHours() < 18
+  const palette = useMemo<WrapPalette>(() => pickPalette(facts.seed), [facts.seed])
 
   const [provider, setProvider] = useState<WrapProviderState | null>(null)
   const [narrative, setNarrative] = useState<AIWrappedNarrative | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [generatedAt, setGeneratedAt] = useState<number | null>(null)
+  // The 2h tracked-work gate applies to the LIVE day only. A finished day is
+  // always available. "Generate anyway" is the quiet escape hatch.
+  const underThreshold = mode === 'today' && facts.workSeconds < WORK_THRESHOLD_SECONDS && facts.quality !== 'empty'
+  const [forced, setForced] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const gated = underThreshold && !forced
 
   useEffect(() => {
+    if (gated) { setLoaded(true); return }
     let cancelled = false
     setLoaded(false)
     setNarrative(null)
@@ -292,32 +352,47 @@ export default function DayWrapped({
       if (cancelled) return
       setProvider(state)
       if (!state.connected) { setLoaded(true); return }
-      const day = await ipc.ai.getWrappedNarrative(data.date).catch(() => null)
+      const day = await ipc.ai.getWrappedNarrative(data.date, reloadKey > 0).catch(() => null)
       if (cancelled) return
       setNarrative(day ?? null)
+      setGeneratedAt(Date.now())
       setLoaded(true)
     })()
     return () => { cancelled = true }
-  }, [data.date])
+  }, [data.date, gated, reloadKey])
+
+  const generatedLabel = generatedAt ? relativeTime(generatedAt) : null
 
   const scenes: BuiltScene[] = useMemo(() => {
-    if (!loaded || !provider) return [{ theme: THEME.rest, render: () => <MessageScene kicker="Wrapped" title="Writing your wrap…" theme={THEME.rest} /> }]
-    if (!provider.connected) return [{
-      theme: THEME.rest,
+    // Under the live-day threshold: the light line + a quiet "Generate anyway".
+    if (gated) return [{
+      theme: palette.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="No provider connected, so there's no wrap." theme={THEME.rest}
+        <MessageScene kicker="Today so far" title={underThresholdLine(facts.workSeconds)} theme={palette.rest}>
+          <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
+            <button onClick={(e) => { e.stopPropagation(); setForced(true) }} style={ghostButton}>Generate anyway</button>
+            <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Not yet</button>
+          </div>
+        </MessageScene>
+      ),
+    }]
+    if (!loaded || !provider) return [{ theme: palette.rest, render: () => <MessageScene kicker="Wrapped" title="Writing your wrap…" theme={palette.rest} /> }]
+    if (!provider.connected) return [{
+      theme: palette.rest,
+      render: () => (
+        <MessageScene kicker="Wrapped" title="No provider connected, so there's no wrap." theme={palette.rest}
           body="Connect one in Settings and your day gets written up.">
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
-            <button onClick={(e) => { e.stopPropagation(); if (onOpenSettings) onOpenSettings(); else onClose() }} style={primaryButton(THEME.rest.accent)}>Open Settings →</button>
+            <button onClick={(e) => { e.stopPropagation(); if (onOpenSettings) onOpenSettings(); else onClose() }} style={primaryButton(palette.rest.accent)}>Open Settings →</button>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Dismiss</button>
           </div>
         </MessageScene>
       ),
     }]
     if (facts.quality === 'empty' || facts.activeSeconds <= 0 || !narrative) return [{
-      theme: THEME.rest,
+      theme: palette.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="A quiet one." body="Not much tracked yet. Come back once the day has more in it." theme={THEME.rest}>
+        <MessageScene kicker="Wrapped" title="A quiet one." body="Not much tracked yet. Come back once the day has more in it." theme={palette.rest}>
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Done</button>
           </div>
@@ -326,24 +401,73 @@ export default function DayWrapped({
     }]
 
     const out: BuiltScene[] = []
-    out.push({ theme: THEME.cover, render: () => <CoverScene facts={facts} mode={mode} inProgress={inProgress} theme={THEME.cover} /> })
-    out.push({ theme: THEME.headline, render: () => <HeadlineScene facts={facts} lead={narrative.lead} inProgress={inProgress} theme={THEME.headline} /> })
+    const stem = `daylens-${facts.date}`
+    out.push({ theme: palette.cover, render: () => <CoverScene facts={facts} mode={mode} inProgress={inProgress} theme={palette.cover} /> })
+
+    if (!facts.isLeisureDay && facts.workActivities.length > 0) {
+      out.push({ theme: palette.did, render: () => <BuildBeatScene facts={facts} theme={palette.did} reduced={reduced} /> })
+    }
+
+    out.push({
+      theme: palette.headline,
+      render: () => <HeadlineScene facts={facts} lead={narrative.lead} inProgress={inProgress} theme={palette.headline} />,
+      share: dayShareModel(facts, mode), shareName: `${stem}-headline`,
+    })
+
     if (!facts.isLeisureDay) {
       if (facts.workActivities.length > 0 && facts.workSeconds >= 15 * 60) {
-        out.push({ theme: THEME.did, render: () => <DidScene facts={facts} insight={narrative.slides.topApp} theme={THEME.did} reduced={reduced} /> })
+        out.push({
+          theme: palette.did, render: () => <DidScene facts={facts} theme={palette.did} reduced={reduced} />,
+          share: dayShareModel(facts, mode), shareName: `${stem}-did`,
+        })
       }
-      if (facts.ribbon.length >= 2) {
-        out.push({ theme: THEME.shape, render: () => <RibbonScene facts={facts} story={narrative.slides.scale} theme={THEME.shape} reduced={reduced} /> })
+
+      // The day as a story: lead with morning, then the busier of midday/evening.
+      const beats: Array<{ seg: DayStorySegment; line: string | null }> = []
+      if (facts.dayStory.morning) beats.push({ seg: facts.dayStory.morning, line: narrative.story.morning })
+      const mid = facts.dayStory.midday
+      const eve = facts.dayStory.evening
+      const later = mid && eve ? (eve.seconds > mid.seconds ? eve : mid) : (mid ?? eve)
+      const laterLine = later === eve ? narrative.story.evening : narrative.story.midday
+      if (later) beats.push({ seg: later, line: laterLine })
+      for (const beat of beats.slice(0, 2)) {
+        out.push({ theme: palette.shape, render: () => <StoryScene seg={beat.seg} line={beat.line} theme={palette.shape} /> })
       }
-      if (facts.standout) {
-        out.push({ theme: THEME.standout, render: () => <StandoutScene facts={facts} theme={THEME.standout} /> })
+
+      if (facts.appSites.length >= 2) {
+        out.push({
+          theme: palette.thread, render: () => <WhereScene facts={facts} line={narrative.whereLine} theme={palette.thread} reduced={reduced} />,
+          share: dayShareModel(facts, mode), shareName: `${stem}-where`,
+        })
+      }
+
+      if (facts.wildcardHook) {
+        out.push({ theme: palette.standout, render: () => <WildcardScene facts={facts} line={narrative.wildcard} theme={palette.standout} /> })
       }
     }
-    // No open-thread / carryover slide, and no "pick it up" bridge (locked
-    // decision): Daylens never predicts tomorrow. The finale closes the day.
-    out.push({ theme: THEME.finale, render: (onRestart) => <FinaleScene facts={facts} mode={mode} theme={THEME.finale} onClose={onClose} onOpenReport={onOpenReport} onRestart={onRestart} bridge={null} /> })
+
+    out.push({
+      theme: palette.finale,
+      render: (onRestart) => (
+        <FinaleScene
+          facts={facts} mode={mode} theme={palette.finale} onClose={onClose} onOpenReport={onOpenReport}
+          onRestart={onRestart} onRegenerate={() => setReloadKey((k) => k + 1)} generatedLabel={generatedLabel}
+        />
+      ),
+      share: dayShareModel(facts, mode), shareName: `${stem}-finale`,
+    })
     return out
-  }, [loaded, provider, facts, narrative, mode, inProgress, reduced, onClose, onOpenReport, onOpenSettings])
+  }, [gated, loaded, provider, facts, narrative, mode, inProgress, reduced, palette, generatedLabel, onClose, onOpenReport, onOpenSettings])
 
   return <WrapStory scenes={scenes} onClose={onClose} />
+}
+
+function relativeTime(ms: number): string {
+  const diff = Date.now() - ms
+  if (diff < 60_000) return 'just now'
+  const mins = Math.round(diff / 60_000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
 }

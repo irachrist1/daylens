@@ -622,15 +622,19 @@ test('clearing a corrected review reverts the block to its computed label', () =
   db.close()
 })
 
-// timeline.md §4: today, before it has been analyzed, is one provisional block
-// per idle-bounded stretch — neutral "Active now", never per-activity named.
-test('the live day shows provisional blocks until it is analyzed', () => {
+// timeline.md §4: today, before it has been analyzed, is ONE provisional block
+// for the whole day — neutral "Active now", never split or per-activity named.
+// Daylens makes no claim about the day's shape until the user analyzes it.
+test('the live day is one provisional block until it is analyzed', () => {
   const db = createDb()
   const today = dateStringForOffset(0)
+  // Two stretches separated by a long idle gap — pre-change this would have been
+  // two coarse provisional blocks; now it must collapse to a single one.
   insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
+  insertSession(db, { title: 'Inbox - Gmail - Google Chrome', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'communication', startMinute: 180, durationMinutes: 30, dateStr: today })
 
   const blocks = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
-  assert.ok(blocks.length >= 1, 'today should still produce a block')
+  assert.equal(blocks.length, 1, `today should be one provisional block, got ${blocks.length}`)
   assert.ok(blocks.every((block) => block.provisional === true), 'today blocks are provisional before analysis')
   assert.ok(blocks.every((block) => block.label.current === 'Active now'), `provisional blocks are neutral, got ${blocks.map((b) => b.label.current).join(', ')}`)
   db.close()

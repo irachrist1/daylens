@@ -142,7 +142,7 @@ const api = {
   },
   db: {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
-    rebuildTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date),
+    rebuildTimelineDay: (date: string, hint?: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
     getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
@@ -214,8 +214,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, daysOrDate, force }),
     prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
-    getWrappedNarrative: (date: string): Promise<AIWrappedNarrative | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date }),
+    getWrappedNarrative: (date: string, force?: boolean): Promise<AIWrappedNarrative | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date, force }),
     getWrappedPeriodWrap: (period: WrappedPeriod, anchorDate: string): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate }),
     getWrapProviderState: (): Promise<WrapProviderState> =>

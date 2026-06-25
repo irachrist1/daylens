@@ -17,9 +17,9 @@ import {
   type AITextJobExecutionOptions,
   type ProviderTextResponse,
 } from './aiOrchestration'
+import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import {
   buildFallbackNarrative,
-  buildWrappedFactsFromPayload,
   buildWrappedPrompts,
   computeFactsHash,
   validateWrappedNarrativeResponse,
@@ -52,12 +52,15 @@ const NARRATIVE_TIMEOUT_MS = 12_000
 
 export async function getWrappedNarrative(
   payload: DayTimelinePayload,
-  options: { triggerSource?: AIInvocationSource } = {},
+  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
 ): Promise<AIWrappedNarrative> {
-  const facts = buildWrappedFactsFromPayload(payload)
+  const facts = buildDayWrapFacts(payload)
   const factsHash = computeFactsHash(facts)
   const cacheKey = wrappedNarrativeCacheKey(facts, factsHash)
 
+  // A wrap is never silently regenerated (DEV-118): a cached wrap is shown as-is.
+  // Only an explicit Regenerate (force) clears the entry and spends a new call.
+  if (options.force) narrativeCache.delete(cacheKey)
   const cached = narrativeCache.get(cacheKey)
   if (cached) return cached
 

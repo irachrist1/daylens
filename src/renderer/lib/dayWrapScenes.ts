@@ -44,6 +44,52 @@ export interface WrapStandout {
   name: string
 }
 
+/** One slice of the "where the time went" chart. Apps and sites are named as
+ *  they brand themselves (Cursor, YouTube) because this is the one card where the
+ *  tool IS the point. Slices + "Other" sum to activeSeconds, so the chart
+ *  reconciles to the headline exactly (wrapped.md §5.1.3). */
+export interface AppSiteSlice {
+  name: string
+  seconds: number
+  kind: 'app' | 'site' | 'other'
+  category: AppCategory
+}
+
+export type WrapHookKind =
+  | 'longestStretch' | 'peakWindow' | 'topApp' | 'count' | 'earlyBird' | 'nightOwl' | 'rangeSpan'
+
+/** A true, computed candidate for the wildcard / lead angle. The model only ever
+ *  phrases one of these; it never derives its own (wrapped.md §6). */
+export interface WrapHook {
+  kind: WrapHookKind
+  /** The load-bearing value, already formatted ("2h 14m", "8am", "14"). */
+  value: string
+  /** A plain-language description of what the value means. */
+  caption: string
+  /** Active seconds, when the hook is a duration (for the count-up). */
+  seconds?: number
+}
+
+/** One part of the day, with the human work names touched in it. The model
+ *  narrates "morning was X, then Y" from this; the names are already humanized
+ *  so a raw filename can never reach the prose. */
+export interface DayStorySegment {
+  part: 'morning' | 'midday' | 'evening'
+  clockStart: string
+  clockEnd: string
+  seconds: number
+  /** Humanized work activities touched in this part of the day, most time first. */
+  items: string[]
+  /** A friendly leisure surface that shared this window, if one was notable. */
+  aside: string | null
+}
+
+export interface DayStory {
+  morning: DayStorySegment | null
+  midday: DayStorySegment | null
+  evening: DayStorySegment | null
+}
+
 export type WrapQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
 
 export interface DayWrapFacts {
@@ -68,6 +114,17 @@ export interface DayWrapFacts {
   topLeisure: string[]
   isLeisureDay: boolean
   quality: WrapQuality
+  /** Stable per-day seed (from the date). Drives palette / layout / which hook
+   *  leads, so a day is identical on reopen but different from the day before. */
+  seed: number
+  /** Where the time went: app + site distribution, summing to activeSeconds. */
+  appSites: AppSiteSlice[]
+  /** 3 to 5 true candidate hooks; the model phrases one as the wildcard. */
+  candidateHooks: WrapHook[]
+  /** The single hook the seed picked to lead the wildcard card. */
+  wildcardHook: WrapHook | null
+  /** The day as a story: morning / midday / evening, each with real work names. */
+  dayStory: DayStory
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -207,6 +264,14 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
   const tracked = workSeconds + leisureSeconds + personalSeconds
   const isLeisureDay = tracked > 0 && leisureSeconds >= workSeconds && leisureSeconds / tracked >= 0.5
 
+  const seed = seedFromDate(payload.date)
+  const appSites = buildAppSiteDistribution(blocks, activeSeconds)
+  const dayStory = buildDayStory(blocks)
+  const candidateHooks = buildCandidateHooks(blocks, standout, workActivities, appSites)
+  const wildcardHook = candidateHooks.length > 0
+    ? candidateHooks[seed % candidateHooks.length]
+    : null
+
   return {
     date: payload.date,
     weekday,
@@ -223,7 +288,189 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     topLeisure,
     isLeisureDay,
     quality: qualityForSeconds(activeSeconds),
+    seed,
+    appSites,
+    candidateHooks,
+    wildcardHook,
+    dayStory,
   }
+}
+
+// ─── Seed (stable per day, different day to day) ──────────────────────────────
+
+/** A small deterministic integer from the date string. Same day → same seed
+ *  (the wrap is identical on reopen); adjacent days differ (the look changes). */
+export function seedFromDate(date: string): number {
+  let h = 2166136261
+  for (let i = 0; i < date.length; i++) {
+    h ^= date.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return Math.abs(h)
+}
+
+// ─── Where the time went: app + site distribution ────────────────────────────
+
+const MAX_APP_SITE_SLICES = 6
+
+/** App and website distribution across the day, summed from block evidence and
+ *  reconciled to activeSeconds by folding the remainder into "Other". */
+function buildAppSiteDistribution(blocks: WorkContextBlock[], activeSeconds: number): AppSiteSlice[] {
+  const byName = new Map<string, AppSiteSlice>()
+  for (const block of blocks) {
+    const kind = effectiveBlockKind(block)
+    if (kind === 'idle') continue
+    // Browsers contribute their sites, not the browser shell; everything else
+    // contributes the app. This is what makes the chart read as real surfaces.
+    const browserSeconds = block.topApps
+      .filter((a) => a.isBrowser)
+      .reduce((s, a) => s + Math.max(0, a.totalSeconds), 0)
+    for (const app of block.topApps) {
+      if (app.category === 'system' || app.isBrowser) continue
+      const key = `app:${app.appName.toLowerCase()}`
+      const existing = byName.get(key)
+      const seconds = Math.max(0, app.totalSeconds)
+      if (existing) existing.seconds += seconds
+      else byName.set(key, { name: app.appName, seconds, kind: 'app', category: app.category })
+    }
+    if (browserSeconds > 0) {
+      const sites = block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds)
+      const siteTotal = sites.reduce((s, w) => s + Math.max(0, w.totalSeconds), 0) || 1
+      for (const site of sites) {
+        const name = friendlyDomain(site.domain)
+        if (!name) continue
+        // Scale site seconds into the browser's share of this block so sites and
+        // apps live on one comparable axis.
+        const seconds = Math.round((Math.max(0, site.totalSeconds) / siteTotal) * browserSeconds)
+        if (seconds <= 0) continue
+        const key = `site:${name.toLowerCase()}`
+        const existing = byName.get(key)
+        if (existing) existing.seconds += seconds
+        else byName.set(key, { name, seconds, kind: 'site', category: block.dominantCategory })
+      }
+    }
+  }
+
+  const ranked = [...byName.values()].filter((s) => s.seconds > 0).sort((a, b) => b.seconds - a.seconds)
+  const top = ranked.slice(0, MAX_APP_SITE_SLICES)
+  const accounted = top.reduce((s, slice) => s + slice.seconds, 0)
+  const remainder = Math.max(0, activeSeconds - accounted)
+  // Fold everything unaccounted (untracked gaps, tiny apps, rounding) into one
+  // honest "Other" slice so the chart sums to the headline exactly.
+  if (remainder >= 60) top.push({ name: 'Other', seconds: remainder, kind: 'other', category: 'uncategorized' })
+  return top
+}
+
+// ─── The day as a story (morning / midday / evening) ─────────────────────────
+
+function partOfDay(ms: number): 'morning' | 'midday' | 'evening' {
+  const hour = new Date(ms).getHours()
+  if (hour < 12) return 'morning'
+  if (hour < 17) return 'midday'
+  return 'evening'
+}
+
+function buildDayStory(blocks: WorkContextBlock[]): DayStory {
+  const buckets: Record<'morning' | 'midday' | 'evening', WorkContextBlock[]> = { morning: [], midday: [], evening: [] }
+  for (const block of blocks) {
+    if (effectiveBlockKind(block) === 'idle') continue
+    buckets[partOfDay(block.startTime)].push(block)
+  }
+  const seg = (part: 'morning' | 'midday' | 'evening'): DayStorySegment | null => {
+    const list = buckets[part].slice().sort((a, b) => a.startTime - b.startTime)
+    if (list.length === 0) return null
+    const seconds = list.reduce((s, b) => s + blockActiveSeconds(b), 0)
+    if (seconds < 5 * 60) return null
+    const byName = new Map<string, number>()
+    let asideName: string | null = null
+    let asideSeconds = 0
+    for (const block of list) {
+      const kind = effectiveBlockKind(block)
+      if (kind === 'work') {
+        const name = workActivityName(block)
+        if (name) byName.set(name, (byName.get(name) ?? 0) + blockActiveSeconds(block))
+      } else if (kind === 'leisure') {
+        const domains = block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
+        const friendly = leisureActivityTitle(domains)
+        const s = blockActiveSeconds(block)
+        if (s > asideSeconds) { asideSeconds = s; asideName = friendly }
+      }
+    }
+    const items = [...byName.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name]) => name)
+    return {
+      part,
+      clockStart: formatClock(list[0].startTime),
+      clockEnd: formatClock(list[list.length - 1].endTime),
+      seconds,
+      items,
+      aside: asideName,
+    }
+  }
+  return { morning: seg('morning'), midday: seg('midday'), evening: seg('evening') }
+}
+
+// ─── Candidate hooks (true, computed; the model phrases one) ──────────────────
+
+function buildCandidateHooks(
+  blocks: WorkContextBlock[],
+  standout: WrapStandout | null,
+  workActivities: WrapActivity[],
+  appSites: AppSiteSlice[],
+): WrapHook[] {
+  const hooks: WrapHook[] = []
+
+  if (standout) {
+    hooks.push({
+      kind: 'longestStretch',
+      value: formatHm(standout.seconds),
+      caption: `your longest unbroken stretch, on ${lowerName(standout.name)}`,
+      seconds: standout.seconds,
+    })
+  }
+
+  // Peak window: which third of the day held the most work.
+  const windows: Record<'morning' | 'midday' | 'evening', number> = { morning: 0, midday: 0, evening: 0 }
+  for (const block of blocks) {
+    if (effectiveBlockKind(block) !== 'work') continue
+    windows[partOfDay(block.startTime)] += blockActiveSeconds(block)
+  }
+  const peak = (Object.entries(windows) as Array<['morning' | 'midday' | 'evening', number]>)
+    .sort((a, b) => b[1] - a[1])[0]
+  if (peak && peak[1] >= 30 * 60) {
+    const word = peak[0] === 'morning' ? 'the morning' : peak[0] === 'midday' ? 'the afternoon' : 'the evening'
+    hooks.push({ kind: 'peakWindow', value: formatHm(peak[1]), caption: `your best stretch was in ${word}`, seconds: peak[1] })
+    if (peak[0] === 'morning' && windows.morning >= windows.midday + windows.evening) {
+      hooks.push({ kind: 'earlyBird', value: formatHm(windows.morning), caption: 'most of the work landed before noon' })
+    }
+    if (peak[0] === 'evening' && windows.evening >= 60 * 60) {
+      hooks.push({ kind: 'nightOwl', value: formatHm(windows.evening), caption: 'the evening did the heavy lifting' })
+    }
+  }
+
+  // A count: the most-returned-to surface across the day.
+  const topApp = appSites.find((s) => s.kind !== 'other')
+  if (topApp) {
+    const blockCount = blocks.filter((b) => b.topApps.some((a) => a.appName.toLowerCase() === topApp.name.toLowerCase())).length
+    if (blockCount >= 3) {
+      hooks.push({ kind: 'count', value: String(blockCount), caption: `separate times you came back to ${topApp.name}` })
+    }
+  }
+
+  // A juxtaposition: the top two activities, side by side.
+  if (workActivities.length >= 2) {
+    hooks.push({
+      kind: 'topApp',
+      value: formatHm(workActivities[0].seconds),
+      caption: `on ${lowerName(workActivities[0].name)}, more than anything else`,
+      seconds: workActivities[0].seconds,
+    })
+  }
+
+  return hooks.slice(0, 5)
+}
+
+function lowerName(s: string): string {
+  return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1)
 }
 
 function buildRibbon(blocks: WorkContextBlock[]): RibbonSegment[] {

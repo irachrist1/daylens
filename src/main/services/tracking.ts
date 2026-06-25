@@ -1426,6 +1426,15 @@ export function getCurrentSession(): LiveSession | null {
   return currentSession
 }
 
+// Close out the in-flight session to the DB right now, giving it a real id. A
+// merge that includes the still-live block has nothing stable to pin its
+// boundary correction to (the live session is ephemeral, id -1), so the merge
+// would re-split on the next tick. Flushing first turns the live block into a
+// persisted block the merge can anchor on. The next poll starts a fresh session.
+export function flushCurrentSession(): void {
+  flushCurrent(undefined, 'user_merge')
+}
+
 // ─── Poll ─────────────────────────────────────────────────────────────────────
 
 async function poll(): Promise<void> {

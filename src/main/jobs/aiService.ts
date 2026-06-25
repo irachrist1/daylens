@@ -147,7 +147,8 @@ import { buildCLIProcessPayload, buildCLIProcessSpec } from '../services/cliLaun
 import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
-import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
+import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
+import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { converse, looksLikeGreeting } from '../ai/converse'
 import { getCurrentTrace, maybeStartTrace, setCurrentTrace } from '../ai/trace'
 
@@ -4002,6 +4003,10 @@ export async function generateWorkBlockInsight(
     // same evidence produces the same label and "Regenerate" feels like a
     // no-op.
     rejectedLabel?: string
+    // A freeform note the user typed about what they actually did today (from
+    // the "done for the day?" wrap flow). Used as a strong grounding hint when
+    // the evidence alone is ambiguous — never overrides the evidence wholesale.
+    userHint?: string
   },
 ): Promise<WorkContextInsight> {
   const systemPrompt = [
@@ -4023,9 +4028,15 @@ export async function generateWorkBlockInsight(
           screen: 'timeline_day',
           triggerSource: options?.triggerSource ?? (block.isLive ? 'system' : 'background'),
           systemPrompt,
-          userMessage: options?.rejectedLabel?.trim()
-            ? `${workBlockPrompt(block)}\n\nThe previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
-            : workBlockPrompt(block),
+          userMessage: [
+            workBlockPrompt(block),
+            options?.rejectedLabel?.trim()
+              ? `The previous label "${options.rejectedLabel.trim()}" was marked inaccurate by the user. Produce a clearly different, more accurate label grounded only in the evidence above.`
+              : '',
+            options?.userHint?.trim()
+              ? `The user described their day as: "${options.userHint.trim()}". Treat this as a strong hint for what they were doing, but stay grounded in the evidence above, and only apply it where it fits this block's activity.`
+              : '',
+          ].filter(Boolean).join('\n\n'),
         },
         sendWithProvider,
       ),
@@ -4062,6 +4073,95 @@ export async function generateWorkBlockInsight(
       })
     }
     return insight
+  }
+}
+
+const DAY_REGROUP_TIMEOUT_MS = 60_000
+
+function hhmmForTimestamp(ts: number): string {
+  const date = new Date(ts)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+// Compact, evidence-led description of every block on the day, in order, for the
+// regroup planner. One model call sees the WHOLE day at once so it can decide
+// which adjacent blocks are the same continued intent (timeline.md §3.3) — the
+// per-block namer never sees its neighbours and so can never make this call.
+function dayRegroupPrompt(blocks: WorkContextBlock[], userHint?: string): string {
+  const blockLines = blocks.map((block, index) => {
+    const dur = Math.max(1, Math.round(blockActiveSeconds(block) / 60))
+    const apps = block.topApps.slice(0, 4).map((app) => app.appName).filter(Boolean).join(', ')
+    const titles = (block.evidenceSummary.windowTitles ?? [])
+      .filter((w) => w.title?.trim())
+      .slice(0, 3)
+      .map((w) => `"${w.title.slice(0, 60)}"`)
+      .join('; ')
+    const sites = block.websites.slice(0, 3).map((site) => site.domain).filter(Boolean).join(', ')
+    return [
+      `[${index}] ${hhmmForTimestamp(block.startTime)}-${hhmmForTimestamp(block.endTime)} (${dur}m) · ${block.dominantCategory}`,
+      `    labelled now: ${userVisibleLabelForBlock(block)}`,
+      apps ? `    apps: ${apps}` : '',
+      titles ? `    on screen: ${titles}` : '',
+      sites ? `    sites: ${sites}` : '',
+    ].filter(Boolean).join('\n')
+  })
+
+  const lines = [
+    'Here are today\'s timeline blocks, in order. They were cut by simple rules and tend to be SPLIT TOO FINELY — one real activity is often broken across several adjacent blocks.',
+    'Your job: group the blocks that are the SAME continued activity into one block. Return strict JSON: {"groups": [[0,1,2],[3],[4,5]]}.',
+    'Rules:',
+    '  - Each inner array is a run of CONSECUTIVE block indices that are one continued intent/goal/project and should become a single block.',
+    '  - Every index 0..N-1 appears exactly once, in order. A block that stands on its own is its own one-element group.',
+    '  - Merge ONLY genuinely-same work: the same task or project continued (e.g. setting up the work network across Terminal, the Ubiquiti dashboard, and diagnostics is ONE thing). A short peek at streaming/social between two stretches of the same work does not break the run — keep merging across it.',
+    '  - Keep genuinely DIFFERENT goals separate: coding a feature, a meeting, and unrelated admin are different blocks even when back-to-back. When unsure, keep them separate.',
+    '  - Never group to just shrink the count, and never invent a connection the evidence does not show. You may only GROUP existing blocks — never split one.',
+    '',
+    `Blocks (${blocks.length}):`,
+    blockLines.join('\n'),
+    userHint ? `\nThe user described their day as: "${userHint}". Use it only to recognise which blocks are the same thread; never invent activity it does not support.` : '',
+  ].filter(Boolean)
+  return lines.join('\n')
+}
+
+// Plan how to regroup a day's heuristic blocks into fewer, same-intent blocks.
+// Returns the runs of consecutive block indices to merge (singletons stay as is)
+// or null when the AI is unavailable / returns an unusable plan — the caller
+// then leaves the day on its heuristic blocks (timeline.md §5 fallback). The
+// merged blocks are NAMED by the existing per-block namer, which reads the full
+// combined evidence and produces one coherent title (§3.3).
+export async function generateDayRegroupPlan(
+  blocks: WorkContextBlock[],
+  options?: { userHint?: string },
+): Promise<number[][] | null> {
+  if (blocks.length < 2) return null
+
+  const systemPrompt = [
+    VOICE_SYSTEM_PROMPT,
+    'You are Daylens.',
+    'You decide which adjacent timeline blocks are the same continued activity and should be one block.',
+    'You only group blocks that are already there — you never split, rename, or invent activity.',
+    'Return only valid JSON.',
+  ].join(' ')
+
+  try {
+    const { text } = await withTimeout(
+      executeTextAIJob(
+        {
+          jobType: 'block_cleanup_relabel',
+          screen: 'timeline_day',
+          triggerSource: 'user',
+          systemPrompt,
+          userMessage: dayRegroupPrompt(blocks, options?.userHint?.trim() || undefined),
+        },
+        sendWithProvider,
+      ),
+      DAY_REGROUP_TIMEOUT_MS,
+      'Day regroup timed out',
+    )
+    return parseDayRegroupGroups(text, blocks.length)
+  } catch (error) {
+    console.warn('[timeline] AI day regroup failed:', error)
+    return null
   }
 }
 
@@ -4514,6 +4614,15 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
       }
       return { ...inner, providerCallCount: providerCalls }
     })
+    // SOFT voice guard (ai.md §5 voice). The answer has already streamed to the
+    // user by now, so this only ever LOGS a banned phrase for voice monitoring —
+    // it never throws and never rewrites the answer. A hard guard here would
+    // crash a live chat over a single word already on screen.
+    const answerText = result.assistantMessage?.content
+    if (answerText) {
+      const banned = findBannedVocab(answerText)
+      if (banned) console.warn(`[ai:voice] banned vocabulary in chat answer: "${banned}"`)
+    }
     if (recorder) {
       recorder.finish(result.assistantMessage?.content)
     }

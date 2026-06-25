@@ -23,7 +23,13 @@ const polarApiBaseUrl = (process.env.POLAR_API_BASE_URL || 'https://api.polar.sh
 const flutterwaveApiBaseUrl = (process.env.FLUTTERWAVE_API_BASE_URL || 'https://api.flutterwave.com/v3').replace(/\/+$/, '')
 const fairUseMicros = Math.round(Number(process.env.SUBSCRIPTION_FAIR_USE_USD || 20) * 1_000_000)
 const managedProvider = process.env.DAYLENS_MANAGED_PROVIDER || 'anthropic'
-const managedModel = process.env.DAYLENS_MANAGED_MODEL || 'daylens-default'
+// The real upstream model LiteLLM proxies to, and the name we show/record. This is
+// the value litellm-config.yaml reads as `os.environ/DAYLENS_MANAGED_MODEL`.
+const managedModel = process.env.DAYLENS_MANAGED_MODEL || 'anthropic/claude-sonnet-4-6'
+// The public alias the billing server sends to LiteLLM as the request `model`. It MUST
+// match a `model_name` in litellm-config.yaml (which maps it to `managedModel`). Sending
+// the real model name here would match no model_name and every managed call would 404.
+const litellmModelAlias = process.env.LITELLM_MODEL_ALIAS || 'daylens-default'
 const localPassAmount = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF || 15000)
 
 function assertProductionSafety() {
@@ -519,7 +525,7 @@ async function managedCompletion(req, res) {
     },
     body: JSON.stringify({
       ...parsed.json,
-      model: managedModel,
+      model: litellmModelAlias,
       stream: false,
       metadata: { account_id: account.id, feature },
     }),

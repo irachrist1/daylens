@@ -382,6 +382,14 @@ a[href], button.link-style {
   animation: aiCaretBlink 1s steps(1) infinite;
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.rename-ai-spin {
+  animation: spin 0.7s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ai-message-in { animation: none; }
   .ai-caret { animation: none; }

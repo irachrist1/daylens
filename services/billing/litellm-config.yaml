@@ -1,3 +1,7 @@
+# `model_name` is the public alias the billing server sends (LITELLM_MODEL_ALIAS,
+# default `daylens-default`). `litellm_params.model` is the real upstream model
+# (DAYLENS_MANAGED_MODEL). The two are different on purpose: the server never sends
+# the real model name, only the alias.
 model_list:
   - model_name: daylens-default
     litellm_params:

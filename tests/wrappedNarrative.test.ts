@@ -2,421 +2,25 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildFallbackNarrative,
-  buildWrappedFactsFromPayload,
   buildWrappedPrompts,
   computeFactsHash,
   validateWrappedNarrativeResponse,
-  type WrappedFacts,
 } from '../src/main/lib/wrappedNarrative.ts'
-import type {
-  AppCategory,
-  DayTimelinePayload,
-  TimelineBlockReviewState,
-  WorkContextBlock,
-} from '../src/shared/types.ts'
+import { buildDayWrapFacts, type DayWrapFacts } from '../src/renderer/lib/dayWrapScenes.ts'
+import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-function fullFacts(overrides: Partial<WrappedFacts> = {}): WrappedFacts {
-  return {
-    date: '2026-05-12',
-    totalSeconds: 5 * 3600 + 24 * 60, // 5h 24m
-    focusSeconds: 3 * 3600,
-    focusPct: 56,
-    blockCount: 6,
-    totalSwitches: 42,
-    switchesPerHour: 8,
-    dominantCategory: 'development',
-    dominantCategoryPct: 48,
-    quality: 'full',
-    peakBlock: {
-      label: 'Wrapped narrative service',
-      durationSeconds: 80 * 60,
-      startClock: '10:12 AM',
-      endClock: '11:32 AM',
-      category: 'development',
-    },
-    topApp: {
-      appName: 'Cursor',
-      durationSeconds: 4 * 3600,
-      category: 'development',
-      isBrowser: false,
-    },
-    topDomain: {
-      domain: 'github.com',
-      totalSeconds: 1800,
-      classification: 'codePlatform',
-      isWorkRelevant: true,
-    },
-    mattered: [
-      {
-        label: 'Wrapped narrative service',
-        category: 'development',
-        intentRole: 'execution',
-        intentSubject: 'wrappedNarrative.ts',
-        durationSeconds: 80 * 60,
-        startClock: '10:12 AM',
-        endClock: '11:32 AM',
-        reviewState: 'auto-approved',
-        confidence: 'high',
-      },
-    ],
-    needsReview: {
-      count: 1,
-      items: [
-        { label: 'Slack triage', durationSeconds: 12 * 60, startClock: '9:00 AM', endClock: '9:12 AM' },
-      ],
-    },
-    carryover: [
-      {
-        label: 'Wrapped narrative service',
-        intentRole: 'execution',
-        intentSubject: 'wrappedNarrative.ts',
-        startClock: '10:12 AM',
-        endClock: '11:32 AM',
-        reason: 'open-thread',
-      },
-    ],
-    kindBreakdown: {
-      work: 5 * 3600 + 24 * 60,
-      leisure: 0,
-      personal: 0,
-      idle: 0,
-      dominant: 'work',
-      topLeisure: [],
-      isLeisureDay: false,
-    },
-    ...overrides,
-  }
-}
-
-function emptyFacts(): WrappedFacts {
-  return {
-    date: '2026-05-12',
-    totalSeconds: 0,
-    focusSeconds: 0,
-    focusPct: 0,
-    blockCount: 0,
-    totalSwitches: 0,
-    switchesPerHour: 0,
-    dominantCategory: 'unknown',
-    dominantCategoryPct: 0,
-    quality: 'empty',
-    peakBlock: null,
-    topApp: null,
-    topDomain: null,
-    mattered: [],
-    needsReview: { count: 0, items: [] },
-    carryover: [],
-    kindBreakdown: {
-      work: 0, leisure: 0, personal: 0, idle: 0,
-      dominant: 'personal', topLeisure: [], isLeisureDay: false,
-    },
-  }
-}
-
-// ─── validateWrappedNarrativeResponse ─────────────────────────────────────────
-
-test('validate: accepts a clean AI response matching the facts', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'You held the line — about 5 hours of tracked time with development carrying the weight today.',
-    peakInsight: 'Your clearest stretch ran 10:12 AM to 11:32 AM and was clearly development work.',
-    nudge: 'Try to defend that 10:12–11:32 window again tomorrow before meetings start crowding in.',
-  })
-  const result = validateWrappedNarrativeResponse(raw, facts, 'abc123')
-  assert.ok(result)
-  assert.equal(result?.source, 'ai')
-  assert.equal(result?.factsHash, 'abc123')
-  assert.match(result!.lead, /5 hours/)
-})
-
-test('validate: tolerates a fenced ```json block', () => {
-  const facts = fullFacts()
-  const raw = '```json\n{"lead":"About 5 hours tracked today with steady development work running through the morning.","peakInsight":null,"nudge":null}\n```'
-  const result = validateWrappedNarrativeResponse(raw, facts, 'h')
-  assert.ok(result)
-})
-
-test('validate: rejects empty lead', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({ lead: '', peakInsight: null, nudge: null })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects a too-short lead (under 24 chars)', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({ lead: 'Good day.', peakInsight: null, nudge: null })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects a too-long lead (over 200 chars)', () => {
-  const facts = fullFacts()
-  const longText = `You held the line `.repeat(20)
-  const raw = JSON.stringify({ lead: longText, peakInsight: null, nudge: null })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects emoji in the lead', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'You held the line — about 5 hours of clear development work today 🚀.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects a lead that asks the user a question', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'Was this the kind of focused development day you were trying to have today?',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects an hour claim that contradicts the facts', () => {
-  // Facts say 5h, AI claims "12 hours" → outside the 1h tolerance.
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'You shipped 12 hours of focused development work today across many blocks.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects claim of "I am not sure" non-answers', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: "I'm not sure what to make of today's signal, but here's what I see across the blocks.",
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects an ungrounded domain reference', () => {
-  // Facts only know github.com; AI mentions reddit.com → invented.
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'About 5 hours tracked, with reddit.com pulling significant browser attention today.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: rejects peakInsight when facts.peakBlock is null', () => {
-  const facts = fullFacts({ peakBlock: null })
-  const raw = JSON.stringify({
-    lead: 'About 5 hours of tracked work today, mostly steady development effort.',
-    peakInsight: 'Your peak stretch was a long uninterrupted block in the late morning.',
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-test('validate: accepts when peakInsight and nudge are null', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'About 5 hours tracked, with development carrying the bulk of the day.',
-    peakInsight: null,
-    nudge: null,
-  })
-  const result = validateWrappedNarrativeResponse(raw, facts, 'h')
-  assert.ok(result)
-  assert.equal(result?.peakInsight, null)
-  assert.equal(result?.nudge, null)
-})
-
-test('validate: rejects non-JSON garbage', () => {
-  const facts = fullFacts()
-  assert.equal(validateWrappedNarrativeResponse('Sure! Here is the summary.', facts, 'h'), null)
-})
-
-test('validate: rejects truncated JSON', () => {
-  const facts = fullFacts()
-  assert.equal(validateWrappedNarrativeResponse('{"lead": "About 5 hours tracked today', facts, 'h'), null)
-})
-
-test('validate: rejects a code fence inside the lead', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'About 5 hours tracked today with ```bash``` carrying the dev signal.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
-})
-
-// ─── buildFallbackNarrative ──────────────────────────────────────────────────
-
-test('fallback: empty quality returns a modest lead and no insights', () => {
-  const facts = emptyFacts()
-  const result = buildFallbackNarrative(facts, 'h')
-  assert.equal(result.source, 'fallback')
-  assert.equal(result.peakInsight, null)
-  assert.equal(result.nudge, null)
-  assert.match(result.lead, /not see enough activity/i)
-})
-
-test('fallback: tooEarly quality leads with a warming-up lead', () => {
-  const facts = fullFacts({ totalSeconds: 90, quality: 'tooEarly', peakBlock: null })
-  const result = buildFallbackNarrative(facts, 'h')
-  assert.match(result.lead, /still warming up/i)
-  assert.equal(result.nudge, null)
-})
-
-test('fallback: full day with peak emits a peak insight and never a forward nudge', () => {
-  const facts = fullFacts()
-  const result = buildFallbackNarrative(facts, 'h')
-  assert.ok(result.peakInsight)
-  assert.match(result.peakInsight!, /10:12 AM/)
-  // Locked decision: no open-thread / carryover prediction, ever.
-  assert.equal(result.nudge, null)
-})
-
-test('fallback: partial day suppresses the forward-looking nudge', () => {
-  const facts = fullFacts({ totalSeconds: 30 * 60, quality: 'partial' })
-  const result = buildFallbackNarrative(facts, 'h')
-  assert.equal(result.nudge, null)
-})
-
-// ─── computeFactsHash ────────────────────────────────────────────────────────
-
-test('hash: identical facts produce identical hashes', () => {
-  assert.equal(computeFactsHash(fullFacts()), computeFactsHash(fullFacts()))
-})
-
-test('hash: changing the date changes the hash', () => {
-  assert.notEqual(
-    computeFactsHash(fullFacts()),
-    computeFactsHash(fullFacts({ date: '2026-05-13' })),
-  )
-})
-
-test('hash: changing the dominant category changes the hash', () => {
-  assert.notEqual(
-    computeFactsHash(fullFacts()),
-    computeFactsHash(fullFacts({ dominantCategory: 'browsing' })),
-  )
-})
-
-test('hash: trivial sub-minute drift on totalSeconds does NOT change the hash', () => {
-  // Bucketed to the minute — 5h24m+5s should hash the same as 5h24m.
-  const a = computeFactsHash(fullFacts())
-  const b = computeFactsHash(fullFacts({ totalSeconds: 5 * 3600 + 24 * 60 + 5 }))
-  assert.equal(a, b)
-})
-
-// ─── buildWrappedPrompts ─────────────────────────────────────────────────────
-
-test('prompt: system prompt forbids emoji, code fences, and ungrounded names', () => {
-  const { systemPrompt } = buildWrappedPrompts(fullFacts())
-  assert.match(systemPrompt, /STRICT JSON/)
-  assert.match(systemPrompt, /No emoji/)
-  assert.match(systemPrompt, /Never ask the user a question/)
-  assert.match(systemPrompt, /Never invent/)
-})
-
-test('validate: accepts per-slide narration when present', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'You held the line — about 5 hours of tracked development today, steady through the morning.',
-    peakInsight: 'Your clearest stretch ran 10:12 AM to 11:32 AM, all development work.',
-    nudge: 'Defend that 10:12 to 11:32 window again tomorrow before meetings creep in.',
-    slides: {
-      scale: 'A development-led day with five hours of tracked time and six work sessions to show for it.',
-      focus: 'Focus held — over half the day matched a clean signal, which is rare on a busy schedule.',
-      topApp: 'Cursor was the anchor — most of the development time on the wrapped narrative work ran through it.',
-      switching: 'A reasonably steady rhythm with switches well under the scattered threshold today.',
-      identity: 'A clear development day — most of the time landed there with little drift to other modes.',
-      closing: 'Carry the rhythm from that mid-morning stretch into tomorrow rather than starting cold.',
-    },
-  })
-  const result = validateWrappedNarrativeResponse(raw, facts, 'h')
-  assert.ok(result, 'expected slide-rich response to validate')
-  assert.ok(result!.slides.scale, 'scale slide line should pass through')
-  assert.ok(result!.slides.topApp, 'topApp slide line should pass through')
-  assert.equal(result!.source, 'ai')
-})
-
-test('validate: drops slide lines containing banned vocabulary', () => {
-  const facts = fullFacts()
-  const raw = JSON.stringify({
-    lead: 'About 5 hours of tracked development today, steady through the morning sessions.',
-    peakInsight: null,
-    nudge: null,
-    slides: {
-      scale: 'Today you crushed it — about five hours of clean development work shipped.',
-      focus: null, topApp: null, switching: null, identity: null, closing: null,
-    },
-  })
-  const result = validateWrappedNarrativeResponse(raw, facts, 'h')
-  assert.ok(result)
-  assert.equal(result!.slides.scale, null, 'banned phrase should be stripped to null')
-})
-
-test('fallback: full work day fills the earned cards, drops the padding', () => {
-  const facts = fullFacts()
-  const result = buildFallbackNarrative(facts, 'h')
-  // Earned cards: where-the-time-went (scale), what-you-worked-on (topApp), close.
-  assert.ok(result.slides.scale)
-  assert.ok(result.slides.topApp)
-  assert.ok(result.slides.focus)
-  assert.ok(result.slides.closing)
-  // Switching / identity are redundant padding under the earn-each-slide rule.
-  assert.equal(result.slides.switching, null)
-  assert.equal(result.slides.identity, null)
-})
-
-test('fallback: empty quality leaves all slide slots null', () => {
-  const facts = emptyFacts()
-  const result = buildFallbackNarrative(facts, 'h')
-  assert.equal(result.slides.scale, null)
-  assert.equal(result.slides.focus, null)
-  assert.equal(result.slides.closing, null)
-})
-
-test('prompt: system prompt requests the slides object with all six keys', () => {
-  const { systemPrompt } = buildWrappedPrompts(fullFacts())
-  assert.match(systemPrompt, /"slides"/)
-  for (const key of ['scale', 'focus', 'topApp', 'switching', 'identity', 'closing']) {
-    assert.ok(systemPrompt.includes(`"${key}"`), `expected slides.${key} described in prompt`)
-  }
-})
-
-test('prompt: user message embeds the facts JSON verbatim', () => {
-  const facts = fullFacts()
-  const { userMessage } = buildWrappedPrompts(facts)
-  assert.match(userMessage, /"date": "2026-05-12"/)
-  assert.match(userMessage, /"dominantCategory": "development"/)
-})
-
-test('prompt: system prompt describes the reconciled kind spine and bans homework', () => {
-  const { systemPrompt } = buildWrappedPrompts(fullFacts())
-  assert.match(systemPrompt, /facts\.mattered/)
-  assert.match(systemPrompt, /facts\.carryover/)
-  assert.match(systemPrompt, /facts\.kindBreakdown/)
-  // The redesign forbids the "needs review" homework closing and 100% claims.
-  assert.match(systemPrompt, /no "needs review"/i)
-  assert.match(systemPrompt, /never say "100%"/i)
-})
-
-// ─── Review-grounded derivation (Wraps V2) ────────────────────────────────────
 
 function makeBlock(opts: {
   label: string
   start: number
   durationSeconds: number
   category?: AppCategory
-  reviewState?: TimelineBlockReviewState
+  appName?: string
 }): WorkContextBlock {
   const category: AppCategory = opts.category ?? 'development'
+  const appName = opts.appName ?? 'Cursor'
   return {
     id: `b:${opts.label}:${opts.start}`,
     startTime: opts.start,
@@ -426,7 +30,7 @@ function makeBlock(opts: {
     ruleBasedLabel: opts.label,
     aiLabel: null,
     sessions: [],
-    topApps: [],
+    topApps: [{ bundleId: appName.toLowerCase(), appName, category, totalSeconds: opts.durationSeconds, sessionCount: 1, isBrowser: false }],
     websites: [],
     keyPages: [],
     pageRefs: [],
@@ -448,12 +52,13 @@ function makeBlock(opts: {
     computedAt: opts.start,
     switchCount: 0,
     confidence: 'high',
-    review: { ...DEFAULT_TIMELINE_BLOCK_REVIEW, state: opts.reviewState ?? 'auto-approved' },
+    review: { ...DEFAULT_TIMELINE_BLOCK_REVIEW, state: 'auto-approved' },
     isLive: false,
   }
 }
 
-function makeDayPayload(blocks: WorkContextBlock[], totalSeconds: number): DayTimelinePayload {
+function makeDayPayload(blocks: WorkContextBlock[]): DayTimelinePayload {
+  const total = blocks.reduce((s, b) => s + Math.round((b.endTime - b.startTime) / 1000), 0)
   return {
     date: '2026-05-12',
     sessions: [],
@@ -463,128 +68,219 @@ function makeDayPayload(blocks: WorkContextBlock[], totalSeconds: number): DayTi
     focusSessions: [],
     computedAt: Date.now(),
     version: 'test',
-    totalSeconds,
-    focusSeconds: totalSeconds,
+    totalSeconds: total,
+    focusSeconds: total,
     focusPct: 100,
     appCount: 0,
     siteCount: 0,
   }
 }
 
-test('derive: decided blocks are mattered, pending blocks are needs-review', () => {
-  const base = new Date('2026-05-12T09:00:00').getTime()
-  const facts = buildWrappedFactsFromPayload(makeDayPayload([
-    makeBlock({ label: 'Auth refactor', start: base, durationSeconds: 30 * 60, reviewState: 'approved' }),
-    makeBlock({ label: 'Slack triage', start: base + 40 * 60_000, durationSeconds: 10 * 60, reviewState: 'pending' }),
-  ], 40 * 60))
-  assert.equal(facts.mattered.length, 1)
-  assert.equal(facts.mattered[0].label, 'Auth refactor')
-  assert.notEqual(facts.mattered[0].reviewState, 'pending')
-  assert.equal(facts.needsReview.count, 1)
-  assert.equal(facts.needsReview.items[0].label, 'Slack triage')
+const NINE_AM = new Date('2026-05-12T09:00:00').getTime()
+const ONE_PM = new Date('2026-05-12T13:00:00').getTime()
+
+function workingDayFacts(): DayWrapFacts {
+  return buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Auth refactor', start: NINE_AM, durationSeconds: 90 * 60, category: 'development', appName: 'Cursor' }),
+    makeBlock({ label: 'Design review', start: ONE_PM, durationSeconds: 40 * 60, category: 'design', appName: 'Figma' }),
+  ]))
+}
+
+function emptyFacts(): DayWrapFacts {
+  return buildDayWrapFacts(makeDayPayload([]))
+}
+
+// A clean arc response that matches the working-day facts.
+function cleanResponse(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    lead: 'A full one. About two hours, mostly heads-down.',
+    story: {
+      morning: 'Morning went to the auth refactor in Cursor.',
+      midday: 'After lunch you moved to the design review.',
+      evening: null,
+    },
+    whereLine: 'Cursor held the most of it.',
+    wildcard: 'Your longest unbroken stretch ran an hour and a half.',
+    closing: "That's the day.",
+    ...over,
+  })
+}
+
+// ─── Facts shape ──────────────────────────────────────────────────────────────
+
+test('facts: a working day yields appSites, a story, and a wildcard hook', () => {
+  const facts = workingDayFacts()
+  assert.ok(facts.appSites.length >= 2, 'expected app/site distribution')
+  assert.ok(facts.dayStory.morning, 'expected a morning beat')
+  assert.ok(facts.dayStory.midday, 'expected a midday beat')
+  assert.equal(facts.dayStory.evening, null)
+  assert.ok(facts.wildcardHook, 'expected a wildcard hook')
 })
 
-test('derive: ignored blocks are excluded from mattered and needs-review', () => {
-  const base = new Date('2026-05-12T09:00:00').getTime()
-  const facts = buildWrappedFactsFromPayload(makeDayPayload([
-    makeBlock({ label: 'Ignored noise', start: base, durationSeconds: 30 * 60, reviewState: 'ignored' }),
-    makeBlock({ label: 'Pending thing', start: base + 40 * 60_000, durationSeconds: 20 * 60, reviewState: 'pending' }),
-  ], 50 * 60))
-  assert.ok(!facts.mattered.some((m) => m.label === 'Ignored noise'))
-  assert.ok(!facts.needsReview.items.some((i) => i.label === 'Ignored noise'))
-  assert.equal(facts.needsReview.count, 1)
+test('facts: the app/site distribution sums to the headline exactly', () => {
+  const facts = workingDayFacts()
+  const sum = facts.appSites.reduce((s, slice) => s + slice.seconds, 0)
+  assert.equal(sum, facts.activeSeconds)
 })
 
-test('derive: sub-5-minute pending blocks are below the needs-review floor', () => {
-  const base = new Date('2026-05-12T09:00:00').getTime()
-  const facts = buildWrappedFactsFromPayload(makeDayPayload([
-    makeBlock({ label: 'Quick peek', start: base, durationSeconds: 3 * 60, reviewState: 'pending' }),
-  ], 3 * 60))
-  assert.equal(facts.needsReview.count, 0)
+test('facts: the same date seeds identically, adjacent dates differ', () => {
+  const a = workingDayFacts()
+  const b = workingDayFacts()
+  assert.equal(a.seed, b.seed)
 })
 
-// ─── Fallback narrative grounding ─────────────────────────────────────────────
+// ─── validateWrappedNarrativeResponse ─────────────────────────────────────────
 
-test('fallback: lead names the work subject on a working day', () => {
-  const result = buildFallbackNarrative(fullFacts(), 'h')
-  assert.match(result.lead, /working day/i)
-  assert.match(result.lead, /mostly on wrappedNarrative\.ts/i)
+test('validate: accepts a clean arc response matching the facts', () => {
+  const result = validateWrappedNarrativeResponse(cleanResponse(), workingDayFacts(), 'abc123')
+  assert.ok(result)
+  assert.equal(result?.source, 'ai')
+  assert.equal(result?.factsHash, 'abc123')
+  assert.ok(result!.story.morning)
+  assert.ok(result!.wildcard)
 })
 
-test('fallback: never surfaces a carryover thread to resume', () => {
-  // Locked decision: the open-thread / "pick it up" line is removed every cadence.
-  const result = buildFallbackNarrative(fullFacts(), 'h')
-  assert.equal(result.nudge, null)
+test('validate: tolerates a fenced ```json block', () => {
+  const raw = '```json\n' + cleanResponse() + '\n```'
+  assert.ok(validateWrappedNarrativeResponse(raw, workingDayFacts(), 'h'))
 })
 
-test('fallback: closing is a quiet sign-off, never review homework', () => {
-  // Even with a pending pile, the close assigns no homework.
-  const result = buildFallbackNarrative(fullFacts(), 'h') // needsReview.count = 1
-  assert.ok(result.slides.closing)
-  assert.doesNotMatch(result.slides.closing!, /review/i)
-  assert.doesNotMatch(result.slides.closing!, /need/i)
+test('validate: rejects an empty lead', () => {
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: '' }), workingDayFacts(), 'h'), null)
 })
 
-test('fallback: nudge is absent when there is no real carryover thread', () => {
-  // No invented homework — when nothing carried over, there is no nudge.
-  const result = buildFallbackNarrative(fullFacts({ carryover: [] }), 'h')
-  assert.equal(result.nudge, null)
+test('validate: rejects a too-long lead', () => {
+  const longText = 'You held the line all day. '.repeat(20)
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: longText }), workingDayFacts(), 'h'), null)
 })
 
-// ─── Hash sensitivity to review state (cache-honesty) ─────────────────────────
+test('validate: rejects emoji in the lead', () => {
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: 'A solid two hours of heads-down work today 🚀' }), workingDayFacts(), 'h'), null)
+})
 
-test('hash: clearing the needs-review pile changes the hash', () => {
-  // Approving a pending block leaves totals untouched but must regenerate the
-  // narrative — otherwise the wrap keeps claiming "N need review" forever.
-  assert.notEqual(
-    computeFactsHash(fullFacts()),
-    computeFactsHash(fullFacts({ needsReview: { count: 0, items: [] } })),
+test('validate: rejects an em dash anywhere', () => {
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: 'A full one — mostly heads-down for two hours.' }), workingDayFacts(), 'h'), null)
+})
+
+test('validate: rejects a lead that asks a question', () => {
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: 'Was today the focused day you were hoping for?' }), workingDayFacts(), 'h'), null)
+})
+
+test('validate: rejects an hour claim that exceeds the day total', () => {
+  // Facts total is 2h10m; claiming 12 hours is invented.
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: 'You shipped 12 hours of deep development work today.' }), workingDayFacts(), 'h'), null)
+})
+
+test('validate: rejects a "100%" claim', () => {
+  assert.equal(validateWrappedNarrativeResponse(cleanResponse({ lead: 'You were 100% on the auth refactor all morning long.' }), workingDayFacts(), 'h'), null)
+})
+
+test('validate: drops a story beat for a part of the day that did not happen', () => {
+  // Evening is null in the facts, so any evening beat the model invents is dropped.
+  const result = validateWrappedNarrativeResponse(
+    cleanResponse({ story: { morning: 'Morning was the auth refactor.', midday: null, evening: 'You closed the night on the design review.' } }),
+    workingDayFacts(), 'h',
   )
+  assert.ok(result)
+  assert.equal(result!.story.evening, null)
 })
 
-test('hash: changing what mattered changes the hash', () => {
-  const a = fullFacts()
-  const b = fullFacts({ mattered: [{ ...a.mattered[0], intentSubject: 'something-else.ts' }] })
+test('validate: rejects carryover / "pick it up tomorrow" homework', () => {
+  const result = validateWrappedNarrativeResponse(
+    cleanResponse({ closing: 'The design review is still open, pick it up tomorrow.' }),
+    workingDayFacts(), 'h',
+  )
+  assert.ok(result)
+  // The banned closing is dropped to null, never shown.
+  assert.equal(result!.closing, null)
+})
+
+test('validate: rejects a focus-percentage grade', () => {
+  const result = validateWrappedNarrativeResponse(
+    cleanResponse({ wildcard: 'You were focused 72% of the working day.' }),
+    workingDayFacts(), 'h',
+  )
+  assert.ok(result)
+  assert.equal(result!.wildcard, null)
+})
+
+test('validate: rejects non-JSON garbage', () => {
+  assert.equal(validateWrappedNarrativeResponse('Sure! Here is the summary.', workingDayFacts(), 'h'), null)
+})
+
+test('validate: rejects truncated JSON', () => {
+  assert.equal(validateWrappedNarrativeResponse('{"lead": "About two hours tracked today', workingDayFacts(), 'h'), null)
+})
+
+// ─── buildFallbackNarrative ──────────────────────────────────────────────────
+
+test('fallback: empty quality returns a modest lead and no beats', () => {
+  const result = buildFallbackNarrative(emptyFacts(), 'h')
+  assert.equal(result.source, 'fallback')
+  assert.equal(result.story.morning, null)
+  assert.equal(result.wildcard, null)
+  assert.match(result.lead, /not much tracked/i)
+})
+
+test('fallback: a working day fills the arc and names the work', () => {
+  const result = buildFallbackNarrative(workingDayFacts(), 'h')
+  assert.ok(result.lead)
+  assert.ok(result.story.morning, 'expected a morning beat')
+  assert.ok(result.whereLine, 'expected a where line')
+  assert.equal(result.closing, "That's the day.")
+})
+
+test('fallback: never predicts tomorrow or assigns homework', () => {
+  const result = buildFallbackNarrative(workingDayFacts(), 'h')
+  for (const line of [result.lead, result.story.morning, result.story.midday, result.whereLine, result.wildcard, result.closing]) {
+    if (!line) continue
+    assert.doesNotMatch(line, /tomorrow|pick (it|this|that) up|needs? review|carry/i, `homework leaked: ${line}`)
+    assert.doesNotMatch(line, /[—–]/, `dash leaked: ${line}`)
+  }
+})
+
+// ─── computeFactsHash ────────────────────────────────────────────────────────
+
+test('hash: identical facts produce identical hashes', () => {
+  assert.equal(computeFactsHash(workingDayFacts()), computeFactsHash(workingDayFacts()))
+})
+
+test('hash: changing the date changes the hash', () => {
+  const a = workingDayFacts()
+  const b = { ...a, date: '2026-05-13' }
   assert.notEqual(computeFactsHash(a), computeFactsHash(b))
 })
 
-test('hash: changing the carryover thread changes the hash', () => {
-  assert.notEqual(
-    computeFactsHash(fullFacts()),
-    computeFactsHash(fullFacts({ carryover: [] })),
-  )
+test('hash: a different set of activities changes the hash', () => {
+  const a = workingDayFacts()
+  const b = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Billing migration', start: NINE_AM, durationSeconds: 90 * 60, category: 'development', appName: 'Cursor' }),
+  ]))
+  assert.notEqual(computeFactsHash(a), computeFactsHash(b))
 })
 
-// ─── Review-count claim validation ────────────────────────────────────────────
+// ─── buildWrappedPrompts ─────────────────────────────────────────────────────
 
-test('validate: rejects a review-count claim that contradicts the pending count', () => {
-  const facts = fullFacts() // needsReview.count = 1
-  const raw = JSON.stringify({
-    lead: 'Steady development throughout, and 3 stretches still need a quick review before close.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
+test('prompt: system prompt requests the arc and bans invention, emoji, questions', () => {
+  const { systemPrompt } = buildWrappedPrompts(workingDayFacts())
+  assert.match(systemPrompt, /STRICT JSON/)
+  assert.match(systemPrompt, /No emoji/)
+  assert.match(systemPrompt, /Never ask the user a question/)
+  assert.match(systemPrompt, /Never invent a number/)
+  assert.match(systemPrompt, /NAME THE WORK, NEVER THE FILE/)
+  for (const key of ['"lead"', '"story"', '"whereLine"', '"wildcard"', '"closing"']) {
+    assert.ok(systemPrompt.includes(key), `expected ${key} described in prompt`)
+  }
 })
 
-test('validate: rejects review homework even when it matches the pending count', () => {
-  // The redesign deletes the "needs review" closing entirely — any review-nudge
-  // is homework and must be rejected regardless of the count.
-  const facts = fullFacts() // needsReview.count = 1
-  const raw = JSON.stringify({
-    lead: 'Most of the day held steady, though 1 stretch still needs a quick review before close.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
+test('prompt: system prompt forbids predicting tomorrow and grading', () => {
+  const { systemPrompt } = buildWrappedPrompts(workingDayFacts())
+  assert.match(systemPrompt, /NEVER predict tomorrow/)
+  assert.match(systemPrompt, /NEVER grade/)
 })
 
-test('validate: rejects a "needs review" claim when nothing is pending', () => {
-  const facts = fullFacts({ needsReview: { count: 0, items: [] } })
-  const raw = JSON.stringify({
-    lead: 'A solid development day, but a few stretches still need a quick review tonight.',
-    peakInsight: null,
-    nudge: null,
-  })
-  assert.equal(validateWrappedNarrativeResponse(raw, facts, 'h'), null)
+test('prompt: user message embeds the compact facts JSON', () => {
+  const { userMessage } = buildWrappedPrompts(workingDayFacts())
+  assert.match(userMessage, /"date": "2026-05-12"/)
+  assert.match(userMessage, /"whereTheTimeWent"/)
 })

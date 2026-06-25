@@ -4286,7 +4286,21 @@ function loadPersistedTimelineBlocksForDay(
     const memberRows = appSessionMembersByBlock.get(row.id) ?? []
 
     const sessionIds = new Set(memberRows.map((r) => Number(r.member_id)))
-    const blockSessions = sessions.filter((s) => sessionIds.has(s.id))
+    let blockSessions = sessions.filter((s) => sessionIds.has(s.id))
+    if (blockSessions.length === 0) {
+      // Derived read path: the persisted members are app_session ids, but the
+      // sessions handed in for a past day are *derived* sessions in a different
+      // id namespace, so the id match above finds nothing and the block comes
+      // back with no sessions. That silently broke every merge on a settled day
+      // — manual shift-click and AI Analyze alike — because a merge correction is
+      // anchored on the two sessions straddling a boundary and there were none to
+      // anchor on. Assign each session to the block its START falls in (the same
+      // way the rebuild assigns a session to exactly one candidate): the sets are
+      // disjoint, so a block's last session and its neighbour's first session are
+      // the real adjacent pair, and a merge recorded on them round-trips on the
+      // next rebuild keyed on those same derived ids.
+      blockSessions = sessions.filter((s) => s.startTime >= row.start_time && s.startTime < row.end_time)
+    }
 
     const websites = getWebsiteSummariesForRange(db, row.start_time, row.end_time).slice(0, 5)
 
@@ -4427,48 +4441,40 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
-// timeline.md §4: the live day, before it is analyzed, is ONE provisional block
-// per idle-bounded stretch — labelled neutrally "Active now", never given a
-// speculative per-activity intent name (naming live is how a transcription
-// session got stamped "Software Development Block"). It still carries full
-// evidence so the detail panel works; it just isn't named or AI-analyzed. The
-// provisional blocks finalize into real named blocks when the user runs Analyze
-// Day, on the next day's open, or via nightly consolidation.
+// timeline.md §4 (founder decision, Jun 2026): the live day, before it is
+// analyzed, is ONE provisional block for the WHOLE day — labelled neutrally
+// "Active now", never split or given speculative per-activity intent names
+// (naming live is how a transcription session got stamped "Software Development
+// Block"). Daylens makes no claim about the shape of the day until the user
+// asks it to: the single block finalizes into real named blocks when they run
+// Analyze Day. It still carries full evidence so the detail panel works.
 function buildProvisionalLiveBlocks(
   db: Database.Database,
   sessions: AppSession[],
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
-  const segments = coarseSegmentsFromSessions(sessions)
-  const coarse = segments.length > 0
-    ? segments
-    : [{ sessions, boundedBeforeGap: false, boundedAfterGap: false }]
-
-  return coarse.map((segment, index) => {
-    const candidate: CandidateBlock = {
-      sessions: segment.sessions,
-      formation: 'heuristic',
-      boundedBeforeGap: segment.boundedBeforeGap,
-      boundedAfterGap: segment.boundedAfterGap,
-    }
-    const block = buildBlockFromCandidate(candidate, db, context)
-    const isLastStretch = index === coarse.length - 1
-    const containsLiveSession = segment.sessions.some((session) => session.id === -1)
-    return {
-      ...block,
-      provisional: true,
-      isLive: isLastStretch && containsLiveSession,
-      label: {
-        ...block.label,
-        current: 'Active now',
-        source: 'rule' as const,
-        confidence: 0,
-        override: null,
-        aiSuggested: null,
-      },
-    }
-  })
+  const candidate: CandidateBlock = {
+    sessions,
+    formation: 'heuristic',
+    boundedBeforeGap: false,
+    boundedAfterGap: false,
+  }
+  const block = buildBlockFromCandidate(candidate, db, context)
+  const containsLiveSession = sessions.some((session) => session.id === -1)
+  return [{
+    ...block,
+    provisional: true,
+    isLive: containsLiveSession,
+    label: {
+      ...block.label,
+      current: 'Active now',
+      source: 'rule' as const,
+      confidence: 0,
+      override: null,
+      aiSuggested: null,
+    },
+  }]
 }
 
 export function buildTimelineBlocksForDay(
