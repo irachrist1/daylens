@@ -1993,6 +1993,22 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 40,
+    description: 'Add wrapped_narratives — persist a generated wrap so it is shown on open, not regenerated (DEV-118)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS wrapped_narratives (
+          cadence        TEXT    NOT NULL,
+          period_key     TEXT    NOT NULL,
+          facts_hash     TEXT    NOT NULL,
+          narrative_json TEXT    NOT NULL,
+          generated_at   INTEGER NOT NULL,
+          PRIMARY KEY (cadence, period_key)
+        );
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

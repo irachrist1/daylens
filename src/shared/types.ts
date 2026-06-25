@@ -1048,6 +1048,10 @@ export interface AIWrappedNarrative {
   /** Tracks whether this came from a validated AI response or the deterministic fallback. */
   source: 'ai' | 'fallback'
   factsHash: string
+  /** When this wrap was generated (epoch ms). Set when the wrap is persisted, so
+   *  the UI shows an honest "generated <when>" marker instead of "just now" on
+   *  every open. Absent only for a transient, un-persisted result. */
+  generatedAt?: number
 }
 
 // ─── Frozen daily snapshots (Briefs & Wraps, invariant 4) ──────────────────────

@@ -23,10 +23,9 @@ import {
   buildWrappedPrompts,
   computeFactsHash,
   validateWrappedNarrativeResponse,
-  wrappedNarrativeCacheKey,
 } from '../lib/wrappedNarrative'
-
-const narrativeCache = new Map<string, AIWrappedNarrative>()
+import { getDb } from './database'
+import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 
 interface ProviderRunner {
   (
@@ -56,23 +55,36 @@ export async function getWrappedNarrative(
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
   const factsHash = computeFactsHash(facts)
-  const cacheKey = wrappedNarrativeCacheKey(facts, factsHash)
+  const db = getDb()
+  // Keyed by the DATE, not the facts hash, so today's wrap is stable as the day
+  // accrues more activity (it does not rebuild every open). Only Regenerate replaces it.
+  const periodKey = facts.date
 
-  // A wrap is never silently regenerated (DEV-118): a cached wrap is shown as-is.
-  // Only an explicit Regenerate (force) clears the entry and spends a new call.
-  if (options.force) narrativeCache.delete(cacheKey)
-  const cached = narrativeCache.get(cacheKey)
-  if (cached) return cached
+  // A wrap is never silently regenerated (DEV-118 / wrapped.md §3.3): a stored
+  // wrap is shown as-is, with its real generated-at time. Only an explicit
+  // Regenerate (force) spends a new call and overwrites it.
+  if (!options.force) {
+    const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
+    if (stored) return { ...stored.narrative, generatedAt: stored.generatedAt }
+  }
+
+  // Persist a freshly produced wrap and stamp it with its generation time.
+  const persist = (result: AIWrappedNarrative): AIWrappedNarrative => {
+    const generatedAt = Date.now()
+    putStoredWrappedNarrative(db, 'day', periodKey, result, factsHash, generatedAt)
+    return { ...result, generatedAt }
+  }
 
   const fallback = buildFallbackNarrative(facts, factsHash)
 
   // Quality gates: no AI for empty/tooEarly days — the fallback is honest enough
   // and we don't want to spend tokens on "not enough data yet".
   if (facts.quality === 'empty' || facts.quality === 'tooEarly') {
-    narrativeCache.set(cacheKey, fallback)
-    return fallback
+    return persist(fallback)
   }
 
+  // No provider: do NOT persist; the UI shows the connect-a-provider message,
+  // and we want a real wrap generated the moment a provider is connected.
   if (!providerRunner) {
     return fallback
   }
@@ -103,11 +115,11 @@ export async function getWrappedNarrative(
     )
 
     const parsed = validateWrappedNarrativeResponse(text, facts, factsHash)
-    const result = parsed ?? fallback
-    narrativeCache.set(cacheKey, result)
-    return result
+    return persist(parsed ?? fallback)
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
+    // A transient failure is not a generated wrap — return the floor without
+    // persisting, so a retry can still produce and store the real one.
     return fallback
   }
 }

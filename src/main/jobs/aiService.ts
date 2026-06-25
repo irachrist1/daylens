@@ -39,6 +39,7 @@ import {
   parseFollowUpSuggestions,
 } from '../lib/followUpSuggestions'
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
+import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
 import { kindForDomain } from '@shared/workKind'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
@@ -4045,8 +4046,13 @@ export async function generateWorkBlockInsight(
     )
     const parsed = parseWorkBlockInsight(text)
 
+    // §3.5 / invariant 3: even the model may not name a block after a raw machine
+    // identifier (AGENT, AGENT-EXECUTION-PLAN.md). If it does, drop to the guarded
+    // evidence-based name rather than persist the raw token as an "ai" label.
+    const aiLabel = parsed?.label?.trim()
+    const label = aiLabel && !looksLikeRawArtifactLabel(aiLabel) ? aiLabel : userVisibleLabelForBlock(block)
     const insight = {
-      label: parsed?.label || userVisibleLabelForBlock(block),
+      label,
       narrative: parsed?.narrative || fallbackNarrativeForBlock(block),
     }
     if (!block.isLive) {

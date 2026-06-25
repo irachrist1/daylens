@@ -353,7 +353,9 @@ export default function DayWrapped({
       const day = await ipc.ai.getWrappedNarrative(data.date, reloadKey > 0).catch(() => null)
       if (cancelled) return
       setNarrative(day ?? null)
-      setGeneratedAt(Date.now())
+      // Show when the wrap was actually generated (persisted), not "just now" on
+      // every open — only fall back to now for a transient, un-persisted result.
+      setGeneratedAt(day?.generatedAt ?? Date.now())
       setLoaded(true)
     })()
     return () => { cancelled = true }
