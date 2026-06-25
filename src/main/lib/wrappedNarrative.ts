@@ -714,7 +714,7 @@ export function buildFallbackNarrative(facts: WrappedFacts, factsHash: string): 
   }
   if (facts.quality === 'tooEarly') {
     return {
-      lead: 'The day is still warming up — a few more minutes of activity and a real recap will surface.',
+      lead: 'The day is still warming up. A few more minutes of activity and a real recap will surface.',
       peakInsight: null,
       nudge: null,
       slides: { ...EMPTY_SLIDES },
@@ -735,14 +735,14 @@ export function buildFallbackNarrative(facts: WrappedFacts, factsHash: string): 
   if (kb.isLeisureDay) {
     const watchLabel = durationPhrase(kb.leisure)
     lead = kb.work > 0
-      ? `Mostly a rest day — ${watchLabel} watching, ${workLabel} of work.`
-      : `A rest day — ${watchLabel} of watching and browsing.`
+      ? `Mostly a rest day. ${watchLabel} watching, ${workLabel} of work.`
+      : `A rest day. ${watchLabel} of watching and browsing.`
   } else if (kb.work > 0) {
     lead = matteredSubject
-      ? `A working day — ${workLabel} of work, mostly on ${matteredSubject}.`
-      : `A working day — ${workLabel} of focused work.`
+      ? `A working day. ${workLabel} of work, mostly on ${matteredSubject}.`
+      : `A working day. ${workLabel} of focused work.`
   } else {
-    lead = `A quiet day — ${durationPhrase(facts.totalSeconds)} tracked, no clear work thread.`
+    lead = `A quiet day. ${durationPhrase(facts.totalSeconds)} tracked, no clear work thread.`
   }
 
   // Card 4 — Open thread (only a real unfinished WORK thread). On a leisure day
@@ -752,7 +752,7 @@ export function buildFallbackNarrative(facts: WrappedFacts, factsHash: string): 
     const carry = facts.carryover[0] ?? null
     if (carry) {
       const what = carry.intentSubject ?? carry.label
-      nudge = `${what} was still open at ${carry.endClock} — worth picking it up tomorrow.`
+      nudge = `${what} was still open at ${carry.endClock}, worth picking it up tomorrow.`
     }
   }
 
@@ -797,7 +797,7 @@ function buildFallbackSlides(facts: WrappedFacts): AIWrappedNarrative['slides'] 
   // Card 2 — What you worked on (only if there is real work). Omitted entirely
   // on a pure-leisure day.
   const topApp = (kb.work >= 15 * 60 && facts.mattered.length > 0)
-    ? `${facts.mattered[0].intentSubject ?? facts.mattered[0].label} took the most of the working time — ${durationPhrase(facts.mattered[0].durationSeconds)}.`
+    ? `${facts.mattered[0].intentSubject ?? facts.mattered[0].label} took the most of the working time, ${durationPhrase(facts.mattered[0].durationSeconds)}.`
     : null
 
   // Focus framing is for work days only — never score a rest day for focus.

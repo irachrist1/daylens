@@ -222,7 +222,7 @@ export function buildPeriodFallbackNarrative(
   const catLabel = humanCategory(facts.dominantWorkCategory)
   const lead = facts.dominantWorkCategory === 'unknown'
     ? `A mixed ${label} across ${facts.daysWithActivity} day${facts.daysWithActivity === 1 ? '' : 's'} of tracked work.`
-    : `A ${label} led by ${catLabel} — that is where most of the work landed.`
+    : `A ${label} led by ${catLabel}. That is where most of the work landed.`
 
   const top = facts.threads[0]
   const whatMattered = top
