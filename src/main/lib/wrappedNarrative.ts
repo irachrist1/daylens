@@ -505,15 +505,15 @@ export function buildWrappedPrompts(facts: WrappedFacts): { systemPrompt: string
     VOICE_SYSTEM_PROMPT,
     'You are Daylens, narrating a Wrapped-style recap of one person\'s working day.',
     'You will receive a compact JSON facts object derived deterministically from the user\'s local activity.',
-    'Return STRICT JSON with exactly these keys: "lead" (string), "peakInsight" (string or null), "nudge" (string or null), and "slides" (object with keys "scale", "focus", "topApp", "switching", "identity", "closing", each a string or null).',
+    'Return STRICT JSON with exactly these keys: "lead" (string), "peakInsight" (string or null), "nudge" (always null), and "slides" (object with keys "scale", "focus", "topApp", "switching", "identity", "closing", each a string or null).',
     'No prose outside the JSON. No code fences. No emoji. No markdown.',
-    'Voice: dry, direct, second-person, a colleague who has been paying attention. No motivational filler. No "great work", no "you crushed it", no "let\'s dive in", no exclamation marks. Specific over generic.',
+    'Follow the Daylens voice directive appended at the end of this prompt exactly; it sets the person, warmth, and humor for the chosen voice. It governs how every line sounds. Keep each line short and punchy, one idea per card, never a paragraph, no exclamation marks.',
     'Each string is one sentence, 24-170 characters. Never two sentences. Never ask the user a question.',
     'The day has a kind split in facts.kindBreakdown: work, leisure, personal seconds. This ONE breakdown is the truth; every line must agree with it. Leisure is first-class and stated plainly without judgment — watching is never "work", never "focus", never "what mattered".',
     'lead — Shape (always): one honest sentence on the real split. If facts.kindBreakdown.isLeisureDay, say it was mostly rest (e.g. "Mostly a rest day, Xh watching and Ym of work"); otherwise lead on the work and, when facts.mattered is non-empty, name facts.mattered[0]. Never say "100%". Never score focus on a rest day.',
     'Never use an em dash (—) anywhere in the output. Use a comma, a period, or "and" instead.',
     'peakInsight: 1 sentence on the peak WORK stretch\'s time range. null if facts.peakBlock is null or it was a leisure day.',
-    'nudge — Open thread: only when facts.carryover is non-empty, name facts.carryover[0] (its intentSubject, or label) as the work thread to pick up tomorrow. null if facts.carryover is empty, quality is "partial", or it was a rest day. Never invent a follow-up.',
+    'nudge: ALWAYS null. Daylens never predicts tomorrow and never tells the user to pick anything up. There is no open-thread or carryover line.',
     'slides.scale — Where the time went (always): the single reconciled breakdown from facts.kindBreakdown (e.g. "Work 52m (subject) · Leisure 3h 51m (YouTube, Netflix)"). This is the ONLY line allowed to carry the split; nothing else may restate percentages.',
     'slides.topApp — What you worked on: only when facts.kindBreakdown.work is a real amount and facts.mattered is non-empty, name facts.mattered[0]\'s subject and time. null on a pure-leisure day.',
     'NAME THE WORK, NEVER THE FILE. A wrap never prints a filename, folder, repo, branch, tab title, or video title. Say what the person was DOING. "MLPipeline_Week2.ipynb" becomes "your ML coursework"; "BofA_Internship_Essay" becomes "the internship essay"; "src/main/services/tracking.ts" becomes "the tracking work". If facts give you only a raw artifact and no clean subject, write "a few smaller things" rather than print the raw string.',
@@ -574,8 +574,9 @@ export function validateWrappedNarrativeResponse(
   // otherwise the model is inventing structure.
   if (peakInsight != null && !facts.peakBlock) return null
 
-  const nudge = normalizeOptional(nudgeRaw)
-  if (nudge != null && !isFieldValid(nudge, true, facts)) return null
+  // Daylens never predicts tomorrow (locked decision): the open-thread / carryover
+  // line is removed entirely, every cadence. Drop anything the model returns here.
+  void nudgeRaw
 
   const slidesRaw = (obj.slides && typeof obj.slides === 'object') ? obj.slides as Record<string, unknown> : {}
   const slides = {
@@ -590,7 +591,7 @@ export function validateWrappedNarrativeResponse(
   return {
     lead,
     peakInsight,
-    nudge,
+    nudge: null,
     slides,
     source: 'ai',
     factsHash,
@@ -745,16 +746,9 @@ export function buildFallbackNarrative(facts: WrappedFacts, factsHash: string): 
     lead = `A quiet day. ${durationPhrase(facts.totalSeconds)} tracked, no clear work thread.`
   }
 
-  // Card 4 — Open thread (only a real unfinished WORK thread). On a leisure day
-  // with no work carryover this is simply absent — no invented homework.
-  let nudge: string | null = null
-  if (facts.quality !== 'partial') {
-    const carry = facts.carryover[0] ?? null
-    if (carry) {
-      const what = carry.intentSubject ?? carry.label
-      nudge = `${what} was still open at ${carry.endClock}, worth picking it up tomorrow.`
-    }
-  }
+  // No open-thread / carryover line, ever (locked decision): Daylens cannot know
+  // tomorrow, so the wrap never predicts or assigns one.
+  const nudge: string | null = null
 
   // peakInsight is a work-only nicety; never narrate a "peak" on a leisure day.
   const peakInsight = (!kb.isLeisureDay && facts.peakBlock && kb.work > 0)

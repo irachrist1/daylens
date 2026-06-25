@@ -271,13 +271,13 @@ test('fallback: tooEarly quality leads with a warming-up lead', () => {
   assert.equal(result.nudge, null)
 })
 
-test('fallback: full day with peak emits a peak insight and forward nudge', () => {
+test('fallback: full day with peak emits a peak insight and never a forward nudge', () => {
   const facts = fullFacts()
   const result = buildFallbackNarrative(facts, 'h')
   assert.ok(result.peakInsight)
   assert.match(result.peakInsight!, /10:12 AM/)
-  assert.ok(result.nudge)
-  assert.match(result.nudge!, /10:12|11:32/)
+  // Locked decision: no open-thread / carryover prediction, ever.
+  assert.equal(result.nudge, null)
 })
 
 test('fallback: partial day suppresses the forward-looking nudge', () => {
@@ -511,11 +511,10 @@ test('fallback: lead names the work subject on a working day', () => {
   assert.match(result.lead, /mostly on wrappedNarrative\.ts/i)
 })
 
-test('fallback: nudge surfaces the carryover thread to resume', () => {
+test('fallback: never surfaces a carryover thread to resume', () => {
+  // Locked decision: the open-thread / "pick it up" line is removed every cadence.
   const result = buildFallbackNarrative(fullFacts(), 'h')
-  assert.ok(result.nudge)
-  assert.match(result.nudge!, /wrappedNarrative\.ts/)
-  assert.match(result.nudge!, /pick/i)
+  assert.equal(result.nudge, null)
 })
 
 test('fallback: closing is a quiet sign-off, never review homework', () => {

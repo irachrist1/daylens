@@ -22,12 +22,12 @@ export function normalizeSummaryVoice(value: unknown): SummaryVoice {
 export function voiceDirective(voice: SummaryVoice | undefined): string {
   switch (normalizeSummaryVoice(voice)) {
     case 'straight':
-      return 'Voice: straight and factual. Plain, neutral sentences that state what happened and the numbers, no flourish, no emoji. Never use em dashes; use commas or periods.'
+      return 'Voice: Straight. No narrator and no "I", just the facts stated plainly. Economical, never cold: use contractions and compact durations inline ("5h 20m of work"), and lead with the answer. No humor, no emoji, no warmth cue, no scores or percentages. Never use em dashes; use a comma, a period, or "and".'
     case 'witty':
-      return "Voice: lightly witty and playful. A human, good-humored line or two and at most one tasteful emoji. Never snarky, never at the reader's expense, never fabricate to be funny. Never use em dashes; use commas or periods."
+      return 'Voice: Witty. First person and playful, with observational humor that comes from the real day, never snark and never at the reader\'s expense. A light turn or wink is welcome, and at most one emoji when a real moment earns it. Never invent a fact to land a joke. Never use em dashes; use a comma, a period, or "and".'
     case 'warm':
     default:
-      return 'Voice: warm and encouraging, like a thoughtful friend. Kind, supportive, plain language, no flattery, no hype, no emoji unless it genuinely fits. Never use em dashes; use commas or periods.'
+      return 'Voice: Warm. First person and light, like a sharp friend who was in the room, glad to see you but never fawning. Open at most once with a light "good to see you", connect the day naturally, and let dry humor land when it earns it. Not therapy: no "supportive", no "you\'ve got this", no hype, no flattery. At most one emoji, only when a real moment earns it, usually none. Never use em dashes; use a comma, a period, or "and".'
   }
 }
 
@@ -46,18 +46,18 @@ export const VOICE_SAMPLES: readonly VoiceSample[] = [
     voice: 'straight',
     label: 'Straight',
     tagline: 'Just the facts',
-    sample: '5h 20m of focused work. Finished the Q3 proposal, had the 2pm team call, cleared your inbox.',
+    sample: '5h 20m of work. Morning on the work network, afternoon on the Q3 proposal, which is done. Made the 2pm call and cleared your inbox.',
   },
   {
     voice: 'warm',
     label: 'Warm',
-    tagline: 'Like a thoughtful friend',
-    sample: 'A solid day, about 5 hours in. You stayed with the Q3 proposal and got it finished, made your team call, and cleared the inbox. Nice work.',
+    tagline: 'A sharp friend who was there',
+    sample: 'Good to see you. About five hours in. You got the work network up in the morning, then stayed with the Q3 proposal until it was done. The 2pm call happened and your inbox is clear. Solid day.',
   },
   {
     voice: 'witty',
     label: 'Witty',
     tagline: 'A little playful',
-    sample: '5-ish hours, mostly heads-down. The Q3 proposal finally crossed the line, the 2pm call happened, and your inbox is (briefly) at zero. ✨',
+    sample: 'Five-ish hours, mostly heads-down. The work network is alive, the Q3 proposal finally crossed the line, and your inbox is (briefly) at zero. The 2pm call also happened, as calls do.',
   },
 ]

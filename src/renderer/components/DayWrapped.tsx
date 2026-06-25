@@ -184,17 +184,6 @@ function StandoutScene({ facts, theme }: { facts: DayWrapFacts; theme: Theme }) 
   )
 }
 
-function ThreadScene({ line, theme }: { line: string; theme: Theme }) {
-  return (
-    <Scene>
-      <Kicker accent={theme.accent}>Open thread</Kicker>
-      <h1 style={{ fontSize: 'clamp(30px, 4.6vw, 46px)', fontWeight: 750, lineHeight: 1.2, letterSpacing: '-0.02em', color: '#fff', margin: 0, maxWidth: '22ch' }}>
-        {line}
-      </h1>
-    </Scene>
-  )
-}
-
 function lower(s: string): string {
   return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1)
 }
@@ -256,7 +245,7 @@ function FinaleScene({
         <button onClick={(e) => { e.stopPropagation(); void saveShareCard(dayShareModel(facts, mode), `daylens-${facts.date}.png`).then(setSaved) }} style={primaryButton(theme.accent)}>
           {saved ? 'Saved ✓' : 'Save image'}
         </button>
-        <button onClick={(e) => { e.stopPropagation(); onOpenReport() }} style={ghostButton}>{mode === 'yesterday' ? 'Pick it up →' : 'Open timeline'}</button>
+        <button onClick={(e) => { e.stopPropagation(); onOpenReport() }} style={ghostButton}>{mode === 'yesterday' ? 'Continue your day' : 'Open timeline'}</button>
         <button onClick={(e) => { e.stopPropagation(); onRestart() }} style={ghostButton} aria-label="Replay">↺</button>
         <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Done</button>
       </div>
@@ -316,8 +305,8 @@ export default function DayWrapped({
     if (!provider.connected) return [{
       theme: THEME.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="Connect a provider to see your wrap." theme={THEME.rest}
-          body={`Every word in a wrap comes from a real AI call${provider.provider ? ` to ${provider.provider}` : ''}. Connect one in Settings and your wraps start writing themselves.`}>
+        <MessageScene kicker="Wrapped" title="No provider connected, so there's no wrap." theme={THEME.rest}
+          body="Connect one in Settings and your day gets written up.">
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
             <button onClick={(e) => { e.stopPropagation(); if (onOpenSettings) onOpenSettings(); else onClose() }} style={primaryButton(THEME.rest.accent)}>Open Settings →</button>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Dismiss</button>
@@ -328,7 +317,7 @@ export default function DayWrapped({
     if (facts.quality === 'empty' || facts.activeSeconds <= 0 || !narrative) return [{
       theme: THEME.rest,
       render: () => (
-        <MessageScene kicker="Wrapped" title="A quiet one." body="Daylens needs a bit more activity before it can tell the story of this day." theme={THEME.rest}>
+        <MessageScene kicker="Wrapped" title="A quiet one." body="Not much tracked yet. Come back once the day has more in it." theme={THEME.rest}>
           <div style={{ display: 'flex', gap: 12, marginTop: 38, pointerEvents: 'all' }}>
             <button onClick={(e) => { e.stopPropagation(); onClose() }} style={ghostButton}>Done</button>
           </div>
@@ -349,12 +338,10 @@ export default function DayWrapped({
       if (facts.standout) {
         out.push({ theme: THEME.standout, render: () => <StandoutScene facts={facts} theme={THEME.standout} /> })
       }
-      if (narrative.nudge) {
-        out.push({ theme: THEME.thread, render: () => <ThreadScene line={narrative.nudge!} theme={THEME.thread} /> })
-      }
     }
-    const bridge = mode === 'yesterday' ? narrative.nudge : null
-    out.push({ theme: THEME.finale, render: (onRestart) => <FinaleScene facts={facts} mode={mode} theme={THEME.finale} onClose={onClose} onOpenReport={onOpenReport} onRestart={onRestart} bridge={bridge} /> })
+    // No open-thread / carryover slide, and no "pick it up" bridge (locked
+    // decision): Daylens never predicts tomorrow. The finale closes the day.
+    out.push({ theme: THEME.finale, render: (onRestart) => <FinaleScene facts={facts} mode={mode} theme={THEME.finale} onClose={onClose} onOpenReport={onOpenReport} onRestart={onRestart} bridge={null} /> })
     return out
   }, [loaded, provider, facts, narrative, mode, inProgress, reduced, onClose, onOpenReport, onOpenSettings])
 
