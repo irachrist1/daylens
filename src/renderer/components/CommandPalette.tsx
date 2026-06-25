@@ -25,7 +25,7 @@ import {
   type SearchSourceKind,
 } from '../lib/searchResults'
 import { useCommandSurfaceActions, type CommandSurfaceAction } from '../lib/commandSurface'
-import type { DayTimelinePayload, FocusSession } from '@shared/types'
+import type { DayTimelinePayload, FocusSession, WrappedPeriod } from '@shared/types'
 import type { DaylensSearchResult } from '../../preload/index'
 
 export interface CommandPaletteProps {
@@ -33,6 +33,7 @@ export interface CommandPaletteProps {
   platform: 'macos' | 'windows' | 'linux'
   onClose: () => void
   onOpenWrapped: (payload: { day: DayTimelinePayload; threadId: number | null; artifactId: number | null }) => void
+  onOpenPeriodWrapped: (period: WrappedPeriod) => void
 }
 
 // Section order, top to bottom (FB1 §Target behavior).
@@ -41,7 +42,7 @@ const GROUP_ORDER = [
   'Actions for this message',
   'Chat',
   'Navigate',
-  'Day Wrapped',
+  'Wrapped',
   'Focus',
   'Tools',
 ] as const
@@ -127,7 +128,7 @@ function Keycap({ children }: { children: ReactNode }) {
   )
 }
 
-export default function CommandPalette({ isOpen, platform, onClose, onOpenWrapped }: CommandPaletteProps) {
+export default function CommandPalette({ isOpen, platform, onClose, onOpenWrapped, onOpenPeriodWrapped }: CommandPaletteProps) {
   const navigate = useNavigate()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -214,8 +215,11 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
     { id: 'nav-apps', group: 'Navigate', label: 'Open Apps', hint: 'Per-app context', keywords: 'tools applications', icon: <LayoutGrid size={15} strokeWidth={1.8} />, perform: () => navigate('/apps') },
     { id: 'nav-ai', group: 'Navigate', label: 'Open AI', hint: 'Chat with Daylens', keywords: 'chat insights ask', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => navigate('/ai') },
     { id: 'nav-settings', group: 'Navigate', label: 'Open Settings', hint: 'Preferences and integrations', keywords: 'preferences provider sync', icon: <SettingsIcon size={15} strokeWidth={1.8} />, perform: () => navigate('/settings') },
-    { id: 'wrapped-today', group: 'Day Wrapped', label: "Open today's Day Wrapped", hint: 'Recap the day so far', keywords: 'recap summary', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(todayString()) },
-    { id: 'wrapped-yesterday', group: 'Day Wrapped', label: "Open yesterday's Day Wrapped", hint: 'Morning brief', keywords: 'recap summary morning brief', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(shiftDateString(todayString(), -1)) },
+    { id: 'wrapped-today', group: 'Wrapped', label: "Open today's Wrapped", hint: 'Recap the day so far', keywords: 'recap summary day', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(todayString()) },
+    { id: 'wrapped-yesterday', group: 'Wrapped', label: "Open yesterday's Wrapped", hint: 'Morning brief', keywords: 'recap summary morning brief day', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => openWrappedFor(shiftDateString(todayString(), -1)) },
+    { id: 'wrapped-week', group: 'Wrapped', label: "Open this week's Wrapped", hint: 'The week in one story', keywords: 'recap summary weekly', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => onOpenPeriodWrapped('week') },
+    { id: 'wrapped-month', group: 'Wrapped', label: "Open this month's Wrapped", hint: 'The month in one story', keywords: 'recap summary monthly', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => onOpenPeriodWrapped('month') },
+    { id: 'wrapped-year', group: 'Wrapped', label: "Open this year's Wrapped", hint: 'The year in one story', keywords: 'recap summary annual yearly', icon: <Sparkles size={15} strokeWidth={1.8} />, perform: () => onOpenPeriodWrapped('year') },
     activeFocus
       ? { id: 'focus-stop', group: 'Focus' as const, label: 'End focus session', hint: `Session #${activeFocus.id}`, keywords: 'stop end', icon: <Timer size={15} strokeWidth={1.8} />, perform: async () => { await ipc.focus.stop(activeFocus.id); setActiveFocus(null) } }
       : { id: 'focus-start', group: 'Focus' as const, label: 'Start focus session', hint: 'Quiet distraction alerts', keywords: 'deep work', icon: <Timer size={15} strokeWidth={1.8} />, perform: async () => { await ipc.focus.start(null); setActiveFocus(await ipc.focus.getActive()) } },
@@ -238,7 +242,7 @@ export default function CommandPalette({ isOpen, platform, onClose, onOpenWrappe
       })
       window.location.reload()
     } },
-  ], [navigate, openWrappedFor, activeFocus, platform])
+  ], [navigate, openWrappedFor, onOpenPeriodWrapped, activeFocus, platform])
 
   const contextItems: PaletteItem[] = useMemo(() => contextActions.map((action: CommandSurfaceAction) => ({
     id: action.id,

@@ -6,16 +6,17 @@ import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DayWrapped from './components/DayWrapped'
+import PeriodWrapped from './components/PeriodWrapped'
 import CommandPalette from './components/CommandPalette'
 import { registerCommandPaletteOpener } from './lib/commandSurface'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
-import { todayString } from './lib/format'
+import { todayString, shiftDateString } from './lib/format'
 import { handleDailySummaryNavigation } from './lib/dailySummaryNavigation'
 import Onboarding from './views/Onboarding'
 import DashboardBuild from './components/DashboardBuild'
 import FeedbackModal from './components/FeedbackModal'
-import type { AppSettings, AppTheme, DayTimelinePayload, OnboardingState } from '@shared/types'
+import type { AppSettings, AppTheme, DayTimelinePayload, OnboardingState, WrappedPeriod } from '@shared/types'
 
 // Lazy-load route views so the initial bundle is small (#6)
 const Timeline = lazy(() => import('./views/Timeline'))
@@ -63,6 +64,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
   const [wrappedDay, setWrappedDay] = useState<DayTimelinePayload | null>(null)
   const [wrappedThreadId, setWrappedThreadId] = useState<number | null>(null)
   const [wrappedArtifactId, setWrappedArtifactId] = useState<number | null>(null)
+  const [periodWrap, setPeriodWrap] = useState<{ period: WrappedPeriod; anchorDate: string } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   const openDailySummaryRoute = useCallback((route: string) => {
@@ -138,16 +140,32 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [platform, settings])
 
-  // Dev shortcut: Cmd+Shift+Option+W / Ctrl+Shift+Alt+W opens DayWrapped for today
+  // Dev shortcut: Cmd+Shift+Option+W / Ctrl+Shift+Alt+W opens today's Wrapped,
+  // Cmd+Shift+Option+Y opens yesterday's (catch-up framing). DayWrapped detects
+  // today vs yesterday from the date itself.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!isDevShortcut(e, 'KeyW', platform)) return
-      void ipc.db.getTimelineDay(todayString()).then((payload) => {
+      const wantToday = isDevShortcut(e, 'KeyW', platform)
+      const wantYesterday = isDevShortcut(e, 'KeyY', platform)
+      if (!wantToday && !wantYesterday) return
+      const date = wantYesterday ? shiftDateString(todayString(), -1) : todayString()
+      void ipc.db.getTimelineDay(date).then((payload) => {
         setWrappedDay(payload)
         setWrappedThreadId(null)
         setWrappedArtifactId(null)
         setWrappedOpen(true)
       })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [platform])
+
+  // Dev shortcut: Cmd+Shift+Option+E opens this week's Wrapped (the wider lens —
+  // month / year are reachable from the command palette).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!isDevShortcut(e, 'KeyE', platform)) return
+      setPeriodWrap({ period: 'week', anchorDate: todayString() })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -200,6 +218,7 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
             setWrappedArtifactId(artifactId)
             setWrappedOpen(true)
           }}
+          onOpenPeriodWrapped={(period) => setPeriodWrap({ period, anchorDate: todayString() })}
         />
       )}
       {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
@@ -219,6 +238,14 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
               navigate('/ai')
             }
           }}
+        />
+      )}
+      {periodWrap && (
+        <PeriodWrapped
+          period={periodWrap.period}
+          anchorDate={periodWrap.anchorDate}
+          onOpenSettings={() => { setPeriodWrap(null); navigate('/settings') }}
+          onClose={() => setPeriodWrap(null)}
         />
       )}
       {/* Full-height shell: title bar on top, sidebar + content below */}

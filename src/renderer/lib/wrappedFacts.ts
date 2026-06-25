@@ -357,6 +357,13 @@ export function looksLikeRawArtifactLabel(label: string): boolean {
   if (/^watch\s+/i.test(normalized)) return true
   if (/^mail\s+-\s+/i.test(normalized)) return true
   if (/^notifications\s+\|\s+linkedin$/i.test(normalized)) return true
+  // A bare file: extension, or an underscore/slash-mangled token never typed by
+  // a human. "MLPipeline_Week2.ipynb", "src/main/services/tracking.ts",
+  // "BofA_Internship_Essay" — Spotify Wrapped never shows you a filename.
+  if (/\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages|tsx?|jsx?|py|rs|go|java|rb|c|cpp|h|md|json|ya?ml|sql|sh)$/i.test(normalized)) return true
+  if (/\//.test(normalized) && !/\s/.test(normalized)) return true
+  if (/_/.test(normalized) && !/\s/.test(normalized)) return true
+  if (/\bweek\s*\d+\b/i.test(normalized) && /\b(notebook|assignment|lab|pset|hw|homework)\b/i.test(normalized)) return true
   return false
 }
 
