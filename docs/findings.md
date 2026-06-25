@@ -207,3 +207,75 @@ content for a time window lives in `website_visits` (page_title, url) and `activ
 *Companion to the specs in `docs/specs/` and the cross-cutting decisions in
 `docs/research/open-questions.md`. Next: study how others solved this (Rize, Toggl, StayFree,
 the Raycast v2 rewrite), then update the specs, then cut Linear issues.*
+
+---
+
+# 2026-06-25 — the day still came out wrong: blocks, then names, then capture
+
+**Status:** Fixed + tested · **Source:** live `daylens.sqlite` + code read
+
+Testing the daily wrap on June 25 turned up a chain of bugs, and the lesson from June 20
+repeated: the symptom showed at the top (the wrap "felt flat, made no sense") but the bug was
+always at the bottom. We fixed bottom-up — capture, then blocks, then names — and pinned each
+fix with a test. The wrap mostly fixed itself once the blocks and names underneath it were
+right, because it reads the same data.
+
+## The phantom 2am day
+
+The wrap said the day ran "1:56am to 1:09pm" and that "1h 47m landed in the morning." Neither
+was true; the first real session was 9:41am. The cause: a 24-second glance at Claude at 1:56am
+(real — the user woke briefly) was a sub-15-minute sliver, and `enforceMinimumBlockFloor` folded
+every sliver into its nearest neighbour with no gap check. So the blip folded across an 8-hour
+sleep gap into the 9:41am block, making one 11-hour block that started at 2am.
+
+Fix: a sliver only folds across a gap under 30 minutes (`TIMELINE_SLIVER_FOLD_MAX_GAP_MS`); a
+sliver isolated by a bigger gap, when the day has a real block elsewhere, is dropped as noise.
+(`workBlocks.ts` → `enforceMinimumBlockFloor`; test `tests/timelineSegmentation.test.ts`.)
+
+## The "Away 3h 47m" bar before the day began
+
+The overnight sleep (Mac `suspend` 5:53am → `resume` 9:41am in `activity_state_events`) was
+drawn as an "Away" bar above the first block. The day starts when you start. Fix:
+`buildSegmentsForDay` never renders a gap before the first real block.
+
+## Today split into named blocks on its own
+
+Per `timeline.md` §4, today stays ONE provisional "Active now" block until the user clicks
+Analyze. It was showing named blocks. This was **not** a background job — we traced every path:
+startup finalizes yesterday only and explicitly skips today, `reprojectStaleDays` skips today,
+the tracking loop never materializes, quit only syncs. It was the user's own "Re-analyze with
+AI" click, which is the analyze action. Separately, the provisional builder anchored the one
+block at the 1:56am blip. Fix: `buildProvisionalLiveBlocks` drops leading noise so the live
+block starts at real activity; the gate is unchanged. (test `tests/provisionalLiveDay.test.ts`.)
+
+## Names: "daylens", "AGENT", an article title
+
+Blocks were named after raw machine identifiers — the repo (`daylens`), a SCREAMING file stem
+(`AGENT`, from `AGENT-EXECUTION-PLAN.md`), and a web article's title. Fix:
+`looksLikeRawArtifactLabel` (`src/shared/blockLabel.ts`) rejects SCREAMING / SCREAMING-KEBAB
+stems, with or without a file extension, from block names and summaries, falling back to an
+evidence-based name. It deliberately does **not** reject ordinary filenames, paths, or repo
+names — those are the existing label design, pinned by the `blockOwnership` and
+`workBlockSplitting` tests. Turning a filename or repo into a human "verb + object" name is the
+AI naming path (§3.5 tier 2), which already exists behind "Re-analyze with AI"; making it run
+without a manual click and tuning its prompt is the next quality lever, not a deterministic
+patch.
+
+## The class that vanished
+
+A 2-hour Google Meet class showed as ~3 minutes. Input-based idle detection flushed the session
+as "away" after 5 minutes with no keystrokes — right for an empty desk, wrong for a class you
+are watching. Fix: `src/main/lib/passivePresence.ts` holds a session open through no-input idle
+when it is a watched video, a live call, or an online class (native meeting apps by category;
+browser Meet/Zoom/Teams by window title), with guards so "team meeting notes.md" stays active
+work. This affects future capture only — a class already truncated in the DB can't be recovered
+— and a genuine walk-away still ends the session on screen sleep/lock.
+
+## Still open
+
+- **AI block naming quality.** The path exists; it needs to run without a manual click and the
+  prompt needs tuning so names read as "Redesigning onboarding", not "daylens".
+- **Wrapped persistence.** Persist a generated wrap and show it on open instead of regenerating;
+  propagate the naming/voice fixes to week/month/year.
+- **Span vs active time.** A block's drawn span still disagrees with its active time when an
+  untracked passive stretch sits inside it; the passive-capture fix narrows this going forward.

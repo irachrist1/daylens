@@ -75,10 +75,15 @@ export interface WrapHook {
  *  so a raw filename can never reach the prose. */
 export interface DayStorySegment {
   part: 'morning' | 'midday' | 'evening'
+  /** The honest human word for when this stretch happened, from its real start
+   *  clock ("Morning", "Afternoon", "Late night"). Display + prose use this, not
+   *  the coarse `part` bucket, so a 1:56am start never reads as "Morning". */
+  label: string
   clockStart: string
   clockEnd: string
   seconds: number
-  /** Humanized work activities touched in this part of the day, most time first. */
+  /** What was worked on in this part of the day, phrased as actions
+   *  ("building Daylens"), most time first. The model narrates from these. */
   items: string[]
   /** A friendly leisure surface that shared this window, if one was notable. */
   aside: string | null
@@ -198,6 +203,30 @@ export function categoryWord(category: AppCategory): string {
     case 'social': return 'Social'
     default: return 'Work'
   }
+}
+
+/** The verb for a kind of work, so it reads as an action the user did, never as
+ *  a place they were "on". "building Daylens", "writing the essay". */
+export function categoryAction(category: AppCategory): string {
+  switch (category) {
+    case 'development': return 'building'
+    case 'aiTools': return 'building'
+    case 'writing': return 'writing'
+    case 'design': return 'designing'
+    case 'research': return 'digging into'
+    case 'browsing': return 'reading up on'
+    case 'meetings': return 'meeting on'
+    case 'communication': return 'talking through'
+    case 'email': return 'working through'
+    case 'productivity': return 'sorting out'
+    default: return 'working on'
+  }
+}
+
+/** A human work phrase: the action plus the subject ("building Daylens"). Used in
+ *  prose and the facts handed to the model, never the bare project noun. */
+export function workActionPhrase(name: string, category: AppCategory): string {
+  return `${categoryAction(category)} ${name}`
 }
 
 // ─── Builder ──────────────────────────────────────────────────────────────────
@@ -370,6 +399,18 @@ function partOfDay(ms: number): 'morning' | 'midday' | 'evening' {
   return 'evening'
 }
 
+/** The honest word for when a stretch began, from its real clock hour. The story
+ *  buckets are coarse (everything before noon is "morning"), so a session that
+ *  starts at 1:56am must not be labelled "Morning". */
+function partLabel(ms: number): string {
+  const hour = new Date(ms).getHours()
+  if (hour < 5) return 'Late night'
+  if (hour < 12) return 'Morning'
+  if (hour < 17) return 'Afternoon'
+  if (hour < 21) return 'Evening'
+  return 'Night'
+}
+
 function buildDayStory(blocks: WorkContextBlock[]): DayStory {
   const buckets: Record<'morning' | 'midday' | 'evening', WorkContextBlock[]> = { morning: [], midday: [], evening: [] }
   for (const block of blocks) {
@@ -381,14 +422,21 @@ function buildDayStory(blocks: WorkContextBlock[]): DayStory {
     if (list.length === 0) return null
     const seconds = list.reduce((s, b) => s + blockActiveSeconds(b), 0)
     if (seconds < 5 * 60) return null
-    const byName = new Map<string, number>()
+    // Keyed by the work name so the same activity merges, but we carry the action
+    // phrase ("building Daylens") so the prose never frames the work as a place.
+    const byName = new Map<string, { phrase: string; seconds: number }>()
     let asideName: string | null = null
     let asideSeconds = 0
     for (const block of list) {
       const kind = effectiveBlockKind(block)
       if (kind === 'work') {
         const name = workActivityName(block)
-        if (name) byName.set(name, (byName.get(name) ?? 0) + blockActiveSeconds(block))
+        if (name) {
+          const key = name.toLowerCase()
+          const existing = byName.get(key)
+          if (existing) existing.seconds += blockActiveSeconds(block)
+          else byName.set(key, { phrase: workActionPhrase(name, block.dominantCategory), seconds: blockActiveSeconds(block) })
+        }
       } else if (kind === 'leisure') {
         const domains = block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
         const friendly = leisureActivityTitle(domains)
@@ -396,9 +444,10 @@ function buildDayStory(blocks: WorkContextBlock[]): DayStory {
         if (s > asideSeconds) { asideSeconds = s; asideName = friendly }
       }
     }
-    const items = [...byName.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name]) => name)
+    const items = [...byName.values()].sort((a, b) => b.seconds - a.seconds).slice(0, 3).map((v) => v.phrase)
     return {
       part,
+      label: partLabel(list[0].startTime),
       clockStart: formatClock(list[0].startTime),
       clockEnd: formatClock(list[list.length - 1].endTime),
       seconds,

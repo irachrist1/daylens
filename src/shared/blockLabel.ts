@@ -50,6 +50,22 @@ const GENERIC_LABELS = new Set([
   'Writing',
 ])
 
+// timeline.md §3.5 / invariant 3: a block is never named after a mangled machine
+// identifier. This rejects only the indefensible shape — a SCREAMING token
+// (AGENT) or a SCREAMING-KEBAB/SNAKE stem with or without a file extension
+// (AGENT-EXECUTION-PLAN, AGENT-EXECUTION-PLAN.md). It deliberately does NOT reject
+// ordinary filenames or paths (insightsQueryRouter.ts, src/main/workBlocks.ts) or
+// repo names (daylens) — those are the existing label design (blockOwnership /
+// workBlockSplitting tests). Turning a filename or repo into a real "verb +
+// object" name is the AI naming path (§3.5 tier 2), a separate decision, not here.
+export function looksLikeRawArtifactLabel(value: string | null | undefined): boolean {
+  const t = value?.trim()
+  if (!t) return true
+  if (/^[A-Z][A-Z0-9]+$/.test(t)) return true                        // a SCREAMING token: AGENT, API
+  if (/^[A-Z0-9]+([-_][A-Z0-9]+)+(\.[a-z0-9]+)?$/.test(t)) return true // SCREAMING-KEBAB(.ext): AGENT-EXECUTION-PLAN(.md)
+  return false
+}
+
 export function naturalizeLabel(value: string): string {
   if (!value) return ''
   let cleaned = value.trim()
@@ -98,6 +114,7 @@ function isUsefulLabel(value: string | null | undefined): value is string {
   const trimmed = value.trim()
   if (!trimmed) return false
   if (GENERIC_LABELS.has(trimmed)) return false
+  if (looksLikeRawArtifactLabel(trimmed)) return false
   const pipeSegments = trimmed.split(/\s*\|\s*/).filter(Boolean)
   // 3+ pipe segments is almost always raw browser-tab soup
   // ("W2_Reading | Intro to ML | Perusall"). Reject so we fall through to a
@@ -152,7 +169,7 @@ export function userVisibleBlockLabel(block: WorkContextBlock): string {
   )
   if (topArtifact) {
     const naturalized = naturalizeLabel(topArtifact.displayTitle.trim())
-    if (naturalized && !GENERIC_LABELS.has(naturalized)) return naturalized
+    if (naturalized && !GENERIC_LABELS.has(naturalized) && !looksLikeRawArtifactLabel(naturalized)) return naturalized
   }
 
   // A bare site name is only an honest label when a page could own the block.

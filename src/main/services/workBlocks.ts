@@ -52,6 +52,7 @@ import { isAppFocused } from '../lib/focusScore'
 import { getSettings } from './settings'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
@@ -140,6 +141,12 @@ const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
 // blocks that may stay under the floor are a meeting (a 10-minute standup is real)
 // and a lone short block with no non-meeting neighbour to fold into.
 const TIMELINE_MIN_BLOCK_FLOOR_MS = 15 * 60_000
+// The widest gap a sub-floor sliver may fold ACROSS into a neighbour. A sliver
+// absorbs into a short-break neighbour (a 20-minute coffee gap), but never across
+// a real away/sleep gap: a 24-second 1:56am blip must not fold into the 9:41am
+// block and make one 11-hour phantom starting at 2am. Matches the gap at which
+// the timeline would draw a visible break.
+const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 30 * 60_000
 // The same work continued across a moderate untracked gap is one block, not two.
 // A 17-minute lull in the middle of a coding morning (stepped away, tracker
 // missed a stretch) should not split one Ghostty session into "Terminal work"
@@ -3331,9 +3338,33 @@ function enforceMinimumBlockFloor(
 
       const left = index > 0 ? result[index - 1] : null
       const right = index < result.length - 1 ? result[index + 1] : null
-      const leftOk = Boolean(left && left.formation !== 'meeting')
-      const rightOk = Boolean(right && right.formation !== 'meeting')
-      if (!leftOk && !rightOk) continue
+      // A sliver may only fold into a neighbour it is genuinely contiguous with.
+      // Folding ACROSS an idle/sleep gap is what produces phantom blocks: a 24s
+      // 1:56am blip folded right into the 9:41am block makes one 11-hour block
+      // starting at 2am. A neighbour separated by >= the idle gap is not a valid
+      // fold target; an isolated sliver is left as its own small block (which the
+      // wrap and ribbon already drop as sub-floor).
+      const leftOk = Boolean(left && left.formation !== 'meeting'
+        && gapBetweenCandidates(left, candidate) < TIMELINE_SLIVER_FOLD_MAX_GAP_MS)
+      const rightOk = Boolean(right && right.formation !== 'meeting'
+        && gapBetweenCandidates(candidate, right) < TIMELINE_SLIVER_FOLD_MAX_GAP_MS)
+      if (!leftOk && !rightOk) {
+        // No neighbour close enough to fold into. If the day has a real block
+        // elsewhere, this isolated sub-floor stretch is noise (a 24s 1:56am blip
+        // while asleep), not a block — drop it rather than show it. Keep it only
+        // when it is all there is (a lone short day); meetings are skipped above.
+        const hasRealBlock = result.some((other, otherIndex) =>
+          otherIndex !== index
+          && (other.formation === 'meeting'
+            || candidateActiveMs(other) >= TIMELINE_MIN_BLOCK_FLOOR_MS
+            || candidateSpanMs(other) >= TIMELINE_MIN_BLOCK_FLOOR_MS))
+        if (hasRealBlock) {
+          result.splice(index, 1)
+          foldedAny = true
+          break
+        }
+        continue
+      }
 
       let mergeLeft: boolean
       if (leftOk && !rightOk) mergeLeft = true
@@ -3428,6 +3459,8 @@ function usefulDerivedLabel(value: string | null | undefined): string | null {
   const natural = naturalizeLabel(trimmed)
   if (!natural) return null
   if (GENERIC_LABELS.has(natural)) return null
+  // §3.5 / invariant 3: never surface a raw file / machine identifier as a name.
+  if (looksLikeRawArtifactLabel(natural)) return null
   return natural
 }
 
@@ -4454,14 +4487,28 @@ function buildProvisionalLiveBlocks(
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
+  // Drop leading/standalone noise before bundling the day into one provisional
+  // block: a 24s 1:56am blip separated from the real day by an 8h sleep gap must
+  // not anchor the block at 2am. Keep only coarse segments that clear the block
+  // floor on span or active time; if none do (a genuinely tiny day), keep all.
+  const segments = coarseSegmentsFromSessions(sessions)
+  const realSessions = segments
+    .filter((seg) => {
+      if (seg.sessions.length === 0) return false
+      const span = sessionEndMs(seg.sessions[seg.sessions.length - 1]) - seg.sessions[0].startTime
+      const active = seg.sessions.reduce((sum, s) => sum + Math.max(0, s.durationSeconds * 1000), 0)
+      return span >= TIMELINE_MIN_BLOCK_FLOOR_MS || active >= TIMELINE_MIN_BLOCK_FLOOR_MS
+    })
+    .flatMap((seg) => seg.sessions)
+  const kept = realSessions.length > 0 ? realSessions : sessions
   const candidate: CandidateBlock = {
-    sessions,
+    sessions: kept,
     formation: 'heuristic',
     boundedBeforeGap: false,
     boundedAfterGap: false,
   }
   const block = buildBlockFromCandidate(candidate, db, context)
-  const containsLiveSession = sessions.some((session) => session.id === -1)
+  const containsLiveSession = kept.some((session) => session.id === -1)
   return [{
     ...block,
     provisional: true,
@@ -4591,8 +4638,11 @@ function buildSegmentsForDay(
   }
 
   const gapRanges: Array<{ startTime: number; endTime: number }> = []
-  let cursor = fromMs
   const byStart = [...workSegments].sort((left, right) => left.startTime - right.startTime)
+  // The day starts at the first real block, not midnight: overnight sleep/idle
+  // before you began is not a gap in your day, so never render an "Away" bar
+  // before the first block. Gaps BETWEEN and after blocks still show.
+  let cursor = byStart.length > 0 ? byStart[0].startTime : fromMs
   for (const segment of byStart) {
     if (segment.startTime > cursor) {
       gapRanges.push({ startTime: cursor, endTime: segment.startTime })
@@ -4857,12 +4907,14 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const sessions = withFocusApps(mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession))
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
-  // timeline.md §4: today, before it has been analyzed, shows as provisional
-  // "Active now" stretches — not named per-activity blocks. The day finalizes
-  // when it is materialized: Analyze Day (a materialize request) persists named
-  // blocks, after which passive reads see those persisted blocks and render the
-  // real segmentation. So a day is provisional only while it has never been
-  // materialized and the nightly job hasn't processed it.
+  // timeline.md §4 (founder rule): today stays ONE provisional "Active now"
+  // block until the USER explicitly analyzes it (a materialize request from
+  // Analyze Day). We can't know the shape of the day until it is done, so Daylens
+  // never splits today into named blocks on its own. A day is provisional while it
+  // has no user-materialized blocks and was not processed by the nightly job;
+  // crucially, NOTHING but an explicit user Analyze may materialize the live day
+  // (see the guard in persistTimelineDayIfChanged), so a passive read never
+  // persists today and never ends provisional mode behind the user's back.
   const isLiveProvisionalDay = dateStr === localDateString()
     && !(options.materialize ?? false)
     && validPersistedTimelineBlockCount(db, dateStr) === 0

@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { isArtifactCompatibleWithBlockCategory, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
+import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { effectiveBlockKind, kindForDomain } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
@@ -211,7 +211,11 @@ function blockShortSummary(block: WorkContextBlock): string {
       && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
   )
   const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
-  const naturalizedArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
+  // §3.5 / invariant 3: never let a raw file, slug, or article tab-title become
+  // the subject of the summary ("editing AGENT-EXECUTION-PLAN.md"). Drop it and
+  // fall back to the category noun ("editing code").
+  const cleanArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
+  const naturalizedArtifact = cleanArtifact && !looksLikeRawArtifactLabel(cleanArtifact) ? cleanArtifact : null
 
   // Same artifact-ownership filter as before: only attribute the artifact to
   // apps that could plausibly own it (browsers for page artifacts, the named

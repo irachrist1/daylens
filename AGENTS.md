@@ -20,8 +20,9 @@ You run this loop without stopping to ask questions:
 1. **Pick the issue.** Work the "Daylens v2" project — issues **DEV-87 … DEV-92**, each one a
    whole shippable PR. Take the lowest-numbered issue that is **not blocked** (Linear shows the
    blockers; DEV-87 unblocks the rest). If nothing is unblocked, say so and stop.
-2. **Branch from `main`.** `git fetch` and branch from the latest `main`:
-   `agent/dev-<n>-<slug>`. Never commit to `main`.
+2. **Work on `main`.** Commit straight to `main` (or a short-lived working branch you merge
+   back into `main` the same session). Keep `main` green: typecheck and tests pass on every
+   commit. No branch-per-issue and no PR ceremony unless the founder asks for one.
 3. **Plan first, in the issue.** Before writing code, read the issue's spec links and the
    invariants (they are physics — never break one to ship), then comment your plan on the issue:
    the files/systems you'll change, the approach, decisions where the spec is silent, and the
@@ -89,6 +90,17 @@ For every issue:
 - If you can't visually verify something, **say so plainly.** Never claim a screen works
   when you haven't seen it work. "I couldn't reproduce this on a live day" is a real,
   acceptable answer. A false "it works" is not.
+
+## Fix the foundation, not the symptom
+
+When something reads wrong on screen, the bug is almost never where it shows. A wrap that
+"feels flat", a timeline that "makes no sense" — the cause is usually a layer or two down:
+the blocks, the capture, the names. Diagnose bottom-up — capture, then blocks, then naming,
+then the words — and check your hypothesis against the real data in `daylens.sqlite` before you
+touch code. A fix to the copy on top of wrong data is still wrong. When fixing the named
+feature means repairing the timeline or tracking engine underneath it, repair it; that is the
+job, not scope creep. Record what you found in [`docs/findings.md`](docs/findings.md) and add a
+regression test, so the next person inherits the cause, not just the patch.
 
 ## Linear protocol
 

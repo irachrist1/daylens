@@ -161,15 +161,13 @@ function DidScene({ facts, theme, reduced }: { facts: DayWrapFacts; theme: Theme
   )
 }
 
-const PART_LABEL: Record<DayStorySegment['part'], string> = { morning: 'Morning', midday: 'Midday', evening: 'Evening' }
-
 function StoryScene({ seg, line, theme }: { seg: DayStorySegment; line: string | null; theme: Theme }) {
   const fallback = seg.items.length > 0
-    ? `${PART_LABEL[seg.part]} went to ${seg.items.slice(0, 2).map(lower).join(' and ')}.`
-    : `${PART_LABEL[seg.part]} was a quieter stretch.`
+    ? `${seg.label} went to ${seg.items.slice(0, 2).map(lower).join(' and ')}.`
+    : `${seg.label} was a quieter stretch.`
   return (
     <Scene>
-      <Kicker accent={theme.accent}>{PART_LABEL[seg.part]} · {seg.clockStart} to {seg.clockEnd}</Kicker>
+      <Kicker accent={theme.accent}>{seg.label} · {seg.clockStart} to {seg.clockEnd}</Kicker>
       <h1 style={{ fontSize: 'clamp(26px, 4.2vw, 44px)', fontWeight: 750, lineHeight: 1.18, letterSpacing: '-0.02em', color: '#fff', margin: 0, maxWidth: '24ch' }}>
         {line ?? fallback}
       </h1>
@@ -415,7 +413,9 @@ export default function DayWrapped({
     })
 
     if (!facts.isLeisureDay) {
-      if (facts.workActivities.length > 0 && facts.workSeconds >= 15 * 60) {
+      // The "what you did" list only earns its slide with more than one activity.
+      // With a single thread it just repeats the headline, so skip it.
+      if (facts.workActivities.length >= 2 && facts.workSeconds >= 15 * 60) {
         out.push({
           theme: palette.did, render: () => <DidScene facts={facts} theme={palette.did} reduced={reduced} />,
           share: dayShareModel(facts, mode), shareName: `${stem}-did`,

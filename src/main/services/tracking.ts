@@ -28,6 +28,7 @@ import { isCategoryFocused } from '../lib/focusScore'
 import { resolveCanonicalApp } from '../lib/appIdentity'
 import { stripBrowserUrlFromTitle } from '@shared/aiSanitize'
 import { localDateString, localDayBounds } from '../lib/localDate'
+import { looksLikePassivePresenceSession } from '../lib/passivePresence'
 import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
@@ -1119,10 +1120,12 @@ function isDaylensSelfIdentity(bundleId: string, appName: string, rawAppName?: s
   return false
 }
 
+// A watched video, a live call, or an online class is presence, not idle. See
+// `passivePresence.ts`. Held open through a no-input stretch so a 2-hour Meet
+// class is not flushed away at the 5-minute idle cutoff; a real walk-away still
+// ends on screen sleep/lock.
 function looksLikePassiveMediaSession(session: InFlightSession): boolean {
-  if (session.category === 'entertainment') return true
-  const haystack = `${session.bundleId} ${session.appName} ${session.rawAppName} ${session.windowTitle ?? ''}`.toLowerCase()
-  return /\b(netflix|youtube|youtu\.be|hulu|disney|prime video|amazon video|plex|twitch|vimeo|vlc|quicktime|music|spotify)\b/.test(haystack)
+  return looksLikePassivePresenceSession(session)
 }
 
 function trackedForegroundSessionExclusionReason(

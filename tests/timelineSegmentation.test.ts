@@ -112,6 +112,30 @@ test('assisted-work pair across a 10-minute gap is one block', () => {
   db.close()
 })
 
+// REGRESSION: a tiny overnight blip (a 24s glance at Claude at 1:56am) must not
+// fold across the multi-hour sleep gap into the morning's work. The sliver floor
+// used to fold any sub-15min block into its nearest neighbour with no gap check,
+// producing one 11-hour block that started at 2am and made the whole wrap lie.
+test('an overnight sliver does not fold across the sleep gap into the morning block', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.anthropic.claude', appName: 'Claude', category: 'aiTools', startTime: at(1, 56), endTime: at(1, 56) + 24_000, windowTitle: 'Claude' }),
+    session({ bundleId: 'com.apple.Terminal', appName: 'Terminal', category: 'development', startTime: at(9, 41), endTime: at(10, 11), windowTitle: 'daylens — onboarding-ux-redesign' }),
+    session({ bundleId: 'com.anthropic.claude', appName: 'Claude', category: 'aiTools', startTime: at(10, 11), endTime: at(10, 50), windowTitle: 'Claude' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  const spans = blocks.map((b) => `${new Date(b.startTime).getHours()}:${String(new Date(b.startTime).getMinutes()).padStart(2, '0')}-${new Date(b.endTime).getHours()}:${String(new Date(b.endTime).getMinutes()).padStart(2, '0')}`)
+  // The 24s pre-dawn blip is noise: it is neither foldable across the sleep gap
+  // nor a block of its own, so it is dropped entirely. No block touches 1-5am.
+  const preDawn = blocks.some((b) => new Date(b.startTime).getHours() < 5)
+  assert.equal(preDawn, false, `the overnight blip should be dropped, not shown: ${spans.join(', ')}`)
+  // The real morning work block starts at 9:41am, not 1:56am.
+  const morning = blocks.find((b) => blockActiveSeconds(b) >= FLOOR_SECONDS)
+  assert.ok(morning, `expected a real morning block: ${spans.join(', ')}`)
+  assert.equal(new Date(morning!.startTime).getHours(), 9, `morning block should start at 9am, got ${spans.join(', ')}`)
+  db.close()
+})
+
 // GUARD (distinct topics): two different browsing topics in the same browser are
 // two different things. They share a top app and the browsing category, so the
 // topic-sensitive content-context check (different window titles) is the only

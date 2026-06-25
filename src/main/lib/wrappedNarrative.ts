@@ -13,6 +13,7 @@ import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type { AIWrappedNarrative } from '@shared/types'
 import {
   formatHm,
+  workActionPhrase,
   type DayWrapFacts,
 } from '../../renderer/lib/dayWrapScenes'
 
@@ -66,7 +67,7 @@ function compactDayFacts(facts: DayWrapFacts) {
       personal: formatHm(facts.personalSeconds),
       mostlyRest: facts.isLeisureDay,
     },
-    workedOn: facts.workActivities.map((a) => ({ what: a.name, time: formatHm(a.seconds) })),
+    workedOn: facts.workActivities.map((a) => ({ what: workActionPhrase(a.name, a.category), time: formatHm(a.seconds) })),
     whereTheTimeWent: facts.appSites.map((s) => ({ name: s.name, time: formatHm(s.seconds) })),
     story: { morning: seg('morning'), midday: seg('midday'), evening: seg('evening') },
     longestStretch: facts.standout
@@ -87,6 +88,8 @@ export function buildWrappedPrompts(facts: DayWrapFacts): { systemPrompt: string
     'Follow the Daylens voice directive appended at the end of this prompt exactly; it sets the person, warmth, and humor for the chosen voice and is the ceiling for tone. Keep every line short and punchy, one idea per card, never a paragraph.',
     'Each string is one or two short sentences, 20 to 180 characters. Never ask the user a question.',
     'NAME THE WORK, NEVER THE FILE. The facts already hand you humanized names ("the internship essay", "the timeline rework"); use those words. Never print a filename, folder, repo, branch, tab title, or video title. If a part of the day has no clean name, fold it into "a few smaller things".',
+    'WORK IS AN ACTION, NOT A PLACE. The entries in workedOn and story are already phrased as actions ("building Daylens", "writing the essay"); narrate the person DOING the work. Never say someone was "on" a project, and never frame a project as a place or an app they sat inside.',
+    'NEVER NAME A TOOL IN PROSE. The apps, browsers, and sites in whereTheTimeWent (Terminal, Claude, Chrome, a domain) belong ONLY to the chart and its one whereLine caption. Never write an app, tool, or website name in lead, story, or closing. Say what was being made, not what it was made in.',
     'lead — the hook: one honest, human line on the SHAPE of the day from facts.split and facts.total. "Today was a long one." / "A quiet one." / "Mostly heads-down." If facts.split.mostlyRest, say it was mostly off the clock, plainly and without judgment. Never a score, never a percentage, never "100%".',
     'story.morning / story.midday / story.evening — the day as a story: narrate facts.story[part].did like a friend who was there, connecting the parts ("then", "after lunch"). Use the real names and the time window. Set a beat to null when facts.story[part] is null. If a part also has alsoSawSomeOf (a leisure surface), you may own it with one relevant, kind line, never a scold.',
     'whereLine — one short caption for the app and site chart in facts.whereTheTimeWent (which app or site held the most). null if there is nothing to say. Do not restate the whole list; the chart shows it.',
@@ -273,16 +276,15 @@ function buildFallbackLead(facts: DayWrapFacts): string {
   const top = facts.workActivities[0]
   const shape = facts.activeSeconds / 3600 >= 6 ? 'A long one.' : facts.activeSeconds / 3600 >= 3 ? 'A full one.' : 'A lighter one.'
   return top
-    ? `${shape} ${formatHm(facts.activeSeconds)}, mostly on ${lower(top.name)}.`
+    ? `${shape} ${formatHm(facts.activeSeconds)}, mostly ${lower(workActionPhrase(top.name, top.category))}.`
     : `${shape} ${formatHm(facts.activeSeconds)} tracked.`
 }
 
 function storyLine(seg: DayWrapFacts['dayStory']['morning']): string | null {
   if (!seg || seg.items.length === 0) return null
-  const part = seg.part === 'morning' ? 'Morning' : seg.part === 'midday' ? 'The afternoon' : 'The evening'
   const names = seg.items.slice(0, 2).map(lower)
   const joined = names.length === 2 ? `${names[0]} and ${names[1]}` : names[0]
-  return `${part} went to ${joined}.`
+  return `${seg.label} went to ${joined}.`
 }
 
 function lower(s: string): string {
