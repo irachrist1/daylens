@@ -340,10 +340,11 @@ function startBackgroundServices(): void {
 
   startTracking()
   if (process.platform === 'darwin') startFocusCapture()
-  if (process.platform === 'win32') {
-    startWindowsFocusCapture()
-    ensureProcessMonitor()
-  }
+  if (process.platform === 'win32') startWindowsFocusCapture()
+  // Background-process evidence (long-running apps that never come to the
+  // foreground) feeds block naming on both Windows and Linux. macOS uses
+  // focus events instead, so the monitor is a no-op there.
+  if (process.platform === 'win32' || process.platform === 'linux') ensureProcessMonitor()
   if (!SMOKE_TEST) {
     startSync()
     startDailySummaryNotifier(mainWindow)
@@ -810,8 +811,8 @@ app.whenReady()
 
     initDb()
 
-    // The Windows process monitor now starts lazily on the first diagnostics
-    // request (see getProcessMetrics), so nothing to spawn here at launch.
+    // The process monitor (Windows + Linux) is started in startBackgroundServices
+    // once tracking is enabled; diagnostics requests reuse the same instance.
 
     registerDbHandlers()
     registerDebugHandlers()
