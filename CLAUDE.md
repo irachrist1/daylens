@@ -1,11 +1,10 @@
 # Daylens — agent entry point
 
-**Before doing any work in this repo, read [`AGENTS.md`](AGENTS.md) and
-[`docs/plans/AGENT-EXECUTION-PLAN.md`](docs/plans/AGENT-EXECUTION-PLAN.md) and follow them
-exactly.** They define the autonomous build of Daylens v2: the work packets, model routing,
-branch model (branch from `main` per packet → PR to `main`), Linear status protocol, quality
-gate, and the rule that only the founder marks an issue Done after testing.
+**Before doing any work in this repo, read [`AGENTS.md`](AGENTS.md) and follow it.** It is
+the whole playbook: how to work, the invariants (the physics you never break), the
+quality gate, and the rule that only the founder marks something done after testing on a
+real day.
 
-The founder's only job is to test. Build in packets (2+ related issues → one notable,
-testable feature → one PR), keep checks green, update Linear, tag `/bugbot`, never push to
-`main` directly.
+The short version: understand before you change, fix the foundation not the symptom, ask
+when you're unsure instead of assuming, work on `main`, keep it green, and verify in the
+running app — green tests are not proof. The founder's only job is to test.

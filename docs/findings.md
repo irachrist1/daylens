@@ -204,9 +204,8 @@ content for a time window lives in `website_visits` (page_title, url) and `activ
 
 ---
 
-*Companion to the specs in `docs/specs/` and the cross-cutting decisions in
-`docs/research/open-questions.md`. Next: study how others solved this (Rize, Toggl, StayFree,
-the Raycast v2 rewrite), then update the specs, then cut Linear issues.*
+*Companion to the behavior specs in `docs/specs/`. Prior art on how other trackers solved
+this (Rize, Toggl, StayFree) lives in `docs/research/prior-art.md`.*
 
 ---
 
