@@ -31,6 +31,7 @@ import type {
   CategoryOverrideEffect,
   ClientRecord,
   BreakRecommendation,
+  CalendarRangeDay,
   DayTimelinePayload,
   DistractionCostPayload,
   FocusReflectionSavePayload,
@@ -144,6 +145,8 @@ const api = {
     getTimelineDay: (date: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.GET_TIMELINE_DAY, date),
     rebuildTimelineDay: (date: string, hint?: string): Promise<DayTimelinePayload> => ipcRenderer.invoke(IPC.DB.REBUILD_TIMELINE_DAY, date, hint),
     getRecapRange: (dates: string[]): Promise<DayTimelinePayload[]> => ipcRenderer.invoke(IPC.DB.GET_RECAP_RANGE, dates),
+    getTimelineRangeBlocks: (fromDate: string, toDate: string): Promise<CalendarRangeDay[]> =>
+      ipcRenderer.invoke(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, fromDate, toDate),
     getDistractionCost: (): Promise<DistractionCostPayload> => ipcRenderer.invoke(IPC.DB.GET_DISTRACTION_COST),
     getAppSummaries: (days?: number): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES, days),
     getAppSummariesForDate: (date: string): Promise<AppUsageSummary[]> => ipcRenderer.invoke(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, date),

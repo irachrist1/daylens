@@ -246,6 +246,27 @@ export interface DayTimelinePayload {
 
 export type HistoryDayPayload = DayTimelinePayload
 
+// One block as the calendar month grid reads it: the same persisted
+// timeline_blocks truth the day view renders, reduced to what a day cell
+// shows. Label resolution mirrors userVisibleBlockLabel — a user rename
+// (block_label_overrides) always wins over label_current.
+export interface CalendarRangeBlock {
+  id: string
+  date: string
+  startTime: number
+  endTime: number
+  dominantCategory: AppCategory
+  label: string
+  kind: WorkKind
+  activeSeconds: number
+}
+
+export interface CalendarRangeDay {
+  date: string
+  blocks: CalendarRangeBlock[]
+  activeSeconds: number
+}
+
 export interface WorkContextInsight {
   label: string | null
   narrative: string | null
@@ -1719,6 +1740,7 @@ export const IPC = {
     MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',
+    GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',
   },
   DEBUG: {
     GET_INFO: 'debug:get-info',

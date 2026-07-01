@@ -1,11 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
-import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { effectiveBlockKind, kindForDomain } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
@@ -102,10 +101,6 @@ function formatClockTime(timestamp: number): string {
   }).format(timestamp)
 }
 
-function blockDurationSeconds(block: WorkContextBlock): number {
-  return blockActiveSeconds(block)
-}
-
 function segmentDurationSeconds(segment: TimelineSegment): number {
   return Math.max(1, Math.round((segment.endTime - segment.startTime) / 1000))
 }
@@ -121,23 +116,6 @@ function categoryLabel(category: AppCategory): string {
 
 function shortDomainLabel(domain: string): string {
   return domain.replace(/^www\./i, '')
-}
-
-function artifactSubtitle(block: WorkContextBlock): string | null {
-  const titles = block.topArtifacts
-    .filter((artifact) => isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory))
-    .slice(0, 3)
-    .map((artifact) => safeTimelineText(artifact.displayTitle.trim()))
-    .filter(Boolean)
-
-  if (titles.length > 0) return titles.join(' • ')
-
-  const domains = block.websites
-    .slice(0, 3)
-    .map((site) => shortDomainLabel(site.domain))
-    .filter(Boolean)
-
-  return domains.length > 0 ? domains.join(' • ') : null
 }
 
 function blockNarrative(block: WorkContextBlock): string | null {
@@ -265,28 +243,18 @@ function gapKindLabel(kind: TimelineGapSegment['kind']): string {
   return 'Untracked gap'
 }
 
-type DisplayTimelineSegment = TimelineSegment | {
-  kind: 'gap_group'
-  startTime: number
-  endTime: number
-  items: TimelineGapSegment[]
-}
-
 const MIN_VISIBLE_GAP_SECONDS = 30 * 60
-const LONG_GAP_ANCHOR_SECONDS = 75 * 60
 
-// timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long, so the
-// shape of the day shows where time went before you read a label. Height is
-// linear in active minutes. The engine's 15-minute floor is the shortest a block
-// can be, and at this slope a 15-minute block clears the readable minimum, so the
-// scale stays genuinely proportional (a 3-hour block is ~12× a 15-minute one)
-// without squashing the short end. MIN_BLOCK_HEIGHT is a defensive floor for any
-// sub-floor block (live/edge cases) so a card can always show its title + meta.
-const PX_PER_MINUTE = 3.2
-const MIN_BLOCK_HEIGHT = 48
-// Below this height a card shows only its title + meta line; taller cards add the
-// narrative so a short block stays legible instead of clipping mid-sentence.
-const BLOCK_NARRATIVE_MIN_HEIGHT = 104
+// Calendar geometry. The timeline is drawn as a real calendar grid: a block
+// sits at its wall-clock position (top = start, bottom = end), so height =
+// duration falls out of the clock itself (timeline.md §3.4 / invariant 1) and
+// gaps read as the empty space they are.
+const DAY_HOUR_HEIGHT = 88
+const WEEK_HOUR_HEIGHT = 52
+const TIME_GUTTER_WIDTH = 56
+// Smallest drawable card. The engine's 15-minute floor means a real block at
+// the day scale is ≥ 22px; this only catches meetings and edge-case slivers.
+const MIN_CARD_HEIGHT = 16
 
 // Daylens won't shape a day into named blocks until there's enough to work with
 // (founder decision: at least 2 hours tracked). Below this the Analyze action
@@ -311,62 +279,62 @@ function trackedSecondsFor(payload: DayTimelinePayload): number {
   return blockSeconds > 0 ? blockSeconds : payload.totalSeconds
 }
 
-function compressTimelineSegments(segments: TimelineSegment[]): DisplayTimelineSegment[] {
-  const compressed: DisplayTimelineSegment[] = []
-  let gapCluster: TimelineGapSegment[] = []
+// Local midnight of a YYYY-MM-DD date — the top of that day's calendar track.
+function dayStartMs(dateStr: string): number {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d).getTime()
+}
 
-  const flushGapCluster = () => {
-    if (gapCluster.length === 0) return
+// Minutes from local midnight, clamped to the 24h track. A block that runs
+// past midnight (the owned day extends into the small hours) is clamped to
+// the bottom edge; its label still shows the real clock times.
+function minutesIntoDay(ts: number, dayStart: number): number {
+  return Math.min(24 * 60, Math.max(0, (ts - dayStart) / 60_000))
+}
 
-    if (gapCluster.length >= 2) {
-      compressed.push({
-        kind: 'gap_group',
-        startTime: gapCluster[0].startTime,
-        endTime: gapCluster[gapCluster.length - 1].endTime,
-        items: gapCluster,
-      })
-    } else {
-      compressed.push(...gapCluster)
-    }
+function hourLabel(hour: number): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date(2000, 0, 1, hour))
+}
 
-    gapCluster = []
-  }
+function monthKey(dateStr: string): string {
+  return dateStr.slice(0, 7)
+}
 
-  for (const segment of segments) {
-    if (segment.kind === 'work_block') {
-      flushGapCluster()
-      compressed.push(segment)
-      continue
-    }
+function monthLabel(dateStr: string): string {
+  const [y, m] = dateStr.split('-').map(Number)
+  return new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(new Date(y, m - 1, 1))
+}
 
-    // Derived untracked spans (start/end of day, gaps between blocks) stay in the
-    // payload but are not drawn — only real Away / Machine off breaks surface.
-    if (segment.kind === 'idle_gap') continue
+// First day of the month `delta` months away, as YYYY-MM-DD.
+function shiftMonth(dateStr: string, delta: number): string {
+  const [y, m] = dateStr.split('-').map(Number)
+  const next = new Date(y, m - 1 + delta, 1)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-01`
+}
 
-    const gapSeconds = segmentDurationSeconds(segment)
-    if (gapSeconds < MIN_VISIBLE_GAP_SECONDS) continue
-
-    if (gapSeconds >= LONG_GAP_ANCHOR_SECONDS) {
-      flushGapCluster()
-      compressed.push(segment)
-      continue
-    }
-
-    gapCluster.push(segment)
-  }
-
-  flushGapCluster()
-  return compressed
+// Every date drawn on the month grid: full Monday-start weeks covering the
+// month, so the grid is always 7 columns × 4–6 rows.
+function monthGridDates(dateStr: string): string[] {
+  const [y, m] = dateStr.split('-').map(Number)
+  const first = `${y}-${String(m).padStart(2, '0')}-01`
+  const lastDay = new Date(y, m, 0).getDate()
+  const last = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  const start = getWeekStart(first)
+  const end = shiftDate(getWeekStart(last), 6)
+  const dates: string[] = []
+  for (let d = start; d <= end; d = shiftDate(d, 1)) dates.push(d)
+  return dates
 }
 
 interface TimelineNavState {
-  view: 'day' | 'week'
+  view: 'day' | 'week' | 'month'
   date: string
 }
 
 function timelineNavStateFromParams(searchParams: URLSearchParams): TimelineNavState {
+  const rawView = searchParams.get('view')
   return {
-    view: searchParams.get('view') === 'week' ? 'week' : 'day',
+    view: rawView === 'week' ? 'week' : rawView === 'month' ? 'month' : 'day',
     date: searchParams.get('date') ?? todayString(),
   }
 }
@@ -408,233 +376,247 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
   )
 }
 
-const TimelineRow = memo(function TimelineRow({
-  segment,
+// One block drawn as a calendar event: absolutely positioned at its clock
+// time inside a day track. `compact` is the week-column variant (smaller
+// type, title-first, no prose).
+function CalendarBlockCard({
   block,
+  top,
+  height,
+  compact,
   isSelected,
-  inMergeRange = false,
+  inMergeRange,
+  onClick,
 }: {
-  segment: TimelineSegment
-  block: WorkContextBlock | null
+  block: WorkContextBlock
+  top: number
+  height: number
+  compact: boolean
   isSelected: boolean
-  // True for blocks caught inside a shift-selected merge span but not the open
-  // (anchor) block — they get the selected highlight without the detail reveal.
-  inMergeRange?: boolean
+  inMergeRange: boolean
+  onClick?: () => void
 }) {
-  const duration = formatDuration(segmentDurationSeconds(segment))
-
-  if (!block) {
-    const gapSegment = segment as TimelineGapSegment
-
-    // Away / Machine off breaks read as thin dividers, not cards — labelled so
-    // you know why the time is blank ("Away · 45m") without competing with blocks.
-    return (
-      <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'center' }}>
-        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
-          {formatClockTime(gapSegment.startTime)}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0' }}>
-          <div style={{ flex: '0 0 16px', borderTop: '1px dashed var(--color-border-ghost)' }} />
-          <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-            {gapKindLabel(gapSegment.kind)} · {duration}
-          </span>
-          <div style={{ flex: 1, borderTop: '1px dashed var(--color-border-ghost)' }} />
-        </div>
-      </div>
-    )
-  }
-
-  const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
-  // timeline.md §3.4 / invariant 1: a block is drawn as tall as it is long — a
-  // 3-hour block towers over a 15-minute one. Height is linear in active minutes
-  // (PX_PER_MINUTE), with MIN_BLOCK_HEIGHT only as a defensive floor for any
-  // sub-floor block so its title and meta stay readable.
-  const proportionalHeight = Math.max(MIN_BLOCK_HEIGHT, Math.round((blockActiveSeconds(block) / 60) * PX_PER_MINUTE))
-  // A short card can't fit a narrative without clipping mid-sentence, so it shows
-  // title + meta only; taller cards (or the open one) add the prose.
-  const showNarrative = isSelected || proportionalHeight >= BLOCK_NARRATIVE_MIN_HEIGHT
+  const accent = block.provisional ? '#8b93a7' : (CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized)
   const ignored = block.review.state === 'ignored'
-  // Leisure / personal rows are muted so the eye finds work first. Work is
-  // full-strength; everything else recedes. This is the whole point of the
-  // `kind` axis on the surface.
-  const blockKind = effectiveBlockKind(block)
-  const muted = blockKind !== 'work'
-  const artifactLine = artifactSubtitle(block)
-  const appsLine = block.topApps
-    .slice(0, 3)
-    .map((app) => formatDisplayAppName(app.appName))
-    .join(' • ')
+  // Leisure / personal blocks are muted so the eye finds work first.
+  const muted = effectiveBlockKind(block) !== 'work'
+  const label = userVisibleBlockLabel(block)
+  const timeRange = `${formatClockTime(block.startTime)} – ${formatClockTime(block.endTime)}`
+  const showTime = height >= (compact ? 34 : 40)
+  const showSummary = !compact && height >= 128
+  const titleLines = height >= (compact ? 48 : 56) ? 2 : 1
 
   return (
     <button
       type="button"
       data-timeline-block-id={block.id}
-      aria-label={`Open ${userVisibleBlockLabel(block)}, ${duration}`}
+      aria-label={`Open ${label}, ${formatDuration(blockActiveSeconds(block))}`}
       aria-pressed={isSelected}
+      onClick={onClick}
+      title={`${label} · ${timeRange}`}
       style={{
-        display: 'grid',
-        gridTemplateColumns: '104px minmax(0, 1fr)',
-        gap: 16,
-        alignItems: 'start',
-        width: '100%',
-        border: 'none',
-        background: 'transparent',
-        padding: 0,
+        position: 'absolute',
+        top,
+        height,
+        left: compact ? 2 : 4,
+        right: compact ? 2 : 8,
+        display: 'block',
         textAlign: 'left',
         cursor: 'pointer',
-      }}
-    >
-      <div style={{ paddingTop: 6 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-primary)' }}>{formatClockTime(block.startTime)}</div>
-        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-          {duration}
-        </div>
-      </div>
-      <div style={{
-        position: 'relative',
-        padding: '14px 16px 14px 18px',
-        borderRadius: 16,
-        // Both the open block and every block inside a merge span read as
-        // selected; only the open one gets the lifted shadow so it stays primary.
-        border: (isSelected || inMergeRange) ? `1px solid ${accent}55` : '1px solid var(--color-border-ghost)',
-        background: (isSelected || inMergeRange) ? 'var(--color-surface-low)' : 'var(--color-surface)',
-        boxShadow: isSelected ? '0 10px 30px rgba(0,0,0,0.10)' : 'none',
+        borderRadius: compact ? 6 : 8,
+        border: (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
+        borderLeft: `3px solid ${accent}`,
+        background: (isSelected || inMergeRange) ? `${accent}30` : `${accent}1c`,
+        boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
         transition: 'border-color 120ms, background 120ms',
+        padding: compact ? '2px 6px' : '4px 9px',
         overflow: 'hidden',
         minWidth: 0,
-        // Height is proportional to duration (the calendar invariant), but used
-        // as a *floor* so a short block with a long, full title grows just enough
-        // to show it instead of clipping. Tall blocks keep their exact
-        // proportional height — their text never reaches this floor.
-        minHeight: proportionalHeight,
-        opacity: ignored ? 0.5 : muted ? 0.72 : 1,
-      }}>
-        <div style={{
-          position: 'absolute',
-          left: 0,
-          top: 12,
-          bottom: 12,
-          width: 3,
-          borderRadius: 999,
-          background: accent,
-        }} />
-        <div style={{ display: 'flex', alignItems: 'start', gap: 10, minWidth: 0, marginBottom: 6 }}>
-          <div
-            title={userVisibleBlockLabel(block)}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 15,
-              fontWeight: 700,
-              color: 'var(--color-text-primary)',
-              lineHeight: 1.25,
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: 2,
-              overflow: 'hidden',
-              overflowWrap: 'break-word',
-              wordBreak: 'break-word',
-            }}
-          >
-            {userVisibleBlockLabel(block)}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {/* A provisional live block stays neutral — no category badge until
-                the day is analyzed (timeline.md §4). */}
-            {!block.provisional && (
-              <span style={{
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: accent,
-                background: `${accent}18`,
-                borderRadius: 999,
-                padding: '3px 7px',
-              }}>
-                {categoryLabel(block.dominantCategory)}
-              </span>
-            )}
-            {block.isLive && (
-              <span style={{
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: '#22c55e',
-              }}>
-                Live
-              </span>
-            )}
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: showNarrative ? 8 : 0 }}>
-          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)}
-        </div>
-        {showNarrative && (
-          <p style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--color-text-secondary)', margin: '0 0 10px', overflowWrap: 'break-word', minWidth: 0 }}>
-            {blockNarrative(block) ?? blockShortSummary(block)}
-          </p>
-        )}
-        {isSelected && artifactLine && (
-          <InlineRevealText
-            text={artifactLine}
-            style={{ fontSize: 12.5, color: 'var(--color-text-primary)', marginBottom: appsLine ? 6 : 0 }}
-          />
-        )}
-        {isSelected && appsLine && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {block.topApps.slice(0, 2).map((app) => (
-                <AppIcon
-                  key={`${block.id}:${app.bundleId}`}
-                  bundleId={app.bundleId}
-                  appName={app.appName}
-                  size={18}
-                  fontSize={9}
-                  color={accent}
-                />
-              ))}
-            </div>
-            <InlineRevealText
-              text={appsLine}
-              style={{ fontSize: 12, color: 'var(--color-text-tertiary)', flex: 1 }}
-            />
-          </div>
+        opacity: ignored ? 0.45 : muted ? 0.7 : 1,
+        zIndex: isSelected ? 3 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'start', gap: 6, minWidth: 0 }}>
+        <span style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: compact ? 11 : 12.5,
+          fontWeight: 650,
+          color: 'var(--color-text-primary)',
+          lineHeight: 1.25,
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: titleLines,
+          overflow: 'hidden',
+          overflowWrap: 'break-word',
+          wordBreak: 'break-word',
+        }}>
+          {label}
+        </span>
+        {block.isLive && (
+          <span aria-label="Live" style={{
+            flexShrink: 0,
+            marginTop: 3,
+            width: 7,
+            height: 7,
+            borderRadius: '50%',
+            background: '#22c55e',
+          }} />
         )}
       </div>
+      {showTime && (
+        <div style={{ fontSize: compact ? 10 : 11, color: 'var(--color-text-tertiary)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {timeRange} · {formatDuration(blockActiveSeconds(block))}
+        </div>
+      )}
+      {showSummary && (
+        <p style={{
+          fontSize: 12,
+          lineHeight: 1.5,
+          color: 'var(--color-text-secondary)',
+          margin: '4px 0 0',
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: Math.max(1, Math.floor((height - 64) / 18)),
+          overflow: 'hidden',
+          overflowWrap: 'break-word',
+        }}>
+          {blockNarrative(block) ?? blockShortSummary(block)}
+        </p>
+      )}
     </button>
   )
-})
+}
 
-function GapGroupRow({ segment }: { segment: Extract<DisplayTimelineSegment, { kind: 'gap_group' }> }) {
-  const totals = segment.items.reduce<Map<TimelineGapSegment['kind'], number>>((map, item) => {
-    map.set(item.kind, (map.get(item.kind) ?? 0) + segmentDurationSeconds(item))
-    return map
-  }, new Map())
+// The hour labels column shared by the day and week grids.
+function HourGutter({ hourHeight }: { hourHeight: number }) {
+  return (
+    <div style={{ position: 'relative', height: 24 * hourHeight, width: TIME_GUTTER_WIDTH }}>
+      {Array.from({ length: 23 }, (_, index) => index + 1).map((hour) => (
+        <div
+          key={hour}
+          style={{
+            position: 'absolute',
+            top: hour * hourHeight,
+            right: 8,
+            transform: 'translateY(-50%)',
+            fontSize: 10,
+            color: 'var(--color-text-tertiary)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {hourLabel(hour)}
+        </div>
+      ))}
+    </div>
+  )
+}
 
-  const chips = (['machine_off', 'away'] as const)
-    .filter((kind) => totals.has(kind))
-    .map((kind) => ({
-      kind,
-      label: gapKindLabel(kind),
-      duration: formatDuration(totals.get(kind) ?? 0),
-    }))
-
-  if (chips.length === 0) return null
-
-  const breakSummary = chips.map((chip) => `${chip.label} ${chip.duration}`).join(' · ')
+// One day as a 24-hour calendar track: hour lines, blocks at their clock
+// positions, honest labels for real Away / Machine off breaks, and the
+// current-time line on today. Blocks are buttons carrying
+// data-timeline-block-id, so the day view's click-capture selection (plain
+// click, shift-click merge, click-empty deselect) works unchanged.
+function CalendarDayTrack({
+  date,
+  blocks,
+  gapSegments = [],
+  hourHeight,
+  compact = false,
+  selectedBlockId = null,
+  selectedSpanIds,
+  nowMs = null,
+  onBlockClick,
+}: {
+  date: string
+  blocks: WorkContextBlock[]
+  gapSegments?: TimelineGapSegment[]
+  hourHeight: number
+  compact?: boolean
+  selectedBlockId?: string | null
+  selectedSpanIds?: ReadonlySet<string>
+  nowMs?: number | null
+  onBlockClick?: (block: WorkContextBlock) => void
+}) {
+  const dayStart = dayStartMs(date)
+  const nowMinutes = nowMs != null ? (nowMs - dayStart) / 60_000 : null
+  const showNowLine = nowMinutes != null && nowMinutes >= 0 && nowMinutes <= 24 * 60
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16, alignItems: 'center' }}>
-      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
-        {formatClockTime(segment.startTime)}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 0' }}>
-        <div style={{ flex: '0 0 16px', borderTop: '1px dashed var(--color-border-ghost)' }} />
-        <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{breakSummary}</span>
-        <div style={{ flex: 1, borderTop: '1px dashed var(--color-border-ghost)' }} />
-      </div>
+    <div style={{ position: 'relative', height: 24 * hourHeight, minWidth: 0 }}>
+      {Array.from({ length: 24 }, (_, hour) => (
+        <div
+          key={hour}
+          style={{
+            position: 'absolute',
+            top: hour * hourHeight,
+            left: 0,
+            right: 0,
+            borderTop: '1px solid var(--color-border-ghost)',
+            pointerEvents: 'none',
+          }}
+        />
+      ))}
+
+      {/* Real breaks read as quiet labels in the empty space they explain. */}
+      {!compact && gapSegments.map((gap) => {
+        const top = (minutesIntoDay(gap.startTime, dayStart) / 60) * hourHeight
+        const bottom = (minutesIntoDay(gap.endTime, dayStart) / 60) * hourHeight
+        const gapHeight = bottom - top
+        if (gapHeight < 22) return null
+        return (
+          <div
+            key={`gap:${gap.kind}:${gap.startTime}`}
+            style={{
+              position: 'absolute',
+              top,
+              height: gapHeight,
+              left: 4,
+              right: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+              {gapKindLabel(gap.kind)} · {formatDuration(segmentDurationSeconds(gap))}
+            </span>
+          </div>
+        )
+      })}
+
+      {blocks.map((block) => {
+        const top = (minutesIntoDay(block.startTime, dayStart) / 60) * hourHeight
+        const bottom = (minutesIntoDay(block.endTime, dayStart) / 60) * hourHeight
+        const height = Math.max(MIN_CARD_HEIGHT, bottom - top)
+        return (
+          <CalendarBlockCard
+            key={block.id}
+            block={block}
+            top={top}
+            height={height}
+            compact={compact}
+            isSelected={selectedBlockId === block.id}
+            inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
+            onClick={onBlockClick ? () => onBlockClick(block) : undefined}
+          />
+        )
+      })}
+
+      {showNowLine && (
+        <div style={{
+          position: 'absolute',
+          top: (nowMinutes / 60) * hourHeight,
+          left: 0,
+          right: 0,
+          zIndex: 4,
+          pointerEvents: 'none',
+        }}>
+          <div style={{ position: 'absolute', left: -3, top: -3.5, width: 8, height: 8, borderRadius: '50%', background: '#ef4444' }} />
+          <div style={{ borderTop: '2px solid #ef4444' }} />
+        </div>
+      )}
     </div>
   )
 }
@@ -1294,58 +1276,35 @@ function BlockInspector({
   )
 }
 
-interface WeekDaySummary {
-  date: string
-  totalSeconds: number
-  categories: Array<{ category: AppCategory; seconds: number }>
-  blockCount: number
-  topLabels: string[]
-}
-
-function WeekView({
+// The week as a real calendar grid: seven day columns on a shared 24-hour
+// track, Google-Calendar shape, Daylens data. The stats + week review card
+// keeps living underneath, computed from the same blocks the grid draws so
+// the totals cannot disagree with what's on screen.
+function CalendarWeekView({
   selectedDate,
   onSelectDate,
+  onOpenBlock,
+  nowMs,
+  scrollerRef,
 }: {
   selectedDate: string
   onSelectDate: (date: string) => void
+  onOpenBlock: (date: string, startTime: number) => void
+  nowMs: number
+  scrollerRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const [hoveredDate, setHoveredDate] = useState<string | null>(null)
-  const [hoveredStack, setHoveredStack] = useState<{ date: string; category: AppCategory; seconds: number } | null>(null)
   const weekStart = getWeekStart(selectedDate)
   const today = todayString()
-  const includesToday = Array.from({ length: 7 }, (_, index) => shiftDate(weekStart, index)).includes(today)
+  const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => shiftDate(weekStart, index)), [weekStart])
+  const includesToday = dates.includes(today)
 
-  const weekResource = useProjectionResource<WeekDaySummary[]>({
+  const weekResource = useProjectionResource<DayTimelinePayload[]>({
     scope: 'timeline',
     dependencies: [weekStart],
     intervalMs: includesToday ? 30_000 : 0,
-    load: async () => {
-      const dates = Array.from({ length: 7 }, (_, index) => shiftDate(weekStart, index))
-      const days = await Promise.all(dates.map((date) => ipc.db.getTimelineDay(date)))
-      return days.map((payload) => {
-        const categories = new Map<AppCategory, number>()
-        const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-        for (const block of trustedBlocks) {
-          categories.set(block.dominantCategory, (categories.get(block.dominantCategory) ?? 0) + blockDurationSeconds(block))
-        }
-        const trustedTotalSeconds = trustedBlocks.reduce((sum, block) => sum + blockDurationSeconds(block), 0)
-        return {
-          date: payload.date,
-          totalSeconds: trustedTotalSeconds,
-          categories: [...categories.entries()]
-            .sort((left, right) => right[1] - left[1])
-            .map(([category, seconds]) => ({ category, seconds })),
-          blockCount: trustedBlocks.length,
-          topLabels: [...new Set(
-            trustedBlocks
-              .slice(0, 5)
-              .map((block) => userVisibleBlockLabel(block))
-              .filter(Boolean)
-          )].slice(0, 3),
-        }
-      })
-    },
+    load: () => Promise.all(dates.map((date) => ipc.db.getTimelineDay(date))),
   })
+
   const expectedWeekReviewScopeKey = `week:${weekStart}`
   const weekReviewResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'timeline',
@@ -1355,7 +1314,8 @@ function WeekView({
   })
   const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
 
-  const data = weekResource.data ?? []
+  const days = useMemo(() => weekResource.data ?? [], [weekResource.data])
+  const byDate = useMemo(() => new Map(days.map((payload) => [payload.date, payload])), [days])
   const rawWeekReview = weekReviewResource.data ?? null
   const weekReview = rawWeekReview && rawWeekReview.scopeKey === expectedWeekReviewScopeKey
     ? rawWeekReview
@@ -1370,101 +1330,113 @@ function WeekView({
       setGeneratingWeekReview(false)
     }
   }, [weekStart, weekReviewResource])
-  const maxSeconds = data.length > 0 ? Math.max(...data.map((day) => day.totalSeconds), 1) : 1
-  const activeDays = data.filter((day) => day.totalSeconds > 0)
-  const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.totalSeconds, 0)
+
+  // Every number below comes from the same blocks the grid draws.
+  const dayTotals = dates.map((date) => {
+    const blocks = byDate.get(date)?.blocks ?? []
+    return { date, seconds: blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0), blocks }
+  })
+  const activeDays = dayTotals.filter((day) => day.seconds > 0)
+  const totalWeekSeconds = activeDays.reduce((sum, day) => sum + day.seconds, 0)
   const averageTrackedSeconds = activeDays.length > 0 ? Math.round(totalWeekSeconds / activeDays.length) : 0
   const mostActiveDay = activeDays.length > 0
-    ? activeDays.reduce((best, day) => day.totalSeconds > best.totalSeconds ? day : best)
+    ? activeDays.reduce((best, day) => day.seconds > best.seconds ? day : best)
     : null
-  const topWeekCategory = Array.from(activeDays.reduce<Map<AppCategory, number>>((map, day) => {
-    for (const category of day.categories) {
-      map.set(category.category, (map.get(category.category) ?? 0) + category.seconds)
-    }
-    return map
-  }, new Map()).entries())
+  const topWeekCategory = [...dayTotals
+    .flatMap((day) => day.blocks)
+    .reduce<Map<AppCategory, number>>((map, block) => {
+      map.set(block.dominantCategory, (map.get(block.dominantCategory) ?? 0) + blockActiveSeconds(block))
+      return map
+    }, new Map())
+    .entries()]
     .sort((left, right) => right[1] - left[1])[0] ?? null
-  const activeDay = data.find((day) => day.date === hoveredDate)
-    ?? data.find((day) => day.date === selectedDate)
-    ?? activeDays[0]
-    ?? null
+
+  // Scroll the shared page scroller so the week's earliest activity is in
+  // view — once per week, not on every 30s live refresh.
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const scrolledKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (days.length === 0 || scrolledKeyRef.current === weekStart) return
+    const scroller = scrollerRef.current
+    const grid = gridRef.current
+    if (!scroller || !grid) return
+    const startMinutes = days.flatMap((payload) =>
+      payload.blocks.map((block) => minutesIntoDay(block.startTime, dayStartMs(payload.date))))
+    const targetMinutes = startMinutes.length > 0 ? Math.min(...startMinutes) : 8 * 60
+    const gridTop = grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    scroller.scrollTop = Math.max(0, gridTop + (targetMinutes / 60) * WEEK_HOUR_HEIGHT - 80)
+    scrolledKeyRef.current = weekStart
+  }, [days, weekStart, scrollerRef])
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 10 }}>
-        {data.map((day) => {
-          const [y, m, d] = day.date.split('-').map(Number)
-          const isSelected = day.date === selectedDate
-          const isToday = day.date === today
-          const height = Math.max(14, (day.totalSeconds / maxSeconds) * 148)
-
-          return (
-            <button
-              key={day.date}
-              type="button"
-              onClick={() => onSelectDate(day.date)}
-              onMouseEnter={() => setHoveredDate(day.date)}
-              style={{
-                border: isSelected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
-                background: isToday || isSelected ? 'var(--color-surface-low)' : 'transparent',
-                borderRadius: 14,
-                padding: '12px 8px 10px',
-                cursor: 'pointer',
-                textAlign: 'center',
-              }}
-            >
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
-                {new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(y, m - 1, d))}
-              </div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--color-text-primary)', marginTop: 2 }}>
-                {d}
-              </div>
-              <div style={{
-                height: 168,
-                display: 'flex',
-                alignItems: 'end',
-                  justifyContent: 'center',
-                  marginTop: 10,
-                }}>
-                <div style={{
-                  width: 76,
-                  height,
-                  borderRadius: 12,
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border-ghost)',
-                  overflow: 'hidden',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'end',
-                }}>
-                  {day.categories.slice(0, 4).map((category, index, array) => {
-                    const total = array.reduce((sum, item) => sum + item.seconds, 0) || 1
-                    const segmentHeight = `${Math.max(8, (category.seconds / total) * 100)}%`
-                    return (
-                      <div
-                        key={`${day.date}:${category.category}`}
-                        onMouseEnter={(event) => {
-                          event.stopPropagation()
-                          setHoveredDate(day.date)
-                          setHoveredStack({ date: day.date, category: category.category, seconds: category.seconds })
-                        }}
-                        onMouseLeave={() => setHoveredStack((current) => current?.date === day.date && current.category === category.category ? null : current)}
-                        style={{
-                          height: segmentHeight,
-                          background: CATEGORY_COLORS[category.category],
-                          opacity: 1 - (index * 0.08),
-                        }}
-                      />
-                    )
-                  })}
+      <div style={{
+        borderRadius: 16,
+        border: '1px solid var(--color-border-ghost)',
+        background: 'var(--color-surface)',
+        overflow: 'hidden',
+      }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))`,
+          borderBottom: '1px solid var(--color-border-ghost)',
+        }}>
+          <div />
+          {dates.map((date) => {
+            const [y, m, d] = date.split('-').map(Number)
+            const isToday = date === today
+            return (
+              <button
+                key={`head:${date}`}
+                type="button"
+                onClick={() => onSelectDate(date)}
+                title={`Open ${formatFullDate(date)}`}
+                style={{
+                  border: 'none',
+                  borderLeft: '1px solid var(--color-border-ghost)',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  padding: '10px 4px 8px',
+                  textAlign: 'center',
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                  {new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(y, m - 1, d))}
                 </div>
-              </div>
-              <div style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', marginTop: 8 }}>
-                {day.totalSeconds > 0 ? formatDuration(day.totalSeconds) : 'No data'}
-              </div>
-            </button>
-          )
-        })}
+                <div style={{
+                  margin: '4px auto 0',
+                  width: 26,
+                  height: 26,
+                  lineHeight: '26px',
+                  borderRadius: '50%',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: isToday ? 'var(--color-primary-contrast)' : 'var(--color-text-primary)',
+                  background: isToday ? 'var(--gradient-primary)' : 'transparent',
+                }}>
+                  {d}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        <div ref={gridRef} style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))` }}>
+          <HourGutter hourHeight={WEEK_HOUR_HEIGHT} />
+          {dates.map((date) => (
+            <div key={`col:${date}`} style={{ borderLeft: '1px solid var(--color-border-ghost)', minWidth: 0 }}>
+              <CalendarDayTrack
+                date={date}
+                blocks={byDate.get(date)?.blocks ?? []}
+                hourHeight={WEEK_HOUR_HEIGHT}
+                compact
+                nowMs={date === today ? nowMs : null}
+                onBlockClick={(block) => onOpenBlock(date, block.startTime)}
+              />
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{
@@ -1506,7 +1478,7 @@ function WeekView({
               Most active
             </div>
             <div style={{ fontSize: 24, fontWeight: 780, color: 'var(--color-text-primary)' }}>
-              {mostActiveDay ? formatDuration(mostActiveDay.totalSeconds) : '0m'}
+              {mostActiveDay ? formatDuration(mostActiveDay.seconds) : '0m'}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
               {mostActiveDay ? formatFullDate(mostActiveDay.date) : 'No tracked days'}
@@ -1564,93 +1536,179 @@ function WeekView({
                   : 'No saved review for this week yet. Click Generate to summarize what happened.'}
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
 
-        {activeDay && (
-          <div style={{
-            borderTop: '1px solid var(--color-border-ghost)',
-            paddingTop: 14,
-            display: 'grid',
-            gap: 10,
+// The month as a day-cell grid: full Monday-start weeks, each cell listing
+// the day's first blocks plus its tracked total. Fed by the lightweight
+// range-blocks read over the same persisted blocks the day view renders;
+// today's cell comes from the live day payload so the two views agree.
+function CalendarMonthView({
+  selectedDate,
+  onSelectDate,
+}: {
+  selectedDate: string
+  onSelectDate: (date: string) => void
+}) {
+  const key = monthKey(selectedDate)
+  const gridDates = useMemo(() => monthGridDates(selectedDate), [selectedDate])
+  const today = todayString()
+  const from = gridDates[0]
+  const to = gridDates[gridDates.length - 1]
+  const includesToday = from <= today && today <= to
+
+  const monthResource = useProjectionResource<CalendarRangeDay[]>({
+    scope: 'timeline',
+    dependencies: [key],
+    intervalMs: includesToday ? 60_000 : 0,
+    load: async () => {
+      const rangeDays = await ipc.db.getTimelineRangeBlocks(from, to)
+      if (!includesToday) return rangeDays
+      // Today is still live (not persisted) — read it from the same day
+      // payload the day view renders so the month cell can't disagree.
+      const todayPayload = await ipc.db.getTimelineDay(today)
+      const todayBlocks: CalendarRangeBlock[] = todayPayload.blocks.map((block) => ({
+        id: block.id,
+        date: today,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        dominantCategory: block.dominantCategory,
+        label: userVisibleBlockLabel(block),
+        kind: effectiveBlockKind(block),
+        activeSeconds: blockActiveSeconds(block),
+      }))
+      const rest = rangeDays.filter((day) => day.date !== today)
+      if (todayBlocks.length === 0) return rest
+      return [...rest, {
+        date: today,
+        blocks: todayBlocks,
+        activeSeconds: todayBlocks.reduce((sum, block) => sum + block.activeSeconds, 0),
+      }]
+    },
+  })
+
+  const byDate = useMemo(
+    () => new Map((monthResource.data ?? []).map((day) => [day.date, day])),
+    [monthResource.data],
+  )
+
+  const weekdayNames = useMemo(() => gridDates.slice(0, 7).map((date) => {
+    const [y, m, d] = date.split('-').map(Number)
+    return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(y, m - 1, d))
+  }), [gridDates])
+
+  return (
+    <div style={{
+      borderRadius: 16,
+      border: '1px solid var(--color-border-ghost)',
+      background: 'var(--color-surface)',
+      overflow: 'hidden',
+    }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
+        {weekdayNames.map((name) => (
+          <div key={`wd:${name}`} style={{
+            padding: '10px 10px 8px',
+            fontSize: 10,
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--color-text-tertiary)',
+            textAlign: 'right',
+            borderBottom: '1px solid var(--color-border-ghost)',
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 730, color: 'var(--color-text-primary)' }}>
-                  {formatFullDate(activeDay.date)}
-                </div>
-                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                  {formatDuration(activeDay.totalSeconds)} tracked • {activeDay.blockCount} block{activeDay.blockCount !== 1 ? 's' : ''}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => onSelectDate(activeDay.date)}
-                style={{
-                  padding: '7px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-low)',
-                  color: 'var(--color-text-primary)',
+            {name}
+          </div>
+        ))}
+        {gridDates.map((date, index) => {
+          const day = byDate.get(date)
+          const blocks = day?.blocks ?? []
+          const inMonth = monthKey(date) === key
+          const isToday = date === today
+          const isFuture = date > today
+          const shown = blocks.slice(0, 3)
+          const dayNumber = Number(date.split('-')[2])
+          return (
+            <button
+              key={date}
+              type="button"
+              onClick={() => onSelectDate(date)}
+              title={`Open ${formatFullDate(date)}`}
+              style={{
+                border: 'none',
+                borderLeft: index % 7 === 0 ? 'none' : '1px solid var(--color-border-ghost)',
+                borderTop: index < 7 ? 'none' : '1px solid var(--color-border-ghost)',
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                padding: '8px 8px 10px',
+                minHeight: 118,
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                // Buttons don't stretch their flex children by default
+                // (UA style), so without this a nowrap row keeps its content
+                // width and bleeds across the neighbouring cells.
+                alignItems: 'stretch',
+                overflow: 'hidden',
+                gap: 4,
+                opacity: inMonth ? 1 : 0.4,
+              }}
+            >
+              <div style={{ alignSelf: 'flex-end' }}>
+                <span style={{
+                  display: 'inline-block',
+                  minWidth: 24,
+                  height: 24,
+                  lineHeight: '24px',
+                  borderRadius: '50%',
+                  textAlign: 'center',
                   fontSize: 12,
                   fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Open day
-              </button>
-            </div>
-
-            {activeDay.topLabels.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {activeDay.topLabels.map((label, index) => (
-                  <span
-                    key={`${activeDay.date}:${index}:${label}`}
-                    style={{
-                      borderRadius: 999,
-                      padding: '5px 9px',
-                      background: 'var(--color-surface-low)',
-                      color: 'var(--color-text-secondary)',
-                      fontSize: 11.5,
-                    }}
-                  >
-                    {label}
+                  color: isToday ? 'var(--color-primary-contrast)' : isFuture ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
+                  background: isToday ? 'var(--gradient-primary)' : 'transparent',
+                }}>
+                  {dayNumber}
+                </span>
+              </div>
+              {shown.map((block) => (
+                <div key={block.id} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, opacity: block.kind !== 'work' ? 0.7 : 1 }}>
+                  <span style={{
+                    flexShrink: 0,
+                    width: 7,
+                    height: 7,
+                    borderRadius: 2,
+                    background: CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized,
+                  }} />
+                  <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatClockTime(block.startTime)}
                   </span>
-                ))}
-              </div>
-            )}
-
-            {activeDay.categories.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {activeDay.categories.slice(0, 4).map((entry) => {
-                  const highlighted = hoveredStack?.date === activeDay.date && hoveredStack.category === entry.category
-                  return (
-                    <span
-                      key={`${activeDay.date}:${entry.category}`}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 7,
-                        borderRadius: 999,
-                        padding: '5px 10px',
-                        background: highlighted ? `${CATEGORY_COLORS[entry.category]}20` : 'var(--color-surface-low)',
-                        color: highlighted ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                        fontSize: 11.5,
-                      }}
-                    >
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: CATEGORY_COLORS[entry.category] }} />
-                      {categoryLabel(entry.category)} {formatDuration(entry.seconds)}
-                    </span>
-                  )
-                })}
-              </div>
-            )}
-
-            {hoveredStack && hoveredStack.date === activeDay.date && (
-              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                Hovered segment: {categoryLabel(hoveredStack.category)} for {formatDuration(hoveredStack.seconds)}
-              </div>
-            )}
-          </div>
-        )}
+                  <span style={{
+                    fontSize: 11,
+                    color: 'var(--color-text-secondary)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}>
+                    {block.label}
+                  </span>
+                </div>
+              ))}
+              {blocks.length > shown.length && (
+                <div style={{ fontSize: 10.5, color: 'var(--color-text-tertiary)' }}>
+                  +{blocks.length - shown.length} more
+                </div>
+              )}
+              {day && day.activeSeconds > 0 && (
+                <div style={{ marginTop: 'auto', fontSize: 10.5, fontWeight: 650, color: 'var(--color-text-tertiary)' }}>
+                  {formatDuration(day.activeSeconds)} tracked
+                </div>
+              )}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -1664,7 +1722,11 @@ export default function Timeline() {
   const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
+  // Clock tick for the current-time line — a minute is as fine as the grid reads.
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const dayGridRef = useRef<HTMLDivElement | null>(null)
+  const lastDayScrollKeyRef = useRef<string | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastBlockOpenKeyRef = useRef<string | null>(null)
   // After a merge the old block ids vanish; we stash the merged span's start
@@ -1689,6 +1751,11 @@ export default function Timeline() {
     const onResize = () => setIsCompact(window.innerWidth < 1120)
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
   }, [])
 
   const timelineResource = useProjectionResource<DayTimelinePayload>({
@@ -1779,18 +1846,44 @@ export default function Timeline() {
     }
   }, [payload])
 
+  // Month opens at the top; day and week auto-scroll to the day's first
+  // activity themselves (below / in CalendarWeekView).
   useEffect(() => {
+    if (view !== 'month') return
     const node = scrollRef.current
     if (!node) return
     node.scrollTop = 0
   }, [view, date])
 
+  // Scroll the day grid so the day starts where the activity starts — once
+  // per opened date, not on every live refresh.
+  useEffect(() => {
+    if (view !== 'day' || !payload || payload.date !== date) return
+    if (lastDayScrollKeyRef.current === date) return
+    const scroller = scrollRef.current
+    const grid = dayGridRef.current
+    if (!scroller) return
+    lastDayScrollKeyRef.current = date
+    if (payload.blocks.length === 0 || !grid) {
+      scroller.scrollTop = 0
+      return
+    }
+    const dayStart = dayStartMs(date)
+    const firstMinutes = Math.min(
+      ...payload.blocks.map((block) => minutesIntoDay(block.startTime, dayStart)),
+    )
+    const gridTop = grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    scroller.scrollTop = Math.max(0, gridTop + (firstMinutes / 60) * DAY_HOUR_HEIGHT - 90)
+  }, [view, date, payload])
+
   useEffect(() => {
     const openKey = view === 'week'
       ? `week:${date}`
-      : payload
-        ? `day:${payload.date}:${payload.blocks.length}:${payload.totalSeconds}`
-        : null
+      : view === 'month'
+        ? `month:${monthKey(date)}`
+        : payload
+          ? `day:${payload.date}:${payload.blocks.length}:${payload.totalSeconds}`
+          : null
     if (!openKey || lastTimelineOpenKeyRef.current === openKey) return
     lastTimelineOpenKeyRef.current = openKey
     track(ANALYTICS_EVENT.TIMELINE_OPENED, {
@@ -1803,8 +1896,12 @@ export default function Timeline() {
   }, [date, payload, view])
 
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
-  const displaySegments = useMemo(
-    () => compressTimelineSegments(payload?.segments ?? []),
+  // Real breaks (Away / Machine off) worth explaining on the grid. Derived
+  // idle gaps just read as the empty space they are.
+  const gapSegments = useMemo(
+    () => (payload?.segments ?? []).filter((segment): segment is TimelineGapSegment =>
+      (segment.kind === 'away' || segment.kind === 'machine_off')
+      && segmentDurationSeconds(segment) >= MIN_VISIBLE_GAP_SECONDS),
     [payload],
   )
 
@@ -1838,7 +1935,7 @@ export default function Timeline() {
     }, { replace: true })
   }
 
-  function setView(nextView: 'day' | 'week') {
+  function setView(nextView: TimelineNavState['view']) {
     updateNavState({ view: nextView, date })
   }
 
@@ -1846,9 +1943,34 @@ export default function Timeline() {
     updateNavState({ view, date: nextDate })
   }
 
-  const forwardDisabled = view === 'day'
+  // Re-run the day auto-scroll when the user comes back to the day view.
+  useEffect(() => {
+    if (view !== 'day') lastDayScrollKeyRef.current = null
+  }, [view])
+
+  const today = todayString()
+  const onCurrentPeriod = view === 'day'
     ? isToday
-    : getWeekStart(date) === getWeekStart(todayString())
+    : view === 'week'
+      ? getWeekStart(date) === getWeekStart(today)
+      : monthKey(date) === monthKey(today)
+  const forwardDisabled = onCurrentPeriod
+
+  const headerLabel = view === 'week'
+    ? weekRangeLabel(date)
+    : view === 'month'
+      ? monthLabel(date)
+      : isToday ? 'Today' : formatFullDate(date)
+
+  function stepDate(direction: -1 | 1) {
+    if (view === 'week') {
+      setDate(shiftDate(getWeekStart(date), direction * 7))
+    } else if (view === 'month') {
+      setDate(shiftMonth(date, direction))
+    } else {
+      setDate(shiftDate(date, direction))
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -1867,7 +1989,7 @@ export default function Timeline() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
             type="button"
-            onClick={() => setDate(view === 'week' ? shiftDate(getWeekStart(date), -7) : shiftDate(date, -1))}
+            onClick={() => stepDate(-1)}
             style={{
               width: 32,
               height: 32,
@@ -1894,14 +2016,12 @@ export default function Timeline() {
             fontWeight: 700,
             color: 'var(--color-text-primary)',
           }}>
-            {view === 'week' ? weekRangeLabel(date) : isToday ? 'Today' : formatFullDate(date)}
+            {headerLabel}
           </div>
           <button
             type="button"
             onClick={() => {
-              if (!forwardDisabled) {
-                setDate(view === 'week' ? shiftDate(getWeekStart(date), 7) : shiftDate(date, 1))
-              }
+              if (!forwardDisabled) stepDate(1)
             }}
             disabled={forwardDisabled}
             style={{
@@ -1923,7 +2043,7 @@ export default function Timeline() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {(view === 'day' ? !isToday : getWeekStart(date) !== getWeekStart(todayString())) && (
+          {!onCurrentPeriod && (
             <button
               type="button"
               onClick={() => setDate(todayString())}
@@ -1949,7 +2069,7 @@ export default function Timeline() {
             background: 'var(--color-surface-high)',
             border: '1px solid var(--color-border-ghost)',
           }}>
-            {(['day', 'week'] as const).map((mode) => (
+            {(['day', 'week', 'month'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -1965,7 +2085,7 @@ export default function Timeline() {
                   fontWeight: 700,
                 }}
               >
-                {mode === 'day' ? 'Day' : 'Week'}
+                {mode === 'day' ? 'Day' : mode === 'week' ? 'Week' : 'Month'}
               </button>
             ))}
           </div>
@@ -1975,7 +2095,27 @@ export default function Timeline() {
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
         {view === 'week' && (
           <div style={{ padding: '24px 32px 40px' }}>
-            <WeekView
+            <CalendarWeekView
+              selectedDate={date}
+              nowMs={nowMs}
+              scrollerRef={scrollRef}
+              onSelectDate={(nextDate) => {
+                updateNavState({ view: 'day', date: nextDate })
+              }}
+              onOpenBlock={(nextDate, startTime) => {
+                // Open the day with that block selected: the pending marker is
+                // resolved against the day payload once it lands (same
+                // mechanism a merge uses to reselect its fused block).
+                pendingSelectAtRef.current = startTime
+                updateNavState({ view: 'day', date: nextDate })
+              }}
+            />
+          </div>
+        )}
+
+        {view === 'month' && (
+          <div style={{ padding: '24px 32px 40px' }}>
+            <CalendarMonthView
               selectedDate={date}
               onSelectDate={(nextDate) => {
                 updateNavState({ view: 'day', date: nextDate })
@@ -2002,7 +2142,7 @@ export default function Timeline() {
             {!error && loading && (
               <div style={{ display: 'grid', gap: 12 }}>
                 {[0, 1, 2, 3].map((index) => (
-                  <div key={index} style={{ display: 'grid', gridTemplateColumns: '104px minmax(0, 1fr)', gap: 16 }}>
+                  <div key={index} style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px minmax(0, 1fr)`, gap: 16 }}>
                     <div style={{ height: 20, borderRadius: 8, background: 'var(--color-surface-low)', opacity: 0.5 }} />
                     <div style={{ height: 110 - (index * 10), borderRadius: 16, background: 'var(--color-surface-low)', opacity: 0.5 }} />
                   </div>
@@ -2064,23 +2204,29 @@ export default function Timeline() {
                   }}>
                     {/* Cards aren't text to select; killing user-select here keeps
                         shift-click from smearing a text highlight across the run. */}
-                    <div style={{ display: 'grid', gap: 14, userSelect: 'none' }}>
-                      {displaySegments.map((segment) => (
-                        segment.kind === 'gap_group' ? (
-                          <GapGroupRow
-                            key={`gap-group:${segment.startTime}:${segment.endTime}`}
-                            segment={segment}
-                          />
-                        ) : (
-                          <TimelineRow
-                            key={segment.kind === 'work_block' ? segment.blockId : `${segment.kind}:${segment.startTime}:${segment.endTime}`}
-                            segment={segment}
-                            block={segment.kind === 'work_block' ? blockMap.get(segment.blockId) ?? null : null}
-                            isSelected={segment.kind === 'work_block' && selectedBlockId === segment.blockId}
-                            inMergeRange={segment.kind === 'work_block' && selectedBlockId !== segment.blockId && selectedSpanIds.has(segment.blockId)}
-                          />
-                        )
-                      ))}
+                    <div
+                      ref={dayGridRef}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: `${TIME_GUTTER_WIDTH}px minmax(0, 1fr)`,
+                        userSelect: 'none',
+                        borderRadius: 16,
+                        border: '1px solid var(--color-border-ghost)',
+                        background: 'var(--color-surface)',
+                        overflow: 'hidden',
+                        padding: '8px 0',
+                      }}
+                    >
+                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} />
+                      <CalendarDayTrack
+                        date={payload.date}
+                        blocks={sortedBlocks}
+                        gapSegments={gapSegments}
+                        hourHeight={DAY_HOUR_HEIGHT}
+                        selectedBlockId={selectedBlockId}
+                        selectedSpanIds={selectedSpanIds}
+                        nowMs={isToday ? nowMs : null}
+                      />
                     </div>
                     <BlockInspector
                       block={selectedBlock}

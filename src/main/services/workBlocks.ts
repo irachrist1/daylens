@@ -398,7 +398,7 @@ function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
   })
 }
 
-function dominantCategoryForBlock(
+export function dominantCategoryForBlock(
   distribution: Partial<Record<AppCategory, number>>,
   topArtifacts: ArtifactRef[],
 ): AppCategory {

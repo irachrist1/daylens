@@ -51,6 +51,7 @@ import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
 import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
+import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from '../services/ai'
 import { resolveIcon } from '../services/iconResolver'
@@ -451,6 +452,11 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
     return getRecapRange(getDb(), dates)
+  })
+
+  // Calendar month grid — persisted blocks for a date range, one light query.
+  ipcMain.handle(IPC.DB.GET_TIMELINE_RANGE_BLOCKS, (_e, fromDate: string, toDate: string) => {
+    return getTimelineRangeBlocks(getDb(), fromDate, toDate)
   })
 
   // App usage summaries for a range — used by Apps view
