@@ -47,7 +47,7 @@ import type {
   WorkIntentRole,
   WebsiteSummary,
 } from '@shared/types'
-import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
+import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES, isAppCategory } from '@shared/types'
 import { isAppFocused } from '../lib/focusScore'
 import { getSettings } from './settings'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
@@ -56,7 +56,7 @@ import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
-import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
+import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { localDayBounds, localDateString } from '../lib/localDate'
 import { ownedDayBounds } from '../lib/dayOwnership'
@@ -1331,6 +1331,7 @@ function reviewFromRow(
     correctedLabel: stringValue(correction.label),
     correctedIntentRole: intentRoleValue(correction.intentRole),
     correctedIntentSubject: stringValue(correction.intentSubject),
+    correctedCategory: isAppCategory(correction.category) ? correction.category : null,
     updatedAt: row.updated_at,
   }
 }
@@ -1398,12 +1399,12 @@ function reviewForBlock(db: Database.Database, dateStr: string, block: WorkConte
 }
 
 function applyReviewToBlock(block: WorkContextBlock, review: TimelineBlockReview): WorkContextBlock {
+  let next: WorkContextBlock = { ...block, review }
   if (review.state === 'corrected' && review.correctedLabel) {
-    return {
-      ...block,
-      review,
+    next = {
+      ...next,
       label: {
-        ...block.label,
+        ...next.label,
         current: review.correctedLabel,
         source: 'user',
         confidence: 1,
@@ -1411,10 +1412,17 @@ function applyReviewToBlock(block: WorkContextBlock, review: TimelineBlockReview
       },
     }
   }
-  return {
-    ...block,
-    review,
+  // A user recategorization wins over the computed dominant category, and the
+  // work/leisure kind follows the corrected category — a block the user marked
+  // "development" means "this was work", whatever the domain evidence said.
+  if (review.state === 'corrected' && review.correctedCategory) {
+    next = {
+      ...next,
+      dominantCategory: review.correctedCategory,
+      kind: kindForCategory(review.correctedCategory),
+    }
   }
+  return next
 }
 
 function ensureDefaultReviewRowForBlock(db: Database.Database, dateStr: string, block: WorkContextBlock): void {
@@ -1475,6 +1483,10 @@ export function writeTimelineBlockReview(
     const subject = update.correctedIntentSubject?.trim() ?? ''
     if (subject) nextCorrection.intentSubject = subject
     else delete nextCorrection.intentSubject
+  }
+  if (update.correctedCategory !== undefined) {
+    if (isAppCategory(update.correctedCategory)) nextCorrection.category = update.correctedCategory
+    else delete nextCorrection.category
   }
 
   const originalJson = existing?.original_block_json && existing.original_block_json !== '{}'

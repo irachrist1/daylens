@@ -143,6 +143,9 @@ export interface TimelineBlockReview {
   correctedLabel: string | null
   correctedIntentRole: WorkIntentRole | null
   correctedIntentSubject: string | null
+  // A user recategorization (Edit → Type). Wins over the computed dominant
+  // category on every read and recolors the block everywhere (invariant 8).
+  correctedCategory: AppCategory | null
   updatedAt: number | null
 }
 
@@ -153,6 +156,7 @@ export interface TimelineBlockReviewUpdate {
   correctedLabel?: string | null
   correctedIntentRole?: WorkIntentRole | null
   correctedIntentSubject?: string | null
+  correctedCategory?: AppCategory | null
 }
 
 export interface FocusScoreBreakdown {

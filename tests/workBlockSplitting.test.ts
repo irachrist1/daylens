@@ -647,6 +647,39 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   db.close()
 })
 
+// Edit → Type: a user recategorization is a correction like a rename — it wins
+// over the computed dominant category on every read, flips the work/leisure
+// kind to match, and survives a rebuild through evidence lineage. Category
+// drives block color everywhere, so this is what makes a recolor stick.
+test('a category correction wins, recolors the kind, and survives rebuild', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Stranger Things - Netflix', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 0, durationMinutes: 40 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.ok(block)
+  assert.equal(block.dominantCategory, 'entertainment')
+
+  writeTimelineBlockReview(db, TEST_DATE, block, {
+    state: 'corrected',
+    correctedCategory: 'research',
+  })
+
+  const corrected = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.equal(corrected.dominantCategory, 'research', 'the corrected category wins on read')
+  assert.equal(corrected.kind, 'work', 'the kind follows the corrected category')
+  assert.equal(corrected.review.correctedCategory, 'research')
+
+  // Simulate a rebuild: retire the block id and stale the heuristic. The
+  // correction re-applies through the evidence key, not the block id.
+  db.prepare(`UPDATE timeline_block_reviews SET block_id = 'retired-block-id' WHERE block_id = ?`).run(block.id)
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+
+  const rebuilt = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.equal(rebuilt.dominantCategory, 'research', 'the category correction survives the rebuild')
+  assert.equal(rebuilt.kind, 'work')
+  db.close()
+})
+
 // Undo a rename: a rename is stored as both an override and an evidence-keyed
 // review correction, so clearing it must reset the review too — otherwise the
 // corrected label keeps winning and the rename never goes away.

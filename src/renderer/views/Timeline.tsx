@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
@@ -29,6 +29,25 @@ function isBrowserAppName(bundleId: string, appName: string): boolean {
 const PAGE_ARTIFACT_LABEL_CATEGORIES: ReadonlySet<AppCategory> = new Set<AppCategory>([
   'browsing', 'research', 'entertainment', 'social', 'aiTools',
 ])
+
+// The types a user can assign a block in Edit → Type. Category drives the
+// block's color everywhere, so this doubles as the recolor control. The
+// neutral system/uncategorized values are not offered — a corrected block
+// always has a real type.
+const BLOCK_CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
+  { value: 'development', label: 'Development' },
+  { value: 'design', label: 'Design' },
+  { value: 'writing', label: 'Writing' },
+  { value: 'research', label: 'Research' },
+  { value: 'aiTools', label: 'AI tools' },
+  { value: 'email', label: 'Email' },
+  { value: 'communication', label: 'Communication' },
+  { value: 'meetings', label: 'Meetings' },
+  { value: 'productivity', label: 'Productivity' },
+  { value: 'browsing', label: 'Browsing' },
+  { value: 'entertainment', label: 'Entertainment' },
+  { value: 'social', label: 'Social' },
+]
 
 // Mirror of the R1 ownership gate at the renderer surface so the rail / day
 // sentence / summary subject all reject browser-page leaks even if a stale
@@ -370,6 +389,7 @@ function CalendarBlockCard({
   inMergeRange,
   dimmed = false,
   onClick,
+  onContextMenu,
 }: {
   block: WorkContextBlock
   top: number
@@ -381,6 +401,7 @@ function CalendarBlockCard({
   // blocks fade but stay in place — the shape of the day never lies.
   dimmed?: boolean
   onClick?: () => void
+  onContextMenu?: (event: ReactMouseEvent) => void
 }) {
   const accent = block.provisional ? '#8b93a7' : activityColorForCategory(block.dominantCategory)
   // Leisure / personal blocks are muted so the eye finds work first —
@@ -399,6 +420,7 @@ function CalendarBlockCard({
       aria-label={`Open ${label}, ${formatDuration(blockActiveSeconds(block))}`}
       aria-pressed={isSelected}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       title={`${label} · ${timeRange}`}
       style={{
         position: 'absolute',
@@ -417,22 +439,27 @@ function CalendarBlockCard({
         cursor: 'pointer',
         borderRadius: compact ? 6 : 8,
         // The thin border stays on every block so neighbouring blocks read as
-        // separate cards. Only the thick vertical accent stripe on the left is
-        // dropped in the day view — the large fills already carry the colour.
-        // The dense week grid keeps the stripe as a colour cue on small blocks.
+        // separate cards; the solid accent stripe on the left carries the
+        // category colour unmistakably at every size (founder ask, Jul 2026 —
+        // the low-alpha fills alone read as "no colour" on the light theme).
         // The live block reads as "happening now": solid accent border and a
-        // stronger fill, against the quiet tint of finished blocks.
+        // stronger fill, against the quieter tint of finished blocks.
         border: block.isLive
           ? `1.5px solid ${accent}`
           : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
-        borderLeft: compact ? `3px solid ${accent}` : undefined,
-        background: (isSelected || inMergeRange) ? `${accent}30` : block.isLive ? `${accent}28` : `${accent}1c`,
+        borderLeft: `3px solid ${accent}`,
+        // Frosted glass: a stronger tint over a backdrop blur, so the hour
+        // lines behind the card haze out instead of striking through the
+        // title and summary text (founder ask, Jul 2026).
+        background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
+        backdropFilter: 'blur(10px) saturate(1.4)',
+        WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
         transition: 'border-color 120ms, background 120ms',
         padding: compact ? '2px 6px' : '4px 9px',
         overflow: 'hidden',
         minWidth: 0,
-        opacity: dimmed ? 0.22 : muted ? 0.7 : 1,
+        opacity: dimmed ? 0.22 : muted ? 0.75 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
@@ -537,6 +564,7 @@ function CalendarDayTrack({
   nowMs = null,
   dimBlock,
   onBlockClick,
+  onBlockContextMenu,
 }: {
   date: string
   blocks: WorkContextBlock[]
@@ -549,6 +577,8 @@ function CalendarDayTrack({
   // When set, blocks outside the active tag filter render dimmed.
   dimBlock?: (block: WorkContextBlock) => boolean
   onBlockClick?: (block: WorkContextBlock) => void
+  // Right-click on a block, Google-Calendar style (day view only).
+  onBlockContextMenu?: (block: WorkContextBlock, event: ReactMouseEvent) => void
 }) {
   const dayStart = dayStartMs(date)
   const trackStartMin = bounds.startHour * 60
@@ -595,6 +625,7 @@ function CalendarDayTrack({
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
             dimmed={dimBlock ? dimBlock(block) : false}
             onClick={onBlockClick ? () => onBlockClick(block) : undefined}
+            onContextMenu={onBlockContextMenu ? (event) => onBlockContextMenu(block, event) : undefined}
           />
         )
       })}
@@ -614,6 +645,94 @@ function CalendarDayTrack({
           <div style={{ borderTop: '2px solid #ef4444' }} />
         </div>
       )}
+    </div>
+  )
+}
+
+// The right-click menu on a block, Google-Calendar style: Edit, Regenerate
+// summary, Delete. Rendered fixed at the cursor; a full-screen backdrop closes
+// it on any click or Escape.
+function BlockContextMenu({
+  x,
+  y,
+  busy,
+  onEdit,
+  onRegenerate,
+  onDelete,
+  onClose,
+}: {
+  x: number
+  y: number
+  busy: boolean
+  onEdit: () => void
+  onRegenerate: () => void
+  onDelete: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const MENU_WIDTH = 200
+  const MENU_HEIGHT = 118
+  const left = Math.min(x, window.innerWidth - MENU_WIDTH - 8)
+  const top = Math.min(y, window.innerHeight - MENU_HEIGHT - 8)
+
+  const itemStyle = (danger = false): CSSProperties => ({
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    border: 'none',
+    background: 'transparent',
+    borderRadius: 7,
+    padding: '7px 10px',
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: danger ? '#f87171' : 'var(--color-text-primary)',
+    cursor: busy ? 'default' : 'pointer',
+    opacity: busy ? 0.5 : 1,
+  })
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 60 }}
+      onClick={onClose}
+      onContextMenu={(event) => { event.preventDefault(); onClose() }}
+    >
+      <div
+        role="menu"
+        style={{
+          position: 'fixed',
+          left,
+          top,
+          width: MENU_WIDTH,
+          borderRadius: 10,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          boxShadow: '0 12px 36px rgba(0,0,0,0.24)',
+          padding: 5,
+          zIndex: 61,
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button type="button" role="menuitem" disabled={busy} onClick={onEdit} style={itemStyle()}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+          Edit
+        </button>
+        <button type="button" role="menuitem" disabled={busy} onClick={onRegenerate} style={itemStyle()}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+          {busy ? 'Regenerating…' : 'Regenerate summary'}
+        </button>
+        <button type="button" role="menuitem" disabled={busy} onClick={onDelete} style={itemStyle(true)}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+          Delete
+        </button>
+      </div>
     </div>
   )
 }
@@ -814,6 +933,7 @@ function BlockInspector({
   payload,
   onRefresh,
   onSelectBlock,
+  editSignal,
   mergeSelection,
   onMerged,
 }: {
@@ -821,6 +941,8 @@ function BlockInspector({
   payload: DayTimelinePayload
   onRefresh: () => Promise<void>
   onSelectBlock?: (blockId: string) => void
+  // One-shot "open in edit mode" request from the block's right-click menu.
+  editSignal?: { blockId: string; nonce: number } | null
   // The blocks in the current shift-selected span (ordered, includes the anchor).
   // Length ≥ 2 means a merge is on the table.
   mergeSelection: WorkContextBlock[]
@@ -834,19 +956,26 @@ function BlockInspector({
   const [merging, setMerging] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
-  // The rename input is revealed only when the user clicks Rename — the panel
-  // stays calm until then.
-  const [renaming, setRenaming] = useState(false)
-  // The "let AI name it" sparkle inside the rename row.
+  // The edit panel (title / type / regenerate) is revealed only when the user
+  // clicks Edit — the panel stays calm until then.
+  const [editing, setEditing] = useState(false)
+  // The "let AI name it" sparkle inside the title row.
   const [suggesting, setSuggesting] = useState(false)
+  // Saving state for a Type (category) correction.
+  const [categorySaving, setCategorySaving] = useState(false)
 
   useEffect(() => {
     setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
     setReviewError(null)
     setBoundaryError(null)
-    setRenaming(false)
+    setEditing(false)
     setSuggesting(false)
   }, [block?.id, block?.label.current, block?.label.override])
+
+  // The context menu's Edit lands here once the selection has propagated.
+  useEffect(() => {
+    if (editSignal && block && editSignal.blockId === block.id) setEditing(true)
+  }, [editSignal, block])
 
   if (!block) {
     return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
@@ -903,7 +1032,7 @@ function BlockInspector({
     setReviewError(null)
     void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
       .then(() => { invalidateDayRecap(); return onRefresh() })
-      .then(() => setRenaming(false))
+      .then(() => setEditing(false))
       .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
       .finally(() => setOverrideSaving(false))
   }
@@ -935,6 +1064,20 @@ function BlockInspector({
     } finally {
       setDeleting(false)
     }
+  }
+
+  // Recategorize the block (Edit → Type). Persisted as a review correction so
+  // it wins over the computed category and survives every rebuild — and since
+  // category drives color on every surface, this is also how a block's color
+  // is changed, Google-Calendar style.
+  const changeCategory = (category: AppCategory) => {
+    if (category === block.dominantCategory || categorySaving) return
+    setCategorySaving(true)
+    setReviewError(null)
+    void ipc.db.setBlockReview({ blockId: block.id, date: payload.date, state: 'corrected', correctedCategory: category })
+      .then(() => { invalidateDayRecap(); return onRefresh() })
+      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't change the block type. Try again in a moment.").message))
+      .finally(() => setCategorySaving(false))
   }
 
   // The sparkle in the rename row: ask the AI to write a fresh, accurate title
@@ -1130,10 +1273,10 @@ function BlockInspector({
             {correctable && (
               <button
                 type="button"
-                onClick={() => setRenaming((value) => !value)}
+                onClick={() => setEditing((value) => !value)}
                 style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
               >
-                Rename
+                Edit
               </button>
             )}
             {correctable && (
@@ -1191,37 +1334,78 @@ function BlockInspector({
         )}
       </div>
 
-      {renaming && correctable && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-          <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Rename block</label>
-          <input
-            id="timeline-block-label-override"
-            type="text"
-            autoFocus
-            value={overrideDraft}
-            onChange={(event) => setOverrideDraft(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter') submitRename() }}
-            placeholder={userVisibleBlockLabel(block)}
-            style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
-          />
-          <button
-            type="button"
-            aria-label="Name this block with AI"
-            title="Let AI name this block"
-            disabled={suggesting || overrideSaving}
-            onClick={() => { void suggestName() }}
-            style={{ height: 32, width: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-primary)', cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
-          >
-            <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            disabled={overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
-            onClick={submitRename}
-            style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
-          >
-            {overrideSaving ? 'Saving…' : 'Save'}
-          </button>
+      {editing && correctable && (
+        <div style={{ display: 'grid', gap: 10, marginBottom: 16, padding: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
+          {/* Title row: rename with an AI-suggest sparkle. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Block title</label>
+            <input
+              id="timeline-block-label-override"
+              type="text"
+              autoFocus
+              value={overrideDraft}
+              onChange={(event) => setOverrideDraft(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') submitRename() }}
+              placeholder={userVisibleBlockLabel(block)}
+              style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
+            />
+            <button
+              type="button"
+              aria-label="Name this block with AI"
+              title="Let AI name this block"
+              disabled={suggesting || overrideSaving}
+              onClick={() => { void suggestName() }}
+              style={{ height: 32, width: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-primary)', cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
+            >
+              <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
+              onClick={submitRename}
+              style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
+            >
+              {overrideSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+
+          {/* Type row: recategorize the block. The category drives its color on
+              every surface, so this is also "change the block's color" — and
+              the correction survives every rebuild (invariant 8). */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <label htmlFor="timeline-block-category" style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>Type</label>
+            <select
+              id="timeline-block-category"
+              value={block.dominantCategory}
+              disabled={categorySaving}
+              onChange={(event) => changeCategory(event.target.value as AppCategory)}
+              style={{ height: 30, borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 8px', fontSize: 12.5, outline: 'none', cursor: categorySaving ? 'default' : 'pointer' }}
+            >
+              {/* A block whose computed category isn't offerable (system /
+                  uncategorized) still needs its current value present, or the
+                  select renders blank. */}
+              {!BLOCK_CATEGORY_OPTIONS.some((option) => option.value === block.dominantCategory) && (
+                <option value={block.dominantCategory}>{categoryLabel(block.dominantCategory)}</option>
+              )}
+              {BLOCK_CATEGORY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 4, background: activityColorForCategory(block.dominantCategory), flexShrink: 0 }} />
+            {categorySaving && <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>Saving…</span>}
+          </div>
+
+          {/* Regenerate: fresh AI title + summary from the block's evidence. */}
+          <div>
+            <button
+              type="button"
+              disabled={suggesting || overrideSaving}
+              onClick={() => { void suggestName() }}
+              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', padding: '5px 10px', borderRadius: 8, opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
+            >
+              {suggesting ? 'Regenerating…' : 'Regenerate summary'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1778,6 +1962,13 @@ export default function Timeline() {
     [payload, sortedBlocks, isToday, nowMs],
   )
 
+  // The GCal-style right-click menu on a block: position + the block it's for.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; blockId: string } | null>(null)
+  // A one-shot "open the inspector in edit mode" request (from the context
+  // menu's Edit). The nonce makes repeat Edits on the same block re-fire.
+  const [editSignal, setEditSignal] = useState<{ blockId: string; nonce: number } | null>(null)
+  const [menuBusy, setMenuBusy] = useState(false)
+
   // Filter the day by block type ("Focused work", "Meeting", "Leisure"…).
   // Filtering dims the other blocks in place — the day's shape stays honest.
   const [tagFilter, setTagFilter] = useState<string | null>(null)
@@ -1901,6 +2092,49 @@ export default function Timeline() {
   }, [date, payload, view])
 
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
+
+  // Right-click on a block (GCal-style). Selecting it first means the
+  // inspector already shows the block the menu is acting on.
+  const openBlockContextMenu = (block: WorkContextBlock, event: ReactMouseEvent) => {
+    event.preventDefault()
+    if (block.provisional) return
+    setSelectedBlockId(block.id)
+    setMergeRangeEndId(null)
+    setContextMenu({ x: event.clientX, y: event.clientY, blockId: block.id })
+  }
+
+  const menuRegenerate = async () => {
+    if (!contextMenu || menuBusy) return
+    setMenuBusy(true)
+    try {
+      await ipc.ai.regenerateBlockLabel(contextMenu.blockId)
+      daySummaryRecapCache.delete(date)
+      await timelineResource.refresh()
+    } catch {
+      // The inspector surfaces regenerate errors; the menu just closes.
+    } finally {
+      setMenuBusy(false)
+      setContextMenu(null)
+    }
+  }
+
+  const menuDelete = async () => {
+    if (!contextMenu || menuBusy) return
+    setMenuBusy(true)
+    try {
+      const { deleted } = await ipc.db.deleteTimelineBlock({ blockId: contextMenu.blockId, date })
+      if (deleted) {
+        daySummaryRecapCache.delete(date)
+        setSelectedBlockId(null)
+        await timelineResource.refresh()
+      }
+    } catch {
+      // Native dialog cancelled or delete failed — nothing to clean up.
+    } finally {
+      setMenuBusy(false)
+      setContextMenu(null)
+    }
+  }
 
   useEffect(() => {
     if (!selectedBlock) {
@@ -2241,12 +2475,28 @@ export default function Timeline() {
                         selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
                         dimBlock={tagFilter ? (block) => blockTypeTag(block) !== tagFilter : undefined}
+                        onBlockContextMenu={openBlockContextMenu}
                       />
                     </div>
+                    {contextMenu && (
+                      <BlockContextMenu
+                        x={contextMenu.x}
+                        y={contextMenu.y}
+                        busy={menuBusy}
+                        onEdit={() => {
+                          setEditSignal({ blockId: contextMenu.blockId, nonce: Date.now() })
+                          setContextMenu(null)
+                        }}
+                        onRegenerate={() => { void menuRegenerate() }}
+                        onDelete={() => { void menuDelete() }}
+                        onClose={() => { if (!menuBusy) setContextMenu(null) }}
+                      />
+                    )}
                     <BlockInspector
                       block={selectedBlock}
                       payload={payload}
                       onRefresh={timelineResource.refresh}
+                      editSignal={editSignal}
                       mergeSelection={mergeSelection}
                       onMerged={(mergedStartTime) => {
                         pendingSelectAtRef.current = mergedStartTime

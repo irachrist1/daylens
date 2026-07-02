@@ -17,7 +17,8 @@ it took**. To the right, a short, honest recap of the day. That is the whole scr
 - Not responsive; the left column has to be scrolled from the view to the left column to work.
 - The detail panel shows **"Apps used"** and **"Key artifacts"** — two lists for one idea.
 - Fix controls named badly: "Fix this episode", "Not right?" and "Edit this block" should
-  be renamed to "Rename", "Merge with above/below". Remove the "Split" and "Hide" options
+  be renamed to "Edit" (one edit surface: title, type, regenerate — see §3.4 rule 5;
+  "Rename" was the interim name), "Merge with above/below". Remove the "Split" and "Hide" options
   and get rid of the "episode" wording everywhere.
 
 ## 3. How blocks are built (the engine)
@@ -128,8 +129,17 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    one consistent color used everywhere a block is drawn — day grid, week grid, month dots,
    inspector — from the single palette in `shared/activityColors.ts`. The user can customize
    the five activity-group colors in Settings → General (see `settings.md` §8); an override
-   applies across every surface at once, never per-view.
-5. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
+   applies across every surface at once, never per-view. On the card itself the color must
+   be unmistakable: a solid accent stripe on the left edge plus a frosted-glass fill
+   (backdrop blur) so the hour lines behind never strike through the title or summary text.
+5. **Blocks are edited like calendar events.** Right-clicking a block opens a context menu
+   (Edit / Regenerate summary / Delete), Google-Calendar style. The detail panel's **Edit**
+   button (formerly "Rename") opens one edit surface with the block's title (with AI
+   suggest), its **Type** — recategorizing recolors the block everywhere, since category
+   drives color — and a regenerate-summary action. A type change is a review correction
+   like a rename: it wins over the computed category, flips the work/leisure kind to match,
+   and survives every rebuild (invariant 8). Provisional (live) blocks are not editable.
+6. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
    (macOS and Windows), then records the deletion as a correction (review state `ignored`).
    The block disappears from every surface — timeline, month grid, recap, AI, wraps,
    search — its span renders as the empty space it now is, and the deletion survives every

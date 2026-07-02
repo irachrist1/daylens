@@ -145,7 +145,7 @@ export function kindForDomain(host: string | null | undefined): WorkKind | null 
   return null
 }
 
-function kindForCategory(category: AppCategory): WorkKind {
+export function kindForCategory(category: AppCategory): WorkKind {
   if (WORK_CATEGORIES.has(category)) return 'work'
   if (LEISURE_CATEGORIES.has(category)) return 'leisure'
   // browsing / system / uncategorized: neutral. Generic browsing with no

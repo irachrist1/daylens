@@ -22,6 +22,7 @@ export const DEFAULT_TIMELINE_BLOCK_REVIEW: TimelineBlockReview = {
   correctedLabel: null,
   correctedIntentRole: null,
   correctedIntentSubject: null,
+  correctedCategory: null,
   updatedAt: null,
 }
 

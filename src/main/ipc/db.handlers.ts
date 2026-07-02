@@ -687,6 +687,7 @@ export function registerDbHandlers(): void {
       correctedLabel: payload.correctedLabel,
       correctedIntentRole: payload.correctedIntentRole,
       correctedIntentSubject: payload.correctedIntentSubject,
+      correctedCategory: payload.correctedCategory,
     })
 
     if (payload.state === 'corrected' && payload.correctedLabel?.trim()) {
