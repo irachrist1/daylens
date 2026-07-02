@@ -665,6 +665,17 @@ export interface AIChatTurnResult {
   providerCallCount?: number
 }
 
+export interface AIStarterSuggestion {
+  label: string
+  prompt: string
+  source: 'model' | 'recent'
+}
+
+export interface AIStarterSuggestionResult {
+  suggestions: AIStarterSuggestion[]
+  error: string | null
+}
+
 // FB7: post-answer transforms. The renderer signals the transform explicitly so
 // the main process rewrites the SPECIFIC prior answer (with its grounded numbers)
 // instead of mis-routing a disguised English prompt to the generic report bundle.

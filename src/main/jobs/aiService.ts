@@ -2090,12 +2090,20 @@ async function generateSuggestedFollowUps(
   }
 }
 
-const starterSuggestionCache = new Map<string, string[]>()
+const starterSuggestionCache = new Map<string, import('@shared/types').AIStarterSuggestionResult>()
+
+function recentQueryFallback(pastQueries: string[]): import('@shared/types').AIStarterSuggestion[] {
+  return pastQueries.slice(0, 4).map((query) => ({
+    label: query.length > 72 ? `${query.slice(0, 69).trimEnd()}…` : query,
+    prompt: query,
+    source: 'recent' as const,
+  }))
+}
 
 // Empty-chat suggestions come from the user's own query history. They use the
 // same metered economy job as follow-up chips, so input/output tokens and cost
 // land in ai_usage_events and appear under "Suggestions" in Settings.
-export async function getStarterSuggestions(): Promise<string[]> {
+export async function getStarterSuggestions(): Promise<import('@shared/types').AIStarterSuggestionResult> {
   const db = getDb()
   const rows = db.prepare(`
     SELECT content
@@ -2118,7 +2126,7 @@ export async function getStarterSuggestions(): Promise<string[]> {
     })
     .slice(0, 20)
 
-  if (pastQueries.length < 2) return []
+  if (pastQueries.length < 2) return { suggestions: recentQueryFallback(pastQueries), error: null }
   const signature = hashText(pastQueries.join('\n'))
   const cached = starterSuggestionCache.get(signature)
   if (cached) return cached
@@ -2136,15 +2144,23 @@ export async function getStarterSuggestions(): Promise<string[]> {
       },
       sendWithProvider,
     )
-    const suggestions = parseStarterSuggestions(text, pastQueries)
-    starterSuggestionCache.clear()
-    starterSuggestionCache.set(signature, suggestions)
-    return suggestions
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('[ai] starter suggestion generation failed; showing none:', error instanceof Error ? error.message : error)
+    const parsed = parseStarterSuggestions(text, pastQueries)
+    const suggestions = parsed.length >= 2
+      ? parsed.map((suggestion) => ({ ...suggestion, source: 'model' as const }))
+      : recentQueryFallback(pastQueries)
+    const result = {
+      suggestions,
+      error: parsed.length >= 2 ? null : "Suggestions couldn't refresh. Showing recent questions.",
     }
-    return []
+    starterSuggestionCache.clear()
+    starterSuggestionCache.set(signature, result)
+    return result
+  } catch (error) {
+    console.warn('[ai] starter suggestion generation failed; using recent questions:', error instanceof Error ? error.message : error)
+    return {
+      suggestions: recentQueryFallback(pastQueries),
+      error: "Suggestions couldn't refresh. Showing recent questions.",
+    }
   }
 }
 

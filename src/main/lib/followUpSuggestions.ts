@@ -400,12 +400,12 @@ export function buildStarterSuggestionPrompts(pastQueries: string[]): { systemPr
   return {
     systemPrompt: `You generate starter question chips for Daylens, a local work-history assistant.
 
-Return only valid JSON: { "suggestions": ["...", "...", "..."] }
+Return only valid JSON: { "suggestions": [{ "label": "...", "prompt": "..." }] }
 
 Rules:
-1. Return 3 or 4 concise questions, each at most 12 words.
-2. Base every suggestion on the user's actual past queries below. Reuse their recurring projects, clients, apps, timeframes, or question styles.
-3. Suggest a useful next question, not a verbatim repeat.
+1. Return 3 or 4 suggestions. The label is a concise question of at most 12 words. The prompt is the complete question to place in the composer.
+2. Base every label and prompt on the user's actual past queries below. Reuse their recurring projects, clients, apps, timeframes, or question styles.
+3. Suggest a useful next question, not a verbatim repeat. The prompt may add useful specificity but must stay grounded in the history.
 4. Do not invent a project, client, app, person, or fact that is absent from the past queries.
 5. Avoid generic prompts such as "What did I work on today?", "Tell me more", or "What else happened?" unless that exact theme recurs in the user's queries.
 6. Write the chips as questions the user would ask Daylens. No explanation or markdown.`,
@@ -413,7 +413,7 @@ Rules:
   }
 }
 
-export function parseStarterSuggestions(raw: string, pastQueries: string[]): string[] {
+export function parseStarterSuggestions(raw: string, pastQueries: string[]): Array<{ label: string; prompt: string }> {
   const pastAnchors = queryAnchors(pastQueries.join(' '))
   if (pastAnchors.size === 0) return []
   const normalized = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
@@ -421,16 +421,18 @@ export function parseStarterSuggestions(raw: string, pastQueries: string[]): str
     const parsed = JSON.parse(normalized) as { suggestions?: unknown }
     if (!Array.isArray(parsed.suggestions)) return []
     const seen = new Set<string>()
-    const suggestions: string[] = []
+    const suggestions: Array<{ label: string; prompt: string }> = []
     for (const value of parsed.suggestions) {
-      if (typeof value !== 'string') continue
-      const text = value.trim().replace(/\s+/g, ' ').slice(0, 120)
-      const key = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-      if (!text || seen.has(key) || text.split(/\s+/).length > 12) continue
-      const anchored = [...queryAnchors(text)].some((token) => pastAnchors.has(token))
+      const legacy = typeof value === 'string' ? value : null
+      const object = value && typeof value === 'object' ? value as Record<string, unknown> : null
+      const label = String(legacy ?? object?.label ?? '').trim().replace(/\s+/g, ' ').slice(0, 120)
+      const prompt = String(legacy ?? object?.prompt ?? '').trim().replace(/\s+/g, ' ').slice(0, 420)
+      const key = label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+      if (!label || !prompt || seen.has(key) || label.split(/\s+/).length > 12) continue
+      const anchored = [...queryAnchors(`${label} ${prompt}`)].some((token) => pastAnchors.has(token))
       if (!anchored) continue
       seen.add(key)
-      suggestions.push(text)
+      suggestions.push({ label, prompt })
     }
     return suggestions.slice(0, 4)
   } catch {

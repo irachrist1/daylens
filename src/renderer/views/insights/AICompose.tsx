@@ -6,12 +6,14 @@ import { buildMentionChipElement, MentionRowIcon, type MentionItem, type Mention
 
 export interface AIComposeHandle {
   focus: () => void
+  setValue: (text: string) => void
 }
 
 interface AIComposeProps {
   onSubmit: (text: string) => void
   loading: boolean
   placeholder?: string
+  variant?: 'docked' | 'starter'
 }
 
 // D5: composer affordances — `/` commands and `@` entity mentions. FB11: mentions
@@ -58,7 +60,7 @@ function serializeEditor(el: HTMLElement): string {
 }
 
 function AIComposeImpl(
-  { onSubmit, loading, placeholder }: AIComposeProps,
+  { onSubmit, loading, placeholder, variant = 'docked' }: AIComposeProps,
   ref: ForwardedRef<AIComposeHandle>,
 ) {
   const editorRef = useRef<HTMLDivElement>(null)
@@ -70,7 +72,26 @@ function AIComposeImpl(
   // The @-trigger text range to replace on selection (null while a slash menu is open).
   const triggerRangeRef = useRef<{ node: Text; start: number; end: number } | null>(null)
 
-  useImperativeHandle(ref, () => ({ focus: () => editorRef.current?.focus() }), [])
+  const setEditorValue = useCallback((text: string) => {
+    const editor = editorRef.current
+    if (!editor) return
+    editor.textContent = text
+    editor.dataset.empty = text.trim() ? 'false' : 'true'
+    setEmpty(!text.trim())
+    editor.focus()
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    range.collapse(false)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    setMenu(null)
+  }, [])
+
+  useImperativeHandle(ref, () => ({
+    focus: () => editorRef.current?.focus(),
+    setValue: setEditorValue,
+  }), [setEditorValue])
 
   useEffect(() => { editorRef.current?.focus() }, [])
 
@@ -282,8 +303,9 @@ function AIComposeImpl(
         borderRadius: 16,
         border: '1px solid var(--color-border-ghost)',
         background: 'var(--color-surface)',
-        padding: '8px 8px 8px 16px',
+        padding: variant === 'starter' ? '14px 12px 10px 18px' : '8px 8px 8px 16px',
         boxShadow: 'var(--color-shadow-floating)',
+        minHeight: variant === 'starter' ? 112 : undefined,
       }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
           {empty && (
@@ -310,7 +332,7 @@ function AIComposeImpl(
             onPaste={onPaste}
             onBlur={() => { window.setTimeout(() => setMenu(null), 120) }}
             style={{
-              minHeight: 24,
+              minHeight: variant === 'starter' ? 76 : 24,
               maxHeight: 184,
               overflowY: 'auto',
               border: 'none',
@@ -318,7 +340,7 @@ function AIComposeImpl(
               outline: 'none',
               color: 'var(--color-text-primary)',
               caretColor: 'var(--color-text-primary)',
-              fontSize: 13.5,
+              fontSize: variant === 'starter' ? 14 : 13.5,
               lineHeight: '22px',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',

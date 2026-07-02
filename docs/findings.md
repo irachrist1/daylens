@@ -370,3 +370,24 @@ afternoon reads as one calendar block, not slices. Heuristic bumped to `timeline
 unprocessed past days rebuild on revisit; AI/user-processed days are kept (re-analyze to adopt
 the new shape).
 
+---
+
+# 2026-07-02 — empty chat failures were hidden, and null selection meant two things
+
+**Status:** Fixed + regression-tested · **Source:** live `ai_usage_events` + built-app run
+
+The missing starter questions were not an Anthropic outage: live usage showed successful
+Claude Haiku 4.5 suggestion calls. The empty-chat effect required a narrow combination of
+thread hydration, history, and null selection, then converted every provider or parse failure
+to `[]`. It now runs for an explicit new-chat draft, returns structured label/full-prompt
+suggestions, and falls back to recent real queries with a visible status instead of blank UI.
+
+The new-chat snapback had the same overloaded null at its root. `activeThreadId === null`
+meant both “the user intentionally opened a new draft” and “no thread has been adopted yet.”
+Any background list refresh could therefore adopt the previous conversation. New-draft state
+is now explicit; thread refreshes are tied to the navigation version that started them, so a
+stale refresh cannot replace the draft.
+
+Historical answers can still contain the retired inline “remember that” nudge even after the
+generator stops producing it. The renderer now strips that exact legacy tail on history load
+and on newly completed answers; memory consent remains exclusively in the action widget.

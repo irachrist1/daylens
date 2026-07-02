@@ -99,6 +99,17 @@ export function sanitizeForRender(text: string): { text: string; report: Sanitiz
   return applyPatterns(text, '[redacted]')
 }
 
+// Older chat rows may contain the retired inline memory nudge. Memory consent
+// now lives exclusively in the action widget, so hide the legacy paragraph
+// without rewriting the user's stored conversation.
+export function stripLegacyMemoryNudge(text: string): string {
+  if (!text) return text
+  return text.replace(
+    /(?:\n\s*){1,2}By the way\s*[—-]\s*[^\n]*?Want me to remember that\?\s*Just say\s*["“]remember that["”]\.?\s*$/i,
+    '',
+  ).trimEnd()
+}
+
 // Deep walk a tool result and run sanitizeForModel on every string field.
 // Plain objects, arrays, primitives, and nested combinations are all handled.
 // Returns a new value; the input is left untouched so the trace harness can

@@ -1,6 +1,7 @@
 import type { AIActionUndo, AIAnswerTransformKind, AIMessageAction, AIProviderMode, AIThreadMessage } from '@shared/types'
 import type { AIProviderErrorCode } from '@shared/aiProviderError'
 import { ANSWER_TRANSFORM_KINDS, TRANSFORM_LABELS } from '@shared/answerTransforms'
+import { stripLegacyMemoryNudge } from '@shared/aiSanitize'
 
 export interface AltProvider {
   provider: AIProviderMode
@@ -72,6 +73,7 @@ export function messageActionKey(messageId: string | number, action: AIMessageAc
 export function threadMessagesFromHistory(history: AIThreadMessage[]): ThreadMessage[] {
   return history.map((message, index) => ({
     ...message,
+    content: stripLegacyMemoryNudge(message.content),
     id: message.id ?? `history:${index}:${message.role}`,
     state: 'complete' as const,
   }))

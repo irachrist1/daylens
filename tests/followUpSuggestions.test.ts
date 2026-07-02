@@ -224,9 +224,22 @@ test('starter suggestions are anchored in actual past queries', () => {
     ],
   }), pastQueries)
   assert.deepEqual(result, [
-    'Which days did Acme take most time?',
-    'Compare the Acme proposal with last week?',
+    { label: 'Which days did Acme take most time?', prompt: 'Which days did Acme take most time?' },
+    { label: 'Compare the Acme proposal with last week?', prompt: 'Compare the Acme proposal with last week?' },
   ])
+})
+
+test('starter suggestions accept concise labels with fuller composer prompts', () => {
+  const result = parseStarterSuggestions(JSON.stringify({
+    suggestions: [{
+      label: 'Compare Acme proposal time',
+      prompt: 'Compare time on the Acme proposal this week with last week.',
+    }],
+  }), ['How much time did I spend on the Acme proposal?'])
+  assert.deepEqual(result, [{
+    label: 'Compare Acme proposal time',
+    prompt: 'Compare time on the Acme proposal this week with last week.',
+  }])
 })
 
 test('starter suggestion prompt requires past-query grounding', () => {

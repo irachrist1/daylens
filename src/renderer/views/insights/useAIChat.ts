@@ -18,7 +18,7 @@ import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META, getSelectedModel } from '../../lib/aiProvider'
 import { sanitizeIpcError } from '../../lib/ipcError'
-import { sanitizeForRender } from '../../../shared/aiSanitize'
+import { sanitizeForRender, stripLegacyMemoryNudge } from '../../../shared/aiSanitize'
 import { clearStreamingSnapshot, setStreamingSnapshot } from './streamingStore'
 import {
   actionFeedbackKey,
@@ -77,6 +77,7 @@ export function useAIChat() {
   const [threadsHydrated, setThreadsHydrated] = useState(false)
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
+  const [isNewChatDraft, setIsNewChatDraft] = useState(rememberedThreadId === null)
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
   const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [actionWidgetState, setActionWidgetState] = useState<Record<string, ActionWidgetStateEntry>>({})
@@ -94,6 +95,7 @@ export function useAIChat() {
   const aiScreenTrackedRef = useRef(false)
   const routedReportKeyRef = useRef<string | null>(null)
   const threadsHydratedRef = useRef(false)
+  const navigationVersionRef = useRef(0)
 
   // Provider + environment load. Deliberately NOT keyed on activeThreadId and
   // deliberately free of the today-timeline rebuild + recap range the old tab
@@ -240,6 +242,7 @@ export function useAIChat() {
     // which is exactly the "header changes, body stays empty" bug. Instead we
     // stale-guard by thread id: only the latest requested thread may write.
     setActiveThreadId(threadId)
+    setIsNewChatDraft(false)
     rememberedThreadId = threadId
     latestRequestedThreadRef.current = threadId
     setThreadLoading(true)
@@ -286,6 +289,10 @@ export function useAIChat() {
       }
       const firstId = firstActiveThreadId(rows)
       if (firstId != null) void loadThread(firstId)
+      else {
+        setIsNewChatDraft(true)
+        rememberedThreadId = null
+      }
     }).catch(() => { /* best-effort */ })
     return () => { cancelled = true }
   }, [loadThread, location.search])
@@ -347,13 +354,19 @@ export function useAIChat() {
     }
   }, [])
 
-  const refreshThreadsAfterTurn = useCallback(async () => {
+  const refreshThreadsAfterTurn = useCallback(async (requestThreadId: number | null, navigationVersion: number) => {
     // sendMessage auto-creates a thread server-side when none is passed. Adopt
     // the newest row so follow-up turns (and retries) stay linked to it.
     try {
       const refreshed = await ipc.ai.listThreads({ includeArchived: true })
       setThreads(refreshed)
-      setActiveThreadId((current) => current ?? firstActiveThreadId(refreshed))
+      if (navigationVersionRef.current !== navigationVersion || requestThreadId != null) return
+      const createdThreadId = firstActiveThreadId(refreshed)
+      if (createdThreadId != null) {
+        setActiveThreadId(createdThreadId)
+        setIsNewChatDraft(false)
+        rememberedThreadId = createdThreadId
+      }
     } catch { /* best-effort */ }
   }, [])
 
@@ -368,6 +381,8 @@ export function useAIChat() {
     const createdAt = Date.now()
     const userId = `user:${requestId}`
     const assistantId = `assistant:${requestId}`
+    const requestThreadId = activeThreadId
+    const navigationVersion = navigationVersionRef.current
 
     track(ANALYTICS_EVENT.AI_QUERY_SENT, analyticsContext({ query_kind: queryKind, trigger }))
     if (queryKind !== 'question') {
@@ -410,7 +425,7 @@ export function useAIChat() {
       // that ordering was why answers only appeared after navigating away.
       setMessages((current) => current.map((message) => (
         message.id === assistantId
-          ? { ...response.assistantMessage, state: 'complete' as const }
+          ? { ...response.assistantMessage, content: stripLegacyMemoryNudge(response.assistantMessage.content), state: 'complete' as const }
           : message
       )))
       track(ANALYTICS_EVENT.AI_QUERY_ANSWERED, analyticsContext({
@@ -419,7 +434,7 @@ export function useAIChat() {
         trigger,
         provider_calls: response.providerCallCount ?? null,
       }))
-      void refreshThreadsAfterTurn()
+      void refreshThreadsAfterTurn(requestThreadId, navigationVersion)
     } catch (error) {
       const sanitized = sanitizeIpcError(
         error,
@@ -455,7 +470,7 @@ export function useAIChat() {
       )))
       // Keep the (server-created) thread linked so a retry continues it rather
       // than spawning a duplicate.
-      void refreshThreadsAfterTurn()
+      void refreshThreadsAfterTurn(requestThreadId, navigationVersion)
       if (willAutoRetry) {
         const waitMs = Math.min(45, Math.max(8, sanitized.retryAfterSeconds ?? 20)) * 1000
         autoRetryTimeoutsRef.current[assistantId] = window.setTimeout(() => {
@@ -674,8 +689,10 @@ export function useAIChat() {
     for (const handle of Object.values(autoRetryTimeoutsRef.current)) window.clearTimeout(handle)
     autoRetryTimeoutsRef.current = {}
     latestRequestedThreadRef.current = null
+    navigationVersionRef.current += 1
     setThreadLoading(false)
     setActiveThreadId(null)
+    setIsNewChatDraft(true)
     rememberedThreadId = null
     resetComposerState()
   }, [messages.length, activeThreadId, resetComposerState])
@@ -700,6 +717,7 @@ export function useAIChat() {
           void loadThread(nextId)
         } else {
           setActiveThreadId(null)
+          setIsNewChatDraft(true)
           rememberedThreadId = null
           resetComposerState()
         }
@@ -724,6 +742,7 @@ export function useAIChat() {
           void loadThread(nextId)
         } else {
           setActiveThreadId(null)
+          setIsNewChatDraft(true)
           rememberedThreadId = null
           resetComposerState()
         }
@@ -780,6 +799,7 @@ export function useAIChat() {
     threadsHydrated,
     threads,
     activeThreadId,
+    isNewChatDraft,
     activeThreadLabel,
     activeModel,
     activeProvider,

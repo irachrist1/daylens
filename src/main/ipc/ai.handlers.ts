@@ -40,7 +40,7 @@ import {
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
+import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -64,7 +64,7 @@ export function registerAIHandlers(): void {
     })
   })
 
-  ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<string[]> => {
+  ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<AIStarterSuggestionResult> => {
     return getStarterSuggestions()
   })
 

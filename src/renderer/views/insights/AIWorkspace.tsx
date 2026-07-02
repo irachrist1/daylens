@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Copy, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
-import type { AIProviderMode, AIThreadSettings } from '@shared/types'
+import type { AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
 import { ipc } from '../../lib/ipc'
 import { AI_PROVIDER_META } from '../../lib/aiProvider'
@@ -43,6 +43,7 @@ export default function AIWorkspace() {
     threadsHydrated,
     threads,
     activeThreadId,
+    isNewChatDraft,
     activeThreadLabel,
     activeModel,
     settings,
@@ -59,7 +60,6 @@ export default function AIWorkspace() {
     loadError,
     refreshProvider,
     submitMessage,
-    handleSend,
     handleRetry,
     handleErrorRetry,
     handleCopy,
@@ -72,7 +72,6 @@ export default function AIWorkspace() {
     selectThread,
     deleteThread,
     archiveThread,
-    handlePromptChipClick,
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
@@ -128,22 +127,33 @@ export default function AIWorkspace() {
     return () => { cancelled = true }
   }, [])
 
-  const [starterPrompts, setStarterPrompts] = useState<string[]>([])
+  const [starterPrompts, setStarterPrompts] = useState<AIStarterSuggestion[]>([])
+  const [starterError, setStarterError] = useState<string | null>(null)
+  const [hoveredStarter, setHoveredStarter] = useState<number | null>(null)
   useEffect(() => {
     const isSettledEmptyChat = threadsHydrated
       && !threadLoading
-      && activeThreadId == null
+      && isNewChatDraft
       && messages.length === 0
-    if (!hasApiKey || hasHistory !== true || !isSettledEmptyChat) {
+    if (!hasApiKey || !isSettledEmptyChat) {
       setStarterPrompts([])
+      setStarterError(null)
       return
     }
     let cancelled = false
     void ipc.ai.getStarterSuggestions()
-      .then((suggestions) => { if (!cancelled) setStarterPrompts(suggestions) })
-      .catch(() => { if (!cancelled) setStarterPrompts([]) })
+      .then((result) => {
+        if (cancelled) return
+        setStarterPrompts(result.suggestions)
+        setStarterError(result.error)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setStarterPrompts([])
+        setStarterError("Suggestions couldn't load. Try opening a new chat again.")
+      })
     return () => { cancelled = true }
-  }, [activeThreadId, hasApiKey, hasHistory, messages.length, threadLoading, threadsHydrated])
+  }, [hasApiKey, isNewChatDraft, messages.length, threadLoading, threadsHydrated])
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -267,8 +277,16 @@ export default function AIWorkspace() {
       source,
       trigger: 'suggested',
     }))
-    void handleSend(text, { trigger: 'suggested' })
-  }, [analyticsContext, handleSend])
+    composerRef.current?.setValue(text)
+  }, [analyticsContext])
+
+  const openStarterSuggestion = useCallback((suggestion: AIStarterSuggestion) => {
+    track(ANALYTICS_EVENT.AI_SUGGESTED_QUESTION_CLICKED, analyticsContext({
+      source: suggestion.source === 'model' ? 'starter' : 'starter_recent',
+      trigger: 'suggested',
+    }))
+    composerRef.current?.setValue(suggestion.prompt)
+  }, [analyticsContext])
 
   // FB8: apply a model choice. For an existing thread → per-chat override (D4).
   // For a brand-new (thread-less) chat → set the global chat model so the first
@@ -469,7 +487,7 @@ export default function AIWorkspace() {
               <p style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>Loading conversation…</p>
             </div>
           ) : (
-            <div style={{ margin: 'auto 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+            <div style={{ margin: 'auto 0', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, width: '100%' }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--gradient-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-primary-contrast)' }}>
                 <IconSparkle size={20} />
               </div>
@@ -483,17 +501,35 @@ export default function AIWorkspace() {
                     : 'Grounded in your local history. Ask a question, or request a report, table, or export.'}
                 </p>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxWidth: 540 }}>
-                {starterPrompts.map((prompt) => (
+              <div style={{ width: '100%', maxWidth: 620, marginTop: 4, textAlign: 'left' }}>
+                <AICompose ref={composerRef} onSubmit={submitMessage} loading={loading} variant="starter" placeholder="Ask anything" />
+              </div>
+              <div style={{ width: '100%', maxWidth: 620, textAlign: 'left' }}>
+                {starterPrompts.map((suggestion, index) => (
                   <button
-                    key={prompt}
+                    key={`${suggestion.label}:${index}`}
                     type="button"
-                    onClick={() => handlePromptChipClick(prompt, 'starter')}
-                    style={{ padding: '8px 14px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 12.5 }}
+                    onClick={() => openStarterSuggestion(suggestion)}
+                    onMouseEnter={() => setHoveredStarter(index)}
+                    onMouseLeave={() => setHoveredStarter(null)}
+                    style={{ position: 'relative', width: '100%', padding: '10px 12px', borderRadius: 8, border: 'none', borderBottom: index < starterPrompts.length - 1 ? '1px solid var(--color-border-ghost)' : 'none', background: hoveredStarter === index ? 'var(--color-surface-high)' : 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 12.5, textAlign: 'left', transition: 'background 120ms ease, color 120ms ease' }}
                   >
-                    {prompt}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <span style={{ color: 'var(--color-text-tertiary)', display: 'inline-flex' }}><IconSparkle size={14} /></span>
+                      <span>{suggestion.label}</span>
+                    </span>
+                    {hoveredStarter === index && suggestion.prompt !== suggestion.label && (
+                      <span style={{ position: 'absolute', zIndex: 20, left: 28, bottom: 'calc(100% + 6px)', width: 'min(480px, calc(100% - 36px))', padding: '9px 11px', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', boxShadow: 'var(--color-shadow-floating)', color: 'var(--color-text-primary)', fontSize: 11.5, lineHeight: 1.45 }}>
+                        {suggestion.prompt}
+                      </span>
+                    )}
                   </button>
                 ))}
+                {starterError && (
+                  <p role="status" style={{ margin: '8px 12px 0', color: 'var(--color-text-tertiary)', fontSize: 11.5 }}>
+                    {starterError}
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -501,7 +537,7 @@ export default function AIWorkspace() {
       </div>
 
       {/* ── Docked composer ───────────────────────────────────────────────── */}
-      {hasApiKey && (
+      {hasApiKey && (hasMessages || threadLoading) && (
         <div style={{ flexShrink: 0, padding: '12px 24px 20px' }}>
           <div style={{ maxWidth: 760, margin: '0 auto' }}>
             <AICompose ref={composerRef} onSubmit={submitMessage} loading={loading} />
