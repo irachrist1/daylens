@@ -67,6 +67,10 @@ interface InFlightSession {
   startTime: number
   category: AppCategory
   windowTitles?: { title: string | null; ticks: number }[]
+  // Set when the session's start was stamped from the true input time on a
+  // return from away/provisional_idle. Lets the MIN_SESSION_SEC floor log why a
+  // just-born session collapsed, instead of dropping it silently.
+  bornOnIdleReturn?: boolean
 }
 
 interface LinuxProcessSnapshot {
@@ -1168,6 +1172,13 @@ let lastSnapshotPersistAt = 0
 type IdleState = 'active' | 'provisional_idle' | 'away'
 let idleState: IdleState = 'active'
 let provisionalIdleStart: number | null = null
+// True last-input time captured on the poll where the user returns from
+// away/provisional_idle, consumed by the next session start so its boundary is
+// stamped from real input rather than the poll wall-clock (two-clock fix).
+let returnFromIdleAtMs: number | null = null
+// End boundary of the most recently flushed session. A restamped start is
+// clamped to be ≥ this so sessions never overlap backwards.
+let lastFlushEndMs: number | null = null
 let powerMonitorListenersRegistered = false
 const trackingTickListeners = new Set<() => void>()
 const ATTRIBUTION_REFRESH_DEBOUNCE_MS = 3_000
@@ -1422,6 +1433,7 @@ export function stopTracking(): void {
   flushActiveBrowserContext(getDb())
   idleState = 'active'
   provisionalIdleStart = null
+  returnFromIdleAtMs = null
   console.log('[tracking] stopped')
 }
 
@@ -1440,21 +1452,70 @@ export function flushCurrentSession(): void {
 
 // ─── Poll ─────────────────────────────────────────────────────────────────────
 
+// Test seam: drives the idle/session FSM with a scripted clock, idle timer, and
+// active-window result so the return → idle → away lifecycle can be exercised
+// without a real desktop, the native active-window module, or wall-clock time.
+// `recordFlush` (optional) observes every flush's final bounds so a test can
+// assert the end ≥ start invariant. Production reads go through nowMs() /
+// getIdleSeconds() / the real capture path unchanged when this is null.
+interface TrackingFsmTestHarness {
+  now: () => number
+  idleSeconds: () => number
+  activeWindow: () => ActiveWinResult | null
+  recordFlush?: (info: {
+    startTime: number
+    endTime: number
+    durationSeconds: number
+    endedReason: string | null
+    persisted: boolean
+  }) => void
+}
+let fsmTestHarness: TrackingFsmTestHarness | null = null
+
+export function __setTrackingFsmTestHarness(harness: TrackingFsmTestHarness | null): void {
+  fsmTestHarness = harness
+  // Reset all FSM state so each scripted scenario starts from a clean slate.
+  currentSession = null
+  idleState = 'active'
+  provisionalIdleStart = null
+  returnFromIdleAtMs = null
+  lastFlushEndMs = null
+  lastSnapshotPersistAt = 0
+  if (attributionRefreshTimer) {
+    clearTimeout(attributionRefreshTimer)
+    attributionRefreshTimer = null
+  }
+  pendingAttributionDates.clear()
+}
+
+// Test-only single-poll driver. Production drives poll() on the interval timer.
+export function __pollForTest(): Promise<void> {
+  return poll()
+}
+
+function nowMs(): number {
+  return fsmTestHarness ? fsmTestHarness.now() : Date.now()
+}
+
+function getIdleSeconds(): number {
+  return fsmTestHarness ? fsmTestHarness.idleSeconds() : powerMonitor.getSystemIdleTime()
+}
+
 async function poll(): Promise<void> {
   try {
     // ── Idle detection ───────────────────────────────────────────────────────
-    const idleSec = powerMonitor.getSystemIdleTime()
+    const idleSec = getIdleSeconds()
     if (idleSec >= AWAY_THRESHOLD_SEC) {
       if (currentSession && looksLikePassiveMediaSession(currentSession)) {
         if (idleState === 'active') {
-          provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
+          provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
           idleState = 'provisional_idle'
           recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec), heldForMediaPlayback: true })
           console.log(`[tracking] idle ${Math.round(idleSec)}s during media playback — session held open`)
         }
       } else {
         if (idleState !== 'away' && currentSession) {
-          const idleStartMs = provisionalIdleStart ?? (Date.now() - Math.round(idleSec) * 1_000)
+          const idleStartMs = provisionalIdleStart ?? (nowMs() - Math.round(idleSec) * 1_000)
           if (idleState !== 'provisional_idle') {
             recordActivityEvent('away_start', { idleSeconds: Math.round(idleSec) })
           }
@@ -1468,7 +1529,7 @@ async function poll(): Promise<void> {
       }
     } else if (idleSec >= IDLE_THRESHOLD_SEC) {
       if (idleState === 'active') {
-        provisionalIdleStart = Date.now() - Math.round(idleSec) * 1_000
+        provisionalIdleStart = nowMs() - Math.round(idleSec) * 1_000
         idleState = 'provisional_idle'
         recordActivityEvent('idle_start', { idleSeconds: Math.round(idleSec) })
         console.log(`[tracking] provisional idle at ${Math.round(idleSec)}s — session held open`)
@@ -1481,6 +1542,12 @@ async function poll(): Promise<void> {
         // Returning from away: session was already flushed, a new one will start below.
         console.log(`[tracking] user returned from ${idleState}`)
         recordActivityEvent(idleState === 'away' ? 'away_end' : 'idle_end')
+        // Stamp the true last-input time for the session that starts on this poll.
+        // idleSec here is <120s (< IDLE_THRESHOLD_SEC), so this at most back-dates
+        // the start by the sub-grace input gap — never into counted idle time. The
+        // session-start clamp to lastFlushEndMs keeps this from overlapping the
+        // previously flushed session (e.g. an app switch during provisional_idle).
+        returnFromIdleAtMs = nowMs() - Math.round(idleSec) * 1_000
       }
       idleState = 'active'
       provisionalIdleStart = null
@@ -1491,7 +1558,10 @@ async function poll(): Promise<void> {
     let backend = trackingStatus.moduleSource ?? 'unknown'
     const backendTrace: string[] = []
 
-    if (process.platform === 'linux') {
+    if (fsmTestHarness) {
+      win = fsmTestHarness.activeWindow()
+      backend = 'test'
+    } else if (process.platform === 'linux') {
       const preferFallback = linuxShouldPreferFallback()
       const support = getLinuxTrackingDiagnostics()
       let fallback: ReturnType<typeof linuxFallbackActiveWindow> = null
@@ -1697,6 +1767,13 @@ async function poll(): Promise<void> {
       return
     }
 
+    // Consume the one-shot return-from-idle signal set earlier this poll. It
+    // applies only to a session that starts on this same poll; anything that
+    // doesn't start a session (excluded/noise apps returned above, or a session
+    // that continues unchanged) must not carry it forward to a later poll.
+    const returnedAtMs = returnFromIdleAtMs
+    returnFromIdleAtMs = null
+
     // App switched → flush the previous session
     if (currentSession && currentSession.bundleId !== bundleId) {
       flushCurrent(undefined, 'app_switch')
@@ -1704,7 +1781,15 @@ async function poll(): Promise<void> {
 
     // Start a new session if none is in-flight for this app
     if (!currentSession || currentSession.bundleId !== bundleId) {
-      const startedAt = Date.now()
+      // Two-clock fix: when this session is born on a return from away/idle,
+      // stamp its start from the true last-input time rather than the poll
+      // wall-clock, clamped to the previous flush end so sessions never overlap.
+      // Otherwise the away/idle end (input-derived) can predate a poll-stamped
+      // start and the session gets silently discarded on flush.
+      const bornOnIdleReturn = returnedAtMs != null
+      const startedAt = bornOnIdleReturn
+        ? Math.max(returnedAtMs, lastFlushEndMs ?? 0)
+        : nowMs()
       const category = identity.defaultCategory ?? classifyApp(bundleId, appName)
       currentSession = {
         bundleId,
@@ -1718,6 +1803,7 @@ async function poll(): Promise<void> {
           : 'foreground_poll',
         startTime: startedAt,
         category,
+        bornOnIdleReturn,
         windowTitles: [{ title: resolvedWindowTitle, ticks: 1 }],
       }
       upsertAppIdentityObservation(getDb(), {
@@ -1775,14 +1861,16 @@ async function poll(): Promise<void> {
 function flushCurrent(overrideEndTime?: number, endedReason: string | null = null): void {
   if (!currentSession) return
 
-  const endTime = overrideEndTime ?? Date.now()
-
-  // Guard: never write a session with non-positive duration
-  if (endTime <= currentSession.startTime) {
-    clearPersistedLiveSnapshot()
-    currentSession = null
-    return
-  }
+  // Two-clock safety. A session's start is stamped from poll wall-clock, but an
+  // away/idle flush end is derived from the true last-input time (idleStartMs),
+  // which can predate the poll that opened the session. Clamp any explicit end
+  // forward to the session start so end < start is impossible; a session that
+  // collapses to zero length then dies at the explicit MIN_SESSION_SEC floor
+  // (logged when it was born on a return), never via a silent negative-duration
+  // discard. Wall-clock flushes (no override) are already monotonic.
+  const endTime = overrideEndTime != null
+    ? Math.max(overrideEndTime, currentSession.startTime)
+    : nowMs()
 
   // Split sessions that cross midnight into two records so that each calendar
   // day's totals only include time that actually fell within that day.
@@ -1812,7 +1900,16 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
     currentSession.windowTitle = dominantTitle
   }
 
-  const durationSeconds = Math.round((endTime - currentSession.startTime) / 1_000)
+  const durationSeconds = Math.max(0, Math.round((endTime - currentSession.startTime) / 1_000))
+
+  if (durationSeconds < MIN_SESSION_SEC && currentSession.bornOnIdleReturn) {
+    // Diagnosable drop: a session born on a return from away/idle collapsed under
+    // the noise floor. Previously this vanished via the silent negative-duration
+    // discard; now it is explicit so brief post-away sittings are traceable.
+    console.log(
+      `[tracking] dropped ${durationSeconds}s return session (${currentSession.appName}) at MIN_SESSION_SEC floor — endedReason=${endedReason}`,
+    )
+  }
 
   if (durationSeconds >= MIN_SESSION_SEC) {
     try {
@@ -1867,6 +1964,17 @@ function flushCurrent(overrideEndTime?: number, endedReason: string | null = nul
       })
     }
   }
+
+  // Record the boundary so a restamped next-session start can clamp to it and
+  // never overlap backwards, then let a test observe the final (clamped) bounds.
+  lastFlushEndMs = endTime
+  fsmTestHarness?.recordFlush?.({
+    startTime: currentSession.startTime,
+    endTime,
+    durationSeconds,
+    endedReason,
+    persisted: durationSeconds >= MIN_SESSION_SEC,
+  })
 
   clearPersistedLiveSnapshot()
   currentSession = null
