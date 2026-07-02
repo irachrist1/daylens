@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, WorkContextBlock } from '@shared/types'
-import { activityColorForCategory } from '@shared/activityColors'
+import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind, kindForDomain } from '@shared/workKind'
@@ -383,8 +383,9 @@ function CalendarBlockCard({
   onClick?: () => void
 }) {
   const accent = block.provisional ? '#8b93a7' : activityColorForCategory(block.dominantCategory)
-  // Leisure / personal blocks are muted so the eye finds work first.
-  const muted = effectiveBlockKind(block) !== 'work'
+  // Leisure / personal blocks are muted so the eye finds work first —
+  // unless the user turned that off (Settings → General → Dim leisure blocks).
+  const muted = effectiveBlockKind(block) !== 'work' && leisureBlocksDimmed()
   const label = userVisibleBlockLabel(block)
   const timeRange = `${formatClockTime(block.startTime)} – ${formatClockTime(block.endTime)}`
   const showTime = height >= (compact ? 34 : 40)

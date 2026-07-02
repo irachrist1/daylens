@@ -124,7 +124,12 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    activity before or after simply don't exist in the view. No rendering or scrolling
    through an empty midnight-to-9am. The week grid applies the same rule across its seven
    days on one shared hour scale.
-4. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
+4. **Blocks are color-coded by category, Google-Calendar style.** Each kind of activity has
+   one consistent color used everywhere a block is drawn — day grid, week grid, month dots,
+   inspector — from the single palette in `shared/activityColors.ts`. The user can customize
+   the five activity-group colors in Settings → General (see `settings.md` §8); an override
+   applies across every surface at once, never per-view.
+5. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
    (macOS and Windows), then records the deletion as a correction (review state `ignored`).
    The block disappears from every surface — timeline, month grid, recap, AI, wraps,
    search — its span renders as the empty space it now is, and the deletion survives every

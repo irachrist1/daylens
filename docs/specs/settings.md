@@ -92,6 +92,20 @@ off by default and safe in production.
 - **Notifications** — morning brief and evening wrap toggles drive the briefs in
   [`briefs-wraps.md`](briefs-wraps.md); when on, the briefs actually fire with real content.
 - **Theme** (System / Light / Dark) applies immediately and predictably.
+- **Appearance** (in General, under Theme — deliberately minimal):
+  - **Activity colors** — one color per kind of work (Development / Writing & docs /
+    Meetings & communication / Entertainment & leisure / Browsing & research), picked from a
+    curated ten-color palette, applied everywhere blocks are drawn (day grid, week grid,
+    month dots, inspector). Each group's default is in the palette, so picking it equals
+    reset; a "Reset colors" button clears all overrides. No free-form color wheel — the
+    curated set keeps every choice legible on both themes. Source of truth:
+    `shared/activityColors.ts`; overrides persist in `activityColorOverrides` and are
+    validated (known category, `#rrggbb`) on write.
+  - **Dim leisure blocks** — the calendar fades non-work blocks so the eye finds work
+    first; this toggle turns that off. Default on.
+  - Changes apply on save with no restart. Considered and deliberately left out to stay
+    minimal: week-start day, density/hour-height, 12/24-hour time (locale-driven),
+    per-category (rather than per-group) colors.
 - **Updates** — packaged builds auto-update; dev builds explain that updates come through the
   dev workflow.
 - **Analytics** — anonymous, opt-in/out, and the "local-only" promise is real when set.
@@ -151,7 +165,8 @@ clicking Labels → Privacy → MCP and confirming no Labels rows survive.
 
 ### 10.4 Per-section look
 
-- **General** — keep as is (name + theme on one page). Good.
+- **General** — name + theme, plus the Appearance rows (§8: activity colors, dim leisure
+  blocks) in the same calm row style. Still one page, one job: how Daylens looks.
 
 - **Memory** → match `ref-claude-capabilities-memory.png`. **Mood:** trustworthy, uncluttered,
   "set and forget." Clean toggle rows, each a bold title + a muted one-line description (with

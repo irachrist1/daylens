@@ -4,6 +4,7 @@ import type {
   AIProviderMode,
   AppSettings,
 } from '@shared/types'
+import { sanitizeActivityColorOverrides } from '@shared/activityColors'
 import { createDefaultOnboardingState, normalizeOnboardingState } from '../lib/onboardingState'
 import { ensureSecureStore, getSecureStore } from './secureStore'
 
@@ -65,6 +66,8 @@ const DEFAULTS: AppSettings = {
   trackingSkipIncognito: true,
   trackingPaused: false,
   billingInstallationId: '',
+  activityColorOverrides: {},
+  dimLeisureBlocks: true,
 }
 
 // M1: model ids that have been shut down at the provider and now 404. Existing
@@ -135,6 +138,8 @@ export function getSettings(): AppSettings {
     trackingSkipIncognito: (_store.get('trackingSkipIncognito', true) as boolean),
     trackingPaused: (_store.get('trackingPaused', false) as boolean),
     billingInstallationId: (_store.get('billingInstallationId', '') as string),
+    activityColorOverrides: sanitizeActivityColorOverrides(_store.get('activityColorOverrides', {})),
+    dimLeisureBlocks: (_store.get('dimLeisureBlocks', true) as boolean),
   }
 }
 
@@ -160,6 +165,9 @@ export async function setSettings(partial: Partial<AppSettings>): Promise<void> 
       .map((name) => String(name ?? '').trim().slice(0, 80))
       .filter((name) => name.length > 0)
       .slice(0, 24)
+  }
+  if ('activityColorOverrides' in entries) {
+    entries.activityColorOverrides = sanitizeActivityColorOverrides(entries.activityColorOverrides)
   }
   if (entries.onboardingState) {
     entries.onboardingState = normalizeOnboardingState(entries.onboardingState, entries.onboardingState.stage === 'complete')

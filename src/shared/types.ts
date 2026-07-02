@@ -1367,6 +1367,11 @@ export interface AppSettings {
   trackingSkipIncognito?: boolean   // effective only when controls enabled; defaults on
   trackingPaused?: boolean          // ad-hoc pause; blocks capture regardless of the master switch
   billingInstallationId?: string    // random local install identity; raw activity never leaves with it
+  // Appearance (Settings → General). Colors are per-category overrides of the
+  // shared activityColors palette — set via the grouped picker, validated to
+  // #rrggbb + known categories on write (see shared/activityColors.ts).
+  activityColorOverrides?: Partial<Record<AppCategory, string>>
+  dimLeisureBlocks?: boolean        // fade non-work blocks on the calendar; default true
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'

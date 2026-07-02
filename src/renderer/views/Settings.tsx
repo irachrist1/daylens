@@ -15,6 +15,7 @@ import type {
   ClientMemoryGroup,
   MemoryAuditEntry,
 } from '@shared/types'
+import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
 import type { UpdaterStatusInfo } from '../../preload/index'
@@ -219,6 +220,69 @@ function Segmented<T extends string>({
           {option.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+// Settings → General → Activity colors. One row per activity group (the five
+// kinds of work the calendar draws), each with the curated swatch palette.
+// Picking a group's default is the same as resetting it, so overrides only
+// persist for real changes and "Reset colors" simply clears the map.
+function ActivityColorRows({
+  overrides,
+  onChange,
+}: {
+  overrides: Partial<Record<AppCategory, string>>
+  onChange: (next: Partial<Record<AppCategory, string>>) => void
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 12, padding: '2px 0 14px' }}>
+      {ACTIVITY_COLOR_GROUPS.map((group) => {
+        const current = overrides[group.categories[0]] ?? group.defaultColor
+        return (
+          <div key={group.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)' }}>{group.label}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 1 }}>{group.hint}</div>
+            </div>
+            <div role="radiogroup" aria-label={`${group.label} color`} style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
+              {ACTIVITY_COLOR_CHOICES.map((choice) => {
+                const selected = choice.hex.toLowerCase() === current.toLowerCase()
+                return (
+                  <button
+                    key={choice.hex}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={`${choice.name}${choice.hex.toLowerCase() === group.defaultColor.toLowerCase() ? ' (default)' : ''}`}
+                    title={choice.name}
+                    onClick={() => {
+                      const next = { ...overrides }
+                      for (const category of group.categories) {
+                        if (choice.hex.toLowerCase() === group.defaultColor.toLowerCase()) delete next[category]
+                        else next[category] = choice.hex
+                      }
+                      onChange(next)
+                    }}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: '50%',
+                      border: 'none',
+                      padding: 0,
+                      cursor: 'pointer',
+                      background: choice.hex,
+                      boxShadow: selected
+                        ? `0 0 0 2px var(--color-surface), 0 0 0 4px ${choice.hex}`
+                        : 'none',
+                    }}
+                  />
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -996,7 +1060,7 @@ const SECTION_GROUPS: SectionGroup[] = [
   {
     label: 'Account',
     items: [
-      { id: 'general', label: 'General', keywords: 'name profile display persona theme appearance light dark look system' },
+      { id: 'general', label: 'General', keywords: 'name profile display persona theme appearance light dark look system colors activity color palette dim leisure blocks' },
       { id: 'notifications', label: 'Notifications', keywords: 'morning brief evening wrap distraction alerts' },
       { id: 'billing', label: 'Billing', keywords: 'plan subscription subscribe upgrade payment credit free key' },
       { id: 'usage', label: 'Usage', keywords: 'credit meter cost spend remaining' },
@@ -2092,6 +2156,19 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     }
   }
 
+  // Appearance changes (activity colors, leisure dimming) take effect the
+  // moment they're saved: the shared module every surface reads is updated
+  // alongside the persisted setting, so the calendar shows the new look on
+  // its next render — no restart, no reload (settings.md invariant 1).
+  function persistAppearance(partial: Pick<Partial<AppSettings>, 'activityColorOverrides' | 'dimLeisureBlocks'>) {
+    if (!settings) return
+    void persist(partial)
+    applyAppearanceSettings({
+      activityColorOverrides: partial.activityColorOverrides ?? settings.activityColorOverrides,
+      dimLeisureBlocks: partial.dimLeisureBlocks ?? settings.dimLeisureBlocks,
+    })
+  }
+
   // Save an inline edit to a fact. A hand edit becomes a correction (the backend
   // flips its origin to 'user') that a rebuild never overwrites.
   async function reloadMemoryAudit() {
@@ -2525,6 +2602,36 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                     void persist({ theme: value })
                     window.dispatchEvent(new CustomEvent('daylens:theme-changed', { detail: value }))
                   }}
+                />
+              }
+            />
+            <SettingsRow
+              align="start"
+              title="Activity colors"
+              description="One color per kind of work, used everywhere blocks are drawn — the day grid, week grid, and month dots."
+              control={
+                Object.keys(settings.activityColorOverrides ?? {}).length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => persistAppearance({ activityColorOverrides: {} })}
+                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
+                  >
+                    Reset colors
+                  </button>
+                ) : undefined
+              }
+            />
+            <ActivityColorRows
+              overrides={settings.activityColorOverrides ?? {}}
+              onChange={(next) => persistAppearance({ activityColorOverrides: next })}
+            />
+            <SettingsRow
+              title="Dim leisure blocks"
+              description="Fade entertainment and personal blocks on the calendar so work stands out. Turn off to render every block at full strength."
+              control={
+                <Toggle
+                  checked={settings.dimLeisureBlocks !== false}
+                  onChange={(value) => persistAppearance({ dimLeisureBlocks: value })}
                 />
               }
             />

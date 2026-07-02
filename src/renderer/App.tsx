@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
+import { applyAppearanceSettings } from '@shared/activityColors'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import UpdateBanner from './components/UpdateBanner'
@@ -287,6 +288,7 @@ export default function App() {
     ipc.settings.get().then((s) => {
       if (!active) return
       applyTheme(s.theme)
+      applyAppearanceSettings(s)
       setSettings(s)
     }).catch((err) => {
       if (!active) return
