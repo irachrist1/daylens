@@ -492,3 +492,67 @@ tracker missed but history saw. The UI now renders sites (and page/file artifact
 nested under the app they happened in — modal and right panel — so nothing reads as
 additive; `WorkContextAppSummary` carries `canonicalAppId` and `WebsiteSummary` already
 carried `browserBundleId` for the owner match.
+
+# 2026-07-03 — the timeline-vs-spec audit: five root causes, none where the symptom showed
+
+Two blind investigations (Opus and GPT-5.5, no access to each other's work) traced the
+founder's four symptoms end to end against the code and the live DB. Every root cause
+sat at least one layer below where the symptom appeared. All five fixed, each with a
+regression test in `tests/timelineDivergences.test.ts` / `tests/trackingIdleFsm.test.ts`.
+
+## Post-away sittings vanished: a two-clock mismatch, then a silent discard
+
+A session born on a return-from-away poll was stamped `startTime = Date.now()` at the
+detecting poll, but the later away-flush ended it at `provisionalIdleStart` — the true
+last-input time from `powerMonitor.getSystemIdleTime()`, up to one poll *earlier*. For a
+single-touch return, end < start, and `flushCurrent`'s non-positive-duration guard
+discarded the whole session with no row and no log. Meanwhile `focus_events` and
+`website_visits` (not gated by that machinery) recorded the sitting fine — which is what
+made the DB look like "capture works, blocks don't." Fix: return-born sessions are
+stamped at true input time (clamped to the previous flush end), and the flush end clamps
+to ≥ start, so short sessions now die only at the explicit 10s floor, logged.
+**Founder-pending policy**: a lone wake-touch (~1 input + 120s idle grace) still writes
+no row — making those visible means crediting idle-grace on away-escalation.
+
+## The resumed sitting hid for 15 minutes: the analyze-time floor applied to the live view
+
+`buildProvisionalLiveBlocks` dropped any coarse sitting under the 15-minute floor once
+the day had one real segment — including the sitting being lived in right now. The floor
+is a §3.4 finalize rule; §4 says a provisional block starts when activity resumes.
+Reconciliation that keeps both founder decisions: the day's **most recent** sitting is
+exempt (appears immediately), earlier finished sittings still need the floor (a 24s
+1:56am blip stays dead).
+
+## Sites under the wrong browser: an accumulator keyed by domain alone
+
+`getWebsiteSummariesForRange` collapsed a domain visited in two browsers into one row
+owned by whichever visit was read back first (no ORDER BY → rowid order). Attribution of
+raw rows was always correct; only the final grouping erased the second browser. Now
+keyed `(domain, browser)` with a deterministic ORDER BY.
+
+## Safari history was 100% dark: TCC, not code
+
+`pollWebKit` copies `~/Library/Safari/History.db`, which needs Full Disk Access; FDA was
+never requested or checked (only Accessibility + Screen Recording), so `copyFileSync`
+threw EPERM into a silent catch — zero `webkit_history` rows ever. The status is now
+tracked from the copy outcome and surfaced in Settings' capture health with the
+Privacy_AllFiles deep link; the 60s poll retries, so granting FDA heals without restart.
+
+## Page minutes were raw history sums
+
+Domain summaries reconciled against foreground time, but page-level paths
+(`getTopPagesForDomains`, `buildPageCandidates`) summed raw `website_visits.duration_sec`
+— and Chromium history accrues in the background (56 Dia visits that day before Dia was
+ever foreground). Both levels now aggregate the identical per-visit credits from one
+`reconcileWebsiteVisits` engine, so page totals equal domain totals by construction.
+Still raw: the App Detail browser-profile view (`getDomainSummariesForBrowser` /
+`getPageSummariesForBrowser`) — known, small, tracked in `docs/roadmap.md`.
+
+## Also: gap reasons ranked by coverage, and the dead capture layer is gone
+
+`classifyGapRange` let coverage share outrank the spec's asleep > locked > paused >
+passive > idle priority (a 60%-idle/40%-asleep gap read "Idle"). And the four
+never-written tables from the v14 attribution-first schema (`raw_window_sessions`,
+`browser_context_events`, `idle_periods`, `file_activity_events`) are dropped (migration
+v42) along with their always-empty readers; `attribution.ts`'s hardcoded browser regex
+(missed Dia/Comet/Zen) now uses the app catalog + OS registry like the timeline engine.
