@@ -1243,7 +1243,7 @@ const JOB_FEATURE_GROUPS: Record<string, string> = {
   week_review: 'Week review',
   app_narrative: 'App insights',
   chat_answer: 'AI chat',
-  chat_followup_suggestions: 'AI chat',
+  chat_followup_suggestions: 'Suggestions',
   search_intent: 'Search',
   report_generation: 'Reports',
 }

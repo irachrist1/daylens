@@ -198,6 +198,7 @@ const api = {
   },
   ai: {
     sendMessage: (payload: AIChatSendRequest): Promise<AIChatTurnResult> => ipcRenderer.invoke(IPC.AI.SEND_MESSAGE, payload),
+    getStarterSuggestions: (): Promise<string[]> => ipcRenderer.invoke(IPC.AI.GET_STARTER_SUGGESTIONS),
     onStream: (callback: (event: AIChatStreamEvent) => void): (() => void) => {
       const handler = (_e: Electron.IpcRendererEvent, event: AIChatStreamEvent) => callback(event)
       ipcRenderer.on(IPC.AI.STREAM_EVENT, handler)

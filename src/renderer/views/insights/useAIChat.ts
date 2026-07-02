@@ -74,6 +74,7 @@ export function useAIChat() {
   const [messages, setMessages] = useState<ThreadMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [threadLoading, setThreadLoading] = useState(false)
+  const [threadsHydrated, setThreadsHydrated] = useState(false)
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
@@ -273,6 +274,7 @@ export function useAIChat() {
       // leaves the guard down and the next mount hydrates for real.
       if (cancelled) return
       threadsHydratedRef.current = true
+      setThreadsHydrated(true)
       setThreads(rows)
       if (hasDeepLink) return // the deep-link effect owns which thread loads
       // Restore the selection from earlier this session so a tab switch doesn't
@@ -775,6 +777,7 @@ export function useAIChat() {
     messages,
     loading,
     threadLoading,
+    threadsHydrated,
     threads,
     activeThreadId,
     activeThreadLabel,

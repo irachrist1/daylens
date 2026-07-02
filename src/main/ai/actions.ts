@@ -312,6 +312,20 @@ export function buildMemoryProposal(
   }
 }
 
+// Action previews decorate an answer; they never replace it. Keeping this merge
+// explicit prevents a confirmable side effect (especially memory) from turning
+// into an early-return response that stops the conversation.
+export function attachActionWidgets<T extends { actionWidgets?: AIActionWidget[] }>(
+  answer: T,
+  widgets: AIActionWidget[],
+): T {
+  if (widgets.length === 0) return answer
+  return {
+    ...answer,
+    actionWidgets: [...(answer.actionWidgets ?? []), ...widgets],
+  }
+}
+
 // ── Commit (runs the real manual-edit pipeline, only on confirm) ────────────
 
 function commitRename(db: Database.Database, action: AIRenameBlockProposal): AIActionCommitResult {

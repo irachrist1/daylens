@@ -10,6 +10,7 @@ import {
   prepareDailyReport,
   generateWorkBlockInsight,
   getAIHistory,
+  getStarterSuggestions,
   getThreadHistory,
   getWeekReview,
   sendMessage,
@@ -61,6 +62,10 @@ export function registerAIHandlers(): void {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
     })
+  })
+
+  ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<string[]> => {
+    return getStarterSuggestions()
   })
 
   // DEV-109: commit an AI action proposal — the user confirmed the preview

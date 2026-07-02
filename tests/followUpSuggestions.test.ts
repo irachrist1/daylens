@@ -3,11 +3,13 @@ import assert from 'node:assert/strict'
 import {
   buildDeterministicFollowUpCandidates,
   buildFollowUpSuggestionPrompts,
+  buildStarterSuggestionPrompts,
   classifyQuestionShape,
   extractAnswerEntities,
   filterFollowUpCandidatesWithReport,
   isIdentityAnswer,
   parseFollowUpSuggestions,
+  parseStarterSuggestions,
 } from '../src/main/lib/followUpSuggestions.ts'
 import type { FollowUpSuggestion } from '../src/shared/types.ts'
 
@@ -207,4 +209,28 @@ test('question shape classifier covers the five taxonomy families', () => {
   assert.equal(classifyQuestionShape('Which projects are losing momentum?'), 'cross_cutting')
   assert.equal(classifyQuestionShape('Was Tuesday a deep day?'), 'reflective')
   assert.equal(classifyQuestionShape('Draft a short status update.'), 'generative')
+})
+
+test('starter suggestions are anchored in actual past queries', () => {
+  const pastQueries = [
+    'How much time did I spend on the Acme proposal?',
+    'Summarize my client work for Acme this week.',
+  ]
+  const result = parseStarterSuggestions(JSON.stringify({
+    suggestions: [
+      'Which days did Acme take most time?',
+      'Compare the Acme proposal with last week?',
+      'What should I cook tonight?',
+    ],
+  }), pastQueries)
+  assert.deepEqual(result, [
+    'Which days did Acme take most time?',
+    'Compare the Acme proposal with last week?',
+  ])
+})
+
+test('starter suggestion prompt requires past-query grounding', () => {
+  const { systemPrompt, userPrompt } = buildStarterSuggestionPrompts(['Show my Daylens work this week'])
+  assert.match(systemPrompt, /actual past queries/i)
+  assert.match(userPrompt, /Daylens work/)
 })

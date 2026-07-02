@@ -319,13 +319,20 @@ a[href], button.link-style {
   field-sizing: content;
 }
 
-/* FB11: the contenteditable composer. White-space pre-wrap so Shift+Enter
-   newlines render; placeholder shown only when truly empty. */
-.dl-composer:empty::before,
-.dl-composer[data-empty="true"]::before {
-  content: attr(data-placeholder);
+/* The placeholder is a sibling overlay, not a ::before child of the editable
+   surface. Chromium places the native caret after generated pseudo-content on
+   some macOS/Windows builds, which made the caret appear at the far right of
+   the placeholder while typed text still began on the left. */
+.dl-composer-placeholder {
+  position: absolute;
+  inset: 6px 0 auto 0;
+  font-size: 13.5px;
+  line-height: 22px;
   color: var(--color-text-tertiary);
   pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dl-composer:focus { outline: none; }
 

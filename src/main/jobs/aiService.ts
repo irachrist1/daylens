@@ -33,10 +33,12 @@ import { resolveFollowUp } from '../lib/followUpResolver'
 import {
   buildDeterministicFollowUpCandidates,
   buildFollowUpSuggestionPrompts,
+  buildStarterSuggestionPrompts,
   classifyQuestionShape,
   filterFollowUpCandidatesWithReport,
   isIdentityAnswer,
   parseFollowUpSuggestions,
+  parseStarterSuggestions,
 } from '../lib/followUpSuggestions'
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
@@ -65,9 +67,9 @@ import {
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { deriveTitleFromMessage, isWeakThreadTitle, type ThreadTitleContext } from '../lib/threadTitles'
 import { getDb } from '../services/database'
-import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId, proposeUnstoredMemoryFact } from '../services/workMemoryProfile'
+import { workMemoryPromptBlock, chatMemoryPromptBlock, getWorkMemoryProfile, getClientMemory, findClientScopeForWrite, clientScope as clientScopeId } from '../services/workMemoryProfile'
 import { looksLikeMemoryInstruction, extractMemoryOps } from '../ai/memoryWrite'
-import { buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal } from '../ai/actions'
+import { attachActionWidgets, buildMemoryProposal, buildMergeBlocksProposal, buildRenameBlockProposal } from '../ai/actions'
 import {
   createArtifact,
   createThread,
@@ -129,7 +131,7 @@ import { friendlyProviderError } from '../services/providerErrors'
 import { buildAnthropicPromptInput } from '../services/anthropicPromptCaching'
 import { planQuestion } from '../ai/planner'
 import { phraseAnswer } from '../ai/phrase'
-import { runResolverQueries, type ResolverQuery } from '../ai/resolvers'
+import { runResolverQueries } from '../ai/resolvers'
 import {
   backgroundRelabelDispositionForBlock,
   fallbackNarrativeForBlock,
@@ -388,25 +390,6 @@ function buildFocusReviewNote(session: FocusSession, distractionCount: number): 
   }
 
   return `${parts.join(' · ')}.\nWhat went well, what interrupted you, and what should the next session keep or change?`
-}
-
-// One memory proposal per conversation context per session — Daylens offers a
-// noticed pattern once, then stops nudging (memory.md §2.1, no nagging).
-const proposedMemoryContexts = new Set<string>()
-
-// After a day/range answer, offer to remember ONE thing Daylens noticed (a
-// drafted fact the user hasn't stored or forgotten) — proposing, not silently
-// absorbing. Returns the line to append, or null. Marks the context so it only
-// offers once.
-function maybeMemoryProposalLine(queries: ResolverQuery[], contextKey: string): string | null {
-  if (proposedMemoryContexts.has(contextKey)) return null
-  const aboutTheDay = queries.some((q) => q.resolver === 'getDay' || q.resolver === 'getRange')
-  if (!aboutTheDay) return null
-  const proposal = proposeUnstoredMemoryFact(getDb())
-  if (!proposal) return null
-  proposedMemoryContexts.add(contextKey)
-  const noticed = proposal.text.charAt(0).toLowerCase() + proposal.text.slice(1)
-  return `By the way — ${noticed} Want me to remember that? Just say "remember that".`
 }
 
 // The conversation write path for memory (memory.md §2.1, ai-actions.md). When
@@ -2102,6 +2085,64 @@ async function generateSuggestedFollowUps(
   } catch (error) {
     if (process.env.NODE_ENV === 'development') {
       console.warn('[ai] follow-up generation failed; showing none:', error instanceof Error ? error.message : error)
+    }
+    return []
+  }
+}
+
+const starterSuggestionCache = new Map<string, string[]>()
+
+// Empty-chat suggestions come from the user's own query history. They use the
+// same metered economy job as follow-up chips, so input/output tokens and cost
+// land in ai_usage_events and appear under "Suggestions" in Settings.
+export async function getStarterSuggestions(): Promise<string[]> {
+  const db = getDb()
+  const rows = db.prepare(`
+    SELECT content
+    FROM ai_messages
+    WHERE role = 'user'
+    ORDER BY created_at DESC, id DESC
+    LIMIT 60
+  `).all() as Array<{ content: string }>
+
+  const seen = new Set<string>()
+  const pastQueries = rows
+    .map((row) => row.content.trim().replace(/\s+/g, ' '))
+    .filter((query) => {
+      if (query.length < 8 || query.length > 300) return false
+      if (/^(?:yes|no|ok|okay|thanks?|continue|retry)[.!]?$/i.test(query)) return false
+      const key = query.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 20)
+
+  if (pastQueries.length < 2) return []
+  const signature = hashText(pastQueries.join('\n'))
+  const cached = starterSuggestionCache.get(signature)
+  if (cached) return cached
+
+  const { systemPrompt, userPrompt } = buildStarterSuggestionPrompts(pastQueries)
+  try {
+    const { text } = await executeTextAIJob(
+      {
+        jobType: 'chat_followup_suggestions',
+        screen: 'ai_chat',
+        triggerSource: 'user',
+        systemPrompt,
+        userMessage: userPrompt,
+        prior: [],
+      },
+      sendWithProvider,
+    )
+    const suggestions = parseStarterSuggestions(text, pastQueries)
+    starterSuggestionCache.clear()
+    starterSuggestionCache.set(signature, suggestions)
+    return suggestions
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[ai] starter suggestion generation failed; showing none:', error instanceof Error ? error.message : error)
     }
     return []
   }
@@ -4724,20 +4765,25 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     return persistChatTurn(db, conversationId, userMessage, focusIntent, threadId)
   }
 
-  // "remember that…", "forget that I use Notion", "actually I work in…" — write
-  // it to memory and confirm, before the read-only answer path (memory.md §2.1).
+  // Memory is an action attached to the turn, never the answer itself. The old
+  // early return persisted the preview and stopped before answering the user.
+  // Build the preview now, then carry it through the normal answer path so the
+  // response always completes whether the user confirms, cancels, or ignores it.
   const memoryEnvelope = await maybeHandleMemoryInstruction(effectiveUserMessage, sendWithProvider, prior)
-  if (memoryEnvelope) {
-    await stream.streamText(memoryEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, memoryEnvelope, threadId)
+  const withMemoryProposal = (envelope: AnswerEnvelope): AnswerEnvelope => {
+    const proposals = memoryEnvelope?.actionWidgets ?? []
+    return attachActionWidgets(envelope, proposals)
   }
+  const persistTurn = (envelope: AnswerEnvelope) => (
+    persistChatTurn(db, conversationId, userMessage, withMemoryProposal(envelope), threadId)
+  )
 
   // "rename my afternoon block to networking" — preview the rename in a block
   // card; it commits only on confirm (ai-actions.md §5).
   const renameEnvelope = maybeHandleRenameInstruction(effectiveUserMessage, null)
   if (renameEnvelope) {
     await stream.streamText(renameEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, renameEnvelope, threadId)
+    return persistTurn(renameEnvelope)
   }
 
   // "merge my last two blocks" — preview the merge in a card; commits only on
@@ -4745,7 +4791,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   const mergeEnvelope = maybeHandleMergeInstruction(effectiveUserMessage, null)
   if (mergeEnvelope) {
     await stream.streamText(mergeEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, mergeEnvelope, threadId)
+    return persistTurn(mergeEnvelope)
   }
 
   // "in word please?" / "pdf version" / "as markdown" — re-export the answer we
@@ -4758,7 +4804,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   })
   if (reExportEnvelope) {
     await stream.streamText(reExportEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, reExportEnvelope, threadId)
+    return persistTurn(reExportEnvelope)
   }
 
   // FB7: an explicit "Turn into…" transform rewrites the SPECIFIC prior answer.
@@ -4774,7 +4820,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         restoredState,
         previousContext,
       })
-      return persistChatTurn(db, conversationId, userMessage, transformEnvelope, threadId)
+      return persistTurn(transformEnvelope)
     }
     // No prior answer to transform — fall through to normal handling.
   }
@@ -4789,7 +4835,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   })
   if (directReportEnvelope) {
     await stream.streamText(directReportEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, directReportEnvelope, threadId)
+    return persistTurn(directReportEnvelope)
   }
 
   const routed = shouldUseRouter(effectiveUserMessage)
@@ -4805,7 +4851,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   })
   if (reportEnvelope) {
     await stream.streamText(reportEnvelope.assistantText)
-    return persistChatTurn(db, conversationId, userMessage, reportEnvelope, threadId)
+    return persistTurn(reportEnvelope)
   }
 
   if (routed) {
@@ -4858,14 +4904,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         inferFollowUpAffordances(answerKind),
       )
       const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, assistantText, answerKind, conversationState)
-      return persistChatTurn(db, conversationId, userMessage, {
+      return persistTurn({
         assistantText,
         answerKind,
         sourceKind: 'weekly_brief',
         resolvedTemporalContext,
         conversationState,
         suggestedFollowUps,
-      }, threadId)
+      })
     }
 
     if (process.env.NODE_ENV === 'development') {
@@ -4901,14 +4947,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     const proseAnswer = await routerProsePass(effectiveUserMessage, routed.answer)
     await stream.streamText(proseAnswer)
     const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, proseAnswer, answerKind, conversationState)
-    return persistChatTurn(db, conversationId, userMessage, {
+    return persistTurn({
       assistantText: proseAnswer,
       answerKind,
       sourceKind: 'deterministic',
       resolvedTemporalContext,
       conversationState,
       suggestedFollowUps,
-    }, threadId)
+    })
   }
 
   if (process.env.NODE_ENV === 'development') {
@@ -4953,7 +4999,10 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       return ''
     }
   })()
-  const extraSystem = `${threadInstructionBlock}${memoryContextBlock}` || undefined
+  const pendingMemoryInstruction = memoryEnvelope
+    ? '\n\nA memory preview is shown separately for this turn. Respond naturally to the user, but do not claim the memory has already been saved.'
+    : ''
+  const extraSystem = `${threadInstructionBlock}${memoryContextBlock}${pendingMemoryInstruction}` || undefined
 
   // ── Router miss → plan → resolve → phrase (ADR 0002). The model may select
   //    and parameterize resolvers (the planner) and phrase their output, but it
@@ -5001,14 +5050,6 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
         extraSystem,
         onDelta: (delta) => stream.push(delta),
       })).trim()
-      // Offer to remember one noticed pattern (memory.md §2.1) — once per
-      // context, after a day/range answer. "remember that" then routes through
-      // the memory write path above, resolving "that" from this turn.
-      const proposalLine = maybeMemoryProposalLine(plan.queries, contextKey)
-      if (proposalLine && assistantText) {
-        await stream.streamText(`\n\n${proposalLine}`)
-        assistantText = `${assistantText}\n\n${proposalLine}`
-      }
     }
   }
 
@@ -5041,14 +5082,14 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
     },
   )
   const suggestedFollowUps = await generateSuggestedFollowUps(userMessage, assistantText, answerKind, conversationState)
-  return persistChatTurn(db, conversationId, userMessage, {
+  return persistTurn({
     assistantText,
     answerKind,
     sourceKind: 'freeform',
     resolvedTemporalContext,
     conversationState,
     suggestedFollowUps,
-  }, threadId)
+  })
 }
 
 export async function prepareDailyReport(dateStr = currentLocalDateString()): Promise<AIDailyReportPreparationResult> {

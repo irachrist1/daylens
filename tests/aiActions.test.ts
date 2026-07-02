@@ -6,9 +6,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction } from '../src/main/ai/actions.ts'
+import { attachActionWidgets, buildMemoryProposal, commitAction, undoAction, looksLikeMergeBlocksInstruction } from '../src/main/ai/actions.ts'
 import { looksLikeRenameBlockInstruction } from '../src/main/ai/actions.ts'
 import { getWorkMemoryProfile } from '../src/main/services/workMemoryProfile.ts'
+import { looksLikeMemoryInstruction } from '../src/main/ai/memoryWrite.ts'
 
 test('buildMemoryProposal maps an add op to a non-destructive save preview', () => {
   const proposal = buildMemoryProposal([{ action: 'add', text: 'Acme is your biggest client.' }], [])
@@ -49,6 +50,29 @@ test('buildMemoryProposal marks a delete as destructive and shows the affected f
 
 test('buildMemoryProposal returns null when there is nothing durable to change', () => {
   assert.equal(buildMemoryProposal([], []), null)
+})
+
+test('a memory preview decorates the completed answer instead of replacing it', () => {
+  const proposal = buildMemoryProposal([{ action: 'add', text: 'Acme is your biggest client.' }], [])
+  assert.ok(proposal)
+  const answer = attachActionWidgets({ assistantText: 'Acme took most of your client time this week.' }, [proposal])
+  assert.equal(answer.assistantText, 'Acme took most of your client time this week.')
+  assert.deepEqual(answer.actionWidgets, [proposal])
+})
+
+test('memory proposals only trigger on high-confidence durable statements', () => {
+  assert.equal(looksLikeMemoryInstruction('Remember that Acme is my biggest client.'), true)
+  assert.equal(looksLikeMemoryInstruction('My name is Tonny.'), true)
+  assert.equal(looksLikeMemoryInstruction('I prefer short weekly summaries.'), true)
+  assert.equal(looksLikeMemoryInstruction('I work in Digital Operations at Andersen.'), true)
+  assert.equal(looksLikeMemoryInstruction('Actually, I work in operations, not engineering.'), true)
+})
+
+test('memory proposals ignore questions, status updates, and conversational requests', () => {
+  assert.equal(looksLikeMemoryInstruction('Help me remember what I worked on without taking notes.'), false)
+  assert.equal(looksLikeMemoryInstruction('What did I work on today?'), false)
+  assert.equal(looksLikeMemoryInstruction('I am working on the proposal today.'), false)
+  assert.equal(looksLikeMemoryInstruction('The weekly report is ready for review.'), false)
 })
 
 test('rename detector flags "rename … to …" shapes, not unrelated questions', () => {

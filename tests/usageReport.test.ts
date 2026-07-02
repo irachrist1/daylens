@@ -22,6 +22,30 @@ test('lookupModelPricing matches versioned model ids', () => {
   assert.equal(rates.outputPerMillion, 5)
 })
 
+test('lookupModelPricing covers every economy suggestions model', () => {
+  assert.deepEqual(lookupModelPricing('claude-haiku-4-5-20251001'), {
+    inputPerMillion: 1,
+    outputPerMillion: 5,
+    cacheReadPerMillion: 0.1,
+    cacheWritePerMillion: 1.25,
+  })
+  assert.deepEqual(lookupModelPricing('gpt-5.4-nano'), {
+    inputPerMillion: 0.2,
+    outputPerMillion: 1.25,
+    cacheReadPerMillion: 0.02,
+  })
+  assert.deepEqual(lookupModelPricing('openai/gpt-5.4-mini'), {
+    inputPerMillion: 0.75,
+    outputPerMillion: 4.5,
+    cacheReadPerMillion: 0.075,
+  })
+  assert.deepEqual(lookupModelPricing('gemini-3.1-flash-lite'), {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.5,
+    cacheReadPerMillion: 0.025,
+  })
+})
+
 test('aggregateUsageFromEvents estimates spend for BYOK rows with null cost_usd', () => {
   const from = Date.parse('2026-06-24T00:00:00Z')
   const to = from + 86_400_000

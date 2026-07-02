@@ -284,40 +284,48 @@ function AIComposeImpl(
         background: 'var(--color-surface)',
         padding: '8px 8px 8px 16px',
         boxShadow: 'var(--color-shadow-floating)',
-        opacity: loading ? 0.75 : 1,
       }}>
-        <div
-          ref={editorRef}
-          className="dl-composer"
-          contentEditable={!loading}
-          suppressContentEditableWarning
-          role="textbox"
-          aria-multiline="true"
-          aria-label="Ask Daylens about your work history"
-          data-placeholder={placeholder ?? 'Ask anything — / for commands, @ to mention…'}
-          data-empty="true"
-          onInput={syncState}
-          onKeyUp={syncState}
-          onClick={syncState}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onBlur={() => { window.setTimeout(() => setMenu(null), 120) }}
-          style={{
-            flex: 1,
-            minHeight: 24,
-            maxHeight: 184,
-            overflowY: 'auto',
-            border: 'none',
-            background: 'transparent',
-            outline: 'none',
-            color: 'var(--color-text-primary)',
-            fontSize: 13.5,
-            lineHeight: '22px',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            padding: '6px 0',
-          }}
-        />
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          {empty && (
+            <span
+              aria-hidden="true"
+              className="dl-composer-placeholder"
+            >
+              {placeholder ?? 'Ask anything — / for commands, @ to mention…'}
+            </span>
+          )}
+          <div
+            ref={editorRef}
+            className="dl-composer"
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Ask Daylens about your work history"
+            data-empty="true"
+            onInput={syncState}
+            onKeyUp={syncState}
+            onClick={syncState}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onBlur={() => { window.setTimeout(() => setMenu(null), 120) }}
+            style={{
+              minHeight: 24,
+              maxHeight: 184,
+              overflowY: 'auto',
+              border: 'none',
+              background: 'transparent',
+              outline: 'none',
+              color: 'var(--color-text-primary)',
+              caretColor: 'var(--color-text-primary)',
+              fontSize: 13.5,
+              lineHeight: '22px',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              padding: '6px 0',
+            }}
+          />
+        </div>
         <button
           onClick={send}
           disabled={loading || empty}

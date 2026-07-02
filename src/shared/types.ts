@@ -1758,6 +1758,7 @@ export const IPC = {
   AI: {
     SEND_MESSAGE: 'ai:send-message',
     STREAM_EVENT: 'ai:stream-event',
+    GET_STARTER_SUGGESTIONS: 'ai:get-starter-suggestions',
     COMMIT_ACTION: 'ai:commit-action',
     UNDO_ACTION: 'ai:undo-action',
     SET_MESSAGE_FEEDBACK: 'ai:set-message-feedback',

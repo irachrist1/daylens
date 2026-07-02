@@ -278,3 +278,46 @@ work. This affects future capture only — a class already truncated in the DB c
   propagate the naming/voice fixes to week/month/year.
 - **Span vs active time.** A block's drawn span still disagrees with its active time when an
   untracked passive stretch sits inside it; the passive-capture fix narrows this going forward.
+
+---
+
+# 2026-07-02 — chat memory, composer, and suggestions
+
+**Status:** Fixed + regression-tested · **Source:** live `daylens.sqlite`, screenshots, and code read
+
+## Memory was replacing the answer
+
+`sendMessageInner` treated a memory proposal as a complete answer. Once
+`maybeHandleMemoryInstruction` returned a preview card, the function persisted that card and
+returned before the normal plan → resolve → phrase path ran. Confirming the card only committed
+the database write, so there was no answer left to deliver. Memory proposals now decorate the
+normal completed answer as action widgets. The write remains confirm-first, but it cannot
+terminate the response.
+
+The repeated banner had a second cause: every day/range answer called
+`proposeUnstoredMemoryFact`, so ordinary questions could append an evidence-derived “remember
+that?” nudge. That path is gone. A preview now requires an explicit memory command or a narrow,
+high-confidence durable statement such as a name, role, recurring fact, correction, or stated
+preference. “Help me remember what I worked on” is treated as a product request, not a fact.
+
+## The composer disabled its own editing surface
+
+`AICompose` set `contentEditable={!loading}` and dimmed the whole input while a turn was in
+flight. The editor is now always content-editable; only sending another turn waits for the
+current one. The draft stays DOM-owned, so streaming updates do not disturb typing or cursor
+selection.
+
+The misplaced caret came from rendering placeholder text with `.dl-composer::before` inside the
+contenteditable element. Chromium can position its native caret after generated pseudo-content,
+even though typed text starts at the left edge. The placeholder is now a pointer-free sibling
+overlay, leaving the editable element genuinely empty and the caret at the real insertion point
+on macOS and Windows.
+
+## Empty-chat suggestions were static
+
+The empty state used four hardcoded prompts. Follow-up suggestions already used a metered model
+call, and live `ai_usage_events` rows proved their input/output tokens were recorded, but Settings
+grouped `chat_followup_suggestions` into “AI chat.” Empty-chat suggestions now come from recent
+real user queries, pass an anchor check against those queries, and use the cheapest model for the
+selected provider (Claude Haiku 4.5 for Anthropic). Both starter and follow-up calls remain fully
+metered and appear as **Suggestions** in Settings usage.

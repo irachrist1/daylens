@@ -381,3 +381,59 @@ export function parseFollowUpSuggestions(
 
   return dedupeSuggestions(fallback).slice(0, 4)
 }
+
+const STARTER_STOP_WORDS = new Set([
+  'about', 'after', 'again', 'anything', 'could', 'from', 'have', 'help', 'into',
+  'last', 'more', 'much', 'please', 'show', 'summarize', 'that', 'their', 'there',
+  'these', 'this', 'today', 'what', 'when', 'where', 'which', 'with', 'worked',
+  'would', 'your',
+])
+
+function queryAnchors(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().match(/[a-z0-9][a-z0-9.+_-]{3,}/g)
+      ?.filter((token) => !STARTER_STOP_WORDS.has(token)) ?? [],
+  )
+}
+
+export function buildStarterSuggestionPrompts(pastQueries: string[]): { systemPrompt: string; userPrompt: string } {
+  return {
+    systemPrompt: `You generate starter question chips for Daylens, a local work-history assistant.
+
+Return only valid JSON: { "suggestions": ["...", "...", "..."] }
+
+Rules:
+1. Return 3 or 4 concise questions, each at most 12 words.
+2. Base every suggestion on the user's actual past queries below. Reuse their recurring projects, clients, apps, timeframes, or question styles.
+3. Suggest a useful next question, not a verbatim repeat.
+4. Do not invent a project, client, app, person, or fact that is absent from the past queries.
+5. Avoid generic prompts such as "What did I work on today?", "Tell me more", or "What else happened?" unless that exact theme recurs in the user's queries.
+6. Write the chips as questions the user would ask Daylens. No explanation or markdown.`,
+    userPrompt: JSON.stringify({ pastQueries: pastQueries.slice(0, 20) }, null, 2),
+  }
+}
+
+export function parseStarterSuggestions(raw: string, pastQueries: string[]): string[] {
+  const pastAnchors = queryAnchors(pastQueries.join(' '))
+  if (pastAnchors.size === 0) return []
+  const normalized = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
+  try {
+    const parsed = JSON.parse(normalized) as { suggestions?: unknown }
+    if (!Array.isArray(parsed.suggestions)) return []
+    const seen = new Set<string>()
+    const suggestions: string[] = []
+    for (const value of parsed.suggestions) {
+      if (typeof value !== 'string') continue
+      const text = value.trim().replace(/\s+/g, ' ').slice(0, 120)
+      const key = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+      if (!text || seen.has(key) || text.split(/\s+/).length > 12) continue
+      const anchored = [...queryAnchors(text)].some((token) => pastAnchors.has(token))
+      if (!anchored) continue
+      seen.add(key)
+      suggestions.push(text)
+    }
+    return suggestions.slice(0, 4)
+  } catch {
+    return []
+  }
+}

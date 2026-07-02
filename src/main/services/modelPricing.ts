@@ -8,6 +8,18 @@ export interface ModelPricingRates {
 
 const PRICING_TABLE: Array<{ pattern: RegExp; rates: ModelPricingRates }> = [
   {
+    pattern: /gpt-5\.4-nano/i,
+    rates: { inputPerMillion: 0.2, outputPerMillion: 1.25, cacheReadPerMillion: 0.02 },
+  },
+  {
+    pattern: /gpt-5\.4-mini/i,
+    rates: { inputPerMillion: 0.75, outputPerMillion: 4.5, cacheReadPerMillion: 0.075 },
+  },
+  {
+    pattern: /gemini-3\.1-flash-lite/i,
+    rates: { inputPerMillion: 0.25, outputPerMillion: 1.5, cacheReadPerMillion: 0.025 },
+  },
+  {
     pattern: /haiku/i,
     rates: { inputPerMillion: 1, outputPerMillion: 5, cacheReadPerMillion: 0.1, cacheWritePerMillion: 1.25 },
   },

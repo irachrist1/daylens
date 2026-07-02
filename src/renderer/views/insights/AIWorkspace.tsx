@@ -23,20 +23,6 @@ import { ANSWER_TRANSFORMS, type ThreadMessage } from './types'
 
 const SIDEBAR_COLLAPSED_KEY = 'daylens.ai.sidebarCollapsed'
 
-const STARTER_PROMPTS = [
-  'What did I work on today?',
-  'Summarize my last 7 days by project.',
-  'When was I most focused this week?',
-  "Export today's work sessions as CSV.",
-]
-
-// Shown when there is no tracked history yet — these don't depend on data.
-const EMPTY_DB_PROMPTS = [
-  'Introduce me to how Daylens works',
-  'What can I ask you once my day fills in?',
-  'How does Daylens keep my data private?',
-]
-
 // Map a chat provider to the settings key holding its chosen model, so picking a
 // model for a brand-new (thread-less) chat updates the right global default.
 const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel' | 'googleModel' | 'openrouterModel'> = {
@@ -54,6 +40,7 @@ export default function AIWorkspace() {
     messages,
     loading,
     threadLoading,
+    threadsHydrated,
     threads,
     activeThreadId,
     activeThreadLabel,
@@ -141,17 +128,22 @@ export default function AIWorkspace() {
     return () => { cancelled = true }
   }, [])
 
-  // Starter chips: lead with the intent captured during onboarding (so day-one
-  // users get a question tailored to why they're here), then either the normal
-  // history prompts or, for an empty database, prompts that explain Daylens.
-  const starterPrompts = useMemo(() => {
-    const intent = settings?.userIntent?.trim()
-    const intentPrompt = intent
-      ? `Help me ${intent.replace(/\.+$/, '').replace(/^i want to\s+/i, '').toLowerCase()}`
-      : null
-    const base = hasHistory === false ? EMPTY_DB_PROMPTS : STARTER_PROMPTS
-    return Array.from(new Set(intentPrompt ? [intentPrompt, ...base] : base)).slice(0, 4)
-  }, [settings?.userIntent, hasHistory])
+  const [starterPrompts, setStarterPrompts] = useState<string[]>([])
+  useEffect(() => {
+    const isSettledEmptyChat = threadsHydrated
+      && !threadLoading
+      && activeThreadId == null
+      && messages.length === 0
+    if (!hasApiKey || hasHistory !== true || !isSettledEmptyChat) {
+      setStarterPrompts([])
+      return
+    }
+    let cancelled = false
+    void ipc.ai.getStarterSuggestions()
+      .then((suggestions) => { if (!cancelled) setStarterPrompts(suggestions) })
+      .catch(() => { if (!cancelled) setStarterPrompts([]) })
+    return () => { cancelled = true }
+  }, [activeThreadId, hasApiKey, hasHistory, messages.length, threadLoading, threadsHydrated])
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })

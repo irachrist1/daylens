@@ -31,6 +31,15 @@ export interface CurrentFact {
 const MEMORY_VERB_RE = /\b(remember|memoris|memoriz|note that|keep in mind|don'?t forget|for the record|make a note)\b/i
 const FORGET_RE = /\b(forget|stop remembering|no longer|don'?t remember|erase that|delete that)\b/i
 const CORRECTION_RE = /^\s*(actually|correction|to correct|that'?s (?:wrong|not right|incorrect)|no,? )/i
+const DURABLE_STATEMENT_RE = [
+  /\bmy name is\s+[^?.!,]{1,60}/i,
+  /\b(?:call|refer to) me as\s+[^?.!,]{1,60}/i,
+  /\bi (?:strongly )?prefer\b/i,
+  /\bi work (?:at|for|in|as|with)\b/i,
+  /\bi(?:'m| am) (?:a|an|the)\s+(?:founder|designer|engineer|developer|writer|consultant|student|researcher|manager|director)\b/i,
+  /\b(?:always|usually|normally|every (?:day|week|month))\b[\s\S]{0,100}\b(?:i|my)\b/i,
+  /\b[^?.!,]{1,80}\bis my (?:client|project|manager|company|team|preferred|preference)\b/i,
+]
 
 // Tight detector so we only spend a model call when the user is plausibly
 // steering memory. A false positive is still safe — the extractor returns no
@@ -39,12 +48,21 @@ const CORRECTION_RE = /^\s*(actually|correction|to correct|that'?s (?:wrong|not 
 export function looksLikeMemoryInstruction(message: string): boolean {
   const m = message.trim()
   if (!m || m.length > 500) return false
+  if (m.includes('?')) return false
   // Recall questions ("do you remember when…", "what do you remember") ask the
   // assistant to recall, not to write memory.
   if (/^(?:do you |you )?remember (?:when|that time|how|what|the time|if|whether)\b/i.test(m)) return false
   if (/\bwhat do you remember\b/i.test(m)) return false
+  // "Help me remember what I worked on" describes a product need, not a fact
+  // to persist. This was the main source of the banner appearing on broad,
+  // conversational prompts.
+  if (/\bremember\s+(?:what|where|when|how|who|which)\b/i.test(m)) return false
   if (MEMORY_VERB_RE.test(m) || FORGET_RE.test(m)) return true
   if (CORRECTION_RE.test(m) && /\b(i|i'?m|i'?ve|my|me)\b/i.test(m)) return true
+  // Implicit proposals are deliberately conservative: only an unmistakably
+  // durable name, role, work fact, recurring habit, or stated preference gets
+  // a preview. Ordinary status updates ("I'm working on X today") do not.
+  if (DURABLE_STATEMENT_RE.some((pattern) => pattern.test(m))) return true
   return false
 }
 
@@ -64,12 +82,13 @@ function buildExtractorPrompt(currentFacts: CurrentFact[]): string {
     '  {"action":"noop"}',
     '',
     'Rules:',
-    '- Only act on a clear instruction to remember, forget, or correct something DURABLE about the user — their role, work, tools, clients, projects, or preferences.',
+    '- Only act on something DURABLE about the user: an explicit remember/forget/correct instruction, or an unmistakable stated name, role, work fact, recurring habit, or preference.',
     '- "remember/note/keep in mind X" → add it (or update an existing fact if it revises one).',
     '- "forget/stop remembering/no longer/I don\'t … anymore" → delete the matching fact by its number.',
     '- "actually it\'s X, not Y" / "correction:" → update the matching fact\'s number (or add if nothing matches).',
     '- Write each fact as a short, plain sentence in SECOND person, present tense — e.g. "You work in Digital Operations at Andersen." — one fact per op.',
     '- Use the conversation so far to resolve "that"/"this" (e.g. right after you offered to remember something).',
+    '- A durable statement without the word "remember" may be proposed, but it is still only a preview until the user confirms it.',
     '- NEVER store a question, a one-off like "what did I do today", a transient state, or anything the user did not ask you to keep.',
     '- If nothing should change, output {"ops":[{"action":"noop"}]}.',
     '',

@@ -175,14 +175,25 @@ export function ActionWidget({ widget, state, onConfirm, onUndo, onDismiss }: Ac
 
   // Committed: collapse to a quiet confirmation strip with an undo when offered.
   if (status === 'committed') {
+    const confirmation = widget.kind === 'memory_write'
+      ? widget.ops.every((op) => op.op === 'delete')
+        ? 'Removed from memory'
+        : widget.ops.every((op) => op.op === 'update')
+          ? 'Memory updated'
+          : 'Saved to memory'
+      : (state?.summary ?? 'Done.')
     return (
-      <div style={{ ...CARD, gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 12, background: 'var(--color-surface)' }}>
+      <div
+        role="status"
+        aria-live="polite"
+        style={{ display: 'inline-flex', width: 'fit-content', maxWidth: '100%', alignItems: 'center', gap: 8, border: '1px solid var(--color-border-ghost)', borderRadius: 999, background: 'var(--color-surface)', padding: state?.undo ? '5px 6px 5px 9px' : '6px 10px' }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span style={{ color: 'var(--color-focus-green, #16a34a)', display: 'inline-flex' }}><IconCheck /></span>
-          <span style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>{state?.summary ?? 'Done.'}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>{confirmation}</span>
         </div>
         {state?.undo && (
-          <button type="button" onClick={() => onUndo(widget.proposalId, state.undo!)} style={{ ...GHOST_BTN, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <button type="button" onClick={() => onUndo(widget.proposalId, state.undo!)} style={{ ...GHOST_BTN, display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 999, padding: '5px 8px', fontSize: 11.5 }}>
             <IconUndo /> Undo
           </button>
         )}
