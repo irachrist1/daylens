@@ -418,3 +418,32 @@ late-night work to tomorrow; the no-straddle invariant only needs ownership ≥ 
 threshold. The "Idle or away" row is gone from Detours (idle isn't something you were "in"),
 and blocks whose span exceeds 6 unbroken hours are flagged in the main-process log instead
 of trusted silently. Learning-vs-detour classification deferred to DEV-119.
+
+---
+
+# 2026-07-02 — the block right-click menu "never appeared": a provisional guard, not an event bug
+
+**Status:** Fixed · **Source:** code read of `Timeline.tsx` `openBlockContextMenu`
+
+Right-clicking a block looked completely broken, but the `contextmenu` wiring was fine.
+`openBlockContextMenu` returned early for `block.provisional` — and on a day that hasn't
+been through Analyze (i.e. every ordinary live day), EVERY block is provisional, so the
+menu could never appear on the blocks a user actually right-clicks. The guard is gone:
+the menu opens on any block, and the editor modal itself limits what a provisional block
+can change (time edits stay locked until Analyze, since `SET_BLOCK_SPAN` refuses
+provisional blocks; title and type stick because they persist as evidence-keyed review
+corrections, which survive re-materialization even though provisional block ids don't).
+
+Same session, the floating GCal event-card popover (commit 243418e) was reverted by
+founder decision: clicking a block now swaps the persistent right panel to the block's
+read-only detail, click-away swaps it back — one `selectedBlockId` state, two mutually
+exclusive panel states, nothing floating over the grid. Overlay chrome (context menu,
+editor modal, detail panel) is marked `data-timeline-inspector` so the view-root
+capture-phase click handler never mistakes clicks inside it for select/deselect intent.
+
+Also new: `db:purge-timeline-block` — the editor modal's Delete block. Unlike the context
+menu's Delete (an `ignored` review; raw capture kept), it hard-deletes every tracked row
+in the block's span (app sessions, website visits, focus events, derived sessions,
+artifact mentions) plus writes the `ignored` review as a backstop for edge-overlapping
+sessions. It's the second deliberate exception (after the per-record purge) to "raw
+captured activity is never destroyed": full erasure of sensitive stretches.

@@ -171,6 +171,8 @@ const api = {
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_SPAN, payload),
     purgeTrackedEvidence: (payload: PurgeTrackedEvidencePayload): Promise<{ purged: boolean }> =>
       ipcRenderer.invoke(IPC.DB.PURGE_TRACKED_EVIDENCE, payload),
+    purgeTimelineBlock: (payload: { blockId: string; date?: string | null }): Promise<{ purged: boolean }> =>
+      ipcRenderer.invoke(IPC.DB.PURGE_TIMELINE_BLOCK, payload),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>

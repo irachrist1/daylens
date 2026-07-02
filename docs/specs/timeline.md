@@ -148,41 +148,53 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    applies across every surface at once, never per-view. On the card itself the color must
    be unmistakable: a solid accent stripe on the left edge plus a frosted-glass fill
    (backdrop blur) so the hour lines behind never strike through the title or summary text.
-5. **Click = read, right-click = edit** (founder decision, Jul 2, 2026). Clicking a block
-   opens a **read-only floating event card anchored beside the block** (the Google
-   Calendar popover): X to close, color chip + title, the date · time · duration line,
-   type tags, the summary, and the evidence ("What you were in" + Detours) below. No edit
-   controls live on this card — ever. Right-clicking a block opens a context menu (Edit /
-   Regenerate summary / Delete); **Edit opens a separate popup modal**, Google Calendar's
-   event editor shape, with:
+5. **Click = read, right-click = edit** (founder decision, Jul 2, 2026; the floating
+   event card was tried the same day and reverted — nothing ever floats over the
+   timeline). Clicking a block **selects it, and the persistent right-hand panel swaps
+   from the day recap to the block's read-only detail**: color chip + title, the
+   date · time · duration line, type tags, the summary, and the evidence ("What you were
+   in" + Detours) below, with an X to return. Clicking anywhere that isn't a block or the
+   panel clears the selection and the panel returns to the day recap — two mutually
+   exclusive panel states driven by one piece of selection state, never both at once. No
+   edit controls live on this panel — ever. Right-clicking any block (provisional
+   included) opens a context menu (Edit / Regenerate summary / Delete); **Edit opens a
+   separate centered popup modal**, Google Calendar's event editor shape, with:
    - the block's **title** (big underlined field),
    - the **time range** — trim-only: edges move inward, never outward, because a block is
      tracked activity and Daylens never counts idle time as work. Each moved edge persists
      as a user "cut here" (`timeline_boundary_corrections`, kind `split`, anchored by
      wall-clock timestamp) enforced as the LAST pipeline pass, so no heuristic can re-join
      what the user separated and the cut survives every rebuild. The trimmed-off stretch
-     re-forms into its own block(s), keeping every tracked minute accounted for.
-   - the **type/color** — with the evidence-suggested category shown as a color dot plus
-     one concise plain-language reason ("Browsing — mostly YouTube (1h 10m of 1h 30m)")
-     and a "Use" shortcut. A type change is a review correction like a rename: wins over
-     the computed category, flips the work/leisure kind, survives every rebuild.
+     re-forms into its own block(s), keeping every tracked minute accounted for. On a
+     provisional (not-yet-analyzed) block the time inputs are locked with a note — the
+     block is still settling; everything else stays editable.
+   - the **type/color** — with the evidence-suggested category always shown as a color
+     dot plus one plain sentence saying why that color was chosen ("This is the Browsing
+     color — most of this block's time was in YouTube."), and a "Use" shortcut when it
+     differs from the current pick. A type change is a review correction like a rename:
+     wins over the computed category, flips the work/leisure kind, survives every rebuild.
    - the **tracked records** in the block, each with a permanent remove: deleting a
      sensitive entry (native "are you sure" first) **erases the underlying records** —
      app sessions, website visits, focus events, artifacts — from Daylens entirely, every
      surface, not a display filter. Raw-data deletion is deliberate here, the one
      exception to "raw captured activity is never destroyed": the user's right to remove
      sensitive records outranks retention.
+   - a **Delete block** action: the full-erasure path for a sensitive stretch. After the
+     native confirm, the block AND every tracked record inside its span — app sessions,
+     website visits, focus events, derived sessions, artifact mentions — are deleted from
+     Daylens entirely (`db:purge-timeline-block`), with an `ignored` review written as a
+     backstop so no edge-overlapping remnant re-forms. Same retention exception as the
+     per-record purge.
    - **Save** applies everything and closes; **Discard** (button, X, Escape, or clicking
      outside) closes with no changes.
-   The right-hand column always holds the day recap; block details never displace it.
-   Provisional (live) blocks open the read-only card only (no context menu).
-6. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
-   (macOS and Windows), then records the deletion as a correction (review state `ignored`).
-   The block disappears from every surface — timeline, month grid, recap, AI, wraps,
-   search — its span renders as the empty space it now is, and the deletion survives every
-   rebuild: the deleted span's sessions are excluded from re-analysis so the block can
-   neither re-form nor be absorbed into a neighbour. Raw captured activity is never
-   destroyed.
+6. **Any block can be deleted.** The context menu's Delete asks "Are you sure?" with the
+   OS-native dialog (macOS and Windows), then records the deletion as a correction (review
+   state `ignored`). The block disappears from every surface — timeline, month grid,
+   recap, AI, wraps, search — its span renders as the empty space it now is, and the
+   deletion survives every rebuild: the deleted span's sessions are excluded from
+   re-analysis so the block can neither re-form nor be absorbed into a neighbour. Raw
+   captured activity is never destroyed on this path; full erasure including the raw
+   records is the editor modal's Delete block (rule 5).
 
 This supersedes the earlier §3.2 "10-minute cutoff" proposal as the single size rule: under
 15 minutes is never its own block.

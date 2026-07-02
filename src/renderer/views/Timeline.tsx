@@ -728,6 +728,10 @@ function BlockContextMenu({
 
   return (
     <div
+      // Marked as inspector chrome so the day grid's capture-phase click
+      // handler leaves the selection alone — clicking a menu item (or the
+      // backdrop to dismiss) must not bleed into select/deselect state.
+      data-timeline-inspector="true"
       style={{ position: 'fixed', inset: 0, zIndex: 60 }}
       onClick={onClose}
       onContextMenu={(event) => { event.preventDefault(); onClose() }}
@@ -769,11 +773,12 @@ function BlockContextMenu({
 }
 
 // ─── The block editor modal ──────────────────────────────────────────────────
-// Right-click → Edit opens this separate popup, Google Calendar's event editor
-// shape: title, time range, type/color with a suggested color and a one-line
-// reason, and the tracked records with a permanent-remove per row. Save
-// applies every change and closes; Discard closes with nothing applied. The
-// read-only click popover never hosts any of this.
+// Right-click → Edit opens this separate centered popup, Google Calendar's
+// event editor shape: title, time range, type/color with the suggested color
+// and a one-sentence reason, the tracked records with a permanent-remove per
+// row, and Delete block (full erasure of the block and its tracked data).
+// Save applies every change and closes; Discard closes with nothing applied.
+// The read-only detail panel never hosts any of this.
 
 function toTimeInputValue(ms: number): string {
   const d = new Date(ms)
@@ -792,11 +797,15 @@ function BlockEditModal({
   block,
   payload,
   onClose,
+  onDeleted,
   onRefresh,
 }: {
   block: WorkContextBlock
   payload: DayTimelinePayload
   onClose: () => void
+  // Called after the block is permanently purged, so the parent can drop the
+  // (now dangling) selection before the refreshed day lands.
+  onDeleted: () => void
   onRefresh: () => Promise<void>
 }) {
   const [titleDraft, setTitleDraft] = useState(() => userVisibleBlockLabel(block))
@@ -804,18 +813,20 @@ function BlockEditModal({
   const [startDraft, setStartDraft] = useState(() => toTimeInputValue(block.startTime))
   const [endDraft, setEndDraft] = useState(() => toTimeInputValue(block.endTime))
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [purgingKey, setPurgingKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const busy = saving || deleting || purgingKey !== null
 
   // Escape = Discard, like closing GCal's editor without saving.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving) onClose() }
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, saving])
+  }, [onClose, busy])
 
-  // The suggested type: what the evidence says this block mostly was — with a
-  // short, plain reason (the dominant app or site and its share of the time).
+  // The suggested type: what the evidence says this block mostly was — shown
+  // as its color plus one plain sentence saying why that color was chosen.
   const suggestion = useMemo(() => {
     const split = Object.entries(block.categoryDistribution ?? {})
       .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
@@ -832,13 +843,36 @@ function BlockEditModal({
       category: topCategory,
       color: activityColorForCategory(topCategory),
       reason: carrier
-        ? `${label} — mostly ${carrier} (${formatDuration(split[0][1])} of ${formatDuration(blockActiveSeconds(block))})`
-        : `${label} — the largest share of this block's time`,
+        ? `This is the ${label} color — most of this block's time was in ${carrier}.`
+        : `This is the ${label} color — it covers the largest share of this block's time.`,
     }
   }, [block])
 
+  // Delete the block AND its tracked data, permanently. This is the full
+  // erasure path for sensitive stretches: the main process confirms with a
+  // native dialog, then the underlying records — app sessions, site visits,
+  // focus events — are deleted from Daylens entirely, not hidden.
+  const deleteBlock = async () => {
+    if (busy) return
+    setDeleting(true)
+    setError(null)
+    try {
+      const { purged } = await ipc.db.purgeTimelineBlock({ blockId: block.id, date: payload.date })
+      if (purged) {
+        daySummaryRecapCache.delete(payload.date)
+        onDeleted()
+        await onRefresh()
+        onClose()
+        return
+      }
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't delete the block. Try again in a moment.").message)
+    }
+    setDeleting(false)
+  }
+
   const save = async () => {
-    if (saving) return
+    if (busy) return
     setSaving(true)
     setError(null)
     try {
@@ -868,7 +902,7 @@ function BlockEditModal({
   // native "are you sure" dialog; on confirm the underlying rows are deleted
   // everywhere — not hidden — and the day re-forms from what remains.
   const purgeRow = async (row: { key: string; kind: 'app' | 'site'; bundleId?: string; appName?: string; domain?: string }) => {
-    if (purgingKey) return
+    if (busy) return
     setPurgingKey(row.key)
     setError(null)
     try {
@@ -925,8 +959,11 @@ function BlockEditModal({
 
   return (
     <div
+      // Inspector-marked so the day grid's capture-phase click handler never
+      // treats modal clicks (backdrop included) as select/deselect intent.
+      data-timeline-inspector="true"
       style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-      onClick={() => { if (!saving) onClose() }}
+      onClick={() => { if (!busy) onClose() }}
     >
       <div
         role="dialog"
@@ -951,7 +988,7 @@ function BlockEditModal({
             type="button"
             aria-label="Discard changes"
             title="Discard"
-            onClick={() => { if (!saving) onClose() }}
+            onClick={() => { if (!busy) onClose() }}
             style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', flexShrink: 0 }}
           >
             <X size={17} strokeWidth={2} aria-hidden="true" />
@@ -988,20 +1025,24 @@ function BlockEditModal({
                 type="time"
                 aria-label="Start time"
                 value={startDraft}
+                disabled={block.provisional}
                 onChange={(event) => setStartDraft(event.target.value)}
-                style={{ ...inputBase, padding: '5px 8px' }}
+                style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
               <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>to</span>
               <input
                 type="time"
                 aria-label="End time"
                 value={endDraft}
+                disabled={block.provisional}
                 onChange={(event) => setEndDraft(event.target.value)}
-                style={{ ...inputBase, padding: '5px 8px' }}
+                style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
             </div>
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>
-              Edges move inward only — the trimmed-off stretch becomes its own block. Daylens never counts idle time as activity.
+              {block.provisional
+                ? 'Time edits unlock after Analyze day — this block is still settling.'
+                : 'Edges move inward only — the trimmed-off stretch becomes its own block. Daylens never counts idle time as activity.'}
             </div>
           </div>
 
@@ -1023,17 +1064,21 @@ function BlockEditModal({
               </select>
               <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 4, background: activityColorForCategory(categoryDraft), flexShrink: 0 }} />
             </div>
-            {suggestion && suggestion.category !== categoryDraft && (
+            {/* The suggested color and, in one plain sentence, why. Always
+                visible — the user should never wonder where a color came from. */}
+            {suggestion && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 8, fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
                 <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, background: suggestion.color, flexShrink: 0 }} />
-                <span>Suggested: {suggestion.reason}</span>
-                <button
-                  type="button"
-                  onClick={() => setCategoryDraft(suggestion.category)}
-                  style={{ border: 'none', background: 'transparent', color: 'var(--color-primary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: 0 }}
-                >
-                  Use
-                </button>
+                <span>{suggestion.reason}</span>
+                {suggestion.category !== categoryDraft && (
+                  <button
+                    type="button"
+                    onClick={() => setCategoryDraft(suggestion.category)}
+                    style={{ border: 'none', background: 'transparent', color: 'var(--color-primary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: 0 }}
+                  >
+                    Use
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1081,21 +1126,32 @@ function BlockEditModal({
           )}
         </div>
 
-        {/* Save applies and closes; Discard closes with no changes. */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+        {/* Delete erases the block and its tracked data entirely (native
+            confirm first); Save applies and closes; Discard closes with no
+            changes. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 20 }}>
           <button
             type="button"
-            disabled={saving}
+            disabled={busy}
+            onClick={() => { void deleteBlock() }}
+            title="Permanently delete this block and everything tracked inside it"
+            style={{ border: '1px solid rgba(248, 113, 113, 0.4)', background: 'transparent', color: '#f87171', fontSize: 12.5, fontWeight: 650, cursor: busy ? 'default' : 'pointer', padding: '7px 14px', borderRadius: 9, opacity: busy && !deleting ? 0.5 : 1, marginRight: 'auto' }}
+          >
+            {deleting ? 'Deleting…' : 'Delete block'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
             onClick={onClose}
-            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12.5, fontWeight: 650, cursor: saving ? 'default' : 'pointer', padding: '7px 14px', borderRadius: 9 }}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12.5, fontWeight: 650, cursor: busy ? 'default' : 'pointer', padding: '7px 14px', borderRadius: 9 }}
           >
             Discard
           </button>
           <button
             type="button"
-            disabled={saving}
+            disabled={busy}
             onClick={() => { void save() }}
-            style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: saving ? 'default' : 'pointer', padding: '7px 16px', borderRadius: 9, opacity: saving ? 0.6 : 1 }}
+            style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', padding: '7px 16px', borderRadius: 9, opacity: saving ? 0.6 : 1 }}
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -1296,15 +1352,16 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   )
 }
 
-// The block detail as a Google-Calendar event card: a READ-ONLY floating
-// popover anchored beside the clicked block — close (X) top-right, color chip
-// + title, the date/time line, type tags, the summary, and the evidence
-// underneath. No edit controls live here (founder decision, Jul 2, 2026):
-// editing happens exclusively through right-click → Edit, which opens the
-// separate editor modal. The day recap keeps the right column to itself.
-const BLOCK_POPOVER_WIDTH = 400
-
-function BlockPopover({
+// The block detail in the persistent right panel: clicking a block swaps the
+// right column from the day recap to this READ-ONLY view — color chip +
+// title, the date/time line, type tags, the summary, and the app/site
+// evidence underneath — and clicking anywhere outside the block swaps it
+// back (founder decision, Jul 2, 2026, reverting the floating event card:
+// nothing ever floats over the timeline). Selection state lives in Timeline;
+// this component just renders the selected block. No edit controls live
+// here: editing happens exclusively through right-click → Edit, which opens
+// the separate editor modal.
+function BlockDetailInspector({
   block,
   payload,
   onSelectBlock,
@@ -1313,7 +1370,7 @@ function BlockPopover({
   onMerged,
   onRefresh,
 }: {
-  block: WorkContextBlock | null
+  block: WorkContextBlock
   payload: DayTimelinePayload
   onSelectBlock?: (blockId: string) => void
   onClose: () => void
@@ -1330,46 +1387,7 @@ function BlockPopover({
 
   useEffect(() => {
     setBoundaryError(null)
-  }, [block?.id])
-
-  // Anchor the card beside its block, GCal-style: to the right of the block
-  // when there's room, else to the left, clamped into the viewport. The
-  // capture-phase scroll listener keeps it glued to the block while the day
-  // grid scrolls underneath.
-  const popoverRef = useRef<HTMLDivElement | null>(null)
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
-  const blockId = block?.id ?? null
-  useEffect(() => {
-    if (!blockId) { setPosition(null); return }
-    const reposition = () => {
-      const anchor = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
-      if (!anchor) { setPosition(null); return }
-      const rect = anchor.getBoundingClientRect()
-      const height = popoverRef.current?.offsetHeight ?? 480
-      let left = rect.right + 12
-      if (left + BLOCK_POPOVER_WIDTH > window.innerWidth - 16) left = rect.left - BLOCK_POPOVER_WIDTH - 12
-      left = Math.max(16, Math.min(left, window.innerWidth - BLOCK_POPOVER_WIDTH - 16))
-      const top = Math.max(72, Math.min(rect.top, window.innerHeight - height - 16))
-      setPosition({ left, top })
-    }
-    reposition()
-    window.addEventListener('scroll', reposition, true)
-    window.addEventListener('resize', reposition)
-    return () => {
-      window.removeEventListener('scroll', reposition, true)
-      window.removeEventListener('resize', reposition)
-    }
-  }, [blockId])
-
-  // Escape closes the card, like GCal.
-  useEffect(() => {
-    if (!blockId) return
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [blockId, onClose])
-
-  if (!block) return null
+  }, [block.id])
 
   const accent = activityColorForCategory(block.dominantCategory)
   // A provisional (live, not-yet-analyzed) block is never merged — that
@@ -1526,27 +1544,24 @@ function BlockPopover({
   }
 
   return (
-    <div ref={popoverRef} data-timeline-inspector="true" className="timeline-summary-inspector" style={{
-      position: 'fixed',
-      left: position?.left ?? -9999,
-      top: position?.top ?? -9999,
-      width: BLOCK_POPOVER_WIDTH,
-      maxHeight: 'min(72vh, 640px)',
+    <div data-timeline-inspector="true" className="timeline-summary-inspector" style={{
+      position: 'sticky',
+      top: 24,
+      maxHeight: 'calc(100vh - 140px)',
       overflowY: 'auto',
       scrollbarWidth: 'none',
       msOverflowStyle: 'none',
       overscrollBehavior: 'contain',
-      zIndex: 40,
-      borderRadius: 16,
+      borderRadius: 18,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',
-      boxShadow: '0 16px 48px rgba(0,0,0,0.26)',
       padding: '10px 22px 22px',
     }}>
-      {/* Read-only card: close is the only control here. Editing goes through
-          right-click → Edit (the separate editor modal), never this view. */}
+      {/* Read-only panel: close is the only control here — it returns the
+          panel to the day summary. Editing goes through right-click → Edit
+          (the separate editor modal), never this view. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 2, marginBottom: 2 }}>
-        <button type="button" aria-label="Close" title="Close" onClick={onClose} style={iconButtonStyle()} {...iconHover}>
+        <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={iconButtonStyle()} {...iconHover}>
           <X size={16} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
@@ -1639,11 +1654,11 @@ function BlockPopover({
         <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginBottom: 12 }}>{boundaryError}</div>
       )}
 
-      {blockNarrative(block) && (
-        <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
-          {blockNarrative(block)}
-        </p>
-      )}
+      {/* The block's summary — AI narrative once it lands, deterministic
+          fallback before, same rule the block card follows. */}
+      <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
+        {blockNarrative(block) ?? blockShortSummary(block)}
+      </p>
 
       <div style={{ display: 'grid', gap: 18 }}>
         {evidence.length > 0 && (
@@ -2191,7 +2206,7 @@ export default function Timeline() {
   // The GCal-style right-click menu on a block: position + the block it's for.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; blockId: string } | null>(null)
   // The block being edited in the editor modal (right-click → Edit). The
-  // read-only click popover never hosts edit controls.
+  // read-only detail panel never hosts edit controls.
   const [editBlockId, setEditBlockId] = useState<string | null>(null)
   const [menuBusy, setMenuBusy] = useState(false)
 
@@ -2247,16 +2262,18 @@ export default function Timeline() {
   }, [date])
 
   // Escape steps the selection down: first it drops a multi-block merge span,
-  // then it deselects entirely.
+  // then it deselects entirely. While the context menu or editor modal is
+  // open, Escape belongs to that overlay — it must not also touch selection.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      if (contextMenu || editBlockId) return
       if (mergeRangeEndId) setMergeRangeEndId(null)
       else if (selectedBlockId) setSelectedBlockId(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mergeRangeEndId, selectedBlockId])
+  }, [mergeRangeEndId, selectedBlockId, contextMenu, editBlockId])
 
   // Once the post-merge payload lands, reselect the single block now covering
   // the merged span and clear the pending marker.
@@ -2327,10 +2344,11 @@ export default function Timeline() {
   )
 
   // Right-click on a block (GCal-style). Selecting it first means the
-  // inspector already shows the block the menu is acting on.
+  // inspector already shows the block the menu is acting on. Provisional
+  // (not-yet-analyzed) blocks get the menu too — that's the common case on a
+  // live day; the editor itself limits what a provisional block can change.
   const openBlockContextMenu = (block: WorkContextBlock, event: ReactMouseEvent) => {
     event.preventDefault()
-    if (block.provisional) return
     setSelectedBlockId(block.id)
     setMergeRangeEndId(null)
     setContextMenu({ x: event.clientX, y: event.clientY, blockId: block.id })
@@ -2432,7 +2450,40 @@ export default function Timeline() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
+      // Selection is deliberate two-state plumbing: clicking a block sets
+      // selectedBlockId (the right panel renders that block's detail);
+      // clicking anywhere that isn't a block, the inspector panel, or an
+      // overlay (context menu / editor modal) clears it (the panel returns to
+      // the day summary). Capture-phase on the view root so "anywhere
+      // outside the block" means exactly that — header and empty space
+      // included.
+      onClickCapture={(event) => {
+        const target = event.target as HTMLElement | null
+        if (target?.closest('[data-timeline-inspector="true"]')) {
+          return
+        }
+        const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
+        const clickedId = blockButton?.dataset.timelineBlockId ?? null
+        // Clicking empty space deselects everything.
+        if (!clickedId) {
+          setSelectedBlockId(null)
+          setMergeRangeEndId(null)
+          return
+        }
+        // Shift- (or Cmd-) click with something already selected extends
+        // the selection into a merge span instead of replacing it.
+        if ((event.shiftKey || event.metaKey) && selectedBlockId && clickedId !== selectedBlockId) {
+          setMergeRangeEndId(clickedId)
+          return
+        }
+        setMergeRangeEndId(null)
+        if (clickedId !== selectedBlockId) {
+          setSelectedBlockId(clickedId)
+        }
+      }}
+    >
       <div style={{
         position: 'sticky',
         top: 0,
@@ -2660,32 +2711,8 @@ export default function Timeline() {
                   <div style={{
                     display: 'grid',
                     gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 360px',
-                  gap: 24,
-                  alignItems: 'start',
-                }}
-                  onClickCapture={(event) => {
-                    const target = event.target as HTMLElement | null
-                    if (target?.closest('[data-timeline-inspector="true"]')) {
-                      return
-                    }
-                    const blockButton = target?.closest<HTMLElement>('[data-timeline-block-id]')
-                    const clickedId = blockButton?.dataset.timelineBlockId ?? null
-                    // Clicking empty track space deselects everything.
-                    if (!clickedId) {
-                      setSelectedBlockId(null)
-                      setMergeRangeEndId(null)
-                      return
-                    }
-                    // Shift- (or Cmd-) click with something already selected extends
-                    // the selection into a merge span instead of replacing it.
-                    if ((event.shiftKey || event.metaKey) && selectedBlockId && clickedId !== selectedBlockId) {
-                      setMergeRangeEndId(clickedId)
-                      return
-                    }
-                    setMergeRangeEndId(null)
-                    if (clickedId !== selectedBlockId) {
-                      setSelectedBlockId(clickedId)
-                    }
+                    gap: 24,
+                    alignItems: 'start',
                   }}>
                     {/* Cards aren't text to select; killing user-select here keeps
                         shift-click from smearing a text highlight across the run. */}
@@ -2731,35 +2758,44 @@ export default function Timeline() {
                         block={blockMap.get(editBlockId)!}
                         payload={payload}
                         onClose={() => setEditBlockId(null)}
+                        onDeleted={() => {
+                          setSelectedBlockId(null)
+                          setMergeRangeEndId(null)
+                        }}
                         onRefresh={timelineResource.refresh}
                       />
                     )}
-                    {/* The right column keeps the day recap; the block detail
-                        floats over the grid as a GCal-style event card. */}
-                    <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
-                    <BlockPopover
-                      block={selectedBlock}
-                      payload={payload}
-                      onRefresh={timelineResource.refresh}
-                      onClose={() => {
-                        setSelectedBlockId(null)
-                        setMergeRangeEndId(null)
-                      }}
-                      mergeSelection={mergeSelection}
-                      onMerged={(mergedStartTime) => {
-                        pendingSelectAtRef.current = mergedStartTime
-                        setMergeRangeEndId(null)
-                        setSelectedBlockId(null)
-                      }}
-                      onSelectBlock={(blockId) => {
-                        setMergeRangeEndId(null)
-                        setSelectedBlockId(blockId)
-                        requestAnimationFrame(() => {
-                          const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
-                          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        })
-                      }}
-                    />
+                    {/* The right column is one panel with two mutually
+                        exclusive states, keyed off selectedBlock: a selected
+                        block shows its detail; no selection shows the day
+                        summary. Nothing floats over the timeline. */}
+                    {selectedBlock ? (
+                      <BlockDetailInspector
+                        block={selectedBlock}
+                        payload={payload}
+                        onRefresh={timelineResource.refresh}
+                        onClose={() => {
+                          setSelectedBlockId(null)
+                          setMergeRangeEndId(null)
+                        }}
+                        mergeSelection={mergeSelection}
+                        onMerged={(mergedStartTime) => {
+                          pendingSelectAtRef.current = mergedStartTime
+                          setMergeRangeEndId(null)
+                          setSelectedBlockId(null)
+                        }}
+                        onSelectBlock={(blockId) => {
+                          setMergeRangeEndId(null)
+                          setSelectedBlockId(blockId)
+                          requestAnimationFrame(() => {
+                            const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
+                            el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          })
+                        }}
+                      />
+                    ) : (
+                      <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
+                    )}
                   </div>
                 )}
               </>

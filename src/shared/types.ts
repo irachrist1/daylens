@@ -1800,6 +1800,7 @@ export const IPC = {
     MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
     SET_BLOCK_SPAN: 'db:set-block-span',
     PURGE_TRACKED_EVIDENCE: 'db:purge-tracked-evidence',
+    PURGE_TIMELINE_BLOCK: 'db:purge-timeline-block',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',

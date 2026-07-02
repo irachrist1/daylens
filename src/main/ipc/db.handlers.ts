@@ -824,6 +824,65 @@ export function registerDbHandlers(): void {
     return { purged: true }
   })
 
+  // Permanently purge an entire block (block editor → Delete block). Unlike
+  // DELETE_TIMELINE_BLOCK (which hides the block behind an 'ignored' review
+  // and keeps the raw capture), this deletes every tracked row inside the
+  // block's span — app sessions, website visits, focus events, derived
+  // sessions, artifact mentions — so a sensitive stretch is gone from every
+  // surface and can never resurface on a rebuild. Same founder decision as
+  // the per-record purge (Jul 2, 2026): full erasure of sensitive records
+  // outranks retention. The 'ignored' review is still written as a backstop
+  // for edge-overlapping sessions the span delete can't reach.
+  ipcMain.handle(IPC.DB.PURGE_TIMELINE_BLOCK, async (event, payload: { blockId: string; date?: string | null }): Promise<{ purged: boolean }> => {
+    const db = getDb()
+    let block: WorkContextBlock | null = null
+    if (payload.date) {
+      const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+      block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
+    }
+    block = block ?? getBlockDetailPayload(db, payload.blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+
+    const dateStr = payload.date ?? localDateStringForTimestamp(block.startTime)
+    const timeRange = `${new Date(block.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${new Date(block.endTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      type: 'warning' as const,
+      title: 'Delete block and its data',
+      message: 'Permanently delete this block?',
+      detail: `"${block.label.current}" (${timeRange}) and everything tracked inside it — apps, sites, page titles — will be deleted from Daylens entirely. This cannot be undone.`,
+      buttons: ['Delete permanently', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    }
+    const { response } = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options)
+    if (response !== 0) return { purged: false }
+
+    const fromMs = block.startTime
+    const toMs = block.endTime
+    const run = db.transaction(() => {
+      db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
+      db.prepare(`DELETE FROM website_visits WHERE visit_time >= ? AND visit_time < ?`).run(fromMs, toMs)
+      db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ?`).run(fromMs, toMs)
+      db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ?`).run(fromMs, toMs)
+      db.prepare(`DELETE FROM artifact_mentions WHERE start_time >= ? AND start_time < ?`).run(fromMs, toMs)
+    })
+    run()
+
+    // Backstop: a session that started before the block's edge and bled in
+    // survives the span delete — the ignored review keeps any remnant from
+    // re-forming into a visible block on the next rebuild.
+    writeTimelineBlockReview(db, dateStr, block, { state: 'ignored' })
+
+    invalidateTimelineDayBlocks(db, dateStr)
+    invalidateProjectionScope('timeline', 'block_purge')
+    invalidateProjectionScope('apps', 'block_purge')
+    invalidateProjectionScope('insights', 'block_purge')
+    return { purged: true }
+  })
+
   ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {
     const db = getDb()
     const initialDate = payload.date ?? null
