@@ -98,3 +98,87 @@ test('active browser page titles feed evidence-backed time answers', async () =>
   assert.match(routed.answer, /Structured client\/project attribution was missing/)
   db.close()
 })
+
+test('Dia (a real browser with no "browser"-shaped bundle id) is detected and gets domain evidence', async () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+
+  const startTime = localMs(2026, 5, 1, 10, 0)
+  const endTime = localMs(2026, 5, 1, 10, 30)
+  // Dia's bundle id/app name contain no "chrome|safari|firefox|edge|brave|arc|
+  // opera|vivaldi|browser" substring, so the old regex-based looksLikeBrowser
+  // never enriched its sessions. category is deliberately 'aiTools' (Dia's
+  // catalog default), not 'browsing', so this exercises the app-identity
+  // catalog tier of detection rather than the cheap category shortcut.
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id,
+      app_name,
+      start_time,
+      end_time,
+      duration_sec,
+      category,
+      is_focused,
+      window_title,
+      raw_app_name,
+      canonical_app_id,
+      app_instance_id,
+      capture_source,
+      capture_version
+    ) VALUES (?, ?, ?, ?, ?, 'aiTools', 1, ?, ?, 'dia', ?, 'test', 2)
+  `).run(
+    'company.thebrowser.dia',
+    'Dia',
+    startTime,
+    endTime,
+    Math.round((endTime - startTime) / 1000),
+    'Dia',
+    'Dia',
+    'company.thebrowser.dia',
+  )
+
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain,
+      page_title,
+      url,
+      visit_time,
+      visit_time_us,
+      duration_sec,
+      browser_bundle_id,
+      canonical_browser_id,
+      browser_profile_id,
+      normalized_url,
+      page_key,
+      source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'default', ?, ?, 'active_browser_context')
+  `).run(
+    'notion.so',
+    'ASYV renewal budget - Notion',
+    'https://notion.so/asyv-renewal',
+    startTime,
+    BigInt(startTime) * 1000n,
+    Math.round((endTime - startTime) / 1000),
+    'company.thebrowser.dia',
+    'dia',
+    'https://notion.so/asyv-renewal',
+    'notion.so/asyv-renewal',
+  )
+
+  const [fromMs, toMs] = localDayBounds(2026, 5, 1)
+  const attribution = runAttributionForRange(fromMs, toMs, {}, db)
+  assert.equal(attribution.sessionCount, 1)
+
+  const segments = db.prepare(`
+    SELECT domain, window_title AS windowTitle
+    FROM activity_segments
+    WHERE primary_bundle_id = 'company.thebrowser.dia'
+  `).all() as { domain: string | null; windowTitle: string | null }[]
+
+  assert.ok(segments.length > 0, 'expected at least one activity segment for the Dia session')
+  assert.ok(
+    segments.some((row) => row.domain === 'notion.so'),
+    'Dia session should be enriched with browser evidence (domain), not left null',
+  )
+  db.close()
+})

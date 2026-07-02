@@ -2022,6 +2022,18 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 42,
+    description: 'Drop the dead capture layer — raw_window_sessions, browser_context_events, file_activity_events, idle_periods were never written to in production (0 rows, 0 writers anywhere in src/); the active pipeline reads app_sessions, website_visits, and activity_state_events instead',
+    up: () => {
+      getDb().exec(`
+        DROP TABLE IF EXISTS raw_window_sessions;
+        DROP TABLE IF EXISTS browser_context_events;
+        DROP TABLE IF EXISTS file_activity_events;
+        DROP TABLE IF EXISTS idle_periods;
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

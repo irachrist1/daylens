@@ -1,8 +1,7 @@
 // Attribution pipeline.
 //
 // Reads from the immutable raw layer (app_sessions, website_visits,
-// activity_state_events) plus the new browser_context_events / file_activity
-// streams when available, then writes:
+// activity_state_events), then writes:
 //
 //   activity_segments      (Layer 2)
 //     + segment_attributions
@@ -19,9 +18,11 @@ import { getDb } from './database'
 import os from 'node:os'
 import {
   normalizeWebsiteTitleForDisplay,
+  resolveCanonicalApp,
   resolveCanonicalBrowser,
   titleLooksUseful,
 } from '../lib/appIdentity'
+import { isBrowserApplication } from './browserRegistry'
 import { getClientMemory } from './workMemoryProfile'
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -157,15 +158,9 @@ function loadAppAttentionMap(db: Database.Database): Map<string, AppRow> {
 
 // ─── Step 1 — load idle periods within range ─────────────────────────────────
 function loadIdlePeriods(db: Database.Database, fromMs: number, toMs: number): IdlePeriod[] {
-  // Real idle_periods rows take precedence; fall back to activity_state_events.
-  const direct = db.prepare(`
-    SELECT started_at AS startedAt, ended_at AS endedAt
-    FROM idle_periods
-    WHERE ended_at >= ? AND started_at < ?
-    ORDER BY started_at ASC
-  `).all(fromMs, toMs) as IdlePeriod[]
-  if (direct.length > 0) return direct
-
+  // idle_periods (a capture-layer table that was never written to) has been
+  // dropped — see db/migrations.ts v42. activity_state_events is the only
+  // source of idle spans.
   const events = db.prepare(`
     SELECT event_ts AS ts, event_type AS type
     FROM activity_state_events
@@ -243,7 +238,7 @@ function normalizeToSegments(
       // Browser enrichment turns active-tab/history rows into structured
       // evidence for AI queries without mutating the raw foreground session.
       let browserEvidence: BrowserEvidence | null = null
-      if (looksLikeBrowser(session.bundle_id, session.app_name)) {
+      if (looksLikeBrowser(session.bundle_id, session.app_name, session.category)) {
         if (!canonicalBrowserByBundleId.has(session.bundle_id)) {
           canonicalBrowserByBundleId.set(
             session.bundle_id,
@@ -323,9 +318,20 @@ function deriveAttentionFromCategory(category: string): 'focus' | 'supporting' |
   return 'ambient'
 }
 
-function looksLikeBrowser(bundleId: string, appName: string): boolean {
-  const lower = `${bundleId} ${appName}`.toLowerCase()
-  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|browser)/.test(lower)
+// Whether a session is a browser — mirrors the tiered detection in
+// workBlocks.ts's computeIsBrowserSession: cheap/deterministic checks first
+// (capture-time category, then the app-identity catalog), falling back to
+// the OS-level LaunchServices/registry lookup only for apps the catalog
+// doesn't know about yet. Replaces a hardcoded name regex that missed real
+// browsers with no recognizable substring in their bundle id or app name
+// (e.g. Dia's "company.thebrowser.dia", Comet, Zen) and would silently
+// leave their foreground segments without domain/pageTitle evidence.
+function looksLikeBrowser(bundleId: string, appName: string, category: string): boolean {
+  if (category === 'browsing') return true
+  const identity = resolveCanonicalApp(bundleId, appName)
+  if (identity.isBrowser || identity.defaultCategory === 'browsing') return true
+  return (process.platform === 'darwin' || process.platform === 'win32')
+    && isBrowserApplication({ bundleId, appName, executablePath: bundleId })
 }
 
 function usefulWindowTitle(title: string | null, appName: string): string | null {

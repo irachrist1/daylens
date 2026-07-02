@@ -175,42 +175,15 @@ export function gatherConcurrentEvidence(
     `).all(searchEnd, searchStart) as ConcurrentWebsiteVisit[]
     : []
 
-  const browserContexts = tableExists(db, 'browser_context_events')
-    ? db.prepare(`
-      SELECT
-        id,
-        bundle_id AS bundleId,
-        tab_url AS tabUrl,
-        domain,
-        registrable_domain AS registrableDomain,
-        tab_title AS tabTitle,
-        page_path AS pagePath,
-        started_at AS startedAt,
-        ended_at AS endedAt
-      FROM browser_context_events
-      WHERE started_at < ?
-        AND ended_at > ?
-      ORDER BY started_at ASC
-      LIMIT 40
-    `).all(searchEnd, searchStart) as ConcurrentBrowserContext[]
-    : []
-
-  const fileActivity = tableExists(db, 'file_activity_events')
-    ? db.prepare(`
-      SELECT DISTINCT
-        file_path AS filePath,
-        file_name AS fileName,
-        project_root AS projectRoot,
-        repo_remote_url AS repoRemoteUrl,
-        started_at AS startedAt,
-        ended_at AS endedAt
-      FROM file_activity_events
-      WHERE started_at < ?
-        AND COALESCE(ended_at, started_at + COALESCE(duration_ms, 1)) > ?
-      ORDER BY started_at ASC
-      LIMIT 40
-    `).all(searchEnd, searchStart) as ConcurrentFileActivity[]
-    : []
+  // browser_context_events and file_activity_events were part of a capture
+  // layer that was never wired up to a writer (0 rows, ever) and the tables
+  // have been dropped (see db/migrations.ts v42). gatherConcurrentEvidence's
+  // callers (eveningConsolidation.ts, workBlocks.ts) still destructure
+  // browserContexts/fileActivity off ConcurrentEvidence, so the fields stay
+  // in the shape as permanently-empty constants rather than forcing a change
+  // in those call sites.
+  const browserContexts: ConcurrentBrowserContext[] = []
+  const fileActivity: ConcurrentFileActivity[] = []
 
   return { overlappingVisits, browserContexts, fileActivity }
 }
