@@ -386,7 +386,6 @@ function CalendarBlockCard({
   height,
   compact,
   isSelected,
-  inMergeRange,
   dimmed = false,
   onClick,
   onContextMenu,
@@ -396,7 +395,6 @@ function CalendarBlockCard({
   height: number
   compact: boolean
   isSelected: boolean
-  inMergeRange: boolean
   // True when a tag filter is active and this block isn't in it. Filtered
   // blocks fade but stay in place — the shape of the day never lies.
   dimmed?: boolean
@@ -446,12 +444,12 @@ function CalendarBlockCard({
         // stronger fill, against the quieter tint of finished blocks.
         border: block.isLive
           ? `1.5px solid ${accent}`
-          : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
+          : isSelected ? `1px solid ${accent}88` : `1px solid ${accent}30`,
         borderLeft: `3px solid ${accent}`,
         // Frosted glass: a stronger tint over a backdrop blur, so the hour
         // lines behind the card haze out instead of striking through the
         // title and summary text (founder ask, Jul 2026).
-        background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
+        background: isSelected ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
         backdropFilter: 'blur(10px) saturate(1.4)',
         WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
@@ -572,7 +570,6 @@ function CalendarDayTrack({
   hourHeight,
   compact = false,
   selectedBlockId = null,
-  selectedSpanIds,
   nowMs = null,
   dimBlock,
   onBlockClick,
@@ -585,7 +582,6 @@ function CalendarDayTrack({
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
-  selectedSpanIds?: ReadonlySet<string>
   nowMs?: number | null
   // When set, blocks outside the active tag filter render dimmed.
   dimBlock?: (block: WorkContextBlock) => boolean
@@ -663,7 +659,6 @@ function CalendarDayTrack({
             height={height}
             compact={compact}
             isSelected={selectedBlockId === block.id}
-            inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
             dimmed={dimBlock ? dimBlock(block) : false}
             onClick={onBlockClick ? () => onBlockClick(block) : undefined}
             onContextMenu={onBlockContextMenu ? (event) => onBlockContextMenu(block, event) : undefined}
@@ -701,6 +696,8 @@ function BlockContextMenu({
   onRegenerate,
   onDelete,
   onClose,
+  mergeAbove,
+  mergeBelow,
 }: {
   x: number
   y: number
@@ -709,6 +706,11 @@ function BlockContextMenu({
   onRegenerate: () => void
   onDelete: () => void
   onClose: () => void
+  // Omitted entirely when the block has no neighbour on that side; disabled
+  // (but still shown) when a neighbour exists but can't yet be merged (a
+  // live block on either side of the pair) — timeline.md §2/§3.4 rule 5.
+  mergeAbove: { disabled: boolean; onClick: () => void } | null
+  mergeBelow: { disabled: boolean; onClick: () => void } | null
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -717,7 +719,9 @@ function BlockContextMenu({
   }, [onClose])
 
   const MENU_WIDTH = 200
-  const MENU_HEIGHT = 118
+  const ITEM_HEIGHT = 36
+  const itemCount = 3 + (mergeAbove ? 1 : 0) + (mergeBelow ? 1 : 0)
+  const MENU_HEIGHT = itemCount * ITEM_HEIGHT + 10
   const left = Math.min(x, window.innerWidth - MENU_WIDTH - 8)
   const top = Math.min(y, window.innerHeight - MENU_HEIGHT - 8)
 
@@ -767,6 +771,20 @@ function BlockContextMenu({
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
           Edit
         </button>
+        {mergeAbove && (
+          <button type="button" role="menuitem" disabled={busy || mergeAbove.disabled} onClick={mergeAbove.onClick} style={itemStyle()}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+            Merge with above
+          </button>
+        )}
+        {mergeBelow && (
+          <button type="button" role="menuitem" disabled={busy || mergeBelow.disabled} onClick={mergeBelow.onClick} style={itemStyle()}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+            Merge with below
+          </button>
+        )}
         <button type="button" role="menuitem" disabled={busy} onClick={onRegenerate} style={itemStyle()}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
@@ -1068,7 +1086,15 @@ function BlockEditModal({
                 aria-label="Start time"
                 value={startDraft}
                 disabled={block.provisional}
-                onChange={(event) => setStartDraft(event.target.value)}
+                min={toTimeInputValue(block.startTime)}
+                onChange={(event) => {
+                  const raw = event.target.value
+                  if (!raw) { setStartDraft(raw); return }
+                  // Trim-only: the start edge can only move later than the
+                  // block's original start, never earlier (timeline.md §3.4 rule 5).
+                  const ms = fromTimeInputValue(raw, block.startTime)
+                  setStartDraft(ms != null && ms < block.startTime ? toTimeInputValue(block.startTime) : raw)
+                }}
                 style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
               <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>to</span>
@@ -1077,7 +1103,15 @@ function BlockEditModal({
                 aria-label="End time"
                 value={endDraft}
                 disabled={block.provisional}
-                onChange={(event) => setEndDraft(event.target.value)}
+                max={toTimeInputValue(block.endTime)}
+                onChange={(event) => {
+                  const raw = event.target.value
+                  if (!raw) { setEndDraft(raw); return }
+                  // Trim-only: the end edge can only move earlier than the
+                  // block's original end, never later (timeline.md §3.4 rule 5).
+                  const ms = fromTimeInputValue(raw, block.endTime)
+                  setEndDraft(ms != null && ms > block.endTime ? toTimeInputValue(block.endTime) : raw)
+                }}
                 style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
             </div>
@@ -1406,60 +1440,13 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
 function BlockDetailInspector({
   block,
   payload,
-  onSelectBlock,
   onClose,
-  mergeSelection,
-  onMerged,
-  onRefresh,
 }: {
   block: WorkContextBlock
   payload: DayTimelinePayload
-  onSelectBlock?: (blockId: string) => void
   onClose: () => void
-  // The blocks in the current shift-selected span (ordered, includes the anchor).
-  // Length ≥ 2 means a merge is on the table.
-  mergeSelection: WorkContextBlock[]
-  // Called after a successful merge with the merged span's start time, so the
-  // timeline can collapse the selection back onto the single merged block.
-  onMerged: (mergedStartTime: number) => void
-  onRefresh: () => Promise<void>
 }) {
-  const [merging, setMerging] = useState(false)
-  const [boundaryError, setBoundaryError] = useState<string | null>(null)
-
-  useEffect(() => {
-    setBoundaryError(null)
-  }, [block.id])
-
   const accent = activityColorForCategory(block.dominantCategory)
-  // A provisional (live, not-yet-analyzed) block is never merged — that
-  // control appears once the day is analyzed (timeline.md §4).
-
-  // A merge is on the table once the user has shift-selected a second block.
-  // Blocks are continuous time, so the span the user sees highlighted — first
-  // through last — is exactly what fuses, in-between blocks included.
-  const mergeStart = mergeSelection[0] ?? null
-  const mergeEnd = mergeSelection[mergeSelection.length - 1] ?? null
-  const hasMergeSpan = mergeSelection.length >= 2 && mergeStart != null && mergeEnd != null
-  const mergeHasLiveBlock = mergeSelection.some((candidate) => candidate.provisional)
-
-  const mergeSelectedBlocks = async () => {
-    if (!hasMergeSpan || !mergeStart || !mergeEnd) return
-    setMerging(true)
-    setBoundaryError(null)
-    try {
-      await ipc.db.mergeTimelineEpisodes({ blockIds: [mergeStart.id, mergeEnd.id], date: payload.date })
-      daySummaryRecapCache.delete(payload.date)
-      // Hand the merged span's start time back so the timeline can reselect the
-      // single block that now covers it (block ids change when the span fuses).
-      onMerged(mergeStart.startTime)
-      await onRefresh()
-    } catch (error) {
-      setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again in a moment.").message)
-    } finally {
-      setMerging(false)
-    }
-  }
 
   // One evidence view (timeline.md §2/§3.0): the apps, sites, and files behind
   // the block, in a single list sorted by time — the old "Apps used" and "Key
@@ -1690,44 +1677,7 @@ function BlockDetailInspector({
             </span>
           ))}
         </div>
-        {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-            <button
-              type="button"
-              aria-label={`Merge ${mergeSelection.length} blocks into one, ${formatClockTime(mergeStart.startTime)} to ${formatClockTime(mergeEnd.endTime)}`}
-              disabled={merging || mergeHasLiveBlock}
-              onClick={() => { void mergeSelectedBlocks() }}
-              style={{ border: 'none', background: accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: (merging || mergeHasLiveBlock) ? 'default' : 'pointer', padding: '4px 12px', borderRadius: 8, opacity: mergeHasLiveBlock ? 0.5 : 1 }}
-            >
-              {merging ? 'Merging…' : `Merge ${mergeSelection.length} blocks`}
-            </button>
-            <button
-              type="button"
-              onClick={() => onSelectBlock?.(block.id)}
-              disabled={merging}
-              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: merging ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8 }}
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-        {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
-          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
-            {mergeHasLiveBlock
-              ? 'This selection includes a live block — give it a moment to settle, then merge.'
-              : `Fuses ${formatClockTime(mergeStart.startTime)} – ${formatClockTime(mergeEnd.endTime)} into one block.`}
-          </div>
-        )}
-        {mergeSelection.length < 2 && !block.provisional && payload.blocks.length > 1 && (
-          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
-            Tip: Shift-click another block to merge them. Right-click the block to edit it.
-          </div>
-        )}
       </div>
-
-      {boundaryError && (
-        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginBottom: 12 }}>{boundaryError}</div>
-      )}
 
       {/* The block's summary — AI narrative once it lands, deterministic
           fallback before, same rule the block card follows. */}
@@ -2205,9 +2155,6 @@ function CalendarMonthView({
 export default function Timeline() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
-  // The far end of a shift-selected merge span. Null means a plain single
-  // selection; set means "select everything between the anchor and here".
-  const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   // Clock tick for the current-time line and the live block's growing bottom
@@ -2298,57 +2245,28 @@ export default function Timeline() {
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [sortedBlocks])
 
-  // The contiguous span the user has selected: just the anchor for a plain
-  // click, or the inclusive run of blocks between the anchor and the
-  // shift-clicked end. Everything in here renders selected and merges together.
-  const mergeSelection = useMemo<WorkContextBlock[]>(() => {
-    if (!selectedBlockId) return []
-    const anchor = blockMap.get(selectedBlockId)
-    if (!anchor) return []
-    if (!mergeRangeEndId || mergeRangeEndId === selectedBlockId || !blockMap.has(mergeRangeEndId)) return [anchor]
-    const i = sortedBlocks.findIndex((candidate) => candidate.id === selectedBlockId)
-    const j = sortedBlocks.findIndex((candidate) => candidate.id === mergeRangeEndId)
-    if (i < 0 || j < 0) return [anchor]
-    const [lo, hi] = i <= j ? [i, j] : [j, i]
-    return sortedBlocks.slice(lo, hi + 1)
-  }, [selectedBlockId, mergeRangeEndId, blockMap, sortedBlocks])
-
-  const selectedSpanIds = useMemo(
-    () => new Set(mergeSelection.map((candidate) => candidate.id)),
-    [mergeSelection],
-  )
-
   useEffect(() => {
     if (!selectedBlockId) return
     if (blockMap.has(selectedBlockId)) return
     setSelectedBlockId(null)
   }, [payload, selectedBlockId, blockMap])
 
-  // Drop a stale range end the moment its block leaves the day (e.g. after a
-  // rebuild) so the selection collapses cleanly to the anchor.
-  useEffect(() => {
-    if (mergeRangeEndId && !blockMap.has(mergeRangeEndId)) setMergeRangeEndId(null)
-  }, [blockMap, mergeRangeEndId])
-
   useEffect(() => {
     setSelectedBlockId(null)
-    setMergeRangeEndId(null)
     setTagFilter(null)
   }, [date])
 
-  // Escape steps the selection down: first it drops a multi-block merge span,
-  // then it deselects entirely. While the context menu or editor modal is
-  // open, Escape belongs to that overlay — it must not also touch selection.
+  // Escape deselects. While the context menu or editor modal is open, Escape
+  // belongs to that overlay — it must not also touch selection.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (contextMenu || editBlockId) return
-      if (mergeRangeEndId) setMergeRangeEndId(null)
-      else if (selectedBlockId) setSelectedBlockId(null)
+      if (selectedBlockId) setSelectedBlockId(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mergeRangeEndId, selectedBlockId, contextMenu, editBlockId])
+  }, [selectedBlockId, contextMenu, editBlockId])
 
   // Once the post-merge payload lands, reselect the single block now covering
   // the merged span and clear the pending marker.
@@ -2418,15 +2336,61 @@ export default function Timeline() {
     [payload],
   )
 
-  // Right-click on a block (GCal-style). Selecting it first means the
-  // inspector already shows the block the menu is acting on. Provisional
-  // (not-yet-analyzed) blocks get the menu too — that's the common case on a
-  // live day; the editor itself limits what a provisional block can change.
+  // Right-click on a block (GCal-style) only opens the menu — it never
+  // selects the block or swaps the right panel. Click = read, right-click =
+  // edit (timeline.md §3.4 rule 5): panel-swap is left-click's job alone.
+  // Provisional (not-yet-analyzed) blocks get the menu too — that's the
+  // common case on a live day; the editor itself limits what a provisional
+  // block can change.
   const openBlockContextMenu = (block: WorkContextBlock, event: ReactMouseEvent) => {
     event.preventDefault()
-    setSelectedBlockId(block.id)
-    setMergeRangeEndId(null)
     setContextMenu({ x: event.clientX, y: event.clientY, blockId: block.id })
+  }
+
+  // The menu's target block and its immediate neighbours, for "Merge with
+  // above/below" — a single-neighbour merge, not the shift-click range merge
+  // that used to live on the read-only panel (spec: no edit controls there).
+  const menuBlock = contextMenu ? blockMap.get(contextMenu.blockId) ?? null : null
+  const menuBlockIndex = menuBlock ? sortedBlocks.findIndex((candidate) => candidate.id === menuBlock.id) : -1
+  const menuAboveBlock = menuBlockIndex > 0 ? sortedBlocks[menuBlockIndex - 1] : null
+  const menuBelowBlock = menuBlockIndex >= 0 && menuBlockIndex < sortedBlocks.length - 1 ? sortedBlocks[menuBlockIndex + 1] : null
+  // A provisional (live) block on either side of the pair can't be merged
+  // yet — same rule the old panel control used (timeline.md §4).
+  const menuMergeAboveDisabled = !!menuBlock?.provisional || !!menuAboveBlock?.provisional
+  const menuMergeBelowDisabled = !!menuBlock?.provisional || !!menuBelowBlock?.provisional
+
+  const menuMergeAbove = async () => {
+    if (!contextMenu || menuBusy || !menuBlock || !menuAboveBlock || menuMergeAboveDisabled) return
+    setMenuBusy(true)
+    try {
+      await ipc.db.mergeTimelineEpisodes({ blockIds: [menuAboveBlock.id, menuBlock.id], date })
+      daySummaryRecapCache.delete(date)
+      pendingSelectAtRef.current = menuAboveBlock.startTime
+      setSelectedBlockId(null)
+      await timelineResource.refresh()
+    } catch {
+      // Menu just closes; the merged/unmerged state is visible on the grid.
+    } finally {
+      setMenuBusy(false)
+      setContextMenu(null)
+    }
+  }
+
+  const menuMergeBelow = async () => {
+    if (!contextMenu || menuBusy || !menuBlock || !menuBelowBlock || menuMergeBelowDisabled) return
+    setMenuBusy(true)
+    try {
+      await ipc.db.mergeTimelineEpisodes({ blockIds: [menuBlock.id, menuBelowBlock.id], date })
+      daySummaryRecapCache.delete(date)
+      pendingSelectAtRef.current = menuBlock.startTime
+      setSelectedBlockId(null)
+      await timelineResource.refresh()
+    } catch {
+      // Menu just closes; the merged/unmerged state is visible on the grid.
+    } finally {
+      setMenuBusy(false)
+      setContextMenu(null)
+    }
   }
 
   const menuRegenerate = async () => {
@@ -2544,16 +2508,8 @@ export default function Timeline() {
         // Clicking empty space deselects everything.
         if (!clickedId) {
           setSelectedBlockId(null)
-          setMergeRangeEndId(null)
           return
         }
-        // Shift- (or Cmd-) click with something already selected extends
-        // the selection into a merge span instead of replacing it.
-        if ((event.shiftKey || event.metaKey) && selectedBlockId && clickedId !== selectedBlockId) {
-          setMergeRangeEndId(clickedId)
-          return
-        }
-        setMergeRangeEndId(null)
         if (clickedId !== selectedBlockId) {
           setSelectedBlockId(clickedId)
         }
@@ -2811,7 +2767,6 @@ export default function Timeline() {
                         gapSegments={gapSegments}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
-                        selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
                         dimBlock={tagFilter ? (block) => blockTypeTag(block) !== tagFilter : undefined}
                         onBlockContextMenu={openBlockContextMenu}
@@ -2826,6 +2781,8 @@ export default function Timeline() {
                           setEditBlockId(contextMenu.blockId)
                           setContextMenu(null)
                         }}
+                        mergeAbove={menuAboveBlock ? { disabled: menuMergeAboveDisabled, onClick: () => { void menuMergeAbove() } } : null}
+                        mergeBelow={menuBelowBlock ? { disabled: menuMergeBelowDisabled, onClick: () => { void menuMergeBelow() } } : null}
                         onRegenerate={() => { void menuRegenerate() }}
                         onDelete={() => { void menuDelete() }}
                         onClose={() => { if (!menuBusy) setContextMenu(null) }}
@@ -2838,7 +2795,6 @@ export default function Timeline() {
                         onClose={() => setEditBlockId(null)}
                         onDeleted={() => {
                           setSelectedBlockId(null)
-                          setMergeRangeEndId(null)
                         }}
                         onRefresh={timelineResource.refresh}
                       />
@@ -2851,24 +2807,8 @@ export default function Timeline() {
                       <BlockDetailInspector
                         block={selectedBlock}
                         payload={payload}
-                        onRefresh={timelineResource.refresh}
                         onClose={() => {
                           setSelectedBlockId(null)
-                          setMergeRangeEndId(null)
-                        }}
-                        mergeSelection={mergeSelection}
-                        onMerged={(mergedStartTime) => {
-                          pendingSelectAtRef.current = mergedStartTime
-                          setMergeRangeEndId(null)
-                          setSelectedBlockId(null)
-                        }}
-                        onSelectBlock={(blockId) => {
-                          setMergeRangeEndId(null)
-                          setSelectedBlockId(blockId)
-                          requestAnimationFrame(() => {
-                            const el = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
-                            el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          })
                         }}
                       />
                     ) : (
