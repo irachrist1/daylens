@@ -4673,18 +4673,21 @@ function buildProvisionalLiveBlocks(
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
-  // Drop standalone noise: a 24s 1:56am blip separated from the real day by an
-  // 8h sleep gap must not become its own phantom block. Keep only coarse
-  // segments (split at the 15-minute session break) that clear the block floor
-  // on span or active time; if none do (a genuinely tiny day), keep them all.
-  const segments = coarseSegmentsFromSessions(sessions)
-  const realSegments = segments.filter((seg) => {
-    if (seg.sessions.length === 0) return false
+  // timeline.md §4: a new provisional block starts when activity resumes — so
+  // the day's MOST RECENT sitting always shows, no matter how short yet. The
+  // old floor filter here made a sitting that just resumed after an idle/away
+  // gap — including the one being lived in right now, "Active now" —
+  // invisible for up to 15 minutes (divergence #3b). Earlier, finished
+  // sittings still need to clear the block floor on span or active time: a
+  // 24s 1:56am blip separated from the real day by an 8h sleep gap must not
+  // become its own phantom block (both founder decisions, Jul 2, 2026).
+  const segments = coarseSegmentsFromSessions(sessions).filter((seg) => seg.sessions.length > 0)
+  const kept = segments.filter((seg, index) => {
+    if (index === segments.length - 1) return true
     const span = sessionEndMs(seg.sessions[seg.sessions.length - 1]) - seg.sessions[0].startTime
     const active = seg.sessions.reduce((sum, s) => sum + Math.max(0, s.durationSeconds * 1000), 0)
     return span >= TIMELINE_MIN_BLOCK_FLOOR_MS || active >= TIMELINE_MIN_BLOCK_FLOOR_MS
   })
-  const kept = realSegments.length > 0 ? realSegments : segments.filter((seg) => seg.sessions.length > 0)
   return kept.map((seg) => {
     const candidate: CandidateBlock = {
       sessions: seg.sessions,
@@ -4888,9 +4891,15 @@ function gapCauseIntervals(events: ReturnType<typeof getActivityStateEventsForRa
   return intervals
 }
 
-// Name one gap range from the cause intervals that overlap it: per-kind
-// coverage decides, priority breaks ties, and a gap that no signal covers at
-// least half of is honestly "Untracked" — Daylens wasn't running to know.
+// Name one gap range from the cause intervals that overlap it: a gap that no
+// signal covers at least half of is honestly "Untracked" — Daylens wasn't
+// running to know (timeline.md §3.1). Otherwise, when several causes covered
+// parts of the gap, the strongest real-absence signal names it by priority
+// order (asleep > locked > paused > passive > idle) — NOT whichever kind
+// happened to cover the most of the gap (founder decision, Jul 2, 2026,
+// divergence #6: coverage share used to outrank priority, so a gap that was
+// 60% idle and 40% asleep read as "Idle" instead of the stronger "Asleep"
+// signal).
 function classifyGapRange(
   range: { startTime: number; endTime: number },
   causes: GapCauseInterval[],
@@ -4901,14 +4910,11 @@ function classifyGapRange(
     const overlap = Math.min(cause.endTime, range.endTime) - Math.max(cause.startTime, range.startTime)
     if (overlap > 0) covered.set(cause.kind, (covered.get(cause.kind) ?? 0) + overlap)
   }
-  let best: TimelineGapSegment['kind'] | null = null
-  let bestMs = 0
-  for (const kind of GAP_KIND_PRIORITY) {
-    const ms = covered.get(kind) ?? 0
-    if (ms > bestMs) { best = kind; bestMs = ms }
-  }
   const totalCovered = [...covered.values()].reduce((sum, ms) => sum + ms, 0)
-  if (!best || totalCovered < gapMs * 0.5) {
+  const best = totalCovered < gapMs * 0.5
+    ? null
+    : GAP_KIND_PRIORITY.find((kind) => (covered.get(kind) ?? 0) > 0) ?? null
+  if (!best) {
     return {
       kind: 'untracked',
       startTime: range.startTime,
