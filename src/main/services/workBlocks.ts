@@ -35,6 +35,7 @@ import type {
   LiveSession,
   PageRef,
   TimelineEvidenceSummary,
+  TimelineGapSegment,
   TimelineSegment,
   TimelineBlockReview,
   TimelineBlockReviewState,
@@ -1579,6 +1580,52 @@ function writeBoundaryCorrection(
 // of the next — not just the outer pair, so the in-between blocks are absorbed
 // too. The scorer keys each merge on those two straddling sessions, so a span
 // merge survives Analyze / rebuild exactly like an adjacent one.
+// Persist a user "cut here" so it survives every rebuild. Anchored purely by
+// wall-clock timestamp (span_start_ms): session ids churn across the
+// app_sessions ↔ derived_sessions namespaces, but the moment the user pointed
+// at does not. Enforced by enforceUserCuts as the last pipeline pass.
+function writeSplitCorrection(db: Database.Database, dateStr: string, cutMs: number): void {
+  const now = Date.now()
+  const id = `cut_${sha1(`${dateStr}:${cutMs}`).slice(0, 18)}`
+  // The (left, right) session-id pair has a unique index; a cut is anchored to
+  // a timestamp, not sessions, so use the negated cut time as a synthetic pair
+  // that can never collide with real session ids (always positive) or with a
+  // cut at a different moment. INSERT OR REPLACE covers a re-cut of the same
+  // moment via either uniqueness (id or pair).
+  db.prepare(`
+    INSERT OR REPLACE INTO timeline_boundary_corrections (id, date, left_session_id, right_session_id, kind, created_at, updated_at, span_start_ms, span_end_ms)
+    VALUES (?, ?, ?, ?, 'split', ?, ?, ?, ?)
+  `).run(id, dateStr, -cutMs, -cutMs, now, now, cutMs, cutMs)
+}
+
+// Trim a block's time range (block editor → time row). Trim-only by design:
+// a block is tracked activity, so its edges can move inward but never outward
+// — extending would count idle time as work, which Daylens never does
+// (invariant: block duration = genuine engagement). Each moved edge becomes a
+// persisted user cut; the trimmed-off stretch re-forms into its own block(s)
+// on the rebuild, keeping every tracked minute accounted for.
+export function trimTimelineBlockSpan(
+  db: Database.Database,
+  dateStr: string,
+  block: WorkContextBlock,
+  startMs: number,
+  endMs: number,
+): { changed: boolean } {
+  const MIN_EDGE_MOVE_MS = 60_000
+  const newStart = Math.max(block.startTime, Math.min(startMs, block.endTime))
+  const newEnd = Math.min(block.endTime, Math.max(endMs, block.startTime))
+  if (newEnd - newStart < MIN_EDGE_MOVE_MS) {
+    throw new Error('The block needs at least a minute left after trimming.')
+  }
+  const startMoved = newStart - block.startTime >= MIN_EDGE_MOVE_MS
+  const endMoved = block.endTime - newEnd >= MIN_EDGE_MOVE_MS
+  if (!startMoved && !endMoved) return { changed: false }
+  if (startMoved) writeSplitCorrection(db, dateStr, newStart)
+  if (endMoved) writeSplitCorrection(db, dateStr, newEnd)
+  invalidateTimelineDay(db, dateStr)
+  return { changed: true }
+}
+
 export function mergeTimelineEpisodes(
   db: Database.Database,
   dateStr: string,
@@ -2976,19 +3023,25 @@ interface MergedSpan {
 interface BoundaryCorrections {
   merges: Set<string>
   mergedSpans: MergedSpan[]
+  // User "cut here" timestamps (from a time-range trim in the block editor).
+  // A cut is enforced LAST in the pipeline, after every merge/fold pass, so no
+  // heuristic can re-join what the user explicitly separated.
+  cuts: number[]
   lookup(left: CandidateBlock, right: CandidateBlock): 'merge' | null
 }
 
 const EMPTY_BOUNDARY_CORRECTIONS: BoundaryCorrections = {
   merges: new Set(),
   mergedSpans: [],
+  cuts: [],
   lookup: () => null,
 }
 
-function makeBoundaryCorrections(merges: Set<string>, mergedSpans: MergedSpan[] = []): BoundaryCorrections {
+function makeBoundaryCorrections(merges: Set<string>, mergedSpans: MergedSpan[] = [], cuts: number[] = []): BoundaryCorrections {
   return {
     merges,
     mergedSpans,
+    cuts,
     lookup(left, right) {
       // Exact session-pair match first (cheap, precise) — but session ids only
       // hold within one id namespace. The span anchor is the durable signal: a
@@ -3028,14 +3081,21 @@ function loadBoundaryCorrections(db: Database.Database, dateStr?: string): Bound
   `).all(dateStr) as Array<{ leftId: number; rightId: number; kind: string; spanStartMs: number | null; spanEndMs: number | null }>
   const merges = new Set<string>()
   const mergedSpans: MergedSpan[] = []
+  const cuts: number[] = []
   for (const row of rows) {
+    if (row.kind === 'split') {
+      // A user cut stores its timestamp in span_start_ms — the wall-clock
+      // anchor survives every session-id namespace flip, like merge spans.
+      if (row.spanStartMs != null) cuts.push(row.spanStartMs)
+      continue
+    }
     if (row.kind !== 'merge') continue
     merges.add(boundaryKeyForSessionIds(row.leftId, row.rightId))
     if (row.spanStartMs != null && row.spanEndMs != null && row.spanEndMs > row.spanStartMs) {
       mergedSpans.push({ startMs: row.spanStartMs, endMs: row.spanEndMs })
     }
   }
-  return makeBoundaryCorrections(merges, mergedSpans)
+  return makeBoundaryCorrections(merges, mergedSpans, cuts)
 }
 
 type RunMode = 'execution' | 'research' | 'browse' | 'admin' | 'drift' | 'meeting'
@@ -3474,6 +3534,43 @@ function enforceMinimumBlockFloor(
   return result
 }
 
+// A user "cut here" (from a time-range trim in the block editor) is enforced
+// LAST — after every merge, bridge, and floor pass — so no heuristic can
+// re-join what the user explicitly separated. Any candidate spanning a cut is
+// split at that timestamp; the resulting pieces stay even if they fall under
+// the 15-minute floor (an explicit user correction outranks the size rule,
+// invariant 8). Cuts sitting on an existing boundary are no-ops.
+function enforceUserCuts(candidates: CandidateBlock[], cuts: number[]): CandidateBlock[] {
+  if (cuts.length === 0 || candidates.length === 0) return candidates
+  let result = candidates
+  for (const cut of [...cuts].sort((a, b) => a - b)) {
+    result = result.flatMap((candidate) => {
+      if (candidate.sessions.length === 0) return [candidate]
+      const start = candidate.sessions[0].startTime
+      const end = sessionEndMs(candidate.sessions[candidate.sessions.length - 1])
+      if (cut <= start || cut >= end) return [candidate]
+      const [leftSessions, rightSessions] = splitSessionsAtTime(candidate.sessions, cut)
+      if (leftSessions.length === 0 || rightSessions.length === 0) return [candidate]
+      return [
+        {
+          ...candidate,
+          sessions: leftSessions,
+          boundedAfterGap: false,
+          endReasons: ['user-cut' as BoundaryReason],
+        },
+        {
+          ...candidate,
+          sessions: rightSessions,
+          boundedBeforeGap: false,
+          forcedBoundaryBefore: true,
+          startReasons: ['user-cut' as BoundaryReason],
+        },
+      ]
+    })
+  }
+  return result
+}
+
 function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], dateStr?: string): WorkContextBlock[] {
   const context = buildTimelineContext(db, sessions)
   const corrections = loadBoundaryCorrections(db, dateStr)
@@ -3493,7 +3590,7 @@ function buildBlocksForSessions(db: Database.Database, sessions: AppSession[], d
     })
   const bridged = bridgeSameWorkCandidates(candidates, db, context)
   const reconciled = reconcileBoundaries(bridged, db, context, corrections)
-  return enforceMinimumBlockFloor(reconciled, db, context)
+  return enforceUserCuts(enforceMinimumBlockFloor(reconciled, db, context), corrections.cuts)
     .map((candidate) => buildBlockFromCandidate(candidate, db, context))
 }
 
@@ -3966,6 +4063,13 @@ function invalidateTimelineDay(db: Database.Database, dateStr: string): void {
     SET invalidated_at = ?
     WHERE date = ? AND invalidated_at IS NULL
   `).run(Date.now(), dateStr)
+}
+
+// Public invalidation for edits that change the day's underlying data
+// (evidence purge): the persisted blocks are stale and must rebuild from
+// what remains on the next read.
+export function invalidateTimelineDayBlocks(db: Database.Database, dateStr: string): void {
+  invalidateTimelineDay(db, dateStr)
 }
 
 type CarriedAiLabel = { label: string; narrative: string | null; confidence: number }
@@ -4694,43 +4798,134 @@ export function buildTimelineBlocksForDay(
   return computed
 }
 
-function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
-  if (segments.length <= 1) return segments
-
-  const merged: TimelineSegment[] = [segments[0]]
-  for (let index = 1; index < segments.length; index++) {
-    const current = segments[index]
-    const previous = merged[merged.length - 1]
-
-    if (
-      current.kind !== 'work_block'
-      && previous.kind !== 'work_block'
-      && current.kind === previous.kind
-      && current.source === previous.source
-      && current.startTime <= previous.endTime
-    ) {
-      previous.endTime = Math.max(previous.endTime, current.endTime)
-      previous.label = current.kind === 'machine_off' ? 'Machine off' : current.kind === 'away' ? 'Away' : 'Idle gap'
-      continue
-    }
-
-    merged.push(current)
-  }
-
-  return merged
-}
-
 // A gap becomes visible blank space on the grid at the same threshold that
 // ends a block: 15 minutes. Below that a lull is absorbed; at or above it the
 // timeline must show the absence honestly.
 const MIN_VISIBLE_GAP_MS = 15 * 60 * 1000
 
-function isVisibleGapSegment(segment: TimelineSegment): boolean {
-  if (segment.kind === 'work_block') return true
-  return segment.endTime - segment.startTime >= MIN_VISIBLE_GAP_MS
+// One cause interval derived from a start/end pair of activity-state events.
+interface GapCauseInterval {
+  kind: TimelineGapSegment['kind']
+  startTime: number
+  endTime: number
 }
 
-function buildSegmentsForDay(
+const GAP_KIND_LABELS: Record<string, string> = {
+  asleep: 'Asleep',
+  locked: 'Away',
+  idle: 'Idle',
+  passive: 'Passive',
+  paused: 'Tracking paused',
+  untracked: 'Untracked',
+}
+
+// When multiple causes covered parts of one gap, the strongest signal names
+// it: a real absence (machine asleep / screen locked) outranks a pause,
+// which outranks presence-without-input.
+const GAP_KIND_PRIORITY: Array<TimelineGapSegment['kind']> = ['asleep', 'locked', 'paused', 'passive', 'idle']
+
+// Turn the day's raw activity-state events into cause intervals. Each
+// start-type event opens a cause; the next end-type event closes it. An
+// idle_start recorded with heldForMediaPlayback means something was actively
+// playing — the user was present, just not typing — which is passive
+// presence, not idleness.
+function gapCauseIntervals(events: ReturnType<typeof getActivityStateEventsForRange>, toMs: number): GapCauseInterval[] {
+  const intervals: GapCauseInterval[] = []
+  let open: { kind: TimelineGapSegment['kind']; startTime: number } | null = null
+
+  const closeAt = (ts: number) => {
+    if (open && ts > open.startTime) {
+      intervals.push({ kind: open.kind, startTime: open.startTime, endTime: ts })
+    }
+    open = null
+  }
+
+  for (const event of events) {
+    switch (event.eventType) {
+      case 'suspend':
+        closeAt(event.eventTs)
+        open = { kind: 'asleep', startTime: event.eventTs }
+        break
+      case 'lock_screen':
+        closeAt(event.eventTs)
+        open = { kind: 'locked', startTime: event.eventTs }
+        break
+      case 'away_start':
+        // The no-input flush while unlocked: idle, not locked-away.
+        if (!open || open.kind === 'idle' || open.kind === 'passive') {
+          closeAt(event.eventTs)
+          open = { kind: 'idle', startTime: event.eventTs }
+        }
+        break
+      case 'idle_start': {
+        let heldForMedia = false
+        try {
+          heldForMedia = Boolean(JSON.parse(event.metadataJson || '{}').heldForMediaPlayback)
+        } catch { /* malformed metadata reads as plain idle */ }
+        if (!open || open.kind === 'idle' || open.kind === 'passive') {
+          closeAt(event.eventTs)
+          open = { kind: heldForMedia ? 'passive' : 'idle', startTime: event.eventTs }
+        }
+        break
+      }
+      case 'tracking_paused':
+        closeAt(event.eventTs)
+        open = { kind: 'paused', startTime: event.eventTs }
+        break
+      case 'resume':
+      case 'unlock_screen':
+      case 'away_end':
+      case 'idle_end':
+      case 'tracking_resumed':
+        closeAt(event.eventTs)
+        break
+      default:
+        break
+    }
+  }
+  closeAt(toMs)
+  return intervals
+}
+
+// Name one gap range from the cause intervals that overlap it: per-kind
+// coverage decides, priority breaks ties, and a gap that no signal covers at
+// least half of is honestly "Untracked" — Daylens wasn't running to know.
+function classifyGapRange(
+  range: { startTime: number; endTime: number },
+  causes: GapCauseInterval[],
+): TimelineGapSegment {
+  const gapMs = range.endTime - range.startTime
+  const covered = new Map<TimelineGapSegment['kind'], number>()
+  for (const cause of causes) {
+    const overlap = Math.min(cause.endTime, range.endTime) - Math.max(cause.startTime, range.startTime)
+    if (overlap > 0) covered.set(cause.kind, (covered.get(cause.kind) ?? 0) + overlap)
+  }
+  let best: TimelineGapSegment['kind'] | null = null
+  let bestMs = 0
+  for (const kind of GAP_KIND_PRIORITY) {
+    const ms = covered.get(kind) ?? 0
+    if (ms > bestMs) { best = kind; bestMs = ms }
+  }
+  const totalCovered = [...covered.values()].reduce((sum, ms) => sum + ms, 0)
+  if (!best || totalCovered < gapMs * 0.5) {
+    return {
+      kind: 'untracked',
+      startTime: range.startTime,
+      endTime: range.endTime,
+      label: GAP_KIND_LABELS.untracked,
+      source: 'derived_gap',
+    }
+  }
+  return {
+    kind: best,
+    startTime: range.startTime,
+    endTime: range.endTime,
+    label: GAP_KIND_LABELS[best] ?? 'Away',
+    source: 'activity_event',
+  }
+}
+
+export function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
@@ -4740,6 +4935,7 @@ function buildSegmentsForDay(
 ): TimelineSegment[] {
   const [fromMs, toMs] = bounds ?? ownedDayBounds(db, dateStr)
   const events = getActivityStateEventsForRange(db, fromMs, toMs)
+  const causes = gapCauseIntervals(events, toMs)
   const workSegments: TimelineSegment[] = blocks.map((block) => ({
     kind: 'work_block',
     startTime: block.startTime,
@@ -4747,102 +4943,34 @@ function buildSegmentsForDay(
     blockId: block.id,
   }))
 
-  const eventSegments: TimelineSegment[] = []
-  let activeAwayStart: { kind: 'away' | 'machine_off'; startTime: number } | null = null
-  for (const event of events) {
-    if (event.eventType === 'away_start' || event.eventType === 'lock_screen' || event.eventType === 'idle_start') {
-      const kind = event.eventType === 'lock_screen' ? 'away' : 'away'
-      activeAwayStart = { kind, startTime: event.eventTs }
-    } else if (event.eventType === 'suspend') {
-      activeAwayStart = { kind: 'machine_off', startTime: event.eventTs }
-    } else if ((event.eventType === 'away_end' || event.eventType === 'unlock_screen' || event.eventType === 'idle_end' || event.eventType === 'resume') && activeAwayStart) {
-      eventSegments.push({
-        kind: activeAwayStart.kind,
-        startTime: activeAwayStart.startTime,
-        endTime: event.eventTs,
-        label: activeAwayStart.kind === 'machine_off' ? 'Machine off' : 'Away',
-        source: 'activity_event',
-      })
-      activeAwayStart = null
-    }
-  }
-
-  if (activeAwayStart) {
-    eventSegments.push({
-      kind: activeAwayStart.kind,
-      startTime: activeAwayStart.startTime,
-      endTime: toMs,
-      label: activeAwayStart.kind === 'machine_off' ? 'Machine off' : 'Away',
-      source: 'activity_event',
-    })
-  }
-
   const gapRanges: Array<{ startTime: number; endTime: number }> = []
   const byStart = [...workSegments].sort((left, right) => left.startTime - right.startTime)
   // The day starts at the first real block, not midnight: overnight sleep/idle
-  // before you began is not a gap in your day, so never render an "Away" bar
-  // before the first block. Gaps BETWEEN and after blocks still show.
+  // before you began is not a gap in your day, so never render a gap reason
+  // before the first block. Gaps BETWEEN and after blocks still show — but
+  // never past "now": the live day's bounds run to midnight, and the hours
+  // that haven't happened yet are not a gap of any kind.
+  const gapCeiling = Math.min(toMs, Date.now())
   let cursor = byStart.length > 0 ? byStart[0].startTime : fromMs
   for (const segment of byStart) {
     if (segment.startTime > cursor) {
-      gapRanges.push({ startTime: cursor, endTime: segment.startTime })
+      gapRanges.push({ startTime: cursor, endTime: Math.min(segment.startTime, gapCeiling) })
     }
     cursor = Math.max(cursor, segment.endTime)
   }
-  if (cursor < toMs) {
-    gapRanges.push({ startTime: cursor, endTime: toMs })
+  if (cursor < gapCeiling) {
+    gapRanges.push({ startTime: cursor, endTime: gapCeiling })
   }
 
-  const gapSegments: TimelineSegment[] = []
-  for (const range of gapRanges) {
-    let gapCursor = range.startTime
-    const overlappingEvents = eventSegments
-      .map((segment) => ({
-        ...segment,
-        startTime: Math.max(segment.startTime, range.startTime),
-        endTime: Math.min(segment.endTime, range.endTime),
-      }))
-      .filter((segment) => segment.endTime > segment.startTime)
-      .sort((left, right) => left.startTime - right.startTime)
+  // One classified segment per visible gap (founder decision, Jul 2, 2026):
+  // the blank space stays blank, but it always knows why it's blank.
+  const gapSegments: TimelineSegment[] = gapRanges
+    .filter((range) => range.endTime - range.startTime >= MIN_VISIBLE_GAP_MS)
+    .map((range) => classifyGapRange(range, causes))
 
-    for (const eventSegment of overlappingEvents) {
-      if (!isVisibleGapSegment(eventSegment)) continue
-
-      if (eventSegment.startTime > gapCursor) {
-        const gapDuration = eventSegment.startTime - gapCursor
-        if (gapDuration >= MIN_VISIBLE_GAP_MS) {
-          gapSegments.push({
-            kind: 'idle_gap',
-            startTime: gapCursor,
-            endTime: eventSegment.startTime,
-            label: 'Idle gap',
-            source: 'derived_gap',
-          })
-        }
-      }
-      gapSegments.push(eventSegment)
-      gapCursor = Math.max(gapCursor, eventSegment.endTime)
-    }
-
-    if (gapCursor < range.endTime) {
-      const gapDuration = range.endTime - gapCursor
-      if (gapDuration >= MIN_VISIBLE_GAP_MS) {
-        gapSegments.push({
-          kind: 'idle_gap',
-          startTime: gapCursor,
-          endTime: range.endTime,
-          label: 'Idle gap',
-          source: 'derived_gap',
-        })
-      }
-    }
-  }
-
-  const merged = mergeAdjacentSegments([...workSegments, ...gapSegments]
-    .filter((segment) => segment.endTime > segment.startTime && isVisibleGapSegment(segment))
-    .sort((left, right) => left.startTime - right.startTime))
-
-  return merged
+  return [...workSegments, ...gapSegments]
+    .filter((segment) => segment.endTime > segment.startTime)
+    .sort((left, right) => left.startTime - right.startTime)
 }
 
 // DEV-113: honor the apps the user marked as their real work in onboarding.

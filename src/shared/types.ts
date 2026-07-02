@@ -118,6 +118,7 @@ export type BoundaryReason =
   | 'detour-end'
   | 'subject-change'
   | 'user-merge'
+  | 'user-cut'
 
 // The boundary reasons that opened and closed a block/episode. Always
 // populated (at minimum the day edges), so every block can explain itself.
@@ -157,6 +158,19 @@ export interface TimelineBlockReviewUpdate {
   correctedIntentRole?: WorkIntentRole | null
   correctedIntentSubject?: string | null
   correctedCategory?: AppCategory | null
+}
+
+// Permanently delete a sensitive tracked record from the app — the underlying
+// rows (sessions, visits, focus events, artifacts), not a display filter. Used
+// by the block editor's per-entry remove; scoped to the block's time span so
+// "this visit" disappears from every surface (timeline, apps, AI, wraps).
+export interface PurgeTrackedEvidencePayload {
+  kind: 'app' | 'site'
+  bundleId?: string
+  appName?: string
+  domain?: string
+  fromMs: number
+  toMs: number
 }
 
 export interface FocusScoreBreakdown {
@@ -215,8 +229,20 @@ export interface WorkContextBlock {
   provisional?: boolean
 }
 
+// A gap on the timeline always carries the reason it happened (founder
+// decision, Jul 2, 2026) — looking at a day retroactively you can tell what
+// kind of absence each blank stretch was, derived from the activity-state
+// events that covered it:
+//   asleep    — machine suspended / lid closed
+//   locked    — screen locked; user confirmed not present
+//   idle      — machine open and unlocked, but no input for a sustained stretch
+//   passive   — no input but something was actively playing (video, meeting):
+//               present, just not typing
+//   paused    — the user paused tracking (settings/tray)
+//   untracked — no signal at all: Daylens wasn't running
+// The legacy kinds (idle_gap / away / machine_off) remain for older producers.
 export interface TimelineGapSegment {
-  kind: 'idle_gap' | 'away' | 'machine_off'
+  kind: 'idle_gap' | 'away' | 'machine_off' | 'asleep' | 'locked' | 'idle' | 'passive' | 'paused' | 'untracked'
   startTime: number
   endTime: number
   label: string
@@ -1772,6 +1798,8 @@ export const IPC = {
     SET_BLOCK_REVIEW: 'db:set-block-review',
     DELETE_TIMELINE_BLOCK: 'db:delete-timeline-block',
     MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
+    SET_BLOCK_SPAN: 'db:set-block-span',
+    PURGE_TRACKED_EVIDENCE: 'db:purge-tracked-evidence',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',
     GET_TIMELINE_RANGE_BLOCKS: 'db:get-timeline-range-blocks',

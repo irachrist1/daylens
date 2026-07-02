@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
-import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade, mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade, mergeTimelineEpisodes, trimTimelineBlockSpan, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { PROJECTION_VERSION } from '../src/main/core/projections/chunk2.ts'
 
@@ -115,11 +115,11 @@ function insertWebsiteVisit(
   )
 }
 
-function insertActivityEvent(db: Database.Database, eventType: string, ts: number): void {
+function insertActivityEvent(db: Database.Database, eventType: string, ts: number, metadata: Record<string, unknown> = {}): void {
   db.prepare(`
     INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json)
-    VALUES (?, ?, 'test', '{}')
-  `).run(ts, eventType)
+    VALUES (?, ?, 'test', ?)
+  `).run(ts, eventType, JSON.stringify(metadata))
 }
 
 function insertDerivedSessionDay(db: Database.Database): void {
@@ -417,10 +417,67 @@ test('timeline hides short gap events while preserving meaningful untracked span
   const shortGaps = gaps.filter((segment) => segment.endTime - segment.startTime < 30 * 60_000)
 
   assert.equal(shortGaps.length, 0, `short gaps should be hidden: ${JSON.stringify(shortGaps)}`)
+  // Typed gaps (Jul 2, 2026): a 10-second idle blip cannot explain an hour —
+  // the gap classifies honestly as "untracked" rather than pretending to know.
   assert.ok(
-    gaps.some((segment) => segment.kind === 'idle_gap' && segment.startTime === localMs(9, 30) && segment.endTime === localMs(10, 30)),
+    gaps.some((segment) => segment.kind === 'untracked' && segment.startTime === localMs(9, 30) && segment.endTime === localMs(10, 30)),
     `expected the full 60-minute untracked span to remain: ${JSON.stringify(gaps)}`,
   )
+  db.close()
+})
+
+// Typed gaps (founder decision, Jul 2, 2026): a visible gap carries the
+// reason derived from the activity events that covered it — Asleep for a
+// suspend, Away for a lock, Passive when media held the session open.
+test('gaps classify by their activity-event cause', () => {
+  const db = createDb()
+  insertSession(db, { title: 'a.ts - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 30 })
+  insertSession(db, { title: 'b.ts - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 90, durationMinutes: 30 })
+  insertSession(db, { title: 'c.ts - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 180, durationMinutes: 30 })
+  // First gap (9:30–10:30): machine suspended for nearly the whole stretch.
+  insertActivityEvent(db, 'suspend', localMs(9, 31))
+  insertActivityEvent(db, 'resume', localMs(10, 29))
+  // Second gap (11:00–12:00): screen locked.
+  insertActivityEvent(db, 'lock_screen', localMs(11, 2))
+  insertActivityEvent(db, 'unlock_screen', localMs(11, 58))
+
+  const gaps = getTimelineDayPayload(db, TEST_DATE).segments.filter((segment) => segment.kind !== 'work_block')
+  assert.ok(
+    gaps.some((gap) => gap.kind === 'asleep' && gap.startTime === localMs(9, 30)),
+    `suspend-covered gap should read Asleep: ${JSON.stringify(gaps)}`,
+  )
+  assert.ok(
+    gaps.some((gap) => gap.kind === 'locked' && gap.startTime === localMs(11, 0)),
+    `lock-covered gap should read Away (locked): ${JSON.stringify(gaps)}`,
+  )
+  db.close()
+})
+
+// A time-range trim (block editor) is a user "cut here": enforced after every
+// merge/fold pass and persisted by wall-clock timestamp, so the separated
+// pieces can never re-fuse — even on a full rebuild.
+test('a time-range trim cuts the block and survives a rebuild', () => {
+  const db = createDb()
+  insertSession(db, { title: 'work.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 100 })
+
+  const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
+  assert.ok(block)
+  assert.equal(getTimelineDayPayload(db, TEST_DATE).blocks.length, 1)
+
+  // Trim the end back to 10:00 — the 10:00–10:40 tail re-forms on its own.
+  const result = trimTimelineBlockSpan(db, TEST_DATE, block, block.startTime, localMs(10, 0))
+  assert.equal(result.changed, true)
+
+  const trimmed = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(trimmed.length, 2, `the cut should split the block: ${trimmed.map((b) => `${new Date(b.startTime).toLocaleTimeString()}–${new Date(b.endTime).toLocaleTimeString()}`).join(', ')}`)
+  const sorted = [...trimmed].sort((a, b) => a.startTime - b.startTime)
+  assert.equal(sorted[0].endTime, localMs(10, 0), 'the first piece ends exactly at the cut')
+  assert.equal(sorted[1].startTime, localMs(10, 0), 'the second piece starts exactly at the cut')
+
+  // A rebuild (stale heuristic, retired ids) must not re-fuse the pieces.
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const rebuilt = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(rebuilt.length, 2, 'the user cut survives the rebuild')
   db.close()
 })
 

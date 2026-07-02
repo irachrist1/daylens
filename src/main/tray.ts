@@ -1,6 +1,8 @@
 import { BrowserWindow, Menu, Tray, app, nativeImage } from 'electron'
 import path from 'node:path'
 import { getSettings, setSettings } from './services/settings'
+import { getDb } from './services/database'
+import { recordActivityStateEvent } from './db/queries'
 
 let tray: Tray | null = null
 let trayError: string | null = null
@@ -90,6 +92,16 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
       type: 'checkbox',
       checked: paused,
       click: () => {
+        // Record the pause/resume as an activity-state event so the paused
+        // span classifies as "Tracking paused" on the timeline, matching the
+        // settings-page toggle path.
+        try {
+          recordActivityStateEvent(getDb(), {
+            eventTs: Date.now(),
+            eventType: !paused ? 'tracking_paused' : 'tracking_resumed',
+            source: 'tray',
+          })
+        } catch { /* best-effort gap labeling; the pause itself still applies */ }
         void setSettings({ trackingPaused: !paused }).then(() => refreshTrayMenu(controller))
       },
     },

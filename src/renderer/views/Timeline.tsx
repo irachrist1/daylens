@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Pencil, Sparkles, Trash2, X } from 'lucide-react'
+import { Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
@@ -547,16 +547,18 @@ function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackB
 
 // One day as a 24-hour calendar track: hour lines, blocks at their clock
 // positions, and the current-time line on today. Idle/away time renders as
-// nothing at all — blank space between blocks, sized by the clock (founder
-// rule, Jul 2, 2026): no card, no color, no label, nothing clickable. The
-// shape of the blocks and the gaps between them IS the record of when you
-// were at the computer. Blocks are buttons carrying data-timeline-block-id,
-// so the day view's click-capture selection (plain click, shift-click merge,
-// click-empty deselect) works unchanged.
+// blank space between blocks, sized by the clock — no card, no fill, nothing
+// clickable — but never unexplained (founder decision, Jul 2, 2026): each
+// visible gap carries one quiet line saying what kind of absence it was
+// (Asleep / Away / Idle / Passive / Tracking paused / Untracked) and for how
+// long. Blocks are buttons carrying data-timeline-block-id, so the day view's
+// click-capture selection (plain click, shift-click merge, click-empty
+// deselect) works unchanged.
 function CalendarDayTrack({
   date,
   blocks,
   bounds,
+  gapSegments = [],
   hourHeight,
   compact = false,
   selectedBlockId = null,
@@ -569,6 +571,7 @@ function CalendarDayTrack({
   date: string
   blocks: WorkContextBlock[]
   bounds: TrackBounds
+  gapSegments?: TimelineGapSegment[]
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
@@ -606,6 +609,34 @@ function CalendarDayTrack({
           }}
         />
       ))}
+
+      {/* Gap reasons: the blank space stays blank — one quiet, non-interactive
+          line names the kind of absence and its length. */}
+      {!compact && gapSegments.map((gap) => {
+        const top = topFor(gap.startTime)
+        const gapHeight = topFor(gap.endTime) - top
+        if (gapHeight < 26) return null
+        return (
+          <div
+            key={`gap:${gap.startTime}`}
+            style={{
+              position: 'absolute',
+              top,
+              height: gapHeight,
+              left: 4,
+              right: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+              {gap.label} · {formatDuration(Math.max(60, Math.round((gap.endTime - gap.startTime) / 1000)))}
+            </span>
+          </div>
+        )
+      })}
 
       {blocks.map((block) => {
         const top = topFor(block.startTime)
@@ -732,6 +763,343 @@ function BlockContextMenu({
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
           Delete
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── The block editor modal ──────────────────────────────────────────────────
+// Right-click → Edit opens this separate popup, Google Calendar's event editor
+// shape: title, time range, type/color with a suggested color and a one-line
+// reason, and the tracked records with a permanent-remove per row. Save
+// applies every change and closes; Discard closes with nothing applied. The
+// read-only click popover never hosts any of this.
+
+function toTimeInputValue(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function fromTimeInputValue(value: string, baseMs: number): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!match) return null
+  const d = new Date(baseMs)
+  d.setHours(Number(match[1]), Number(match[2]), 0, 0)
+  return d.getTime()
+}
+
+function BlockEditModal({
+  block,
+  payload,
+  onClose,
+  onRefresh,
+}: {
+  block: WorkContextBlock
+  payload: DayTimelinePayload
+  onClose: () => void
+  onRefresh: () => Promise<void>
+}) {
+  const [titleDraft, setTitleDraft] = useState(() => userVisibleBlockLabel(block))
+  const [categoryDraft, setCategoryDraft] = useState<AppCategory>(block.dominantCategory)
+  const [startDraft, setStartDraft] = useState(() => toTimeInputValue(block.startTime))
+  const [endDraft, setEndDraft] = useState(() => toTimeInputValue(block.endTime))
+  const [saving, setSaving] = useState(false)
+  const [purgingKey, setPurgingKey] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Escape = Discard, like closing GCal's editor without saving.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, saving])
+
+  // The suggested type: what the evidence says this block mostly was — with a
+  // short, plain reason (the dominant app or site and its share of the time).
+  const suggestion = useMemo(() => {
+    const split = Object.entries(block.categoryDistribution ?? {})
+      .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
+      .sort((a, b) => b[1] - a[1])
+    const topCategory = split[0]?.[0]
+    if (!topCategory || !BLOCK_CATEGORY_OPTIONS.some((option) => option.value === topCategory)) return null
+    const topApp = block.topApps[0]
+    const topSite = block.websites[0]
+    const carrier = topApp && (!topSite || topApp.totalSeconds >= topSite.totalSeconds)
+      ? formatDisplayAppName(topApp.appName)
+      : topSite ? shortDomainLabel(topSite.domain) : null
+    const label = BLOCK_CATEGORY_OPTIONS.find((option) => option.value === topCategory)?.label ?? categoryLabel(topCategory)
+    return {
+      category: topCategory,
+      color: activityColorForCategory(topCategory),
+      reason: carrier
+        ? `${label} — mostly ${carrier} (${formatDuration(split[0][1])} of ${formatDuration(blockActiveSeconds(block))})`
+        : `${label} — the largest share of this block's time`,
+    }
+  }, [block])
+
+  const save = async () => {
+    if (saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      const title = titleDraft.trim()
+      if (title && title !== block.label.current) {
+        await ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label: title, narrative: block.label.narrative })
+      }
+      if (categoryDraft !== block.dominantCategory) {
+        await ipc.db.setBlockReview({ blockId: block.id, date: payload.date, state: 'corrected', correctedCategory: categoryDraft })
+      }
+      const startMs = fromTimeInputValue(startDraft, block.startTime)
+      const endMs = fromTimeInputValue(endDraft, block.endTime)
+      if (startMs != null && endMs != null && (startMs !== block.startTime || endMs !== block.endTime)) {
+        // Applied last: a trim re-shapes the day and retires block ids.
+        await ipc.db.setBlockSpan({ blockId: block.id, date: payload.date, startMs, endMs })
+      }
+      daySummaryRecapCache.delete(payload.date)
+      await onRefresh()
+      onClose()
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't save the changes. Try again in a moment.").message)
+      setSaving(false)
+    }
+  }
+
+  // Permanently remove a sensitive tracked record. The main process shows the
+  // native "are you sure" dialog; on confirm the underlying rows are deleted
+  // everywhere — not hidden — and the day re-forms from what remains.
+  const purgeRow = async (row: { key: string; kind: 'app' | 'site'; bundleId?: string; appName?: string; domain?: string }) => {
+    if (purgingKey) return
+    setPurgingKey(row.key)
+    setError(null)
+    try {
+      const { purged } = await ipc.db.purgeTrackedEvidence({
+        kind: row.kind,
+        bundleId: row.bundleId,
+        appName: row.appName,
+        domain: row.domain,
+        fromMs: block.startTime,
+        toMs: block.endTime,
+      })
+      if (purged) {
+        daySummaryRecapCache.delete(payload.date)
+        await onRefresh()
+        onClose()
+      }
+    } catch (err) {
+      setError(sanitizeIpcError(err, "Couldn't remove the record. Try again in a moment.").message)
+    } finally {
+      setPurgingKey(null)
+    }
+  }
+
+  const trackedRows = [
+    ...block.topApps.slice(0, 10).map((app) => ({
+      key: `app:${app.bundleId}`,
+      kind: 'app' as const,
+      bundleId: app.bundleId,
+      appName: app.appName,
+      name: formatDisplayAppName(app.appName),
+      detail: categoryLabel(app.category),
+      seconds: app.totalSeconds,
+      icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={22} fontSize={9} color={activityColorForCategory(app.category)} />,
+    })),
+    ...block.websites.slice(0, 10).map((site) => ({
+      key: `site:${site.domain}`,
+      kind: 'site' as const,
+      domain: site.domain,
+      name: shortDomainLabel(site.domain),
+      detail: site.topTitle?.trim() || null,
+      seconds: site.totalSeconds,
+      icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={22} />,
+    })),
+  ].sort((a, b) => b.seconds - a.seconds)
+
+  const inputBase: CSSProperties = {
+    borderRadius: 9,
+    border: '1px solid var(--color-border-ghost)',
+    background: 'var(--color-surface-low)',
+    color: 'var(--color-text-primary)',
+    fontSize: 13,
+    outline: 'none',
+  }
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      onClick={() => { if (!saving) onClose() }}
+    >
+      <div
+        role="dialog"
+        aria-label="Edit block"
+        style={{
+          width: 560,
+          maxWidth: '100%',
+          maxHeight: '84vh',
+          overflowY: 'auto',
+          borderRadius: 18,
+          border: '1px solid var(--color-border-ghost)',
+          background: 'var(--color-surface)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+          padding: '16px 24px 20px',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {/* Title row, GCal editor style: close on the left, the title as a big
+            underlined field. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+          <button
+            type="button"
+            aria-label="Discard changes"
+            title="Discard"
+            onClick={() => { if (!saving) onClose() }}
+            style={{ width: 32, height: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', cursor: 'pointer', flexShrink: 0 }}
+          >
+            <X size={17} strokeWidth={2} aria-hidden="true" />
+          </button>
+          <input
+            type="text"
+            aria-label="Block title"
+            value={titleDraft}
+            autoFocus
+            onChange={(event) => setTitleDraft(event.target.value)}
+            placeholder="Block title"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 19,
+              fontWeight: 650,
+              border: 'none',
+              borderBottom: '1.5px solid var(--color-border-ghost)',
+              background: 'transparent',
+              color: 'var(--color-text-primary)',
+              padding: '4px 2px 7px',
+              outline: 'none',
+            }}
+          />
+        </div>
+
+        <div style={{ display: 'grid', gap: 16, paddingLeft: 44 }}>
+          {/* Time range. Trim-only: a block is tracked activity, so its edges
+              move inward — Daylens never turns idle time into work. */}
+          <div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: 'var(--color-text-primary)', fontWeight: 600 }}>{formatFullDate(payload.date)}</span>
+              <input
+                type="time"
+                aria-label="Start time"
+                value={startDraft}
+                onChange={(event) => setStartDraft(event.target.value)}
+                style={{ ...inputBase, padding: '5px 8px' }}
+              />
+              <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>to</span>
+              <input
+                type="time"
+                aria-label="End time"
+                value={endDraft}
+                onChange={(event) => setEndDraft(event.target.value)}
+                style={{ ...inputBase, padding: '5px 8px' }}
+              />
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6, lineHeight: 1.5 }}>
+              Edges move inward only — the trimmed-off stretch becomes its own block. Daylens never counts idle time as activity.
+            </div>
+          </div>
+
+          {/* Type + color, with the evidence-based suggestion and its reason. */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <select
+                aria-label="Block type"
+                value={categoryDraft}
+                onChange={(event) => setCategoryDraft(event.target.value as AppCategory)}
+                style={{ ...inputBase, height: 32, padding: '0 8px', cursor: 'pointer' }}
+              >
+                {!BLOCK_CATEGORY_OPTIONS.some((option) => option.value === categoryDraft) && (
+                  <option value={categoryDraft}>{categoryLabel(categoryDraft)}</option>
+                )}
+                {BLOCK_CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 4, background: activityColorForCategory(categoryDraft), flexShrink: 0 }} />
+            </div>
+            {suggestion && suggestion.category !== categoryDraft && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 8, fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
+                <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, background: suggestion.color, flexShrink: 0 }} />
+                <span>Suggested: {suggestion.reason}</span>
+                <button
+                  type="button"
+                  onClick={() => setCategoryDraft(suggestion.category)}
+                  style={{ border: 'none', background: 'transparent', color: 'var(--color-primary)', fontSize: 12, fontWeight: 650, cursor: 'pointer', padding: 0 }}
+                >
+                  Use
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Tracked records, each permanently removable — real deletion of
+              the underlying data, for anything the user doesn't want Daylens
+              to hold (native confirm before anything is touched). */}
+          {trackedRows.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
+                Tracked in this block
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {trackedRows.map((row) => (
+                  <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    {row.icon}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</div>
+                      {row.detail && (
+                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.detail}</div>
+                      )}
+                    </div>
+                    <span style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatDuration(row.seconds)}</span>
+                    <button
+                      type="button"
+                      aria-label={`Permanently remove ${row.name} from Daylens`}
+                      title="Remove permanently"
+                      disabled={purgingKey !== null}
+                      onClick={() => { void purgeRow(row) }}
+                      style={{ width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 7, border: 'none', background: 'transparent', color: purgingKey === row.key ? 'var(--color-text-tertiary)' : '#f87171', cursor: purgingKey ? 'default' : 'pointer', opacity: purgingKey && purgingKey !== row.key ? 0.4 : 1, flexShrink: 0 }}
+                    >
+                      <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 8, lineHeight: 1.5 }}>
+                Removing deletes the record from Daylens entirely — timeline, apps, and AI — not just from this view.
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{error}</div>
+          )}
+        </div>
+
+        {/* Save applies and closes; Discard closes with no changes. */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={onClose}
+            style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12.5, fontWeight: 650, cursor: saving ? 'default' : 'pointer', padding: '7px 14px', borderRadius: 9 }}
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => { void save() }}
+            style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12.5, fontWeight: 700, cursor: saving ? 'default' : 'pointer', padding: '7px 16px', borderRadius: 9, opacity: saving ? 0.6 : 1 }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -928,63 +1296,41 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   )
 }
 
-// The block detail as a Google-Calendar event card: a floating popover
-// anchored beside the clicked block — icon actions top-right (edit, regenerate,
-// delete, close), color chip + title, the date/time line, type tags, the
-// summary, and the evidence underneath. The pencil flips the card into the
-// edit surface in place. The day recap keeps the right column to itself.
+// The block detail as a Google-Calendar event card: a READ-ONLY floating
+// popover anchored beside the clicked block — close (X) top-right, color chip
+// + title, the date/time line, type tags, the summary, and the evidence
+// underneath. No edit controls live here (founder decision, Jul 2, 2026):
+// editing happens exclusively through right-click → Edit, which opens the
+// separate editor modal. The day recap keeps the right column to itself.
 const BLOCK_POPOVER_WIDTH = 400
 
 function BlockPopover({
   block,
   payload,
-  onRefresh,
   onSelectBlock,
   onClose,
-  editSignal,
   mergeSelection,
   onMerged,
+  onRefresh,
 }: {
   block: WorkContextBlock | null
   payload: DayTimelinePayload
-  onRefresh: () => Promise<void>
   onSelectBlock?: (blockId: string) => void
   onClose: () => void
-  // One-shot "open in edit mode" request from the block's right-click menu.
-  editSignal?: { blockId: string; nonce: number } | null
   // The blocks in the current shift-selected span (ordered, includes the anchor).
   // Length ≥ 2 means a merge is on the table.
   mergeSelection: WorkContextBlock[]
   // Called after a successful merge with the merged span's start time, so the
   // timeline can collapse the selection back onto the single merged block.
   onMerged: (mergedStartTime: number) => void
+  onRefresh: () => Promise<void>
 }) {
-  const [overrideDraft, setOverrideDraft] = useState('')
-  const [overrideSaving, setOverrideSaving] = useState(false)
-  const [reviewError, setReviewError] = useState<string | null>(null)
   const [merging, setMerging] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
-  // The edit panel (title / type / regenerate) is revealed only when the user
-  // clicks Edit — the panel stays calm until then.
-  const [editing, setEditing] = useState(false)
-  // The "let AI name it" sparkle inside the title row.
-  const [suggesting, setSuggesting] = useState(false)
-  // Saving state for a Type (category) correction.
-  const [categorySaving, setCategorySaving] = useState(false)
 
   useEffect(() => {
-    setOverrideDraft(block?.label.override ?? block?.label.current ?? '')
-    setReviewError(null)
     setBoundaryError(null)
-    setEditing(false)
-    setSuggesting(false)
-  }, [block?.id, block?.label.current, block?.label.override])
-
-  // The context menu's Edit lands here once the selection has propagated.
-  useEffect(() => {
-    if (editSignal && block && editSignal.blockId === block.id) setEditing(true)
-  }, [editSignal, block])
+  }, [block?.id])
 
   // Anchor the card beside its block, GCal-style: to the right of the block
   // when there's room, else to the left, clamped into the viewport. The
@@ -1013,7 +1359,7 @@ function BlockPopover({
       window.removeEventListener('scroll', reposition, true)
       window.removeEventListener('resize', reposition)
     }
-  }, [blockId, editing])
+  }, [blockId])
 
   // Escape closes the card, like GCal.
   useEffect(() => {
@@ -1026,16 +1372,8 @@ function BlockPopover({
   if (!block) return null
 
   const accent = activityColorForCategory(block.dominantCategory)
-  const hasOverride = Boolean(block.label.override?.trim())
-  // The name this block had before the user renamed it — shown so they can see
-  // what changed and undo it (timeline.md acceptance: previous name + undo).
-  const previousName = block.review.originalLabel?.trim()
-    || block.label.aiSuggested?.trim()
-    || block.label.ruleBased?.trim()
-    || null
-  // A provisional (live, not-yet-analyzed) block is never renamed or merged —
-  // those controls appear once the day is analyzed (timeline.md §4).
-  const correctable = !block.provisional
+  // A provisional (live, not-yet-analyzed) block is never merged — that
+  // control appears once the day is analyzed (timeline.md §4).
 
   // A merge is on the table once the user has shift-selected a second block.
   // Blocks are continuous time, so the span the user sees highlighted — first
@@ -1045,19 +1383,13 @@ function BlockPopover({
   const hasMergeSpan = mergeSelection.length >= 2 && mergeStart != null && mergeEnd != null
   const mergeHasLiveBlock = mergeSelection.some((candidate) => candidate.provisional)
 
-  // Fixing a block (rename / undo / merge) makes any generated recap that named
-  // the old version stale — drop the cached recap for the day so it regenerates
-  // against the corrected blocks (timeline.md acceptance: a fix refreshes the
-  // recap). The backend already invalidates the insights projection scope.
-  const invalidateDayRecap = () => { daySummaryRecapCache.delete(payload.date) }
-
   const mergeSelectedBlocks = async () => {
     if (!hasMergeSpan || !mergeStart || !mergeEnd) return
     setMerging(true)
     setBoundaryError(null)
     try {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [mergeStart.id, mergeEnd.id], date: payload.date })
-      invalidateDayRecap()
+      daySummaryRecapCache.delete(payload.date)
       // Hand the merged span's start time back so the timeline can reselect the
       // single block that now covers it (block ids change when the span fuses).
       onMerged(mergeStart.startTime)
@@ -1066,82 +1398,6 @@ function BlockPopover({
       setBoundaryError(sanitizeIpcError(error, "Couldn't merge these blocks. Try again in a moment.").message)
     } finally {
       setMerging(false)
-    }
-  }
-
-  const submitRename = () => {
-    const label = overrideDraft.trim()
-    if (!label || label === block.label.current) return
-    setOverrideSaving(true)
-    setReviewError(null)
-    void ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label, narrative: block.label.narrative })
-      .then(() => { invalidateDayRecap(); return onRefresh() })
-      .then(() => setEditing(false))
-      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't save the rename. Try again in a moment.").message))
-      .finally(() => setOverrideSaving(false))
-  }
-
-  const undoRename = () => {
-    setOverrideSaving(true)
-    setReviewError(null)
-    void ipc.db.clearBlockLabelOverride(block.id)
-      .then(() => { invalidateDayRecap(); return onRefresh() })
-      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't undo the rename. Try again in a moment.").message))
-      .finally(() => setOverrideSaving(false))
-  }
-
-  // Delete this block. The main process shows the native "Are you sure?"
-  // dialog (macOS and Windows message box); on confirm the block is recorded
-  // as deleted, disappears from every view, and stays deleted through rebuilds.
-  const deleteBlock = async () => {
-    if (deleting) return
-    setDeleting(true)
-    setReviewError(null)
-    try {
-      const { deleted } = await ipc.db.deleteTimelineBlock({ blockId: block.id, date: payload.date })
-      if (deleted) {
-        invalidateDayRecap()
-        await onRefresh()
-      }
-    } catch (error) {
-      setReviewError(sanitizeIpcError(error, "Couldn't delete this block. Try again in a moment.").message)
-    } finally {
-      setDeleting(false)
-    }
-  }
-
-  // Recategorize the block (Edit → Type). Persisted as a review correction so
-  // it wins over the computed category and survives every rebuild — and since
-  // category drives color on every surface, this is also how a block's color
-  // is changed, Google-Calendar style.
-  const changeCategory = (category: AppCategory) => {
-    if (category === block.dominantCategory || categorySaving) return
-    setCategorySaving(true)
-    setReviewError(null)
-    void ipc.db.setBlockReview({ blockId: block.id, date: payload.date, state: 'corrected', correctedCategory: category })
-      .then(() => { invalidateDayRecap(); return onRefresh() })
-      .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't change the block type. Try again in a moment.").message))
-      .finally(() => setCategorySaving(false))
-  }
-
-  // The sparkle in the rename row: ask the AI to write a fresh, accurate title
-  // from the block's evidence and drop it into the input for the user to keep or
-  // tweak before saving. The AI label is applied immediately (the model also
-  // persists it), and a manual edit + Save still overrides it.
-  const suggestName = async () => {
-    if (suggesting) return
-    setSuggesting(true)
-    setReviewError(null)
-    try {
-      const insight = await ipc.ai.regenerateBlockLabel(block.id)
-      const label = insight.label?.trim()
-      if (label) setOverrideDraft(label)
-      invalidateDayRecap()
-      await onRefresh()
-    } catch (error) {
-      setReviewError(sanitizeIpcError(error, "Couldn't name this with AI. Try again in a moment.").message)
-    } finally {
-      setSuggesting(false)
     }
   }
 
@@ -1287,23 +1543,9 @@ function BlockPopover({
       boxShadow: '0 16px 48px rgba(0,0,0,0.26)',
       padding: '10px 22px 22px',
     }}>
-      {/* The GCal action row: edit / regenerate / delete / close, top-right. */}
+      {/* Read-only card: close is the only control here. Editing goes through
+          right-click → Edit (the separate editor modal), never this view. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 2, marginBottom: 2 }}>
-        {correctable && (
-          <button type="button" aria-label="Edit block" title="Edit" onClick={() => setEditing((value) => !value)} style={iconButtonStyle()} {...iconHover}>
-            <Pencil size={15} strokeWidth={2} aria-hidden="true" />
-          </button>
-        )}
-        {correctable && (
-          <button type="button" aria-label="Regenerate summary" title="Regenerate summary" disabled={suggesting} onClick={() => { void suggestName() }} style={iconButtonStyle(suggesting)} {...iconHover}>
-            <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
-          </button>
-        )}
-        {correctable && (
-          <button type="button" aria-label="Delete block" title="Delete" disabled={deleting} onClick={() => { void deleteBlock() }} style={iconButtonStyle(deleting)} {...iconHover}>
-            <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
-          </button>
-        )}
         <button type="button" aria-label="Close" title="Close" onClick={onClose} style={iconButtonStyle()} {...iconHover}>
           <X size={16} strokeWidth={2} aria-hidden="true" />
         </button>
@@ -1386,87 +1628,15 @@ function BlockPopover({
               : `Fuses ${formatClockTime(mergeStart.startTime)} – ${formatClockTime(mergeEnd.endTime)} into one block.`}
           </div>
         )}
-        {mergeSelection.length < 2 && correctable && payload.blocks.length > 1 && (
+        {mergeSelection.length < 2 && !block.provisional && payload.blocks.length > 1 && (
           <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
-            Tip: Shift-click another block to merge them.
-          </div>
-        )}
-        {hasOverride && previousName && (
-          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
-            Renamed from “{previousName}” ·{' '}
-            <button type="button" disabled={overrideSaving} onClick={undoRename} style={{ border: 'none', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', padding: 0, textDecorationLine: 'underline', textUnderlineOffset: 2 }}>
-              Undo
-            </button>
+            Tip: Shift-click another block to merge them. Right-click the block to edit it.
           </div>
         )}
       </div>
 
-      {editing && correctable && (
-        <div style={{ display: 'grid', gap: 10, marginBottom: 16, padding: 12, borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
-          {/* Title row: rename with an AI-suggest sparkle. */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <label htmlFor="timeline-block-label-override" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Block title</label>
-            <input
-              id="timeline-block-label-override"
-              type="text"
-              autoFocus
-              value={overrideDraft}
-              onChange={(event) => setOverrideDraft(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter') submitRename() }}
-              placeholder={userVisibleBlockLabel(block)}
-              style={{ flex: 1, minWidth: 150, height: 32, borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 12px', fontSize: 13, outline: 'none' }}
-            />
-            <button
-              type="button"
-              aria-label="Name this block with AI"
-              title="Let AI name this block"
-              disabled={suggesting || overrideSaving}
-              onClick={() => { void suggestName() }}
-              style={{ height: 32, width: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-primary)', cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
-            >
-              <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              disabled={overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current}
-              onClick={submitRename}
-              style={{ height: 32, padding: '0 14px', borderRadius: 9, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', fontSize: 12, fontWeight: 700, cursor: 'pointer', opacity: overrideSaving || suggesting || !overrideDraft.trim() || overrideDraft.trim() === block.label.current ? 0.6 : 1 }}
-            >
-              {overrideSaving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-
-          {/* Type row: recategorize the block. The category drives its color on
-              every surface, so this is also "change the block's color" — and
-              the correction survives every rebuild (invariant 8). */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <label htmlFor="timeline-block-category" style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>Type</label>
-            <select
-              id="timeline-block-category"
-              value={block.dominantCategory}
-              disabled={categorySaving}
-              onChange={(event) => changeCategory(event.target.value as AppCategory)}
-              style={{ height: 30, borderRadius: 8, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '0 8px', fontSize: 12.5, outline: 'none', cursor: categorySaving ? 'default' : 'pointer' }}
-            >
-              {/* A block whose computed category isn't offerable (system /
-                  uncategorized) still needs its current value present, or the
-                  select renders blank. */}
-              {!BLOCK_CATEGORY_OPTIONS.some((option) => option.value === block.dominantCategory) && (
-                <option value={block.dominantCategory}>{categoryLabel(block.dominantCategory)}</option>
-              )}
-              {BLOCK_CATEGORY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 4, background: activityColorForCategory(block.dominantCategory), flexShrink: 0 }} />
-            {categorySaving && <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>Saving…</span>}
-          </div>
-
-        </div>
-      )}
-
-      {(reviewError || boundaryError) && (
-        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginBottom: 12 }}>{reviewError || boundaryError}</div>
+      {boundaryError && (
+        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171', marginBottom: 12 }}>{boundaryError}</div>
       )}
 
       {blockNarrative(block) && (
@@ -2020,9 +2190,9 @@ export default function Timeline() {
 
   // The GCal-style right-click menu on a block: position + the block it's for.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; blockId: string } | null>(null)
-  // A one-shot "open the inspector in edit mode" request (from the context
-  // menu's Edit). The nonce makes repeat Edits on the same block re-fire.
-  const [editSignal, setEditSignal] = useState<{ blockId: string; nonce: number } | null>(null)
+  // The block being edited in the editor modal (right-click → Edit). The
+  // read-only click popover never hosts edit controls.
+  const [editBlockId, setEditBlockId] = useState<string | null>(null)
   const [menuBusy, setMenuBusy] = useState(false)
 
   // Filter the day by block type ("Focused work", "Meeting", "Leisure"…).
@@ -2148,6 +2318,13 @@ export default function Timeline() {
   }, [date, payload, view])
 
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
+
+  // The day's typed gaps — each visible blank stretch with its reason
+  // (Asleep / Away / Idle / Passive / Tracking paused / Untracked).
+  const gapSegments = useMemo(
+    () => (payload?.segments ?? []).filter((segment): segment is TimelineGapSegment => segment.kind !== 'work_block'),
+    [payload],
+  )
 
   // Right-click on a block (GCal-style). Selecting it first means the
   // inspector already shows the block the menu is acting on.
@@ -2526,6 +2703,7 @@ export default function Timeline() {
                         date={payload.date}
                         blocks={sortedBlocks}
                         bounds={dayBounds}
+                        gapSegments={gapSegments}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}
@@ -2540,12 +2718,20 @@ export default function Timeline() {
                         y={contextMenu.y}
                         busy={menuBusy}
                         onEdit={() => {
-                          setEditSignal({ blockId: contextMenu.blockId, nonce: Date.now() })
+                          setEditBlockId(contextMenu.blockId)
                           setContextMenu(null)
                         }}
                         onRegenerate={() => { void menuRegenerate() }}
                         onDelete={() => { void menuDelete() }}
                         onClose={() => { if (!menuBusy) setContextMenu(null) }}
+                      />
+                    )}
+                    {editBlockId && blockMap.get(editBlockId) && (
+                      <BlockEditModal
+                        block={blockMap.get(editBlockId)!}
+                        payload={payload}
+                        onClose={() => setEditBlockId(null)}
+                        onRefresh={timelineResource.refresh}
                       />
                     )}
                     {/* The right column keeps the day recap; the block detail
@@ -2559,7 +2745,6 @@ export default function Timeline() {
                         setSelectedBlockId(null)
                         setMergeRangeEndId(null)
                       }}
-                      editSignal={editSignal}
                       mergeSelection={mergeSelection}
                       onMerged={(mergedStartTime) => {
                         pendingSelectAtRef.current = mergedStartTime

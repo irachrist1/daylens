@@ -44,6 +44,7 @@ import type {
   ResolvedIconPayload,
   SyncStatus,
   TimelineBlockReviewUpdate,
+  PurgeTrackedEvidencePayload,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
   TrackingPermissionDetails,
@@ -166,6 +167,10 @@ const api = {
       ipcRenderer.invoke(IPC.DB.DELETE_TIMELINE_BLOCK, payload),
     mergeTimelineEpisodes: (payload: { blockIds: [string, string]; date?: string | null }): Promise<DayTimelinePayload> =>
       ipcRenderer.invoke(IPC.DB.MERGE_TIMELINE_EPISODES, payload),
+    setBlockSpan: (payload: { blockId: string; date: string; startMs: number; endMs: number }): Promise<{ changed: boolean }> =>
+      ipcRenderer.invoke(IPC.DB.SET_BLOCK_SPAN, payload),
+    purgeTrackedEvidence: (payload: PurgeTrackedEvidencePayload): Promise<{ purged: boolean }> =>
+      ipcRenderer.invoke(IPC.DB.PURGE_TRACKED_EVIDENCE, payload),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>
       ipcRenderer.invoke(IPC.DB.GET_APP_DETAIL, canonicalAppId, days),
     getAppActivityDigest: (days?: number): Promise<AppActivityDigest[]> =>

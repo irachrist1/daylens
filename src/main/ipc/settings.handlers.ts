@@ -14,6 +14,8 @@ import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer }
 import { IPC } from '@shared/types'
 import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
+import { getDb } from '../services/database'
+import { recordActivityStateEvent } from '../db/queries'
 
 export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.GET, async () => {
@@ -28,6 +30,22 @@ export function registerSettingsHandlers(): void {
     const changedKeys = sanitizeSettingsChangedKeys(rawChangedKeys)
 
     await setSettings(partial)
+
+    // A pause/resume of tracking is an activity-state fact the timeline needs:
+    // the paused span must classify as "Tracking paused" on the grid, not as
+    // an unexplained untracked gap (timeline gap reasons, Jul 2, 2026).
+    if ('trackingPaused' in partial && Boolean(previous.trackingPaused) !== Boolean(partial.trackingPaused)) {
+      try {
+        recordActivityStateEvent(getDb(), {
+          eventTs: Date.now(),
+          eventType: partial.trackingPaused ? 'tracking_paused' : 'tracking_resumed',
+          source: 'settings',
+        })
+      } catch {
+        // The event is best-effort telemetry for gap labeling; the pause
+        // itself is already persisted in settings.
+      }
+    }
 
     const analyticsWillEnable = !previous.analyticsOptIn && partial.analyticsOptIn === true
     const analyticsWillDisable = previous.analyticsOptIn && partial.analyticsOptIn === false

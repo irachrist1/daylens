@@ -51,7 +51,7 @@ import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from '../services/ai'
@@ -78,6 +78,7 @@ import type {
   WorkContextInsight,
   TimelineWorkSession,
   TimelineBlockReviewUpdate,
+  PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
 } from '@shared/types'
 import { FOCUSED_CATEGORIES, ALL_TIME_DAYS } from '@shared/types'
@@ -737,6 +738,90 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('apps', 'block_review')
     invalidateProjectionScope('insights', 'block_review')
     return { deleted: true }
+  })
+
+  // Trim a block's time range (block editor). Trim-only: edges move inward,
+  // never outward — a block is tracked activity, and Daylens never counts
+  // idle time as work. Each moved edge is persisted as a user "cut here"
+  // that survives every rebuild; the trimmed-off stretch re-forms into its
+  // own block(s), so every tracked minute stays accounted for.
+  ipcMain.handle(IPC.DB.SET_BLOCK_SPAN, (_e, payload: { blockId: string; date: string; startMs: number; endMs: number }): { changed: boolean } => {
+    const db = getDb()
+    const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+    const block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
+    if (!block) throw new Error('Block not found.')
+    if (block.provisional) throw new Error('Analyze the day before editing block times.')
+    const result = trimTimelineBlockSpan(db, payload.date, block, payload.startMs, payload.endMs)
+    if (result.changed) {
+      invalidateProjectionScope('timeline', 'block_span')
+      invalidateProjectionScope('apps', 'block_span')
+      invalidateProjectionScope('insights', 'block_span')
+    }
+    return result
+  })
+
+  // Permanently purge a sensitive tracked record (block editor → remove
+  // entry). This deletes the underlying rows — app sessions, website visits,
+  // focus events, matching artifacts — inside the given span, so the record
+  // is gone from every surface (timeline, apps, AI, wraps), not hidden. The
+  // native confirm makes the irreversibility explicit. Raw data deletion is
+  // the point here, by explicit founder decision (Jul 2, 2026): sensitive
+  // records must be fully removable.
+  ipcMain.handle(IPC.DB.PURGE_TRACKED_EVIDENCE, async (event, payload: PurgeTrackedEvidencePayload): Promise<{ purged: boolean }> => {
+    const db = getDb()
+    const subject = payload.kind === 'site' ? (payload.domain ?? '').trim() : (payload.appName ?? payload.bundleId ?? '').trim()
+    if (!subject) throw new Error('Nothing to remove.')
+    if (!(payload.toMs > payload.fromMs)) throw new Error('Invalid time span.')
+
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      type: 'warning' as const,
+      title: 'Remove tracked record',
+      message: 'Permanently remove this record?',
+      detail: `Everything tracked for "${subject}" in this block will be deleted from Daylens — timeline, apps, and AI. This cannot be undone.`,
+      buttons: ['Remove permanently', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    }
+    const { response } = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options)
+    if (response !== 0) return { purged: false }
+
+    const { fromMs, toMs } = payload
+    const run = db.transaction(() => {
+      if (payload.kind === 'site' && payload.domain) {
+        const domain = payload.domain
+        const like = `%${domain}%`
+        db.prepare(`DELETE FROM website_visits WHERE domain = ? AND visit_time >= ? AND visit_time < ?`)
+          .run(domain, fromMs, toMs)
+        db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (url LIKE ? OR page_title LIKE ?)`)
+          .run(fromMs, toMs, like, like)
+        db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND domain = ?`)
+          .run(fromMs, toMs, domain)
+        // Artifact identities for the host are display aggregates; remove them
+        // outright (mentions cascade). Other days' remaining data regenerates
+        // its own artifacts on the next rebuild.
+        db.prepare(`DELETE FROM artifacts WHERE host = ?`).run(domain)
+      } else {
+        const bundleId = payload.bundleId ?? ''
+        const appName = payload.appName ?? bundleId
+        db.prepare(`DELETE FROM app_sessions WHERE start_time >= ? AND start_time < ? AND (bundle_id = ? OR app_name = ?)`)
+          .run(fromMs, toMs, bundleId, appName)
+        db.prepare(`DELETE FROM focus_events WHERE ts_ms >= ? AND ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
+          .run(fromMs, toMs, bundleId, appName)
+        db.prepare(`DELETE FROM derived_sessions WHERE start_ts_ms >= ? AND start_ts_ms < ? AND (app_bundle_id = ? OR app_name = ?)`)
+          .run(fromMs, toMs, bundleId, appName)
+      }
+    })
+    run()
+
+    const dateStr = localDateStringForTimestamp(fromMs)
+    invalidateTimelineDayBlocks(db, dateStr)
+    invalidateProjectionScope('timeline', 'evidence_purge')
+    invalidateProjectionScope('apps', 'evidence_purge')
+    invalidateProjectionScope('insights', 'evidence_purge')
+    return { purged: true }
   })
 
   ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {

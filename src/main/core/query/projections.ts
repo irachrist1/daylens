@@ -7,12 +7,10 @@ import type {
   DayTimelinePayload,
   HistoryDayPayload,
   LiveSession,
-  TimelineSegment,
   WeeklySummary,
-  WorkContextBlock,
   WorkflowPattern,
 } from '@shared/types'
-import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay } from '../../services/workBlocks'
+import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay, buildSegmentsForDay } from '../../services/workBlocks'
 import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString } from '../../lib/localDate'
@@ -71,54 +69,6 @@ function derivedSessionToAppSession(
   }
 }
 
-// Aligned with the 15-minute session break (timeline.md §3.1): a real gap of
-// 15+ minutes ends a block and shows as blank space, so it becomes a visible
-// segment at the same threshold.
-const MIN_VISIBLE_GAP_MS = 15 * 60 * 1000
-
-function buildDerivedSegments(
-  db: Database.Database,
-  dateStr: string,
-  blocks: WorkContextBlock[],
-): TimelineSegment[] {
-  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const segments: TimelineSegment[] = []
-  let cursor = fromMs
-  for (const block of blocks) {
-    if (block.startTime > cursor) {
-      const gapDuration = block.startTime - cursor
-      if (gapDuration >= MIN_VISIBLE_GAP_MS) {
-        segments.push({
-          kind: 'idle_gap',
-          startTime: cursor,
-          endTime: block.startTime,
-          label: 'Idle gap',
-          source: 'derived_gap',
-        })
-      }
-    }
-    segments.push({
-      kind: 'work_block',
-      startTime: block.startTime,
-      endTime: block.endTime,
-      blockId: block.id,
-    })
-    cursor = Math.max(cursor, block.endTime)
-  }
-  if (cursor < toMs) {
-    const gapDuration = toMs - cursor
-    if (gapDuration >= MIN_VISIBLE_GAP_MS) {
-      segments.push({
-        kind: 'idle_gap',
-        startTime: cursor,
-        endTime: toMs,
-        label: 'Idle gap',
-        source: 'derived_gap',
-      })
-    }
-  }
-  return segments.filter((segment) => segment.endTime > segment.startTime)
-}
 
 function getDerivedDayTimelinePayload(
   db: Database.Database,
@@ -148,7 +98,9 @@ function getDerivedDayTimelinePayload(
   // user deleted (review state 'ignored') is filtered from every read.
   const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
     .filter(isTrustedTimelineBlock)
-  const segments = buildDerivedSegments(db, dateStr, blocks)
+  // Same typed gap classification as the live path, so a past day's blank
+  // stretches carry their reasons (Asleep / Away / Idle / …) too.
+  const segments = buildSegmentsForDay(db, dateStr, blocks, [fromMs, toMs])
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions
     .filter((session) => session.isFocused)

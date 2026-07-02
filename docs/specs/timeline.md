@@ -59,10 +59,26 @@ A new block starts only on a strong signal:
   the current block and is never absorbed into it; a new block starts only once real
   activity resumes. Idle/away time is not a detour, not tracked time, and not part of any
   block's duration — it renders as blank, empty space on the timeline, proportional to how
-  long the gap lasted, with no card, no color, no title, and nothing clickable. A block's
-  duration equals the time you were genuinely active, never the wall-clock span across a
-  lull. The "tracked" total follows the same rule: only real active time, never elapsed
-  clock range.
+  long the gap lasted, with no card, no color, and nothing clickable. A block's duration
+  equals the time you were genuinely active, never the wall-clock span across a lull. The
+  "tracked" total follows the same rule: only real active time, never elapsed clock range.
+- **Every visible gap carries its reason** (founder decision, Jul 2, 2026): one quiet,
+  non-interactive line naming the kind of absence and its length, classified from the
+  activity-state events that covered the span —
+  - **Asleep** — machine suspended / lid closed;
+  - **Away** — screen locked: the user confirmed not present;
+  - **Idle** — machine open and unlocked, but no input for a sustained stretch;
+  - **Passive** — no input but something actively playing (a meeting, a video): present,
+    just not typing (from `idle_start` with `heldForMediaPlayback`);
+  - **Tracking paused** — the user paused tracking (settings or tray; both record
+    `tracking_paused`/`tracking_resumed` events);
+  - **Untracked** — no signal covered at least half the gap: Daylens wasn't running, so it
+    says it doesn't know rather than guessing (invariant 9).
+  When several causes covered parts of one gap, the strongest real-absence signal names it
+  (asleep > locked > paused > passive > idle). Gaps never extend past "now" on the live
+  day. Candidate future kinds worth considering when evidence exists (not built yet):
+  "In a meeting" from calendar data, and "On another device" if cross-device signals ever
+  arrive.
 - A single block claiming many unbroken hours (say, 12:00 AM straight to 10:54 AM) is
   almost never real. If a block that long exists with no detected gaps, Daylens flags it
   (main-process log) rather than trusting it silently — it usually means idle/away
@@ -132,19 +148,34 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    applies across every surface at once, never per-view. On the card itself the color must
    be unmistakable: a solid accent stripe on the left edge plus a frosted-glass fill
    (backdrop blur) so the hour lines behind never strike through the title or summary text.
-5. **Blocks are edited like calendar events.** Clicking a block opens a **floating event
-   card anchored beside the block** (the Google Calendar popover, founder reference
-   Jul 2, 2026) — never a page change: icon actions top-right (pencil = edit, sparkle =
-   regenerate summary, trash = delete, X = close), then color chip + title, the
-   date · time · duration line, type tags, the summary, and the evidence ("What you were
-   in" + Detours) below. The pencil flips the card into the edit surface in place: title
-   (with AI suggest), and **Type** — recategorizing recolors the block everywhere, since
-   category drives color. Right-clicking a block opens the same actions as a context menu
-   (Edit / Regenerate summary / Delete). A type change is a review correction like a
-   rename: it wins over the computed category, flips the work/leisure kind to match, and
-   survives every rebuild (invariant 8). Escape or clicking empty grid closes the card.
+5. **Click = read, right-click = edit** (founder decision, Jul 2, 2026). Clicking a block
+   opens a **read-only floating event card anchored beside the block** (the Google
+   Calendar popover): X to close, color chip + title, the date · time · duration line,
+   type tags, the summary, and the evidence ("What you were in" + Detours) below. No edit
+   controls live on this card — ever. Right-clicking a block opens a context menu (Edit /
+   Regenerate summary / Delete); **Edit opens a separate popup modal**, Google Calendar's
+   event editor shape, with:
+   - the block's **title** (big underlined field),
+   - the **time range** — trim-only: edges move inward, never outward, because a block is
+     tracked activity and Daylens never counts idle time as work. Each moved edge persists
+     as a user "cut here" (`timeline_boundary_corrections`, kind `split`, anchored by
+     wall-clock timestamp) enforced as the LAST pipeline pass, so no heuristic can re-join
+     what the user separated and the cut survives every rebuild. The trimmed-off stretch
+     re-forms into its own block(s), keeping every tracked minute accounted for.
+   - the **type/color** — with the evidence-suggested category shown as a color dot plus
+     one concise plain-language reason ("Browsing — mostly YouTube (1h 10m of 1h 30m)")
+     and a "Use" shortcut. A type change is a review correction like a rename: wins over
+     the computed category, flips the work/leisure kind, survives every rebuild.
+   - the **tracked records** in the block, each with a permanent remove: deleting a
+     sensitive entry (native "are you sure" first) **erases the underlying records** —
+     app sessions, website visits, focus events, artifacts — from Daylens entirely, every
+     surface, not a display filter. Raw-data deletion is deliberate here, the one
+     exception to "raw captured activity is never destroyed": the user's right to remove
+     sensitive records outranks retention.
+   - **Save** applies everything and closes; **Discard** (button, X, Escape, or clicking
+     outside) closes with no changes.
    The right-hand column always holds the day recap; block details never displace it.
-   Provisional (live) blocks open the card read-only (no edit/delete).
+   Provisional (live) blocks open the read-only card only (no context menu).
 6. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
    (macOS and Windows), then records the deletion as a correction (review state `ignored`).
    The block disappears from every surface — timeline, month grid, recap, AI, wraps,

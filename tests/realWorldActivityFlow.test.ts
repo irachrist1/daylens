@@ -28,8 +28,10 @@ test('real-world day projection shows the activity a user actually did', () => {
     ['Visual Studio Code', 'Google Chrome', 'Zoom', 'Codex', 'Safari'],
   )
 
-  const away = day.segments.find((segment) => segment.kind === 'away')
-  assert.ok(away, 'lock/unlock telemetry should render as an away segment')
+  // Typed gaps (Jul 2, 2026): a lock/unlock-covered gap classifies as
+  // 'locked' and reads "Away" on the grid.
+  const away = day.segments.find((segment) => segment.kind === 'locked')
+  assert.ok(away, 'lock/unlock telemetry should render as an away (locked) segment')
   assert.equal(away.startTime, localMs(REAL_WORLD_DATE, 11, 15))
   assert.equal(away.endTime, localMs(REAL_WORLD_DATE, 12, 0))
 
