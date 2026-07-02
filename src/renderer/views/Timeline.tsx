@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Moon, Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import { activityColorForCategory } from '@shared/activityColors'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind, kindForDomain } from '@shared/workKind'
@@ -48,23 +49,6 @@ function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
 // `?code=…` straight into the block card.
 function safeTimelineText(text: string): string {
   return sanitizeForModel(text)
-}
-
-const CATEGORY_COLORS: Record<AppCategory, string> = {
-  development: '#5b8cff',
-  communication: '#f97316',
-  research: '#7c5cff',
-  writing: '#a855f7',
-  aiTools: '#c084fc',
-  design: '#ec4899',
-  browsing: '#fb923c',
-  meetings: '#14b8a6',
-  entertainment: '#f59e0b',
-  email: '#38bdf8',
-  productivity: '#6366f1',
-  social: '#f43f5e',
-  system: '#94a3b8',
-  uncategorized: '#94a3b8',
 }
 
 function shiftDate(dateStr: string, days: number): string {
@@ -266,51 +250,11 @@ const MIN_DAY_CARD_HEIGHT = 44
 // stays disabled with a gentle "keep going" nudge.
 const ANALYZE_MIN_SECONDS = 2 * 60 * 60
 
-// Lightly absurd statuses cycled while the AI shapes the day, so the wait feels
-// like Daylens having fun rather than spinning.
-const WRAP_LOADING_MESSAGES = [
-  'Computing…',
-  'Discombobulating…',
-  'Untangling your tabs…',
-  'Reticulating splines…',
-  'Consulting the timeline…',
-  'Making it make sense…',
-]
-
 // The day's tracked seconds, from the same blocks the timeline draws (invariant
 // 7) with the raw total as a floor. Shared by the recap footer and the gate.
 function trackedSecondsFor(payload: DayTimelinePayload): number {
   const blockSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   return blockSeconds > 0 ? blockSeconds : payload.totalSeconds
-}
-
-// The tracked-time readout. On a live day it ticks up every second between
-// payload refreshes (the payload's live-session end is frozen at computedAt),
-// and while tracking is live it never goes backwards for the same date — the
-// counter the user watches must be monotone (a cycling counter was the
-// 2026-07-02 bug). Once the day is analyzed (no live block) the payload total
-// is shown as-is, so corrections like deletes still read honestly.
-function LiveTrackedDuration({ payload }: { payload: DayTimelinePayload }) {
-  const hasLive = payload.blocks.some((block) => block.isLive)
-  const [tickMs, setTickMs] = useState(() => Date.now())
-  const floorRef = useRef<{ date: string; seconds: number } | null>(null)
-  useEffect(() => {
-    if (!hasLive) return
-    setTickMs(Date.now())
-    const timer = window.setInterval(() => setTickMs(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [hasLive, payload.date])
-  const base = trackedSecondsFor(payload)
-  if (!hasLive) {
-    floorRef.current = null
-    return <>{formatDuration(base)}</>
-  }
-  const elapsed = Math.max(0, Math.floor((tickMs - payload.computedAt) / 1000))
-  let seconds = base + elapsed
-  const floor = floorRef.current
-  if (floor && floor.date === payload.date && floor.seconds > seconds) seconds = floor.seconds
-  floorRef.current = { date: payload.date, seconds }
-  return <>{formatDuration(seconds)}</>
 }
 
 // Local midnight of a YYYY-MM-DD date — the top of that day's calendar track.
@@ -426,26 +370,6 @@ function IconChevronRight() {
   )
 }
 
-function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
-  return (
-    <div style={{
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '6px 14px',
-      padding: '0 0 18px',
-      fontSize: 12.5,
-      color: 'var(--color-text-tertiary)',
-    }}>
-      <span>
-        <strong style={{ color: 'var(--color-text-primary)' }}><LiveTrackedDuration payload={payload} /></strong> tracked
-      </span>
-      <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
-      <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
-      <span>{payload.siteCount} site{payload.siteCount !== 1 ? 's' : ''}</span>
-    </div>
-  )
-}
-
 // One block drawn as a calendar event: absolutely positioned at its clock
 // time inside a day track. `compact` is the week-column variant (smaller
 // type, title-first, no prose).
@@ -470,7 +394,7 @@ function CalendarBlockCard({
   dimmed?: boolean
   onClick?: () => void
 }) {
-  const accent = block.provisional ? '#8b93a7' : (CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized)
+  const accent = block.provisional ? '#8b93a7' : activityColorForCategory(block.dominantCategory)
   // Leisure / personal blocks are muted so the eye finds work first.
   const muted = effectiveBlockKind(block) !== 'work'
   const label = userVisibleBlockLabel(block)
@@ -507,9 +431,13 @@ function CalendarBlockCard({
         // separate cards. Only the thick vertical accent stripe on the left is
         // dropped in the day view — the large fills already carry the colour.
         // The dense week grid keeps the stripe as a colour cue on small blocks.
-        border: (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
+        // The live block reads as "happening now": solid accent border and a
+        // stronger fill, against the quiet tint of finished blocks.
+        border: block.isLive
+          ? `1.5px solid ${accent}`
+          : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
         borderLeft: compact ? `3px solid ${accent}` : undefined,
-        background: (isSelected || inMergeRange) ? `${accent}30` : `${accent}1c`,
+        background: (isSelected || inMergeRange) ? `${accent}30` : block.isLive ? `${accent}28` : `${accent}1c`,
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
         transition: 'border-color 120ms, background 120ms',
         padding: compact ? '2px 6px' : '4px 9px',
@@ -544,6 +472,7 @@ function CalendarBlockCard({
             height: 7,
             borderRadius: '50%',
             background: '#22c55e',
+            animation: 'live-pulse 2s ease-in-out infinite',
           }} />
         )}
       </div>
@@ -573,18 +502,11 @@ function CalendarBlockCard({
 
 // The hour labels column shared by the day and week grids. Runs only over the
 // bounded span — the hours the day actually lived in.
-function HourGutter({ hourHeight, bounds, date, nowMs = null }: { hourHeight: number; bounds: TrackBounds; date?: string; nowMs?: number | null }) {
+function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackBounds }) {
   const hours = Array.from(
     { length: Math.max(0, bounds.endHour - bounds.startHour + 1) },
     (_, index) => bounds.startHour + index,
   )
-  // The current-time cue for the day view: a small, subtle dot on the time rail
-  // instead of a line across the whole track. Only shows when a live `nowMs`
-  // (today) is passed and falls inside the tracked span — mirrors the old
-  // full-width line's visibility, minus the line.
-  const trackStartMin = bounds.startHour * 60
-  const nowMinutes = nowMs != null && date != null ? (nowMs - dayStartMs(date)) / 60_000 : null
-  const showNow = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= bounds.endHour * 60
   return (
     <div style={{ position: 'relative', height: (bounds.endHour - bounds.startHour) * hourHeight, width: TIME_GUTTER_WIDTH }}>
       {hours.map((hour) => (
@@ -603,21 +525,6 @@ function HourGutter({ hourHeight, bounds, date, nowMs = null }: { hourHeight: nu
           {hourLabel(hour)}
         </div>
       ))}
-      {showNow && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: ((nowMinutes - trackStartMin) / 60) * hourHeight,
-            right: 2,
-            transform: 'translateY(-50%)',
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: '#ef4444',
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -664,10 +571,9 @@ function CalendarDayTrack({
 
   return (
     <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
-      {/* Hour separator lines are kept only for the dense week grid. The day
-          view is a clean canvas — no hour lines; the rail labels carry time and
-          the blocks carry all the visual weight. */}
-      {compact && Array.from({ length: hourCount }, (_, index) => (
+      {/* Faint hour lines, Google-Calendar style: the grid reads as a grid
+          without any wrapping chrome, in both the day and week tracks. */}
+      {Array.from({ length: hourCount }, (_, index) => (
         <div
           key={index}
           style={{
@@ -681,7 +587,8 @@ function CalendarDayTrack({
         />
       ))}
 
-      {/* Real breaks read as quiet labels in the empty space they explain. */}
+      {/* Real breaks (Away / Machine off) read as hatched regions — visibly
+          not-tracked time, GCal out-of-office style — with a quiet label. */}
       {!compact && gapSegments.map((gap) => {
         const top = topFor(gap.startTime)
         const gapHeight = topFor(gap.endTime) - top
@@ -699,9 +606,11 @@ function CalendarDayTrack({
               alignItems: 'center',
               justifyContent: 'center',
               pointerEvents: 'none',
+              borderRadius: 8,
+              background: 'repeating-linear-gradient(-45deg, transparent, transparent 7px, var(--color-border-ghost) 7px, var(--color-border-ghost) 8px)',
             }}
           >
-            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', background: 'var(--color-bg)', padding: '2px 8px', borderRadius: 999 }}>
               {gapKindLabel(gap.kind)} · {formatDuration(segmentDurationSeconds(gap))}
             </span>
           </div>
@@ -730,10 +639,9 @@ function CalendarDayTrack({
         )
       })}
 
-      {/* The full-width "now" line lives only in the dense week grid. In the day
-          view the current time is a small dot on the time rail (see HourGutter),
-          so nothing crosses the blocks. */}
-      {compact && showNowLine && (
+      {/* The current-time line, Google-Calendar style: a thin red line across
+          the track with a dot at its left edge, drawn over the blocks. */}
+      {showNowLine && (
         <div style={{
           position: 'absolute',
           top: ((nowMinutes - trackStartMin) / 60) * hourHeight,
@@ -752,40 +660,20 @@ function CalendarDayTrack({
 
 const daySummaryRecapCache = new Map<string, AIDaySummaryResult>()
 
-// Plain-English count line for the recap footer: "8 blocks · 12 apps · 9 sites".
-function countSummaryLine(blockCount: number, appCount: number, siteCount: number): string {
-  const parts = [
-    `${blockCount} block${blockCount === 1 ? '' : 's'}`,
-    `${appCount} app${appCount === 1 ? '' : 's'}`,
-  ]
-  if (siteCount > 0) parts.push(`${siteCount} site${siteCount === 1 ? '' : 's'}`)
-  return parts.join(' · ')
-}
-
 function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePayload; onSelectBlock?: (blockId: string) => void; onRefresh?: () => Promise<void> }) {
   const [recap, setRecap] = useState<AIDaySummaryResult | null>(null)
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null)
-  // The playful "done for the day?" confirm card, with its optional note box.
+  // The optional-note step of Analyze day: a one-line hint grounds the AI.
   const [wrapOpen, setWrapOpen] = useState(false)
   const [wrapNote, setWrapNote] = useState('')
-  const [userName, setUserName] = useState<string>('')
-  // Rotating, lightly absurd status while the AI shapes the day.
-  const [loadingMsg, setLoadingMsg] = useState(WRAP_LOADING_MESSAGES[0])
 
   const isToday = payload.date === todayString()
   const provisional = payload.blocks.some((block) => block.provisional)
   // Daylens makes no claim about the day until it has enough to work with.
   const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
-  const firstName = userName.trim().split(/\s+/)[0] ?? ''
-
-  // Invariant 5: every number on the recap comes from the same blocks the
-  // timeline draws. The headline tracked time is the sum of the blocks'
-  // active seconds — never a separately-computed total that could disagree.
-  const trackedSeconds = trackedSecondsFor(payload)
-  const countLine = countSummaryLine(payload.blocks.length, payload.appCount, payload.siteCount)
 
   useEffect(() => {
     setAnalyzeStatus(null)
@@ -796,24 +684,6 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
     setRecap(cached ?? null)
     setRecapLoading(false)
   }, [payload.date])
-
-  // Load the user's name once so the wrap prompt can greet them by name.
-  useEffect(() => {
-    let alive = true
-    void ipc.settings.get().then((s) => { if (alive) setUserName(s?.userName ?? '') })
-    return () => { alive = false }
-  }, [])
-
-  // Cycle the funny loading copy every ~1.4s while analyzing; reset when idle.
-  useEffect(() => {
-    if (!analyzing) { setLoadingMsg(WRAP_LOADING_MESSAGES[0]); return }
-    let i = 0
-    const timer = setInterval(() => {
-      i = (i + 1) % WRAP_LOADING_MESSAGES.length
-      setLoadingMsg(WRAP_LOADING_MESSAGES[i])
-    }, 1400)
-    return () => clearInterval(timer)
-  }, [analyzing])
 
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
@@ -856,20 +726,6 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
     }
   }
 
-  // A short, human summary of the day for the wrap prompt: "~3h across Cursor,
-  // Chrome and 2 more". Grounded in the same totals the footer shows.
-  const wrapSummary = (() => {
-    const topApps = [...payload.blocks.flatMap((b) => b.topApps)]
-      .reduce<Map<string, number>>((map, app) => {
-        map.set(app.appName, (map.get(app.appName) ?? 0) + app.totalSeconds)
-        return map
-      }, new Map())
-    const names = [...topApps.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => formatDisplayAppName(name))
-    const lead = names.slice(0, 2).join(', ')
-    const more = names.length > 2 ? ` and ${names.length - 2} more` : ''
-    return `${formatDuration(trackedSeconds)} tracked${lead ? ` across ${lead}${more}` : ''}.`
-  })()
-
   return (
     <div style={{
       position: 'sticky',
@@ -892,42 +748,14 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
 
       {payload.totalSeconds === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-          Nothing tracked yet. Daylens fills this in once the day has something to say.
+          Nothing tracked yet.
         </div>
       ) : (
         <>
-          {/* The recap leads — calm, grounded prose, Dia-style. */}
-          {recap && recap.summary ? (
-            <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
+          {/* The day recap — calm, grounded prose once generated. */}
+          {recap?.summary && (
+            <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--color-text-primary)' }}>
               {recap.summary}
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gap: 10, justifyItems: 'start' }}>
-              {provisional && (
-                <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
-                  Today is one block while it’s still going. When you wrap up, Daylens shapes it into named blocks and a recap.
-                </div>
-              )}
-              {!provisional && (
-                <button
-                  type="button"
-                  onClick={() => { void handleGenerateRecap() }}
-                  disabled={recapLoading}
-                  style={{
-                    border: '1px solid var(--color-border-ghost)',
-                    background: 'var(--color-surface-high)',
-                    color: 'var(--color-text-primary)',
-                    borderRadius: 10,
-                    padding: '8px 13px',
-                    fontSize: 13,
-                    fontWeight: 650,
-                    cursor: recapLoading ? 'default' : 'pointer',
-                    opacity: recapLoading ? 0.6 : 1,
-                  }}
-                >
-                  {recapLoading ? 'Generating recap…' : 'Generate recap'}
-                </button>
-              )}
             </div>
           )}
 
@@ -935,49 +763,38 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
             <div style={{ fontSize: 11.5, lineHeight: 1.5, color: '#f87171' }}>{recapError}</div>
           )}
 
-          {/* Counts footer — secondary to the prose. */}
-          <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 14, display: 'grid', gap: 4 }}>
-            <div style={{ fontSize: 15, fontWeight: 720, color: 'var(--color-text-primary)' }}>
-              <LiveTrackedDuration payload={payload} /> tracked
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>{countLine}</div>
-          </div>
-
           {onRefresh && (
-            <div style={{ display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
-              {/* While analyzing, the whole control is the funny rotating status. */}
+            <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 14, display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
               {analyzing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>
                   <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                  {loadingMsg}
+                  Analyzing day…
                 </div>
               ) : provisional ? (
-                // TODAY, unanalyzed: the playful "done for the day?" wrap flow,
-                // gated until there's at least 2 hours to work with.
-                !enoughToAnalyze ? (
-                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', lineHeight: 1.5 }}>
-                    Keep going{firstName ? `, ${firstName}` : ''}. Daylens needs about 2 hours before it can shape your day.
-                  </div>
-                ) : !wrapOpen ? (
-                  <button
-                    type="button"
-                    onClick={() => setWrapOpen(true)}
-                    style={{ justifySelf: 'start', border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 10, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    {firstName ? `Done for the day, ${firstName}? 😄` : 'Done for the day? 😄'}
-                  </button>
+                // TODAY, unanalyzed: Analyze day shapes the provisional day into
+                // named blocks. Gated until there's at least 2 hours to work with.
+                !wrapOpen ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!enoughToAnalyze}
+                      onClick={() => setWrapOpen(true)}
+                      style={{ justifySelf: 'start', border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 10, padding: '8px 14px', fontSize: 13, fontWeight: 700, cursor: enoughToAnalyze ? 'pointer' : 'default', opacity: enoughToAnalyze ? 1 : 0.5 }}
+                    >
+                      Analyze day
+                    </button>
+                    {!enoughToAnalyze && (
+                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
+                        Available after ~2 hours of tracked time.
+                      </div>
+                    )}
+                  </>
                 ) : (
-                  <div style={{ display: 'grid', gap: 10, width: '100%', border: '1px solid var(--color-border-ghost)', borderRadius: 12, padding: 14, background: 'var(--color-surface-high)' }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                      Wrapping up? 😄
-                    </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.55 }}>
-                      {wrapSummary} I’ll shape this into named blocks and a recap.
-                    </div>
+                  <div style={{ display: 'grid', gap: 8, width: '100%' }}>
                     <textarea
                       value={wrapNote}
                       onChange={(event) => setWrapNote(event.target.value)}
-                      placeholder="Optional: in a line, what were you actually working on today?"
+                      placeholder="Optional: in a line, what were you working on today?"
                       rows={2}
                       style={{ width: '100%', resize: 'vertical', borderRadius: 9, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-primary)', padding: '8px 10px', fontSize: 12.5, outline: 'none', fontFamily: 'inherit', lineHeight: 1.5 }}
                     />
@@ -987,27 +804,37 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
                         onClick={() => { void handleAnalyze(wrapNote) }}
                         style={{ border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', borderRadius: 9, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}
                       >
-                        Yes, wrap it up
+                        Analyze
                       </button>
                       <button
                         type="button"
                         onClick={() => { setWrapOpen(false); setWrapNote('') }}
                         style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 9, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
                       >
-                        Not yet
+                        Cancel
                       </button>
                     </div>
                   </div>
                 )
               ) : (
-                // A past / already-analyzed day: plain re-analyze, no gate.
-                <button
-                  type="button"
-                  onClick={() => { void handleAnalyze() }}
-                  style={{ justifySelf: 'start', border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Re-analyze with AI
-                </button>
+                // A past / already-analyzed day: re-analyze + recap, side by side.
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => { void handleAnalyze() }}
+                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Re-analyze with AI
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleGenerateRecap() }}
+                    disabled={recapLoading}
+                    style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', borderRadius: 10, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: recapLoading ? 'default' : 'pointer', opacity: recapLoading ? 0.6 : 1 }}
+                  >
+                    {recapLoading ? 'Generating…' : recap ? 'Regenerate recap' : 'Generate recap'}
+                  </button>
+                </div>
               )}
               {analyzeStatus && !analyzing && (
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', lineHeight: 1.4 }}>
@@ -1065,7 +892,7 @@ function BlockInspector({
     return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
   }
 
-  const accent = CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized
+  const accent = activityColorForCategory(block.dominantCategory)
   const hasOverride = Boolean(block.label.override?.trim())
   // The name this block had before the user renamed it — shown so they can see
   // what changed and undo it (timeline.md acceptance: previous name + undo).
@@ -1586,12 +1413,8 @@ function CalendarWeekView({
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      <div style={{
-        borderRadius: 16,
-        border: '1px solid var(--color-border-ghost)',
-        background: 'var(--color-surface)',
-        overflow: 'hidden',
-      }}>
+      {/* The week grid sits directly on the page background — no wrapping card. */}
+      <div>
         <div style={{
           display: 'grid',
           gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))`,
@@ -1896,7 +1719,7 @@ function CalendarMonthView({
                     width: 7,
                     height: 7,
                     borderRadius: 2,
-                    background: CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized,
+                    background: activityColorForCategory(block.dominantCategory),
                   }} />
                   <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
                     {formatClockTime(block.startTime)}
@@ -2381,8 +2204,6 @@ export default function Timeline() {
 
             {!error && !loading && payload && (
               <>
-                <SummaryStrip payload={payload} />
-
                 {/* Filter the day by block type. Dims the rest in place. */}
                 {dayTags.length > 1 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 16px' }}>
@@ -2461,19 +2282,16 @@ export default function Timeline() {
                   }}>
                     {/* Cards aren't text to select; killing user-select here keeps
                         shift-click from smearing a text highlight across the run. */}
+                    {/* The grid renders directly on the page background — no card,
+                        no border. Hour labels on the rail, blocks filling the rest. */}
                     <div
                       style={{
                         display: 'grid',
                         gridTemplateColumns: `${TIME_GUTTER_WIDTH}px minmax(0, 1fr)`,
                         userSelect: 'none',
-                        borderRadius: 16,
-                        border: '1px solid var(--color-border-ghost)',
-                        background: 'var(--color-surface)',
-                        overflow: 'hidden',
-                        padding: '8px 0',
                       }}
                     >
-                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} date={payload.date} nowMs={isToday ? nowMs : null} />
+                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} />
                       <CalendarDayTrack
                         date={payload.date}
                         blocks={sortedBlocks}

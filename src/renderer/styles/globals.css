@@ -397,6 +397,12 @@ a[href], button.link-style {
   animation: spin 0.7s linear infinite;
 }
 
+/* The live block's "happening now" dot on the timeline. */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ai-message-in { animation: none; }
   .ai-caret { animation: none; }
