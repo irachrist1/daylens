@@ -237,6 +237,13 @@ svg text {
   height: 0;
 }
 
+/* The timeline grid scrolls with no visible scrollbar — the day itself is the
+   scroll indicator (founder ask, Jul 2026). */
+.timeline-scroller::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* Card base */
 .card {
   background: var(--color-surface-card);

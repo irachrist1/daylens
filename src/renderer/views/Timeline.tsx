@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
@@ -457,12 +457,21 @@ function CalendarBlockCard({
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
         transition: 'border-color 120ms, background 120ms',
         padding: compact ? '2px 6px' : '4px 9px',
-        overflow: 'hidden',
+        // Day view: overflow stays visible so the sticky content wrapper below
+        // can slide within the block. (overflow:hidden would make the card its
+        // own scrollport and freeze the sticky text at the block top.) The
+        // week's compact cards keep the clip — they're too small to stick.
+        overflow: compact ? 'hidden' : 'visible',
         minWidth: 0,
         opacity: dimmed ? 0.22 : muted ? 0.75 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
+      {/* The text pins into view while a tall block spans past the top of the
+          scrollport — the block stays fixed in its time slot; only the timeline
+          scrolls. Sticky keeps the title, time, and summary fully readable at
+          every scroll position, with a small breathing offset. */}
+      <div style={compact ? undefined : { position: 'sticky', top: 8, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'start', gap: 6, minWidth: 0 }}>
         <span style={{
           flex: 1,
@@ -512,6 +521,7 @@ function CalendarBlockCard({
           {blockNarrative(block) ?? blockShortSummary(block)}
         </p>
       )}
+      </div>
     </button>
   )
 }
@@ -926,27 +936,59 @@ function BlockEditModal({
     }
   }
 
-  const trackedRows = [
-    ...block.topApps.slice(0, 10).map((app) => ({
-      key: `app:${app.bundleId}`,
-      kind: 'app' as const,
-      bundleId: app.bundleId,
-      appName: app.appName,
-      name: formatDisplayAppName(app.appName),
-      detail: categoryLabel(app.category),
-      seconds: app.totalSeconds,
-      icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={22} fontSize={9} color={activityColorForCategory(app.category)} />,
-    })),
-    ...block.websites.slice(0, 10).map((site) => ({
-      key: `site:${site.domain}`,
-      kind: 'site' as const,
-      domain: site.domain,
-      name: shortDomainLabel(site.domain),
-      detail: site.topTitle?.trim() || null,
-      seconds: site.totalSeconds,
-      icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={22} />,
-    })),
-  ].sort((a, b) => b.seconds - a.seconds)
+  // Sites are breakdowns of their browser's time — the browser owns the slot,
+  // the sites say where inside it the minutes went. They render nested under
+  // the owning app so the list never reads as additive parallel entries
+  // (Dia 1h 27m *plus* x.com 24m would double-count the same clock time).
+  type TrackedRow = {
+    key: string
+    kind: 'app' | 'site'
+    bundleId?: string
+    appName?: string
+    domain?: string
+    name: string
+    detail: string | null
+    seconds: number
+    icon: ReactNode
+    withinApp?: boolean
+  }
+  const appRows: TrackedRow[] = block.topApps.slice(0, 10).map((app) => ({
+    key: `app:${app.bundleId}`,
+    kind: 'app' as const,
+    bundleId: app.bundleId,
+    appName: app.appName,
+    name: formatDisplayAppName(app.appName),
+    detail: categoryLabel(app.category),
+    seconds: app.totalSeconds,
+    icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={activityColorForCategory(app.category)} />,
+  }))
+  const siteRowFor = (site: WorkContextBlock['websites'][number], withinApp: boolean): TrackedRow => ({
+    key: `site:${site.domain}`,
+    kind: 'site' as const,
+    domain: site.domain,
+    name: shortDomainLabel(site.domain),
+    detail: site.topTitle?.trim() || null,
+    seconds: site.totalSeconds,
+    icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={withinApp ? 20 : 24} />,
+    withinApp,
+  })
+  const sitesByOwner = new Map<string, TrackedRow[]>()
+  const orphanSites: TrackedRow[] = []
+  for (const site of block.websites.slice(0, 10)) {
+    const owner = block.topApps.find((app) =>
+      app.bundleId === site.browserBundleId
+      || (site.canonicalBrowserId != null && app.canonicalAppId === site.canonicalBrowserId))
+    if (owner) {
+      const list = sitesByOwner.get(`app:${owner.bundleId}`) ?? []
+      list.push(siteRowFor(site, true))
+      sitesByOwner.set(`app:${owner.bundleId}`, list)
+    } else {
+      orphanSites.push(siteRowFor(site, false))
+    }
+  }
+  const trackedRows: TrackedRow[] = [...appRows, ...orphanSites]
+    .sort((a, b) => b.seconds - a.seconds)
+    .flatMap((row) => [row, ...(sitesByOwner.get(row.key) ?? []).sort((a, b) => b.seconds - a.seconds)])
 
   const inputBase: CSSProperties = {
     borderRadius: 9,
@@ -1091,17 +1133,17 @@ function BlockEditModal({
               <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
                 Tracked in this block
               </div>
-              <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ display: 'grid', gap: 12 }}>
                 {trackedRows.map((row) => (
-                  <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <div key={row.key} style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, paddingLeft: row.withinApp ? 34 : 0 }}>
                     {row.icon}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</div>
+                      <div style={{ fontSize: row.withinApp ? 12.5 : 13, fontWeight: 600, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</div>
                       {row.detail && (
-                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.detail}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{row.detail}</div>
                       )}
                     </div>
-                    <span style={{ fontSize: 11.5, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatDuration(row.seconds)}</span>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{formatDuration(row.seconds)}</span>
                     <button
                       type="button"
                       aria-label={`Permanently remove ${row.name} from Daylens`}
@@ -1173,7 +1215,6 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   const [wrapOpen, setWrapOpen] = useState(false)
   const [wrapNote, setWrapNote] = useState('')
 
-  const isToday = payload.date === todayString()
   const provisional = payload.blocks.some((block) => block.provisional)
   // Daylens makes no claim about the day until it has enough to work with.
   const enoughToAnalyze = trackedSecondsFor(payload) >= ANALYZE_MIN_SECONDS
@@ -1245,10 +1286,9 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
       display: 'grid',
       gap: 16,
     }} className="timeline-summary-inspector">
-      <div style={{ fontSize: 18, fontWeight: 750, color: 'var(--color-text-primary)' }}>
-        {isToday ? 'Today' : formatFullDate(payload.date)}
-      </div>
-
+      {/* No date heading here — the nav pill above the grid already names the
+          day (founder ask, Jul 2026): the panel goes straight to the recap,
+          Analyze day, and stats. */}
       {payload.totalSeconds === 0 ? (
         <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
           Nothing tracked yet.
@@ -1267,7 +1307,9 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
           )}
 
           {onRefresh && (
-            <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 14, display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
+            // The divider only draws when prose sits above it — as the panel's
+            // first element it would read as a stray line under the padding.
+            <div style={{ borderTop: (recap?.summary || recapError) ? '1px solid var(--color-border-ghost)' : 'none', paddingTop: (recap?.summary || recapError) ? 14 : 0, display: 'grid', gap: 8, justifyItems: 'start', width: '100%' }}>
               {analyzing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 650, color: 'var(--color-text-primary)' }}>
                   <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--color-border-ghost)', borderTopColor: 'var(--color-text-secondary)', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
@@ -1431,9 +1473,21 @@ function BlockDetailInspector({
     icon: ReactNode
     onOpen?: () => void
     offTask: boolean
+    // The bundle the row happened inside — a site inside its browser, a page
+    // or file inside its app. Set when the owning app is itself in the list:
+    // the row then renders nested under it, because its minutes are a
+    // breakdown of the app's time, never additional time on top of it.
+    ownerKey?: string
+    children?: EvidenceRow[]
   }
   const isOffTaskCategory = (category: AppCategory): boolean =>
     category === 'entertainment' || category === 'social'
+  const ownerKeyFor = (bundleId?: string | null, canonicalId?: string | null): string | undefined => {
+    const owner = block.topApps.slice(0, 8).find((app) =>
+      (bundleId != null && app.bundleId === bundleId)
+      || (canonicalId != null && app.canonicalAppId === canonicalId))
+    return owner ? `app:${owner.bundleId}` : undefined
+  }
   const appRows: EvidenceRow[] = block.topApps.slice(0, 8).map((app) => ({
     key: `app:${app.bundleId}`,
     name: formatDisplayAppName(app.appName),
@@ -1465,6 +1519,7 @@ function BlockDetailInspector({
     // A page artifact on a leisure host (a YouTube/Netflix tab that leaked into
     // the block's evidence) is a side trip, mirroring how site rows are routed.
     offTask: kindForDomain(artifact.host) === 'leisure',
+    ownerKey: ownerKeyFor(artifact.ownerBundleId, artifact.canonicalAppId),
   }))
   // Sites already represented by an artifact row are not repeated.
   const artifactHosts = new Set(block.topArtifacts.map((a) => a.host?.toLowerCase()).filter(Boolean) as string[])
@@ -1478,14 +1533,26 @@ function BlockDetailInspector({
       seconds: site.totalSeconds,
       icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={24} />,
       offTask: kindForDomain(site.domain) === 'leisure',
+      ownerKey: ownerKeyFor(site.browserBundleId, site.canonicalBrowserId),
     }))
-  const allEvidence = [...appRows, ...artifactRows, ...siteRows].sort((a, b) => b.seconds - a.seconds)
+  // Nest each on-task site/page/file under the app it happened in; rows whose
+  // app isn't listed stay top-level. Off-task rows keep flowing to Detours.
+  const childRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && row.ownerKey)
+  const nested = appRows.map((app) => ({
+    ...app,
+    children: childRows.filter((row) => row.ownerKey === app.key).sort((a, b) => b.seconds - a.seconds),
+  }))
+  const orphanRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && !row.ownerKey)
+  const allEvidence = [...nested, ...orphanRows].sort((a, b) => b.seconds - a.seconds)
   const evidence = allEvidence.filter((row) => !row.offTask)
   // "Detours" (§6): where ACTIVE time went elsewhere inside this block — the
   // leisure sites and apps you were actually in. Idle/away time is never a
   // detour (founder rule, Jul 2, 2026): it isn't something you were "in", it's
   // the absence of activity, and it renders as blank space on the grid instead.
-  const detours = allEvidence.filter((row) => row.offTask)
+  const detours = [
+    ...allEvidence.filter((row) => row.offTask),
+    ...[...artifactRows, ...siteRows].filter((row) => row.offTask),
+  ].sort((a, b) => b.seconds - a.seconds)
   const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0)
 
   // The block's type tag + how the time inside splits by category. Real facts,
@@ -1496,14 +1563,14 @@ function BlockDetailInspector({
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
 
-  const renderEvidenceRow = (row: EvidenceRow, dimmed: boolean) => {
+  const renderEvidenceRow = (row: EvidenceRow, dimmed: boolean, indented = false) => {
     const content = (
       <>
         {row.icon}
         <div style={{ flex: 1, minWidth: 0 }}>
           <InlineRevealText
             text={row.name}
-            style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
+            style={{ fontSize: indented ? 12.5 : 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
           />
           {row.detail && (
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.detail}</div>
@@ -1514,15 +1581,23 @@ function BlockDetailInspector({
         </div>
       </>
     )
-    const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1 }
-    if (row.onOpen) {
-      return (
-        <button key={row.key} type="button" onClick={row.onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}>
+    // Rows that happened inside another app indent under it: their minutes are
+    // a breakdown of the parent's time, so they must not read as additive.
+    const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1, paddingLeft: indented ? 34 : 0 }
+    const rowNode = row.onOpen
+      ? (
+        <button type="button" onClick={row.onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, paddingLeft: indented ? 34 : 0, textAlign: 'left', cursor: 'pointer' }}>
           {content}
         </button>
       )
-    }
-    return <div key={row.key} style={baseStyle}>{content}</div>
+      : <div style={baseStyle}>{content}</div>
+    if (!row.children?.length) return <Fragment key={row.key}>{rowNode}</Fragment>
+    return (
+      <Fragment key={row.key}>
+        {rowNode}
+        {row.children.map((child) => renderEvidenceRow(child, dimmed, true))}
+      </Fragment>
+    )
   }
 
   const iconButtonStyle = (disabled = false): CSSProperties => ({
@@ -2602,7 +2677,10 @@ export default function Timeline() {
         </div>
       </div>
 
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto' }}>
+      {/* The timeline scrolls without showing a scrollbar (founder ask, Jul
+          2026) — the grid is the chrome; the hidden thumb lives in globals.css
+          under .timeline-scroller. */}
+      <div ref={scrollRef} className="timeline-scroller" style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
         {view === 'week' && (
           <div style={{ padding: '24px 32px 40px' }}>
             <CalendarWeekView

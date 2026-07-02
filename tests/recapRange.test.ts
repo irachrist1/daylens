@@ -31,8 +31,12 @@ function seedSingleBlockDay(db: Database.Database): void {
       category, is_focused, window_title, capture_source, capture_version
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
+  // Kiro is tracked for the first 50 minutes; the Safari visit sits in the
+  // untracked tail of the hour. Site time only counts while its browser was
+  // frontmost or while nothing was tracked at all — a visit behind another
+  // focused app is a background tab and reconciles to zero.
   const info = sessionStmt.run(
-    'com.kiro.kiro', 'Kiro', start, end, 3600,
+    'com.kiro.kiro', 'Kiro', start, start + 50 * 60_000, 3000,
     'development', 1, 'src/main/services/workBlocks.ts — daylens', 'foreground_poll', 1,
   )
   const sessionId = String(info.lastInsertRowid)
@@ -43,7 +47,7 @@ function seedSingleBlockDay(db: Database.Database): void {
       url, normalized_url, domain, page_title
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    'com.apple.Safari', 'safari', start + 5 * 60_000, 600,
+    'com.apple.Safari', 'safari', start + 50 * 60_000, 600,
     'https://github.com/irachrist1/daylens-v1/pull/36',
     'https://github.com/irachrist1/daylens-v1/pull/36',
     'github.com',

@@ -1175,6 +1175,7 @@ function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     grouped.set(session.bundleId, {
       bundleId: session.bundleId,
+      canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId,
       appName: identity.displayName || sanitizeBlockLabel(session.appName) || session.appName,
       category: session.category,
       totalSeconds: session.durationSeconds,

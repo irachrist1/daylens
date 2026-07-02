@@ -447,3 +447,48 @@ in the block's span (app sessions, website visits, focus events, derived session
 artifact mentions) plus writes the `ignored` review as a backstop for edge-overlapping
 sessions. It's the second deliberate exception (after the per-record purge) to "raw
 captured activity is never destroyed": full erasure of sensitive stretches.
+
+---
+
+# 2026-07-02 — app time and site time double-counted: two capture streams, no reconciliation
+
+**Status:** Fixed · **Source:** live-day audit of `daylens.sqlite` (Jul 2, 10:00–13:22) + code read of `tracking.ts` / `browserContext.ts` / `browser.ts` / `queries.ts`
+
+The block editor showed Dia at 1h 27m and then x.com, Netflix, Instagram, Meet etc. as
+peer rows with their own minutes — but those sites were visited *inside* Dia. Two
+independent capture streams write over the same clock time: `app_sessions` gets the
+browser's full frontmost stretch (`tracking.ts` `flushCurrent`), while `website_visits`
+gets a row per site from two producers (`browserContext.ts` active-tab samples +
+`browser.ts` history polls). Nothing ever reconciled them. On the real day the damage
+was worse than presentation: history-sourced visits keep accruing while the browser is
+in the background or the user is idle, so Dia-hosted site rows summed to 8,820s against
+Dia's actual 5,310s of foreground time (a Meet tab "earned" 33m while Warp was focused;
+Netflix "played" through idle stretches).
+
+Block duration, category chips, and day totals were never double-counted — they read
+`app_sessions` only. The corruption lived in every list that showed app rows and site
+rows side by side as if additive (edit modal "Tracked in this block", right panel "What
+you were in", plus any AI consumer summing `WebsiteSummary` rows onto app rows).
+
+The model now enforced in `getWebsiteSummariesForRange` (regression-tested in
+`tests/websiteTimeReconciliation.test.ts`): **the browser owns the time slot; sites are a
+breakdown of that same time.**
+
+1. A visit's minutes clip to when its hosting browser was actually frontmost.
+2. Within one browser exactly one tab is active at a time, so visits *partition* the
+   browser's time: `active_browser_context` samples claim their seconds first, history
+   rows only fill what's left, overlapping same-domain visits union.
+3. A visit behind another focused app is a background tab → zero.
+4. A visit in a gap covered by an absence signal (idle/away/asleep/paused — the
+   `activity_state_events` taxonomy, with `idleSeconds` backdating) → zero: idle time is
+   not browsing time.
+5. A visit in a truly signal-less gap survives clipped to the gap — a history record
+   from when Daylens wasn't looking is real evidence, not a background tab (this keeps
+   the Zen-style capture-failure case from findings §2.2 evidence-bearing).
+
+Result on the real day: Dia-hosted site time 8,820s → 5,734s against Dia's 5,255s; the
+~8m residual is rule 5 — genuine browsing in signal-less capture gaps, which the app
+tracker missed but history saw. The UI now renders sites (and page/file artifacts)
+nested under the app they happened in — modal and right panel — so nothing reads as
+additive; `WorkContextAppSummary` carries `canonicalAppId` and `WebsiteSummary` already
+carried `browserBundleId` for the owner match.

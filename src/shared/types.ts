@@ -182,6 +182,9 @@ export interface FocusScoreBreakdown {
 
 export interface WorkContextAppSummary {
   bundleId: string
+  // Canonical app identity when known — how a site/page row finds the app it
+  // happened inside when bundle ids differ across capture sources.
+  canonicalAppId?: string | null
   appName: string
   category: AppCategory
   totalSeconds: number
