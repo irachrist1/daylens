@@ -995,6 +995,7 @@ export function registerDbHandlers(): void {
         browsers: {
           discoveredCount: browserStatus.discoveredBrowsers.length,
           names: browserStatus.discoveredBrowsers.map((browser) => browser.name),
+          safariHistoryAccess: browserStatus.safariHistoryAccess,
         },
         captureHelperRunning,
       },

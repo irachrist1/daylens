@@ -17,6 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
+import type { SafariHistoryAccessStatus } from '@shared/types'
 import { getDb } from './database'
 import { insertWebsiteVisit } from '../db/queries'
 import { normalizeUrlForStorage, pageKeyForUrl, resolveCanonicalBrowser } from '../lib/appIdentity'
@@ -423,6 +424,37 @@ const browserStatus = {
   browsersPollable: 0,
 }
 
+// Safari's History.db lives under ~/Library/Safari, which is TCC-protected and
+// requires Full Disk Access (FDA). macOS has no programmatic "is FDA granted?"
+// API, so this is inferred purely from whether the WebKit poll's copyFileSync of
+// History.db succeeds. Starts 'unknown' until the first WebKit poll attempt.
+let safariHistoryAccessStatus: SafariHistoryAccessStatus = 'unknown'
+
+function isPermissionDeniedError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code
+  if (code === 'EPERM' || code === 'EACCES') return true
+  const message = err instanceof Error ? err.message : String(err)
+  return message.includes('Operation not permitted') || message.includes('EPERM') || message.includes('EACCES')
+}
+
+// Updates the persistent Safari FDA status and logs the transition once — not on
+// every 60s poll — so denied/restored states don't spam the log while the poller
+// keeps retrying in the background.
+function setSafariHistoryAccessStatus(next: SafariHistoryAccessStatus, browser: BrowserEntry): void {
+  if (safariHistoryAccessStatus === next) return
+  const prev = safariHistoryAccessStatus
+  safariHistoryAccessStatus = next
+  if (next === 'denied') {
+    console.warn(
+      `[browser] Safari history capture blocked — reading ${browser.name} history requires Full Disk Access ` +
+      `(System Settings > Privacy & Security > Full Disk Access). Daylens will pick it up automatically on the ` +
+      `next poll once granted.`,
+    )
+  } else if (next === 'ok' && prev === 'denied') {
+    console.log('[browser] Safari history access restored — Full Disk Access is granted, capturing Safari history again.')
+  }
+}
+
 function getDiscoveredBrowserDiagnostics() {
   return getBrowserEntries().map((browser) => ({
     name: browser.name,
@@ -458,6 +490,7 @@ export function stopBrowserTracking(): void {
 export function getBrowserStatus() {
   return {
     ...browserStatus,
+    safariHistoryAccess: safariHistoryAccessStatus,
     discoveredBrowsers: getDiscoveredBrowserDiagnostics(),
   }
 }
@@ -693,6 +726,9 @@ function pollWebKit(
 
   try {
     fs.copyFileSync(browser.historyPath, tmpDb)
+    // Reaching here means the TCC-protected copy of History.db succeeded, i.e.
+    // Full Disk Access is granted — clear any prior 'denied' status.
+    setSafariHistoryAccessStatus('ok', browser)
     if (fs.existsSync(`${browser.historyPath}-wal`)) fs.copyFileSync(`${browser.historyPath}-wal`, tmpWal)
     if (fs.existsSync(`${browser.historyPath}-shm`)) fs.copyFileSync(`${browser.historyPath}-shm`, tmpShm)
 
@@ -738,6 +774,9 @@ function pollWebKit(
   } catch (err) {
     error = String(err)
     console.warn(`[browser] failed to poll ${browser.name}:`, err)
+    if (isPermissionDeniedError(err)) {
+      setSafariHistoryAccessStatus('denied', browser)
+    }
     captureRateLimited(ANALYTICS_EVENT.BROWSER_TRACKING_HEALTH, `browser:${browser.bundleId}`, {
       failure_kind: classifyFailureKind(err),
       reason: 'poll',

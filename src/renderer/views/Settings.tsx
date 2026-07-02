@@ -784,6 +784,7 @@ function CaptureHealthContent({
 
   const titleStatus = captureHealth.windowTitles.status
   const browserNames = captureHealth.browsers?.names ?? []
+  const safariHistoryAccess = captureHealth.browsers?.safariHistoryAccess
   const permissions = captureHealth.permissions
   const linuxTracking = diagnostics?.linuxTracking
   const platform = diagnostics?.platform
@@ -794,7 +795,11 @@ function CaptureHealthContent({
       ? 'warning'
       : 'neutral'
   const captureHelperUnhealthy = captureHealth.captureHelperRunning === false
-  const hasIssue = tone === 'warning' || captureHelperUnhealthy
+  // Full Disk Access gates Safari history specifically — it's tracked independently
+  // of the window-title tone above (a user can have titles working fine while
+  // Safari history is still blocked, or vice versa).
+  const safariAccessDenied = platform === 'darwin' && safariHistoryAccess === 'denied'
+  const hasIssue = tone === 'warning' || captureHelperUnhealthy || safariAccessDenied
 
   const headline = tone === 'success'
     ? 'Daylens is seeing your work'
@@ -857,6 +862,14 @@ function CaptureHealthContent({
     troubleshootingSteps.push({
       label: 'Capture helper not running',
       detail: 'The background helper that reads window titles is not running. Restart Daylens to relaunch it.',
+    })
+  }
+
+  if (safariAccessDenied) {
+    troubleshootingSteps.push({
+      label: 'Grant Full Disk Access for Safari history',
+      detail: 'Safari browsing history needs Full Disk Access. System Settings > Privacy & Security > Full Disk Access. Enable Daylens — no restart needed, it’s picked up automatically on the next check.',
+      action: { label: 'Open Settings', url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles' },
     })
   }
 
@@ -946,6 +959,24 @@ function CaptureHealthContent({
               description={browserNames.length > 0 ? browserNames.join(', ') : 'No browser history locations found yet.'}
               control={<StatusPill label={String(captureHealth.browsers?.discoveredCount ?? 0)} />}
             />
+            {platform === 'darwin' && safariHistoryAccess && (
+              <SettingsRow
+                title="Safari history access"
+                description={
+                  safariHistoryAccess === 'ok'
+                    ? 'Full Disk Access is granted — Safari browsing history is being captured.'
+                    : safariHistoryAccess === 'denied'
+                      ? 'Safari browsing history needs Full Disk Access to be captured.'
+                      : 'Not yet checked — this fills in after the first Safari history poll.'
+                }
+                control={
+                  <StatusPill
+                    label={safariHistoryAccess === 'ok' ? 'Granted' : safariHistoryAccess === 'denied' ? 'Needs access' : 'Unknown'}
+                    tone={safariHistoryAccess === 'ok' ? 'success' : safariHistoryAccess === 'denied' ? 'warning' : 'neutral'}
+                  />
+                }
+              />
+            )}
             {typeof captureHealth.captureHelperRunning === 'boolean' && (
               <SettingsRow
                 title="Capture helper"

@@ -1260,6 +1260,14 @@ export type TrackingPermissionState =
 
 export type CapturePermissionStatus = 'granted' | 'missing' | 'unsupported_or_unknown'
 
+// Safari (WebKit) history reads ~/Library/Safari/History.db, which is TCC-protected
+// and requires Full Disk Access. macOS gives no programmatic way to check FDA ahead
+// of time, so this is inferred from whether the copy of that file actually succeeds:
+// 'unknown' until the first WebKit poll attempt, 'ok' once a copy has succeeded,
+// 'denied' if a copy fails with EPERM/EACCES (cleared back to 'ok' the next time a
+// poll succeeds — no restart required).
+export type SafariHistoryAccessStatus = 'ok' | 'denied' | 'unknown'
+
 export interface TrackingPermissionDetails {
   accessibility: CapturePermissionStatus
   screenRecording: CapturePermissionStatus
@@ -1618,6 +1626,7 @@ export interface TrackingDiagnosticsPayload {
     browsers?: {
       discoveredCount: number
       names: string[]
+      safariHistoryAccess: SafariHistoryAccessStatus
     }
     captureHelperRunning?: boolean | null
   }

@@ -94,6 +94,18 @@ test('browser diagnostics always expose a discoveredBrowsers array', async () =>
   })
 })
 
+test('browser diagnostics expose safariHistoryAccess, defaulting to unknown until a WebKit poll runs', async () => {
+  const homeDir = tempHomeDir()
+  await withWindowsHome(homeDir, () => {
+    const status = getBrowserStatus()
+    // Nothing in this test suite drives an actual WebKit poll (that requires a
+    // live Electron-backed DB — see the gap noted in the PR this test shipped
+    // with), so the status should still read 'unknown' rather than having
+    // latched into 'ok'/'denied' from unrelated state.
+    assert.equal(status.safariHistoryAccess, 'unknown')
+  })
+})
+
 test('LaunchServices http/https handlers discover Zen without a browser-name list', () => {
   const dump = `
 --------------------------------------------------------------------------------
