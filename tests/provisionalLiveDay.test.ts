@@ -29,10 +29,13 @@ function seedEvent(db: Database.Database, tsMs: number, type: string): void {
   db.prepare(`INSERT INTO activity_state_events (event_ts, event_type, source, metadata_json) VALUES (?, ?, 'test', '{}')`).run(tsMs, type)
 }
 
-// timeline.md §4 founder rule: today stays ONE provisional "Active now" block
-// until the user clicks Analyze. It starts at real activity (not an overnight
-// blip), and overnight sleep before the day began shows no "Away" bar.
-test('today is one provisional block until analyzed, starting at real activity, no leading Away bar', () => {
+// timeline.md §4 founder rule (Jul 2, 2026): today is one provisional block
+// per continuous sitting until the user clicks Analyze — neutral labels, no
+// speculative names. A sitting starts at real activity (not an overnight
+// blip), and overnight sleep before the day began shows no "Away" bar. With
+// no in-memory live session the sitting reads "Earlier today"; the live
+// sitting reads "Active now".
+test('today is one provisional block per sitting, starting at real activity, no leading Away bar', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
   ensureFocusEventsTable(db)
@@ -48,9 +51,9 @@ test('today is one provisional block until analyzed, starting at real activity, 
 
   const payload = getTimelineDayPayload(db, today, null, { materialize: false })
 
-  assert.equal(payload.blocks.length, 1, `today should be ONE provisional block, got ${payload.blocks.length}`)
+  assert.equal(payload.blocks.length, 1, `one sitting should be ONE provisional block, got ${payload.blocks.length}`)
   assert.equal(payload.blocks[0].provisional, true, 'the live day block must be provisional')
-  assert.equal(payload.blocks[0].label.current, 'Active now', 'provisional block is labelled neutrally')
+  assert.equal(payload.blocks[0].label.current, 'Earlier today', 'provisional block is labelled neutrally')
   assert.equal(new Date(payload.blocks[0].startTime).getHours(), 9, 'block starts at 9am real activity, not the 2am blip')
 
   const firstStart = payload.blocks[0].startTime

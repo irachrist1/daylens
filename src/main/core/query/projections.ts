@@ -71,7 +71,10 @@ function derivedSessionToAppSession(
   }
 }
 
-const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
+// Aligned with the 15-minute session break (timeline.md §3.1): a real gap of
+// 15+ minutes ends a block and shows as blank space, so it becomes a visible
+// segment at the same threshold.
+const MIN_VISIBLE_GAP_MS = 15 * 60 * 1000
 
 function buildDerivedSegments(
   db: Database.Database,

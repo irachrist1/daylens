@@ -391,3 +391,30 @@ stale refresh cannot replace the draft.
 Historical answers can still contain the retired inline “remember that” nudge even after the
 generator stops producing it. The renderer now strips that exact legacy tail on history load
 and on newly completed answers; memory consent remains exclusively in the action widget.
+
+---
+
+# 2026-07-02 — the whole-day provisional block conflated engagement with elapsed clock
+
+**Status:** Fixed + regression-tested · **Source:** live `DaylensWindows/daylens.sqlite` + engine run
+
+The "12:00 AM – 10:54 AM" card was not an idle-detection failure — it was
+`buildProvisionalLiveBlocks` bundling the entire live day into ONE block whose span covered
+every gap between sittings, including a 5½-hour sleep. The spec's own §4 ("breaks where idle
+15+ minutes") was never implemented on the live path. The provisional day is now one neutral
+block per continuous sitting ("Active now" for the live sitting, "Earlier today" for finished
+ones), split at real gaps. Test: workBlockSplitting "the live day is one provisional block
+per sitting until it is analyzed".
+
+## Founder decision recorded: the 15-minute session break (supersedes 45)
+
+A real activity gap of ~15+ minutes ends the block — never absorbed, never a detour, never
+tracked time; it renders as blank space sized by the clock. `IDLE_GAP_THRESHOLD_MS`, the
+same-work bridge, the sliver-fold cap, and the visible-gap floor all sit on 15m now.
+Heuristic bumped to `timeline-v9` — unprocessed past days rebuild on revisit; AI/user-
+processed days are kept (Re-analyze to adopt the new shape). Day ownership deliberately
+keeps the wider 45-minute sitting (`dayOwnership.ts`) so a short midnight pause doesn't flip
+late-night work to tomorrow; the no-straddle invariant only needs ownership ≥ the block
+threshold. The "Idle or away" row is gone from Detours (idle isn't something you were "in"),
+and blocks whose span exceeds 6 unbroken hours are flagged in the main-process log instead
+of trusted silently. Learning-vs-detour classification deferred to DEV-119.

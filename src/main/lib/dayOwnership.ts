@@ -1,10 +1,14 @@
 import type Database from 'better-sqlite3'
 import { localDayBounds, shiftLocalDateString } from './localDate'
 
-// One sitting = one day (timeline-v8 physics): a break under 45 minutes stays
-// inside the same continuous sitting; 45+ minutes is the session break that
-// seals it. Day ownership follows the same threshold so a block can never
-// straddle the ownership boundary between two days.
+// One sitting = one day: a break under 45 minutes stays inside the same
+// continuous late-night sitting; 45+ minutes seals it. Note (timeline-v9,
+// Jul 2026): blocks now split at 15-minute activity gaps, but ownership
+// deliberately keeps the wider 45-minute sitting so a short midnight pause
+// doesn't flip late-night work onto the next day. The invariant only needs
+// this threshold to be >= the block-split threshold — any chain of sub-15-min
+// gaps is also a chain of sub-45-min gaps, so a block can never straddle the
+// ownership boundary between two days.
 const SITTING_BREAK_MS = 45 * 60_000
 const MAX_LATE_NIGHT_CARRY_MS = 12 * 60 * 60_000
 const BREAK_EVENT_TYPES = ['away_start', 'lock_screen', 'suspend'] as const

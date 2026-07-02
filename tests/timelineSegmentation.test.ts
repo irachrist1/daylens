@@ -332,10 +332,30 @@ test('same video with a short detour is one block', () => {
 })
 
 // FLOOR (DEV-99 / timeline.md §3.4): no block under fifteen minutes stands
-// alone. A morning with 20-minute lulls and an 8-minute Spotify blip is one
-// continuous sitting under the 45-minute session break — the blip and the lulls
-// fold INTO the work, never out as slivers.
-test('a sub-15-minute sliver between lulls folds into the surrounding work', () => {
+// alone. A morning with brief (sub-15-minute) lulls and an 8-minute Spotify
+// blip is one continuous sitting under the 15-minute session break — the blip
+// and the brief lulls fold INTO the work, never out as slivers.
+test('a sub-15-minute sliver between brief lulls folds into the surrounding work', () => {
+  const db = freshDb()
+  const sessions = [
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 40), windowTitle: 'workBlocks.ts — daylens' }),
+    session({ bundleId: 'com.spotify.client', appName: 'Spotify', category: 'entertainment', startTime: at(9, 50), endTime: at(9, 58), windowTitle: 'Discover Weekly' }),
+    session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(10, 8), endTime: at(10, 48), windowTitle: 'workBlocks.ts — daylens' }),
+  ]
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  assert.equal(blocks.length, 1, `one sitting of the same work should be one block, got ${blocks.length}`)
+  for (const block of blocks) {
+    assert.ok(blockActiveSeconds(block) >= FLOOR_SECONDS, `no block may sit under the 15-min floor, got ${blockActiveSeconds(block)}s`)
+  }
+  db.close()
+})
+
+// The 15-minute session break (founder decision, Jul 2, 2026): real activity
+// gaps of 15+ minutes END the block and are never absorbed. The same morning
+// with 20-minute lulls is three sittings; the isolated 8-minute Spotify blip
+// bounded by real gaps on both sides is noise, not a block — it is dropped,
+// and the two work stretches stand as separate blocks with blank space between.
+test('15+ minute gaps end blocks; an isolated sub-floor blip between real gaps is dropped', () => {
   const db = freshDb()
   const sessions = [
     session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 40), windowTitle: 'workBlocks.ts — daylens' }),
@@ -343,10 +363,10 @@ test('a sub-15-minute sliver between lulls folds into the surrounding work', () 
     session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(10, 28), endTime: at(11, 8), windowTitle: 'workBlocks.ts — daylens' }),
   ]
   const blocks = buildTimelineBlocksFromSessions(db, sessions)
-  assert.equal(blocks.length, 1, `one sitting of the same work should be one block, got ${blocks.length}`)
-  for (const block of blocks) {
-    assert.ok(blockActiveSeconds(block) >= FLOOR_SECONDS, `no block may sit under the 15-min floor, got ${blockActiveSeconds(block)}s`)
-  }
+  assert.equal(blocks.length, 2, `two sittings split by real gaps should be two blocks, got ${blocks.length}: ${blocks.map((b) => `${new Date(b.startTime).toLocaleTimeString()}–${new Date(b.endTime).toLocaleTimeString()}`).join(', ')}`)
+  const sorted = [...blocks].sort((a, b) => a.startTime - b.startTime)
+  assert.ok(sorted[0].endTime <= at(9, 40), 'the first block must not span into the gap')
+  assert.ok(sorted[1].startTime >= at(10, 28), 'the second block must not reach back across the gap')
   db.close()
 })
 

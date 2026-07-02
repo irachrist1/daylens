@@ -257,36 +257,36 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
   db.close()
 })
 
-test('a 45+ minute untracked gap is a hard boundary even for the same app', () => {
+test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
-  // timeline.md §3.1 (45-minute session break): missing idle telemetry must not
-  // erase a real 45+ minute absence merely because the same app resumes
-  // afterward. Both stretches sit above the 15-min calendar floor (DEV-99), so
-  // this isolates the gap boundary from the floor.
+  // timeline.md §3.1 (15-minute session break, founder decision Jul 2, 2026):
+  // a real activity gap of 15+ minutes ends the block, even when the same app
+  // resumes afterward — the gap is blank space, never absorbed. Both stretches
+  // sit above the 15-min calendar floor (DEV-99), so this isolates the gap
+  // boundary from the floor.
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 16 })
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 63, durationMinutes: 63 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 36, durationMinutes: 63 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 2, `same-app work across a 47m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `same-app work across a 20m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
-test('same-app work bridges a lull below the 45-minute session break', () => {
+test('same-app work bridges a brief lull below the 15-minute session break', () => {
   const db = createDb()
-  // The founder's coffee-break rule: a half-hour lull inside a working session
-  // stays INSIDE one continuous block — the card spans the lull, active time
-  // stays honest. Only a 45+ minute absence starts a new block.
+  // A brief lull inside a working session stays INSIDE one continuous block —
+  // the active time stays honest. A real 15+ minute absence ends the block.
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 20 })
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 52, durationMinutes: 40 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 30, durationMinutes: 40 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 1, `same-app work across a 32m lull stays one block; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 1, `same-app work across a 10m lull stays one block; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
-test('sparse AI/dev tool spans do not cross a 45+ minute idle boundary', () => {
+test('sparse AI/dev tool spans do not cross a 15+ minute idle boundary', () => {
   const db = createDb()
   const sessions: AppSession[] = [
     {
@@ -534,7 +534,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v9'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -643,7 +643,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v9'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 
@@ -669,21 +669,26 @@ test('clearing a corrected review reverts the block to its computed label', () =
   db.close()
 })
 
-// timeline.md §4: today, before it has been analyzed, is ONE provisional block
-// for the whole day — neutral "Active now", never split or per-activity named.
-// Daylens makes no claim about the day's shape until the user analyzes it.
-test('the live day is one provisional block until it is analyzed', () => {
+// timeline.md §4 (founder decision, Jul 2, 2026): today, before it has been
+// analyzed, is one provisional block PER CONTINUOUS SITTING — neutral labels,
+// never per-activity named. A real 15+ minute activity gap ends the sitting;
+// the gap is blank space, never absorbed into a whole-day card. Daylens makes
+// no claim about the day's shape until the user analyzes it.
+test('the live day is one provisional block per sitting until it is analyzed', () => {
   const db = createDb()
   const today = dateStringForOffset(0)
-  // Two stretches separated by a long idle gap — pre-change this would have been
-  // two coarse provisional blocks; now it must collapse to a single one.
+  // Two stretches separated by a long idle gap — two sittings, two provisional
+  // blocks, and the gap between them is not inside either block's span.
   insertSession(db, { title: 'workBlocks.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40, dateStr: today })
   insertSession(db, { title: 'Inbox - Gmail - Google Chrome', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'communication', startMinute: 180, durationMinutes: 30, dateStr: today })
 
   const blocks = getTimelineDayProjection(db, today, null, { materialize: false }).blocks
-  assert.equal(blocks.length, 1, `today should be one provisional block, got ${blocks.length}`)
+  assert.equal(blocks.length, 2, `two sittings should be two provisional blocks, got ${blocks.length}`)
   assert.ok(blocks.every((block) => block.provisional === true), 'today blocks are provisional before analysis')
-  assert.ok(blocks.every((block) => block.label.current === 'Active now'), `provisional blocks are neutral, got ${blocks.map((b) => b.label.current).join(', ')}`)
+  assert.ok(blocks.every((block) => block.label.current === 'Earlier today'), `provisional blocks are neutral, got ${blocks.map((b) => b.label.current).join(', ')}`)
+  // The 2h20m idle gap is never absorbed: neither block spans across it.
+  const sorted = [...blocks].sort((a, b) => a.startTime - b.startTime)
+  assert.ok(sorted[0].endTime <= sorted[1].startTime - 60 * 60_000, 'the idle gap stays blank space between the sittings')
   db.close()
 })
 

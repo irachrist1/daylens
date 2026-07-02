@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Moon, Sparkles } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
-import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
+import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory } from '@shared/activityColors'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
@@ -83,10 +83,6 @@ function formatClockTime(timestamp: number): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(timestamp)
-}
-
-function segmentDurationSeconds(segment: TimelineSegment): number {
-  return Math.max(1, Math.round((segment.endTime - segment.startTime) / 1000))
 }
 
 function categoryLabel(category: AppCategory): string {
@@ -220,14 +216,6 @@ function blockShortSummary(block: WorkContextBlock): string {
   }
   return `Spent ${duration} on ${categoryLabel(block.dominantCategory).toLowerCase()}.`
 }
-
-function gapKindLabel(kind: TimelineGapSegment['kind']): string {
-  if (kind === 'machine_off') return 'Machine off'
-  if (kind === 'away') return 'Away'
-  return 'Untracked gap'
-}
-
-const MIN_VISIBLE_GAP_SECONDS = 30 * 60
 
 // Calendar geometry. The timeline is drawn as a real calendar grid: a block
 // sits at its wall-clock position (top = start, bottom = end), so height =
@@ -530,15 +518,17 @@ function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackB
 }
 
 // One day as a 24-hour calendar track: hour lines, blocks at their clock
-// positions, honest labels for real Away / Machine off breaks, and the
-// current-time line on today. Blocks are buttons carrying
-// data-timeline-block-id, so the day view's click-capture selection (plain
-// click, shift-click merge, click-empty deselect) works unchanged.
+// positions, and the current-time line on today. Idle/away time renders as
+// nothing at all — blank space between blocks, sized by the clock (founder
+// rule, Jul 2, 2026): no card, no color, no label, nothing clickable. The
+// shape of the blocks and the gaps between them IS the record of when you
+// were at the computer. Blocks are buttons carrying data-timeline-block-id,
+// so the day view's click-capture selection (plain click, shift-click merge,
+// click-empty deselect) works unchanged.
 function CalendarDayTrack({
   date,
   blocks,
   bounds,
-  gapSegments = [],
   hourHeight,
   compact = false,
   selectedBlockId = null,
@@ -550,7 +540,6 @@ function CalendarDayTrack({
   date: string
   blocks: WorkContextBlock[]
   bounds: TrackBounds
-  gapSegments?: TimelineGapSegment[]
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
@@ -586,36 +575,6 @@ function CalendarDayTrack({
           }}
         />
       ))}
-
-      {/* Real breaks (Away / Machine off) read as hatched regions — visibly
-          not-tracked time, GCal out-of-office style — with a quiet label. */}
-      {!compact && gapSegments.map((gap) => {
-        const top = topFor(gap.startTime)
-        const gapHeight = topFor(gap.endTime) - top
-        if (gapHeight < 22) return null
-        return (
-          <div
-            key={`gap:${gap.kind}:${gap.startTime}`}
-            style={{
-              position: 'absolute',
-              top,
-              height: gapHeight,
-              left: 4,
-              right: 8,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              pointerEvents: 'none',
-              borderRadius: 8,
-              background: 'repeating-linear-gradient(-45deg, transparent, transparent 7px, var(--color-border-ghost) 7px, var(--color-border-ghost) 8px)',
-            }}
-          >
-            <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap', background: 'var(--color-bg)', padding: '2px 8px', borderRadius: 999 }}>
-              {gapKindLabel(gap.kind)} · {formatDuration(segmentDurationSeconds(gap))}
-            </span>
-          </div>
-        )
-      })}
 
       {blocks.map((block) => {
         const top = topFor(block.startTime)
@@ -1060,13 +1019,12 @@ function BlockInspector({
     }))
   const allEvidence = [...appRows, ...artifactRows, ...siteRows].sort((a, b) => b.seconds - a.seconds)
   const evidence = allEvidence.filter((row) => !row.offTask)
-  // "Detours" (§6): where time went elsewhere inside this block — the leisure
-  // sites and apps, plus the stretch with no tracked activity at all.
+  // "Detours" (§6): where ACTIVE time went elsewhere inside this block — the
+  // leisure sites and apps you were actually in. Idle/away time is never a
+  // detour (founder rule, Jul 2, 2026): it isn't something you were "in", it's
+  // the absence of activity, and it renders as blank space on the grid instead.
   const detours = allEvidence.filter((row) => row.offTask)
-  const spanSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
-  const idleSeconds = Math.max(0, spanSeconds - blockActiveSeconds(block))
-  const showIdleRow = idleSeconds >= 10 * 60
-  const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0) + (showIdleRow ? idleSeconds : 0)
+  const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0)
 
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
@@ -1288,9 +1246,10 @@ function BlockInspector({
           </section>
         )}
 
-        {/* Where time went elsewhere inside this window: the leisure detours
-            plus the stretch with nothing tracked at all. Honest, not a grade. */}
-        {(detours.length > 0 || showIdleRow) && (
+        {/* Where active time went elsewhere inside this window: the leisure
+            detours you were actually in. Honest, not a grade. Idle/away time
+            never appears here — it isn't a detour, it's blank space. */}
+        {detours.length > 0 && (
           <section>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
               <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', textTransform: 'uppercase' }}>
@@ -1304,18 +1263,6 @@ function BlockInspector({
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {detours.map((row) => renderEvidenceRow(row, true))}
-              {showIdleRow && renderEvidenceRow({
-                key: 'idle',
-                name: 'Idle or away',
-                detail: 'No tracked activity in this stretch',
-                seconds: idleSeconds,
-                icon: (
-                  <span style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: 'var(--color-surface-high)', color: 'var(--color-text-tertiary)' }}>
-                    <Moon size={14} strokeWidth={2} aria-hidden="true" />
-                  </span>
-                ),
-                offTask: true,
-              }, true)}
             </div>
           </section>
         )}
@@ -1953,14 +1900,6 @@ export default function Timeline() {
   }, [date, payload, view])
 
   const selectedBlock = selectedBlockId ? blockMap.get(selectedBlockId) ?? null : null
-  // Real breaks (Away / Machine off) worth explaining on the grid. Derived
-  // idle gaps just read as the empty space they are.
-  const gapSegments = useMemo(
-    () => (payload?.segments ?? []).filter((segment): segment is TimelineGapSegment =>
-      (segment.kind === 'away' || segment.kind === 'machine_off')
-      && segmentDurationSeconds(segment) >= MIN_VISIBLE_GAP_SECONDS),
-    [payload],
-  )
 
   useEffect(() => {
     if (!selectedBlock) {
@@ -2296,7 +2235,6 @@ export default function Timeline() {
                         date={payload.date}
                         blocks={sortedBlocks}
                         bounds={dayBounds}
-                        gapSegments={gapSegments}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}

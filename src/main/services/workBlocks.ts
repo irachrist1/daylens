@@ -102,12 +102,13 @@ function sanitizeBlockLabel(label: string | null | undefined): string | null {
   return label
 }
 
-// The single "session break" rule (founder decision, Jul 2026): being away for
-// 45 minutes or more ends the session and starts a new block; anything shorter
-// stays INSIDE the same continuous block (the card spans the lull, active time
-// stays honest). This is what turns a morning of work with a 20-minute coffee
-// break into ONE block instead of a fragmented string of slices.
-const IDLE_GAP_THRESHOLD_MS = 45 * 60_000
+// The single "session break" rule (founder decision, Jul 2, 2026 — supersedes
+// the earlier 45-minute rule): a real gap in activity of roughly 15 minutes or
+// more ENDS the current block. The gap is never absorbed into a block; it
+// renders as blank space on the timeline, and a new block starts only once
+// real activity resumes. A block's duration is the time the user was genuinely
+// active, never the wall-clock span across an idle lull.
+const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
@@ -148,19 +149,18 @@ const TIMELINE_MIN_STANDALONE_SPAN_MS = 30 * 60_000
 // and a lone short block with no non-meeting neighbour to fold into.
 const TIMELINE_MIN_BLOCK_FLOOR_MS = 15 * 60_000
 // The widest gap a sub-floor sliver may fold ACROSS into a neighbour. A sliver
-// absorbs into a short-break neighbour (a 20-minute coffee gap), but never across
-// a real away/sleep gap: a 24-second 1:56am blip must not fold into the 9:41am
-// block and make one 11-hour phantom starting at 2am. Aligned with the session
-// break: inside 45 minutes it is still the same sitting.
-const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 45 * 60_000
-// The same work continued across a moderate untracked gap is one block, not two.
-// A 30-minute lull in the middle of a coding morning (stepped away, tracker
-// missed a stretch) should not split one Ghostty session into "Terminal work"
-// and a separate block. Two stretches of the same dominant app doing related
-// work bridge a gap up to this size, even across a coarse-segment boundary.
-// Aligned with the 45-minute session break: a genuine break (machine off for
-// hours, a long lunch) exceeds this and stays split.
-const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 45 * 60_000
+// absorbs into a nearby neighbour across a brief lull, but never across a real
+// break: a 24-second 1:56am blip must not fold into the 9:41am block and make
+// one 11-hour phantom starting at 2am. Aligned with the 15-minute session
+// break: a gap of 15+ minutes is never absorbed into any block.
+const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 15 * 60_000
+// The same work continued across a brief untracked lull is one block, not two.
+// A short pause in the middle of a coding morning should not split one Ghostty
+// session into "Terminal work" and a separate block. Two stretches of the same
+// dominant app doing related work bridge a gap up to this size, even across a
+// coarse-segment boundary. Aligned with the 15-minute session break: a real
+// gap (15+ minutes away) always stays split — it is blank space, not work.
+const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 15 * 60_000
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
 // Quality bar: a 90-minute block titled "Daylens AI refactor — extract
@@ -170,6 +170,14 @@ const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 300 * 60_000
 const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 360 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
+// Bumped to v9 with: the 15-minute session break (founder decision, Jul 2,
+// 2026 — a real activity gap of 15+ minutes ends the block, is never absorbed,
+// and renders as blank space; a new block starts only when activity resumes),
+// the same-work bridge and sliver-fold caps aligned to the same 15 minutes,
+// the live provisional day split into one provisional block per continuous
+// sitting instead of one whole-day card, and suspiciously long unbroken
+// blocks flagged in the logs instead of trusted silently.
+//
 // Bumped to v8 with: the 45-minute session break (away under 45 min stays
 // inside one continuous block; 45+ min starts a new one), larger block
 // ceilings (3h base / 5h coherent / 6h assisted), the floor-pass fold guard
@@ -194,7 +202,13 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // buildTimelineBlocksForDay) so the stale "Canva development" / "Notifications
 // development" labels get replaced — unless the day was already AI/user
 // processed, in which case that curated result is kept and its IDs stay stable.
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v8'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v9'
+
+// A single unbroken block this long is almost never real (~11 hours of
+// continuous engagement is suspicious on its face) — it usually means
+// idle/away detection failed somewhere in the span. Flag it in the logs
+// rather than trusting it silently (founder rule, Jul 2, 2026).
+const SUSPICIOUS_UNBROKEN_BLOCK_SPAN_MS = 6 * 60 * 60_000
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
@@ -4526,54 +4540,57 @@ export function listTimelineDaysNeedingHeuristicUpgrade(
   return rows.map((row) => row.date)
 }
 
-// timeline.md §4 (founder decision, Jun 2026): the live day, before it is
-// analyzed, is ONE provisional block for the WHOLE day — labelled neutrally
-// "Active now", never split or given speculative per-activity intent names
-// (naming live is how a transcription session got stamped "Software Development
-// Block"). Daylens makes no claim about the shape of the day until the user
-// asks it to: the single block finalizes into real named blocks when they run
-// Analyze Day. It still carries full evidence so the detail panel works.
+// timeline.md §4: the live day, before it is analyzed, is provisional — never
+// split into speculative intent-named blocks (naming live is how a
+// transcription session got stamped "Software Development Block"). But the raw
+// unit is still honest (founder decision, Jul 2, 2026): each continuous
+// sitting is its own provisional block, ended by any real activity gap of 15+
+// minutes. The gap between sittings is blank space, never absorbed — one card
+// spanning 12:00 AM to 10:54 AM across a night of sleep is a lie. The stretch
+// being lived in right now is "Active now"; finished stretches wait neutrally
+// as "Earlier today" until Analyze Day names them. Each block still carries
+// full evidence so the detail panel works.
 function buildProvisionalLiveBlocks(
   db: Database.Database,
   sessions: AppSession[],
 ): WorkContextBlock[] {
   if (sessions.length === 0) return []
   const context = buildTimelineContext(db, sessions)
-  // Drop leading/standalone noise before bundling the day into one provisional
-  // block: a 24s 1:56am blip separated from the real day by an 8h sleep gap must
-  // not anchor the block at 2am. Keep only coarse segments that clear the block
-  // floor on span or active time; if none do (a genuinely tiny day), keep all.
+  // Drop standalone noise: a 24s 1:56am blip separated from the real day by an
+  // 8h sleep gap must not become its own phantom block. Keep only coarse
+  // segments (split at the 15-minute session break) that clear the block floor
+  // on span or active time; if none do (a genuinely tiny day), keep them all.
   const segments = coarseSegmentsFromSessions(sessions)
-  const realSessions = segments
-    .filter((seg) => {
-      if (seg.sessions.length === 0) return false
-      const span = sessionEndMs(seg.sessions[seg.sessions.length - 1]) - seg.sessions[0].startTime
-      const active = seg.sessions.reduce((sum, s) => sum + Math.max(0, s.durationSeconds * 1000), 0)
-      return span >= TIMELINE_MIN_BLOCK_FLOOR_MS || active >= TIMELINE_MIN_BLOCK_FLOOR_MS
-    })
-    .flatMap((seg) => seg.sessions)
-  const kept = realSessions.length > 0 ? realSessions : sessions
-  const candidate: CandidateBlock = {
-    sessions: kept,
-    formation: 'heuristic',
-    boundedBeforeGap: false,
-    boundedAfterGap: false,
-  }
-  const block = buildBlockFromCandidate(candidate, db, context)
-  const containsLiveSession = kept.some((session) => session.id === -1)
-  return [{
-    ...block,
-    provisional: true,
-    isLive: containsLiveSession,
-    label: {
-      ...block.label,
-      current: 'Active now',
-      source: 'rule' as const,
-      confidence: 0,
-      override: null,
-      aiSuggested: null,
-    },
-  }]
+  const realSegments = segments.filter((seg) => {
+    if (seg.sessions.length === 0) return false
+    const span = sessionEndMs(seg.sessions[seg.sessions.length - 1]) - seg.sessions[0].startTime
+    const active = seg.sessions.reduce((sum, s) => sum + Math.max(0, s.durationSeconds * 1000), 0)
+    return span >= TIMELINE_MIN_BLOCK_FLOOR_MS || active >= TIMELINE_MIN_BLOCK_FLOOR_MS
+  })
+  const kept = realSegments.length > 0 ? realSegments : segments.filter((seg) => seg.sessions.length > 0)
+  return kept.map((seg) => {
+    const candidate: CandidateBlock = {
+      sessions: seg.sessions,
+      formation: 'heuristic',
+      boundedBeforeGap: seg.boundedBeforeGap,
+      boundedAfterGap: seg.boundedAfterGap,
+    }
+    const block = buildBlockFromCandidate(candidate, db, context)
+    const containsLiveSession = seg.sessions.some((session) => session.id === -1)
+    return {
+      ...block,
+      provisional: true,
+      isLive: containsLiveSession,
+      label: {
+        ...block.label,
+        current: containsLiveSession ? 'Active now' : 'Earlier today',
+        source: 'rule' as const,
+        confidence: 0,
+        override: null,
+        aiSuggested: null,
+      },
+    }
+  })
 }
 
 // The time spans of blocks the user deleted (review state 'ignored') on a
@@ -4604,6 +4621,28 @@ function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSe
     !spans.some((span) => session.startTime >= span.startMs && session.startTime < span.endMs))
 }
 
+// Sanity check (founder rule, Jul 2, 2026): a single block claiming many hours
+// of unbroken engagement is almost never real — it usually means idle/away
+// detection failed inside the span. We don't silently trust it; we flag it in
+// the main-process log so the failure is visible and diagnosable. Deduped per
+// (date, span) so periodic payload refreshes don't spam the log.
+const flaggedSuspiciousBlocks = new Set<string>()
+function flagSuspiciousUnbrokenBlocks(dateStr: string, blocks: WorkContextBlock[]): void {
+  for (const block of blocks) {
+    const spanMs = block.endTime - block.startTime
+    if (spanMs < SUSPICIOUS_UNBROKEN_BLOCK_SPAN_MS) continue
+    const key = `${dateStr}:${block.startTime}:${block.endTime}`
+    if (flaggedSuspiciousBlocks.has(key)) continue
+    flaggedSuspiciousBlocks.add(key)
+    const hours = (spanMs / 3_600_000).toFixed(1)
+    const activeHours = (blockActiveSeconds(block) / 3_600).toFixed(1)
+    console.warn(
+      `[timeline] suspicious unbroken block on ${dateStr}: "${block.label.current}" spans ${hours}h `
+      + `(${activeHours}h active) with no detected gap — idle/away detection likely failed in this span`,
+    )
+  }
+}
+
 export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -4624,6 +4663,7 @@ export function buildTimelineBlocksForDay(
       // heuristic is reconstructed more accurately on revisit, then
       // re-persisted so the improvement sticks.
       if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
+        flagSuspiciousUnbrokenBlocks(dateStr, persisted)
         return persisted
       }
       forceMaterialize = true
@@ -4635,6 +4675,7 @@ export function buildTimelineBlocksForDay(
   }
 
   const computed = buildBlocksForSessions(db, sessions, dateStr).map((block) => finalizedLabelForBlock(db, block, dateStr))
+  flagSuspiciousUnbrokenBlocks(dateStr, computed)
   if (shouldMaterialize) {
     persistTimelineDayIfChanged(db, dateStr, sessions, computed, forceMaterialize)
   }
@@ -4667,7 +4708,10 @@ function mergeAdjacentSegments(segments: TimelineSegment[]): TimelineSegment[] {
   return merged
 }
 
-const MIN_VISIBLE_GAP_MS = 30 * 60 * 1000 // 30 minutes
+// A gap becomes visible blank space on the grid at the same threshold that
+// ends a block: 15 minutes. Below that a lull is absorbed; at or above it the
+// timeline must show the absence honestly.
+const MIN_VISIBLE_GAP_MS = 15 * 60 * 1000
 
 function isVisibleGapSegment(segment: TimelineSegment): boolean {
   if (segment.kind === 'work_block') return true
@@ -4988,9 +5032,10 @@ export function getTimelineDayPayload(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
-  // timeline.md §4 (founder rule): today stays ONE provisional "Active now"
-  // block until the USER explicitly analyzes it (a materialize request from
-  // Analyze Day). We can't know the shape of the day until it is done, so Daylens
+  // timeline.md §4 (founder rule): today stays provisional — one neutral block
+  // per continuous sitting, split only at real 15+ minute activity gaps —
+  // until the USER explicitly analyzes it (a materialize request from Analyze
+  // Day). We can't know the shape of the day until it is done, so Daylens
   // never splits today into named blocks on its own. A day is provisional while it
   // has no user-materialized blocks and was not processed by the nightly job;
   // crucially, NOTHING but an explicit user Analyze may materialize the live day
@@ -5016,6 +5061,7 @@ export function getTimelineDayPayload(
   const builtBlocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
+  if (isLiveProvisionalDay) flagSuspiciousUnbrokenBlocks(dateStr, builtBlocks)
   // A deleted block (review state 'ignored') is gone from every surface that
   // reads this payload — timeline, recap, AI, wraps. Its span renders as the
   // empty space it now is.

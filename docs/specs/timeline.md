@@ -53,10 +53,19 @@ declared once, so the views cannot disagree about what happened.
 
 A new block starts only on a strong signal:
 
-- A real session break — idle, asleep, or locked for **45 minutes or more** (founder
-  decision, Jul 2026). Away time under that stays *inside* the same continuous block: the
-  card spans the lull, the active time stays honest. A 20-minute coffee break does not
-  split a morning of work.
+- A real session break — a genuine gap in activity of roughly **15 minutes or more**
+  (founder decision, Jul 2, 2026 — supersedes the earlier 45-minute rule). The gap **ends**
+  the current block and is never absorbed into it; a new block starts only once real
+  activity resumes. Idle/away time is not a detour, not tracked time, and not part of any
+  block's duration — it renders as blank, empty space on the timeline, proportional to how
+  long the gap lasted, with no card, no color, no title, and nothing clickable. A block's
+  duration equals the time you were genuinely active, never the wall-clock span across a
+  lull. The "tracked" total follows the same rule: only real active time, never elapsed
+  clock range.
+- A single block claiming many unbroken hours (say, 12:00 AM straight to 10:54 AM) is
+  almost never real. If a block that long exists with no detected gaps, Daylens flags it
+  (main-process log) rather than trusting it silently — it usually means idle/away
+  detection failed somewhere in the span.
 - A meeting starts or ends.
 - You clearly switch to a **different goal** (different subject/project).
 - A user correction says "cut here".
@@ -187,11 +196,11 @@ before it's worth proposing — never the first signal.
 
 So, on the Today view:
 
-- The day so far is **one big provisional block**, labelled neutrally — *"Active now"*, or the
-  name of a thread **only if one is already clearly established** across the day. No
-  speculative per-activity names while live.
-- That block has breaks where the laptop was locked or the user was idle for roughly **15+
-  minutes**.
+- The day so far is **one provisional block per continuous sitting**, labelled neutrally —
+  the stretch being lived in right now is *"Active now"*, finished stretches are *"Earlier
+  today"*. No speculative per-activity names while live.
+- A real activity gap of roughly **15+ minutes** ends the current provisional block; the
+  gap is blank space on the grid, and a new provisional block starts when activity resumes.
 - Opening it shows the threads active during that time, with time spent on each — and the
   old "Apps used" and "Key artifacts" sections shown **together in one view**, not separated.
 - The "Not right?" button is removed from this view.
@@ -217,10 +226,17 @@ recap on the same day with a button called "Analyze Day."
 
 - Brief detours are absorbed into the surrounding block (section 3.2) — they never appear
   as work.
-- Inside the block's detail panel, a **"Detours"** section answers "where did time go
-  elsewhere in this window": the leisure/social sites and apps with their minutes, plus an
-  "Idle or away" row when a meaningful stretch of the span had nothing tracked. It is
-  informational, never a grade. (This section was previously called "Side trips".)
+- Inside the block's detail panel, a **"Detours"** section answers "where did *active* time
+  go elsewhere in this window": the leisure/social sites and apps with their minutes. A
+  detour is time you were active but off-task **within** a block (a 20-minute YouTube run
+  mid-session) — still real tracked time, so it belongs in the block's breakdown. Idle/away
+  time is **never** a detour: it isn't something you were "in", it's the absence of
+  activity, and it shows as blank space on the grid instead. It is informational, never a
+  grade. (This section was previously called "Side trips".)
+- Known limitation, deliberately not solved yet: Detours can't distinguish off-task
+  browsing from legitimate learning (an educational video related to the work). Tracked as
+  **DEV-119** to design properly; for now all non-primary-task browsing within a block is
+  a detour.
 - The detail panel also shows a **block type tag** ("Focused work", "Meeting", "Research",
   "Leisure"…) derived from the block's kind + dominant category, and the same tags appear
   as filter chips above the day grid — filtering dims non-matching blocks in place so the
@@ -254,6 +270,9 @@ the blocks and the apps and the sites that were used during that day.
 7. A user correction always wins and always survives a rebuild.
 8. The view never shows a Score, a Focus rating, or a Drift number.
 9. When Daylens doesn't know, it says so — it never fills the gap with a guess.
+10. Idle/away time is excluded from every block's duration, from Detours, and from the
+    tracked total. A 15+ minute activity gap ends the block and renders as blank space —
+    it is never absorbed, never a card, never counted.
 
 ## 9. Future integrations
 
