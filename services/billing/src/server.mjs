@@ -270,6 +270,27 @@ async function bootstrap(req, res) {
   return json(res, 200, { token: signToken({ type: 'install', accountId: account.id }, 90 * 86400) })
 }
 
+async function payments(account, res) {
+  const result = await pool.query(
+    `SELECT provider, tx_ref, amount, currency, status, provider_reference, created_at, updated_at
+     FROM billing_payment_intents
+     WHERE account_id = $1 AND status IN ('successful', 'checkout_failed')
+     ORDER BY created_at DESC LIMIT 100`,
+    [account.id],
+  )
+  const rows = result.rows.map((row) => ({
+    provider: row.provider,
+    txRef: row.tx_ref,
+    amount: Number(row.amount),
+    currency: row.currency,
+    status: row.status,
+    providerReference: row.provider_reference,
+    createdAt: new Date(row.created_at).getTime(),
+    updatedAt: new Date(row.updated_at).getTime(),
+  }))
+  return json(res, 200, { payments: rows })
+}
+
 async function createPolarCheckout(account, res) {
   if (!process.env.POLAR_ACCESS_TOKEN || !process.env.POLAR_PRODUCT_ID) return json(res, 503, { error: 'Polar checkout is not configured.' })
   const response = await fetch(`${polarApiBaseUrl}/checkouts/`, {
@@ -645,6 +666,7 @@ async function route(req, res) {
   const account = await accountForToken(req)
   if (req.method === 'GET' && url.pathname === '/v1/billing') return json(res, 200, await billingSnapshot(account))
   if (req.method === 'GET' && url.pathname === '/v1/usage') return usage(account, url, res)
+  if (req.method === 'GET' && url.pathname === '/v1/payments') return payments(account, res)
   if (req.method === 'POST' && url.pathname === '/v1/ai/session') {
     const snapshot = await billingSnapshot(account)
     if (!snapshot.canUseAI) return json(res, 402, { error: snapshot.message })

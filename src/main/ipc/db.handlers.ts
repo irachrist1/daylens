@@ -38,6 +38,7 @@ import {
   updateClient,
   archiveClient,
   restoreClient,
+  deleteClient,
   getOrCreateClientByName,
   getRollupSummary,
 } from '../core/query/attributionResolvers'
@@ -935,6 +936,16 @@ export function registerDbHandlers(): void {
       invalidateProjectionScope('timeline', 'client_restored')
       invalidateProjectionScope('apps', 'client_restored')
       invalidateProjectionScope('insights', 'client_restored')
+    }
+    return ok
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.DELETE_CLIENT, (_e, id: string): boolean => {
+    const ok = deleteClient(id, getDb())
+    if (ok) {
+      invalidateProjectionScope('timeline', 'client_deleted')
+      invalidateProjectionScope('apps', 'client_deleted')
+      invalidateProjectionScope('insights', 'client_deleted')
     }
     return ok
   })

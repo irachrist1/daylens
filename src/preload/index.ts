@@ -38,6 +38,7 @@ import type {
   FocusReflectionSavePayload,
   FocusSession,
   FocusStartPayload,
+  PaymentRecord,
   IconRequest,
   ProviderConnectionResult,
   ResolvedIconPayload,
@@ -292,6 +293,7 @@ const api = {
     openPortal: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.OPEN_PORTAL),
     exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
       ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),
+    getPayments: (): Promise<PaymentRecord[]> => ipcRenderer.invoke(IPC.BILLING.GET_PAYMENTS),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),
@@ -353,6 +355,7 @@ const api = {
       ipcRenderer.invoke(IPC.ATTRIBUTION.UPDATE_CLIENT, payload),
     archiveClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.ARCHIVE_CLIENT, id),
     restoreClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.RESTORE_CLIENT, id),
+    deleteClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.DELETE_CLIENT, id),
     reassignSession: (
       sessionId: string,
       payload: { clientId?: string | null; clientName?: string | null; projectId?: string | null },

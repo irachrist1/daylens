@@ -120,6 +120,51 @@ function newId(): string {
   return `wmf_${crypto.randomBytes(8).toString('hex')}`
 }
 
+function normalizeFactText(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function wordSet(text: string): Set<string> {
+  return new Set(normalizeFactText(text).split(' ').filter((w) => w.length > 2))
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let intersection = 0
+  for (const word of a) {
+    if (b.has(word)) intersection++
+  }
+  const union = a.size + b.size - intersection
+  return union > 0 ? intersection / union : 0
+}
+
+function findDuplicateFact(
+  db: Database.Database,
+  text: string,
+  scope: string,
+): boolean {
+  const hasScope = hasColumn(db, 'work_memory_facts', 'scope')
+  const scopeClause = hasScope ? `AND scope = ?` : ''
+  const params = hasScope ? [scope] : []
+  const rows = db.prepare(
+    `SELECT fact_text FROM work_memory_facts WHERE status = 'active' ${scopeClause}`,
+  ).all(...params) as { fact_text: string }[]
+
+  const normalized = normalizeFactText(text)
+  const newWords = wordSet(text)
+
+  for (const row of rows) {
+    const existingNorm = normalizeFactText(row.fact_text)
+    if (normalized === existingNorm) return true
+    if (normalized.length > 10 && existingNorm.length > 10) {
+      if (normalized.includes(existingNorm) || existingNorm.includes(normalized)) return true
+    }
+    const existingWords = wordSet(row.fact_text)
+    if (jaccardSimilarity(newWords, existingWords) >= 0.8) return true
+  }
+  return false
+}
+
 function ready(db: Database.Database): boolean {
   return tableExists(db, 'work_memory_facts')
 }
@@ -182,8 +227,10 @@ export function addWorkMemoryFact(db: Database.Database, text: string): WorkMemo
   if (!ready(db)) return { facts: [] }
   const trimmed = text.trim()
   if (!trimmed) return getWorkMemoryProfile(db)
-  applyAdd(db, trimmed, 'hand')
-  recordAudit(db, 'remembered', trimmed, 'hand')
+  const id = applyAdd(db, trimmed, 'hand')
+  if (id) {
+    recordAudit(db, 'remembered', trimmed, 'hand')
+  }
   return getWorkMemoryProfile(db)
 }
 
@@ -195,8 +242,10 @@ export function addClientMemoryFact(db: Database.Database, clientId: string, tex
   const trimmed = text.trim()
   if (!trimmed) return getClientMemory(db, clientId)
   const scope = clientScope(clientId)
-  applyAdd(db, trimmed, 'hand', scope)
-  recordAudit(db, 'remembered', trimmed, 'hand', scope)
+  const id = applyAdd(db, trimmed, 'hand', scope)
+  if (id) {
+    recordAudit(db, 'remembered', trimmed, 'hand', scope)
+  }
   return getClientMemory(db, clientId)
 }
 
@@ -228,7 +277,8 @@ function hasSourceColumn(db: Database.Database): boolean {
   return hasColumn(db, 'work_memory_facts', 'source')
 }
 
-function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', scope: string = GENERAL_SCOPE): string {
+function applyAdd(db: Database.Database, text: string, source: 'chat' | 'hand', scope: string = GENERAL_SCOPE): string | null {
+  if (findDuplicateFact(db, text, scope)) return null
   const id = newId()
   const max = db.prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM work_memory_facts`).get() as { m: number }
   if (hasSourceColumn(db)) {
@@ -289,9 +339,11 @@ export function applyMemoryWriteOps(
       if (op.action === 'add') {
         const text = (op.text ?? '').trim()
         if (!text) continue
-        applyAdd(db, text, source, scope)
-        recordAudit(db, 'remembered', text, source, scope)
-        applied.push({ action: 'add', text })
+        const addedId = applyAdd(db, text, source, scope)
+        if (addedId) {
+          recordAudit(db, 'remembered', text, source, scope)
+          applied.push({ action: 'add', text })
+        }
       } else if (op.action === 'update') {
         const text = (op.text ?? '').trim()
         if (!text || !op.targetId) continue

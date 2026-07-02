@@ -10,16 +10,26 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import os from 'node:os'
 import path from 'node:path'
+import fs from 'node:fs'
 import { executeTool } from '../../../src/main/services/aiTools'
 import type { TrackingControlsState } from '../../../src/shared/trackingControls'
 import { anthropicTools } from './tools'
 
 const dbPath =
   process.env.DAYLENS_DB_PATH ??
-  path.join(os.homedir(), 'Library', 'Application Support', 'Daylens', 'daylens.sqlite')
+  (process.platform === 'win32'
+    ? path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'Daylens', 'daylens.sqlite')
+    : process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support', 'Daylens', 'daylens.sqlite')
+      : path.join(os.homedir(), '.config', 'Daylens', 'daylens.sqlite'))
+
+if (!fs.existsSync(dbPath)) {
+  console.error(`[daylens-mcp] Database not found at ${dbPath}. Set DAYLENS_DB_PATH to the correct location.`)
+  process.exit(1)
+}
 
 const db = new Database(dbPath, { readonly: true })
-db.pragma('journal_mode = WAL')
+try { db.pragma('journal_mode = WAL') } catch { /* read-only connection can't change journal mode */ }
 db.pragma('busy_timeout = 5000')
 
 // The subprocess can't reach the Electron settings store, so the current

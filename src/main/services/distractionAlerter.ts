@@ -75,6 +75,7 @@ let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES
 let lastCheckAtMs: number | null = null
 let navigationWindow: BrowserWindow | null = null
 let unsubscribeFromTrackingTicks: (() => void) | null = null
+const liveNotifications = new Set<Notification>()
 
 function resetLeisureState(): void {
   leisureState = null
@@ -115,6 +116,10 @@ function fireAlert(appName: string, minutes: number, offPlan: boolean): void {
   notification.on('click', () => {
     focusNavigationWindow('/ai')
   })
+  notification.on('close', () => {
+    liveNotifications.delete(notification)
+  })
+  liveNotifications.add(notification)
   notification.show()
 }
 
@@ -127,7 +132,7 @@ function checkDistraction(nowMs = Date.now()): void {
     return
   }
 
-  const tickSeconds = lastCheckAtMs ? Math.max(1, Math.round((nowMs - lastCheckAtMs) / 1_000)) : 60
+  const tickSeconds = lastCheckAtMs ? Math.min(120, Math.max(1, Math.round((nowMs - lastCheckAtMs) / 1_000))) : 60
   lastCheckAtMs = nowMs
   const live = getCurrentSession()
   const db = getDb()
@@ -184,7 +189,7 @@ function checkDistraction(nowMs = Date.now()): void {
       // Switched to a different work app — keep accumulating (work state persists)
       lastWorkStateBundleId = live.bundleId
     }
-    workStateAccumulatorSeconds += 60
+    workStateAccumulatorSeconds += tickSeconds
     // Returning to work resets any in-progress leisure tracking
     resetLeisureState()
     return
@@ -253,6 +258,13 @@ export function triggerDistractionCheck(): void {
   } catch (error) {
     console.warn('[distraction] triggered check failed:', error)
   }
+}
+
+export function resetDistractionStateOnResume(): void {
+  lastCheckAtMs = null
+  workStateAccumulatorSeconds = 0
+  lastWorkStateBundleId = null
+  resetLeisureState()
 }
 
 export function startDistractionAlerter(): void {

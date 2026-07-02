@@ -83,11 +83,20 @@ export function startMcpServer(): void {
     return
   }
 
-  _proc = spawn(config.command, config.args, {
-    env: { ...process.env, ...config.env },
-    // stdin is a pipe so the server blocks on read rather than exiting on EOF;
-    // stdout is piped to keep it off the main process terminal.
-    stdio: ['pipe', 'pipe', 'pipe'],
+  try {
+    _proc = spawn(config.command, config.args, {
+      env: { ...process.env, ...config.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    console.error('[mcp] Failed to spawn server:', err)
+    _proc = null
+    return
+  }
+
+  _proc.on('error', (err: Error) => {
+    console.error('[mcp] Server process error:', err)
+    _proc = null
   })
 
   _proc.stderr?.on('data', (chunk: Buffer) => {
@@ -104,8 +113,16 @@ export function startMcpServer(): void {
 
 export function stopMcpServer(): void {
   if (!_proc || _proc.killed) return
-  _proc.kill('SIGTERM')
+  const proc = _proc
   _proc = null
+
+  proc.kill('SIGTERM')
+  const killTimer = setTimeout(() => {
+    if (!proc.killed) {
+      proc.kill('SIGKILL')
+    }
+  }, 5_000)
+  proc.on('exit', () => clearTimeout(killTimer))
 }
 
 export function isMcpServerRunning(): boolean {

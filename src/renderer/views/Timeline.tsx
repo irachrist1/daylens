@@ -256,6 +256,10 @@ const TIME_GUTTER_WIDTH = 56
 // the day scale is ≥ 22px; this only catches meetings and edge-case slivers,
 // and 22px is the least height at which a one-line title still reads.
 const MIN_CARD_HEIGHT = 22
+// Day-view floor: a block that just started must still read and click like a
+// real calendar event (title + time row), not a sliver — founder requirement
+// (2026-07-02). 44px is the least height that shows both lines.
+const MIN_DAY_CARD_HEIGHT = 44
 
 // Daylens won't shape a day into named blocks until there's enough to work with
 // (founder decision: at least 2 hours tracked). Below this the Analyze action
@@ -278,6 +282,35 @@ const WRAP_LOADING_MESSAGES = [
 function trackedSecondsFor(payload: DayTimelinePayload): number {
   const blockSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   return blockSeconds > 0 ? blockSeconds : payload.totalSeconds
+}
+
+// The tracked-time readout. On a live day it ticks up every second between
+// payload refreshes (the payload's live-session end is frozen at computedAt),
+// and while tracking is live it never goes backwards for the same date — the
+// counter the user watches must be monotone (a cycling counter was the
+// 2026-07-02 bug). Once the day is analyzed (no live block) the payload total
+// is shown as-is, so corrections like deletes still read honestly.
+function LiveTrackedDuration({ payload }: { payload: DayTimelinePayload }) {
+  const hasLive = payload.blocks.some((block) => block.isLive)
+  const [tickMs, setTickMs] = useState(() => Date.now())
+  const floorRef = useRef<{ date: string; seconds: number } | null>(null)
+  useEffect(() => {
+    if (!hasLive) return
+    setTickMs(Date.now())
+    const timer = window.setInterval(() => setTickMs(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [hasLive, payload.date])
+  const base = trackedSecondsFor(payload)
+  if (!hasLive) {
+    floorRef.current = null
+    return <>{formatDuration(base)}</>
+  }
+  const elapsed = Math.max(0, Math.floor((tickMs - payload.computedAt) / 1000))
+  let seconds = base + elapsed
+  const floor = floorRef.current
+  if (floor && floor.date === payload.date && floor.seconds > seconds) seconds = floor.seconds
+  floorRef.current = { date: payload.date, seconds }
+  return <>{formatDuration(seconds)}</>
 }
 
 // Local midnight of a YYYY-MM-DD date — the top of that day's calendar track.
@@ -394,7 +427,6 @@ function IconChevronRight() {
 }
 
 function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
-  const trackedSeconds = payload.blocks.reduce((sum, block) => sum + blockActiveSeconds(block), 0)
   return (
     <div style={{
       display: 'flex',
@@ -405,7 +437,7 @@ function SummaryStrip({ payload }: { payload: DayTimelinePayload }) {
       color: 'var(--color-text-tertiary)',
     }}>
       <span>
-        <strong style={{ color: 'var(--color-text-primary)' }}>{formatDuration(trackedSeconds)}</strong> tracked
+        <strong style={{ color: 'var(--color-text-primary)' }}><LiveTrackedDuration payload={payload} /></strong> tracked
       </span>
       <span>{payload.blocks.length} block{payload.blocks.length !== 1 ? 's' : ''}</span>
       <span>{payload.appCount} app{payload.appCount !== 1 ? 's' : ''}</span>
@@ -471,8 +503,12 @@ function CalendarBlockCard({
         textAlign: 'left',
         cursor: 'pointer',
         borderRadius: compact ? 6 : 8,
+        // The thin border stays on every block so neighbouring blocks read as
+        // separate cards. Only the thick vertical accent stripe on the left is
+        // dropped in the day view — the large fills already carry the colour.
+        // The dense week grid keeps the stripe as a colour cue on small blocks.
         border: (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
-        borderLeft: `3px solid ${accent}`,
+        borderLeft: compact ? `3px solid ${accent}` : undefined,
         background: (isSelected || inMergeRange) ? `${accent}30` : `${accent}1c`,
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
         transition: 'border-color 120ms, background 120ms',
@@ -537,11 +573,18 @@ function CalendarBlockCard({
 
 // The hour labels column shared by the day and week grids. Runs only over the
 // bounded span — the hours the day actually lived in.
-function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackBounds }) {
+function HourGutter({ hourHeight, bounds, date, nowMs = null }: { hourHeight: number; bounds: TrackBounds; date?: string; nowMs?: number | null }) {
   const hours = Array.from(
     { length: Math.max(0, bounds.endHour - bounds.startHour + 1) },
     (_, index) => bounds.startHour + index,
   )
+  // The current-time cue for the day view: a small, subtle dot on the time rail
+  // instead of a line across the whole track. Only shows when a live `nowMs`
+  // (today) is passed and falls inside the tracked span — mirrors the old
+  // full-width line's visibility, minus the line.
+  const trackStartMin = bounds.startHour * 60
+  const nowMinutes = nowMs != null && date != null ? (nowMs - dayStartMs(date)) / 60_000 : null
+  const showNow = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= bounds.endHour * 60
   return (
     <div style={{ position: 'relative', height: (bounds.endHour - bounds.startHour) * hourHeight, width: TIME_GUTTER_WIDTH }}>
       {hours.map((hour) => (
@@ -560,6 +603,21 @@ function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackB
           {hourLabel(hour)}
         </div>
       ))}
+      {showNow && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: ((nowMinutes - trackStartMin) / 60) * hourHeight,
+            right: 2,
+            transform: 'translateY(-50%)',
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: '#ef4444',
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -606,7 +664,10 @@ function CalendarDayTrack({
 
   return (
     <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
-      {Array.from({ length: hourCount }, (_, index) => (
+      {/* Hour separator lines are kept only for the dense week grid. The day
+          view is a clean canvas — no hour lines; the rail labels carry time and
+          the blocks carry all the visual weight. */}
+      {compact && Array.from({ length: hourCount }, (_, index) => (
         <div
           key={index}
           style={{
@@ -649,7 +710,11 @@ function CalendarDayTrack({
 
       {blocks.map((block) => {
         const top = topFor(block.startTime)
-        const height = Math.max(MIN_CARD_HEIGHT, topFor(block.endTime) - top)
+        // The live block's payload end freezes at the moment the payload was
+        // computed; glue its bottom to the current-time line so the active
+        // session visibly grows between refreshes instead of lagging the clock.
+        const layoutEnd = block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime
+        const height = Math.max(compact ? MIN_CARD_HEIGHT : MIN_DAY_CARD_HEIGHT, topFor(layoutEnd) - top)
         return (
           <CalendarBlockCard
             key={block.id}
@@ -665,7 +730,10 @@ function CalendarDayTrack({
         )
       })}
 
-      {showNowLine && (
+      {/* The full-width "now" line lives only in the dense week grid. In the day
+          view the current time is a small dot on the time rail (see HourGutter),
+          so nothing crosses the blocks. */}
+      {compact && showNowLine && (
         <div style={{
           position: 'absolute',
           top: ((nowMinutes - trackStartMin) / 60) * hourHeight,
@@ -870,7 +938,7 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
           {/* Counts footer — secondary to the prose. */}
           <div style={{ borderTop: '1px solid var(--color-border-ghost)', paddingTop: 14, display: 'grid', gap: 4 }}>
             <div style={{ fontSize: 15, fontWeight: 720, color: 'var(--color-text-primary)' }}>
-              {formatDuration(trackedSeconds)} tracked
+              <LiveTrackedDuration payload={payload} /> tracked
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>{countLine}</div>
           </div>
@@ -1871,7 +1939,8 @@ export default function Timeline() {
   const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
-  // Clock tick for the current-time line — a minute is as fine as the grid reads.
+  // Clock tick for the current-time line and the live block's growing bottom
+  // edge — 30s keeps the active session visibly moving between data refreshes.
   const [nowMs, setNowMs] = useState(() => Date.now())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
@@ -1901,7 +1970,7 @@ export default function Timeline() {
   }, [])
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -2014,14 +2083,32 @@ export default function Timeline() {
     }
   }, [payload])
 
-  // Every view opens at the top. The day and week tracks are clamped to the
-  // hours that actually have activity, so the top IS the first tracked event —
-  // no auto-scroll gymnastics, no dead space to skip.
+  // Past days, week, and month open at the top (their tracks are clamped to
+  // the tracked hours, so the top is the first tracked event). Today's day
+  // view instead anchors on the live "Active now" block once the payload
+  // lands — the user opens the timeline to see what is happening now, not the
+  // empty morning above it. Anchor once per view/date so 30s refreshes never
+  // fight the user's own scrolling.
+  const anchoredKeyRef = useRef<string | null>(null)
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
-    node.scrollTop = 0
-  }, [view, date])
+    const key = `${view}:${date}`
+    if (anchoredKeyRef.current === key) return
+    if (view !== 'day' || !isToday) {
+      anchoredKeyRef.current = key
+      node.scrollTop = 0
+      return
+    }
+    if (!payload) return // wait for the day to land, then anchor once
+    anchoredKeyRef.current = key
+    const liveBlock = payload.blocks.find((block) => block.isLive)
+    const el = liveBlock
+      ? node.querySelector<HTMLElement>(`[data-timeline-block-id="${liveBlock.id}"]`)
+      : null
+    if (el) el.scrollIntoView({ block: 'center' })
+    else node.scrollTop = 0
+  }, [view, date, isToday, payload])
 
   useEffect(() => {
     const openKey = view === 'week'
@@ -2386,7 +2473,7 @@ export default function Timeline() {
                         padding: '8px 0',
                       }}
                     >
-                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} />
+                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} date={payload.date} nowMs={isToday ? nowMs : null} />
                       <CalendarDayTrack
                         date={payload.date}
                         blocks={sortedBlocks}

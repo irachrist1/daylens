@@ -43,7 +43,7 @@ process.on('unhandledRejection', (reason) => {
   } catch { /* analytics may not be ready */ }
 })
 
-import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, shell } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -71,10 +71,10 @@ import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './serv
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
-import { fireTestDailyNotification, setDailySummaryNotificationWindow, startDailySummaryNotifier } from './services/dailySummaryNotifier'
+import { fireTestDailyNotification, setDailySummaryNotificationWindow, startDailySummaryNotifier, triggerDailySummaryChecks } from './services/dailySummaryNotifier'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
-import { registerDistractionAlerterHandlers, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
+import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -783,6 +783,13 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 
 app.whenReady()
   .then(async () => {
+    if (process.platform === 'win32') {
+      app.setAppUserModelId('dev.christiantonny.daylens')
+    }
+    powerMonitor.on('resume', () => {
+      resetDistractionStateOnResume()
+      triggerDailySummaryChecks()
+    })
     // Must run before initSettings() — restores electron-store config.json from
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     await recoverFromUpdateIfNeeded()

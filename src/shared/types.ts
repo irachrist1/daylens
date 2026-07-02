@@ -1059,6 +1059,8 @@ export type AIJobType =
   | 'wrapped_narrative'
   | 'wrapped_period_narrative'
   | 'search_intent'
+  | 'memory_write'
+  | 'weekly_brief'
 
 export interface AIWrappedNarrative {
   /** The hook: a one-line read on the shape of the day. Always present, and
@@ -1369,6 +1371,17 @@ export interface AppSettings {
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
 export type BillingUsageType = 'free_credit' | 'subscription' | 'local_pass' | 'own_key'
+
+export interface PaymentRecord {
+  provider: string
+  txRef: string
+  amount: number
+  currency: string
+  status: string
+  providerReference: string | null
+  createdAt: number
+  updatedAt: number
+}
 
 export interface BillingAccessSnapshot {
   mode: BillingAccessMode
@@ -1817,6 +1830,7 @@ export const IPC = {
     OPEN_PORTAL: 'billing:open-portal',
     EXPORT_USAGE_CSV: 'billing:export-usage-csv',
     REFRESH: 'billing:refresh',
+    GET_PAYMENTS: 'billing:get-payments',
   },
   PROJECTIONS: {
     INVALIDATED: 'projections:invalidated',
@@ -1858,6 +1872,7 @@ export const IPC = {
     UPDATE_CLIENT: 'attribution:update-client',
     ARCHIVE_CLIENT: 'attribution:archive-client',
     RESTORE_CLIENT: 'attribution:restore-client',
+    DELETE_CLIENT: 'attribution:delete-client',
     RUN_FOR_RANGE: 'attribution:run-for-range',
     GET_CLIENT_DETAIL: 'attribution:get-client-detail',
     GET_WORK_SESSIONS_FOR_DAY: 'attribution:get-work-sessions-for-day',

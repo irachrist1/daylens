@@ -202,6 +202,30 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     cachePolicy: 'off',
     modelStrategy: 'economy',
   },
+  // Memory write extraction (memory.md §2.1): a quick single-shot call that
+  // turns a "remember/forget/correct" instruction into structured ops before
+  // the preview card is built. Cheap and off-screen, like attribution_assist.
+  memory_write: {
+    jobType: 'memory_write',
+    screen: 'background',
+    foreground: false,
+    timeoutMs: 10_000,
+    cachePolicy: 'off',
+    modelStrategy: 'economy',
+  },
+  // Weekly brief (ai_chat surface): turns the deterministic weekly evidence
+  // pack into editorial prose. Rides the chat provider override like
+  // chat_answer, gets the full long-form output budget like week_review.
+  weekly_brief: {
+    jobType: 'weekly_brief',
+    screen: 'timeline_week',
+    foreground: true,
+    timeoutMs: 30_000,
+    usesChatOverride: true,
+    cachePolicy: 'repeated_payload',
+    modelStrategy: 'quality',
+    maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
+  },
 }
 
 function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {

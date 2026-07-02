@@ -159,7 +159,7 @@ export async function extractMemoryOps(params: {
   try {
     const result = await executeTextAIJob(
       {
-        jobType: 'chat_answer',
+        jobType: 'memory_write',
         screen: 'ai_chat',
         triggerSource: 'user',
         systemPrompt: buildExtractorPrompt(params.currentFacts),

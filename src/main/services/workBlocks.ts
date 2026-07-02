@@ -4678,8 +4678,11 @@ function buildSegmentsForDay(
   db: Database.Database,
   dateStr: string,
   blocks: WorkContextBlock[],
+  // The day bounds the payload was built with — segments must cover the same
+  // range the blocks were read from, or gaps and blocks drift apart.
+  bounds?: [number, number],
 ): TimelineSegment[] {
-  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
+  const [fromMs, toMs] = bounds ?? ownedDayBounds(db, dateStr)
   const events = getActivityStateEventsForRange(db, fromMs, toMs)
   const workSegments: TimelineSegment[] = blocks.map((block) => ({
     kind: 'work_block',
@@ -4985,9 +4988,6 @@ export function getTimelineDayPayload(
   liveSession?: LiveSession | null,
   options: { materialize?: boolean } = {},
 ): DayTimelinePayload {
-  const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const sessions = withFocusApps(mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession))
-  const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   // timeline.md §4 (founder rule): today stays ONE provisional "Active now"
   // block until the USER explicitly analyzes it (a materialize request from
   // Analyze Day). We can't know the shape of the day until it is done, so Daylens
@@ -5000,6 +5000,19 @@ export function getTimelineDayPayload(
     && !(options.materialize ?? false)
     && validPersistedTimelineBlockCount(db, dateStr) === 0
     && !persistedDayWasProcessed(db, dateStr)
+  // The live provisional day always reads the full calendar day — founder rule
+  // (2026-07-02): at 3 AM mid-sitting the Today view shows everything tracked
+  // since local midnight, matching the Apps view (which reads calendar bounds
+  // for today). Which day finally owns a cross-midnight sitting is decided by
+  // ownedDayBounds when the day is materialized, never while it is live — the
+  // live boundary used to advance with every session flush, which emptied
+  // today's payload down to the in-memory session and reset the tracked
+  // counter on every app switch.
+  const [fromMs, toMs] = isLiveProvisionalDay
+    ? localDayBounds(dateStr)
+    : ownedDayBounds(db, dateStr, { liveSessionStartMs: liveSession?.startTime ?? null })
+  const sessions = withFocusApps(mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession))
+  const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const builtBlocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
@@ -5008,7 +5021,7 @@ export function getTimelineDayPayload(
   // empty space it now is.
   const blocks = builtBlocks.filter(isTrustedTimelineBlock)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
-  const segments = buildSegmentsForDay(db, dateStr, blocks)
+  const segments = buildSegmentsForDay(db, dateStr, blocks, [fromMs, toMs])
   // Invariant 7: the blocks are the canonical day facts. Every downstream
   // total (Timeline, Apps, AI, recap) reads this same partition instead of
   // independently summing raw sessions.

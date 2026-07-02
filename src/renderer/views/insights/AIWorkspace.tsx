@@ -180,6 +180,19 @@ export default function AIWorkspace() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onNewChat])
 
+  // Seed the composer from another view (e.g. Settings → Memory → "Chat about
+  // your memory"). The event carries the pre-filled text.
+  useEffect(() => {
+    const onSeed = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail
+      if (typeof detail === 'string' && detail.trim()) {
+        composerRef.current?.setValue(detail)
+      }
+    }
+    window.addEventListener('daylens:seed-chat', onSeed)
+    return () => window.removeEventListener('daylens:seed-chat', onSeed)
+  }, [])
+
   const isMac = useMemo(() => navigator.platform.toLowerCase().includes('mac'), [])
   const accel = useCallback(
     (key: string, shift = false) => (isMac ? `${shift ? '⇧ ' : ''}⌘ ${key}` : `Ctrl ${shift ? 'Shift ' : ''}${key}`),

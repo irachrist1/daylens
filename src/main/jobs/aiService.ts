@@ -4893,7 +4893,7 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
       }
       const { text } = await executeTextAIJob(
         {
-          jobType: 'chat_answer',
+          jobType: 'weekly_brief',
           screen: 'ai_chat',
           triggerSource: 'user',
           systemPrompt,

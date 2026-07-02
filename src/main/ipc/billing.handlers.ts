@@ -7,6 +7,7 @@ import {
   getBillingAccess,
   getBillingPortalUrl,
   getBillingUsage,
+  getPaymentHistory,
   exportUsageRows,
   invalidateBillingAccess,
 } from '../services/billing'
@@ -37,8 +38,7 @@ export function registerBillingHandlers(): void {
     await shell.openExternal(await getBillingPortalUrl())
     return true
   })
-  ipcMain.handle(IPC.BILLING.EXPORT_USAGE_CSV, async (_event, payload: { from: number; to: number }) => {
-    // Read every event in the range straight from the table, not the 2000-row
+  ipcMain.handle(IPC.BILLING.EXPORT_USAGE_CSV, async (_event, payload: { from: number; to: number }) => {    // Read every event in the range straight from the table, not the 2000-row
     // display cap in the usage report, so the CSV truly covers the whole range.
     const rows = exportUsageRows(payload.from, payload.to)
     const result = await dialog.showSaveDialog({
@@ -69,4 +69,5 @@ export function registerBillingHandlers(): void {
     await fs.writeFile(result.filePath, lines.map((line) => line.map(csvCell).join(',')).join('\n'), 'utf8')
     return { canceled: false, path: result.filePath }
   })
+  ipcMain.handle(IPC.BILLING.GET_PAYMENTS, () => getPaymentHistory())
 }

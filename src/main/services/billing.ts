@@ -9,6 +9,7 @@ import type {
   BillingUsageReport,
   BillingUsageRow,
   BillingUsageType,
+  PaymentRecord,
 } from '@shared/types'
 import { getDb } from './database'
 import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
@@ -649,4 +650,15 @@ export async function getBillingPortalUrl(): Promise<string> {
 export function invalidateBillingAccess(): void {
   cachedAccess = null
   usageReportCache.clear()
+}
+
+export async function getPaymentHistory(): Promise<PaymentRecord[]> {
+  const base = apiUrl()
+  if (!base) return []
+  try {
+    const result = await request<{ payments: PaymentRecord[] }>('/v1/payments')
+    return result.payments ?? []
+  } catch {
+    return []
+  }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type {
   AppCategory,
@@ -645,19 +645,56 @@ function ExclusionEditor({
         </button>
       </div>
       {values.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ display: 'grid', gap: 6 }}>
           {values.map((value) => (
-            <span key={value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 6px 4px 10px', borderRadius: 999, background: 'var(--color-surface-muted)', border: '1px solid var(--color-border-ghost)', fontSize: 12, color: 'var(--color-text-secondary)' }}>
-              {value}
+            <div
+              key={value}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '7px 12px',
+                borderRadius: 8,
+                background: 'var(--color-surface-muted)',
+                border: '1px solid var(--color-border-ghost)',
+                fontSize: 12.5,
+                color: 'var(--color-text-secondary)',
+                minHeight: 34,
+              }}
+            >
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {value}
+              </span>
               <button
                 type="button"
                 onClick={() => onRemove(value)}
                 aria-label={`Remove ${value}`}
-                style={{ width: 18, height: 18, borderRadius: '50%', border: 'none', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center', fontSize: 14, lineHeight: 1 }}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--color-text-tertiary)',
+                  cursor: 'pointer',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: 14,
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}
               >
                 ×
               </button>
-            </span>
+            </div>
           ))}
         </div>
       )}
@@ -671,6 +708,8 @@ function CaptureHealthContent({
   diagnostics: TrackingDiagnosticsPayload | null
 }) {
   const captureHealth = diagnostics?.captureHealth
+  const [troubleshootOpen, setTroubleshootOpen] = useState(false)
+
   if (!captureHealth) {
     return (
       <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
@@ -683,29 +722,79 @@ function CaptureHealthContent({
   const browserNames = captureHealth.browsers?.names ?? []
   const permissions = captureHealth.permissions
   const linuxTracking = diagnostics?.linuxTracking
+  const platform = diagnostics?.platform
 
   const tone: 'success' | 'warning' | 'neutral' = titleStatus === 'healthy'
     ? 'success'
     : titleStatus === 'missing'
       ? 'warning'
       : 'neutral'
+  const captureHelperUnhealthy = captureHealth.captureHelperRunning === false
+  const hasIssue = tone === 'warning' || captureHelperUnhealthy
+
   const headline = tone === 'success'
     ? 'Daylens is seeing your work'
     : tone === 'warning'
-      ? 'Daylens can’t see what you’re working on'
+      ? 'Daylens can\u2019t see what you\u2019re working on'
       : 'Getting started'
   const body = tone === 'success'
-    ? 'It’s capturing what you’re working on inside each app, not just which app is open.'
+    ? 'It\u2019s capturing what you\u2019re working on inside each app, not just which app is open.'
     : tone === 'warning'
       ? (permissions.platformNote
           ? permissions.platformNote
           : 'Daylens sees which apps are open but not the titles inside them. Granting the screen/accessibility permission usually fixes this.')
-      : 'Daylens needs a few minutes of activity to confirm it’s capturing properly.'
+      : 'Daylens needs a few minutes of activity to confirm it\u2019s capturing properly.'
   const accent = tone === 'success'
     ? { border: '1px solid rgba(79, 219, 200, 0.24)', background: 'rgba(79, 219, 200, 0.08)' }
     : tone === 'warning'
       ? { border: '1px solid rgba(251, 191, 36, 0.28)', background: 'rgba(251, 191, 36, 0.08)' }
       : { border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }
+
+  const troubleshootingSteps: Array<{ label: string; detail: string; action?: { label: string; url: string } }> = []
+
+  if (tone === 'warning') {
+    if (platform === 'darwin') {
+      const screenMissing = permissions.screenRecording === 'missing'
+      const accessibilityMissing = permissions.accessibility === 'missing'
+      if (screenMissing) {
+        troubleshootingSteps.push({
+          label: 'Grant Screen Recording permission',
+          detail: 'System Settings > Privacy & Security > Screen Recording. Enable Daylens, then restart the app.',
+          action: { label: 'Open Settings', url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture' },
+        })
+      }
+      if (accessibilityMissing) {
+        troubleshootingSteps.push({
+          label: 'Grant Accessibility permission',
+          detail: 'System Settings > Privacy & Security > Accessibility. Enable Daylens, then restart the app.',
+          action: { label: 'Open Settings', url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' },
+        })
+      }
+      if (!screenMissing && !accessibilityMissing) {
+        troubleshootingSteps.push({
+          label: 'Restart Daylens',
+          detail: 'Permissions look granted but titles are still missing. Quit and reopen Daylens so the capture helper picks up the new permissions.',
+        })
+      }
+    } else if (platform === 'win32') {
+      troubleshootingSteps.push({
+        label: 'Check Windows tracking permissions',
+        detail: 'Daylens needs access to read window titles. If you dismissed the permission prompt on first launch, restart Daylens to re-trigger it.',
+      })
+    } else {
+      troubleshootingSteps.push({
+        label: 'Check Linux tracking support',
+        detail: linuxTracking?.supportMessage ?? 'Window title capture on Linux depends on your desktop environment and accessibility bus.',
+      })
+    }
+  }
+
+  if (captureHelperUnhealthy) {
+    troubleshootingSteps.push({
+      label: 'Capture helper not running',
+      detail: 'The background helper that reads window titles is not running. Restart Daylens to relaunch it.',
+    })
+  }
 
   return (
       <div>
@@ -713,11 +802,58 @@ function CaptureHealthContent({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 14, fontWeight: 680, color: 'var(--color-text-primary)' }}>{headline}</span>
             <StatusPill label={tone === 'success' ? 'Healthy' : tone === 'warning' ? 'Needs attention' : 'Waiting'} tone={tone} />
+            {hasIssue && (
+              <button
+                type="button"
+                onClick={() => setTroubleshootOpen((value) => !value)}
+                style={{
+                  height: 30,
+                  padding: '0 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'var(--gradient-primary)',
+                  color: 'var(--color-primary-contrast)',
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  marginLeft: 'auto',
+                }}
+              >
+                {troubleshootOpen ? 'Hide steps' : 'Troubleshoot'}
+              </button>
+            )}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>{body}</div>
         </div>
 
-        <details style={{ marginTop: 16 }}>
+        {hasIssue && troubleshootOpen && troubleshootingSteps.length > 0 && (
+          <div style={{ marginTop: 14, padding: '16px 18px', borderRadius: 14, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)', display: 'grid', gap: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}>
+              What to do
+            </div>
+            {troubleshootingSteps.map((step, index) => (
+              <div key={index} style={{ display: 'grid', gap: 4 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                  {index + 1}. {step.label}
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                  {step.detail}
+                </div>
+                {step.action && (
+                  <button
+                    type="button"
+                    onClick={() => { ipc.shell.openExternal(step.action!.url) }}
+                    style={{ ...inlineButtonStyle, marginTop: 4, alignSelf: 'flex-start' }}
+                  >
+                    {step.action.label}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <details style={{ marginTop: 16 }} open={!hasIssue || !troubleshootOpen}>
           <summary style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', cursor: 'pointer', fontWeight: 600, listStyle: 'none' }}>
             Troubleshooting details
           </summary>
@@ -828,6 +964,7 @@ function TrackingControlsContent({
             onRemove={removeApp}
             busy={busy}
           />
+          <div style={{ borderTop: '1px solid var(--color-border-ghost)', margin: '4px 0' }} />
           <ExclusionEditor
             label="Excluded sites"
             placeholder="Domain (e.g. youtube.com)"
@@ -1246,6 +1383,8 @@ const JOB_FEATURE_GROUPS: Record<string, string> = {
   chat_followup_suggestions: 'Suggestions',
   search_intent: 'Search',
   report_generation: 'Reports',
+  memory_write: 'Memory writes',
+  weekly_brief: 'Weekly brief',
 }
 
 function formatJobFeature(feature: string | null | undefined) {
@@ -1798,6 +1937,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // Which section the content pane shows. Honors a ?section= deep link on first
   // mount (so other surfaces can jump straight to e.g. Billing), then is local.
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [activeSection, setActiveSection] = useState<SectionId>(() => {
     const requested = searchParams.get('section')
     return isSectionId(requested) ? requested : 'general'
@@ -2320,6 +2460,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     }
   }
 
+  async function handleDeleteClient(id: string, name: string) {
+    if (!window.confirm(`Permanently delete "${name}"? This removes the client and its projects. Time attributed to it will become unattributed. This cannot be undone.`)) return
+    setClientBusyId(id)
+    try {
+      await ipc.attribution.deleteClient(id)
+      await reloadClients()
+    } finally {
+      setClientBusyId(null)
+    }
+  }
+
   if (!settings) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
@@ -2384,6 +2535,19 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     case 'ai':
       content = (
         <SectionPage title="AI" description="One provider, one model — used by every AI surface: chat, re-analyze, recaps, briefs, and wraps.">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+              {hasApiKey
+                ? `Using your own ${KEY_PROVIDER_LABELS[settings.aiProvider] ?? settings.aiProvider} key`
+                : 'Using Daylens managed AI'}
+            </span>
+            <StatusPill label={hasApiKey ? 'Your key' : 'Managed'} tone={hasApiKey ? 'success' : 'neutral'} />
+            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>
+              {hasApiKey
+                ? 'Calls go straight to the provider — Daylens never bills you.'
+                : 'Calls go through Daylens with included credit or a subscription.'}
+            </span>
+          </div>
           <ConnectAI
             variant="embedded"
             initialProvider={settings.aiProvider}
@@ -2398,6 +2562,18 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage title="Memory" description="What Daylens knows about you, in plain language. Your edits always win — the AI uses them everywhere it talks about you.">
           <div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('daylens:seed-chat', { detail: 'What do you remember about me?' }))
+                  navigate('/ai')
+                }}
+                style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
+              >
+                Chat about your memory
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => setMemoryExpanded((value) => !value)}
@@ -2832,14 +3008,24 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                             </button>
                           )}
                           {archived ? (
-                            <button
-                              type="button"
-                              onClick={() => void handleRestoreClient(client.id)}
-                              disabled={busy}
-                              style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
-                            >
-                              Restore
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleRestoreClient(client.id)}
+                                disabled={busy}
+                                style={{ ...inlineButtonStyle, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                              >
+                                Restore
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteClient(client.id, client.name)}
+                                disabled={busy}
+                                style={{ ...inlineButtonStyle, borderColor: 'rgba(248, 113, 113, 0.28)', color: '#f87171', opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer' }}
+                              >
+                                Delete
+                              </button>
+                            </>
                           ) : (
                             <button
                               type="button"
@@ -3015,7 +3201,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 {mcpAdvancedOpen && (
                 <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginBottom: 8, lineHeight: 1.55 }}>
-                  Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>~/Library/Application Support/Claude/claude_desktop_config.json</code>):
+                  Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>{trackingDiagnostics?.platform === 'win32' ? '%APPDATA%\\Claude\\claude_desktop_config.json' : '~/Library/Application Support/Claude/claude_desktop_config.json'}</code>):
                 </div>
                 <div style={{ position: 'relative' }}>
                   <pre style={{

@@ -1,7 +1,11 @@
 import type Database from 'better-sqlite3'
-import { localDayBounds } from './localDate'
+import { localDayBounds, shiftLocalDateString } from './localDate'
 
-const CONTINUITY_GAP_MS = 15 * 60_000
+// One sitting = one day (timeline-v8 physics): a break under 45 minutes stays
+// inside the same continuous sitting; 45+ minutes is the session break that
+// seals it. Day ownership follows the same threshold so a block can never
+// straddle the ownership boundary between two days.
+const SITTING_BREAK_MS = 45 * 60_000
 const MAX_LATE_NIGHT_CARRY_MS = 12 * 60 * 60_000
 const BREAK_EVENT_TYPES = ['away_start', 'lock_screen', 'suspend'] as const
 const SYSTEM_NOISE_NAMES = new Set([
@@ -16,6 +20,15 @@ interface SessionSpan {
   app_name: string
   start_time: number
   end_time: number
+}
+
+export interface OwnedDayBoundsOptions {
+  // Start of the tracker's in-memory (unflushed) session, when the caller has
+  // it. Used to recognise that a sitting is still running even when the last
+  // persisted flush is old (a long single-app session flushes only on switch).
+  liveSessionStartMs?: number | null
+  // Injectable clock for tests.
+  nowMs?: number
 }
 
 function containsBreakEvent(
@@ -40,9 +53,30 @@ function containsBreakEvent(
   }
 }
 
+// The furthest point past `dateStr`'s midnight that its persisted timeline
+// blocks actually claim. Once a day is materialized, this is the authoritative
+// record of where it ends — the boundary between two days must never move
+// again after one of them is written, or time silently re-attributes on every
+// read. Null when the day has no persisted blocks (or the table doesn't exist
+// yet, e.g. a fresh install).
+function persistedClaimEnd(db: Database.Database, dateStr: string): number | null {
+  try {
+    const row = db.prepare(`
+      SELECT MAX(end_time) AS maxEnd
+      FROM timeline_blocks
+      WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+    `).get(dateStr) as { maxEnd: number | null } | undefined
+    return row?.maxEnd ?? null
+  } catch {
+    return null
+  }
+}
+
 function lateNightCarryEnd(
   db: Database.Database,
   boundaryMs: number,
+  nowMs: number,
+  liveSessionStartMs: number | null,
 ): number {
   const scanFrom = boundaryMs - MAX_LATE_NIGHT_CARRY_MS
   const scanTo = boundaryMs + MAX_LATE_NIGHT_CARRY_MS
@@ -62,7 +96,7 @@ function lateNightCarryEnd(
     .reverse()
     .find((session) =>
       session.start_time < boundaryMs
-      && session.end_time > boundaryMs - CONTINUITY_GAP_MS)
+      && session.end_time > boundaryMs - SITTING_BREAK_MS)
   if (!seed) return boundaryMs
 
   let carryEnd = Math.max(boundaryMs, seed.end_time)
@@ -70,22 +104,49 @@ function lateNightCarryEnd(
   for (const session of sessions) {
     if (session.start_time < boundaryMs) continue
     const gap = session.start_time - previousEnd
-    if (gap >= CONTINUITY_GAP_MS) break
+    if (gap >= SITTING_BREAK_MS) break
     if (containsBreakEvent(db, previousEnd, session.start_time)) break
     carryEnd = Math.max(carryEnd, session.end_time)
     previousEnd = Math.max(previousEnd, session.end_time)
   }
+  carryEnd = Math.min(carryEnd, scanTo)
 
-  return Math.min(carryEnd, scanTo)
+  // An open sitting is never carried backward. Ownership of a cross-midnight
+  // sitting is decided once the sitting has actually ended (a 45+ minute
+  // break); while it is still running, the carry boundary would advance with
+  // every session flush — "today" would never begin, its payload would hold
+  // only the in-memory live session, and the tracked counter would reset to
+  // seconds on every app switch (the resetting-tracked-time bug, 2026-07-02).
+  const sittingEndsAt = liveSessionStartMs != null && liveSessionStartMs - carryEnd < SITTING_BREAK_MS
+    ? nowMs // the live session continues the chain — the sitting is still running
+    : carryEnd
+  if (nowMs - sittingEndsAt < SITTING_BREAK_MS) return boundaryMs
+
+  return carryEnd
 }
 
 export function ownedDayBounds(
   db: Database.Database,
   dateStr: string,
+  options: OwnedDayBoundsOptions = {},
 ): [number, number] {
+  const nowMs = options.nowMs ?? Date.now()
+  const liveStart = options.liveSessionStartMs ?? null
   const [calendarStart, calendarEnd] = localDayBounds(dateStr)
-  const inheritedUntil = lateNightCarryEnd(db, calendarStart)
-  const carriesUntil = lateNightCarryEnd(db, calendarEnd)
+
+  // The previous day's persisted blocks pin the start boundary; this day's own
+  // persisted blocks pin the end boundary. Only when no persisted claim exists
+  // is the boundary derived from session continuity (the late-night carry).
+  const previousClaim = persistedClaimEnd(db, shiftLocalDateString(dateStr, -1))
+  const inheritedUntil = previousClaim != null
+    ? Math.min(Math.max(calendarStart, previousClaim), calendarStart + MAX_LATE_NIGHT_CARRY_MS)
+    : lateNightCarryEnd(db, calendarStart, nowMs, liveStart)
+
+  const ownClaim = persistedClaimEnd(db, dateStr)
+  const carriesUntil = ownClaim != null
+    ? Math.min(Math.max(calendarEnd, ownClaim), calendarEnd + MAX_LATE_NIGHT_CARRY_MS)
+    : lateNightCarryEnd(db, calendarEnd, nowMs, liveStart)
+
   return [
     Math.max(calendarStart, inheritedUntil),
     Math.max(calendarEnd, carriesUntil),

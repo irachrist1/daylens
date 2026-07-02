@@ -26,49 +26,24 @@ export interface ChangelogEntry {
   notes?: string[]
 }
 
-// Newest first. Each entry is a real release of Daylens.
+// Newest first. Each entry is a real, shipped release of Daylens.
+// v1.0.0 is the first version that was ever publicly released. Earlier
+// development builds existed but were never shipped, so they do not appear here.
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
-    issue: 3,
-    version: '2.1',
-    date: '2026-06-24',
-    headline: 'A first run that actually knows you',
-    dek: 'Onboarding asks who you are, and now the whole app listens.',
+    issue: 1,
+    version: '1.0.0',
+    date: '2026-07-02',
+    headline: 'Daylens ships',
+    dek: 'Your laptop activity, turned into a calendar you can search and an AI that actually knows your day.',
     body:
-      'Setting up Daylens used to collect your name, your work, your clients and the rhythm of your day, then quietly forget most of it. Now every answer earns its keep. Your recaps and the morning brief frame the day in your terms, the apps you call real work count toward your focus, your briefs arrive on your schedule instead of a fixed one, and the clients you named get recognised in your day. Tell Daylens about you once, and it shows up everywhere.',
-    hero: { from: '#f6d365', to: '#fda085', accent: '#b65b2f' },
-    notes: [
-      'Recaps, briefs and wraps now write in your voice and for your role.',
-      'Focus apps you picked count as real work in the timeline and Apps view.',
-      'Work rhythm tunes when your morning brief and evening wrap arrive.',
-    ],
-  },
-  {
-    issue: 2,
-    version: '2.0',
-    date: '2026-06-20',
-    headline: 'A timeline you can believe',
-    dek: 'Your day, drawn like a calendar instead of a pile of slivers.',
-    body:
-      'The timeline now reads like a real calendar of your day. Blocks are sized by how long they lasted, so a three-hour stretch towers over a quick detour, and short moments fold into the work around them instead of cluttering the day. Two things that were really one thing merge cleanly, and you can fuse blocks yourself by clicking one, holding Shift, and clicking another. A glance tells you where your time went before you read a single label.',
+      'Daylens captures what you work on, turns it into a timeline that reads like a real calendar, and lets you ask an AI about your day in plain language. Blocks are sized by how long they lasted, short detours fold into the work around them, and the apps you call real work count toward your focus. Bring your own provider key or start with included credit, your raw activity stays on your machine, and a usage view shows exactly where every cent and token went.',
     hero: { from: '#a1c4fd', to: '#c2e9fb', accent: '#3b6ea5' },
     notes: [
-      'Blocks have a fifteen-minute floor, so no more thirty-second slivers.',
+      'Timeline blocks are sized by duration, with a fifteen-minute floor.',
       'Shift-click two blocks to merge the whole span into one.',
-    ],
-  },
-  {
-    issue: 1,
-    version: '1.9',
-    date: '2026-06-12',
-    headline: 'Bring your own AI, or use ours',
-    dek: 'Five dollars of AI on the house, then your call.',
-    body:
-      'Daylens turns your local activity into recaps, briefs and answers using AI, and now you choose how it is powered. Start with five dollars of included usage, subscribe to keep going, or bring your own provider key and pay nobody but them. Either way your raw activity stays on your machine, and a usage view shows exactly where every cent and token went.',
-    hero: { from: '#c3a5fd', to: '#e0c3fc', accent: '#6b4ea5' },
-    notes: [
-      'A usage view breaks spend down by feature, with a CSV export.',
-      'Your keys live in the OS keychain, never in plain text.',
+      'Morning brief, evening wrap, and distraction alerts keep you honest.',
+      'MCP server lets Claude Desktop and Cursor read your activity.',
     ],
   },
 ]

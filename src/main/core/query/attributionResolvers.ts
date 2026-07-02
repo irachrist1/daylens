@@ -1646,6 +1646,18 @@ export function restoreClient(
   return result.changes > 0
 }
 
+export function deleteClient(
+  id: string,
+  db: Database.Database = getDb(),
+): boolean {
+  const result = db.prepare(`DELETE FROM clients WHERE id = ?`).run(id)
+  if (result.changes > 0) {
+    db.prepare(`UPDATE work_sessions SET client_id = NULL WHERE client_id = ?`).run(id)
+    db.prepare(`UPDATE segment_attributions SET client_id = NULL WHERE client_id = ?`).run(id)
+  }
+  return result.changes > 0
+}
+
 // Idempotent get-or-create used by the "attribute a session to a new client by name"
 // shortcut. Returns the existing client when one matches (by name or alias), else creates it.
 export function getOrCreateClientByName(

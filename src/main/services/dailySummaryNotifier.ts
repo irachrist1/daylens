@@ -361,4 +361,11 @@ export function startDailySummaryNotifier(window?: BrowserWindow | null): void {
 
   runChecks()
   notifierTimer = setInterval(runChecks, 60_000)
+  _triggerDailySummaryChecks = runChecks
+}
+
+let _triggerDailySummaryChecks: (() => void) | null = null
+
+export function triggerDailySummaryChecks(): void {
+  _triggerDailySummaryChecks?.()
 }

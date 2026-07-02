@@ -6,6 +6,7 @@ export default defineConfig({
     alias: {
       '@shared': path.resolve(__dirname, 'src/shared'),
       '@daylens/remote-contract': path.resolve(__dirname, 'packages/remote-contract/index.ts'),
+      electron: path.resolve(__dirname, 'packages/mcp-server/stubs/electron.mjs'),
     },
   },
   build: {
