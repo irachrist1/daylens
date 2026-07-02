@@ -53,7 +53,7 @@ import { getSettings } from './settings'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
-import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState } from '@shared/timelineReview'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForDomain, type WorkKind } from '@shared/workKind'
@@ -102,7 +102,12 @@ function sanitizeBlockLabel(label: string | null | undefined): string | null {
   return label
 }
 
-const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
+// The single "session break" rule (founder decision, Jul 2026): being away for
+// 45 minutes or more ends the session and starts a new block; anything shorter
+// stays INSIDE the same continuous block (the card spans the lull, active time
+// stays honest). This is what turns a morning of work with a 20-minute coffee
+// break into ONE block instead of a fragmented string of slices.
+const IDLE_GAP_THRESHOLD_MS = 45 * 60_000
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
@@ -115,11 +120,12 @@ const SLOW_SWITCH_THRESHOLD_SEC = 15 * 60
 // they are absorbed by the brief-peek pass (BRIEF_PEEK_MAX_ACTIVE_MS) — so this
 // floor stays at a genuine-topic-run length, not the detour cutoff.
 const SUSTAINED_CONTEXT_SHIFT_THRESHOLD_SEC = 5 * 60
-// R2 block-sizing: the target shape is a 60-120 minute block, not a string of
-// 20-minute slices. The base ceiling sits at 120 min so a sustained stretch of
-// the same work is not chopped at 60, and the coalesce pass below re-joins
-// adjacent fragments of the same work up to this same ceiling.
-const TIMELINE_MAX_BLOCK_SPAN_MS = 120 * 60_000
+// Block-sizing: the target shape is a large, readable calendar block — 1, 2,
+// 3, even 5 hours — never a string of 20-minute slices. The base ceiling sits
+// at 180 min so a sustained stretch of the same work is not chopped at 2h, and
+// the coalesce pass below re-joins adjacent fragments of the same work up to
+// this same ceiling.
+const TIMELINE_MAX_BLOCK_SPAN_MS = 180 * 60_000
 // Blocks shorter than this are pure noise on the timeline (e.g. a 50-second
 // "Terminal work" sliver). They are unconditionally merged into an adjacent
 // block instead of being shown standalone.
@@ -144,26 +150,33 @@ const TIMELINE_MIN_BLOCK_FLOOR_MS = 15 * 60_000
 // The widest gap a sub-floor sliver may fold ACROSS into a neighbour. A sliver
 // absorbs into a short-break neighbour (a 20-minute coffee gap), but never across
 // a real away/sleep gap: a 24-second 1:56am blip must not fold into the 9:41am
-// block and make one 11-hour phantom starting at 2am. Matches the gap at which
-// the timeline would draw a visible break.
-const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 30 * 60_000
+// block and make one 11-hour phantom starting at 2am. Aligned with the session
+// break: inside 45 minutes it is still the same sitting.
+const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 45 * 60_000
 // The same work continued across a moderate untracked gap is one block, not two.
-// A 17-minute lull in the middle of a coding morning (stepped away, tracker
+// A 30-minute lull in the middle of a coding morning (stepped away, tracker
 // missed a stretch) should not split one Ghostty session into "Terminal work"
 // and a separate block. Two stretches of the same dominant app doing related
 // work bridge a gap up to this size, even across a coarse-segment boundary.
-// Genuine breaks (machine off for hours, long untracked spans) exceed this and
-// stay split.
-const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 30 * 60_000
+// Aligned with the 45-minute session break: a genuine break (machine off for
+// hours, a long lunch) exceeds this and stays split.
+const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 45 * 60_000
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
 // Quality bar: a 90-minute block titled "Daylens AI refactor — extract
 // chat_answer from ai.ts" is the right answer, not three 30-minute slices
 // labelled "Cursor" / "Cursor" / "Untitled block".
-const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 180 * 60_000
-const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 270 * 60_000
+const TIMELINE_MAX_COHERENT_BLOCK_SPAN_MS = 300 * 60_000
+const TIMELINE_MAX_ASSISTED_WORK_SPAN_MS = 360 * 60_000
 const TIMELINE_SPLIT_GAP_THRESHOLD_MS = 5 * 60_000
 const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
+// Bumped to v8 with: the 45-minute session break (away under 45 min stays
+// inside one continuous block; 45+ min starts a new one), larger block
+// ceilings (3h base / 5h coherent / 6h assisted), the floor-pass fold guard
+// fixed so fragmented days can't leave sub-15-minute slivers behind, and merge
+// corrections keyed by time span so they survive the app_sessions ↔
+// derived_sessions id-namespace flip.
+//
 // Bumped to v7 with: short-block absorption is based on active tracked time
 // instead of wall-clock span, uncategorized AI/dev tools are treated as focused
 // timeline evidence, GitHub repo/review pages badge as research, and
@@ -181,7 +194,7 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // buildTimelineBlocksForDay) so the stale "Canva development" / "Notifications
 // development" labels get replaced — unless the day was already AI/user
 // processed, in which case that curated result is kept and its IDs stay stable.
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v7'
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v8'
 
 type FormationReason = 'coherent' | 'heuristic' | 'mixed' | 'meeting' | 'longSingleApp'
 
@@ -1504,15 +1517,20 @@ export function writeTimelineBlockReview(
   )
 }
 
-// Persist a user merge correction keyed by the two sessions straddling the
-// boundary, so it survives a rebuild and feeds back into the boundary scorer as
-// the highest-weight "user correction memory" signal. A pair is unique, and a
-// later correction on the same pair overwrites the earlier one.
+// Persist a user merge correction so it survives every rebuild and feeds back
+// into the boundary scorer as the highest-weight "user correction memory"
+// signal. Anchored two ways: the exact session-id pair straddling the boundary,
+// AND the merged pair's wall-clock span. The span is the anchor that actually
+// survives — session ids live in two namespaces (app_sessions for today,
+// derived_sessions for past days) and derived ids churn on reprojection, which
+// is why id-only merges used to silently unravel ("merge works half the time").
 function writeBoundaryCorrection(
   db: Database.Database,
   dateStr: string,
   leftSessionId: number,
   rightSessionId: number,
+  spanStartMs: number,
+  spanEndMs: number,
 ): void {
   if (leftSessionId < 0 || rightSessionId < 0) {
     throw new Error('Cannot record a boundary correction without persisted session evidence.')
@@ -1520,11 +1538,12 @@ function writeBoundaryCorrection(
   const now = Date.now()
   const id = `bnd_${sha1(`${leftSessionId}:${rightSessionId}`).slice(0, 18)}`
   db.prepare(`
-    INSERT INTO timeline_boundary_corrections (id, date, left_session_id, right_session_id, kind, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'merge', ?, ?)
+    INSERT INTO timeline_boundary_corrections (id, date, left_session_id, right_session_id, kind, created_at, updated_at, span_start_ms, span_end_ms)
+    VALUES (?, ?, ?, ?, 'merge', ?, ?, ?, ?)
     ON CONFLICT(left_session_id, right_session_id)
-    DO UPDATE SET kind = excluded.kind, date = excluded.date, updated_at = excluded.updated_at
-  `).run(id, dateStr, leftSessionId, rightSessionId, now, now)
+    DO UPDATE SET kind = excluded.kind, date = excluded.date, updated_at = excluded.updated_at,
+                  span_start_ms = excluded.span_start_ms, span_end_ms = excluded.span_end_ms
+  `).run(id, dateStr, leftSessionId, rightSessionId, now, now, spanStartMs, spanEndMs)
 }
 
 // Merge a contiguous span of episodes into one. A timeline block is continuous
@@ -1554,7 +1573,9 @@ export function mergeTimelineEpisodes(
       // touching a just-started episode has nothing to anchor on yet.
       throw new Error('This episode is still live — give it a moment to settle, then merge.')
     }
-    writeBoundaryCorrection(db, dateStr, leftLast.id, rightFirst.id)
+    // The span anchor covers the whole fused pair: any boundary a future
+    // rebuild proposes strictly inside (earlier.start, later.end) is erased.
+    writeBoundaryCorrection(db, dateStr, leftLast.id, rightFirst.id, earlier.startTime, later.endTime)
   }
   invalidateTimelineDay(db, dateStr)
 }
@@ -2921,23 +2942,44 @@ function boundaryKeyForCandidates(left: CandidateBlock, right: CandidateBlock): 
   return boundaryKeyForSessionIds(leftLast.id, rightFirst.id)
 }
 
+interface MergedSpan {
+  startMs: number
+  endMs: number
+}
+
 interface BoundaryCorrections {
   merges: Set<string>
+  mergedSpans: MergedSpan[]
   lookup(left: CandidateBlock, right: CandidateBlock): 'merge' | null
 }
 
 const EMPTY_BOUNDARY_CORRECTIONS: BoundaryCorrections = {
   merges: new Set(),
+  mergedSpans: [],
   lookup: () => null,
 }
 
-function makeBoundaryCorrections(merges: Set<string>): BoundaryCorrections {
+function makeBoundaryCorrections(merges: Set<string>, mergedSpans: MergedSpan[] = []): BoundaryCorrections {
   return {
     merges,
+    mergedSpans,
     lookup(left, right) {
+      // Exact session-pair match first (cheap, precise) — but session ids only
+      // hold within one id namespace. The span anchor is the durable signal: a
+      // proposed boundary whose junction falls strictly inside a span the user
+      // fused is erased, whatever ids the sessions carry today.
       const key = boundaryKeyForCandidates(left, right)
-      if (!key) return null
-      if (merges.has(key)) return 'merge'
+      if (key && merges.has(key)) return 'merge'
+      if (mergedSpans.length > 0) {
+        const leftLast = left.sessions[left.sessions.length - 1]
+        const rightFirst = right.sessions[0]
+        if (leftLast && rightFirst) {
+          const junction = (sessionEndMs(leftLast) + rightFirst.startTime) / 2
+          for (const span of mergedSpans) {
+            if (junction > span.startMs && junction < span.endMs) return 'merge'
+          }
+        }
+      }
       return null
     },
   }
@@ -2953,16 +2995,21 @@ function boundaryCorrectionsTableExists(db: Database.Database): boolean {
 function loadBoundaryCorrections(db: Database.Database, dateStr?: string): BoundaryCorrections {
   if (!dateStr || !boundaryCorrectionsTableExists(db)) return EMPTY_BOUNDARY_CORRECTIONS
   const rows = db.prepare(`
-    SELECT left_session_id AS leftId, right_session_id AS rightId, kind
+    SELECT left_session_id AS leftId, right_session_id AS rightId, kind,
+           span_start_ms AS spanStartMs, span_end_ms AS spanEndMs
     FROM timeline_boundary_corrections
     WHERE date = ?
-  `).all(dateStr) as Array<{ leftId: number; rightId: number; kind: string }>
+  `).all(dateStr) as Array<{ leftId: number; rightId: number; kind: string; spanStartMs: number | null; spanEndMs: number | null }>
   const merges = new Set<string>()
+  const mergedSpans: MergedSpan[] = []
   for (const row of rows) {
-    const key = boundaryKeyForSessionIds(row.leftId, row.rightId)
-    if (row.kind === 'merge') merges.add(key)
+    if (row.kind !== 'merge') continue
+    merges.add(boundaryKeyForSessionIds(row.leftId, row.rightId))
+    if (row.spanStartMs != null && row.spanEndMs != null && row.spanEndMs > row.spanStartMs) {
+      mergedSpans.push({ startMs: row.spanStartMs, endMs: row.spanEndMs })
+    }
   }
-  return makeBoundaryCorrections(merges)
+  return makeBoundaryCorrections(merges, mergedSpans)
 }
 
 type RunMode = 'execution' | 'research' | 'browse' | 'admin' | 'drift' | 'meeting'
@@ -3323,7 +3370,12 @@ function enforceMinimumBlockFloor(
   if (candidates.length <= 1) return candidates
   const result = [...candidates]
 
-  for (let guard = 0; guard < result.length; guard++) {
+  // The guard must be the ORIGINAL count: each fold removes one candidate, so
+  // at most N-1 folds are ever possible. Bounding by the shrinking
+  // result.length exited after ~N/2 folds on a fragmented day and let 12-second
+  // slivers survive the floor (seen persisted on 2026-07-01).
+  const maxFolds = result.length
+  for (let guard = 0; guard < maxFolds; guard++) {
     let foldedAny = false
     for (let index = 0; index < result.length; index++) {
       const candidate = result[index]
@@ -4524,6 +4576,34 @@ function buildProvisionalLiveBlocks(
   }]
 }
 
+// The time spans of blocks the user deleted (review state 'ignored') on a
+// date. A deleted block's sessions are excluded from every rebuild, so the
+// block can neither re-form nor be silently absorbed into a neighbour — the
+// deletion is a correction and corrections survive rebuilds (invariant 8).
+function loadIgnoredBlockSpans(db: Database.Database, dateStr: string): MergedSpan[] {
+  const rows = db.prepare(`
+    SELECT original_block_json
+    FROM timeline_block_reviews
+    WHERE date = ? AND review_state = 'ignored'
+  `).all(dateStr) as Array<{ original_block_json: string }>
+  const spans: MergedSpan[] = []
+  for (const row of rows) {
+    const original = parseReviewJson(row.original_block_json)
+    const startMs = typeof original.startTime === 'number' ? original.startTime : null
+    const endMs = typeof original.endTime === 'number' ? original.endTime : null
+    if (startMs != null && endMs != null && endMs > startMs) {
+      spans.push({ startMs, endMs })
+    }
+  }
+  return spans
+}
+
+function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSession[] {
+  if (spans.length === 0) return sessions
+  return sessions.filter((session) =>
+    !spans.some((span) => session.startTime >= span.startMs && session.startTime < span.endMs))
+}
+
 export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
@@ -4533,6 +4613,7 @@ export function buildTimelineBlocksForDay(
   const shouldMaterialize = options.materialize ?? true
   const todayStr = localDateString()
   let forceMaterialize = false
+  sessions = withoutIgnoredSpans(sessions, loadIgnoredBlockSpans(db, dateStr))
 
   if (dateStr < todayStr) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
@@ -4919,9 +5000,13 @@ export function getTimelineDayPayload(
     && !(options.materialize ?? false)
     && validPersistedTimelineBlockCount(db, dateStr) === 0
     && !persistedDayWasProcessed(db, dateStr)
-  const blocks = isLiveProvisionalDay
+  const builtBlocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
+  // A deleted block (review state 'ignored') is gone from every surface that
+  // reads this payload — timeline, recap, AI, wraps. Its span renders as the
+  // empty space it now is.
+  const blocks = builtBlocks.filter(isTrustedTimelineBlock)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   const segments = buildSegmentsForDay(db, dateStr, blocks)
   // Invariant 7: the blocks are the canonical day facts. Every downstream
@@ -5003,8 +5088,12 @@ function getLightweightDayPayload(
       evidence_summary_json,
       heuristic_version,
       computed_at
-    FROM timeline_blocks
+    FROM timeline_blocks b
     WHERE date = ? AND invalidated_at IS NULL AND is_live = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_block_reviews r
+        WHERE r.block_id = b.id AND r.review_state = 'ignored'
+      )
     ORDER BY start_time ASC
   `).all(dateStr) as Array<{
     id: string

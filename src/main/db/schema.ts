@@ -347,10 +347,12 @@ CREATE INDEX IF NOT EXISTS idx_timeline_block_reviews_state
   ON timeline_block_reviews (review_state, updated_at);
 
 -- User corrections to episode boundaries. A 'split' asserts "there IS a
--- boundary between these two sessions"; a 'merge' asserts "there is NOT". Keyed
--- by the evidence (the two sessions straddling the boundary) so the correction
--- re-attaches after a rebuild even when block IDs change — the same lineage
--- approach as timeline_block_reviews.
+-- boundary between these two sessions"; a 'merge' asserts "there is NOT".
+-- Anchored two ways: by the session-id pair straddling the boundary (exact),
+-- and by the merged span's wall-clock range (span_start_ms/span_end_ms) —
+-- session ids live in two namespaces (app_sessions for today, derived_sessions
+-- for past days) and derived ids churn on reprojection, so time is the anchor
+-- that survives every rebuild.
 CREATE TABLE IF NOT EXISTS timeline_boundary_corrections (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
@@ -358,7 +360,9 @@ CREATE TABLE IF NOT EXISTS timeline_boundary_corrections (
   right_session_id INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('split', 'merge')),
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  span_start_ms INTEGER,
+  span_end_ms INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_timeline_boundary_corrections_pair

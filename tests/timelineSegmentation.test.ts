@@ -152,16 +152,16 @@ test('two distinct browsing topics stay separate', () => {
   db.close()
 })
 
-// GUARD (runaway watching, R4): the same video activity split by a real >15-min
-// gap (machine locked) stays two blocks. Distant same-intent spans must NOT
-// bridge into one runaway "watching" block.
-test('entertainment across a real >15-minute gap stays separate', () => {
+// GUARD (runaway watching, R4): the same video activity split by a real session
+// break (away 45+ minutes, machine locked) stays two blocks. Distant
+// same-intent spans must NOT bridge into one runaway "watching" block.
+test('entertainment across a real 45+ minute gap stays separate', () => {
   const db = freshDb()
   seedActivityEvent(db, at(14, 50), 'lock')
-  seedActivityEvent(db, at(15, 8), 'unlock')
+  seedActivityEvent(db, at(15, 28), 'unlock')
   const sessions = [
     session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(14, 0), endTime: at(14, 40), windowTitle: 'documentary · youtube' }),
-    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(15, 10), endTime: at(15, 50), windowTitle: 'documentary · youtube' }),
+    session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: at(15, 30), endTime: at(16, 10), windowTitle: 'documentary · youtube' }),
   ]
   const result = labels(db, sessions)
   assert.equal(result.count, 2, `entertainment across a real gap must stay separate, got ${result.count}: ${result.spans.join(', ')}`)
@@ -331,13 +331,11 @@ test('same video with a short detour is one block', () => {
   db.close()
 })
 
-// FLOOR (DEV-99 / timeline.md §3.4): no block under fifteen minutes stands alone.
-// An off-kind sliver isolated by real idle gaps on both sides survives every
-// earlier pass — foldBriefPeeks needs no idle gap around it, and the short-block
-// absorption needs a *related* neighbour, which an unrelated entertainment blip
-// isn't. The final calendar-floor pass folds it into the nearest work block, so
-// the day comes back as real blocks, never a 35-second sliver.
-test('a sub-15-minute sliver isolated by gaps is folded by the floor', () => {
+// FLOOR (DEV-99 / timeline.md §3.4): no block under fifteen minutes stands
+// alone. A morning with 20-minute lulls and an 8-minute Spotify blip is one
+// continuous sitting under the 45-minute session break — the blip and the lulls
+// fold INTO the work, never out as slivers.
+test('a sub-15-minute sliver between lulls folds into the surrounding work', () => {
   const db = freshDb()
   const sessions = [
     session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 0), endTime: at(9, 40), windowTitle: 'workBlocks.ts — daylens' }),
@@ -345,9 +343,39 @@ test('a sub-15-minute sliver isolated by gaps is folded by the floor', () => {
     session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(10, 28), endTime: at(11, 8), windowTitle: 'workBlocks.ts — daylens' }),
   ]
   const blocks = buildTimelineBlocksFromSessions(db, sessions)
-  assert.equal(blocks.length, 2, `the 8-min sliver must fold away, got ${blocks.length}`)
+  assert.equal(blocks.length, 1, `one sitting of the same work should be one block, got ${blocks.length}`)
   for (const block of blocks) {
     assert.ok(blockActiveSeconds(block) >= FLOOR_SECONDS, `no block may sit under the 15-min floor, got ${blockActiveSeconds(block)}s`)
+  }
+  db.close()
+})
+
+// FLOOR (guard regression, 2026-07-01): the floor pass must fold EVERY sub-floor
+// sliver, however fragmented the day. The old fold loop was bounded by the
+// shrinking result length, so a day with many slivers exited early and 12-second
+// blocks reached the screen. Alternating work/leisure runs force many hard-cut
+// sliver candidates; all of them must fold or drop.
+test('a heavily fragmented day leaves no sub-floor blocks behind', () => {
+  const db = freshDb()
+  const sessions = []
+  // 10 alternating 2-minute work/leisure slivers back to back (kind shifts are
+  // hard candidate boundaries), then a real work block.
+  for (let i = 0; i < 10; i++) {
+    const start = at(9, i * 2)
+    const end = at(9, i * 2 + 2)
+    sessions.push(i % 2 === 0
+      ? session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: start, endTime: end, windowTitle: 'workBlocks.ts — daylens' })
+      : session({ bundleId: 'com.apple.Safari', appName: 'Safari', category: 'entertainment', startTime: start, endTime: end, windowTitle: 'Stranger Things · Netflix' }))
+  }
+  sessions.push(session({ bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startTime: at(9, 20), endTime: at(10, 20), windowTitle: 'workBlocks.ts — daylens' }))
+  const blocks = buildTimelineBlocksFromSessions(db, sessions)
+  for (const block of blocks) {
+    const spanMs = block.endTime - block.startTime
+    const activeMs = blockActiveSeconds(block) * 1000
+    assert.ok(
+      spanMs >= FLOOR_SECONDS * 1000 || activeMs >= FLOOR_SECONDS * 1000,
+      `no block may sit under the 15-min floor on both axes, got span ${Math.round(spanMs / 1000)}s / active ${Math.round(activeMs / 1000)}s`,
+    )
   }
   db.close()
 })

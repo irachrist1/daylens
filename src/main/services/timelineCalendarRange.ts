@@ -62,6 +62,10 @@ export function getTimelineRangeBlocks(
     WHERE b.date >= ? AND b.date <= ?
       AND b.invalidated_at IS NULL
       AND b.is_live = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_block_reviews r
+        WHERE r.block_id = b.id AND r.review_state = 'ignored'
+      )
     ORDER BY b.date ASC, b.start_time ASC
   `).all(fromDate, toDate) as RangeRow[]
 

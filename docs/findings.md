@@ -321,3 +321,52 @@ grouped `chat_followup_suggestions` into “AI chat.” Empty-chat suggestions n
 real user queries, pass an anchor check against those queries, and use the cheapest model for the
 selected provider (Claude Haiku 4.5 for Anthropic). Both starter and follow-up calls remain fully
 metered and appear as **Suggestions** in Settings usage.
+
+---
+
+# 2026-07-02 — the calendar day was wrong three layers down: noise, ids, and a loop guard
+
+**Status:** Fixed + regression-tested · **Source:** live `daylens.sqlite` (July 1) + code read
+
+Testing the new calendar timeline on July 1 showed three engine bugs, each traced to a real
+row before touching code. All three fixes are pinned by tests.
+
+## A 9-hour "Uncategorized long idle period" owned the morning
+
+`timeline_blocks` for July 1 opened with a 594-minute block (12:23 AM – 10:17 AM) whose top
+evidence was **loginwindow, 8h 57m**. Cause: past days rebuild from `derived_sessions`
+(`getDerivedDayTimelinePayload`), and that read path never applied the shared system-noise
+policy — only the `app_sessions` reader (`getSessionsForRange` → `isUxNoise`) filtered it. The
+overnight lock screen became the day's biggest "activity" (invariant 11 broken). Fix: the
+derived path now filters `isSystemNoiseApp` (`src/main/core/query/projections.ts`), and
+SecurityAgent/SecurityAgentHelper joined the shared noise list. Rebuilt against a sandbox copy
+of the live DB, July 1 now starts at 9:21 AM where the real day started.
+
+## "Merge works half the time" — session ids live in two namespaces
+
+A merge correction is keyed by the two session ids straddling the boundary. Today those are
+`app_sessions` ids (~47k); a settled past day re-reads through `derived_sessions` ids (~440k),
+and derived ids churn on every reprojection. A merge recorded in one namespace can never match
+in the other, so user merges silently unraveled on the next rebuild — exactly "works half the
+time". Fix: corrections now also store the merged span's wall-clock range
+(`span_start_ms`/`span_end_ms`, migration 41), and the boundary scorer erases any proposed
+boundary whose junction falls inside a user-fused span, whatever ids the sessions carry.
+Test: `workBlockSplitting` "survives even when session ids change namespace".
+
+## 12-second blocks reached the screen — the floor pass exited early
+
+July 1 persisted two sub-minute blocks at 18:55. `enforceMinimumBlockFloor` folds one sliver
+per outer-loop pass, but the loop guard was bounded by the *shrinking* `result.length`, so a
+fragmented day ran out of iterations before running out of slivers. Fix: bound by the original
+count (N candidates can need up to N-1 folds). Test: timelineSegmentation "a heavily
+fragmented day leaves no sub-floor blocks behind".
+
+## Founder decision recorded: the 45-minute session break
+
+One block = one sitting. Away under 45 minutes (coffee, a call, a lull) stays INSIDE the same
+continuous block; away 45+ minutes ends it. `IDLE_GAP_THRESHOLD_MS`, the same-work bridge, and
+the sliver-fold gap all sit on 45m now; block span ceilings rose to 3h/5h/6h so a real
+afternoon reads as one calendar block, not slices. Heuristic bumped to `timeline-v8` —
+unprocessed past days rebuild on revisit; AI/user-processed days are kept (re-analyze to adopt
+the new shape).
+

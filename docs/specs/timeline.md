@@ -53,14 +53,18 @@ declared once, so the views cannot disagree about what happened.
 
 A new block starts only on a strong signal:
 
-- A real gap — idle, asleep, or locked for roughly **15+ minutes**.
+- A real session break — idle, asleep, or locked for **45 minutes or more** (founder
+  decision, Jul 2026). Away time under that stays *inside* the same continuous block: the
+  card spans the lull, the active time stays honest. A 20-minute coffee break does not
+  split a morning of work.
 - A meeting starts or ends.
 - You clearly switch to a **different goal** (different subject/project).
 - A user correction says "cut here".
 
 A new block does **not** start just because you switched apps, opened a new tab, or glanced
 at something for a minute or 5 minutes or even 10 minutes. Apps are *evidence*, not
-boundaries.
+boundaries. The target shape is a large, readable calendar block — 1, 2, 3, even 5 hours —
+never a fragmented string of 15–20 minute chunks.
 
 **Below the block: a dwell floor on raw switches.** An app or site you were in for **under
 ~10 seconds** is not a real switch — it's a flicker, and it should never become its own
@@ -103,8 +107,21 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    makes the day **fewer, truer blocks**, never more.
 2. **A block's height is proportional to how long it lasted.** A 3-hour block towers over a
    15-minute one; the shape of the day tells you where the time went before you read a label.
-   Height is linear in the block's active minutes, with a small readable minimum so the
-   shortest (15-minute) block still shows its title and time.
+   Blocks are drawn at their wall-clock position (top = start, bottom = end) on a fixed
+   px-per-minute scale, with a small readable minimum so the shortest (15-minute) block
+   still shows its title and time.
+3. **The day's bounds are the day's activity.** The vertical track runs from the hour of the
+   first tracked event to the hour of the last (or "now" on the live day) — hours with no
+   activity before or after simply don't exist in the view. No rendering or scrolling
+   through an empty midnight-to-9am. The week grid applies the same rule across its seven
+   days on one shared hour scale.
+4. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
+   (macOS and Windows), then records the deletion as a correction (review state `ignored`).
+   The block disappears from every surface — timeline, month grid, recap, AI, wraps,
+   search — its span renders as the empty space it now is, and the deletion survives every
+   rebuild: the deleted span's sessions are excluded from re-analysis so the block can
+   neither re-form nor be absorbed into a neighbour. Raw captured activity is never
+   destroyed.
 
 This supersedes the earlier §3.2 "10-minute cutoff" proposal as the single size rule: under
 15 minutes is never its own block.
@@ -200,11 +217,17 @@ recap on the same day with a button called "Analyze Day."
 
 - Brief detours are absorbed into the surrounding block (section 3.2) — they never appear
   as work.
-- A **sustained** off-task stretch (≥ the section 3.2 cutoff) becomes its own small section
-  in the detail panel of the block, visually distinct.
+- Inside the block's detail panel, a **"Detours"** section answers "where did time go
+  elsewhere in this window": the leisure/social sites and apps with their minutes, plus an
+  "Idle or away" row when a meaningful stretch of the span had nothing tracked. It is
+  informational, never a grade. (This section was previously called "Side trips".)
+- The detail panel also shows a **block type tag** ("Focused work", "Meeting", "Research",
+  "Leisure"…) derived from the block's kind + dominant category, and the same tags appear
+  as filter chips above the day grid — filtering dims non-matching blocks in place so the
+  day's shape stays honest.
 
-> **DECISION (you): distraction placement.** Should distractions show inline-dimmed in the
-> main timeline or only inside the detail panel? Current proposal: detail panel only.
+> **DECISION (resolved): distraction placement.** Detail panel only; the timeline itself
+> stays clean.
 
 ## 7. The day recap (right-hand panel)
 

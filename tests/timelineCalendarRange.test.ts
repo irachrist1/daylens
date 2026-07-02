@@ -70,6 +70,21 @@ test('returns blocks grouped by day, ordered, live and invalidated excluded', ()
   db.close()
 })
 
+test('a deleted block is excluded from the month range read', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  seedBlock(db, { id: 'kept', date: '2026-07-01', startTime: T0, endTime: T0 + HOUR })
+  seedBlock(db, { id: 'gone', date: '2026-07-01', startTime: T0 + 2 * HOUR, endTime: T0 + 3 * HOUR })
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (id, block_id, date, evidence_key, review_state, original_block_json, correction_json, created_at, updated_at)
+    VALUES ('r1', 'gone', '2026-07-01', 'k', 'ignored', '{}', '{}', ?, ?)
+  `).run(Date.now(), Date.now())
+
+  const [day] = getTimelineRangeBlocks(db, '2026-07-01', '2026-07-01')
+  assert.deepEqual(day.blocks.map((block) => block.id), ['kept'])
+  db.close()
+})
+
 test('a user rename always wins over label_current', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)

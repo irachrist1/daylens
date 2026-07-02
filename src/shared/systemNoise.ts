@@ -11,6 +11,7 @@ export interface AppIdentityCandidate {
 
 const SYSTEM_NOISE_BUNDLE_IDS = new Set([
   'com.apple.loginwindow',
+  'com.apple.securityagent',
   'com.apple.dock',
   'com.apple.systemuiserver',
   'com.apple.notificationcenterui',
@@ -26,6 +27,8 @@ const SYSTEM_NOISE_BUNDLE_IDS = new Set([
 
 const SYSTEM_NOISE_APP_NAMES = new Set([
   'loginwindow',
+  'securityagent',
+  'securityagenthelper',
   'windowserver',
   'universalaccessd',
   'dock',

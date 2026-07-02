@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
@@ -695,6 +695,46 @@ export function registerDbHandlers(): void {
     invalidateProjectionScope('timeline', 'block_review')
     invalidateProjectionScope('apps', 'block_review')
     invalidateProjectionScope('insights', 'block_review')
+  })
+
+  // Delete a block: a native confirm (macOS and Windows message box), then the
+  // block is recorded as an 'ignored' review correction. Corrections win and
+  // survive rebuilds (invariant 8): every read path filters ignored blocks, and
+  // the day rebuilder excludes the deleted span's sessions so the block cannot
+  // resurface inside a neighbour on the next Analyze. Raw captured activity is
+  // never destroyed.
+  ipcMain.handle(IPC.DB.DELETE_TIMELINE_BLOCK, async (event, payload: { blockId: string; date?: string | null }): Promise<{ deleted: boolean }> => {
+    const db = getDb()
+    let block: WorkContextBlock | null = null
+    if (payload.date) {
+      const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+      block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
+    }
+    block = block ?? getBlockDetailPayload(db, payload.blockId, getCurrentSession())
+    if (!block) throw new Error('Block not found.')
+
+    const dateStr = payload.date ?? localDateStringForTimestamp(block.startTime)
+    const timeRange = `${new Date(block.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} – ${new Date(block.endTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      type: 'warning' as const,
+      title: 'Delete this block',
+      message: 'Are you sure?',
+      detail: `"${block.label.current}" (${timeRange}) will be removed from your timeline and every view that reads it. This survives re-analysis.`,
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+    }
+    const { response } = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options)
+    if (response !== 0) return { deleted: false }
+
+    writeTimelineBlockReview(db, dateStr, block, { state: 'ignored' })
+    invalidateProjectionScope('timeline', 'block_review')
+    invalidateProjectionScope('apps', 'block_review')
+    invalidateProjectionScope('insights', 'block_review')
+    return { deleted: true }
   })
 
   ipcMain.handle(IPC.DB.MERGE_TIMELINE_EPISODES, (_e, payload: { blockIds: [string, string]; date?: string | null }): DayTimelinePayload => {

@@ -1737,6 +1737,7 @@ export const IPC = {
     SET_BLOCK_LABEL_OVERRIDE: 'db:set-block-label-override',
     CLEAR_BLOCK_LABEL_OVERRIDE: 'db:clear-block-label-override',
     SET_BLOCK_REVIEW: 'db:set-block-review',
+    DELETE_TIMELINE_BLOCK: 'db:delete-timeline-block',
     MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
     GET_RECAP_RANGE: 'db:get-recap-range',

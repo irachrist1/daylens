@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Sparkles } from 'lucide-react'
+import { Moon, Sparkles } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, TimelineSegment, WorkContextBlock } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
-import { effectiveBlockKind, kindForDomain } from '@shared/workKind'
+import { blockTypeTag, effectiveBlockKind, kindForDomain } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -253,8 +253,9 @@ const DAY_HOUR_HEIGHT = 88
 const WEEK_HOUR_HEIGHT = 52
 const TIME_GUTTER_WIDTH = 56
 // Smallest drawable card. The engine's 15-minute floor means a real block at
-// the day scale is ≥ 22px; this only catches meetings and edge-case slivers.
-const MIN_CARD_HEIGHT = 16
+// the day scale is ≥ 22px; this only catches meetings and edge-case slivers,
+// and 22px is the least height at which a one-line title still reads.
+const MIN_CARD_HEIGHT = 22
 
 // Daylens won't shape a day into named blocks until there's enough to work with
 // (founder decision: at least 2 hours tracked). Below this the Analyze action
@@ -285,15 +286,52 @@ function dayStartMs(dateStr: string): number {
   return new Date(y, m - 1, d).getTime()
 }
 
-// Minutes from local midnight, clamped to the 24h track. A block that runs
-// past midnight (the owned day extends into the small hours) is clamped to
-// the bottom edge; its label still shows the real clock times.
+// The furthest the track may run past midnight. A block owned by the day can
+// spill into the small hours (the owned day carries late-night work), so the
+// track extends with it — up to 6 AM the next day as a sanity cap.
+const MAX_TRACK_MINUTES = 30 * 60
+
+// Minutes from local midnight. Not clamped to 24h: a block that runs past
+// midnight extends the track instead of piling up at the bottom edge.
 function minutesIntoDay(ts: number, dayStart: number): number {
-  return Math.min(24 * 60, Math.max(0, (ts - dayStart) / 60_000))
+  return Math.min(MAX_TRACK_MINUTES, Math.max(0, (ts - dayStart) / 60_000))
 }
 
 function hourLabel(hour: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date(2000, 0, 1, hour))
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date(2000, 0, 1, hour % 24))
+}
+
+// The day bounds = actual activity (founder rule): the track runs from the
+// hour of the first tracked event to the hour of the last — empty midnight
+// hours simply don't exist in the view. On today the track extends to "now"
+// so the current-time line always has a home.
+interface TrackBounds {
+  startHour: number
+  endHour: number
+}
+
+function trackBoundsFor(
+  days: Array<{ date: string; blocks: WorkContextBlock[] }>,
+  nowMs: number | null,
+): TrackBounds {
+  let firstMin = Number.POSITIVE_INFINITY
+  let lastMin = Number.NEGATIVE_INFINITY
+  for (const day of days) {
+    const dayStart = dayStartMs(day.date)
+    for (const block of day.blocks) {
+      firstMin = Math.min(firstMin, minutesIntoDay(block.startTime, dayStart))
+      lastMin = Math.max(lastMin, minutesIntoDay(block.endTime, dayStart))
+    }
+    if (nowMs != null && nowMs >= dayStart && nowMs < dayStart + 24 * 60 * 60_000) {
+      lastMin = Math.max(lastMin, minutesIntoDay(nowMs, dayStart))
+    }
+  }
+  if (!Number.isFinite(firstMin) || !Number.isFinite(lastMin) || lastMin <= firstMin) {
+    return { startHour: 8, endHour: 18 }
+  }
+  const startHour = Math.max(0, Math.floor(firstMin / 60))
+  const endHour = Math.min(MAX_TRACK_MINUTES / 60, Math.max(startHour + 1, Math.ceil(lastMin / 60)))
+  return { startHour, endHour }
 }
 
 function monthKey(dateStr: string): string {
@@ -386,6 +424,7 @@ function CalendarBlockCard({
   compact,
   isSelected,
   inMergeRange,
+  dimmed = false,
   onClick,
 }: {
   block: WorkContextBlock
@@ -394,10 +433,12 @@ function CalendarBlockCard({
   compact: boolean
   isSelected: boolean
   inMergeRange: boolean
+  // True when a tag filter is active and this block isn't in it. Filtered
+  // blocks fade but stay in place — the shape of the day never lies.
+  dimmed?: boolean
   onClick?: () => void
 }) {
   const accent = block.provisional ? '#8b93a7' : (CATEGORY_COLORS[block.dominantCategory] ?? CATEGORY_COLORS.uncategorized)
-  const ignored = block.review.state === 'ignored'
   // Leisure / personal blocks are muted so the eye finds work first.
   const muted = effectiveBlockKind(block) !== 'work'
   const label = userVisibleBlockLabel(block)
@@ -420,7 +461,13 @@ function CalendarBlockCard({
         height,
         left: compact ? 2 : 4,
         right: compact ? 2 : 8,
-        display: 'block',
+        // Explicit top-aligned column: a calendar event's title sits at its
+        // start time. (A bare <button> vertically centers its content, which
+        // floated the title into the middle of tall blocks.)
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        justifyContent: 'flex-start',
         textAlign: 'left',
         cursor: 'pointer',
         borderRadius: compact ? 6 : 8,
@@ -432,7 +479,7 @@ function CalendarBlockCard({
         padding: compact ? '2px 6px' : '4px 9px',
         overflow: 'hidden',
         minWidth: 0,
-        opacity: ignored ? 0.45 : muted ? 0.7 : 1,
+        opacity: dimmed ? 0.22 : muted ? 0.7 : 1,
         zIndex: isSelected ? 3 : 1,
       }}
     >
@@ -488,16 +535,21 @@ function CalendarBlockCard({
   )
 }
 
-// The hour labels column shared by the day and week grids.
-function HourGutter({ hourHeight }: { hourHeight: number }) {
+// The hour labels column shared by the day and week grids. Runs only over the
+// bounded span — the hours the day actually lived in.
+function HourGutter({ hourHeight, bounds }: { hourHeight: number; bounds: TrackBounds }) {
+  const hours = Array.from(
+    { length: Math.max(0, bounds.endHour - bounds.startHour + 1) },
+    (_, index) => bounds.startHour + index,
+  )
   return (
-    <div style={{ position: 'relative', height: 24 * hourHeight, width: TIME_GUTTER_WIDTH }}>
-      {Array.from({ length: 23 }, (_, index) => index + 1).map((hour) => (
+    <div style={{ position: 'relative', height: (bounds.endHour - bounds.startHour) * hourHeight, width: TIME_GUTTER_WIDTH }}>
+      {hours.map((hour) => (
         <div
           key={hour}
           style={{
             position: 'absolute',
-            top: hour * hourHeight,
+            top: (hour - bounds.startHour) * hourHeight,
             right: 8,
             transform: 'translateY(-50%)',
             fontSize: 10,
@@ -520,36 +572,46 @@ function HourGutter({ hourHeight }: { hourHeight: number }) {
 function CalendarDayTrack({
   date,
   blocks,
+  bounds,
   gapSegments = [],
   hourHeight,
   compact = false,
   selectedBlockId = null,
   selectedSpanIds,
   nowMs = null,
+  dimBlock,
   onBlockClick,
 }: {
   date: string
   blocks: WorkContextBlock[]
+  bounds: TrackBounds
   gapSegments?: TimelineGapSegment[]
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
   selectedSpanIds?: ReadonlySet<string>
   nowMs?: number | null
+  // When set, blocks outside the active tag filter render dimmed.
+  dimBlock?: (block: WorkContextBlock) => boolean
   onBlockClick?: (block: WorkContextBlock) => void
 }) {
   const dayStart = dayStartMs(date)
+  const trackStartMin = bounds.startHour * 60
+  const trackEndMin = bounds.endHour * 60
+  const trackHeight = ((trackEndMin - trackStartMin) / 60) * hourHeight
+  const topFor = (ts: number) => ((minutesIntoDay(ts, dayStart) - trackStartMin) / 60) * hourHeight
   const nowMinutes = nowMs != null ? (nowMs - dayStart) / 60_000 : null
-  const showNowLine = nowMinutes != null && nowMinutes >= 0 && nowMinutes <= 24 * 60
+  const showNowLine = nowMinutes != null && nowMinutes >= trackStartMin && nowMinutes <= trackEndMin
+  const hourCount = Math.max(0, bounds.endHour - bounds.startHour + 1)
 
   return (
-    <div style={{ position: 'relative', height: 24 * hourHeight, minWidth: 0 }}>
-      {Array.from({ length: 24 }, (_, hour) => (
+    <div style={{ position: 'relative', height: trackHeight, minWidth: 0 }}>
+      {Array.from({ length: hourCount }, (_, index) => (
         <div
-          key={hour}
+          key={index}
           style={{
             position: 'absolute',
-            top: hour * hourHeight,
+            top: index * hourHeight,
             left: 0,
             right: 0,
             borderTop: '1px solid var(--color-border-ghost)',
@@ -560,9 +622,8 @@ function CalendarDayTrack({
 
       {/* Real breaks read as quiet labels in the empty space they explain. */}
       {!compact && gapSegments.map((gap) => {
-        const top = (minutesIntoDay(gap.startTime, dayStart) / 60) * hourHeight
-        const bottom = (minutesIntoDay(gap.endTime, dayStart) / 60) * hourHeight
-        const gapHeight = bottom - top
+        const top = topFor(gap.startTime)
+        const gapHeight = topFor(gap.endTime) - top
         if (gapHeight < 22) return null
         return (
           <div
@@ -587,9 +648,8 @@ function CalendarDayTrack({
       })}
 
       {blocks.map((block) => {
-        const top = (minutesIntoDay(block.startTime, dayStart) / 60) * hourHeight
-        const bottom = (minutesIntoDay(block.endTime, dayStart) / 60) * hourHeight
-        const height = Math.max(MIN_CARD_HEIGHT, bottom - top)
+        const top = topFor(block.startTime)
+        const height = Math.max(MIN_CARD_HEIGHT, topFor(block.endTime) - top)
         return (
           <CalendarBlockCard
             key={block.id}
@@ -599,6 +659,7 @@ function CalendarDayTrack({
             compact={compact}
             isSelected={selectedBlockId === block.id}
             inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
+            dimmed={dimBlock ? dimBlock(block) : false}
             onClick={onBlockClick ? () => onBlockClick(block) : undefined}
           />
         )
@@ -607,7 +668,7 @@ function CalendarDayTrack({
       {showNowLine && (
         <div style={{
           position: 'absolute',
-          top: (nowMinutes / 60) * hourHeight,
+          top: ((nowMinutes - trackStartMin) / 60) * hourHeight,
           left: 0,
           right: 0,
           zIndex: 4,
@@ -916,6 +977,7 @@ function BlockInspector({
   const [overrideSaving, setOverrideSaving] = useState(false)
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [merging, setMerging] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [boundaryError, setBoundaryError] = useState<string | null>(null)
   // The rename input is revealed only when the user clicks Rename — the panel
   // stays calm until then.
@@ -998,6 +1060,26 @@ function BlockInspector({
       .then(() => { invalidateDayRecap(); return onRefresh() })
       .catch((error) => setReviewError(sanitizeIpcError(error, "Couldn't undo the rename. Try again in a moment.").message))
       .finally(() => setOverrideSaving(false))
+  }
+
+  // Delete this block. The main process shows the native "Are you sure?"
+  // dialog (macOS and Windows message box); on confirm the block is recorded
+  // as deleted, disappears from every view, and stays deleted through rebuilds.
+  const deleteBlock = async () => {
+    if (deleting) return
+    setDeleting(true)
+    setReviewError(null)
+    try {
+      const { deleted } = await ipc.db.deleteTimelineBlock({ blockId: block.id, date: payload.date })
+      if (deleted) {
+        invalidateDayRecap()
+        await onRefresh()
+      }
+    } catch (error) {
+      setReviewError(sanitizeIpcError(error, "Couldn't delete this block. Try again in a moment.").message)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   // The sparkle in the rename row: ask the AI to write a fresh, accurate title
@@ -1083,7 +1165,21 @@ function BlockInspector({
     }))
   const allEvidence = [...appRows, ...artifactRows, ...siteRows].sort((a, b) => b.seconds - a.seconds)
   const evidence = allEvidence.filter((row) => !row.offTask)
-  const sideTrips = allEvidence.filter((row) => row.offTask)
+  // "Detours" (§6): where time went elsewhere inside this block — the leisure
+  // sites and apps, plus the stretch with no tracked activity at all.
+  const detours = allEvidence.filter((row) => row.offTask)
+  const spanSeconds = Math.max(0, Math.round((block.endTime - block.startTime) / 1000))
+  const idleSeconds = Math.max(0, spanSeconds - blockActiveSeconds(block))
+  const showIdleRow = idleSeconds >= 10 * 60
+  const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0) + (showIdleRow ? idleSeconds : 0)
+
+  // The block's type tag + how the time inside splits by category. Real facts,
+  // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
+  const typeTag = blockTypeTag(block)
+  const categorySplit = Object.entries(block.categoryDistribution ?? {})
+    .filter((entry): entry is [AppCategory, number] => typeof entry[1] === 'number' && entry[1] >= 60)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
 
   const renderEvidenceRow = (row: EvidenceRow, dimmed: boolean) => {
     const content = (
@@ -1149,6 +1245,32 @@ function BlockInspector({
         <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
           {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
         </div>
+        {/* What kind of block this was, and how the time inside splits. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10 }}>
+          <span style={{
+            padding: '3px 9px',
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 700,
+            color: accent,
+            background: `${accent}1c`,
+            border: `1px solid ${accent}40`,
+          }}>
+            {typeTag}
+          </span>
+          {categorySplit.map(([category, seconds]) => (
+            <span key={category} style={{
+              padding: '3px 9px',
+              borderRadius: 999,
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--color-text-tertiary)',
+              border: '1px solid var(--color-border-ghost)',
+            }}>
+              {categoryLabel(category)} · {formatDuration(seconds)}
+            </span>
+          ))}
+        </div>
         {(correctable || (mergeStart && mergeEnd && mergeSelection.length >= 2)) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
             {correctable && (
@@ -1158,6 +1280,16 @@ function BlockInspector({
                 style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
               >
                 Rename
+              </button>
+            )}
+            {correctable && (
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => { void deleteBlock() }}
+                style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: '#f87171', fontSize: 12, fontWeight: 600, cursor: deleting ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, opacity: deleting ? 0.6 : 1 }}
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
               </button>
             )}
             {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
@@ -1253,7 +1385,7 @@ function BlockInspector({
         {evidence.length > 0 && (
           <section>
             <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
-              Evidence
+              What you were in
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {evidence.map((row) => renderEvidenceRow(row, false))}
@@ -1261,13 +1393,34 @@ function BlockInspector({
           </section>
         )}
 
-        {sideTrips.length > 0 && (
+        {/* Where time went elsewhere inside this window: the leisure detours
+            plus the stretch with nothing tracked at all. Honest, not a grade. */}
+        {(detours.length > 0 || showIdleRow) && (
           <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
-              Side trips
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', textTransform: 'uppercase' }}>
+                Detours
+              </div>
+              {detourSeconds > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                  {formatDuration(detourSeconds)}
+                </div>
+              )}
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
-              {sideTrips.map((row) => renderEvidenceRow(row, true))}
+              {detours.map((row) => renderEvidenceRow(row, true))}
+              {showIdleRow && renderEvidenceRow({
+                key: 'idle',
+                name: 'Idle or away',
+                detail: 'No tracked activity in this stretch',
+                seconds: idleSeconds,
+                icon: (
+                  <span style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, background: 'var(--color-surface-high)', color: 'var(--color-text-tertiary)' }}>
+                    <Moon size={14} strokeWidth={2} aria-hidden="true" />
+                  </span>
+                ),
+                offTask: true,
+              }, true)}
             </div>
           </section>
         )}
@@ -1351,22 +1504,17 @@ function CalendarWeekView({
     .entries()]
     .sort((left, right) => right[1] - left[1])[0] ?? null
 
-  // Scroll the shared page scroller so the week's earliest activity is in
-  // view — once per week, not on every 30s live refresh.
-  const gridRef = useRef<HTMLDivElement | null>(null)
-  const scrolledKeyRef = useRef<string | null>(null)
+  // The shared hour scale covers only the hours the week actually lived in
+  // (first tracked event to last across all seven days), so there is no dead
+  // space to scroll through — the grid starts where the week starts.
+  const weekBounds = useMemo(
+    () => trackBoundsFor(days.map((payload) => ({ date: payload.date, blocks: payload.blocks })), includesToday ? nowMs : null),
+    [days, includesToday, nowMs],
+  )
   useEffect(() => {
-    if (days.length === 0 || scrolledKeyRef.current === weekStart) return
     const scroller = scrollerRef.current
-    const grid = gridRef.current
-    if (!scroller || !grid) return
-    const startMinutes = days.flatMap((payload) =>
-      payload.blocks.map((block) => minutesIntoDay(block.startTime, dayStartMs(payload.date))))
-    const targetMinutes = startMinutes.length > 0 ? Math.min(...startMinutes) : 8 * 60
-    const gridTop = grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
-    scroller.scrollTop = Math.max(0, gridTop + (targetMinutes / 60) * WEEK_HOUR_HEIGHT - 80)
-    scrolledKeyRef.current = weekStart
-  }, [days, weekStart, scrollerRef])
+    if (scroller) scroller.scrollTop = 0
+  }, [weekStart, scrollerRef])
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
@@ -1422,13 +1570,14 @@ function CalendarWeekView({
           })}
         </div>
 
-        <div ref={gridRef} style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))` }}>
-          <HourGutter hourHeight={WEEK_HOUR_HEIGHT} />
+        <div style={{ display: 'grid', gridTemplateColumns: `${TIME_GUTTER_WIDTH}px repeat(7, minmax(0, 1fr))` }}>
+          <HourGutter hourHeight={WEEK_HOUR_HEIGHT} bounds={weekBounds} />
           {dates.map((date) => (
             <div key={`col:${date}`} style={{ borderLeft: '1px solid var(--color-border-ghost)', minWidth: 0 }}>
               <CalendarDayTrack
                 date={date}
                 blocks={byDate.get(date)?.blocks ?? []}
+                bounds={weekBounds}
                 hourHeight={WEEK_HOUR_HEIGHT}
                 compact
                 nowMs={date === today ? nowMs : null}
@@ -1725,8 +1874,6 @@ export default function Timeline() {
   // Clock tick for the current-time line — a minute is as fine as the grid reads.
   const [nowMs, setNowMs] = useState(() => Date.now())
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const dayGridRef = useRef<HTMLDivElement | null>(null)
-  const lastDayScrollKeyRef = useRef<string | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
   const lastBlockOpenKeyRef = useRef<string | null>(null)
   // After a merge the old block ids vanish; we stash the merged span's start
@@ -1784,6 +1931,26 @@ export default function Timeline() {
     [payload],
   )
 
+  // The day track runs from the first tracked event to the last (or "now" on
+  // today) — hours with no activity are simply not part of the view.
+  const dayBounds = useMemo(
+    () => trackBoundsFor(payload ? [{ date: payload.date, blocks: sortedBlocks }] : [], isToday ? nowMs : null),
+    [payload, sortedBlocks, isToday, nowMs],
+  )
+
+  // Filter the day by block type ("Focused work", "Meeting", "Leisure"…).
+  // Filtering dims the other blocks in place — the day's shape stays honest.
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const dayTags = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const block of sortedBlocks) {
+      if (block.provisional) continue
+      const tag = blockTypeTag(block)
+      counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  }, [sortedBlocks])
+
   // The contiguous span the user has selected: just the anchor for a plain
   // click, or the inclusive run of blocks between the anchor and the
   // shift-clicked end. Everything in here renders selected and merges together.
@@ -1819,6 +1986,7 @@ export default function Timeline() {
   useEffect(() => {
     setSelectedBlockId(null)
     setMergeRangeEndId(null)
+    setTagFilter(null)
   }, [date])
 
   // Escape steps the selection down: first it drops a multi-block merge span,
@@ -1846,35 +2014,14 @@ export default function Timeline() {
     }
   }, [payload])
 
-  // Month opens at the top; day and week auto-scroll to the day's first
-  // activity themselves (below / in CalendarWeekView).
+  // Every view opens at the top. The day and week tracks are clamped to the
+  // hours that actually have activity, so the top IS the first tracked event —
+  // no auto-scroll gymnastics, no dead space to skip.
   useEffect(() => {
-    if (view !== 'month') return
     const node = scrollRef.current
     if (!node) return
     node.scrollTop = 0
   }, [view, date])
-
-  // Scroll the day grid so the day starts where the activity starts — once
-  // per opened date, not on every live refresh.
-  useEffect(() => {
-    if (view !== 'day' || !payload || payload.date !== date) return
-    if (lastDayScrollKeyRef.current === date) return
-    const scroller = scrollRef.current
-    const grid = dayGridRef.current
-    if (!scroller) return
-    lastDayScrollKeyRef.current = date
-    if (payload.blocks.length === 0 || !grid) {
-      scroller.scrollTop = 0
-      return
-    }
-    const dayStart = dayStartMs(date)
-    const firstMinutes = Math.min(
-      ...payload.blocks.map((block) => minutesIntoDay(block.startTime, dayStart)),
-    )
-    const gridTop = grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
-    scroller.scrollTop = Math.max(0, gridTop + (firstMinutes / 60) * DAY_HOUR_HEIGHT - 90)
-  }, [view, date, payload])
 
   useEffect(() => {
     const openKey = view === 'week'
@@ -1942,11 +2089,6 @@ export default function Timeline() {
   function setDate(nextDate: string) {
     updateNavState({ view, date: nextDate })
   }
-
-  // Re-run the day auto-scroll when the user comes back to the day view.
-  useEffect(() => {
-    if (view !== 'day') lastDayScrollKeyRef.current = null
-  }, [view])
 
   const today = todayString()
   const onCurrentPeriod = view === 'day'
@@ -2154,6 +2296,34 @@ export default function Timeline() {
               <>
                 <SummaryStrip payload={payload} />
 
+                {/* Filter the day by block type. Dims the rest in place. */}
+                {dayTags.length > 1 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 16px' }}>
+                    {dayTags.map(([tag, count]) => {
+                      const active = tagFilter === tag
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setTagFilter(active ? null : tag)}
+                          style={{
+                            padding: '4px 11px',
+                            borderRadius: 999,
+                            fontSize: 11.5,
+                            fontWeight: 650,
+                            cursor: 'pointer',
+                            border: '1px solid var(--color-border-ghost)',
+                            background: active ? 'var(--gradient-primary)' : 'var(--color-surface)',
+                            color: active ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
+                          }}
+                        >
+                          {tag} · {count}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
                 {payload.blocks.length === 0 && (
                   <div style={{
                     borderRadius: 18,
@@ -2205,7 +2375,6 @@ export default function Timeline() {
                     {/* Cards aren't text to select; killing user-select here keeps
                         shift-click from smearing a text highlight across the run. */}
                     <div
-                      ref={dayGridRef}
                       style={{
                         display: 'grid',
                         gridTemplateColumns: `${TIME_GUTTER_WIDTH}px minmax(0, 1fr)`,
@@ -2217,15 +2386,17 @@ export default function Timeline() {
                         padding: '8px 0',
                       }}
                     >
-                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} />
+                      <HourGutter hourHeight={DAY_HOUR_HEIGHT} bounds={dayBounds} />
                       <CalendarDayTrack
                         date={payload.date}
                         blocks={sortedBlocks}
+                        bounds={dayBounds}
                         gapSegments={gapSegments}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
                         selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
+                        dimBlock={tagFilter ? (block) => blockTypeTag(block) !== tagFilter : undefined}
                       />
                     </div>
                     <BlockInspector

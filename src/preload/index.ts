@@ -160,6 +160,8 @@ const api = {
     clearBlockLabelOverride: (blockId: string): Promise<void> => ipcRenderer.invoke(IPC.DB.CLEAR_BLOCK_LABEL_OVERRIDE, blockId),
     setBlockReview: (payload: TimelineBlockReviewUpdate): Promise<void> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_REVIEW, payload),
+    deleteTimelineBlock: (payload: { blockId: string; date?: string | null }): Promise<{ deleted: boolean }> =>
+      ipcRenderer.invoke(IPC.DB.DELETE_TIMELINE_BLOCK, payload),
     mergeTimelineEpisodes: (payload: { blockIds: [string, string]; date?: string | null }): Promise<DayTimelinePayload> =>
       ipcRenderer.invoke(IPC.DB.MERGE_TIMELINE_EPISODES, payload),
     getAppDetail: (canonicalAppId: string, days?: number | string): Promise<AppDetailPayload> =>

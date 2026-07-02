@@ -230,6 +230,33 @@ export function effectiveBlockKind(block: BlockKindInput): WorkKind {
   return block.kind ?? resolveBlockKind(block)
 }
 
+// The human tag for a block's type — "Focused work", "Meeting", "Research",
+// "Leisure"… Derived from real facts (kind + dominant category), never a
+// grade or a score. One vocabulary everywhere: the detail panel shows it and
+// the day view filters by it.
+export function blockTypeTag(block: BlockKindInput): string {
+  if (block.dominantCategory === 'meetings') return 'Meeting'
+  const kind = effectiveBlockKind(block)
+  if (kind === 'leisure') return 'Leisure'
+  if (kind === 'personal') return 'Personal'
+  switch (block.dominantCategory) {
+    case 'development':
+    case 'writing':
+    case 'design':
+      return 'Focused work'
+    case 'research':
+    case 'aiTools':
+      return 'Research'
+    case 'communication':
+    case 'email':
+      return 'Comms'
+    case 'browsing':
+      return 'Browsing'
+    default:
+      return 'Work'
+  }
+}
+
 // Resolve a whole block's kind from its apps and websites. Each native app run
 // contributes its own category-kind; browser time is attributed to the kind of
 // the domains it sat on (leisure youtube vs work github). The dominant kind by

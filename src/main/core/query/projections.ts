@@ -20,6 +20,8 @@ import { ownedDayBounds } from '../../lib/dayOwnership'
 import { isAppFocused } from '../../lib/focusScore'
 import { resolveCanonicalApp } from '../../lib/appIdentity'
 import { getSettings } from '../../services/settings'
+import { isSystemNoiseApp } from '@shared/systemNoise'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
 
 const APP_CATEGORIES: ReadonlySet<string> = new Set([
   'development',
@@ -126,14 +128,23 @@ function getDerivedDayTimelinePayload(
 
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
   const focusApps = getSettings().focusApps
-  const sessions = day.sessions.map((session) => derivedSessionToAppSession(session, focusApps))
+  // Invariant 11: system noise (loginwindow, SecurityAgent, Finder…) is
+  // invisible and never counts as time. The app_sessions read path filters it
+  // in getSessionsForRange; this derived path must apply the same shared
+  // policy, or an overnight loginwindow session becomes a 9-hour
+  // "Uncategorized long idle period" block on a past day.
+  const sessions = day.sessions
+    .filter((session) => !isSystemNoiseApp({ bundleId: session.app_bundle_id, appName: session.app_name }))
+    .map((session) => derivedSessionToAppSession(session, focusApps))
   const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
   const focusSessions = getFocusSessionsForDateRange(db, fromMs, toMs)
   // Past days must go through the same coalescing pipeline as today. The
   // precomputed derived_blocks are raw, un-coalesced chunks (the source of the
   // 100+ micro-block timelines on past days), so rebuild blocks from the
-  // derived sessions instead of mapping derived_blocks one-to-one.
+  // derived sessions instead of mapping derived_blocks one-to-one. A block the
+  // user deleted (review state 'ignored') is filtered from every read.
   const blocks = buildTimelineBlocksForDay(db, dateStr, sessions, options)
+    .filter(isTrustedTimelineBlock)
   const segments = buildDerivedSegments(db, dateStr, blocks)
   const totalSeconds = sessions.reduce((sum, session) => sum + session.durationSeconds, 0)
   const focusSeconds = sessions

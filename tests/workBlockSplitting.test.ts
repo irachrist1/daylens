@@ -257,33 +257,36 @@ test('a sub-30-minute fragment folds into the related neighbour it continues', (
   db.close()
 })
 
-test('a 15+ minute untracked gap is a hard boundary even for the same app', () => {
+test('a 45+ minute untracked gap is a hard boundary even for the same app', () => {
   const db = createDb()
-  // timeline.md §3.1: missing idle telemetry must not erase a real 15+ minute
-  // absence merely because the same app resumes afterward. Both stretches sit
-  // above the 15-min calendar floor (DEV-99), so this isolates the gap boundary
-  // from the floor — a 1-minute opener would (correctly) fold as a sliver.
+  // timeline.md §3.1 (45-minute session break): missing idle telemetry must not
+  // erase a real 45+ minute absence merely because the same app resumes
+  // afterward. Both stretches sit above the 15-min calendar floor (DEV-99), so
+  // this isolates the gap boundary from the floor.
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 16 })
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 33, durationMinutes: 63 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 63, durationMinutes: 63 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 2, `same-app work across a 17m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `same-app work across a 47m gap must split; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
-test('same-app work can still bridge below the 15-minute idle boundary', () => {
+test('same-app work bridges a lull below the 45-minute session break', () => {
   const db = createDb()
-  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 10 })
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 24, durationMinutes: 40 })
+  // The founder's coffee-break rule: a half-hour lull inside a working session
+  // stays INSIDE one continuous block — the card spans the lull, active time
+  // stays honest. Only a 45+ minute absence starts a new block.
+  insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 20 })
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 52, durationMinutes: 40 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 1, `same-app work across a 14m gap may remain one intent; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 1, `same-app work across a 32m lull stays one block; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
-test('sparse AI/dev tool spans do not cross a 15+ minute idle boundary', () => {
+test('sparse AI/dev tool spans do not cross a 45+ minute idle boundary', () => {
   const db = createDb()
   const sessions: AppSession[] = [
     {
@@ -302,8 +305,8 @@ test('sparse AI/dev tool spans do not cross a 15+ minute idle boundary', () => {
       id: 2,
       bundleId: 'com.google.antigravity',
       appName: 'Antigravity',
-      startTime: localMs(10, 3),
-      endTime: localMs(10, 44),
+      startTime: localMs(10, 30),
+      endTime: localMs(11, 11),
       durationSeconds: 27,
       category: 'uncategorized',
       isFocused: false,
@@ -314,21 +317,21 @@ test('sparse AI/dev tool spans do not cross a 15+ minute idle boundary', () => {
 
   const blocks = buildTimelineBlocksFromSessions(db, sessions)
 
-  assert.equal(blocks.length, 2, `a 23m untracked gap must split even sparse AI/dev evidence; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `a 50m untracked gap must split even sparse AI/dev evidence; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   assert.equal(blocks[0].dominantCategory, 'development')
   db.close()
 })
 
-test('same-app work does not bridge across a real lock boundary', () => {
+test('same-app work does not bridge across a 45+ minute locked break', () => {
   const db = createDb()
   insertSession(db, { title: 'npm run dev - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 0, durationMinutes: 20 })
   insertActivityEvent(db, 'lock', localMs(9, 25))
-  insertActivityEvent(db, 'unlock', localMs(9, 35))
-  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 42, durationMinutes: 40 })
+  insertActivityEvent(db, 'unlock', localMs(10, 15))
+  insertSession(db, { title: 'widgets.tsx - daylens - Ghostty', bundleId: 'com.mitchellh.ghostty', appName: 'Ghostty', category: 'development', startMinute: 80, durationMinutes: 40 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
-  assert.equal(blocks.length, 2, `real lock boundary should split resumed work; got ${blocks.map((b) => b.label.current).join(' | ')}`)
+  assert.equal(blocks.length, 2, `a 60m locked break should split resumed work; got ${blocks.map((b) => b.label.current).join(' | ')}`)
   db.close()
 })
 
@@ -364,14 +367,26 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
 
 test('highly coherent blocks split only when they exceed the coherent maximum duration', () => {
   const db = createDb()
+  // A 4-hour single-title stretch stays ONE calendar block under the 5-hour
+  // coherent ceiling ("1, 2, 3, even 5 hours — never a string of slices").
   insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 240 })
+
+  const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(blocks.length, 1, `a 4h coherent stretch stays one block; got ${blocks.length}`)
+  db.close()
+})
+
+test('a coherent stretch beyond the 5-hour ceiling still splits', () => {
+  const db = createDb()
+  insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 0, durationMinutes: 170 })
+  insertSession(db, { title: 'Deep work planning - Notion', bundleId: 'notion.id', appName: 'Notion', category: 'writing', startMinute: 170, durationMinutes: 170 })
 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
   assert.ok(blocks.length >= 2, `expected maximum duration split; got ${blocks.length}`)
   assert.ok(
-    blocks.every((block) => block.endTime - block.startTime <= 180 * 60_000),
-    `expected every block at or below 180 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
+    blocks.every((block) => block.endTime - block.startTime <= 300 * 60_000),
+    `expected every block at or below 300 minutes; got ${blocks.map((block) => Math.round((block.endTime - block.startTime) / 60_000)).join(', ')}`,
   )
   db.close()
 })
@@ -519,7 +534,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -560,19 +575,51 @@ test('background upgrade finds stale unprocessed days but leaves processed days 
   db.close()
 })
 
-test('timeline block review state survives reload from persisted blocks', () => {
+test('a deleted block disappears from the day payload', () => {
   const db = createDb()
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
 
   const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
   assert.ok(block)
 
+  // Delete = review state 'ignored'. The block vanishes from the payload (and
+  // with it every surface that reads it), and its time leaves the totals.
   writeTimelineBlockReview(db, TEST_DATE, block, { state: 'ignored' })
 
-  const reloaded = getTimelineDayPayload(db, TEST_DATE).blocks[0]
-  assert.equal(reloaded.review.state, 'ignored')
+  const reloaded = getTimelineDayPayload(db, TEST_DATE)
+  assert.equal(reloaded.blocks.length, 0, 'a deleted block must not appear in the payload')
   const reviewRows = db.prepare(`SELECT COUNT(*) AS count FROM timeline_block_reviews WHERE review_state = 'ignored'`).get() as { count: number }
   assert.equal(reviewRows.count, 1)
+  db.close()
+})
+
+test('a deleted block stays deleted through a rebuild and is not absorbed by a neighbour', () => {
+  const db = createDb()
+  // Two separate stretches: real work, then a video block the user deletes.
+  insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
+  insertSession(db, { title: 'Video A - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 40, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2)
+  const video = before.find((b) => b.dominantCategory === 'entertainment')
+  assert.ok(video, 'the video block should exist before deletion')
+
+  writeTimelineBlockReview(db, TEST_DATE, video!, { state: 'ignored' })
+
+  const afterDelete = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterDelete.length, 1, 'only the work block remains')
+  assert.equal(afterDelete[0].dominantCategory, 'development')
+
+  // Force a full rebuild: the deleted span's sessions are excluded, so the
+  // block neither re-forms nor folds into the work block.
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterRebuild.length, 1, 'the deletion must survive the rebuild')
+  assert.equal(afterRebuild[0].dominantCategory, 'development')
+  assert.ok(
+    afterRebuild[0].endTime <= video!.startTime,
+    'the deleted span must not be absorbed into the surviving block',
+  )
   db.close()
 })
 
@@ -596,7 +643,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v7'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v8'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 
@@ -786,6 +833,32 @@ test('a user merge overrides a kind-shift hard cut (work absorbs leisure)', () =
   db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
   const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(afterRebuild.length, 1, 'the cross-kind merge must survive a rebuild')
+  db.close()
+})
+
+test('a user merge survives even when session ids change namespace', () => {
+  const db = createDb()
+  // The real-world failure behind "merge works half the time": a merge recorded
+  // against app_sessions ids stops matching once the day is rebuilt from
+  // derived_sessions (a different id namespace, and derived ids churn on every
+  // reprojection). The span anchor must carry the merge on its own.
+  insertSession(db, { title: 'Camera comparison research - DPReview - Google Chrome', startMinute: 0, durationMinutes: 25 })
+  insertSession(db, { title: 'City council election results - Local News - Google Chrome', startMinute: 25, durationMinutes: 25 })
+
+  const before = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(before.length, 2)
+  mergeTimelineEpisodes(db, TEST_DATE, [before[0], before[1]])
+
+  // Simulate the namespace flip: the recorded session-id pair no longer exists.
+  db.prepare(`
+    UPDATE timeline_boundary_corrections
+    SET left_session_id = left_session_id + 400000,
+        right_session_id = right_session_id + 400000
+  `).run()
+
+  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
+  const afterRebuild = getTimelineDayPayload(db, TEST_DATE).blocks
+  assert.equal(afterRebuild.length, 1, 'the merge must survive on its span anchor alone')
   db.close()
 })
 

@@ -2009,6 +2009,19 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 41,
+    description: 'Key merge corrections by time span — session ids live in two namespaces (app_sessions today, derived_sessions on past days), so id-keyed merges silently stopped re-applying once the day flipped read paths',
+    up: () => {
+      const db = getDb()
+      if (!hasColumn('timeline_boundary_corrections', 'span_start_ms')) {
+        db.exec(`ALTER TABLE timeline_boundary_corrections ADD COLUMN span_start_ms INTEGER`)
+      }
+      if (!hasColumn('timeline_boundary_corrections', 'span_end_ms')) {
+        db.exec(`ALTER TABLE timeline_boundary_corrections ADD COLUMN span_end_ms INTEGER`)
+      }
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {
