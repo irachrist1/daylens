@@ -206,10 +206,26 @@ test('a timeline block persists one rich evidence object with titles, sites, URL
   const start = localMs(date, 10)
   const end = localMs(date, 11)
 
+  // Cursor's own session leaves a genuine ~10-minute capture gap (well under
+  // the 15-minute block-split floor) rather than covering the whole hour —
+  // otherwise the github.com visit below would be sitting behind a focused
+  // native app the entire time and correctly reconcile to zero (divergence
+  // #4: page-level evidence must reconcile against real foreground/gap
+  // overlap the same way domain-level summaries do; see queries.ts
+  // reconcileWebsiteVisits). The visit spans the gap plus a few minutes back
+  // inside Cursor's second session, so it still nets positive credited time
+  // and survives as evidence, same as it did when captured for real.
   insertAppSession(db, {
     bundleId: 'com.microsoft.VSCode',
     appName: 'Cursor',
     start,
+    end: start + 5 * 60_000,
+    windowTitle: 'capture-foundation.ts — daylens',
+  })
+  insertAppSession(db, {
+    bundleId: 'com.microsoft.VSCode',
+    appName: 'Cursor',
+    start: start + 15 * 60_000,
     end,
     windowTitle: 'capture-foundation.ts — daylens',
   })

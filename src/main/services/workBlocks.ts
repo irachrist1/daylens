@@ -9,6 +9,7 @@ import {
   getFocusSessionsForDateRange,
   getPageSummariesForBrowser,
   getSessionsForRange,
+  getReconciledWebsiteVisitsForRange,
   getTopPagesForDomains,
   getWebsiteVisitsForRange,
   getWebsiteSummariesForRange,
@@ -1866,16 +1867,6 @@ function splitSessionsByKind(sessions: AppSession[], context?: TimelineBuildCont
   return runs
 }
 
-function websiteVisitsForRange(
-  db: Database.Database,
-  startTime: number,
-  endTime: number,
-  context?: TimelineBuildContext,
-): WebsiteVisitRecord[] {
-  if (!context) return getWebsiteVisitsForRange(db, startTime, endTime)
-  return context.websiteVisits.filter((visit) => visit.visitTime >= startTime && visit.visitTime < endTime)
-}
-
 function sustainedContextShiftSplitIndex(sessions: AppSession[]): number | null {
   const runs = contextRunsFor(sessions)
   if (runs.length < 2) return null
@@ -1906,7 +1897,11 @@ function buildPageCandidates(
   db: Database.Database,
   startTime: number,
   endTime: number,
-  context?: TimelineBuildContext,
+  // Reconciliation (below) always needs a fresh DB read of sessions/absences
+  // for this exact span, so the context.websiteVisits fast path this used to
+  // take no longer applies — the parameter stays for call-site compatibility
+  // with the many context-threading callers elsewhere in this file.
+  _context?: TimelineBuildContext,
 ): ArtifactCandidate[] {
   const grouped = new Map<string, {
     canonicalKey: string
@@ -1922,7 +1917,14 @@ function buildPageCandidates(
     visitCount: number
   }>()
 
-  for (const visit of websiteVisitsForRange(db, startTime, endTime, context)) {
+  // A page's credited time is bounded the same way a domain's is (spec:
+  // timeline.md §3.0 "evidence object", invariant 6): clipped to the
+  // moments its own browser was actually frontmost in this span, or to an
+  // honest capture gap. History rows accrue in the background and while the
+  // browser was never foreground at all, so a visit with zero reconciled
+  // overlap contributes nothing and must not enter the block's evidence —
+  // it never shows up as a page the user "was in".
+  for (const { visit, freeIntervals } of getReconciledWebsiteVisitsForRange(db, startTime, endTime)) {
     // Domain policy gate: adult-host pages are filtered at source so they
     // never become artifact candidates, never get promoted to block labels,
     // and never appear in any app's topArtifacts list. The raw visit row
@@ -1931,13 +1933,18 @@ function buildPageCandidates(
     // headline anywhere in the product.
     if (isHostFilteredFromArtifacts(visit.domain)) continue
 
+    const creditedSeconds = Math.round(
+      freeIntervals.reduce((sum, interval) => sum + (interval.end - interval.start), 0) / 1000,
+    )
+    if (creditedSeconds <= 0) continue
+
     const canonicalKey = visit.normalizedUrl ?? normalizeUrlForStorage(visit.url) ?? `domain:${visit.domain}`
     const existing = grouped.get(canonicalKey)
     const pageTitle = normalizeWebsiteTitleForDisplay(visit.domain, visit.pageTitle)
     const displayTitle = pageTitle || websiteDisplayLabel(visit.domain)
 
     if (existing) {
-      existing.totalSeconds += visit.durationSec
+      existing.totalSeconds += creditedSeconds
       existing.visitCount += 1
       if (!existing.pageTitle && pageTitle) {
         existing.pageTitle = pageTitle
@@ -1956,7 +1963,7 @@ function buildPageCandidates(
       normalizedUrl: visit.normalizedUrl ?? null,
       pageKey: visit.pageKey ?? null,
       url: visit.url ?? null,
-      totalSeconds: visit.durationSec,
+      totalSeconds: creditedSeconds,
       visitCount: 1,
     })
   }

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { getWebsiteSummariesForRange } from '../src/main/db/queries.ts'
+import { getTopPagesForDomains, getWebsiteSummariesForRange } from '../src/main/db/queries.ts'
 import { getTimelineDayPayload, trimTimelineBlockSpan } from '../src/main/services/workBlocks.ts'
 import { localDateString } from '../src/main/lib/localDate.ts'
 
@@ -252,5 +252,107 @@ test('trimming one edge outward and the other inward: the outward edge silently 
   assert.equal(rebuilt[0].endTime, localMs(10, 0), 'the inward end cut takes effect exactly at the requested time')
   assert.equal(rebuilt[1].startTime, localMs(10, 0))
   assert.equal(rebuilt[1].endTime, localMs(10, 40), 'the trailing piece keeps the original end — nothing was extended')
+  db.close()
+})
+
+// ---------------------------------------------------------------------------
+// Divergence #4 (fixed) — page-level evidence used to sum raw
+// website_visits.duration_sec instead of reconciling against the visiting
+// browser's actual foreground time, the way domain-level summaries already
+// do (getWebsiteSummariesForRange, ~queries.ts:2338). Chromium-family
+// history rows accrue in the background and while the browser is not the
+// foreground app at all, so the unreconciled top-pages path
+// (getTopPagesForDomains, ~queries.ts:2424) and the block-evidence page
+// candidates (buildPageCandidates, workBlocks.ts ~1895) could both inflate
+// page minutes and surface pages the user never actually looked at during
+// that span.
+//
+// Fix: both paths now read from the same per-visit reconciliation ledger
+// (reconcileWebsiteVisits, queries.ts) that getWebsiteSummariesForRange
+// already used — a page's credited time is bounded by (a) its own browser's
+// foreground overlap in the requested span and (b) an exclusive claim
+// against every other visit sharing that browser's time pool, so a
+// domain's page times can never sum to more than the domain's own
+// reconciled total (spec: timeline.md §3.0 "evidence object", invariant 6
+// "every number on screen comes from the same blocks"; apps.md's
+// reconciliation rule).
+// ---------------------------------------------------------------------------
+test('page-level evidence reconciles like domain-level: a background-accrued visit contributes 0 and never appears as a page (divergence #4)', () => {
+  const db = createDb()
+  // Warp is frontmost the whole hour; the browser that actually loaded the
+  // page (Dia) never is.
+  insertSession(db, { bundleId: 'dev.warp.Warp-Stable', appName: 'Warp', category: 'development', start: localMs(9, 0), end: localMs(10, 0) })
+  // A Dia history row keeps accruing for the full hour behind Warp — a pure
+  // background tab, never actually seen in this span.
+  insertVisit(db, { domain: 'github.com', visitMs: localMs(9, 0), durationSec: 3600, browserBundleId: 'company.thebrowser.dia' })
+
+  // Domain level already reconciles this to zero (divergence #2 coverage);
+  // page level must agree exactly, not just approximately.
+  const sites = getWebsiteSummariesForRange(db, localMs(9, 0), localMs(10, 0))
+  assert.equal(sites.find((s) => s.domain === 'github.com'), undefined, 'sanity: the domain itself is background noise')
+
+  const pages = getTopPagesForDomains(db, localMs(9, 0), localMs(10, 0), ['github.com'], 5)
+  assert.equal(pages['github.com'], undefined, 'a background-accrued visit must not appear as page evidence either')
+  db.close()
+})
+
+test("page times within a domain sum to no more than that domain's own reconciled total (divergence #4)", () => {
+  const db = createDb()
+  insertSession(db, { bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'browsing', start: localMs(10, 0), end: localMs(11, 0) })
+
+  // History says one page on example.com spanned the whole hour; the
+  // active-tab tracker saw a DIFFERENT page on the same domain for the
+  // first 20 minutes. One browser, one active tab: the hour must split
+  // 20/40 across the two pages, never read as 20+60.
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active_browser_context')
+  `).run('example.com', 'Inbox', 'https://example.com/inbox', 'https://example.com/inbox', localMs(10, 0), localMs(10, 0) * 1000, 1200, 'company.thebrowser.dia', 'company.thebrowser.dia')
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, normalized_url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, canonical_browser_id, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'history')
+  `).run('example.com', 'Archive', 'https://example.com/archive', 'https://example.com/archive', localMs(10, 0), localMs(10, 0) * 1000, 3600, 'company.thebrowser.dia', 'company.thebrowser.dia')
+
+  const domainTotal = getWebsiteSummariesForRange(db, localMs(10, 0), localMs(11, 0)).find((s) => s.domain === 'example.com')
+  assert.ok(domainTotal)
+  assert.equal(domainTotal!.totalSeconds, 3600, 'the domain total is the full hour, whichever page it came from')
+
+  const pages = getTopPagesForDomains(db, localMs(10, 0), localMs(11, 0), ['example.com'], 5)['example.com'] ?? []
+  const byUrl = new Map(pages.map((p) => [p.url, p.totalSeconds]))
+  assert.equal(byUrl.get('https://example.com/inbox'), 1200, 'the observed active tab keeps its own 20 minutes')
+  assert.equal(byUrl.get('https://example.com/archive'), 2400, 'the history page only gets the minutes the active tab does not claim')
+
+  const pageTotal = pages.reduce((sum, p) => sum + p.totalSeconds, 0)
+  assert.ok(pageTotal <= domainTotal!.totalSeconds, `page breakdown (${pageTotal}s) must not exceed the domain's own reconciled total (${domainTotal!.totalSeconds}s)`)
+  assert.equal(pageTotal, domainTotal!.totalSeconds, "by construction the two totals agree exactly, not just approximately — they're unions of the same underlying credited intervals")
+  db.close()
+})
+
+test("a block's page evidence excludes a visit with zero foreground overlap in the block's own span (divergence #4)", () => {
+  const db = createDb()
+  const today = localDateString()
+  // Cursor is frontmost the whole block; Chrome (the browser that loaded
+  // the page) never is anywhere in this span.
+  insertSession(db, { bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', start: localMsForDate(today, 9, 0), end: localMsForDate(today, 10, 0), windowTitle: 'a.ts - Cursor' })
+  insertVisit(db, { domain: 'youtube.com', visitMs: localMsForDate(today, 9, 0), durationSec: 3600, browserBundleId: 'com.google.Chrome' })
+
+  const payload = getTimelineDayPayload(db, today, null, { materialize: true })
+  assert.equal(payload.blocks.length, 1)
+  const block = payload.blocks[0]
+
+  assert.equal(
+    block.pageRefs.find((page) => page.domain === 'youtube.com'),
+    undefined,
+    'a visit whose browser never reached the foreground in this block must not become a page artifact for it',
+  )
+  assert.equal(
+    block.evidenceSummary.sites?.find((page) => page.domain === 'youtube.com'),
+    undefined,
+    'the same rule applies to the persisted evidence object every surface reads',
+  )
   db.close()
 })
