@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Sparkles } from 'lucide-react'
+import { Pencil, Sparkles, Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
@@ -928,11 +928,19 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   )
 }
 
-function BlockInspector({
+// The block detail as a Google-Calendar event card: a floating popover
+// anchored beside the clicked block — icon actions top-right (edit, regenerate,
+// delete, close), color chip + title, the date/time line, type tags, the
+// summary, and the evidence underneath. The pencil flips the card into the
+// edit surface in place. The day recap keeps the right column to itself.
+const BLOCK_POPOVER_WIDTH = 400
+
+function BlockPopover({
   block,
   payload,
   onRefresh,
   onSelectBlock,
+  onClose,
   editSignal,
   mergeSelection,
   onMerged,
@@ -941,6 +949,7 @@ function BlockInspector({
   payload: DayTimelinePayload
   onRefresh: () => Promise<void>
   onSelectBlock?: (blockId: string) => void
+  onClose: () => void
   // One-shot "open in edit mode" request from the block's right-click menu.
   editSignal?: { blockId: string; nonce: number } | null
   // The blocks in the current shift-selected span (ordered, includes the anchor).
@@ -977,9 +986,44 @@ function BlockInspector({
     if (editSignal && block && editSignal.blockId === block.id) setEditing(true)
   }, [editSignal, block])
 
-  if (!block) {
-    return <DaySummaryInspector payload={payload} onSelectBlock={onSelectBlock} onRefresh={onRefresh} />
-  }
+  // Anchor the card beside its block, GCal-style: to the right of the block
+  // when there's room, else to the left, clamped into the viewport. The
+  // capture-phase scroll listener keeps it glued to the block while the day
+  // grid scrolls underneath.
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+  const blockId = block?.id ?? null
+  useEffect(() => {
+    if (!blockId) { setPosition(null); return }
+    const reposition = () => {
+      const anchor = document.querySelector<HTMLElement>(`[data-timeline-block-id="${blockId}"]`)
+      if (!anchor) { setPosition(null); return }
+      const rect = anchor.getBoundingClientRect()
+      const height = popoverRef.current?.offsetHeight ?? 480
+      let left = rect.right + 12
+      if (left + BLOCK_POPOVER_WIDTH > window.innerWidth - 16) left = rect.left - BLOCK_POPOVER_WIDTH - 12
+      left = Math.max(16, Math.min(left, window.innerWidth - BLOCK_POPOVER_WIDTH - 16))
+      const top = Math.max(72, Math.min(rect.top, window.innerHeight - height - 16))
+      setPosition({ left, top })
+    }
+    reposition()
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('resize', reposition)
+    return () => {
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('resize', reposition)
+    }
+  }, [blockId, editing])
+
+  // Escape closes the card, like GCal.
+  useEffect(() => {
+    if (!blockId) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [blockId, onClose])
+
+  if (!block) return null
 
   const accent = activityColorForCategory(block.dominantCategory)
   const hasOverride = Boolean(block.label.override?.trim())
@@ -1207,43 +1251,89 @@ function BlockInspector({
     return <div key={row.key} style={baseStyle}>{content}</div>
   }
 
+  const iconButtonStyle = (disabled = false): CSSProperties => ({
+    width: 32,
+    height: 32,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: '50%',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--color-text-secondary)',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+  })
+  const iconHover = {
+    onMouseEnter: (e: ReactMouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'var(--color-surface-high)' },
+    onMouseLeave: (e: ReactMouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'transparent' },
+  }
+
   return (
-    <div data-timeline-inspector="true" className="timeline-summary-inspector" style={{
-      position: 'sticky',
-      top: 24,
-      maxHeight: 'calc(100vh - 140px)',
+    <div ref={popoverRef} data-timeline-inspector="true" className="timeline-summary-inspector" style={{
+      position: 'fixed',
+      left: position?.left ?? -9999,
+      top: position?.top ?? -9999,
+      width: BLOCK_POPOVER_WIDTH,
+      maxHeight: 'min(72vh, 640px)',
       overflowY: 'auto',
       scrollbarWidth: 'none',
       msOverflowStyle: 'none',
       overscrollBehavior: 'contain',
-      borderRadius: 18,
+      zIndex: 40,
+      borderRadius: 16,
       border: '1px solid var(--color-border-ghost)',
       background: 'var(--color-surface)',
-      padding: 22,
+      boxShadow: '0 16px 48px rgba(0,0,0,0.26)',
+      padding: '10px 22px 22px',
     }}>
+      {/* The GCal action row: edit / regenerate / delete / close, top-right. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 2, marginBottom: 2 }}>
+        {correctable && (
+          <button type="button" aria-label="Edit block" title="Edit" onClick={() => setEditing((value) => !value)} style={iconButtonStyle()} {...iconHover}>
+            <Pencil size={15} strokeWidth={2} aria-hidden="true" />
+          </button>
+        )}
+        {correctable && (
+          <button type="button" aria-label="Regenerate summary" title="Regenerate summary" disabled={suggesting} onClick={() => { void suggestName() }} style={iconButtonStyle(suggesting)} {...iconHover}>
+            <Sparkles size={15} strokeWidth={2} className={suggesting ? 'rename-ai-spin' : undefined} aria-hidden="true" />
+          </button>
+        )}
+        {correctable && (
+          <button type="button" aria-label="Delete block" title="Delete" disabled={deleting} onClick={() => { void deleteBlock() }} style={iconButtonStyle(deleting)} {...iconHover}>
+            <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
+          </button>
+        )}
+        <button type="button" aria-label="Close" title="Close" onClick={onClose} style={iconButtonStyle()} {...iconHover}>
+          <X size={16} strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div>
+
       <div style={{ marginBottom: 16 }}>
-        {/* The title gets the full panel width — the Rename / Merge controls sit
-            on their own row below so a long block name is never squeezed or
-            clipped against the buttons. */}
-        <div
-          title={userVisibleBlockLabel(block)}
-          style={{
-            fontSize: 18,
-            fontWeight: 750,
-            color: 'var(--color-text-primary)',
-            lineHeight: 1.3,
-            marginBottom: 6,
-            overflowWrap: 'break-word',
-            wordBreak: 'break-word',
-          }}
-        >
-          {userVisibleBlockLabel(block)}
-        </div>
-        <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>
-          {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} • {formatDuration(blockActiveSeconds(block))}
+        {/* Color chip + title, GCal event-card style. */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 4, background: accent, flexShrink: 0, marginTop: 5 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              title={userVisibleBlockLabel(block)}
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: 'var(--color-text-primary)',
+                lineHeight: 1.3,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+              }}
+            >
+              {userVisibleBlockLabel(block)}
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+              {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
+            </div>
+          </div>
         </div>
         {/* What kind of block this was, and how the time inside splits. */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingLeft: 26 }}>
           <span style={{
             padding: '3px 9px',
             borderRadius: 999,
@@ -1268,48 +1358,25 @@ function BlockInspector({
             </span>
           ))}
         </div>
-        {(correctable || (mergeStart && mergeEnd && mergeSelection.length >= 2)) && (
+        {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
-            {correctable && (
-              <button
-                type="button"
-                onClick={() => setEditing((value) => !value)}
-                style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '4px 10px', borderRadius: 8 }}
-              >
-                Edit
-              </button>
-            )}
-            {correctable && (
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => { void deleteBlock() }}
-                style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: '#f87171', fontSize: 12, fontWeight: 600, cursor: deleting ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8, opacity: deleting ? 0.6 : 1 }}
-              >
-                {deleting ? 'Deleting…' : 'Delete'}
-              </button>
-            )}
-            {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
-              <>
-                <button
-                  type="button"
-                  aria-label={`Merge ${mergeSelection.length} blocks into one, ${formatClockTime(mergeStart.startTime)} to ${formatClockTime(mergeEnd.endTime)}`}
-                  disabled={merging || mergeHasLiveBlock}
-                  onClick={() => { void mergeSelectedBlocks() }}
-                  style={{ border: 'none', background: accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: (merging || mergeHasLiveBlock) ? 'default' : 'pointer', padding: '4px 12px', borderRadius: 8, opacity: mergeHasLiveBlock ? 0.5 : 1 }}
-                >
-                  {merging ? 'Merging…' : `Merge ${mergeSelection.length} blocks`}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSelectBlock?.(block.id)}
-                  disabled={merging}
-                  style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: merging ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8 }}
-                >
-                  Cancel
-                </button>
-              </>
-            )}
+            <button
+              type="button"
+              aria-label={`Merge ${mergeSelection.length} blocks into one, ${formatClockTime(mergeStart.startTime)} to ${formatClockTime(mergeEnd.endTime)}`}
+              disabled={merging || mergeHasLiveBlock}
+              onClick={() => { void mergeSelectedBlocks() }}
+              style={{ border: 'none', background: accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: (merging || mergeHasLiveBlock) ? 'default' : 'pointer', padding: '4px 12px', borderRadius: 8, opacity: mergeHasLiveBlock ? 0.5 : 1 }}
+            >
+              {merging ? 'Merging…' : `Merge ${mergeSelection.length} blocks`}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectBlock?.(block.id)}
+              disabled={merging}
+              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: merging ? 'default' : 'pointer', padding: '4px 10px', borderRadius: 8 }}
+            >
+              Cancel
+            </button>
           </div>
         )}
         {mergeStart && mergeEnd && mergeSelection.length >= 2 && (
@@ -1395,17 +1462,6 @@ function BlockInspector({
             {categorySaving && <span style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}>Saving…</span>}
           </div>
 
-          {/* Regenerate: fresh AI title + summary from the block's evidence. */}
-          <div>
-            <button
-              type="button"
-              disabled={suggesting || overrideSaving}
-              onClick={() => { void suggestName() }}
-              style={{ border: '1px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: (suggesting || overrideSaving) ? 'default' : 'pointer', padding: '5px 10px', borderRadius: 8, opacity: (suggesting || overrideSaving) ? 0.6 : 1 }}
-            >
-              {suggesting ? 'Regenerating…' : 'Regenerate summary'}
-            </button>
-          </div>
         </div>
       )}
 
@@ -2492,10 +2548,17 @@ export default function Timeline() {
                         onClose={() => { if (!menuBusy) setContextMenu(null) }}
                       />
                     )}
-                    <BlockInspector
+                    {/* The right column keeps the day recap; the block detail
+                        floats over the grid as a GCal-style event card. */}
+                    <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
+                    <BlockPopover
                       block={selectedBlock}
                       payload={payload}
                       onRefresh={timelineResource.refresh}
+                      onClose={() => {
+                        setSelectedBlockId(null)
+                        setMergeRangeEndId(null)
+                      }}
                       editSignal={editSignal}
                       mergeSelection={mergeSelection}
                       onMerged={(mergedStartTime) => {

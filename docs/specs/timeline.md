@@ -132,13 +132,19 @@ timeline the way an event sits on a calendar. Two rules make it read as a real c
    applies across every surface at once, never per-view. On the card itself the color must
    be unmistakable: a solid accent stripe on the left edge plus a frosted-glass fill
    (backdrop blur) so the hour lines behind never strike through the title or summary text.
-5. **Blocks are edited like calendar events.** Right-clicking a block opens a context menu
-   (Edit / Regenerate summary / Delete), Google-Calendar style. The detail panel's **Edit**
-   button (formerly "Rename") opens one edit surface with the block's title (with AI
-   suggest), its **Type** — recategorizing recolors the block everywhere, since category
-   drives color — and a regenerate-summary action. A type change is a review correction
-   like a rename: it wins over the computed category, flips the work/leisure kind to match,
-   and survives every rebuild (invariant 8). Provisional (live) blocks are not editable.
+5. **Blocks are edited like calendar events.** Clicking a block opens a **floating event
+   card anchored beside the block** (the Google Calendar popover, founder reference
+   Jul 2, 2026) — never a page change: icon actions top-right (pencil = edit, sparkle =
+   regenerate summary, trash = delete, X = close), then color chip + title, the
+   date · time · duration line, type tags, the summary, and the evidence ("What you were
+   in" + Detours) below. The pencil flips the card into the edit surface in place: title
+   (with AI suggest), and **Type** — recategorizing recolors the block everywhere, since
+   category drives color. Right-clicking a block opens the same actions as a context menu
+   (Edit / Regenerate summary / Delete). A type change is a review correction like a
+   rename: it wins over the computed category, flips the work/leisure kind to match, and
+   survives every rebuild (invariant 8). Escape or clicking empty grid closes the card.
+   The right-hand column always holds the day recap; block details never displace it.
+   Provisional (live) blocks open the card read-only (no edit/delete).
 6. **Any block can be deleted.** Delete asks "Are you sure?" with the OS-native dialog
    (macOS and Windows), then records the deletion as a correction (review state `ignored`).
    The block disappears from every surface — timeline, month grid, recap, AI, wraps,
