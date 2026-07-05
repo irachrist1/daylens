@@ -2,117 +2,109 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   ArrowRight,
+  ArrowUpRight,
   Blocks,
-  Bot,
   Check,
   Code2,
-  Database,
-  Download,
   EyeOff,
   Layers3,
-  MonitorDown,
-  MousePointer2,
-  Search,
-  ShieldCheck,
+  MessageCircleMore,
   Sparkles,
 } from "lucide-react";
 import { assetPath } from "@/app/lib/basePath";
 import {
-  LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
-  WINDOWS_DOWNLOAD_HREF,
+  UNIFIED_DESKTOP_REPO_URL,
 } from "@/app/lib/platformLinks";
 import styles from "./V2Landing.module.css";
 
-const GITHUB_URL = "https://github.com/irachrist1/daylens";
-
-const surfaces = [
+const benefits = [
   {
     icon: Layers3,
-    title: "Timeline",
-    body: "One honest view of the day, grouped by what you were doing instead of which app happened to be open.",
-    accent: "blue",
+    title: "Intent, not app switches",
+    body: "Writing in Cursor, checking a reference in Dia, and replying in Slack can still be one stretch of work.",
   },
   {
     icon: Blocks,
-    title: "Apps",
-    body: "Open any app and see the work inside it. Projects, pages, and threads stay connected to the same blocks.",
-    accent: "violet",
-  },
-  {
-    icon: Bot,
-    title: "AI",
-    body: "Ask what got done, where the afternoon went, or when you last touched a project. Answers cite your real day.",
-    accent: "cyan",
-  },
-  {
-    icon: Sparkles,
-    title: "Wraps",
-    body: "Daily and weekly stories built from the same facts, with real milestones worth remembering.",
-    accent: "pink",
-  },
-] as const;
-
-const proof = [
-  "Runs on your computer",
-  "Stores history locally",
-  "Works across apps",
-  "Exports when you ask",
-];
-
-const privacyCards = [
-  {
-    icon: Database,
-    title: "Local by default",
-    body: "Your work history lives in a SQLite database on your computer.",
+    title: "One truth, three views",
+    body: "Timeline, Apps, and AI read the same blocks, so the hours and the story always agree.",
   },
   {
     icon: EyeOff,
-    title: "Noise stays invisible",
-    body: "System processes and idle time do not get dressed up as meaningful work.",
+    title: "Noise stays out of sight",
+    body: "Idle time, lock screens, and system processes never get dressed up as meaningful work.",
   },
   {
-    icon: ShieldCheck,
-    title: "You choose the boundary",
-    body: "Cloud sync is optional, filtered, and limited to the facts needed by your linked devices.",
-  },
-  {
-    icon: MousePointer2,
+    icon: Sparkles,
     title: "Corrections always win",
-    body: "Rename, merge, or hide a block once. Daylens keeps your version.",
+    body: "Rename, merge, or remove a block once. Your version survives every rebuild.",
   },
-  {
-    icon: Search,
-    title: "Evidence before answers",
-    body: "AI reads the same blocks as Timeline and Apps. If the evidence is thin, it says so.",
-  },
-  {
-    icon: MonitorDown,
-    title: "Built for every desktop",
-    body: "Daylens is one product across macOS, Windows, and Linux.",
-  },
-];
+] as const;
 
-function Mark({ compact = false }: { compact?: boolean }) {
+const productRows = [
+  {
+    number: "01",
+    title: "A timeline that reads like your day",
+    body: "Blocks are named for what you did and sized by how long it took.",
+  },
+  {
+    number: "02",
+    title: "Every app, with the work inside it",
+    body: "Open any app to see the pages, sites, and intentions that filled the time.",
+  },
+  {
+    number: "03",
+    title: "Answers grounded in real evidence",
+    body: "Ask what got done, where the afternoon went, or when you last touched a project.",
+  },
+  {
+    number: "04",
+    title: "Wraps worth opening",
+    body: "Daily and weekly stories come from the same facts, with no scores or invented wins.",
+  },
+] as const;
+
+const comparisonRows = [
+  ["Groups by what you were doing", true, false, false],
+  ["Absorbs brief detours", true, false, false],
+  ["Keeps corrections after a rebuild", true, false, false],
+  ["Answers questions about the day", true, false, false],
+  ["Keeps tracked history on your computer", true, false, true],
+  ["Never scores or grades the day", true, false, false],
+] as const;
+
+const appLogos = [
+  ["chrome.svg", "Chrome"],
+  ["figma.svg", "Figma"],
+  ["slack.png", "Slack"],
+  ["vscode.ico", "Visual Studio Code"],
+  ["notion.svg", "Notion"],
+  ["claude.svg", "Claude"],
+] as const;
+
+function Wordmark() {
   return (
-    <span className={styles.mark} aria-hidden="true">
-      <span />
-      <span />
-      {!compact && <span />}
+    <span className={styles.wordmark}>
+      <span className={styles.lensMark} aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      Daylens
     </span>
   );
 }
 
-function SectionLabel({ number, children }: { number: string; children: React.ReactNode }) {
+function PillLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <div className={styles.sectionLabel}>
-      <span>{number}.</span>
-      <span>{children}</span>
-    </div>
+    <a className={styles.pillLink} href={href}>
+      {children}
+      <ArrowUpRight size={13} strokeWidth={2.2} />
+    </a>
   );
 }
 
-function ProductFrame({
+function ProductStage({
   src,
   alt,
   className = "",
@@ -124,358 +116,283 @@ function ProductFrame({
   priority?: boolean;
 }) {
   return (
-    <div className={`${styles.productFrame} ${className}`}>
-      <div className={styles.windowBar}>
-        <span />
-        <span />
-        <span />
-        <div>Daylens</div>
+    <div className={`${styles.productStage} ${className}`}>
+      <div className={styles.productShell}>
+        <div className={styles.productScreen}>
+          <Image
+            src={assetPath(src)}
+            alt={alt}
+            fill
+            priority={priority}
+            quality={95}
+            sizes="(max-width: 760px) 94vw, 907px"
+          />
+        </div>
       </div>
-      <Image
-        src={assetPath(src)}
-        alt={alt}
-        width={2538}
-        height={1802}
-        priority={priority}
-        quality={95}
-        sizes="(max-width: 900px) 94vw, 1280px"
-      />
     </div>
+  );
+}
+
+function SectionEyebrow({ children }: { children: React.ReactNode }) {
+  return <p className={styles.eyebrow}>{children}</p>;
+}
+
+function CheckCell({ value }: { value: boolean }) {
+  return value ? (
+    <span className={styles.checkCell} aria-label="Included">
+      <Check size={13} strokeWidth={2.3} />
+      <span>Yes</span>
+    </span>
+  ) : (
+    <span className={styles.emptyCell}>Not built for it</span>
   );
 }
 
 export function V2Landing() {
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.headerInner}>
+      <header className={styles.navigation}>
+        <div className={styles.navInner}>
           <Link href="/" className={styles.logo} aria-label="Daylens home">
-            <Mark />
-            <span>Daylens</span>
+            <Wordmark />
           </Link>
-          <nav className={styles.nav} aria-label="Main navigation">
+          <nav className={styles.navLinks} aria-label="Main navigation">
+            <a href="#benefits">Why Daylens</a>
             <a href="#product">Product</a>
-            <Link href="/docs">Docs</Link>
-            <Link href="/roadmap">Roadmap</Link>
-            <Link href="/changelog">Changelog</Link>
+            <a href="#how">How it works</a>
+            <a href="#privacy">Privacy</a>
           </nav>
-          <div className={styles.headerActions}>
-            <a className={styles.githubButton} href={GITHUB_URL} target="_blank" rel="noreferrer">
-              <Code2 size={16} />
-              <span>GitHub</span>
-            </a>
-          </div>
+          <PillLink href={MAC_DOWNLOAD_HREF}>Download</PillLink>
         </div>
       </header>
 
       <main>
         <section className={styles.hero}>
-          <div className={styles.heroRail}>
-            <div className={styles.heroCornerLeft} />
-            <div className={styles.heroCornerRight} />
-            <div className={styles.heroContent}>
-              <div className={styles.releasePill}>
-                <span>New</span>
-                Daylens v2 is taking shape
-                <ArrowRight size={13} />
+          <h1>See your whole day.</h1>
+          <ProductStage
+            src="/landing/v2/timeline-recap.png"
+            alt="Daylens showing a timeline of work blocks and a recap of the day"
+            className={styles.heroStage}
+            priority
+          />
+        </section>
+
+        <section className={styles.logoCloud} aria-label="Works across the apps you use">
+          <p>Across the apps that make up your day:</p>
+          <div className={styles.logoRow}>
+            {appLogos.map(([file, name]) => (
+              <div key={name} className={styles.appLogo}>
+                <Image
+                  src={assetPath(`/brands/${file}`)}
+                  alt={name}
+                  width={30}
+                  height={30}
+                />
+                <span>{name}</span>
               </div>
-              <h1>
-                Your day,
-                <br />
-                finally <em>makes sense</em>
-              </h1>
-              <p>
-                Daylens turns the work scattered across your computer into one clear, searchable memory.
-              </p>
-              <div className={styles.heroActions}>
-                <a className={styles.heroDownload} href={MAC_DOWNLOAD_HREF}>
-                  <Download size={17} />
-                  macOS
-                </a>
-                <a className={`${styles.heroDownload} ${styles.heroDownloadSecondary}`} href={WINDOWS_DOWNLOAD_HREF}>
-                  <Download size={17} />
-                  Windows
-                </a>
-                <a className={`${styles.heroDownload} ${styles.heroDownloadSecondary}`} href={LINUX_STATUS_HREF}>
-                  <Download size={17} />
-                  Linux
-                </a>
-              </div>
+            ))}
+          </div>
+        </section>
+
+        <section id="benefits" className={styles.benefitsSection}>
+          <div className={styles.benefitHeading}>
+            <SectionEyebrow>Why Daylens</SectionEyebrow>
+            <h2>The day, put back together.</h2>
+            <p>One calm picture of what you actually got done.</p>
+          </div>
+          <div className={styles.benefitGrid}>
+            {benefits.map(({ icon: Icon, title, body }) => (
+              <article key={title}>
+                <Icon size={23} strokeWidth={1.75} />
+                <h3>{title}</h3>
+                <p>{body}</p>
+              </article>
+            ))}
+          </div>
+          <div className={styles.dayRibbon} aria-hidden="true">
+            <div className={styles.ribbonSky} />
+            <div className={styles.ribbonGlow} />
+            <div className={styles.ribbonWaveOne} />
+            <div className={styles.ribbonWaveTwo} />
+            <div className={styles.ribbonWaveThree} />
+            <div className={styles.ribbonBlocks}>
+              <span><b>9:10</b> Building the new timeline</span>
+              <span><b>11:40</b> Research and notes</span>
+              <span><b>2:15</b> Reviewing the day</span>
             </div>
           </div>
         </section>
 
-        <section className={`${styles.rail} ${styles.proofSection}`}>
-          <div className={styles.cornerNodes} />
-          <div className={styles.proofIntro}>
+        <section id="product" className={styles.featureSection}>
+          <div className={styles.featureCopy}>
             <div>
-              <SectionLabel number="02">The promise</SectionLabel>
-              <h2>
-                Built for people who want to know
-                <br />
-                <em>where the day went</em>
-              </h2>
+              <h2>See the whole picture</h2>
+              <p>
+                Daylens turns the work scattered across your computer into one clear,
+                searchable memory.
+              </p>
             </div>
-            <p>
-              Daylens watches the shape of your work, then gives it back as blocks you can read, correct, and ask questions about.
-            </p>
-          </div>
-          <div className={styles.proofGrid}>
-            {proof.map((item, index) => (
-              <div key={item}>
-                <span className={styles.proofNumber}>0{index + 1}</span>
-                <Check size={18} />
-                <strong>{item}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section id="product" className={`${styles.rail} ${styles.stackSection}`}>
-          <div className={styles.centerHeading}>
-            <SectionLabel number="03">The whole day</SectionLabel>
-            <h2>
-              Everything to understand
-              <br />
-              <em>what you actually did</em>
-            </h2>
-          </div>
-          <div className={styles.surfaceTabs}>
-            {surfaces.map((surface, index) => (
-              <span key={surface.title} className={index === 0 ? styles.activeTab : undefined}>
-                {surface.title}
-              </span>
-            ))}
-          </div>
-          <div className={styles.surfaceGrid}>
-            {surfaces.map((surface, index) => {
-              const Icon = surface.icon;
-              return (
-                <article key={surface.title} className={styles.surfaceCard} data-accent={surface.accent}>
-                  <div className={styles.cardMeta}>VIEW. [0{index + 1}]</div>
-                  <Icon size={22} />
-                  <h3>{surface.title}</h3>
-                  <p>{surface.body}</p>
-                  <div className={styles.cardSketch}>
-                    <span />
-                    <span />
-                    <span />
+            <div className={styles.featureList}>
+              {productRows.map((row) => (
+                <article key={row.number}>
+                  <span>{row.number}</span>
+                  <div>
+                    <strong>{row.title}</strong>
+                    <p>{row.body}</p>
                   </div>
                 </article>
-              );
-            })}
+              ))}
+            </div>
+            <PillLink href={MAC_DOWNLOAD_HREF}>Get Daylens</PillLink>
+          </div>
+          <div className={styles.featureVisual}>
+            <div className={styles.visualOrbOne} />
+            <div className={styles.visualOrbTwo} />
+            <div className={styles.timelineCard}>
+              <div className={styles.timelineHeader}>
+                <span>Tuesday</span>
+                <strong>6h 24m</strong>
+              </div>
+              <div className={styles.timelineTrack}>
+                <span className={styles.timeNine}>9am</span>
+                <span className={styles.timeNoon}>noon</span>
+                <span className={styles.timeThree}>3pm</span>
+                <i className={styles.blockOne}><b>Building the new timeline</b><small>2h 18m</small></i>
+                <i className={styles.blockTwo}><b>Product research</b><small>1h 6m</small></i>
+                <i className={styles.blockThree}><b>Polishing the release</b><small>2h 12m</small></i>
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className={`${styles.rail} ${styles.thesisSection}`}>
-          <Mark compact />
+        <section className={styles.comparisonSection}>
+          <div className={styles.comparisonIntro}>
+            <SectionEyebrow>The difference</SectionEyebrow>
+            <h2>Why choose Daylens?</h2>
+            <p>Activity logs show the tools. Daylens remembers the work.</p>
+            <PillLink href={MAC_DOWNLOAD_HREF}>Download</PillLink>
+          </div>
+          <div className={styles.comparisonScroller}>
+            <div className={styles.comparisonTable} role="table" aria-label="Daylens feature comparison">
+              <div className={styles.tableHeader} role="row">
+                <div role="columnheader" />
+                <div className={styles.daylensColumn} role="columnheader"><Wordmark /></div>
+                <div role="columnheader">Activity logs</div>
+                <div role="columnheader">Manual timers</div>
+              </div>
+              {comparisonRows.map(([label, daylens, activity, timers]) => (
+                <div className={styles.tableRow} role="row" key={label}>
+                  <div role="rowheader">{label}</div>
+                  <div className={styles.daylensColumn} role="cell"><CheckCell value={daylens} /></div>
+                  <div role="cell"><CheckCell value={activity} /></div>
+                  <div role="cell"><CheckCell value={timers} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.principleSection}>
+          <div className={styles.principleArt} aria-hidden="true">
+            <div className={styles.principleHalo} />
+            <div className={styles.principleLens}>
+              <span />
+            </div>
+            <div className={styles.principleShadow} />
+          </div>
           <blockquote>
-            “Your tools are evidence. <em>Your work is the story.</em> Daylens keeps the two connected without confusing one for the other.”
+            “Your tools are evidence. Your work is the story. Daylens keeps the two
+            connected without confusing one for the other.”
+            <footer>
+              <strong>The Daylens principle</strong>
+              <span>One truth across Timeline, Apps, and AI</span>
+            </footer>
           </blockquote>
-          <p>One truth across Timeline, Apps, and AI</p>
         </section>
 
-        <section id="how-it-works" className={`${styles.rail} ${styles.transitionSection}`}>
-          <div className={styles.centerHeading}>
-            <SectionLabel number="04">One truth</SectionLabel>
-            <h2>
-              Designed around your intent,
-              <br />
-              <em>not your app history</em>
-            </h2>
+        <section id="how" className={styles.howSection}>
+          <div className={styles.howHeading}>
+            <h2>From activity to memory</h2>
+            <PillLink href={MAC_DOWNLOAD_HREF}>Get Daylens</PillLink>
           </div>
-          <div className={styles.transitionFrame}>
-            <ProductFrame
-              src="/landing/v2/timeline-recap.png"
-              alt="Daylens Timeline and day recap"
+          <div className={styles.steps}>
+            <article>
+              <span>01</span>
+              <div>
+                <h3>Capture quietly</h3>
+                <p>Daylens reads app, window, and browser metadata. No screenshots or video.</p>
+              </div>
+            </article>
+            <article>
+              <span>02</span>
+              <div>
+                <h3>Build the day</h3>
+                <p>Related activity becomes blocks based on what you were trying to do.</p>
+              </div>
+            </article>
+            <article>
+              <span>03</span>
+              <div>
+                <h3>Remember clearly</h3>
+                <p>Read the Timeline, open an app, or ask AI for the answer.</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="privacy" className={styles.showcaseSection}>
+          <div className={styles.showcaseBackdrop}>
+            <div className={styles.showcaseCopy}>
+              <span>Local by design</span>
+              <strong>Your history lives on your computer.</strong>
+              <p>AI receives only the resolved facts needed for the answer you asked for.</p>
+            </div>
+            <ProductStage
+              src="/landing/v2/timeline-week.png"
+              alt="Daylens week view showing work blocks across several days"
+              className={styles.showcaseProduct}
             />
           </div>
         </section>
 
-        <section className={styles.navyWorld}>
-          <div className={`${styles.rail} ${styles.navyIntro}`}>
-            <div className={styles.connector} />
-            <div className={styles.centerHeading}>
-              <SectionLabel number="05">The day, reconstructed</SectionLabel>
-              <h2>
-                See the work in the <em>Timeline</em>,
-                <br />
-                through <em>Apps</em>, or ask <em>AI</em>
-              </h2>
-            </div>
-            <div className={styles.darkSplit}>
-              <article>
-                <span className={styles.miniIcon}><Layers3 size={18} /></span>
-                <h3>One block for one stretch of intent</h3>
-                <p>Writing in Cursor, checking a reference in Dia, and replying in Slack can still be one piece of work.</p>
-                <ul>
-                  <li><Check size={15} /> Brief detours fold into the surrounding work</li>
-                  <li><Check size={15} /> Same-intent neighbours merge</li>
-                  <li><Check size={15} /> Block height always matches duration</li>
-                </ul>
-              </article>
-              <article>
-                <span className={styles.miniIcon}><Sparkles size={18} /></span>
-                <h3>A clear picture, from day to month</h3>
-                <p>Move from the exact shape of today to the larger threads carrying across your week.</p>
-                <ul>
-                  <li><Check size={15} /> Day, week, and month views</li>
-                  <li><Check size={15} /> Meaningful work stays connected</li>
-                  <li><Check size={15} /> Corrections survive every rebuild</li>
-                </ul>
-              </article>
-            </div>
-            <div className={styles.darkImagePair}>
-              <ProductFrame src="/landing/v2/timeline-detail.png" alt="Daylens block detail view" />
-              <ProductFrame src="/landing/v2/timeline-week.png" alt="Daylens week view" />
-            </div>
-          </div>
-
-          <div className={`${styles.rail} ${styles.navyQuote}`}>
-            <div className={styles.quoteLine} />
-            <blockquote>
-              The timeline is not a prettier activity log. It is the answer to one question: <em>what did I actually get done?</em>
-            </blockquote>
-            <Mark compact />
-          </div>
-
-          <div className={`${styles.rail} ${styles.capabilitiesSection}`}>
-            <div className={styles.centerHeading}>
-              <h2>
-                Everything you need
-                <br />
-                to <em>remember the work</em>
-              </h2>
-            </div>
-            <div className={styles.capabilityGrid}>
-              {[
-                ["Follow a project", "See the same thread return across the day or week."],
-                ["Open the evidence", "Inspect the apps and pages supporting every block."],
-                ["Correct the story", "Rename, merge, and hide without losing your changes."],
-                ["Ask naturally", "Use plain language instead of building reports and filters."],
-                ["Remember later", "Search the day you actually had, not the one you planned."],
-                ["Take it with you", "Export your history in useful, readable formats."],
-              ].map(([title, body], index) => (
-                <article key={title}>
-                  <span>MEM. [0{index + 1}]</span>
-                  <div className={styles.orbit}>
-                    <i />
-                    <i />
-                    <i />
-                  </div>
-                  <h3>{title}</h3>
-                  <p>{body}</p>
-                  <div><Check size={14} /> Built from the same block facts</div>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="privacy" className={`${styles.rail} ${styles.localSection}`}>
-          <div className={styles.localHeading}>
-            <div>
-              <SectionLabel number="06">Local by design</SectionLabel>
-              <h2>
-                Your history should help you,
-                <br />
-                <em>without owning you</em>
-              </h2>
-            </div>
-            <p>
-              Daylens starts with a local database and a visible evidence trail. Sync and AI sit on top of that foundation, never underneath it.
-            </p>
-          </div>
-          <div className={styles.localVisual}>
-            <div className={styles.dataBars}>
-              {Array.from({ length: 34 }, (_, index) => <span key={index} style={{ height: `${18 + ((index * 19) % 84)}%` }} />)}
-            </div>
-            <div className={styles.localStats}>
-              <div><span>Source of truth</span><strong>Your computer</strong></div>
-              <div><span>Background upload</span><strong>None</strong></div>
-              <div><span>Corrections</span><strong>Permanent</strong></div>
-            </div>
-            <ProductFrame src="/landing/v2/timeline-month.png" alt="Daylens month view" />
-          </div>
-        </section>
-
-        <section className={styles.blackWorld}>
-          <div className={`${styles.rail} ${styles.privacySection}`}>
-            <div className={styles.privacyHeading}>
-              <div>
-                <SectionLabel number="07">Yours, end to end</SectionLabel>
-                <h2>
-                  Private by default,
-                  <br />
-                  <em>useful out of the box</em>
-                </h2>
-              </div>
-              <a href="#download" className={styles.blueButton}>Get Daylens <ArrowRight size={16} /></a>
-            </div>
-            <div className={styles.privacyGrid}>
-              {privacyCards.map(({ icon: Icon, title, body }) => (
-                <article key={title}>
-                  <Icon size={24} />
-                  <h3>{title}</h3>
-                  <p>{body}</p>
-                </article>
-              ))}
-            </div>
-            <blockquote>
-              “A memory tool only earns its place when you can see what it knows, correct what it got wrong, and leave with your data.”
-            </blockquote>
-          </div>
-        </section>
-
-        <section id="download" className={`${styles.rail} ${styles.downloadSection}`}>
-          <SectionLabel number="08">Ready?</SectionLabel>
-          <h2>
-            Get a clearer picture
-            <br />
-            <em>of your day</em>
-          </h2>
-          <div className={styles.downloadButtons}>
-            <a className={styles.platformButton} href={MAC_DOWNLOAD_HREF}><Download size={16} /> macOS <ArrowRight size={16} /></a>
-            <a className={`${styles.platformButton} ${styles.platformButtonSecondary}`} href={WINDOWS_DOWNLOAD_HREF}><Download size={16} /> Windows <ArrowRight size={16} /></a>
-            <a className={`${styles.platformButton} ${styles.platformButtonSecondary}`} href={LINUX_STATUS_HREF}><Download size={16} /> Linux <ArrowRight size={16} /></a>
-          </div>
-        </section>
-
-        <section className={`${styles.rail} ${styles.gallerySection}`}>
-          <SectionLabel number="09">The product</SectionLabel>
-          <h2>
-            One day,
-            <br />
-            <em>seen from every angle</em>
-          </h2>
-          <div className={styles.galleryFrame}>
-            <ProductFrame src="/hackathon/03-apps-all.png" alt="Daylens Apps view" />
-          </div>
-          <div className={styles.galleryLogos}>
-            <span>Timeline</span>
-            <span>Apps</span>
-            <span>AI</span>
-            <span>Wraps</span>
-          </div>
+        <section className={styles.ctaSection}>
+          <h2>Make sense of the day</h2>
+          <p>Start with the work already happening on your computer.</p>
+          <a className={styles.ctaButton} href={MAC_DOWNLOAD_HREF}>
+            Download Daylens for macOS
+            <ArrowRight size={15} />
+          </a>
         </section>
       </main>
 
-      <footer className={`${styles.rail} ${styles.footer}`}>
-        <div className={styles.footerTop}>
-          <Link href="/" className={styles.logo}><Mark /><span>Daylens</span></Link>
-          <div>
-            <a href={GITHUB_URL} target="_blank" rel="noreferrer">GitHub</a>
+      <footer className={styles.footer}>
+        <div className={styles.footerLinks}>
+          <nav aria-label="Footer navigation">
+            <a href="#benefits">Why Daylens</a>
+            <a href="#product">Product</a>
+            <a href="#how">How it works</a>
             <Link href="/docs">Docs</Link>
-            <Link href="/roadmap">Roadmap</Link>
-            <Link href="/changelog">Changelog</Link>
-          </div>
+          </nav>
+          <a
+            className={styles.githubLink}
+            href={UNIFIED_DESKTOP_REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Code2 size={15} /> GitHub
+          </a>
         </div>
-        <div className={styles.footerWordmark}>daylens</div>
-        <div className={styles.footerBottom}>
+        <div className={styles.footerCredits}>
+          <Wordmark />
+          <span>© {new Date().getFullYear()}</span>
           <span>Built in Rwanda</span>
-          <span>Local first, open source</span>
         </div>
       </footer>
+
+      <div className={styles.mobileDock}>
+        <a href={MAC_DOWNLOAD_HREF}>Download</a>
+        <a href="#product" aria-label="See the product"><MessageCircleMore size={17} /></a>
+      </div>
     </div>
   );
 }

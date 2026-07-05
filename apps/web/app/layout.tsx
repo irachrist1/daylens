@@ -1,5 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import {
+  Crimson_Text,
+  DM_Sans,
+  Inter,
+  Instrument_Serif,
+  JetBrains_Mono,
+  Roboto_Mono,
+} from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import "./public-v2.css";
@@ -21,6 +28,22 @@ const instrumentSerif = Instrument_Serif({
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
+  subsets: ["latin"],
+});
+
+const landingSans = DM_Sans({
+  variable: "--font-landing-sans",
+  subsets: ["latin"],
+});
+
+const landingSerif = Crimson_Text({
+  variable: "--font-landing-serif",
+  subsets: ["latin"],
+  weight: ["400", "600"],
+});
+
+const landingMono = Roboto_Mono({
+  variable: "--font-landing-mono",
   subsets: ["latin"],
 });
 
@@ -59,7 +82,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${inter.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable} ${landingSans.variable} ${landingSerif.variable} ${landingMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-surface text-on-surface font-sans">
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>

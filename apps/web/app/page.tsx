@@ -4,13 +4,13 @@ import { V2Landing } from "./landing/V2Landing";
 import { appPath, assetPath } from "@/app/lib/basePath";
 
 export const metadata: Metadata = {
-  title: "Daylens | Your day, finally makes sense",
+  title: "Daylens | See your whole day",
   description:
-    "Daylens turns the work scattered across your computer into one clear, searchable memory.",
+    "Daylens turns the work scattered across your computer into one clear, searchable memory of what you actually got done.",
   openGraph: {
-    title: "Daylens | Your day, finally makes sense",
+    title: "Daylens | See your whole day",
     description:
-      "Turn the work scattered across your computer into one clear, searchable memory.",
+      "Turn the work scattered across your computer into one clear, searchable memory of what you actually got done.",
     url: "/daylens",
     images: [
       {
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Daylens | Your day, finally makes sense",
+    title: "Daylens | See your whole day",
     description:
       "A local-first memory for the work you do on your computer.",
     images: [assetPath("/hackathon/01-timeline-day.png")],
