@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "daylens-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "autoPort": false
+    },
+    {
+      "name": "marketing-site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "/Users/christiantonny/Documents/Personal/daylens/website", "-l", "4321"],
+      "port": 4321
+    }
+  ]
+}

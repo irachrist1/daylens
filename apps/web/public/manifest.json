@@ -1,0 +1,15 @@
+{
+  "name": "Daylens",
+  "short_name": "Daylens",
+  "description": "Your activity companion — view desktop usage insights on any device",
+  "theme_color": "#141210",
+  "background_color": "#141210",
+  "display": "standalone",
+  "start_url": "/daylens/dashboard",
+  "scope": "/daylens/",
+  "icons": [
+    { "src": "/daylens/app-icon.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/daylens/app-icon.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/daylens/app-icon.png", "sizes": "any", "type": "image/png", "purpose": "maskable" }
+  ]
+}

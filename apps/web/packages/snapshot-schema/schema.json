@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "deviceId": "9d4e7f5b-7c6a-4e2c-b7f8-7f14f7b7bb1d",
+  "platform": "macos",
+  "date": "2026-03-21",
+  "generatedAt": "2026-03-21T14:05:12-07:00",
+  "isPartialDay": true,
+  "focusScore": 74,
+  "focusSeconds": 12600,
+  "appSummaries": [
+    { "appKey": "cursor", "displayName": "Cursor", "category": "development", "totalSeconds": 12600, "sessionCount": 18 },
+    { "appKey": "slack", "displayName": "Slack", "category": "communication", "totalSeconds": 2400, "sessionCount": 12 }
+  ],
+  "categoryTotals": [
+    { "category": "development", "totalSeconds": 12600 },
+    { "category": "communication", "totalSeconds": 2400 }
+  ],
+  "timeline": [
+    { "appKey": "cursor", "startAt": "2026-03-21T08:58:00-07:00", "endAt": "2026-03-21T10:34:00-07:00" },
+    { "appKey": "slack", "startAt": "2026-03-21T10:34:00-07:00", "endAt": "2026-03-21T10:42:00-07:00" }
+  ],
+  "topDomains": [
+    { "domain": "github.com", "seconds": 1800, "category": "development" },
+    { "domain": "claude.ai", "seconds": 900, "category": "aiTools" }
+  ],
+  "categoryOverrides": {
+    "com.tinyspeck.slackmacgap": "communication"
+  },
+  "aiSummary": null,
+  "focusSessions": [
+    {
+      "sourceId": "uuid",
+      "startAt": "2026-03-21T09:00:00-07:00",
+      "endAt": "2026-03-21T10:30:00-07:00",
+      "actualDurationSec": 5400,
+      "targetMinutes": 90,
+      "status": "completed"
+    }
+  ]
+}

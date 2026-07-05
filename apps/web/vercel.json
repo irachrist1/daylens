@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://christian-tonny.dev/daylens",
+      "permanent": false
+    }
+  ]
+}
