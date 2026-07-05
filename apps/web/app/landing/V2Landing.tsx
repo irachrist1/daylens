@@ -155,16 +155,16 @@ export function V2Landing() {
           </Link>
           <nav className={styles.nav} aria-label="Main navigation">
             <a href="#product">Product</a>
-            <a href="#how-it-works">How it works</a>
-            <a href="#privacy">Privacy</a>
             <Link href="/docs">Docs</Link>
+            <Link href="/roadmap">Roadmap</Link>
+            <Link href="/changelog">Changelog</Link>
           </nav>
           <div className={styles.headerActions}>
             <a className={styles.githubButton} href={GITHUB_URL} target="_blank" rel="noreferrer">
               <Code2 size={16} />
               <span>GitHub</span>
             </a>
-            <a className={styles.primaryButton} href={MAC_DOWNLOAD_HREF}>
+            <a className={styles.primaryButton} href="#download">
               Download
               <ArrowRight size={16} />
             </a>
@@ -194,11 +194,15 @@ export function V2Landing() {
               <div className={styles.heroActions}>
                 <a className={styles.heroDownload} href={MAC_DOWNLOAD_HREF}>
                   <Download size={17} />
-                  Download for Mac
-                  <ArrowRight size={17} />
+                  macOS
                 </a>
-                <a href="#product" className={styles.textButton}>
-                  See how it works
+                <a className={`${styles.heroDownload} ${styles.heroDownloadSecondary}`} href={WINDOWS_DOWNLOAD_HREF}>
+                  <Download size={17} />
+                  Windows
+                </a>
+                <a className={`${styles.heroDownload} ${styles.heroDownloadSecondary}`} href={LINUX_STATUS_HREF}>
+                  <Download size={17} />
+                  Linux
                 </a>
               </div>
             </div>
@@ -442,9 +446,9 @@ export function V2Landing() {
             <em>of your day</em>
           </h2>
           <div className={styles.downloadButtons}>
-            <a className={styles.primaryButton} href={MAC_DOWNLOAD_HREF}>Download for Mac <ArrowRight size={16} /></a>
-            <a href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
-            <a href={LINUX_STATUS_HREF}>Linux</a>
+            <a className={styles.platformButton} href={MAC_DOWNLOAD_HREF}><Download size={16} /> macOS <ArrowRight size={16} /></a>
+            <a className={`${styles.platformButton} ${styles.platformButtonSecondary}`} href={WINDOWS_DOWNLOAD_HREF}><Download size={16} /> Windows <ArrowRight size={16} /></a>
+            <a className={`${styles.platformButton} ${styles.platformButtonSecondary}`} href={LINUX_STATUS_HREF}><Download size={16} /> Linux <ArrowRight size={16} /></a>
           </div>
         </section>
 

@@ -98,7 +98,7 @@
 .heroContent > p { max-width: 620px; margin: 0 auto; color: #c7ccef; font-size: 18px; line-height: 1.6; }
 .heroActions { margin-top: 36px; display: flex; align-items: center; justify-content: center; gap: 18px; }
 .heroDownload { min-height: 58px; padding: 0 24px; display: inline-flex; align-items: center; gap: 12px; border: 5px solid white; border-radius: 999px; background: white; color: #151a48 !important; box-shadow: inset 0 0 0 1px #dde0ee; font-size: 14px; font-weight: 700; }
-.heroDownload svg:last-child { padding: 9px; box-sizing: content-box; border-radius: 50%; background: var(--blue); color: white; }
+.heroDownloadSecondary { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: white !important; box-shadow: none; backdrop-filter: blur(12px); }
 .textButton { color: #d9defe !important; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,.35); padding: 8px 0; }
 .heroFrameWrap { position: absolute; z-index: 3; left: 7%; right: 7%; top: 620px; }
 
@@ -201,7 +201,9 @@
 .privacySection blockquote { max-width: 930px; margin: 140px auto 0; font-family: var(--font-serif), Georgia, serif; font-size: clamp(34px, 4vw, 55px); line-height: 1.18; color: #aaa; }.privacySection blockquote::first-line { color: white; }
 
 .downloadSection { min-height: 760px; padding: 160px 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-.downloadSection .sectionLabel { justify-content: center; }.downloadButtons { margin-top: 48px; display: flex; align-items: center; gap: 16px; }.downloadButtons > a:not(.primaryButton) { padding: 12px 4px; border-bottom: 1px solid #c5c5ca; font-size: 13px; }
+.downloadSection .sectionLabel { justify-content: center; }.downloadButtons { margin-top: 48px; display: flex; align-items: center; gap: 12px; }
+.platformButton { min-height: 48px; padding: 0 20px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; border-radius: 999px; background: var(--blue); color: white !important; font-size: 13px; font-weight: 700; }
+.platformButtonSecondary { color: var(--ink) !important; border: 1px solid #dedfe5; background: white; }
 
 .gallerySection { padding: 150px 90px 180px; text-align: center; border-top: 1px solid var(--line); }.gallerySection .sectionLabel { justify-content: center; }
 .galleryFrame { margin: 100px auto 0; max-width: 1120px; }.galleryLogos { margin-top: 60px; display: grid; grid-template-columns: repeat(4, 1fr); color: #a0a1a8; font-family: var(--font-serif), Georgia, serif; font-size: 22px; }
@@ -219,7 +221,7 @@
 
 @media (max-width: 640px) {
   .header { height: 76px; }.headerInner { width: calc(100% - 28px); }.headerActions .githubButton { display: none; }.primaryButton { padding-inline: 15px; }
-  .hero { padding-bottom: 80px; }.heroRail { min-height: 650px; border-radius: 28px; background-size: 42px 42px; }.heroContent { padding-top: 70px; }.hero h1 { margin-top: 32px; font-size: 54px; }.heroContent > p { font-size: 15px; }.heroActions { flex-direction: column; }.textButton { display: none; }.heroFrameWrap { top: 500px; left: 12px; right: 12px; }.windowBar { height: 22px; }.windowBar div { display: none; }
+  .hero { padding-bottom: 100px; }.heroRail { min-height: 790px; border-radius: 28px; background-size: 42px 42px; }.heroContent { padding-top: 70px; }.hero h1 { margin-top: 32px; font-size: 54px; }.heroContent > p { font-size: 15px; }.heroActions { flex-direction: column; }.textButton { display: none; }.heroFrameWrap { top: 650px; left: 12px; right: 12px; }.windowBar { height: 22px; }.windowBar div { display: none; }
   .rail { width: calc(100% - 16px); background-size: 42px 42px; }.proofSection, .stackSection, .thesisSection, .transitionSection, .navyIntro, .navyQuote, .capabilitiesSection, .localSection, .privacySection, .gallerySection, .footer { padding-left: 20px; padding-right: 20px; }
   .proofSection { padding-top: 110px; padding-bottom: 100px; }.sectionLabel { margin-bottom: 28px; }.proofIntro h2, .centerHeading h2, .localHeading h2, .privacyHeading h2, .downloadSection h2, .gallerySection > h2 { font-size: 41px; }
   .proofGrid, .surfaceGrid, .privacyGrid { grid-template-columns: 1fr; }.proofGrid { margin-top: 60px; }.surfaceTabs { grid-template-columns: repeat(2, 1fr); border-radius: 20px; }.surfaceCard { min-height: 390px; }.thesisSection { min-height: 530px; }.thesisSection blockquote { font-size: 34px; }.thesisSection > p { margin-left: 0; }

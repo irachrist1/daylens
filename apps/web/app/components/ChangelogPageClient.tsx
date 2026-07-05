@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { generatedChangelogData } from "../changelog/generatedChangelogData";
 import { MarketingFooter, MarketingInnerNav } from "./MarketingChrome";
-import { MarketingCursor } from "./MarketingEffects";
 
 type SurfaceRecord = (typeof generatedChangelogData.surfaces)[number];
 type SurfaceId = SurfaceRecord["id"];
@@ -116,8 +115,7 @@ export function ChangelogPageClient() {
   const releases = surface.releases as readonly ReleaseRecord[];
 
   return (
-    <div className="lp lp-ray-changelog-page">
-      <MarketingCursor />
+    <div className="lp lp-ray-changelog-page v2-public-page v2-changelog-page">
       <MarketingInnerNav current="changelog" theme="light" variant="capsule" />
 
       <main className="lp-ray-changelog-main">

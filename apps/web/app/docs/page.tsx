@@ -1,5 +1,4 @@
 import { MarketingFooter, MarketingInnerNav } from "../components/MarketingChrome";
-import { MarketingCursor } from "../components/MarketingEffects";
 import {
   LINUX_STATUS_HREF,
   UNIFIED_DESKTOP_ISSUES_URL,
@@ -27,8 +26,7 @@ const TOC = [
 
 export default function DocsPage() {
   return (
-    <div className="lp">
-      <MarketingCursor />
+    <div className="lp v2-public-page v2-docs-page">
       <MarketingInnerNav current="docs" theme="light" variant="capsule" />
 
       <section className="lp-docs-hero">

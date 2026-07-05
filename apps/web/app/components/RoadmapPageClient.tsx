@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MarketingFooter, MarketingInnerNav } from "./MarketingChrome";
-import { MarketingCursor } from "./MarketingEffects";
 
 type RoadmapStatus =
   | "Shipped"
@@ -489,8 +488,7 @@ export function RoadmapPageClient() {
   }
 
   return (
-    <div className="lp lp-ray-board-page">
-      <MarketingCursor />
+    <div className="lp lp-ray-board-page v2-public-page v2-roadmap-page">
       <MarketingInnerNav current="roadmap" theme="light" variant="capsule" />
 
       <main className="lp-ray-board-main">
