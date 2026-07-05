@@ -22,7 +22,7 @@ import type {
   WorkBlockSummary,
   WorkstreamRollup,
   WorkspaceLivePresence,
-} from "../packages/remote-contract/index";
+} from "@daylens/remote-contract";
 import {
   remoteSyncPayloadValidator,
   syncFailureSummaryValidator,
@@ -126,6 +126,17 @@ function looksLikeUnknownLabel(value: string | null | undefined) {
     /^[a-z]$/.test(normalized) ||
     /^pid-\d+$/.test(normalized)
   );
+}
+
+function looksLikePageTitleLeak(value: string | null | undefined) {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  if (!normalized) return false;
+  if (/(\s[|•·]\s.*\s[|•·]\s)/.test(value ?? "")) return true;
+  if (/\b(youtube|x\.com|twitter|instagram|reddit|tiktok|facebook|linkedin)\b/.test(normalized)) return true;
+  if (/\b(home|for you|feed|explore|notifications|watch|shorts|reels|login|sign in|new tab)\b/.test(normalized) && normalized.length <= 48) {
+    return true;
+  }
+  return false;
 }
 
 function titleCaseWords(value: string) {
@@ -238,7 +249,8 @@ function sanitizeBlockLabel(
   if (
     normalized &&
     !looksLikeRawPath(normalized) &&
-    !looksLikeUnknownLabel(normalized)
+    !looksLikeUnknownLabel(normalized) &&
+    !looksLikePageTitleLeak(normalized)
   ) {
     return normalized;
   }

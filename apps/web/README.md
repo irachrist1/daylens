@@ -2,10 +2,8 @@
 
 Marketing site and optional browser-access surfaces for Daylens.
 
-This repo is not the product source of truth. The unified cross-platform product,
-launch status, and canonical docs now live in:
-
-- [daylens](https://github.com/irachrist1/daylens)
+This app lives at `apps/web` in the Daylens monorepo. The repository root is the
+product source of truth for shared contracts, product documentation, and releases.
 
 ## What lives here
 
@@ -30,6 +28,9 @@ Build for production:
 ```bash
 npm run build
 ```
+
+From the monorepo root, use `npm run web:dev`, `npm run web:typecheck`, or
+`npm run web:build`.
 
 ## Launch truthfulness rules
 

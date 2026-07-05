@@ -1,6 +1,6 @@
 import Link from "next/link";
-import type { DaySnapshot, DaySnapshotV2 } from "../../packages/remote-contract";
-import { isSnapshotV2 } from "../../packages/remote-contract";
+import type { DaySnapshot, DaySnapshotV2 } from "@daylens/remote-contract";
+import { isSnapshotV2 } from "@daylens/remote-contract";
 import { TimelineSurface } from "@/app/components/TimelineSurface";
 
 export type SnapshotShape = Record<string, unknown> & {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConvexClient } from "@/app/lib/convex";
+import { normalizeChatMessages, toModelMessages } from "@/app/lib/chat";
 import { getSession } from "@/app/lib/session";
 import { api } from "../../../convex/_generated/api";
 
@@ -12,6 +13,7 @@ type ChatErrorCode =
   | "rate_limited"
   | "model_not_allowed"
   | "service_updating"
+  | "invalid_request"
   | "unknown";
 
 type ChatRange = "day" | "week" | "month";
@@ -32,6 +34,8 @@ function statusForCode(code: ChatErrorCode): number {
       return 400;
     case "service_updating":
       return 503;
+    case "invalid_request":
+      return 400;
     default:
       return 500;
   }
@@ -43,31 +47,44 @@ export async function POST(request: NextRequest) {
     return errorResponse("not_authenticated", "Not authenticated", 401);
   }
 
-  const body = await request.json();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("invalid_request", "Invalid JSON request body.", 400);
+  }
+  if (!body || typeof body !== "object") {
+    return errorResponse("invalid_request", "Invalid chat request body.", 400);
+  }
+  const payload = body as Record<string, unknown>;
   const threadId =
-    typeof body.threadId === "string" && body.threadId.trim()
-      ? body.threadId.trim()
+    typeof payload.threadId === "string" && payload.threadId.trim()
+      ? payload.threadId.trim()
       : undefined;
   const model =
-    typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+    typeof payload.model === "string" && payload.model.trim() ? payload.model.trim() : undefined;
 
   let question: string | undefined;
   let date: string | undefined;
   let range: ChatRange | undefined;
+  let messages: ReturnType<typeof toModelMessages> | undefined;
 
-  if (Array.isArray(body.messages)) {
-    const lastUserMsg = [...body.messages]
+  if (Array.isArray(payload.messages)) {
+    const normalizedMessages = normalizeChatMessages(payload.messages);
+    messages = toModelMessages(normalizedMessages);
+    const lastUserMsg = [...normalizedMessages]
       .reverse()
-      .find((m: { role: string; content?: string }) => m.role === "user");
+      .find((m) => m.role === "user");
     question = lastUserMsg?.content;
-    date = body.date;
-    range = body.range === "week" || body.range === "month" ? body.range : "day";
+    date = typeof payload.date === "string" ? payload.date : undefined;
+    range = payload.range === "week" || payload.range === "month" ? payload.range : "day";
   } else {
-    question = body.question;
-    date = body.date;
-    range = body.range === "week" || body.range === "month" ? body.range : "day";
+    question = typeof payload.question === "string" ? payload.question : undefined;
+    date = typeof payload.date === "string" ? payload.date : undefined;
+    range = payload.range === "week" || payload.range === "month" ? payload.range : "day";
   }
 
+  question = question?.trim();
   if (!question) {
     return errorResponse("empty_question", "Please type a question.", 400);
   }
@@ -93,6 +110,7 @@ export async function POST(request: NextRequest) {
       range,
       threadId,
       model,
+      messages,
     });
 
     if (!result.ok) {

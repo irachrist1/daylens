@@ -59,6 +59,14 @@ const FOCUSED_CATEGORIES = new Set([
   "aiTools",
 ]);
 
+export const REMOTE_CONTEXT_CHAR_CAP = 32_000;
+
+export function capContextBlock(value: string, cap = REMOTE_CONTEXT_CHAR_CAP): string {
+  if (value.length <= cap) return value;
+  const note = "\n\n[context truncated — oldest evidence omitted to stay within the remote AI budget]\n";
+  return `${value.slice(0, Math.max(0, cap - note.length))}${note}`;
+}
+
 // ─── Context builder ────────────────────────────────────────────────
 
 export function buildDayContext(snapshot: DaySnapshot): string {
@@ -220,7 +228,7 @@ export function buildDayContext(snapshot: DaySnapshot): string {
     context += "\n";
   }
 
-  return context;
+  return capContextBlock(context);
 }
 
 export function buildRangeContext(
@@ -315,7 +323,7 @@ export function buildRangeContext(
   });
   context += "\n";
 
-  return context;
+  return capContextBlock(context);
 }
 
 // ─── Prompt templates (matching macOS exactly) ──────────────────────

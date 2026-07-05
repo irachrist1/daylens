@@ -1,12 +1,12 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { DaySnapshot, Platform } from "../packages/snapshot-schema/snapshot";
 import type {
   RemoteSyncPayload,
   WorkspaceLivePresence,
-} from "../packages/remote-contract/index";
+} from "@daylens/remote-contract";
 
 const http = httpRouter();
 const DESKTOP_PLATFORMS = new Set<Platform>(["macos", "windows", "linux"]);
@@ -438,6 +438,64 @@ http.route({
       });
       return jsonResponse({ error: "Remote day sync failed" }, 500);
     }
+  }),
+});
+
+http.route({
+  // R6: desktop AI surfaces (app narrative, week review, day summary) generate
+  // here using the workspace Anthropic key, so a user without a local key still
+  // gets summaries. Bearer-token authenticated like the other /remote routes.
+  path: "/remote/aiSurfaceSummary",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      return jsonResponse({ error: "Not authenticated" }, 401);
+    }
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ error: "Invalid JSON request body." }, 400);
+    }
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const system = typeof payload.system === "string" ? payload.system : "";
+    const userContent = typeof payload.userContent === "string" ? payload.userContent : "";
+    const maxTokens = typeof payload.maxTokens === "number" ? payload.maxTokens : undefined;
+    const model = typeof payload.model === "string" ? payload.model : undefined;
+
+    if (!system.trim() || !userContent.trim()) {
+      return jsonResponse({ error: "Missing prompt." }, 400);
+    }
+
+    const result = await ctx.runAction(api.ai.generateSurfaceSummary, {
+      system,
+      userContent,
+      maxTokens,
+      model,
+    });
+
+    if (!result.ok) {
+      const status =
+        result.code === "billing_exhausted"
+          ? 402
+          : result.code === "rate_limited"
+            ? 429
+            : result.code === "service_updating"
+              ? 503
+              : result.code === "no_data" ||
+                  result.code === "missing_key" ||
+                  result.code === "model_not_allowed"
+                ? 400
+                : 500;
+      return jsonResponse({ error: result.message, code: result.code }, status);
+    }
+
+    return jsonResponse(
+      { text: result.text, provider: result.provider, model: result.model },
+      200,
+    );
   }),
 });
 

@@ -27,7 +27,7 @@ function DomainFavicon({ domain }: { domain: string }) {
     />
   );
 }
-import type { DaySnapshotV2 } from "../../packages/remote-contract";
+import type { DaySnapshotV2 } from "@daylens/remote-contract";
 import { AppIcon } from "@/app/components/AppIcon";
 import { apiPath } from "@/app/lib/basePath";
 import { CATEGORY_COLORS, CATEGORY_LABELS, formatDuration } from "@/app/lib/format";
@@ -40,7 +40,7 @@ import {
   type SurfaceRange,
 } from "@/app/lib/range";
 import { buildAppDetail, mergeDaySnapshots, readableAppSummary, trackedSeconds } from "@/app/lib/presentation";
-import { isSnapshotV2 } from "../../packages/remote-contract";
+import { isSnapshotV2 } from "@daylens/remote-contract";
 
 interface SnapshotDoc {
   snapshot: DaySnapshotV2;

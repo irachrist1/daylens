@@ -12,7 +12,7 @@ import {
   createWorkspaceThreadId,
   type WorkspaceAIMessage,
   type WorkspaceAIThread,
-} from "../packages/remote-contract/index";
+} from "@daylens/remote-contract";
 
 function normalizeThreadTitle(title?: string | null) {
   const trimmed = title?.trim();

@@ -1,1 +1,1 @@
-export * from "../remote-contract/index";
+export * from "@daylens/remote-contract";

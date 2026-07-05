@@ -1,8 +1,8 @@
 # Daylens Web — Implementation Snapshot
 
-This document describes the current `daylens-web` implementation snapshot.
+This document describes the current `apps/web` implementation snapshot.
 
-It is not the planning source of truth for the remote companion. Product and architecture decisions now live in the unified `daylens` repo:
+It is not the planning source of truth for the remote companion. Product and architecture decisions live at the Daylens monorepo root:
 
 - `docs/PRD.md`
 - `docs/SRS.md`
@@ -10,9 +10,9 @@ It is not the planning source of truth for the remote companion. Product and arc
 
 If this file and those planning docs disagree, the planning docs win.
 
-## What `daylens-web` Is
+## What `apps/web` Is
 
-`daylens-web` is the web companion for Daylens. It is not a standalone tracker and it is not a browser-first SaaS dashboard.
+`apps/web` is the web companion for Daylens. It is not a standalone tracker and it is not a browser-first SaaS dashboard.
 
 Today it contains three responsibilities:
 
@@ -44,8 +44,8 @@ Daylens currently spans a unified desktop repo plus a small set of companion or 
 
 | Repo | Responsibility |
 |------|----------------|
-| `daylens` | canonical product contract, desktop capture, SQLite persistence, sync export, local AI orchestration |
-| `daylens-web` | linked web UI, marketing/docs routes, Convex backend, web session/auth flow |
+| repository root | canonical product contract, desktop capture, SQLite persistence, sync export, local AI orchestration |
+| `apps/web` | linked web UI, marketing/docs routes, Convex backend, web session/auth flow |
 | `daylens-linux` | public transition repo pointing contributors back to `daylens` |
 | `daylens-swiftUI` | legacy archived prototype |
 
@@ -61,7 +61,7 @@ Web redeems a link code through a Next.js route, receives a session token, and s
 
 The current launch-foundation sync path is contract-driven and limited to the approved cloud boundary:
 
-- `daylens` and `daylens-web` share a versioned `packages/remote-contract`
+- desktop and `apps/web` share the canonical `packages/remote-contract`
 - desktop emits `/remote/heartbeat` roughly every 15 seconds with `workspace_live_presence`
 - desktop emits `/remote/syncDay` on startup, on a periodic current-day cadence, and on tracking-driven dirty-day flushes
 - desktop now keeps heartbeat freshness separate from durable day-sync success/failure, so a fresh heartbeat does not clear a failed current-day sync
@@ -169,8 +169,8 @@ These are the main reasons `daylens-web` is not yet a finished remote companion:
 
 Current reality:
 
-- `daylens` and `daylens-web` are separate repos
-- `daylens-web` deploys Next.js and Convex separately
+- desktop and web now share the Daylens monorepo
+- `apps/web` deploys Next.js and Convex as the remote companion
 - production issues can happen if the frontend expects Convex functions that are not deployed yet
 
 Approved direction from the planning docs:

@@ -41,8 +41,7 @@ function readContractState(repoRoot) {
 }
 
 export function checkRemoteContract({
-  repoRoot = process.cwd(),
-  siblingRepo = process.env.DAYLENS_CONTRACT_REPO || "../daylens",
+  repoRoot = path.resolve(process.cwd(), "../.."),
 } = {}) {
   const local = readContractState(repoRoot);
 
@@ -56,26 +55,6 @@ export function checkRemoteContract({
     throw new Error(
       `Remote contract version mismatch: source=${local.sourceVersion}, manifest=${local.manifest.contractVersion}`
     );
-  }
-
-  const siblingRoot = path.resolve(repoRoot, siblingRepo);
-  const siblingSourcePath = path.join(siblingRoot, "packages/remote-contract/index.ts");
-  const siblingManifestPath = path.join(siblingRoot, "packages/remote-contract/manifest.json");
-
-  if (fs.existsSync(siblingSourcePath) && fs.existsSync(siblingManifestPath)) {
-    const sibling = readContractState(siblingRoot);
-
-    if (JSON.stringify(sibling.manifest) !== JSON.stringify(local.manifest)) {
-      throw new Error(
-        `Remote contract manifest drift detected.\nlocal: ${JSON.stringify(local.manifest)}\nsibling: ${JSON.stringify(sibling.manifest)}`
-      );
-    }
-
-    if (sibling.source !== local.source) {
-      throw new Error(
-        `Remote contract source drift detected.\nlocal: ${local.sourcePath} (${local.sourceHash})\nsibling: ${sibling.sourcePath} (${sibling.sourceHash})`
-      );
-    }
   }
 
   return {

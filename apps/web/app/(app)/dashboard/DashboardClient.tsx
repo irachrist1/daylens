@@ -14,8 +14,8 @@ import {
   todayLocalDate,
   type SurfaceRange,
 } from "@/app/lib/range";
-import type { DaySnapshot, DaySnapshotV2 } from "../../../packages/remote-contract";
-import { isSnapshotV2 } from "../../../packages/remote-contract";
+import type { DaySnapshot, DaySnapshotV2 } from "@daylens/remote-contract";
+import { isSnapshotV2 } from "@daylens/remote-contract";
 
 interface SnapshotDoc {
   snapshot: DaySnapshot;

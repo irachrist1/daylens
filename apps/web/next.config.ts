@@ -1,9 +1,13 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const basePath = process.env.NODE_ENV === "production" ? "/daylens" : "";
 
 const nextConfig: NextConfig = {
   basePath,
+  turbopack: {
+    root: path.resolve(__dirname, "../.."),
+  },
   images: {
     qualities: [75, 95],
   },

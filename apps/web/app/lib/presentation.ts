@@ -4,7 +4,7 @@ import type {
   RecapSummaryLite,
   TopDomain,
   WorkBlockSummary,
-} from "../../packages/remote-contract";
+} from "@daylens/remote-contract";
 import { formatDisplayAppName, formatVisibleAppName } from "@/app/lib/apps";
 
 export type VisibleAppUsage = {
@@ -167,6 +167,10 @@ export function mergeDaySnapshots(snapshots: DaySnapshotV2[], anchorDate: string
 
 const PATHLIKE_RE =
   /(^[a-z]:[\\/])|(^\/(users|home|var|tmp|private|system|applications)\b)|(^~\/)|([\\/][^\\/\s]+[\\/])/i;
+const PAGE_TITLE_SOUP_RE =
+  /(\s[|•·]\s.*\s[|•·]\s)|(\b(youtube|x\.com|twitter|instagram|reddit|tiktok|facebook|linkedin)\b.*\s[|•·-]\s)|(\s[|•·-]\s\b(youtube|x\.com|twitter|instagram|reddit|tiktok|facebook|linkedin)\b)/i;
+const LOW_VALUE_TITLE_RE =
+  /\b(home|for you|feed|explore|notifications|messages|watch|shorts|reels|login|sign in|new tab|search)\b/i;
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -183,6 +187,8 @@ export function looksLowValueLabel(value: string | null | undefined): boolean {
   if (!hasVisibleLetters(trimmed)) return true;
   if (trimmed.length <= 1) return true;
   if (PATHLIKE_RE.test(trimmed) || trimmed.includes("\\") || trimmed.includes("/")) return true;
+  if (PAGE_TITLE_SOUP_RE.test(trimmed)) return true;
+  if (LOW_VALUE_TITLE_RE.test(trimmed) && trimmed.length <= 40) return true;
   if (
     key === "unknown" ||
     key.startsWith("unknown-") ||

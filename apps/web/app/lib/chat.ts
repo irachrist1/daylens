@@ -9,6 +9,12 @@ export type ChatMessage = {
 
 export const MAX_MODEL_MESSAGES = 20;
 export const MAX_SAVED_CHAT_MESSAGES = 100;
+export const MAX_MODEL_MESSAGE_CHARS = 4_000;
+
+function capMessageContent(content: string) {
+  if (content.length <= MAX_MODEL_MESSAGE_CHARS) return content;
+  return `${content.slice(0, MAX_MODEL_MESSAGE_CHARS - 32)}\n[message truncated]`;
+}
 
 export function normalizeChatMessages(messages: unknown): ChatMessage[] {
   if (!Array.isArray(messages)) {
@@ -49,6 +55,6 @@ export function trimChatMessages(messages: ChatMessage[], max: number) {
 export function toModelMessages(messages: ChatMessage[]) {
   return trimChatMessages(messages, MAX_MODEL_MESSAGES).map((message) => ({
     role: message.role,
-    content: message.content,
+    content: capMessageContent(message.content),
   }));
 }

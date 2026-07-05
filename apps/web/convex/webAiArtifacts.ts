@@ -11,7 +11,7 @@ import {
   type DaySnapshotV2,
   type WorkspaceAIArtifact,
   type WorkspaceAIThread,
-} from "../packages/remote-contract/index";
+} from "@daylens/remote-contract";
 
 type GeneratedOutputKind = "report" | "csv" | "chart";
 type GeneratedArtifactsResult = {

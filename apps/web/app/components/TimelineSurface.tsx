@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { DaySnapshotV2, WorkBlockSummary } from "../../packages/remote-contract";
+import type { DaySnapshotV2, WorkBlockSummary } from "@daylens/remote-contract";
 import { AppIcon } from "@/app/components/AppIcon";
 import { CATEGORY_COLORS, CATEGORY_LABELS, formatDuration } from "@/app/lib/format";
 import { formatLongRangeLabel, type SurfaceRange } from "@/app/lib/range";
@@ -44,12 +44,19 @@ function InlineMetric({ value, label, live = false }: { value: string; label: st
   );
 }
 
-const MIN_GAP_SECONDS = 5 * 60;
+const MIN_GAP_SECONDS = 30 * 60;
+const MIN_ROW_HEIGHT = 96;
+const MAX_ROW_HEIGHT = 220;
+
+function timelineRowMinHeight(seconds: number): number {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, 72 + minutes * 2));
+}
 
 function GapRow({ gapStartAt, gapEndAt }: { gapStartAt: string; gapEndAt: string }) {
   const gapSeconds = Math.round((Date.parse(gapEndAt) - Date.parse(gapStartAt)) / 1000);
   return (
-    <div className="timeline-gap-row">
+    <div className="timeline-gap-row" style={{ minHeight: timelineRowMinHeight(gapSeconds) * 0.45 }}>
       <div className="timeline-gap-row__rail">
         <span>{formatClockTime(gapStartAt)}</span>
         <span>{formatDuration(gapSeconds)}</span>
@@ -262,13 +269,14 @@ function TimelineRow({
     .filter((page): page is NonNullable<typeof page> => Boolean(page))
     .slice(0, 3);
   const supportingLine = supportingBlockLine(block, appLookup);
+  const rowMinHeight = timelineRowMinHeight(blockDurationSeconds(block));
 
   return (
     <button
       type="button"
       onClick={onSelect}
       className={`timeline-row ${isSelected ? "timeline-row--selected" : ""}`}
-      style={{ ["--timeline-accent" as string]: accent }}
+      style={{ ["--timeline-accent" as string]: accent, minHeight: rowMinHeight }}
       data-timeline-keep-selection="true"
     >
       <div className="timeline-row__rail">
@@ -401,6 +409,57 @@ export function TimelineSurface({
     );
   }
 
+  function rowsForDay(day: { localDate: string; snapshot: DaySnapshotV2 }) {
+    const sorted = [...day.snapshot.workBlocks].sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+    const dayStart = new Date(`${day.localDate}T00:00:00`);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const rows = [];
+
+    sorted.forEach((block, idx) => {
+      const compositeId = `${day.localDate}:${block.id}`;
+      const prevEndAt = idx > 0 ? sorted[idx - 1].endAt : dayStart.toISOString();
+      const gap = Math.round((Date.parse(block.startAt) - Date.parse(prevEndAt)) / 1000);
+      if (gap >= MIN_GAP_SECONDS) {
+        rows.push(
+          <GapRow
+            key={`gap-before-${compositeId}`}
+            gapStartAt={prevEndAt}
+            gapEndAt={block.startAt}
+          />,
+        );
+      }
+      rows.push(
+        <TimelineRow
+          key={compositeId}
+          block={{ ...block, id: compositeId }}
+          snapshot={day.snapshot}
+          isSelected={selectedBlock?.id === compositeId}
+          onSelect={() => {
+            setSelectedDayDate(day.localDate);
+            setSelectedBlockId((current) => (current === compositeId ? null : compositeId));
+          }}
+        />,
+      );
+    });
+
+    const last = sorted[sorted.length - 1];
+    if (last && !day.snapshot.isPartialDay) {
+      const gap = Math.round((dayEnd.getTime() - Date.parse(last.endAt)) / 1000);
+      if (gap >= MIN_GAP_SECONDS) {
+        rows.push(
+          <GapRow
+            key={`gap-after-${day.localDate}:${last.id}`}
+            gapStartAt={last.endAt}
+            gapEndAt={dayEnd.toISOString()}
+          />,
+        );
+      }
+    }
+
+    return rows;
+  }
+
   const askAiHref =
     range === "day"
       ? `/chat?date=${anchorDate}`
@@ -440,38 +499,7 @@ export function TimelineSurface({
               ) : null}
 
               <div className="timeline-day-group__rows">
-                {[...day.snapshot.workBlocks]
-                  .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt))
-                  .flatMap((block, idx, sorted) => {
-                    const compositeId = `${day.localDate}:${block.id}`;
-                    const prev = idx > 0 ? sorted[idx - 1] : null;
-                    const gap = prev
-                      ? Math.round((Date.parse(block.startAt) - Date.parse(prev.endAt)) / 1000)
-                      : 0;
-                    const rows = [];
-                    if (prev && gap >= MIN_GAP_SECONDS) {
-                      rows.push(
-                        <GapRow
-                          key={`gap-${compositeId}`}
-                          gapStartAt={prev.endAt}
-                          gapEndAt={block.startAt}
-                        />,
-                      );
-                    }
-                    rows.push(
-                      <TimelineRow
-                        key={compositeId}
-                        block={{ ...block, id: compositeId }}
-                        snapshot={day.snapshot}
-                        isSelected={selectedBlock?.id === compositeId}
-                        onSelect={() => {
-                          setSelectedDayDate(day.localDate);
-                          setSelectedBlockId((current) => (current === compositeId ? null : compositeId));
-                        }}
-                      />,
-                    );
-                    return rows;
-                  })}
+                {rowsForDay(day)}
               </div>
             </section>
           ))}

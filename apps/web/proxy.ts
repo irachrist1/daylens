@@ -6,7 +6,7 @@ import {
 } from "@/app/lib/sessionConfig";
 import { stripBasePath, withBasePath } from "@/app/lib/basePath";
 
-const PUBLIC_PATHS = ["/", "/link", "/recover", "/docs", "/roadmap", "/changelog", "/hackathon"];
+const PUBLIC_PATHS = ["/", "/link", "/recover", "/docs", "/roadmap", "/changelog", "/hackathon", "/linux"];
 const PUBLIC_API_PATHS = [
   "/api/link",
   "/api/recover",
@@ -22,7 +22,7 @@ function redirectToLink(request: NextRequest) {
   return NextResponse.redirect(new URL(withBasePath("/link"), request.url));
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const pathname = stripBasePath(request.nextUrl.pathname);
 
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(path + "/"))) {

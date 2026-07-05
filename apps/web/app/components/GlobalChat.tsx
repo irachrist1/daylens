@@ -14,7 +14,7 @@ import type {
   RecapSummaryLite,
   WorkspaceAIArtifact,
   WorkspaceAIThread,
-} from "../../packages/remote-contract";
+} from "@daylens/remote-contract";
 
 type RecapPeriod = "day" | "week" | "month";
 type ExportKind = "report" | "csv" | "chart";

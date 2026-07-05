@@ -11,7 +11,7 @@ import {
   buildDayContext,
   questionPrompt,
 } from "../packages/prompt-builder/index";
-import type { WorkspaceAIThread } from "../packages/remote-contract/index";
+import type { WorkspaceAIThread } from "@daylens/remote-contract";
 import { DEFAULT_MODEL_ID, isAllowedModel } from "../packages/ai-models/index";
 import { requireSessionIdentity } from "./authHelpers";
 
@@ -22,7 +22,13 @@ type AskQuestionCode =
   | "missing_key"
   | "billing_exhausted"
   | "rate_limited"
-  | "model_not_allowed";
+  | "model_not_allowed"
+  | "service_updating";
+
+type ModelChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 type AskQuestionResult =
   | {
@@ -37,6 +43,7 @@ type AskQuestionResult =
 const RATE_LIMIT_NAMESPACE = "ai:ask";
 const RATE_LIMIT_MAX = 60;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const MAX_MODEL_MESSAGE_CHARS = 4_000;
 
 function toDateKey(date: Date) {
   return date.toLocaleDateString("en-CA");
@@ -81,7 +88,7 @@ function rangeLabel(localDate: string, range: AskRange) {
 }
 
 function classifyAnthropicError(error: unknown):
-  | { code: "missing_key" | "billing_exhausted" | "rate_limited"; message: string }
+  | { code: "missing_key" | "billing_exhausted" | "rate_limited" | "service_updating"; message: string }
   | null {
   if (!(error instanceof Anthropic.APIError)) return null;
 
@@ -118,7 +125,31 @@ function classifyAnthropicError(error: unknown):
     };
   }
 
+  if (status === 403 || status >= 500) {
+    return {
+      code: "service_updating",
+      message:
+        "The AI service is temporarily unavailable. Please try again in a minute.",
+    };
+  }
+
   return null;
+}
+
+function boundedModelMessages(messages: ModelChatMessage[] | undefined, question: string): ModelChatMessage[] {
+  const trimmed = (messages ?? [])
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-20)
+    .map((message) => ({
+      ...message,
+      content: message.content.length > MAX_MODEL_MESSAGE_CHARS
+        ? `${message.content.slice(0, MAX_MODEL_MESSAGE_CHARS - 32)}\n[message truncated]`
+        : message.content,
+    }));
+  if (trimmed.at(-1)?.role === "user" && trimmed.at(-1)?.content.trim() === question.trim()) {
+    return trimmed.slice(0, -1);
+  }
+  return trimmed;
 }
 
 export const askQuestion = action({
@@ -128,6 +159,10 @@ export const askQuestion = action({
     range: v.optional(v.union(v.literal("day"), v.literal("week"), v.literal("month"))),
     threadId: v.optional(v.string()),
     model: v.optional(v.string()),
+    messages: v.optional(v.array(v.object({
+      role: v.union(v.literal("user"), v.literal("assistant")),
+      content: v.string(),
+    }))),
   },
   handler: async (ctx, args): Promise<AskQuestionResult> => {
     const identity = await requireSessionIdentity(ctx);
@@ -222,6 +257,7 @@ export const askQuestion = action({
         ? buildDayContext(snapshots[0])
         : buildRangeContext(rangeLabel(args.date, range), snapshots);
     const userPrompt = questionPrompt(args.question, activityContext);
+    const modelMessages = boundedModelMessages(args.messages, args.question);
 
     const client = new Anthropic({ apiKey: anthropicKey });
 
@@ -231,7 +267,7 @@ export const askQuestion = action({
         model,
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
+        messages: [...modelMessages, { role: "user", content: userPrompt }],
       });
       responseText =
         message.content[0].type === "text" ? message.content[0].text : "";
@@ -270,5 +306,108 @@ export const askQuestion = action({
       provider: "anthropic",
       model,
     };
+  },
+});
+
+const SURFACE_RATE_LIMIT_NAMESPACE = "ai:surface";
+const SURFACE_MAX_OUTPUT_TOKENS = 32000;
+
+type SurfaceSummaryResult =
+  | { ok: true; text: string; provider: "anthropic"; model: string }
+  | { ok: false; code: AskQuestionCode; message: string };
+
+// R6: server-side generation for the desktop's AI surfaces (app narrative,
+// week review, day summary). The desktop builds the full prompt locally and
+// sends it here so a user without a local Anthropic key can still generate via
+// the workspace key. No snapshot or thread dependency — the prompt is
+// self-contained — which is what separates this from askQuestion.
+export const generateSurfaceSummary = action({
+  args: {
+    system: v.string(),
+    userContent: v.string(),
+    maxTokens: v.optional(v.number()),
+    model: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<SurfaceSummaryResult> => {
+    const identity = await requireSessionIdentity(ctx);
+
+    const rateLimit = (await ctx.runMutation(internal.httpRateLimits.checkAndIncrement, {
+      namespace: SURFACE_RATE_LIMIT_NAMESPACE,
+      key: identity.workspaceId,
+      limit: RATE_LIMIT_MAX,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    })) as { allowed: boolean; retryAfterMs: number };
+
+    if (!rateLimit.allowed) {
+      return {
+        ok: false,
+        code: "rate_limited",
+        message:
+          "You've hit the hourly AI limit for this workspace. Try again in a few minutes.",
+      };
+    }
+
+    const requestedModel = args.model?.trim();
+    if (requestedModel && !isAllowedModel(requestedModel)) {
+      return {
+        ok: false,
+        code: "model_not_allowed",
+        message: "That model isn't available on Daylens yet. Pick another in Settings.",
+      };
+    }
+    const model = requestedModel || DEFAULT_MODEL_ID;
+
+    const userContent = args.userContent.trim();
+    if (!userContent) {
+      return { ok: false, code: "no_data", message: "No evidence was provided to summarize." };
+    }
+
+    // Key resolution mirrors askQuestion: workspace-encrypted first, server env
+    // fallback. Never echo the decryption reason.
+    let anthropicKey: string | undefined;
+    try {
+      const keyDocs = await ctx.runQuery(internal.encryptedKeys.getByWorkspace, {
+        workspaceId: identity.workspaceId,
+      });
+      if (keyDocs) {
+        anthropicKey = decrypt(keyDocs.encryptedAnthropicKey, identity.workspaceId);
+      }
+    } catch {
+      // Fall through to the shared env key.
+    }
+    if (!anthropicKey) {
+      anthropicKey = process.env.ANTHROPIC_API_KEY;
+    }
+    if (!anthropicKey) {
+      return {
+        ok: false,
+        code: "missing_key",
+        message:
+          "No Anthropic key is configured. Open Settings → AI Provider and save one.",
+      };
+    }
+
+    const maxTokens = Math.max(
+      256,
+      Math.min(args.maxTokens ?? SURFACE_MAX_OUTPUT_TOKENS, SURFACE_MAX_OUTPUT_TOKENS),
+    );
+    const client = new Anthropic({ apiKey: anthropicKey });
+
+    try {
+      const message = await client.messages.create({
+        model,
+        max_tokens: maxTokens,
+        system: args.system,
+        messages: [{ role: "user", content: userContent }],
+      });
+      const text = message.content[0]?.type === "text" ? message.content[0].text : "";
+      return { ok: true, text, provider: "anthropic", model };
+    } catch (error) {
+      const classified = classifyAnthropicError(error);
+      if (classified) {
+        return { ok: false, ...classified };
+      }
+      throw error;
+    }
   },
 });

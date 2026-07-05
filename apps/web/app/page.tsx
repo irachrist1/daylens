@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { HackathonLanding } from "./hackathon/components/HackathonLanding";
+import { V2Landing } from "./landing/V2Landing";
 import { appPath, assetPath } from "@/app/lib/basePath";
 
 export const metadata: Metadata = {
-  title: "Daylens — Your digital life, made searchable on demand",
+  title: "Daylens | Your day, finally makes sense",
   description:
-    "Daylens is a local-first personal memory system for your laptop. Watches what you do, enriches it with Claude, and lets you ask anything in plain language. Open source, local-first, macOS-ready.",
+    "Daylens turns the work scattered across your computer into one clear, searchable memory.",
   openGraph: {
-    title: "Daylens — Your digital life, made searchable on demand",
+    title: "Daylens | Your day, finally makes sense",
     description:
-      "Local-first memory system for your laptop. Ask anything about what you did, read, or learned, and get a real answer.",
+      "Turn the work scattered across your computer into one clear, searchable memory.",
     url: "/daylens",
     images: [
       {
@@ -23,9 +23,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Daylens — Your digital life, made searchable on demand",
+    title: "Daylens | Your day, finally makes sense",
     description:
-      "Local-first memory system for your laptop. Open source. CBC Spring 2026.",
+      "A local-first memory for the work you do on your computer.",
     images: [assetPath("/hackathon/01-timeline-day.png")],
   },
 };
@@ -40,5 +40,5 @@ export default async function LandingPage({
   if (params.token && /^[0-9a-f]{32}$/i.test(params.token)) {
     redirect(appPath(`/link?token=${params.token}`));
   }
-  return <HackathonLanding />;
+  return <V2Landing />;
 }

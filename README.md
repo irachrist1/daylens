@@ -2,6 +2,8 @@
 
 A local-first desktop app that turns your laptop activity into a searchable timeline you can ask questions about — or plug into Cursor and Claude.
 
+This is the Daylens monorepo. The Electron desktop app lives at the repository root, the Next.js web companion and public site live in `apps/web`, and shared contracts live in `packages`.
+
 ## The problem
 
 You read docs, watch videos, and jump between apps all day. None of it stays easy to find later.
@@ -38,6 +40,16 @@ Get the latest installer from [GitHub Releases](https://github.com/irachrist1/da
 git clone https://github.com/irachrist1/daylens.git && cd daylens
 npm install && npm start
 ```
+
+Run the web app:
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+From the repository root, `npm run web:dev`, `npm run web:typecheck`, and `npm run web:build` provide the same common entry points.
 
 ## How it works
 

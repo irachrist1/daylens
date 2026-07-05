@@ -4,7 +4,7 @@ import { getConvexClient } from "@/app/lib/convex";
 import { getSession } from "@/app/lib/session";
 import { api } from "../../../convex/_generated/api";
 import type { ChatMessage } from "@/app/lib/chat";
-import type { WorkspaceAIMessage } from "../../../packages/remote-contract";
+import type { WorkspaceAIMessage } from "@daylens/remote-contract";
 import { appPath } from "@/app/lib/basePath";
 
 export default async function ChatPage({

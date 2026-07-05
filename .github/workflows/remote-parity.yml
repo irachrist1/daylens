@@ -20,26 +20,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out daylens-web
+      - name: Check out Daylens monorepo
         uses: actions/checkout@v5
-
-      - name: Check out sibling daylens contract
-        continue-on-error: true
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ github.repository_owner }}/daylens
-          path: daylens-contract
 
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: apps/web/package-lock.json
 
       - name: Install dependencies
+        working-directory: apps/web
         run: npm ci
 
       - name: Generate Convex API types
+        working-directory: apps/web
         run: |
           if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
             npm run convex:codegen
@@ -48,20 +44,23 @@ jobs:
           fi
 
       - name: Validate remote contract
-        env:
-          DAYLENS_CONTRACT_REPO: daylens-contract
+        working-directory: apps/web
         run: npm run contract:check
 
       - name: Validate Convex manifest
+        working-directory: apps/web
         run: npm run manifest:check
 
       - name: Typecheck
+        working-directory: apps/web
         run: npm run typecheck
 
       - name: Build
+        working-directory: apps/web
         run: npm run build
 
       - name: Staging smoke
+        working-directory: apps/web
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.smoke_base_url != '' && inputs.smoke_session_cookie != '' }}
         env:
           SMOKE_BASE_URL: ${{ inputs.smoke_base_url }}
