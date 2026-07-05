@@ -20,6 +20,11 @@ export type AIProviderErrorCode =
   | 'credit_exhausted'
   // Key rejected (401/403).
   | 'auth'
+  // The selected model id no longer exists on this key (404 / not_found_error
+  // — e.g. a deprecated dated snapshot still selected in Settings).
+  | 'model_unavailable'
+  // Couldn't reach the provider at all (offline, DNS, connection reset).
+  | 'network'
   // Anything else.
   | 'unknown'
 
@@ -59,7 +64,7 @@ export function isProviderErrorEncoded(message: string): boolean {
   return SENTINEL_RE.test(message)
 }
 
-/** Hard walls need user action (billing / switch / re-key); transient does not. */
+/** Hard walls need user action (billing / switch / re-key / re-pick a model); transient does not. */
 export function isHardProviderWall(code: AIProviderErrorCode): boolean {
-  return code === 'quota_exhausted' || code === 'credit_exhausted' || code === 'auth'
+  return code === 'quota_exhausted' || code === 'credit_exhausted' || code === 'auth' || code === 'model_unavailable'
 }

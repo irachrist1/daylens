@@ -142,12 +142,16 @@ test('browsing-dominant block CAN take a non-blocked page title as label', () =>
   )
 
   const payload = getTimelineDayPayload(db, date)
-  const browsingBlock = payload.blocks.find((block) => block.dominantCategory === 'browsing')
-  assert.ok(browsingBlock, 'expected browsing-dominant block')
-  // The page is allowed to label a browsing block.
+  // A Notion page inside a browser is intentional productivity work — the
+  // artifact now carries a productivity category (invariant 6: intentional SaaS
+  // work must have category weight), so this reads as 'productivity', not the
+  // undifferentiated 'browsing' it used to. The page is still allowed to label
+  // the block.
+  const workBlock = payload.blocks.find((block) => block.dominantCategory === 'productivity')
+  assert.ok(workBlock, `expected a productivity block from the Notion page; got ${payload.blocks.map((b) => b.dominantCategory).join(', ')}`)
   assert.ok(
-    browsingBlock!.label.current.length > 0,
-    'browsing block should have a non-empty label',
+    workBlock!.label.current.length > 0,
+    'the block should have a non-empty label',
   )
   db.close()
 })
@@ -214,7 +218,15 @@ test('block with mixed dev + brief non-adult browsing keeps dev-class label', ()
   db.close()
 })
 
-test('development-carried YouTube top artifact categorizes as entertainment', () => {
+test('a YouTube top artifact does NOT flip a development-dominant block to entertainment (invariant 6)', () => {
+  // Superseded behavior: this block used to categorize as 'entertainment'
+  // because a single entertainment page artifact overrode the focused base.
+  // That is exactly the invariant-6 violation the founder hit ("a block tagged
+  // Leisure because a background YouTube tab set the category over the dominant,
+  // intentional work"). A block whose foreground time is dominated by focused
+  // work keeps its focused category; a lone entertainment artifact no longer
+  // sets it. (An app that is genuinely 100% YouTube is an app-categorization
+  // problem, fixed at capture, not by letting one tab define the block.)
   const db = setupDb()
   const date = '2026-05-16'
   const start = ms(date, 12, 20)
@@ -248,8 +260,8 @@ test('development-carried YouTube top artifact categorizes as entertainment', ()
   const payload = getTimelineDayPayload(db, date)
   const block = payload.blocks.find((candidate) => candidate.topArtifacts.some((artifact) => artifact.host === 'youtube.com'))
   assert.ok(block, 'expected block with YouTube artifact')
-  assert.equal(block!.dominantCategory, 'entertainment')
-  assert.notEqual(block!.dominantCategory, 'development')
+  assert.notEqual(block!.dominantCategory, 'entertainment', 'a single YouTube tab must not set a development-dominant block to Leisure')
+  assert.equal(block!.dominantCategory, 'development')
 
   db.close()
 })

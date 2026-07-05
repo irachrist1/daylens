@@ -54,8 +54,49 @@ test('401 → auth; credit balance → credit_exhausted; OpenAI insufficient_quo
 })
 
 test('non-provider error → unknown', () => {
-  assert.equal(classifyProviderError(new Error('socket hang up')).code, 'unknown')
+  assert.equal(classifyProviderError(new Error('something exploded in a novel way')).code, 'unknown')
   assert.equal(classifyProviderError(null).code, 'unknown')
+})
+
+// ── 2026-07-05 founder report: real walls must never read as the blank
+// "couldn't complete that" ───────────────────────────────────────────────────
+
+test("Anthropic monthly spend limit → quota_exhausted, not a transient retry", () => {
+  const err = {
+    status: 429,
+    error: { type: 'rate_limit_error', message: "This request would exceed your organization's maximum monthly spend limit." },
+  }
+  assert.equal(classifyProviderError(err).code, 'quota_exhausted')
+})
+
+test('deprecated/unknown model id (404 not_found_error) → model_unavailable, a hard wall', () => {
+  const err = {
+    status: 404,
+    error: { type: 'not_found_error', message: 'model: claude-haiku-4-5-20251001' },
+  }
+  assert.equal(classifyProviderError(err).code, 'model_unavailable')
+  assert.equal(isHardProviderWall('model_unavailable'), true)
+  const msg = userMessageForProviderError('model_unavailable', 'Anthropic Claude')
+  assert.match(msg, /model/i)
+  assert.match(msg, /Settings → AI/)
+})
+
+test('connection-level failures → network, with actionable copy', () => {
+  assert.equal(classifyProviderError(new Error('Connection error.')).code, 'network')
+  assert.equal(classifyProviderError(new Error('socket hang up')).code, 'network')
+  assert.equal(classifyProviderError(new Error('getaddrinfo ENOTFOUND api.anthropic.com')).code, 'network')
+  // A 4xx that merely MENTIONS a network word is not a connection failure.
+  assert.equal(classifyProviderError({ status: 401, message: 'network policy' }).code, 'auth')
+  const msg = userMessageForProviderError('network', 'Anthropic Claude')
+  assert.match(msg, /connection/i)
+})
+
+test("an unclassifiable error still shows the provider's own words", () => {
+  const err = { status: 418, error: { type: 'teapot', message: 'Overloaded, upstream fell over' } }
+  const friendly = friendlyProviderError(err, 'Anthropic Claude')
+  const { message, meta } = decodeProviderErrorMeta(friendly.message)
+  assert.equal(meta?.code, 'unknown')
+  assert.match(message, /Overloaded, upstream fell over/)
 })
 
 // ── Copy accuracy (no more "a few requests per minute" misdiagnosis) ────────

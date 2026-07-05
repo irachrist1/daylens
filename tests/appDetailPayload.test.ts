@@ -86,7 +86,7 @@ test('app detail keeps total time but merges quick returns into one human sessio
   db.close()
 })
 
-test('browser detail reads deduped pages directly, with visit counts and work first', () => {
+test('browser detail reconciles overlapping visits into deduped pages under their domains', () => {
   const db = new Database(':memory:')
   db.exec(SCHEMA_SQL)
   const date = todayKey()
@@ -115,13 +115,30 @@ test('browser detail reads deduped pages directly, with visit counts and work fi
   insertVisit.run('youtube.com', 'A different video', secondYoutubeUrl, secondYoutubeUrl, 'youtube.com/watch', start + 360_000, BigInt(start + 360_000) * 1_000n, 600)
 
   const detail = getAppDetailPayload(db, 'safari', 1, null)
-  assert.equal(detail.topPages.length, 3)
-  assert.equal(detail.topPages[0].domain, 'github.com')
-  assert.equal(detail.topPages[0].visitCount, 2)
-  assert.equal(detail.topPages[0].totalSeconds, 120)
-  assert.equal(detail.topPages[1].domain, 'youtube.com')
-  assert.equal(detail.topPages[1].normalizedUrl, youtubeUrl)
-  assert.equal(detail.topPages[2].normalizedUrl, secondYoutubeUrl)
+  const activity = detail.browserActivity
+  assert.ok(activity, 'a browser app must carry browserActivity')
+
+  // The two overlapping YouTube visits (raw 1200s + 600s) claim disjoint
+  // slices of Safari's hour — 1200s together, never 1800s. That was the whole
+  // bug: raw sums let a background tab outgrow the browser itself.
+  const youtube = activity.domains.find((d) => d.domain === 'youtube.com')
+  assert.ok(youtube)
+  assert.equal(youtube.totalSeconds, 1200)
+  assert.equal(youtube.pages.length, 2)
+  const youtubeUrls = youtube.pages.map((p) => p.normalizedUrl).sort()
+  assert.deepEqual(youtubeUrls, [youtubeUrl, secondYoutubeUrl].sort())
+
+  // The repeated GitHub visit dedupes into one page carrying both visits.
+  const github = activity.domains.find((d) => d.domain === 'github.com')
+  assert.ok(github)
+  assert.equal(github.pages.length, 1)
+  assert.equal(github.pages[0].visitCount, 2)
+  assert.equal(github.totalSeconds, 120)
+
+  // The full hour reconciles: 1320s attributed + 2280s with no page recorded.
+  assert.equal(activity.totalSeconds, 3600)
+  assert.equal(activity.attributedSeconds, 1320)
+  assert.equal(activity.unattributedSeconds, 2280)
   db.close()
 })
 

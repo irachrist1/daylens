@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
 import { ALL_TIME_DAYS } from '@shared/types'
-import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
+import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession, PageRef } from '@shared/types'
 import { kindForDomain } from '@shared/workKind'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
@@ -353,6 +353,9 @@ export default function Apps() {
   const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
   const [deletingActivityKey, setDeletingActivityKey] = useState<string | null>(null)
   const [deleteActivityError, setDeleteActivityError] = useState<string | null>(null)
+  // Domains expanded to show their page rows in the merged "where the time
+  // went" section. All collapsed by default; reset when the panel retargets.
+  const [expandedDomains, setExpandedDomains] = useState<Set<string>>(() => new Set())
   const isUserGenerating = expectedNarrativeScopeKey
     ? activeGenerationScopes.has(expectedNarrativeScopeKey)
     : false
@@ -455,6 +458,7 @@ export default function Apps() {
     const detailKey = `${detail.canonicalAppId}:${detail.rangeKey}`
     if (lastTrackedDetailKeyRef.current === detailKey) return
     lastTrackedDetailKeyRef.current = detailKey
+    setExpandedDomains(new Set())
     track(ANALYTICS_EVENT.APP_DETAIL_OPENED, {
       surface: 'apps',
       tracked_time_bucket: trackedTimeBucket(detail.totalSeconds),
@@ -882,12 +886,14 @@ export default function Apps() {
                   const rollups = detail.blockMemoryRollups ?? []
                   const useRollup = rollups.some((row) => row.patternId && row.sessionCount >= 2)
 
-                  // Work surfaces first (spec invariant 8): split domains and
-                  // pages into a primary work list and a quieter "Off to the
-                  // side" group for streaming/social. Each group keeps its
-                  // duration order; nothing is hidden, only deprioritized.
-                  const domainSplit = partitionWorkFirst(detail.topDomains ?? [], (d) => d.domain)
-                  const pageSplit = partitionWorkFirst(detail.topPages, (p) => p.domain)
+                  // One merged "where the time went" tree (2026-07-05): the
+                  // domain rows expand into their page rows, and the math
+                  // reconciles by construction — Σ pages = domain, Σ domains
+                  // + "No page recorded" = the header total. Work surfaces
+                  // first (spec invariant 8): work domains lead, streaming/
+                  // social sink into a quieter "Off to the side" group.
+                  const browserActivity = detail.browserActivity
+                  const domainSplit = partitionWorkFirst(browserActivity?.domains ?? [], (d) => d.domain)
 
                   const offToTheSideSubhead = (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px', color: 'var(--color-text-tertiary)' }}>
@@ -897,31 +903,16 @@ export default function Apps() {
                     </div>
                   )
 
-                  const renderDomainRow = (entry: NonNullable<AppDetailPayload['topDomains']>[number]) => (
-                    <div key={entry.domain} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <EntityIcon artifactType="page" domain={entry.domain} size={26} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <InlineRevealText
-                          text={entry.domain}
-                          style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                        />
-                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                          {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
-                          {entry.topTitle ? ` · ${entry.topTitle.slice(0, 60)}` : ''}
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                        {formatDuration(entry.totalSeconds)}
-                      </div>
-                      <DeleteIconButton
-                        label={`Delete activity for ${entry.domain}`}
-                        busy={deletingActivityKey === `domain:${entry.domain}`}
-                        onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
-                      />
-                    </div>
-                  )
+                  const toggleDomain = (domain: string) => {
+                    setExpandedDomains((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(domain)) next.delete(domain)
+                      else next.add(domain)
+                      return next
+                    })
+                  }
 
-                  const renderPageRow = (page: AppDetailPayload['topPages'][number]) => (
+                  const renderPageRow = (page: PageRef) => (
                     <div key={page.id} style={{ display: 'flex', alignItems: 'start', gap: 10, width: '100%' }}>
                       <button
                         type="button"
@@ -1106,43 +1097,108 @@ export default function Apps() {
                         </section>
                       )}
 
-                      {(domainSplit.work.length > 0 || domainSplit.leisure.length > 0) && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Time by domain
-                          </div>
-                          <div style={{ display: 'grid', gap: 10 }}>
-                            {domainSplit.work.map(renderDomainRow)}
-                          </div>
-                          {domainSplit.leisure.length > 0 && (
-                            <>
-                              {domainSplit.work.length > 0 && offToTheSideSubhead}
-                              <div style={{ display: 'grid', gap: 10 }}>
-                                {domainSplit.leisure.map(renderDomainRow)}
+                      {browserActivity && (domainSplit.work.length > 0 || domainSplit.leisure.length > 0 || browserActivity.unattributedSeconds > 0) && (() => {
+                        const renderDomainGroup = (entry: NonNullable<AppDetailPayload['browserActivity']>['domains'][number]) => {
+                          const expanded = expandedDomains.has(entry.domain)
+                          return (
+                            <div key={entry.domain}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDomain(entry.domain)}
+                                  aria-expanded={expanded}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 10,
+                                    flex: 1,
+                                    minWidth: 0,
+                                    padding: 0,
+                                    border: 'none',
+                                    background: 'transparent',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <span
+                                    aria-hidden="true"
+                                    style={{
+                                      display: 'inline-flex',
+                                      width: 10,
+                                      justifyContent: 'center',
+                                      color: 'var(--color-text-tertiary)',
+                                      fontSize: 9,
+                                      transform: expanded ? 'rotate(90deg)' : 'none',
+                                      transition: 'transform 120ms ease',
+                                    }}
+                                  >
+                                    ▶
+                                  </span>
+                                  <EntityIcon artifactType="page" domain={entry.domain} size={26} />
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <InlineRevealText
+                                      text={entry.domain}
+                                      style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
+                                    />
+                                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                                      {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
+                                      {` · ${entry.pages.length} page${entry.pages.length === 1 ? '' : 's'}`}
+                                    </div>
+                                  </div>
+                                </button>
+                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                                  {formatDuration(entry.totalSeconds)}
+                                </div>
+                                <DeleteIconButton
+                                  label={`Delete activity for ${entry.domain}`}
+                                  busy={deletingActivityKey === `domain:${entry.domain}`}
+                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
+                                />
                               </div>
-                            </>
-                          )}
-                        </section>
-                      )}
-
-                      {(pageSplit.work.length > 0 || pageSplit.leisure.length > 0) && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Pages visited
-                          </div>
-                          <div style={{ display: 'grid', gap: 12 }}>
-                            {pageSplit.work.map(renderPageRow)}
-                          </div>
-                          {pageSplit.leisure.length > 0 && (
-                            <>
-                              {pageSplit.work.length > 0 && offToTheSideSubhead}
-                              <div style={{ display: 'grid', gap: 12 }}>
-                                {pageSplit.leisure.map(renderPageRow)}
+                              {expanded && entry.pages.length > 0 && (
+                                <div style={{ display: 'grid', gap: 12, margin: '10px 0 4px', paddingLeft: 20, borderLeft: '2px solid var(--color-border-ghost)', marginLeft: 4 }}>
+                                  {entry.pages.map(renderPageRow)}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
+                        return (
+                          <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
+                            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
+                              Where your {formatDuration(browserActivity.totalSeconds)} went
+                            </div>
+                            <div style={{ display: 'grid', gap: 10 }}>
+                              {domainSplit.work.map(renderDomainGroup)}
+                            </div>
+                            {domainSplit.leisure.length > 0 && (
+                              <>
+                                {domainSplit.work.length > 0 && offToTheSideSubhead}
+                                <div style={{ display: 'grid', gap: 10 }}>
+                                  {domainSplit.leisure.map(renderDomainGroup)}
+                                </div>
+                              </>
+                            )}
+                            {/* Foreground browser time with no page recorded (native
+                                browser UI, new tabs, uncaptured pages). Explicit and
+                                non-interactive — never smeared into a domain
+                                (invariant 10) — so the rows above plus this one add
+                                up to the header total exactly. */}
+                            {browserActivity.unattributedSeconds > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0, opacity: 0.75 }}>
+                                <span aria-hidden="true" style={{ width: 10 }} />
+                                <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--color-surface-high)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>—</span>
+                                <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>
+                                  No page recorded
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
+                                  {formatDuration(browserActivity.unattributedSeconds)}
+                                </div>
                               </div>
-                            </>
-                          )}
-                        </section>
-                      )}
+                            )}
+                          </section>
+                        )
+                      })()}
                     </>
                   )
                 })()}

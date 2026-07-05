@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { finishAIUsageEvent, startAIUsageEvent } from '../db/queries'
+import { countBackgroundAIUsageEventsSince, finishAIUsageEvent, startAIUsageEvent } from '../db/queries'
 import { getDb } from './database'
 import { capture } from './analytics'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
@@ -452,6 +452,23 @@ export async function getWrapProviderState(): Promise<{ connected: boolean; prov
   }
 }
 
+// Hard daily budget breaker for unattended AI work. The 2026-07-05 cost audit
+// found a stale production build re-labeling the same three blocks every ~10s
+// for days — 77k background calls, ~$110/week — because nothing between the
+// scheduler and the provider ever said "enough". This is that "enough": every
+// background call is counted in ai_usage_events, and past the cap the day's
+// background work is refused at the single choke point every job runs through.
+// User-triggered and system (wrap/brief) jobs are never blocked — a runaway
+// there is visible on screen, and the user's explicit actions must always win.
+// 250 Haiku-sized label calls ≈ $0.35/day worst case.
+export const BACKGROUND_AI_DAILY_CALL_CAP = 250
+
+export function backgroundAIBudgetExhausted(db: ReturnType<typeof getDb>, now = Date.now()): boolean {
+  const midnight = new Date(now)
+  midnight.setHours(0, 0, 0, 0)
+  return countBackgroundAIUsageEventsSince(db, midnight.getTime()) >= BACKGROUND_AI_DAILY_CALL_CAP
+}
+
 export async function executeTextAIJob(
   payload: {
     jobType: AIJobType
@@ -473,6 +490,12 @@ export async function executeTextAIJob(
     onDelta?: (delta: string) => void | Promise<void>
   },
 ): Promise<{ text: string; config: ResolvedProviderConfig; usage: AIProviderUsage | null; cachePolicy: AIJobDefinition['cachePolicy'] }> {
+  if (payload.triggerSource === 'background' && backgroundAIBudgetExhausted(getDb())) {
+    throw new Error(
+      `Background AI budget reached for today (${BACKGROUND_AI_DAILY_CALL_CAP} calls); skipping ${payload.jobType} until tomorrow.`,
+    )
+  }
+
   const settings = await getSettingsAsync()
   const definition = JOB_DEFINITIONS[payload.jobType]
   const executionOptions: AITextJobExecutionOptions = {

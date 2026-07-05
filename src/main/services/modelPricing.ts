@@ -8,6 +8,13 @@ export interface ModelPricingRates {
 
 const PRICING_TABLE: Array<{ pattern: RegExp; rates: ModelPricingRates }> = [
   {
+    // Claude Fable 5 / Mythos 5: $10 in / $50 out per MTok (cache read 0.1x,
+    // cache write 1.25x). Must sit above the generic Anthropic tiers and must
+    // not fall through to DEFAULT_RATES ($3/$15), which underprices it 3x.
+    pattern: /fable|mythos/i,
+    rates: { inputPerMillion: 10, outputPerMillion: 50, cacheReadPerMillion: 1, cacheWritePerMillion: 12.5 },
+  },
+  {
     pattern: /gpt-5\.4-nano/i,
     rates: { inputPerMillion: 0.2, outputPerMillion: 1.25, cacheReadPerMillion: 0.02 },
   },

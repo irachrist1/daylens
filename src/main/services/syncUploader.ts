@@ -3,6 +3,8 @@ import { getDb } from './database'
 import { projectDay, reprojectStaleDays } from '../core/projections/chunk2'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { runEveningConsolidation } from '../jobs/eveningConsolidation'
+import { analyzeTimelineDay } from './analyzeDay'
+import { persistedDayWasProcessed } from './workBlocks'
 
 let dayCheckTimer: ReturnType<typeof setInterval> | null = null
 let lastObservedLocalDate = todayStr()
@@ -54,6 +56,7 @@ export function finalizePreviousDay(): void {
   const steps: Array<() => void> = [
     () => projectFinalizedDayProjection(yesterday, 'startup-finalize'),
     () => consolidateWorkMemory(yesterday, 'startup-finalize'),
+    () => analyzeFinalizedDay(yesterday, 'startup-finalize'),
     () => reprojectStaleProjectionDays(),
   ]
 
@@ -91,6 +94,36 @@ function projectFinalizedDayProjection(dateStr: string, reason: string): void {
 function projectFinalizedDay(dateStr: string, reason: string): void {
   projectFinalizedDayProjection(dateStr, reason)
   consolidateWorkMemory(dateStr, reason)
+  analyzeFinalizedDay(dateStr, reason)
+}
+
+// Enforce invariant 3 ("same-intent neighbours merge into one block")
+// automatically at finalization: run the SAME regroup → merge → relabel
+// pipeline the manual "Analyze" action runs, so a finalized day no longer
+// depends on a user click to become fewer, truer blocks. Fire-and-forget; the
+// AI path falls back cleanly to the heuristic blocks when the provider is
+// unavailable or rate-limited (nothing here throws into the scheduler).
+function analyzeFinalizedDay(dateStr: string, reason: string): void {
+  // Run the AI at most once per day: a day that already carries AI/user labels
+  // has been analyzed, so re-running the regroup/relabel would only re-spend
+  // tokens for no change. The manual "Analyze" action stays ungated — the user
+  // can always ask for a fresh pass.
+  if (persistedDayWasProcessed(getDb(), dateStr)) return
+  void analyzeTimelineDay(getDb(), dateStr, { triggerSource: 'background', surfaceErrors: false })
+    .then((result) => {
+      if (result.merged || result.changed) {
+        invalidateProjectedDay(dateStr, `analyze:${reason}`)
+        console.log('[timeline] auto-analyzed finalized day', {
+          date: dateStr,
+          reason,
+          merged: result.merged,
+          relabelAttempts: result.attempted,
+        })
+      }
+    })
+    .catch((error) => {
+      console.warn('[timeline] automatic day analyze failed:', error)
+    })
 }
 
 function consolidateWorkMemory(dateStr: string, reason: string): void {

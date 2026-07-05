@@ -13,8 +13,6 @@ import {
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
-  getBlockLabelOverride,
-  writeAIBlockLabel,
 } from '../db/queries'
 import {
   getWorkMemoryProfile,
@@ -51,10 +49,10 @@ import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
 import { deleteHistoryForApp, deleteHistoryForSite, deleteTrackedActivity } from '../services/trackingHistory'
 import { getProcessMetrics } from '../services/processMonitor'
-import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, shouldReanalyzeBlockWithAI, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
+import { getBlockDetailPayload, getDistractionCostPayload, getRecapRange, writeTimelineBlockReview, mergeTimelineEpisodes, trimTimelineBlockSpan, invalidateTimelineDayBlocks } from '../services/workBlocks'
 import { getTimelineRangeBlocks } from '../services/timelineCalendarRange'
 import { computeAppActivityDigest } from '../services/appActivityDigest'
-import { generateWorkBlockInsight, generateDayRegroupPlan } from '../services/ai'
+import { analyzeTimelineDay } from '../services/analyzeDay'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
 import { IPC, isAppCategory } from '@shared/types'
@@ -75,7 +73,6 @@ import type {
   DayWorkSessionsPayload,
   DayTimelinePayload,
   WorkContextBlock,
-  WorkContextInsight,
   TimelineWorkSession,
   TimelineBlockReviewUpdate,
   PurgeTrackedEvidencePayload,
@@ -374,82 +371,16 @@ export function registerDbHandlers(): void {
     // label, preserving curated AI labels and user overrides. An optional hint
     // (what the user says they actually did today) is passed to the model as a
     // strong grounding signal when the evidence alone is thin.
-    const db = getDb()
-    const userHint = hint?.trim() || undefined
-    let payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
-    let changed = false
-    let attempted = 0
-    const failures: string[] = []
-
-    // AI-driven Analyze (timeline.md §3.3 / §5): before re-naming, ask the AI to
-    // regroup the day's heuristic blocks — which adjacent blocks are the same
-    // continued intent and should become one. The AI decides only the grouping;
-    // the merge itself rides the same durable boundary-correction path as a manual
-    // shift-click merge (so it survives every rebuild), and each merged block is
-    // named below by the per-block namer from its full combined evidence — one
-    // coherent title across all the stretches. The engine over-splits on a real
-    // day, so this only ever makes the day FEWER, truer blocks (invariant 2). It
-    // falls back cleanly to the heuristic blocks when the AI is unavailable.
-    // User corrections always win: a user-renamed block is never merged away, and
-    // existing user merges are re-applied by the rebuild first.
-    const mergeable = payload.blocks.filter(
-      (block) => !block.isLive && !block.provisional && block.sessions.some((session) => session.id >= 0),
-    )
-    if (mergeable.length >= 2) {
-      try {
-        const groups = await generateDayRegroupPlan(mergeable, { userHint })
-        let mergedAny = false
-        for (const group of groups ?? []) {
-          if (group.length < 2) continue
-          const members = group.map((index) => mergeable[index])
-          if (members.some((member) => getBlockLabelOverride(db, member.id)?.label?.trim())) continue
-          if (members.some((member) => member.isLive || !member.sessions.some((session) => session.id >= 0))) continue
-          try {
-            mergeTimelineEpisodes(db, dateStr, members)
-            mergedAny = true
-          } catch (error) {
-            console.warn('[timeline] AI merge skipped for a group:', error)
-          }
-        }
-        if (mergedAny) {
-          invalidateProjectionScope('timeline', 'timeline-ai-regroup')
-          invalidateProjectionScope('apps', 'timeline-ai-regroup')
-          invalidateProjectionScope('insights', 'timeline-ai-regroup')
-          payload = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
-          changed = true
-        }
-      } catch (error) {
-        console.warn('[timeline] AI day regroup failed:', error)
-      }
-    }
-
-    for (const block of payload.blocks) {
-      if (!shouldReanalyzeBlockWithAI(block)) continue
-      attempted++
-      try {
-        const insight = await generateWorkBlockInsight(
-          { ...block, label: { ...block.label, override: null } },
-          { jobType: 'block_cleanup_relabel', triggerSource: 'user', throwOnError: true, userHint },
-        )
-        changed = applyAIInsightToTimelineBlock(db, block, insight) || changed
-      } catch (error) {
-        console.warn(`[timeline] AI re-analysis failed for block ${block.id}:`, error)
-        failures.push(error instanceof Error ? error.message : String(error))
-      }
-    }
-
-    if (attempted > 0 && !changed && failures.length > 0) {
-      throw new Error(`AI re-analysis failed: ${failures[0]}`)
-    }
-
-    if (changed) {
-      invalidateProjectionScope('timeline', 'timeline-ai-reanalysis')
-      invalidateProjectionScope('apps', 'timeline-ai-reanalysis')
-      invalidateProjectionScope('insights', 'timeline-ai-reanalysis')
-    }
-
-    const refreshed = materializeTimelineDayProjection(db, dateStr, getLiveSessionForDate(dateStr))
-    return refreshed
+    // Manual "Analyze" is now a thin wrapper over the one shared analyze
+    // pipeline (regroup → merge → relabel) that the automatic day-rollover /
+    // startup finalization also runs, so invariant 3 is enforced identically
+    // whether or not the user clicks. See services/analyzeDay.ts.
+    const result = await analyzeTimelineDay(getDb(), dateStr, {
+      userHint: hint?.trim() || undefined,
+      resolveLiveSession: getLiveSessionForDate,
+      triggerSource: 'user',
+    })
+    return result.payload
   })
 
   ipcMain.handle(IPC.DB.GET_RECAP_RANGE, (_e, dates: string[]) => {
@@ -1371,26 +1302,3 @@ function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSe
   ].sort((left, right) => left.startTime - right.startTime)
 }
 
-function applyAIInsightToTimelineBlock(
-  db: ReturnType<typeof getDb>,
-  block: WorkContextBlock,
-  insight: WorkContextInsight,
-): boolean {
-  // Day-level cleanup preserves user overrides (force = false).
-  const label = insight.label?.trim()
-  if (!label) {
-    throw new Error(`AI did not return a label for block ${block.id}.`)
-  }
-  const wrote = writeAIBlockLabel(db, {
-    blockId: block.id,
-    label,
-    narrative: insight.narrative ?? null,
-  })
-  if (!wrote) {
-    // A user can rename the block while the AI request is in flight. That race
-    // is a valid preserve-override no-op, not an AI persistence failure.
-    if (getBlockLabelOverride(db, block.id)?.label.trim()) return false
-    throw new Error(`AI label could not be persisted for block ${block.id}.`)
-  }
-  return true
-}

@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 import type { AppCategory, AppSession } from '../src/shared/types.ts'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { upsertWorkContextInsight } from '../src/main/db/queries.ts'
-import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, listTimelineDaysNeedingHeuristicUpgrade, mergeTimelineEpisodes, trimTimelineBlockSpan, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
+import { buildTimelineBlocksFromSessions, getBlockDetailPayload, getTimelineDayPayload, mergeTimelineEpisodes, trimTimelineBlockSpan, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
 import { getTimelineDayProjection, materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { PROJECTION_VERSION } from '../src/main/core/projections/chunk2.ts'
 
@@ -569,7 +569,7 @@ test('contiguous AI assistant and GitHub repo review collapse into one assisted 
   const blocks = getTimelineDayPayload(db, TEST_DATE).blocks
 
   assert.equal(blocks.length, 1, `AI assistant plus repo review should merge; got ${blocks.map((b) => b.label.current).join(' | ')}`)
-  assert.equal(blocks[0].dominantCategory, 'research')
+  assert.equal(blocks[0].dominantCategory, 'aiTools')
   db.close()
 })
 
@@ -599,7 +599,7 @@ test('a nightly-processed past day is kept even when its heuristic is stale', ()
   const db = createDb()
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
 
-  getTimelineDayPayload(db, TEST_DATE)
+  const before = getTimelineDayPayload(db, TEST_DATE)
   const blockId = (db.prepare(`SELECT id FROM timeline_blocks LIMIT 1`).get() as { id: string }).id
   // Mark the day as nightly-processed (an AI label) under a superseded heuristic.
   db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
@@ -608,27 +608,48 @@ test('a nightly-processed past day is kept even when its heuristic is stale', ()
     VALUES (?, ?, 'Refactoring the router', NULL, 'ai', 0.9, ?, NULL)
   `).run(`${blockId}:ai:test`, blockId, Date.now())
 
-  getTimelineDayPayload(db, TEST_DATE)
-  assert.deepEqual(heuristicVersions(db), ['timeline-v3'], 'processed day must be kept as summarized')
+  // "Kept as summarized" means the summary is frozen: same blocks, same
+  // boundaries, same labels — never a rebuild. (The block's deterministic
+  // category facts MAY be refreshed in place; that is the category-refresh
+  // test below, and it must not change identity or labels.)
+  const after = getTimelineDayPayload(db, TEST_DATE)
+  assert.deepEqual(
+    after.blocks.map((b) => [b.id, b.startTime, b.endTime]),
+    before.blocks.map((b) => [b.id, b.startTime, b.endTime]),
+    'processed day must keep its block identity and boundaries',
+  )
+  assert.equal(after.blocks[0]?.label.current, 'Refactoring the router', 'the AI label must survive')
   db.close()
 })
 
-test('background upgrade finds stale unprocessed days but leaves processed days alone', () => {
+test('a processed stale day refreshes its category facts in place, without touching labels', () => {
   const db = createDb()
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
 
   getTimelineDayPayload(db, TEST_DATE)
-  db.prepare(`UPDATE timeline_blocks SET heuristic_version = 'timeline-v3'`).run()
-
-  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [TEST_DATE])
-
   const blockId = (db.prepare(`SELECT id FROM timeline_blocks LIMIT 1`).get() as { id: string }).id
+  // Simulate a day summarized by an old heuristic that miscategorized the
+  // whole block as entertainment (the "no color until Analyze" bug).
+  db.prepare(`
+    UPDATE timeline_blocks
+    SET heuristic_version = 'timeline-v3',
+        dominant_category = 'entertainment',
+        category_distribution_json = '{"entertainment": 2400}'
+  `).run()
   db.prepare(`
     INSERT INTO timeline_block_labels (id, block_id, label, narrative, source, confidence, created_at, model_info_json)
     VALUES (?, ?, 'Refactoring the router', NULL, 'ai', 0.9, ?, NULL)
-  `).run(`${blockId}:ai:processed`, blockId, Date.now())
+  `).run(`${blockId}:ai:test`, blockId, Date.now())
 
-  assert.deepEqual(listTimelineDaysNeedingHeuristicUpgrade(db, '2026-04-23'), [])
+  const payload = getTimelineDayPayload(db, TEST_DATE)
+  assert.equal(payload.blocks[0]?.dominantCategory, 'development', 'category facts converge on current rules')
+  assert.equal(payload.blocks[0]?.label.current, 'Refactoring the router', 'labels are never touched by the refresh')
+
+  // The refresh is written back so row-level readers (month grid) converge
+  // too, and stamped so it runs once per heuristic bump.
+  const row = db.prepare(`SELECT dominant_category, heuristic_version FROM timeline_blocks WHERE id = ?`).get(blockId) as { dominant_category: string; heuristic_version: string }
+  assert.equal(row.dominant_category, 'development')
+  assert.equal(row.heuristic_version, 'timeline-v9')
   db.close()
 })
 

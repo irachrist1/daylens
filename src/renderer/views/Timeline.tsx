@@ -4,14 +4,24 @@ import { Trash2, X } from 'lucide-react'
 import { ANALYTICS_EVENT, blockCountBucket, trackedTimeBucket } from '@shared/analytics'
 import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBlock, CalendarRangeDay, DayTimelinePayload, TimelineGapSegment, WorkContextBlock } from '@shared/types'
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
+import { calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
-import { blockTypeTag, effectiveBlockKind, kindForDomain } from '@shared/workKind'
+import { blockTypeTag, effectiveBlockKind } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
+import { buildDetailRowTree, type DetailRowNode } from '../lib/blockDetailRowTree'
+import {
+  blockSpanDraftChanged,
+  clampEndTimeDraft,
+  clampStartTimeDraft,
+  draftTimeInputChange,
+  toTimeInputValue,
+} from '../lib/blockTimeEdit'
+import { mergeSelectionSpan, spanMergeState } from '../lib/timelineMergeSelection'
 import { ipc } from '../lib/ipc'
 import { sanitizeIpcError } from '../lib/ipcError'
 import { formatDisplayAppName } from '../lib/apps'
@@ -386,6 +396,7 @@ function CalendarBlockCard({
   height,
   compact,
   isSelected,
+  inMergeRange = false,
   dimmed = false,
   onClick,
   onContextMenu,
@@ -395,13 +406,23 @@ function CalendarBlockCard({
   height: number
   compact: boolean
   isSelected: boolean
+  // True when this block sits inside the shift-selected merge span (but isn't
+  // the anchor). It highlights like a selection so the whole run reads as one
+  // pending merge, without claiming the single-selection panel.
+  inMergeRange?: boolean
   // True when a tag filter is active and this block isn't in it. Filtered
   // blocks fade but stay in place — the shape of the day never lies.
   dimmed?: boolean
   onClick?: () => void
   onContextMenu?: (event: ReactMouseEvent) => void
 }) {
-  const accent = block.provisional ? '#8b93a7' : activityColorForCategory(block.dominantCategory)
+  // timeline.md §3.4 rule 4: color coding is universal — every block is drawn
+  // in its category's accent, live or finalized. Only the NAME stays neutral
+  // while live (§4); a provisional block already carries a real
+  // dominantCategory computed from its accumulated evidence
+  // (buildProvisionalLiveBlocks → buildBlockFromCandidate), so it just needs
+  // to be read here instead of overridden with a hardcoded grey.
+  const accent = activityColorForCategory(block.dominantCategory)
   // Leisure / personal blocks are muted so the eye finds work first —
   // unless the user turned that off (Settings → General → Dim leisure blocks).
   const muted = effectiveBlockKind(block) !== 'work' && leisureBlocksDimmed()
@@ -444,12 +465,12 @@ function CalendarBlockCard({
         // stronger fill, against the quieter tint of finished blocks.
         border: block.isLive
           ? `1.5px solid ${accent}`
-          : isSelected ? `1px solid ${accent}88` : `1px solid ${accent}30`,
+          : (isSelected || inMergeRange) ? `1px solid ${accent}88` : `1px solid ${accent}30`,
         borderLeft: `3px solid ${accent}`,
         // Frosted glass: a stronger tint over a backdrop blur, so the hour
         // lines behind the card haze out instead of striking through the
         // title and summary text (founder ask, Jul 2026).
-        background: isSelected ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
+        background: (isSelected || inMergeRange) ? `${accent}40` : block.isLive ? `${accent}36` : `${accent}2a`,
         backdropFilter: 'blur(10px) saturate(1.4)',
         WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
         boxShadow: isSelected ? '0 6px 20px rgba(0,0,0,0.18)' : 'none',
@@ -570,6 +591,7 @@ function CalendarDayTrack({
   hourHeight,
   compact = false,
   selectedBlockId = null,
+  selectedSpanIds,
   nowMs = null,
   dimBlock,
   onBlockClick,
@@ -582,6 +604,9 @@ function CalendarDayTrack({
   hourHeight: number
   compact?: boolean
   selectedBlockId?: string | null
+  // The blocks in the current shift-selected merge span (includes the anchor).
+  // Everything in here highlights as one pending merge.
+  selectedSpanIds?: ReadonlySet<string>
   nowMs?: number | null
   // When set, blocks outside the active tag filter render dimmed.
   dimBlock?: (block: WorkContextBlock) => boolean
@@ -644,13 +669,23 @@ function CalendarDayTrack({
         )
       })}
 
-      {blocks.map((block) => {
-        const top = topFor(block.startTime)
-        // The live block's payload end freezes at the moment the payload was
-        // computed; glue its bottom to the current-time line so the active
-        // session visibly grows between refreshes instead of lagging the clock.
-        const layoutEnd = block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime
-        const height = Math.max(compact ? MIN_CARD_HEIGHT : MIN_DAY_CARD_HEIGHT, topFor(layoutEnd) - top)
+      {(() => {
+        // Card heights are computed together so the readability floor can be
+        // clamped against the NEXT block: a floored short card must never paint
+        // over the idle gap's caption or the next block (invariant 4 — the
+        // clock wins over the floor). See renderer/lib/timelineBlockLayout.ts.
+        const spans = blocks.map((block) => {
+          const top = topFor(block.startTime)
+          // The live block's payload end freezes at the moment the payload was
+          // computed; glue its bottom to the current-time line so the active
+          // session visibly grows between refreshes instead of lagging the clock.
+          const layoutEnd = block.isLive && nowMs != null ? Math.max(block.endTime, nowMs) : block.endTime
+          return { top, bottom: topFor(layoutEnd) }
+        })
+        const heights = calendarCardHeights(spans, compact ? MIN_CARD_HEIGHT : MIN_DAY_CARD_HEIGHT)
+        return blocks.map((block, index) => {
+        const top = spans[index].top
+        const height = heights[index]
         return (
           <CalendarBlockCard
             key={block.id}
@@ -659,12 +694,14 @@ function CalendarDayTrack({
             height={height}
             compact={compact}
             isSelected={selectedBlockId === block.id}
+            inMergeRange={selectedBlockId !== block.id && (selectedSpanIds?.has(block.id) ?? false)}
             dimmed={dimBlock ? dimBlock(block) : false}
             onClick={onBlockClick ? () => onBlockClick(block) : undefined}
             onContextMenu={onBlockContextMenu ? (event) => onBlockContextMenu(block, event) : undefined}
           />
         )
-      })}
+        })
+      })()}
 
       {/* The current-time line, Google-Calendar style: a thin red line across
           the track with a dot at its left edge, drawn over the blocks. */}
@@ -696,6 +733,7 @@ function BlockContextMenu({
   onRegenerate,
   onDelete,
   onClose,
+  mergeSpan,
   mergeAbove,
   mergeBelow,
 }: {
@@ -706,6 +744,11 @@ function BlockContextMenu({
   onRegenerate: () => void
   onDelete: () => void
   onClose: () => void
+  // The shift-selected multi-block merge. Set only when the right-clicked
+  // block is part of an active span of two or more; it then replaces the
+  // single-neighbour above/below items with one "Merge N blocks" action, so
+  // both merge gestures live in the same menu without stacking up (spec §2).
+  mergeSpan: { count: number; disabled: boolean; onClick: () => void } | null
   // Omitted entirely when the block has no neighbour on that side; disabled
   // (but still shown) when a neighbour exists but can't yet be merged (a
   // live block on either side of the pair) — timeline.md §2/§3.4 rule 5.
@@ -720,7 +763,7 @@ function BlockContextMenu({
 
   const MENU_WIDTH = 200
   const ITEM_HEIGHT = 36
-  const itemCount = 3 + (mergeAbove ? 1 : 0) + (mergeBelow ? 1 : 0)
+  const itemCount = 3 + (mergeSpan ? 1 : (mergeAbove ? 1 : 0) + (mergeBelow ? 1 : 0))
   const MENU_HEIGHT = itemCount * ITEM_HEIGHT + 10
   const left = Math.min(x, window.innerWidth - MENU_WIDTH - 8)
   const top = Math.min(y, window.innerHeight - MENU_HEIGHT - 8)
@@ -771,19 +814,29 @@ function BlockContextMenu({
           onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
           Edit
         </button>
-        {mergeAbove && (
-          <button type="button" role="menuitem" disabled={busy || mergeAbove.disabled} onClick={mergeAbove.onClick} style={itemStyle()}
+        {mergeSpan ? (
+          <button type="button" role="menuitem" disabled={busy || mergeSpan.disabled} onClick={mergeSpan.onClick} style={itemStyle()}
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-            Merge with above
+            Merge {mergeSpan.count} blocks
           </button>
-        )}
-        {mergeBelow && (
-          <button type="button" role="menuitem" disabled={busy || mergeBelow.disabled} onClick={mergeBelow.onClick} style={itemStyle()}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-            Merge with below
-          </button>
+        ) : (
+          <>
+            {mergeAbove && (
+              <button type="button" role="menuitem" disabled={busy || mergeAbove.disabled} onClick={mergeAbove.onClick} style={itemStyle()}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+                Merge with above
+              </button>
+            )}
+            {mergeBelow && (
+              <button type="button" role="menuitem" disabled={busy || mergeBelow.disabled} onClick={mergeBelow.onClick} style={itemStyle()}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
+                Merge with below
+              </button>
+            )}
+          </>
         )}
         <button type="button" role="menuitem" disabled={busy} onClick={onRegenerate} style={itemStyle()}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-high)' }}
@@ -807,19 +860,6 @@ function BlockContextMenu({
 // row, and Delete block (full erasure of the block and its tracked data).
 // Save applies every change and closes; Discard closes with nothing applied.
 // The read-only detail panel never hosts any of this.
-
-function toTimeInputValue(ms: number): string {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-function fromTimeInputValue(value: string, baseMs: number): number | null {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
-  if (!match) return null
-  const d = new Date(baseMs)
-  d.setHours(Number(match[1]), Number(match[2]), 0, 0)
-  return d.getTime()
-}
 
 function BlockEditModal({
   block,
@@ -911,11 +951,14 @@ function BlockEditModal({
       if (categoryDraft !== block.dominantCategory) {
         await ipc.db.setBlockReview({ blockId: block.id, date: payload.date, state: 'corrected', correctedCategory: categoryDraft })
       }
-      const startMs = fromTimeInputValue(startDraft, block.startTime)
-      const endMs = fromTimeInputValue(endDraft, block.endTime)
-      if (startMs != null && endMs != null && (startMs !== block.startTime || endMs !== block.endTime)) {
+      const clampedStart = clampStartTimeDraft(startDraft, block.startTime)
+      const clampedEnd = clampEndTimeDraft(endDraft, block.endTime)
+      setStartDraft(clampedStart)
+      setEndDraft(clampedEnd)
+      const spanDraft = blockSpanDraftChanged(clampedStart, clampedEnd, block)
+      if (spanDraft?.changed) {
         // Applied last: a trim re-shapes the day and retires block ids.
-        await ipc.db.setBlockSpan({ blockId: block.id, date: payload.date, startMs, endMs })
+        await ipc.db.setBlockSpan({ blockId: block.id, date: payload.date, startMs: spanDraft.startMs, endMs: spanDraft.endMs })
       }
       daySummaryRecapCache.delete(payload.date)
       await onRefresh()
@@ -1086,15 +1129,8 @@ function BlockEditModal({
                 aria-label="Start time"
                 value={startDraft}
                 disabled={block.provisional}
-                min={toTimeInputValue(block.startTime)}
-                onChange={(event) => {
-                  const raw = event.target.value
-                  if (!raw) { setStartDraft(raw); return }
-                  // Trim-only: the start edge can only move later than the
-                  // block's original start, never earlier (timeline.md §3.4 rule 5).
-                  const ms = fromTimeInputValue(raw, block.startTime)
-                  setStartDraft(ms != null && ms < block.startTime ? toTimeInputValue(block.startTime) : raw)
-                }}
+                onChange={(event) => setStartDraft(draftTimeInputChange(event.target.value))}
+                onBlur={() => setStartDraft((draft) => clampStartTimeDraft(draft, block.startTime))}
                 style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
               <span style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>to</span>
@@ -1103,15 +1139,8 @@ function BlockEditModal({
                 aria-label="End time"
                 value={endDraft}
                 disabled={block.provisional}
-                max={toTimeInputValue(block.endTime)}
-                onChange={(event) => {
-                  const raw = event.target.value
-                  if (!raw) { setEndDraft(raw); return }
-                  // Trim-only: the end edge can only move earlier than the
-                  // block's original end, never later (timeline.md §3.4 rule 5).
-                  const ms = fromTimeInputValue(raw, block.endTime)
-                  setEndDraft(ms != null && ms > block.endTime ? toTimeInputValue(block.endTime) : raw)
-                }}
+                onChange={(event) => setEndDraft(draftTimeInputChange(event.target.value))}
+                onBlur={() => setEndDraft((draft) => clampEndTimeDraft(draft, block.endTime))}
                 style={{ ...inputBase, padding: '5px 8px', opacity: block.provisional ? 0.5 : 1 }}
               />
             </div>
@@ -1451,96 +1480,10 @@ function BlockDetailInspector({
   // One evidence view (timeline.md §2/§3.0): the apps, sites, and files behind
   // the block, in a single list sorted by time — the old "Apps used" and "Key
   // artifacts" merged into one. Work-first ordering falls out of sorting by
-  // seconds. Off-task evidence is split out below as side trips (§6).
-  type EvidenceRow = {
-    key: string
-    name: string
-    detail: string | null
-    seconds: number
-    icon: ReactNode
-    onOpen?: () => void
-    offTask: boolean
-    // The bundle the row happened inside — a site inside its browser, a page
-    // or file inside its app. Set when the owning app is itself in the list:
-    // the row then renders nested under it, because its minutes are a
-    // breakdown of the app's time, never additional time on top of it.
-    ownerKey?: string
-    children?: EvidenceRow[]
-  }
-  const isOffTaskCategory = (category: AppCategory): boolean =>
-    category === 'entertainment' || category === 'social'
-  const ownerKeyFor = (bundleId?: string | null, canonicalId?: string | null): string | undefined => {
-    const owner = block.topApps.slice(0, 8).find((app) =>
-      (bundleId != null && app.bundleId === bundleId)
-      || (canonicalId != null && app.canonicalAppId === canonicalId))
-    return owner ? `app:${owner.bundleId}` : undefined
-  }
-  const appRows: EvidenceRow[] = block.topApps.slice(0, 8).map((app) => ({
-    key: `app:${app.bundleId}`,
-    name: formatDisplayAppName(app.appName),
-    detail: categoryLabel(app.category),
-    seconds: app.totalSeconds,
-    icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />,
-    offTask: isOffTaskCategory(app.category),
-  }))
-  const artifactRows: EvidenceRow[] = block.topArtifacts.slice(0, 8).map((artifact) => ({
-    key: `art:${artifact.id}`,
-    name: safeTimelineText(artifact.displayTitle.trim()),
-    detail: artifact.subtitle || artifact.host || artifact.path || null,
-    seconds: artifact.totalSeconds,
-    icon: (
-      <EntityIcon
-        artifactType={artifact.artifactType}
-        canonicalAppId={artifact.canonicalAppId}
-        ownerBundleId={artifact.ownerBundleId}
-        ownerAppName={artifact.ownerAppName}
-        ownerAppInstanceId={artifact.ownerAppInstanceId}
-        title={artifact.displayTitle}
-        path={artifact.path}
-        domain={artifact.host}
-        url={artifact.url}
-        size={24}
-      />
-    ),
-    onOpen: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? undefined : () => void openArtifact(artifact),
-    // A page artifact on a leisure host (a YouTube/Netflix tab that leaked into
-    // the block's evidence) is a side trip, mirroring how site rows are routed.
-    offTask: kindForDomain(artifact.host) === 'leisure',
-    ownerKey: ownerKeyFor(artifact.ownerBundleId, artifact.canonicalAppId),
-  }))
-  // Sites already represented by an artifact row are not repeated.
-  const artifactHosts = new Set(block.topArtifacts.map((a) => a.host?.toLowerCase()).filter(Boolean) as string[])
-  const siteRows: EvidenceRow[] = block.websites
-    .filter((site) => !artifactHosts.has(site.domain.toLowerCase()))
-    .slice(0, 8)
-    .map((site) => ({
-      key: `site:${site.domain}`,
-      name: shortDomainLabel(site.domain),
-      detail: site.topTitle?.trim() || null,
-      seconds: site.totalSeconds,
-      icon: <EntityIcon artifactType="page" domain={site.domain} title={site.domain} size={24} />,
-      offTask: kindForDomain(site.domain) === 'leisure',
-      ownerKey: ownerKeyFor(site.browserBundleId, site.canonicalBrowserId),
-    }))
-  // Nest each on-task site/page/file under the app it happened in; rows whose
-  // app isn't listed stay top-level. Off-task rows keep flowing to Detours.
-  const childRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && row.ownerKey)
-  const nested = appRows.map((app) => ({
-    ...app,
-    children: childRows.filter((row) => row.ownerKey === app.key).sort((a, b) => b.seconds - a.seconds),
-  }))
-  const orphanRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && !row.ownerKey)
-  const allEvidence = [...nested, ...orphanRows].sort((a, b) => b.seconds - a.seconds)
-  const evidence = allEvidence.filter((row) => !row.offTask)
-  // "Detours" (§6): where ACTIVE time went elsewhere inside this block — the
-  // leisure sites and apps you were actually in. Idle/away time is never a
-  // detour (founder rule, Jul 2, 2026): it isn't something you were "in", it's
-  // the absence of activity, and it renders as blank space on the grid instead.
-  const detours = [
-    ...allEvidence.filter((row) => row.offTask),
-    ...[...artifactRows, ...siteRows].filter((row) => row.offTask),
-  ].sort((a, b) => b.seconds - a.seconds)
-  const detourSeconds = detours.reduce((sum, row) => sum + row.seconds, 0)
+  // seconds. Off-task evidence is split out below as side trips (§6). The
+  // nesting itself (which rows are children of which app) is pure logic,
+  // extracted to blockDetailRowTree.ts so it's unit-testable without a DOM.
+  const { evidence, detours, detourSeconds } = buildDetailRowTree(block)
 
   // The block's type tag + how the time inside splits by category. Real facts,
   // compactly: "Focused work" · Development 2h 10m · AI tools 40m.
@@ -1550,17 +1493,60 @@ function BlockDetailInspector({
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
 
-  const renderEvidenceRow = (row: EvidenceRow, dimmed: boolean, indented = false) => {
+  // Presentation (name/detail/icon/onOpen) for a row tree node, built from
+  // whichever raw source object it carries. Kept separate from the pure
+  // nesting logic so that logic stays testable without React/icon deps.
+  const presentationFor = (row: DetailRowNode): { name: string; detail: string | null; icon: ReactNode; onOpen?: () => void } => {
+    if (row.kind === 'app' && row.app) {
+      const app = row.app
+      return {
+        name: formatDisplayAppName(app.appName),
+        detail: categoryLabel(app.category),
+        icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />,
+      }
+    }
+    if (row.kind === 'artifact' && row.artifact) {
+      const artifact = row.artifact
+      return {
+        name: safeTimelineText(artifact.displayTitle.trim()),
+        detail: artifact.subtitle || artifact.host || artifact.path || null,
+        icon: (
+          <EntityIcon
+            artifactType={artifact.artifactType}
+            canonicalAppId={artifact.canonicalAppId}
+            ownerBundleId={artifact.ownerBundleId}
+            ownerAppName={artifact.ownerAppName}
+            ownerAppInstanceId={artifact.ownerAppInstanceId}
+            title={artifact.displayTitle}
+            path={artifact.path}
+            domain={artifact.host}
+            url={artifact.url}
+            size={24}
+          />
+        ),
+        onOpen: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? undefined : () => void openArtifact(artifact),
+      }
+    }
+    const site = row.site
+    return {
+      name: site ? shortDomainLabel(site.domain) : '',
+      detail: site?.topTitle?.trim() || null,
+      icon: <EntityIcon artifactType="page" domain={site?.domain} title={site?.domain} size={24} />,
+    }
+  }
+
+  const renderEvidenceRow = (row: DetailRowNode, dimmed: boolean, indented = false) => {
+    const { name, detail, icon, onOpen } = presentationFor(row)
     const content = (
       <>
-        {row.icon}
+        {icon}
         <div style={{ flex: 1, minWidth: 0 }}>
           <InlineRevealText
-            text={row.name}
+            text={name}
             style={{ fontSize: indented ? 12.5 : 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
           />
-          {row.detail && (
-            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.detail}</div>
+          {detail && (
+            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail}</div>
           )}
         </div>
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
@@ -1571,9 +1557,9 @@ function BlockDetailInspector({
     // Rows that happened inside another app indent under it: their minutes are
     // a breakdown of the parent's time, so they must not read as additive.
     const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1, paddingLeft: indented ? 34 : 0 }
-    const rowNode = row.onOpen
+    const rowNode = onOpen
       ? (
-        <button type="button" onClick={row.onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, paddingLeft: indented ? 34 : 0, textAlign: 'left', cursor: 'pointer' }}>
+        <button type="button" onClick={onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, paddingLeft: indented ? 34 : 0, textAlign: 'left', cursor: 'pointer' }}>
           {content}
         </button>
       )
@@ -2155,6 +2141,9 @@ function CalendarMonthView({
 export default function Timeline() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null)
+  // The far end of a shift-selected merge span. Null means a plain single
+  // selection; set means "select the whole run between the anchor and here".
+  const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   // Clock tick for the current-time line and the live block's growing bottom
@@ -2218,6 +2207,19 @@ export default function Timeline() {
     [payload],
   )
 
+  // The contiguous span the user has shift-selected: just the anchor for a
+  // plain click, or the inclusive run between the anchor and the shift-clicked
+  // end. Everything in here renders highlighted and merges together.
+  const mergeSelection = useMemo(
+    () => mergeSelectionSpan(sortedBlocks, selectedBlockId, mergeRangeEndId),
+    [sortedBlocks, selectedBlockId, mergeRangeEndId],
+  )
+  const selectedSpanIds = useMemo(
+    () => new Set(mergeSelection.map((block) => block.id)),
+    [mergeSelection],
+  )
+  const spanMerge = useMemo(() => spanMergeState(mergeSelection), [mergeSelection])
+
   // The day track runs from the first tracked event to the last (or "now" on
   // today) — hours with no activity are simply not part of the view.
   const dayBounds = useMemo(
@@ -2251,22 +2253,31 @@ export default function Timeline() {
     setSelectedBlockId(null)
   }, [payload, selectedBlockId, blockMap])
 
+  // Drop a stale range end the moment its block leaves the day (e.g. after a
+  // rebuild or merge) so the span collapses cleanly back to the anchor.
+  useEffect(() => {
+    if (mergeRangeEndId && !blockMap.has(mergeRangeEndId)) setMergeRangeEndId(null)
+  }, [blockMap, mergeRangeEndId])
+
   useEffect(() => {
     setSelectedBlockId(null)
+    setMergeRangeEndId(null)
     setTagFilter(null)
   }, [date])
 
-  // Escape deselects. While the context menu or editor modal is open, Escape
-  // belongs to that overlay — it must not also touch selection.
+  // Escape steps the selection down: first it drops a multi-block merge span,
+  // then it deselects entirely. While the context menu or editor modal is open,
+  // Escape belongs to that overlay — it must not also touch selection.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (contextMenu || editBlockId) return
-      if (selectedBlockId) setSelectedBlockId(null)
+      if (mergeRangeEndId) setMergeRangeEndId(null)
+      else if (selectedBlockId) setSelectedBlockId(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedBlockId, contextMenu, editBlockId])
+  }, [mergeRangeEndId, selectedBlockId, contextMenu, editBlockId])
 
   // Once the post-merge payload lands, reselect the single block now covering
   // the merged span and clear the pending marker.
@@ -2359,6 +2370,31 @@ export default function Timeline() {
   const menuMergeAboveDisabled = !!menuBlock?.provisional || !!menuAboveBlock?.provisional
   const menuMergeBelowDisabled = !!menuBlock?.provisional || !!menuBelowBlock?.provisional
 
+  // When the right-clicked block is part of an active shift-selected span, the
+  // menu offers "Merge N blocks" for the whole run instead of the single-
+  // neighbour items — the second merge gesture, sharing the same menu.
+  const menuMergeSpanActive = !!menuBlock && spanMerge.isSpan && selectedSpanIds.has(menuBlock.id)
+
+  const menuMergeSpan = async () => {
+    if (!contextMenu || menuBusy || !menuMergeSpanActive || !spanMerge.canMerge || !spanMerge.endpointIds) return
+    const [startId] = spanMerge.endpointIds
+    const spanStartTime = blockMap.get(startId)?.startTime ?? null
+    setMenuBusy(true)
+    try {
+      await ipc.db.mergeTimelineEpisodes({ blockIds: spanMerge.endpointIds, date })
+      daySummaryRecapCache.delete(date)
+      if (spanStartTime != null) pendingSelectAtRef.current = spanStartTime
+      setMergeRangeEndId(null)
+      setSelectedBlockId(null)
+      await timelineResource.refresh()
+    } catch {
+      // Menu just closes; the merged/unmerged state is visible on the grid.
+    } finally {
+      setMenuBusy(false)
+      setContextMenu(null)
+    }
+  }
+
   const menuMergeAbove = async () => {
     if (!contextMenu || menuBusy || !menuBlock || !menuAboveBlock || menuMergeAboveDisabled) return
     setMenuBusy(true)
@@ -2366,6 +2402,7 @@ export default function Timeline() {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [menuAboveBlock.id, menuBlock.id], date })
       daySummaryRecapCache.delete(date)
       pendingSelectAtRef.current = menuAboveBlock.startTime
+      setMergeRangeEndId(null)
       setSelectedBlockId(null)
       await timelineResource.refresh()
     } catch {
@@ -2383,6 +2420,7 @@ export default function Timeline() {
       await ipc.db.mergeTimelineEpisodes({ blockIds: [menuBlock.id, menuBelowBlock.id], date })
       daySummaryRecapCache.delete(date)
       pendingSelectAtRef.current = menuBlock.startTime
+      setMergeRangeEndId(null)
       setSelectedBlockId(null)
       await timelineResource.refresh()
     } catch {
@@ -2508,8 +2546,17 @@ export default function Timeline() {
         // Clicking empty space deselects everything.
         if (!clickedId) {
           setSelectedBlockId(null)
+          setMergeRangeEndId(null)
           return
         }
+        // Shift- (or Cmd-) click with something already selected extends the
+        // selection into a merge span instead of replacing it — the second
+        // merge gesture, alongside the right-click menu.
+        if ((event.shiftKey || event.metaKey) && selectedBlockId && clickedId !== selectedBlockId) {
+          setMergeRangeEndId(clickedId)
+          return
+        }
+        setMergeRangeEndId(null)
         if (clickedId !== selectedBlockId) {
           setSelectedBlockId(clickedId)
         }
@@ -2767,6 +2814,7 @@ export default function Timeline() {
                         gapSegments={gapSegments}
                         hourHeight={DAY_HOUR_HEIGHT}
                         selectedBlockId={selectedBlockId}
+                        selectedSpanIds={selectedSpanIds}
                         nowMs={isToday ? nowMs : null}
                         dimBlock={tagFilter ? (block) => blockTypeTag(block) !== tagFilter : undefined}
                         onBlockContextMenu={openBlockContextMenu}
@@ -2781,6 +2829,7 @@ export default function Timeline() {
                           setEditBlockId(contextMenu.blockId)
                           setContextMenu(null)
                         }}
+                        mergeSpan={menuMergeSpanActive ? { count: spanMerge.count, disabled: !spanMerge.canMerge, onClick: () => { void menuMergeSpan() } } : null}
                         mergeAbove={menuAboveBlock ? { disabled: menuMergeAboveDisabled, onClick: () => { void menuMergeAbove() } } : null}
                         mergeBelow={menuBelowBlock ? { disabled: menuMergeBelowDisabled, onClick: () => { void menuMergeBelow() } } : null}
                         onRegenerate={() => { void menuRegenerate() }}
@@ -2795,6 +2844,7 @@ export default function Timeline() {
                         onClose={() => setEditBlockId(null)}
                         onDeleted={() => {
                           setSelectedBlockId(null)
+                          setMergeRangeEndId(null)
                         }}
                         onRefresh={timelineResource.refresh}
                       />
@@ -2809,6 +2859,7 @@ export default function Timeline() {
                         payload={payload}
                         onClose={() => {
                           setSelectedBlockId(null)
+                          setMergeRangeEndId(null)
                         }}
                       />
                     ) : (

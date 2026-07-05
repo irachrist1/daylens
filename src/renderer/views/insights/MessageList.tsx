@@ -136,6 +136,8 @@ const ERROR_HEADER: Record<AIProviderErrorCode, string> = {
   quota_exhausted: 'Limit reached',
   credit_exhausted: 'Credit low',
   auth: 'Key rejected',
+  model_unavailable: 'Model unavailable',
+  network: 'No connection',
   unknown: 'Couldn’t complete that',
 }
 

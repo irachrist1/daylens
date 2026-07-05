@@ -296,6 +296,9 @@ function AIComposeImpl(
             ))}
         </div>
       )}
+      {/* Compact composer (founder report, 2026-07-05): the box starts at a
+          single centered line and grows only as the text does — never a big
+          empty well with the caret stranded at the top. */}
       <div style={{
         display: 'flex',
         alignItems: 'flex-end',
@@ -303,9 +306,8 @@ function AIComposeImpl(
         borderRadius: 16,
         border: '1px solid var(--color-border-ghost)',
         background: 'var(--color-surface)',
-        padding: variant === 'starter' ? '14px 12px 10px 18px' : '8px 8px 8px 16px',
+        padding: variant === 'starter' ? '9px 10px 9px 18px' : '8px 8px 8px 16px',
         boxShadow: 'var(--color-shadow-floating)',
-        minHeight: variant === 'starter' ? 112 : undefined,
       }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
           {empty && (
@@ -332,7 +334,7 @@ function AIComposeImpl(
             onPaste={onPaste}
             onBlur={() => { window.setTimeout(() => setMenu(null), 120) }}
             style={{
-              minHeight: variant === 'starter' ? 76 : 24,
+              minHeight: 24,
               maxHeight: 184,
               overflowY: 'auto',
               border: 'none',

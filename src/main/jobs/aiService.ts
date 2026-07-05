@@ -21,11 +21,9 @@ import {
   getThreadMessages,
   getActiveFocusSession,
   getDistractionCountForSession,
-  listPendingWorkContextCleanupDates,
   getRecentFocusSessions,
   upsertAISurfaceSummary,
   upsertConversationState,
-  upsertWorkContextCleanupReview,
   upsertWorkContextInsight,
 } from '../db/queries'
 import { routeInsightsQuestion, shouldUseRouter, type EntityContext, type TemporalContext } from '../lib/insightsQueryRouter'
@@ -133,11 +131,9 @@ import { planQuestion } from '../ai/planner'
 import { phraseAnswer } from '../ai/phrase'
 import { runResolverQueries } from '../ai/resolvers'
 import {
-  backgroundRelabelDispositionForBlock,
   fallbackNarrativeForBlock,
   getAppDetailPayload,
   getTimelineDayPayload,
-  listTimelineDaysNeedingHeuristicUpgrade,
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
 import {
@@ -2800,8 +2796,8 @@ function appNarrativeSignature(detail: ReturnType<typeof getAppDetailPayload>): 
     canonicalAppId: detail.canonicalAppId,
     rangeKey: detail.rangeKey,
     topArtifacts: detail.topArtifacts.slice(0, 8).map((artifact) => artifact.displayTitle),
-    topDomains: (detail.topDomains ?? []).slice(0, 8).map((entry) => entry.domain),
-    topPages: detail.topPages.slice(0, 8).map((page) => page.displayTitle),
+    topDomains: (detail.browserActivity?.domains ?? []).slice(0, 8).map((entry) => entry.domain),
+    topPages: (detail.browserActivity?.domains ?? []).flatMap((entry) => entry.pages).slice(0, 8).map((page) => page.displayTitle),
     blockAppearances: detail.blockAppearances.slice(0, 8).map((block) => `${block.blockId}:${block.label}:${block.startTime}:${block.endTime}`),
   }))
 }
@@ -2850,9 +2846,18 @@ function buildAppNarrativeBundle(
   // collapses to one entry, keeping the highest-duration row.
   const dedupedArtifacts = dedupeByTitle(detail.topArtifacts, (a) => a.displayTitle)
   // Work surfaces before leisure: order domains and pages so the model leads
-  // with the work the user came to do, mirroring the view's ordering.
-  const orderedDomains = workFirstByDomain(detail.topDomains ?? [], (d) => d.domain)
-  const orderedPages = workFirstByDomain(dedupeByTitle(detail.topPages, (p) => p.displayTitle), (p) => p.domain)
+  // with the work the user came to do, mirroring the view's ordering. Both are
+  // read from the same reconciled browserActivity tree the view renders, so
+  // the recap can never cite a number the screen doesn't show.
+  const activityDomains = detail.browserActivity?.domains ?? []
+  const orderedDomains = workFirstByDomain(activityDomains, (d) => d.domain)
+  const orderedPages = workFirstByDomain(
+    dedupeByTitle(
+      activityDomains.flatMap((entry) => entry.pages).sort((a, b) => b.totalSeconds - a.totalSeconds),
+      (p) => p.displayTitle,
+    ),
+    (p) => p.domain,
+  )
 
   // B3: collapse the 24-bucket per-hour distribution into the top whole-hour
   // ranges. The model previously confabulated sub-hour windows like
@@ -3941,6 +3946,7 @@ function workBlockPrompt(block: WorkContextBlock): string {
     '  - Do NOT return "Building & Testing" without a code editor or terminal in the evidence.',
     '  - This block may already combine several stretches of one activity. Name the WHOLE thing in one coherent title that covers all the evidence (e.g. "Setting up the work network with the Ubiquiti dashboard and Terminal"), not just the first app.',
     '  - A short peek at streaming or social (YouTube, Netflix, X) inside a work block is a side-distraction, not the headline. Name the work, never the peek — people multi-task with media on the side while actually working.',
+    '  - Name the site or tool where the work happened ("in Notion", "in Google Docs", "in Linear"), not the browser it was rendered in. Mention the browser only as secondary context ("in the Dia browser"), never as the headline location.',
     '  - If you genuinely cannot tell the intent, name it honestly from the real apps and artifacts you DO have ("Cursor, Warp, and Terminal — focused work"). Never announce failure, never say "Computer activity" or "Uncategorized".',
     '',
     `Duration: ${durationMinutes} minutes`,
@@ -4228,296 +4234,6 @@ export async function generateDayRegroupPlan(
   }
 }
 
-const queuedBlockInsightJobs = new Set<string>()
-let lastCleanupAnchorDate: string | null = null
-const BLOCK_FINALIZE_QUIET_MS = 90_000
-const CLEANUP_BLOCK_BATCH_SIZE = 12
-const CLEANUP_BATCH_PAUSE_MS = 750
-const HISTORY_HEURISTIC_UPGRADE_BATCH_SIZE = 4
-const HISTORY_HEURISTIC_UPGRADE_PAUSE_MS = 500
-
-// Provider rate-limit circuit breaker. When a 429 is seen (foreground or
-// background), background AI labeling pauses until this timestamp so the user's
-// interactive requests win the limited request budget. It is a plain expiring
-// timestamp — never a lock — so it cannot get stuck on. Foreground work (chat,
-// user-clicked regenerate, on-demand summaries) never consults it, and the
-// deterministic evening consolidation makes no API calls at all, so neither can
-// ever be blocked by the breaker.
-const MAX_AI_COOLDOWN_MS = 60_000
-let aiBackgroundCooldownUntil = 0
-function isBackgroundAIOnCooldown(): boolean {
-  return Date.now() < aiBackgroundCooldownUntil
-}
-function noteProviderRateLimit(err: unknown): void {
-  if (!err || typeof err !== 'object') return
-  const e = err as {
-    status?: number
-    error?: { type?: string; error?: { type?: string } }
-    headers?: Record<string, string> | { get?: (k: string) => string | null }
-  }
-  const is429 = e.status === 429
-    || e.error?.type === 'rate_limit_error'
-    || e.error?.error?.type === 'rate_limit_error'
-  if (!is429) return
-  const rawRetryAfter = e.headers && typeof (e.headers as { get?: (k: string) => string | null }).get === 'function'
-    ? (e.headers as { get: (k: string) => string | null }).get('retry-after')
-    : (e.headers as Record<string, string> | undefined)?.['retry-after']
-  const seconds = rawRetryAfter ? Number(rawRetryAfter) : NaN
-  const retryAfterMs = Number.isFinite(seconds) && seconds > 0
-    ? Math.min(seconds * 1000, MAX_AI_COOLDOWN_MS)
-    : 30_000
-  aiBackgroundCooldownUntil = Date.now() + retryAfterMs
-  console.warn(`[ai] provider rate-limited; pausing background AI for ~${Math.round(retryAfterMs / 1000)}s`)
-}
-
-const cleanupQueueState: {
-  active: boolean
-  pendingDates: string[]
-  pendingBlocks: WorkContextBlock[]
-} = {
-  active: false,
-  pendingDates: [],
-  pendingBlocks: [],
-}
-let cleanupQueueTimer: ReturnType<typeof setTimeout> | null = null
-let historyHeuristicUpgradeStarted = false
-
-function pause(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function resetCleanupQueue(): void {
-  if (cleanupQueueTimer) {
-    clearTimeout(cleanupQueueTimer)
-    cleanupQueueTimer = null
-  }
-  cleanupQueueState.active = false
-  cleanupQueueState.pendingDates = []
-  cleanupQueueState.pendingBlocks = []
-}
-
-function markBlockCleanupReviewed(block: WorkContextBlock): void {
-  upsertWorkContextCleanupReview(getDb(), {
-    startMs: block.startTime,
-    endMs: block.endTime,
-    stableLabel: block.label.current,
-    sourceBlockIds: [block.id],
-  })
-}
-
-function fillCleanupQueue(): void {
-  const db = getDb()
-  while (cleanupQueueState.pendingBlocks.length === 0 && cleanupQueueState.pendingDates.length > 0) {
-    const dateStr = cleanupQueueState.pendingDates.shift()
-    if (!dateStr) break
-
-    const payload = getTimelineDayPayload(db, dateStr, null)
-    for (const block of payload.blocks) {
-      const disposition = backgroundRelabelDispositionForBlock(block)
-      if (disposition === 'review') {
-        markBlockCleanupReviewed(block)
-        continue
-      }
-      if (disposition === 'relabel') {
-        cleanupQueueState.pendingBlocks.push(block)
-      }
-    }
-  }
-}
-
-async function runBlockInsightJob(
-  block: WorkContextBlock,
-  jobType: 'block_label_finalize' | 'block_cleanup_relabel',
-): Promise<void> {
-  // Breaker: skip background labeling while rate-limited. The block is left
-  // untouched and re-scheduled by the next timeline read once the cooldown
-  // expires, so nothing is lost or stranded.
-  if (isBackgroundAIOnCooldown()) return
-  if (queuedBlockInsightJobs.has(`${jobType}:${block.id}`)) return
-  queuedBlockInsightJobs.add(`${jobType}:${block.id}`)
-
-  try {
-    await generateWorkBlockInsight(block, { jobType, triggerSource: 'background' })
-    invalidateProjectionScope('timeline', `ai:${jobType}`)
-    invalidateProjectionScope('apps', `ai:${jobType}`)
-    invalidateProjectionScope('insights', `ai:${jobType}`)
-  } catch (error) {
-    noteProviderRateLimit(error)
-    console.warn(`[ai] ${jobType} failed for block ${block.id}:`, error)
-  } finally {
-    queuedBlockInsightJobs.delete(`${jobType}:${block.id}`)
-  }
-}
-
-async function processCleanupQueue(): Promise<void> {
-  if (!cleanupQueueState.active) return
-  if (!getSettings().aiBackgroundEnrichment) {
-    resetCleanupQueue()
-    return
-  }
-
-  // Breaker: while rate-limited, leave the queue intact and re-check after the
-  // cooldown rather than chewing through the batch as no-ops.
-  if (isBackgroundAIOnCooldown()) {
-    const cooldownDelayMs = aiBackgroundCooldownUntil - Date.now()
-    if (cooldownDelayMs > 0) {
-      cleanupQueueTimer = setTimeout(() => {
-        cleanupQueueTimer = null
-        void processCleanupQueue()
-      }, cooldownDelayMs)
-      return
-    }
-  }
-
-  try {
-    fillCleanupQueue()
-    if (cleanupQueueState.pendingBlocks.length === 0) {
-      resetCleanupQueue()
-      return
-    }
-
-    const batch = cleanupQueueState.pendingBlocks.splice(0, CLEANUP_BLOCK_BATCH_SIZE)
-    for (const block of batch) {
-      await runBlockInsightJob(block, 'block_cleanup_relabel')
-    }
-
-    fillCleanupQueue()
-    if (cleanupQueueState.pendingBlocks.length === 0 && cleanupQueueState.pendingDates.length === 0) {
-      resetCleanupQueue()
-      return
-    }
-
-    cleanupQueueTimer = setTimeout(() => {
-      cleanupQueueTimer = null
-      void processCleanupQueue()
-    }, CLEANUP_BATCH_PAUSE_MS)
-  } catch (error) {
-    console.warn('[ai] block cleanup sweep failed:', error)
-    resetCleanupQueue()
-  }
-}
-
-function scheduleOvernightCleanup(anchorDate: string): void {
-  if (!getSettings().aiBackgroundEnrichment) return
-  if (cleanupQueueState.active) {
-    lastCleanupAnchorDate = anchorDate
-    return
-  }
-  if (lastCleanupAnchorDate === anchorDate) return
-
-  const pendingDates = listPendingWorkContextCleanupDates(getDb(), anchorDate)
-  lastCleanupAnchorDate = anchorDate
-  if (pendingDates.length === 0) return
-
-  cleanupQueueState.active = true
-  cleanupQueueState.pendingDates = pendingDates
-  cleanupQueueState.pendingBlocks = []
-  void processCleanupQueue()
-}
-
-async function runHistoryHeuristicUpgrade(anchorDate: string): Promise<void> {
-  try {
-    const db = getDb()
-    let upgradedAny = false
-    while (true) {
-      const dates = listTimelineDaysNeedingHeuristicUpgrade(db, anchorDate, HISTORY_HEURISTIC_UPGRADE_BATCH_SIZE)
-      if (dates.length === 0) break
-
-      for (const dateStr of dates) {
-        const payload = getTimelineDayPayload(db, dateStr, null)
-        upgradedAny = true
-        if (getSettings().aiBackgroundEnrichment) {
-          for (const block of payload.blocks) {
-            if (backgroundRelabelDispositionForBlock(block) !== 'relabel') continue
-            await runBlockInsightJob(block, 'block_cleanup_relabel')
-          }
-        }
-        await pause(HISTORY_HEURISTIC_UPGRADE_PAUSE_MS)
-      }
-    }
-
-    if (upgradedAny) {
-      invalidateProjectionScope('timeline', 'timeline-heuristic-upgrade')
-      invalidateProjectionScope('apps', 'timeline-heuristic-upgrade')
-      invalidateProjectionScope('insights', 'timeline-heuristic-upgrade')
-    }
-  } catch (error) {
-    console.warn('[ai] timeline heuristic upgrade sweep failed:', error)
-  }
-}
-
-function scheduleHistoryHeuristicUpgrade(anchorDate: string): void {
-  if (historyHeuristicUpgradeStarted) return
-  historyHeuristicUpgradeStarted = true
-  setTimeout(() => {
-    void runHistoryHeuristicUpgrade(anchorDate)
-  }, 1_000)
-}
-
-const lastTimelineAIJobFingerprint = new Map<string, string>()
-
-/**
- * Identity of the relabel-relevant state of a day's blocks. Two reads with the
- * same fingerprint would schedule exactly the same AI jobs, so the second can be
- * skipped. Keyed on what `backgroundRelabelDispositionForBlock` actually reads:
- * block identity, end time, and current label/source.
- */
-function timelineAIJobFingerprint(payload: DayTimelinePayload): string {
-  // Hash a structured (delimiter-free) encoding of the block fields. The old
-  // `:`/`|`-joined string collided when a label itself contained those
-  // characters, letting two different day states share a fingerprint and
-  // suppress scheduling for a changed day.
-  const shape = payload.blocks.map((block) => [
-    block.id,
-    block.endTime,
-    block.label.source,
-    block.label.current ?? '',
-  ])
-  return createHash('sha1').update(JSON.stringify(shape)).digest('hex')
-}
-
-export function scheduleTimelineAIJobs(payload: DayTimelinePayload): void {
-  const settings = getSettings()
-  if (!settings.aiBackgroundEnrichment) return
-  // Emergency cost fuse: passive timeline reads happen on timers and week-view
-  // fan-outs. They must not spend provider tokens in production unless a dev
-  // deliberately opts into this background path.
-  if (process.env.DAYLENS_ENABLE_PASSIVE_AI !== '1') return
-
-  scheduleHistoryHeuristicUpgrade(currentLocalDateString())
-  // Breaker: while rate-limited, schedule nothing and do not memoize, so the
-  // next read after the cooldown retries cleanly.
-  if (isBackgroundAIOnCooldown()) return
-
-  // GET_TIMELINE_DAY runs on every 30s today-poll, every week-view fan-out, and
-  // every Day Wrapped open. Skip the per-block scheduling when this day's blocks
-  // are byte-for-byte what they were last time we scheduled them (F15).
-  const fingerprint = timelineAIJobFingerprint(payload)
-  if (lastTimelineAIJobFingerprint.get(payload.date) === fingerprint) return
-
-  const now = Date.now()
-  let pendingQuietBlock = false
-  for (const block of payload.blocks) {
-    if (backgroundRelabelDispositionForBlock(block) !== 'relabel') continue
-    if (now - block.endTime < BLOCK_FINALIZE_QUIET_MS) {
-      // Eligible but still settling; it will become schedulable purely with the
-      // passage of time, without any fingerprint change.
-      pendingQuietBlock = true
-      continue
-    }
-    void runBlockInsightJob(block, 'block_label_finalize')
-  }
-
-  scheduleOvernightCleanup(currentLocalDateString())
-
-  // Only memoize once every relabel-eligible block has actually been scheduled,
-  // so a block still inside its quiet window is re-checked on the next read
-  // instead of being stranded until the block set next changes.
-  if (!pendingQuietBlock) {
-    lastTimelineAIJobFingerprint.set(payload.date, fingerprint)
-  }
-}
-
 const APP_VOCABULARY_HINT =
   'App vocabulary (use this to interpret app names correctly): ' +
   'Dia = AI-powered browser; Arc/Chrome/Safari/Firefox/Brave/Edge/Opera/Vivaldi = browsers; ' +
@@ -4691,7 +4407,6 @@ export async function sendMessage(payload: AIChatSendRequest, options: SendMessa
     }
     return result
   } catch (err) {
-    noteProviderRateLimit(err)
     const friendly = friendlyChatError(err)
     if (recorder) {
       recorder.finish(undefined, friendly.message)

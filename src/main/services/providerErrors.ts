@@ -56,10 +56,14 @@ export function classifyProviderError(error: unknown): AIProviderErrorMeta {
     return { code: 'credit_exhausted' }
   }
 
-  // Custom spend/usage limit walls (e.g. Anthropic's "reached your specified API usage limits")
+  // Custom spend/usage limit walls (Anthropic's "reached your specified API
+  // usage limits" and "would exceed your organization's maximum monthly spend
+  // limit"). These arrive as 429s but no backoff recovers them within the
+  // billing period — they need the user, not a retry.
   if (
     haystack.includes('usage limits')
     || haystack.includes('usage limit')
+    || haystack.includes('spend limit')
     || haystack.includes('regain access on')
   ) {
     return { code: 'quota_exhausted' }
@@ -72,7 +76,33 @@ export function classifyProviderError(error: unknown): AIProviderErrorMeta {
     return { code: 'transient_rate_limit', retryAfterSeconds }
   }
 
+  // A model id that no longer exists on this key (deprecated dated snapshot
+  // still selected in Settings). Without this it read as the blank "couldn't
+  // complete that" while every single request failed the same way.
+  if (status === 404 || type === 'not_found_error' || e.error?.type === 'not_found_error') {
+    return { code: 'model_unavailable' }
+  }
+
+  // Connection-level failures (offline, DNS, reset) — the SDKs throw these
+  // without an HTTP status.
+  if (status == null && /connection error|connection refused|fetch failed|network|enotfound|econnreset|econnrefused|etimedout|socket hang up/i.test(haystack)) {
+    return { code: 'network' }
+  }
+
   return { code: 'unknown' }
+}
+
+// Short, single-line extract of the provider's own words, safe to show inside
+// parentheses. The point (founder report, 2026-07-05): a failure the app can't
+// classify must still tell the user WHAT the provider said, not just "couldn't
+// complete that".
+export function providerErrorDetail(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const e = error as RawProviderError
+  const raw = (e.error?.message ?? e.message ?? '').replace(/\s+/g, ' ').trim()
+  if (!raw) return null
+  const detail = raw.replace(/^(?:\d{3}\s+)?(?:Error:\s*)?/i, '').slice(0, 160)
+  return detail || null
 }
 
 /** Branded, channel-name-free, actionable copy for each error class. */
@@ -80,6 +110,7 @@ export function userMessageForProviderError(
   code: AIProviderErrorCode,
   label: string,
   retryAfterSeconds: number | null = null,
+  detail: string | null = null,
 ): string {
   switch (code) {
     case 'transient_rate_limit':
@@ -87,13 +118,19 @@ export function userMessageForProviderError(
         ? `${label} is busy right now. Give it about ${retryAfterSeconds}s and try again.`
         : `${label} is busy right now. Give it a moment and try again.`
     case 'quota_exhausted':
-      return `You've hit ${label}'s request limit for now. Add billing to that provider to raise it, switch providers in Settings → AI, or try again later.`
+      return `You've hit ${label}'s usage limit. Raise the limit or add billing with that provider, switch providers in Settings → AI, or try again later.`
     case 'credit_exhausted':
       return `${label}'s credit balance is too low. Top it up with the provider, or switch providers in Settings → AI.`
     case 'auth':
-      return `${label} rejected the saved key. Re-check or re-paste it in Settings → AI.`
+      return `${label} rejected the saved key — it may be expired or revoked. Re-check or re-paste it in Settings → AI.`
+    case 'model_unavailable':
+      return `${label} no longer offers the selected model. Pick a different model in Settings → AI.`
+    case 'network':
+      return `Couldn't reach ${label}. Check your internet connection and try again.`
     default:
-      return `${label} couldn't complete that. Please try again.`
+      return detail
+        ? `${label} couldn't complete that: ${detail}`
+        : `${label} couldn't complete that. Please try again.`
   }
 }
 
@@ -106,6 +143,7 @@ export function userMessageForProviderError(
 export function friendlyProviderError(error: unknown, label: string): Error {
   if (error instanceof Error && isProviderErrorEncoded(error.message)) return error
   const meta = classifyProviderError(error)
-  const message = userMessageForProviderError(meta.code, label, meta.retryAfterSeconds ?? null)
+  const detail = meta.code === 'unknown' ? providerErrorDetail(error) : null
+  const message = userMessageForProviderError(meta.code, label, meta.retryAfterSeconds ?? null, detail)
   return new Error(encodeProviderErrorMeta(message, meta))
 }

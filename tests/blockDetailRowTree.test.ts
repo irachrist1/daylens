@@ -1,0 +1,195 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
+import { SCHEMA_SQL } from '../src/main/db/schema.ts'
+import { buildTabEvidenceFromFocusEvents } from '../src/main/services/workBlocks.ts'
+import { buildDetailRowTree } from '../src/renderer/lib/blockDetailRowTree.ts'
+import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
+import type { ArtifactRef, AppCategory, WorkContextAppSummary, WorkContextBlock } from '../src/shared/types.ts'
+
+// The "Active now" detail panel (BlockDetailInspector in Timeline.tsx) must
+// nest a browser's pages under the browser's own app row — a Notion page
+// visited inside Dia is a breakdown of Dia's tracked time, never additional
+// time on top of it (docs/findings.md, "app time and site time
+// double-counted"). This suite pins the pure nesting logic
+// (buildDetailRowTree) the panel now delegates to.
+
+function ensureFocusEventsTable(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS focus_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms INTEGER NOT NULL,
+      mono_ns INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      app_bundle_id TEXT,
+      app_name TEXT,
+      pid INTEGER,
+      window_title TEXT,
+      url TEXT,
+      page_title TEXT,
+      source TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      platform TEXT,
+      schema_ver INTEGER
+    );
+  `)
+}
+
+function createDb(): Database.Database {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  ensureFocusEventsTable(db)
+  return db
+}
+
+function insertTabEvent(
+  db: Database.Database,
+  o: { tsMs: number; bundleId: string; appName: string; url: string; pageTitle: string },
+): void {
+  db.prepare(`
+    INSERT INTO focus_events (
+      ts_ms, mono_ns, event_type, app_bundle_id, app_name, pid,
+      window_title, url, page_title, source, confidence, platform, schema_ver
+    ) VALUES (?, ?, 'tab_changed', ?, ?, 1, ?, ?, ?, 'apple_events_tab', 'observed', 'darwin', 1)
+  `).run(o.tsMs, o.tsMs, o.bundleId, o.appName, o.pageTitle, o.url, o.pageTitle)
+}
+
+function makeApp(opts: Partial<WorkContextAppSummary> & { bundleId: string; appName: string; totalSeconds: number }): WorkContextAppSummary {
+  return {
+    canonicalAppId: null,
+    category: 'browsing',
+    sessionCount: 1,
+    isBrowser: false,
+    ...opts,
+  }
+}
+
+function makeBlock(opts: { topApps: WorkContextAppSummary[]; topArtifacts: ArtifactRef[] }): WorkContextBlock {
+  const category: AppCategory = 'browsing'
+  return {
+    id: 'b:test',
+    startTime: 0,
+    endTime: 44 * 60 * 1000,
+    dominantCategory: category,
+    categoryDistribution: { [category]: 2640 },
+    ruleBasedLabel: 'Browsing',
+    aiLabel: null,
+    sessions: [],
+    topApps: opts.topApps,
+    websites: [],
+    keyPages: [],
+    pageRefs: [],
+    documentRefs: [],
+    topArtifacts: opts.topArtifacts,
+    workflowRefs: [],
+    label: {
+      current: 'Browsing',
+      source: 'rule',
+      confidence: 0.8,
+      narrative: null,
+      ruleBased: 'Browsing',
+      aiSuggested: null,
+      override: null,
+    },
+    focusOverlap: { totalSeconds: 2640, pct: 100, sessionIds: [] },
+    evidenceSummary: { apps: [], pages: [], documents: [], domains: [] },
+    heuristicVersion: 'test',
+    computedAt: 0,
+    switchCount: 0,
+    confidence: 'high',
+    review: { ...DEFAULT_TIMELINE_BLOCK_REVIEW, state: 'auto-approved' },
+    isLive: true,
+  }
+}
+
+const DIA_BUNDLE = 'company.thebrowser.browser'
+const ELECTRON_BUNDLE = 'com.github.Electron'
+
+test('live-day shape: tab-evidence Notion pages nest under Dia, Electron stays a top-level sibling, nothing orphaned', () => {
+  const db = createDb()
+  const startMs = 0
+  const endMs = 44 * 60 * 1000 // 44 minutes, matching the founder's reported Dia total
+
+  // Two Notion pages visited inside Dia, captured the way today's live block
+  // actually captures them: focus_events tab-change samples, not
+  // website_visits (which lags behind real-time tab tracking).
+  insertTabEvent(db, { tsMs: startMs, bundleId: DIA_BUNDLE, appName: 'Dia', url: 'https://www.notion.so/Project-Plan', pageTitle: 'Project Plan' })
+  insertTabEvent(db, { tsMs: startMs + 20 * 60 * 1000, bundleId: DIA_BUNDLE, appName: 'Dia', url: 'https://www.notion.so/Meeting-Notes', pageTitle: 'Meeting Notes' })
+
+  // Run the REAL producer (now fixed to populate owner linkage) rather than
+  // hand-rolling PageRefs, so this test tracks what the engine actually emits.
+  const notionPages = buildTabEvidenceFromFocusEvents(db, startMs, endMs)
+  assert.equal(notionPages.length, 2, 'both Notion pages should be captured as tab evidence')
+
+  const dia = makeApp({ bundleId: DIA_BUNDLE, appName: 'Dia', totalSeconds: 2640, isBrowser: true })
+  const electron = makeApp({ bundleId: ELECTRON_BUNDLE, appName: 'Electron', totalSeconds: 600, category: 'development' })
+  const block = makeBlock({ topApps: [dia, electron], topArtifacts: notionPages })
+
+  const { evidence } = buildDetailRowTree(block)
+
+  // Exactly two top-level rows: Dia and Electron. The Notion pages must not
+  // show up as their own top-level ("orphan") entries.
+  assert.equal(evidence.length, 2, `expected exactly Dia + Electron at top level, got: ${evidence.map((r) => r.key).join(', ')}`)
+
+  const diaRow = evidence.find((row) => row.key === `app:${DIA_BUNDLE}`)
+  const electronRow = evidence.find((row) => row.key === `app:${ELECTRON_BUNDLE}`)
+  assert.ok(diaRow, 'Dia row must be present')
+  assert.ok(electronRow, 'Electron row must be present')
+
+  // The Notion pages are children of Dia (depth 2 nesting), not additive
+  // top-level rows.
+  assert.equal(diaRow!.children.length, 2, 'both Notion pages should nest under Dia')
+  for (const child of diaRow!.children) {
+    assert.equal(child.kind, 'artifact')
+    assert.equal(child.ownerKey, `app:${DIA_BUNDLE}`)
+  }
+  const childNames = diaRow!.children.map((c) => c.artifact?.displayTitle).sort()
+  assert.deepEqual(childNames, ['Meeting Notes', 'Project Plan'])
+
+  // Electron is a true sibling: no children of its own, and it isn't nested
+  // under Dia or anything else.
+  assert.equal(electronRow!.children.length, 0, 'Electron has no children of its own')
+  assert.equal(electronRow!.ownerKey, undefined, 'app rows are never themselves children')
+})
+
+test('a PageRef carrying only browser-owner fields (no ownerBundleId/canonicalAppId) still nests under its browser', () => {
+  // Guards the renderer-side fallback independently of the producer fix
+  // above: even if a PageRef somewhere only ever sets browserBundleId/
+  // canonicalBrowserId (the PageRef-specific linkage), ownerKeyFor must still
+  // find the owning app rather than dropping the row into orphans.
+  const dia = makeApp({ bundleId: DIA_BUNDLE, appName: 'Dia', canonicalAppId: 'dia', totalSeconds: 120, isBrowser: true })
+
+  const byBundleId: ArtifactRef = {
+    id: 'art:by-bundle',
+    artifactType: 'page',
+    displayTitle: 'By bundle id',
+    totalSeconds: 60,
+    confidence: 0.85,
+    ownerBundleId: null,
+    canonicalAppId: null,
+    host: 'example.com',
+    openTarget: { kind: 'unsupported', value: null },
+    // PageRef-only fields, accessed structurally by buildDetailRowTree.
+    ...( { browserBundleId: DIA_BUNDLE, canonicalBrowserId: null } as Record<string, unknown>),
+  }
+  const byCanonicalId: ArtifactRef = {
+    id: 'art:by-canonical',
+    artifactType: 'page',
+    displayTitle: 'By canonical id',
+    totalSeconds: 60,
+    confidence: 0.85,
+    ownerBundleId: null,
+    canonicalAppId: null,
+    host: 'example.org',
+    openTarget: { kind: 'unsupported', value: null },
+    ...( { browserBundleId: null, canonicalBrowserId: 'dia' } as Record<string, unknown>),
+  }
+
+  const block = makeBlock({ topApps: [dia], topArtifacts: [byBundleId, byCanonicalId] })
+  const { evidence } = buildDetailRowTree(block)
+
+  assert.equal(evidence.length, 1, 'only Dia at top level — neither page should orphan')
+  const diaRow = evidence[0]
+  assert.equal(diaRow.key, `app:${DIA_BUNDLE}`)
+  assert.equal(diaRow.children.length, 2, 'both pages nest under Dia via the browser-field fallback')
+})

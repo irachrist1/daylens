@@ -1,8 +1,8 @@
-// Regression guard for the per-domain rollup inside AppDetailPayload.
-// When the selected app is a browser, `getAppDetailPayload` must populate
-// `topDomains` from `website_visits`, grouped by `canonical_browser_id` via
-// `getDomainSummariesForBrowser`. When the selected app is a native app,
-// `topDomains` must be omitted so the renderer can hide the section.
+// Regression guard for the reconciled browser breakdown inside
+// AppDetailPayload. When the selected app is a browser, `getAppDetailPayload`
+// must populate `browserActivity` (domains → pages, reconciled against the
+// browser's own foreground time). When the selected app is a native app, it
+// must be omitted so the renderer can hide the section.
 //
 // Fixtures reuse the AI bench infra so the ground truth is the same as the
 // rest of the harness.
@@ -21,12 +21,12 @@ function daysFromFixtureThroughToday(fixtureToday: Date): number {
   return Math.max(1, Math.floor((today - fixtureDay) / 86_400_000) + 1)
 }
 
-test('browser app detail includes per-domain time rollup', () => {
+test('browser app detail includes the reconciled domain breakdown', () => {
   const { db, today } = setupFixture('allDayChatGPT')
   // canonical id for Google Chrome in the appIdentity catalog is "chrome".
   const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
-  assert.ok(Array.isArray(detail.topDomains), 'topDomains must be present for a browser app')
-  const domains = detail.topDomains ?? []
+  assert.ok(detail.browserActivity, 'browserActivity must be present for a browser app')
+  const domains = detail.browserActivity?.domains ?? []
   const domainNames = domains.map((d) => d.domain)
   assert.ok(domainNames.includes('chatgpt.com'), `expected chatgpt.com in ${JSON.stringify(domainNames)}`)
   assert.ok(domainNames.includes('claude.ai'), `expected claude.ai in ${JSON.stringify(domainNames)}`)
@@ -35,17 +35,38 @@ test('browser app detail includes per-domain time rollup', () => {
   db.close()
 })
 
-test('native app detail omits per-domain rollup', () => {
+test('browser breakdown reconciles: pages sum to their domain, domains + remainder sum to the header', () => {
+  const { db, today } = setupFixture('allDayChatGPT')
+  const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
+  const activity = detail.browserActivity
+  assert.ok(activity)
+  for (const domain of activity.domains) {
+    const pageSum = domain.pages.reduce((sum, page) => sum + page.totalSeconds, 0)
+    assert.equal(pageSum, domain.totalSeconds, `pages of ${domain.domain} must sum to the domain total`)
+  }
+  const domainSum = activity.domains.reduce((sum, domain) => sum + domain.totalSeconds, 0)
+  assert.equal(domainSum, activity.attributedSeconds, 'domain totals must sum to attributedSeconds')
+  assert.ok(activity.attributedSeconds <= activity.totalSeconds, 'attributed time can never exceed the header total')
+  assert.equal(
+    activity.attributedSeconds + activity.unattributedSeconds,
+    activity.totalSeconds,
+    'attributed + "No page recorded" must equal the header total exactly',
+  )
+  assert.equal(activity.totalSeconds, detail.totalSeconds, 'the breakdown must anchor on the same header total the view shows')
+  db.close()
+})
+
+test('native app detail omits the browser breakdown', () => {
   const { db, today } = setupFixture('codingDay')
   const detail = getAppDetailPayload(db, 'cursor', daysFromFixtureThroughToday(today), null)
-  assert.equal(detail.topDomains, undefined, 'non-browser apps must not carry topDomains')
+  assert.equal(detail.browserActivity, undefined, 'non-browser apps must not carry browserActivity')
   db.close()
 })
 
 test('domain rollup is ordered by duration desc', () => {
   const { db, today } = setupFixture('allDayChatGPT')
   const detail = getAppDetailPayload(db, 'chrome', daysFromFixtureThroughToday(today), null)
-  const domains = detail.topDomains ?? []
+  const domains = detail.browserActivity?.domains ?? []
   for (let i = 1; i < domains.length; i++) {
     assert.ok(
       domains[i - 1].totalSeconds >= domains[i].totalSeconds,

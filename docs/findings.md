@@ -556,3 +556,163 @@ never-written tables from the v14 attribution-first schema (`raw_window_sessions
 `browser_context_events`, `idle_periods`, `file_activity_events`) are dropped (migration
 v42) along with their always-empty readers; `attribution.ts`'s hardcoded browser regex
 (missed Dia/Comet/Zen) now uses the app catalog + OS registry like the timeline engine.
+
+# 2026-07-03 — the live-testing fix pass: five symptoms, each rooted a layer below the screen
+
+Two blind investigations (Opus and GPT-5.5) plus a file-mapping pass traced the founder's
+five live-testing symptoms (fragmented days, flat detail panel, Leisure mis-tags,
+navigation-speak narratives, monotone Week view). Root causes and fixes:
+
+## Fragmented days until "Re-analyze": invariant 3 lived behind a manual click
+
+There was one heuristic block builder, but the AI regroup that merges same-intent
+neighbours (`generateDayRegroupPlan` → `mergeTimelineEpisodes`) was called from exactly
+one place: the manual Analyze IPC handler. No rollover, consolidation, or startup job
+ever merged. DB proof (Jul 2): the automatic path's invalidated generation had 14
+artifact-labelled fragments split at every app switch; the founder's manual click
+produced the current 6 intent-level blocks. The heuristic genuinely can't do that merge
+(it takes AI to see "AI Chat + Joe Rogan video + Template_output" as one intent), so the
+fix is not a second merge heuristic: the Analyze body is extracted into one shared
+`analyzeTimelineDay` (`services/analyzeDay.ts`) called by both the manual handler and
+the automatic finalize hooks (`syncUploader.ts` day-rollover + startup-finalize), gated
+by `persistedDayWasProcessed` so tokens are spent at most once per day, falling back
+cleanly to heuristic blocks on provider outage. Merges still ride the durable
+boundary-correction path, so they survive rebuilds (invariant 8). Regression:
+`tests/timelineAutoAnalyze.test.ts`.
+
+## "Active now" pages rendered flat: tab-evidence PageRefs carried no owner
+
+Finalized days nest pages under their browser; the live block's pages come from a
+different producer — `buildTabEvidenceFromFocusEvents` (focus_events, because
+`website_visits` lags for today) — which never set `ownerBundleId`/`canonicalAppId`, so
+the detail panel's `ownerKeyFor` returned undefined and every page fell into the flat
+orphan list beside Dia instead of under it. Fixed at both layers: the producer now stamps
+owner linkage like `buildPageCandidates` does, and the panel's row-tree construction
+(extracted to the pure `renderer/lib/blockDetailRowTree.ts`) falls back to
+`browserBundleId`/`canonicalBrowserId` the way site rows always did. Regression:
+`tests/blockDetailRowTree.test.ts` asserts nesting depth through the real producer.
+
+## Leisure tag from a background tab: the top artifact overrode the time-weighted base
+
+`dominantCategoryForBlock` ended with `return artifactCategory ?? baseCategory` — the
+category of the single largest page artifact beat the block's whole foreground
+distribution. Jul 2 proof: `blk_338e5bade088df14` had {aiTools 867s, browsing 39s,
+productivity 76s}, zero entertainment app-time, yet a Netflix page (1051s of raw dwell,
+accruing in the background) sat at topArtifacts[0] and flipped the block to
+entertainment → "Leisure". The asymmetry: Notion pages carried no artifact category at
+all (null), so intentional SaaS work could never defend itself. Invariant 6 is now
+enforced: an entertainment/social artifact may refine a non-focused base but never
+overrides a focused base unless the artifact is a strict majority AND focused work is a
+minority; Notion/Google Docs/Linear/Coda/Quip pages now carry `productivity` weight.
+Regression: `tests/blockCategoryDominance.test.ts` (uses the real blk_338 shape).
+
+Follow-up peer review found two edge cases in that fix: communication/email/meetings
+are work intent even though they are not focused categories, and exact work/leisure
+ties must not go to the leisure artifact. The finalized rule now protects a
+communication-dominant work block from a high-dwell X/Netflix tab, protects split
+focused work even when communication is the plurality category, and only lets leisure
+win when it is strictly stronger than total work intent. Browser apps are also
+normalized back to `browsing` when loading stored evidence, so stale Dia/Safari/Chrome
+categories cannot leak into the Apps rail or block detail. Added regressions to
+`tests/blockCategoryDominance.test.ts` and `tests/captureFoundation.test.ts`.
+
+## Narratives described navigation: evidence titles were ranked by dwell alone
+
+The generator already received page titles — but one per domain, the longest-dwelt,
+which for Notion is always a hub. Jul 2 evening block: "Notes | All Notes | Notion" 649s
+became the topTitle while "AI Training Session | Notion" (12s) and "Andersen AI Training
+— Level 3" (9s) — the actual work, navigated through quickly — never reached the prompt.
+`getWebsiteSummariesForRange` and `getTopPagesForDomains` now prefer specific titles
+over generic index/hub titles (deduped per title), and `workBlockPrompt` names the site
+("in Notion") over the browser ("in Dia"). Input enrichment only — invariant 5 stands.
+Regression: `tests/blockEvidenceTitleSelection.test.ts` (uses the real dwell shape).
+
+## Week view "one color": not a color bug — the category bug wearing a different shirt
+
+Day and Week share `CalendarBlockCard` → `activityColorForCategory`, and the founder's
+Settings overrides were persisted and loaded. The week looked monotone because
+`dominant_category` collapsed almost every block to aiTools/browsing (violet) or
+entertainment (slate + dimmed) — the artifact-override bug above. One genuine hardcoded
+palette did exist: Wrapped's `wrapKit.tsx` `CAT_COLOR`, now deleted in favor of the
+shared Settings-aware resolver. Regression: `tests/wrapKitCategoryColor.test.ts`.
+
+Also: `queries.ts` carried two literal NUL bytes in a cache-key template string, which
+made git treat the whole file as binary; replaced with `\u0000` escapes (identical
+semantics), so the file diffs as text again.
+
+# 2026-07-03 — live blocks stayed grey all day: a naming rule leaked into color
+
+**Status:** Fixed + regression-tested
+
+Founder report: blocks on today's timeline never picked up their category color as the
+day was built — only after Analyze ran. Root cause was one line, not a missing pipeline:
+`buildProvisionalLiveBlocks` (`workBlocks.ts`) already runs every live sitting through the
+same `buildBlockFromCandidate` → `dominantCategoryForBlock` heuristic finalized blocks use,
+so a provisional block's `dominantCategory` is real and updates as evidence accumulates.
+But `CalendarBlockCard` (`Timeline.tsx`) hardcoded `accent = block.provisional ? '#8b93a7' :
+activityColorForCategory(...)` — a leftover that conflated timeline.md §4's naming rule
+("a live block is never given a derived intent-name") with §3.4 rule 4 ("color coding is
+universal ... day grid, week grid, month dots, inspector"). The month-grid dots and the
+block detail inspector never had this override and were already coloring live blocks
+correctly, which is how the bug hid: two of three surfaces looked right.
+
+Fix: `accent` always reads `activityColorForCategory(block.dominantCategory)`; no
+provisional special case. Live block names still stay neutral ("Active now" / "Earlier
+today") — only naming is deferred to finalize, never color. A genuinely thin-evidence
+sitting still reads as quiet grey on its own, because `dominantCategoryForBlock` falls
+back to `uncategorized` (functionally identical to the old hardcoded grey) — so removing
+the override changes nothing until a block actually has a category to show. Regression:
+`tests/timelineLiveBlockColor.test.ts`.
+
+# 2026-07-05 — $110/week AI bill: a stale production build ran an unkillable relabel loop
+
+**Status:** Root-caused + code path deleted + budget breaker added; founder must replace the installed app
+
+The Usage page attributed 99.8% of a $110/week spend to "Timeline labeling" — 77k
+`block_cleanup_relabel` calls in 7 days, all `trigger_source='background'`, cycling the
+same three blocks (922/1027/1087 input tokens) every ~10 seconds for hours. Two causes
+stacked: (1) the passive background sweeps (`scheduleOvernightCleanup`,
+`runHistoryHeuristicUpgrade`) re-queued blocks whose relabel result never made them
+ineligible — a weak AI label kept `shouldReanalyzeBlockWithAI` true forever, and
+`getTimelineDayPayload` never rematerializes processed days, so the heuristic-upgrade
+`while (true)` refetched the same dates endlessly; (2) **the spender was
+`/Applications/Daylens.app` v1.0.44 (built Jun 3), a login item listed twice**, which
+predates both the Jun 24 `DAYLENS_ENABLE_PASSIVE_AI` fuse and this repo's removal of the
+loop's callers, and shares the DaylensWindows DB + API key with the dev build. Calls
+stopped at 23:30 Jul 4 — exactly when that process was quit.
+
+Fixes in this tree: deleted the whole dead passive path (cleanup queue, heuristic-upgrade
+sweep, `scheduleTimelineAIJobs`, their queries) — the once-per-day auto-analyze in
+`syncUploader.ts` (gated by `persistedDayWasProcessed`) is the only background labeling
+left — and added a hard daily budget breaker in `executeTextAIJob`
+(`BACKGROUND_AI_DAILY_CALL_CAP = 250` background calls/day, counted from
+`ai_usage_events`, user/system work never blocked), so any future runaway loop caps at
+pennies instead of $30/day. Regression: `tests/backgroundAIBudget.test.ts`.
+
+Lesson: every unattended AI loop needs a spend ceiling *at the execution choke point*,
+not in the scheduler — schedulers get forked, stale builds keep running them.
+
+Also from the same audit: `modelPricing.ts` had no entry for Fable/Mythos-class models,
+so they fell through to DEFAULT_RATES ($3/$15) — a 3x underestimate at $10/$50. The
+in-app Usage totals otherwise reproduce the Anthropic console CSV within ~4% (local-day
+vs UTC-day bucketing accounts for the gap). Regression: `tests/usageReport.test.ts`.
+
+## Apps view browser sections: three numbers from two time bases could never agree
+
+The App Detail header counted foreground seconds while "Time by domain" and "Pages
+visited" were raw `SUM(duration_sec)` over browser history — which keeps accruing while
+the browser sits in the background and double-counts the two capture paths. Commit
+4d140aa fixed exactly this for the timeline paths (`reconcileWebsiteVisits`) and named
+App Detail the known remaining raw-SUM path; this closes it. `getDomainSummariesForBrowser`
+and `getPageSummariesForBrowser` are deleted; `getBrowserActivityBreakdown` reconciles
+over the whole range (shared claim pools), then clips credit to the browser's OWN
+foreground sessions — so by construction Σ pages = domain, Σ domains = attributed ≤
+header, and the difference renders as an explicit "No page recorded" row (invariant 10).
+Rounding happens once, at the page level; domains sum their pages' rounded seconds, so
+the arithmetic the user can check on screen closes exactly. The UI merges both sections
+into one "Where your Xh Ym went" tree (domains expandable into pages); "What you did
+there" stays above it as the intent-level lead-in — a different axis that never claimed
+to reconcile to domain seconds. Verified against the real DB: Safari Jul 4 = 58m 20s
+across 19 domains + 3m 37s no-page = 1h 1m 57s header, exact. Regressions:
+`tests/appsTopDomains.test.ts` (reconciliation identities), `tests/appDetailPayload.test.ts`
+(overlapping visits claim disjoint slices: 1200s+600s raw → 1200s credited, never 1800s).

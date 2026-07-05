@@ -1,15 +1,16 @@
+// The passive background cleanup/relabel scheduler was deleted on 2026-07-05
+// (docs/issues-2026-07-05.md §1): a stale production build ran its loop against
+// blocks whose relabel result never changed their eligibility, re-spending the
+// same tokens every ~10s. What remains — and what this file guards — is the
+// eligibility gate itself, `shouldReanalyzeBlockWithAI`, which the once-per-day
+// auto-analyze and the manual Analyze action both use to decide which blocks
+// are worth an AI call: deterministic floors reopen, good AI labels and user
+// overrides are never churned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import Database from 'better-sqlite3'
 import type { WorkContextBlock } from '../src/shared/types.ts'
-import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
-import {
-  listPendingWorkContextCleanupDates,
-  upsertWorkContextCleanupReview,
-  upsertWorkContextInsight,
-} from '../src/main/db/queries.ts'
-import { backgroundRelabelDispositionForBlock } from '../src/main/services/workBlocks.ts'
+import { shouldReanalyzeBlockWithAI } from '../src/main/services/workBlocks.ts'
 
 function localMs(year: number, month: number, day: number, hour: number, minute = 0): number {
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
@@ -61,61 +62,7 @@ function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock 
   }
 }
 
-function insertAppSession(
-  db: Database.Database,
-  dateParts: { year: number; month: number; day: number; hour: number },
-): void {
-  const startTime = localMs(dateParts.year, dateParts.month, dateParts.day, dateParts.hour)
-  const endTime = startTime + 3_600_000
-  db.prepare(`
-    INSERT INTO app_sessions (
-      bundle_id,
-      app_name,
-      start_time,
-      end_time,
-      duration_sec,
-      category,
-      is_focused,
-      raw_app_name,
-      capture_source,
-      capture_version
-    ) VALUES ('com.microsoft.VSCode', 'Code', ?, ?, 3600, 'development', 1, 'Code', 'test', 1)
-  `).run(startTime, endTime)
-}
-
-function insertTimelineBlock(
-  db: Database.Database,
-  payload: {
-    id: string
-    date: string
-    startTime: number
-    endTime: number
-  },
-): void {
-  db.prepare(`
-    INSERT INTO timeline_blocks (
-      id,
-      date,
-      start_time,
-      end_time,
-      block_kind,
-      dominant_category,
-      category_distribution_json,
-      switch_count,
-      label_current,
-      label_source,
-      label_confidence,
-      narrative_current,
-      evidence_summary_json,
-      is_live,
-      heuristic_version,
-      computed_at,
-      invalidated_at
-    ) VALUES (?, ?, ?, ?, 'work', 'development', '{}', 0, 'Development', 'rule', 0.5, NULL, '{}', 0, 'test', ?, NULL)
-  `).run(payload.id, payload.date, payload.startTime, payload.endTime, payload.startTime)
-}
-
-test('background relabel reopens deterministic floors while preserving good AI and overrides', () => {
+test('AI re-analysis reopens deterministic floors while preserving good AI and overrides', () => {
   const strongRuleBlock = makeBlock({
     ruleBasedLabel: 'GitHub',
     label: {
@@ -128,7 +75,7 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(strongRuleBlock), 'relabel')
+  assert.equal(shouldReanalyzeBlockWithAI(strongRuleBlock), true)
 
   const artifactFloorBlock = makeBlock({
     id: 'block-artifact-floor',
@@ -142,7 +89,7 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(artifactFloorBlock), 'relabel')
+  assert.equal(shouldReanalyzeBlockWithAI(artifactFloorBlock), true)
 
   const weakFallbackBlock = makeBlock({
     id: 'block-2',
@@ -157,8 +104,10 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(weakFallbackBlock), 'relabel')
+  assert.equal(shouldReanalyzeBlockWithAI(weakFallbackBlock), true)
 
+  // A generic single-word AI label ("Research") is a legacy weak label — it
+  // stays eligible so a better pass can replace it…
   const weakAiBlock = makeBlock({
     id: 'block-3',
     aiLabel: 'Research',
@@ -172,8 +121,10 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(weakAiBlock), 'relabel')
+  assert.equal(shouldReanalyzeBlockWithAI(weakAiBlock), true)
 
+  // …but a specific AI label is settled: re-running it would only re-spend
+  // tokens for no change (the exact failure mode of the deleted background loop).
   const aiBlock = makeBlock({
     id: 'block-4',
     aiLabel: 'Fixing sync uploader retries',
@@ -187,7 +138,7 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: null,
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(aiBlock), 'skip')
+  assert.equal(shouldReanalyzeBlockWithAI(aiBlock), false)
 
   const overrideBlock = makeBlock({
     id: 'block-5',
@@ -201,85 +152,8 @@ test('background relabel reopens deterministic floors while preserving good AI a
       override: 'Client billing follow-up',
     },
   })
-  assert.equal(backgroundRelabelDispositionForBlock(overrideBlock), 'skip')
-})
+  assert.equal(shouldReanalyzeBlockWithAI(overrideBlock), false)
 
-test('pending cleanup dates include only unresolved history days', () => {
-  const db = new Database(':memory:')
-  db.exec(SCHEMA_SQL)
-
-  insertAppSession(db, { year: 2026, month: 4, day: 9, hour: 9 })
-
-  insertAppSession(db, { year: 2026, month: 4, day: 10, hour: 10 })
-  insertTimelineBlock(db, {
-    id: 'block-pending',
-    date: '2026-04-10',
-    startTime: localMs(2026, 4, 10, 10),
-    endTime: localMs(2026, 4, 10, 11),
-  })
-
-  insertAppSession(db, { year: 2026, month: 4, day: 11, hour: 11 })
-  insertTimelineBlock(db, {
-    id: 'block-reviewed',
-    date: '2026-04-11',
-    startTime: localMs(2026, 4, 11, 11),
-    endTime: localMs(2026, 4, 11, 12),
-  })
-  upsertWorkContextCleanupReview(db, {
-    startMs: localMs(2026, 4, 11, 11),
-    endMs: localMs(2026, 4, 11, 12),
-    stableLabel: 'GitHub',
-    sourceBlockIds: ['block-reviewed'],
-  })
-
-  insertAppSession(db, { year: 2026, month: 4, day: 12, hour: 12 })
-  insertTimelineBlock(db, {
-    id: 'block-with-weak-ai',
-    date: '2026-04-12',
-    startTime: localMs(2026, 4, 12, 12),
-    endTime: localMs(2026, 4, 12, 13),
-  })
-  upsertWorkContextInsight(db, {
-    startMs: localMs(2026, 4, 12, 12),
-    endMs: localMs(2026, 4, 12, 13),
-    insight: {
-      label: 'Research',
-      narrative: null,
-    },
-    sourceBlockIds: ['block-with-weak-ai'],
-  })
-
-  insertAppSession(db, { year: 2026, month: 4, day: 13, hour: 13 })
-  insertTimelineBlock(db, {
-    id: 'block-override',
-    date: '2026-04-13',
-    startTime: localMs(2026, 4, 13, 13),
-    endTime: localMs(2026, 4, 13, 14),
-  })
-  db.prepare(`
-    INSERT INTO block_label_overrides (block_id, label, narrative, updated_at)
-    VALUES ('block-override', 'Renamed block', NULL, ?)
-  `).run(Date.now())
-
-  insertAppSession(db, { year: 2026, month: 4, day: 14, hour: 14 })
-  insertTimelineBlock(db, {
-    id: 'block-strong-ai',
-    date: '2026-04-14',
-    startTime: localMs(2026, 4, 14, 14),
-    endTime: localMs(2026, 4, 14, 15),
-  })
-  upsertWorkContextInsight(db, {
-    startMs: localMs(2026, 4, 14, 14),
-    endMs: localMs(2026, 4, 14, 15),
-    insight: {
-      label: 'Fixing sync uploader retries',
-      narrative: null,
-    },
-    sourceBlockIds: ['block-strong-ai'],
-  })
-
-  const pending = listPendingWorkContextCleanupDates(db, '2026-04-14')
-  assert.deepEqual(pending, ['2026-04-09', '2026-04-10', '2026-04-12'])
-
-  db.close()
+  const liveBlock = makeBlock({ id: 'block-6', isLive: true })
+  assert.equal(shouldReanalyzeBlockWithAI(liveBlock), false)
 })

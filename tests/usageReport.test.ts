@@ -22,6 +22,18 @@ test('lookupModelPricing matches versioned model ids', () => {
   assert.equal(rates.outputPerMillion, 5)
 })
 
+// 2026-07-05 usage-page audit: claude-fable-5 fell through to DEFAULT_RATES
+// ($3/$15), underpricing it 3x. Fable/Mythos are $10/$50.
+test('lookupModelPricing prices Fable/Mythos correctly instead of the default tier', () => {
+  assert.deepEqual(lookupModelPricing('claude-fable-5'), {
+    inputPerMillion: 10,
+    outputPerMillion: 50,
+    cacheReadPerMillion: 1,
+    cacheWritePerMillion: 12.5,
+  })
+  assert.equal(lookupModelPricing('claude-mythos-5').inputPerMillion, 10)
+})
+
 test('lookupModelPricing covers every economy suggestions model', () => {
   assert.deepEqual(lookupModelPricing('claude-haiku-4-5-20251001'), {
     inputPerMillion: 1,

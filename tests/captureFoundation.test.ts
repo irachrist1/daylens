@@ -162,6 +162,29 @@ test('legacy and current Zen identities collapse into one browsing row', () => {
   db.close()
 })
 
+test('browser app summaries stay browsing even when captured with stale focused categories', () => {
+  const db = new Database(':memory:')
+  db.exec(SCHEMA_SQL)
+  const date = '2026-06-18'
+  const [from, to] = localDayBounds(date)
+
+  insertAppSession(db, {
+    bundleId: 'app.zen-browser.zen',
+    appName: 'Zen',
+    start: localMs(date, 9),
+    end: localMs(date, 9, 30),
+    category: 'productivity',
+    canonicalAppId: 'app.zen-browser.zen',
+  })
+
+  const summaries = getAppSummariesForRange(db, from, to)
+  assert.equal(summaries.length, 1)
+  assert.equal(summaries[0].appName, 'Zen')
+  assert.equal(summaries[0].category, 'browsing')
+  assert.equal(summaries[0].isFocused, false)
+  db.close()
+})
+
 test('shared system-noise policy covers bundle and display-name variants', () => {
   assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.loginwindow', appName: 'LoginWindow' }), true)
   assert.equal(isSystemNoiseApp({ bundleId: 'com.apple.UserNotificationCenter', appName: 'Notifications' }), true)

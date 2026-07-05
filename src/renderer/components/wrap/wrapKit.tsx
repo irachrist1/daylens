@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { AppCategory } from '@shared/types'
 import type { WorkKind } from '@shared/workKind'
+import { activityColorForCategory } from '@shared/activityColors'
 import { formatHm } from '../../lib/dayWrapScenes'
 
 // ─── Shared Wrapped kit (DEV-114 / DEV-103) ─────────────────────────────────────
@@ -80,16 +81,15 @@ export function layoutVariant(seed: number): number {
   return Math.floor(seed / PALETTE_HUES.length) % 3
 }
 
-const CAT_COLOR: Partial<Record<AppCategory, string>> = {
-  development: '#7eb2ff', aiTools: '#7eb2ff', writing: '#9b8cff', design: '#f472b6',
-  research: '#b87aff', meetings: '#f59e0b', communication: '#34d9c4', email: '#22d3ee',
-  productivity: '#4ade80', browsing: '#fb923c', entertainment: '#ff6b6b', social: '#a78bfa',
-}
+// Delegates to the shared, Settings-aware resolver (src/shared/activityColors.ts)
+// so Wrapped agrees with the calendar and honors the founder's per-category
+// overrides — it used to carry its own hardcoded palette here, disconnected
+// from Settings → General → Activity colors entirely.
 export function categoryColor(category: AppCategory | 'unknown', kind?: WorkKind): string {
   if (kind === 'leisure') return '#ff6b6b'
   if (kind === 'personal') return '#9aa6c2'
-  if (category === 'unknown') return '#8fb0e6'
-  return CAT_COLOR[category] ?? '#8fb0e6'
+  if (category === 'unknown') return activityColorForCategory('uncategorized')
+  return activityColorForCategory(category)
 }
 
 // ─── Count-up (shared rAF clock, reduced-motion aware) ──────────────────────────

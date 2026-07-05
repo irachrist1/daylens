@@ -1019,22 +1019,31 @@ export interface AppDetailPayload {
   totalSeconds: number
   sessionCount: number
   topArtifacts: ArtifactRef[]
-  topPages: PageRef[]
   /**
-   * Per-domain time for browser apps only. When the selected app is a
-   * browser (Chrome, Safari, Arc, Firefox, Edge, etc.), this surfaces the
-   * domains the user actually spent time on inside that browser, ranked by
-   * duration. Omitted for non-browser apps — the renderer should hide the
-   * section when the array is absent or empty. Derived from
-   * `website_visits.browser_bundle_id` via
-   * `getWebsiteSummariesForRange(db, fromMs, toMs, bundleId)`.
+   * Where a browser app's time went — present only for browser apps
+   * (Chrome, Safari, Arc, Dia, …); omit for native apps so the renderer
+   * hides the section. Replaces the old separate topDomains/topPages pair
+   * (2026-07-05): both were raw sums over browser history that kept
+   * accruing in the background, so they could never add up to the app's
+   * own foreground total. This tree reconciles by construction:
+   * Σ page.totalSeconds = its domain's totalSeconds, Σ domain.totalSeconds
+   * = attributedSeconds, and attributedSeconds + unattributedSeconds =
+   * totalSeconds (the same number as the header). `unattributedSeconds`
+   * is foreground browser time with no page recorded (native browser UI,
+   * new tabs, uncaptured pages) — rendered as an explicit "No page
+   * recorded" row, never smeared into a domain (invariant 10).
    */
-  topDomains?: Array<{
-    domain: string
+  browserActivity?: {
     totalSeconds: number
-    visitCount: number
-    topTitle: string | null
-  }>
+    attributedSeconds: number
+    unattributedSeconds: number
+    domains: Array<{
+      domain: string
+      totalSeconds: number
+      visitCount: number
+      pages: PageRef[]
+    }>
+  }
   pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
   blockAppearances: Array<{
     blockId: string

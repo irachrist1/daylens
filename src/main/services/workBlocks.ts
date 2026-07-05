@@ -5,9 +5,8 @@ import {
   getAppCharacter,
   getAppSummariesForRange,
   getBlockLabelOverride,
-  getDomainSummariesForBrowser,
+  getBrowserActivityBreakdown,
   getFocusSessionsForDateRange,
-  getPageSummariesForBrowser,
   getSessionsForRange,
   getReconciledWebsiteVisitsForRange,
   getTopPagesForDomains,
@@ -380,6 +379,30 @@ function dominantCategoryFromDistribution(distribution: Partial<Record<AppCatego
     })[0]?.[0] ?? 'uncategorized'
 }
 
+// Productivity SaaS whose page titles carry real work intent — a Notion doc,
+// a Google Doc, a Linear issue. Recognizing these gives intentional web work a
+// category signal (invariant 6): without it a Notion review inside a browser
+// counts only as "browsing" and can never defend itself against an
+// entertainment page artifact that happens to out-dwell it.
+const PRODUCTIVITY_SAAS_HOSTS = new Set([
+  'notion.so',
+  'notion.com',
+  'app.notion.com',
+  'docs.google.com',
+  'sheets.google.com',
+  'slides.google.com',
+  'linear.app',
+  'coda.io',
+  'quip.com',
+])
+const PRODUCTIVITY_SAAS_SUFFIXES = ['.notion.site', '.notion.so', '.notion.com']
+
+function isProductivitySaasHost(host: string): boolean {
+  if (!host) return false
+  if (PRODUCTIVITY_SAAS_HOSTS.has(host)) return true
+  return PRODUCTIVITY_SAAS_SUFFIXES.some((suffix) => host.endsWith(suffix))
+}
+
 function categoryForTopPageArtifact(topArtifacts: ArtifactRef[]): AppCategory | null {
   const topArtifact = topArtifacts[0]
   if (!topArtifact || topArtifact.artifactType !== 'page') return null
@@ -393,6 +416,7 @@ function categoryForTopPageArtifact(topArtifacts: ArtifactRef[]): AppCategory | 
   if (host === 'github.com' && /^https?:\/\/github\.com\/[^/?#]+\/[^/?#]+(?:[/?#]|$)/i.test(url)) {
     return 'research'
   }
+  if (isProductivitySaasHost(host)) return 'productivity'
   return null
 }
 
@@ -427,6 +451,78 @@ function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
   })
 }
 
+function focusedShareOfDistribution(distribution: Partial<Record<AppCategory, number>>): number {
+  const totalSeconds = Object.values(distribution).reduce((sum, sec) => sum + (sec ?? 0), 0)
+  if (totalSeconds <= 0) return 0
+  const focusedSeconds = (Object.entries(distribution) as Array<[AppCategory, number]>)
+    .filter(([category]) => appCategoryIsFocused(category))
+    .reduce((sum, [, seconds]) => sum + seconds, 0)
+  return focusedSeconds / totalSeconds
+}
+
+// Foreground time that reads as real work intent — used only to defend against
+// a single leisure page artifact. Browsing is the browser shell, not intent.
+const WORK_INTENT_CATEGORIES = new Set<AppCategory>([
+  ...FOCUSED_CATEGORIES,
+  'communication',
+  'email',
+  'meetings',
+])
+
+function appCategoryIsWorkIntent(category: AppCategory): boolean {
+  return WORK_INTENT_CATEGORIES.has(category)
+}
+
+function workIntentShareOfDistribution(distribution: Partial<Record<AppCategory, number>>): number {
+  const totalSeconds = Object.values(distribution).reduce((sum, sec) => sum + (sec ?? 0), 0)
+  if (totalSeconds <= 0) return 0
+  const workSeconds = (Object.entries(distribution) as Array<[AppCategory, number]>)
+    .filter(([category]) => WORK_INTENT_CATEGORIES.has(category))
+    .reduce((sum, [, seconds]) => sum + seconds, 0)
+  return workSeconds / totalSeconds
+}
+
+function isLeisureArtifactCategory(category: AppCategory): boolean {
+  return category === 'social' || category === 'entertainment'
+}
+
+function categoryAfterLeisureArtifactChallenge(
+  distribution: Partial<Record<AppCategory, number>>,
+  baseCategory: AppCategory,
+  focusedCategory: AppCategory | null,
+  artifactCategory: AppCategory,
+  artifactShare: number,
+): AppCategory {
+  const workShare = workIntentShareOfDistribution(distribution)
+  const focusedShare = focusedShareOfDistribution(distribution)
+  if (focusedShare < 0.5 && workShare < 0.5) {
+    if (artifactShare > 0.5) return artifactCategory
+    return baseCategory
+  }
+  if (artifactShare > workShare) return artifactCategory
+  return focusedCategory ?? baseCategory
+}
+
+// App-level category for block detail / Apps rail — always "browsing" for a
+// browser shell regardless of what dominantCategoryForBlock picks for the block.
+export function appCategoryForSessionSummary(
+  session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>,
+): AppCategory {
+  if (isBrowserSession(session)) return 'browsing'
+  return session.category
+}
+
+export function normalizeAppSummaryForBlockDisplay(summary: WorkContextAppSummary): WorkContextAppSummary {
+  const isBrowser = isBrowserSession(summary)
+  const category = isBrowser ? 'browsing' : summary.category
+  if (summary.category === category && summary.isBrowser === isBrowser) return summary
+  return { ...summary, category, isBrowser }
+}
+
+function normalizeAppSummariesForBlockDisplay(summaries: WorkContextAppSummary[]): WorkContextAppSummary[] {
+  return summaries.map(normalizeAppSummaryForBlockDisplay)
+}
+
 export function dominantCategoryForBlock(
   distribution: Partial<Record<AppCategory, number>>,
   topArtifacts: ArtifactRef[],
@@ -441,7 +537,40 @@ export function dominantCategoryForBlock(
   if (focusedCategory && (baseCategory === 'browsing' || baseCategory === 'entertainment' || baseCategory === 'social')) {
     return focusedCategory
   }
-  return artifactCategory ?? baseCategory
+  if (!artifactCategory) return baseCategory
+
+  const totalSeconds = Object.values(distribution).reduce((sum, sec) => sum + (sec ?? 0), 0)
+  const artifactSeconds = topArtifacts[0]?.totalSeconds ?? 0
+  const artifactShare = totalSeconds > 0 ? artifactSeconds / totalSeconds : 0
+  const baseShare = totalSeconds > 0 ? (distribution[baseCategory] ?? 0) / totalSeconds : 0
+
+  if (isLeisureArtifactCategory(artifactCategory)) {
+    const focusedShare = focusedShareOfDistribution(distribution)
+    if (focusedShare >= 0.5) return focusedCategory ?? baseCategory
+    if (appCategoryIsWorkIntent(baseCategory) && baseShare >= 0.5) return baseCategory
+    if (!appCategoryIsFocused(baseCategory) && artifactShare <= 0.5) return baseCategory
+    return categoryAfterLeisureArtifactChallenge(
+      distribution,
+      baseCategory,
+      focusedCategory,
+      artifactCategory,
+      artifactShare,
+    )
+  }
+
+  // Non-focused base: productivity/research artifacts refine browser-shell
+  // intent. Leisure artifacts were handled above because they need work-share
+  // protection before they can relabel a block.
+  if (!appCategoryIsFocused(baseCategory)) {
+    return artifactCategory
+  }
+
+  // Focused base: a page artifact must never flip the block to a different
+  // focused category (GitHub "research" over a development-dominant block).
+  if (appCategoryIsFocused(artifactCategory)) return baseCategory
+
+  if (baseShare < 0.5 && artifactShare > 0.5) return artifactCategory
+  return baseCategory
 }
 
 function coherenceScore(distribution: Partial<Record<AppCategory, number>>): number {
@@ -1141,7 +1270,9 @@ function loadPersistedAppDetailBlocksForDates(
       label: {
         current: row.label_current,
       },
-      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      topApps: Array.isArray(evidence.apps)
+        ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
+        : [],
       topArtifacts,
       pageRefs,
       workflowRefs: workflowsByBlock.get(row.id) ?? [],
@@ -1178,7 +1309,7 @@ function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
       bundleId: session.bundleId,
       canonicalAppId: session.canonicalAppId ?? identity.canonicalAppId,
       appName: identity.displayName || sanitizeBlockLabel(session.appName) || session.appName,
-      category: session.category,
+      category: appCategoryForSessionSummary(session),
       totalSeconds: session.durationSeconds,
       sessionCount: 1,
       isBrowser: isBrowserSession(session),
@@ -2111,7 +2242,10 @@ function buildWindowArtifactCandidates(sessions: AppSession[]): ArtifactCandidat
 // it's populated immediately by the capture helper, unlike website_visits which
 // is populated by a background browser-history poll that can lag by minutes.
 // A 10-second floor is applied so sub-10s tab flickers don't inflate the list.
-function buildTabEvidenceFromFocusEvents(
+// Exported so tests can build real live-day PageRefs from focus_events
+// through the actual producer, rather than hand-rolling a shape that could
+// drift from what this function really returns.
+export function buildTabEvidenceFromFocusEvents(
   db: Database.Database,
   startTime: number,
   endTime: number,
@@ -2194,6 +2328,17 @@ function buildTabEvidenceFromFocusEvents(
     .map((entry): PageRef => {
       const canonicalKey = `page:${entry.normalizedUrl ?? entry.url}`
       const displayTitle = entry.pageTitle ?? websiteDisplayLabel(entry.domain)
+      // Owner linkage, mirroring buildPageCandidates (above): a page is owned
+      // by the browser it happened in, so the block-detail panel's
+      // ownerKeyFor can nest it under that browser's app row. Without this,
+      // tab-evidence pages — the dominant page source for today's live block,
+      // since website_visits lags behind real-time tab tracking — carry only
+      // browserBundleId/canonicalBrowserId (PageRef-specific fields) and
+      // never match the app-owner fields the renderer checked first, so they
+      // fell through to the flat/orphan list instead of nesting under Dia.
+      const canonicalAppId = entry.browserBundleId
+        ? resolveCanonicalApp(entry.browserBundleId, entry.browserBundleId).canonicalAppId
+        : null
       return {
         id: artifactIdFor(canonicalKey),
         artifactType: 'page',
@@ -2202,6 +2347,8 @@ function buildTabEvidenceFromFocusEvents(
         subtitle: entry.domain,
         totalSeconds: Math.round(entry.totalMs / 1_000),
         confidence: 0.85,
+        canonicalAppId,
+        ownerBundleId: entry.browserBundleId,
         url: entry.url,
         host: entry.domain,
         openTarget: { kind: 'external_url', value: entry.url },
@@ -3835,16 +3982,6 @@ function preferredArtifactLabel(block: WorkContextBlock): string | null {
   return usefulDerivedLabel(domainLabel)
 }
 
-export type BackgroundRelabelDisposition = 'skip' | 'review' | 'relabel'
-
-function hasStableDeterministicBlockLabel(block: WorkContextBlock): boolean {
-  return Boolean(
-    preferredArtifactLabel(block)
-    || usefulBlockLabel(block, block.workflowRefs[0]?.label)
-    || usefulBlockLabel(block, block.ruleBasedLabel),
-  )
-}
-
 function hasLegacyWeakAiLabel(block: WorkContextBlock): boolean {
   const aiLabel = block.aiLabel?.trim()
   return Boolean(aiLabel) && !usefulBlockLabel(block, aiLabel)
@@ -3874,16 +4011,6 @@ export function shouldReanalyzeBlockWithAI(block: WorkContextBlock): boolean {
   if (currentLabel && labelIsCategoryFloor(block, currentLabel)) return true
 
   return false
-}
-
-export function backgroundRelabelDispositionForBlock(block: WorkContextBlock): BackgroundRelabelDisposition {
-  if (block.isLive) return 'skip'
-  if (block.label.override?.trim()) return 'skip'
-  if (shouldReanalyzeBlockWithAI(block)) return 'relabel'
-  // Persisted AI labels do not yet carry a reliable quality score, so keep
-  // already-specific AI labels instead of churning them.
-  if (block.aiLabel?.trim()) return 'skip'
-  return hasStableDeterministicBlockLabel(block) ? 'review' : 'relabel'
 }
 
 function finalizedLabelForBlock(
@@ -4554,7 +4681,9 @@ function loadPersistedTimelineBlocksForDay(
       ruleBasedLabel: ruleLabel,
       aiLabel: aiLabel,
       sessions: blockSessions,
-      topApps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+      topApps: Array.isArray(evidence.apps)
+        ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
+        : [],
       websites,
       keyPages,
       pageRefs,
@@ -4572,7 +4701,9 @@ function loadPersistedTimelineBlocksForDay(
       },
       focusOverlap,
       evidenceSummary: {
-        apps: Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : [],
+        apps: Array.isArray(evidence.apps)
+          ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
+          : [],
         pages: pageRefs,
         documents: documentRefs,
         domains: Array.isArray(evidence.domains) ? evidence.domains as string[] : [],
@@ -4611,7 +4742,7 @@ function loadPersistedTimelineBlocksForDay(
 // A day is "processed" once any of its persisted blocks carries an AI,
 // workflow, or user-authored label — i.e. the nightly consolidation job (or the
 // user) has already named it. Such a day is kept exactly as it was summarized.
-function persistedDayWasProcessed(db: Database.Database, dateStr: string): boolean {
+export function persistedDayWasProcessed(db: Database.Database, dateStr: string): boolean {
   const row = db.prepare(`
     SELECT 1
     FROM timeline_block_labels labels
@@ -4637,31 +4768,6 @@ function persistedDayHeuristicIsStale(db: Database.Database, dateStr: string): b
   `).get(dateStr) as { heuristic_version: string } | undefined
   if (!row) return false
   return row.heuristic_version !== TIMELINE_HEURISTIC_VERSION
-}
-
-export function listTimelineDaysNeedingHeuristicUpgrade(
-  db: Database.Database,
-  beforeDate: string = localDateString(),
-  limit = 12,
-): string[] {
-  const rows = db.prepare(`
-    SELECT blocks.date AS date
-    FROM timeline_blocks blocks
-    WHERE blocks.date < ?
-      AND blocks.invalidated_at IS NULL
-      AND blocks.is_live = 0
-      AND blocks.heuristic_version <> ?
-      AND NOT EXISTS (
-        SELECT 1
-        FROM timeline_block_labels labels
-        WHERE labels.block_id = blocks.id
-          AND labels.source IN ('ai', 'workflow', 'user')
-      )
-    GROUP BY blocks.date
-    ORDER BY blocks.date DESC
-    LIMIT ?
-  `).all(beforeDate, TIMELINE_HEURISTIC_VERSION, limit) as Array<{ date: string }>
-  return rows.map((row) => row.date)
 }
 
 // timeline.md §4: the live day, before it is analyzed, is provisional — never
@@ -4742,6 +4848,43 @@ function loadIgnoredBlockSpans(db: Database.Database, dateStr: string): MergedSp
   return spans
 }
 
+// Deterministic category refresh for settled days (2026-07-05, docs/issues-2026-07-05.md §2).
+// A processed day is never rebuilt — boundaries, labels, and corrections are
+// frozen — but the category facts under its colors were computed by an old
+// heuristic and stayed wrong forever ("no color until I click Analyze").
+// Recompute distribution + dominant category from the block's own sessions with
+// the CURRENT rules and write them back, stamping the block's heuristic_version
+// so the refresh runs once per heuristic bump. Labels are never touched, no AI
+// is involved, and the write-back means row-level readers (the month grid's
+// getTimelineRangeBlocks) converge too.
+function refreshStaleBlockCategoryFacts(db: Database.Database, blocks: WorkContextBlock[]): void {
+  const stale = blocks.filter((block) => block.heuristicVersion !== TIMELINE_HEURISTIC_VERSION)
+  if (stale.length === 0) return
+
+  const update = db.prepare(`
+    UPDATE timeline_blocks
+    SET dominant_category = ?, category_distribution_json = ?, heuristic_version = ?
+    WHERE id = ?
+  `)
+
+  for (const block of stale) {
+    // No resolvable sessions (e.g. their raw rows were pruned): keep the
+    // persisted facts rather than replace them with an empty guess.
+    if (block.sessions.length > 0) {
+      const distribution = categoryDistributionFor(effectiveSessionsFor(block.sessions))
+      block.categoryDistribution = distribution
+      block.dominantCategory = dominantCategoryForBlock(distribution, block.topArtifacts)
+    }
+    block.heuristicVersion = TIMELINE_HEURISTIC_VERSION
+    update.run(
+      block.dominantCategory,
+      JSON.stringify(block.categoryDistribution),
+      TIMELINE_HEURISTIC_VERSION,
+      block.id,
+    )
+  }
+}
+
 function withoutIgnoredSpans(sessions: AppSession[], spans: MergedSpan[]): AppSession[] {
   if (spans.length === 0) return sessions
   return sessions.filter((session) =>
@@ -4790,6 +4933,13 @@ export function buildTimelineBlocksForDay(
       // heuristic is reconstructed more accurately on revisit, then
       // re-persisted so the improvement sticks.
       if (persistedDayWasProcessed(db, dateStr) || !persistedDayHeuristicIsStale(db, dateStr)) {
+        // A processed day keeps its boundaries and labels forever, but its
+        // CATEGORY facts were computed by whatever heuristic was current at the
+        // time — and category is what colors every surface (timeline.md §3.4:
+        // color coding is universal). Refresh just those deterministic facts in
+        // place so old days converge on today's categorization without an AI
+        // call and without touching a single label (invariant 8).
+        refreshStaleBlockCategoryFacts(db, persisted)
         flagSuspiciousUnbrokenBlocks(dateStr, persisted)
         return persisted
       }
@@ -5410,7 +5560,9 @@ function getLightweightDayPayload(
     if (FOCUSED_CATEGORIES.includes(dominantCategory)) {
       focusSeconds += blockActiveSec
     }
-    const evidenceApps = Array.isArray(evidence.apps) ? evidence.apps as WorkContextAppSummary[] : []
+    const evidenceApps = Array.isArray(evidence.apps)
+      ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
+      : []
     const topApps = evidenceApps.length > 0 ? evidenceApps : topAppsFromSessions(blockSessions)
 
     blocks.push({
@@ -5861,63 +6013,6 @@ export function getAppDetailPayload(
     .sort((left, right) => right.totalSeconds - left.totalSeconds)
     .slice(0, 8)
 
-  const pageTotals = new Map<string, PageRef>()
-  for (const block of relatedBlocks) {
-    for (const page of block.pageRefs) {
-      const pageBrowserId = page.canonicalAppId
-        ?? page.canonicalBrowserId
-        ?? (page.browserBundleId
-          ? resolveCanonicalApp(page.browserBundleId, page.browserBundleId).canonicalAppId
-          : null)
-      if (pageBrowserId !== canonicalAppId) continue
-
-      const existing = pageTotals.get(page.id)
-      if (existing) {
-        existing.totalSeconds += page.totalSeconds
-        existing.visitCount = (existing.visitCount ?? 0) + (page.visitCount ?? 0)
-      } else {
-        pageTotals.set(page.id, { ...page })
-      }
-    }
-  }
-
-  const blockTopPages = Array.from(pageTotals.values())
-  const directTopPages: PageRef[] = sessions.some((session) => isBrowserSession(session))
-    ? getPageSummariesForBrowser(db, fromMs, todayTo, canonicalAppId, 40).map((page) => {
-      const normalizedTitle = normalizeWebsiteTitleForDisplay(page.domain, page.title)
-      const displayTitle = normalizedTitle ?? websiteDisplayLabel(page.domain)
-      const canonicalKey = page.normalizedUrl ?? page.pageKey ?? page.url
-      return {
-        id: artifactIdFor(`page:${canonicalKey}`),
-        artifactType: 'page',
-        canonicalKey: `page:${canonicalKey}`,
-        displayTitle,
-        subtitle: page.domain,
-        totalSeconds: page.totalSeconds,
-        confidence: 0.9,
-        canonicalAppId,
-        url: page.url,
-        host: page.domain,
-        openTarget: { kind: 'external_url', value: page.url },
-        metadata: { normalizedUrl: page.normalizedUrl },
-        domain: page.domain,
-        browserBundleId: page.browserBundleId,
-        canonicalBrowserId: page.canonicalBrowserId,
-        normalizedUrl: page.normalizedUrl,
-        pageKey: page.pageKey,
-        pageTitle: normalizedTitle,
-        visitCount: page.visitCount,
-      }
-    })
-    : []
-  const topPages = (directTopPages.length > 0 ? directTopPages : blockTopPages)
-    .sort((left, right) => {
-      const kindDelta = Number(kindForDomain(left.domain) === 'leisure')
-        - Number(kindForDomain(right.domain) === 'leisure')
-      return kindDelta || right.totalSeconds - left.totalSeconds
-    })
-    .slice(0, 16)
-
   const pairedAppsMap = new Map<string, { canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>()
   for (const block of relatedBlocks) {
     for (const app of block.topApps) {
@@ -6032,6 +6127,51 @@ export function getAppDetailPayload(
     + liveExtraSeconds
   const sessionCount = (canonicalSummary?.sessionCount ?? sessions.length) + liveExtraSessions
 
+  // Browser apps get the reconciled where-the-time-went tree; native apps get
+  // nothing so the renderer hides the section. Built AFTER totalSeconds so the
+  // "No page recorded" remainder is derived from the exact number the header
+  // shows — the sum the user checks on screen closes by construction.
+  let browserActivity: AppDetailPayload['browserActivity']
+  if (sessions.some((session) => isBrowserSession(session))) {
+    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId)
+    browserActivity = {
+      totalSeconds,
+      attributedSeconds: breakdown.attributedSeconds,
+      unattributedSeconds: Math.max(0, totalSeconds - breakdown.attributedSeconds),
+      domains: breakdown.domains.map((domain) => ({
+        domain: domain.domain,
+        totalSeconds: domain.totalSeconds,
+        visitCount: domain.visitCount,
+        pages: domain.pages.map((page) => {
+          const normalizedTitle = normalizeWebsiteTitleForDisplay(page.domain, page.title)
+          const displayTitle = normalizedTitle ?? websiteDisplayLabel(page.domain)
+          const canonicalKey = page.normalizedUrl ?? page.pageKey ?? page.url ?? `domain:${page.domain}`
+          return {
+            id: artifactIdFor(`page:${canonicalKey}`),
+            artifactType: 'page' as const,
+            canonicalKey: `page:${canonicalKey}`,
+            displayTitle,
+            subtitle: page.domain,
+            totalSeconds: page.totalSeconds,
+            confidence: 0.9,
+            canonicalAppId,
+            url: page.url ?? undefined,
+            host: page.domain,
+            openTarget: page.url
+              ? { kind: 'external_url' as const, value: page.url }
+              : { kind: 'unsupported' as const, value: null },
+            metadata: { normalizedUrl: page.normalizedUrl },
+            domain: page.domain,
+            normalizedUrl: page.normalizedUrl,
+            pageKey: page.pageKey,
+            pageTitle: normalizedTitle,
+            visitCount: page.visitCount,
+          }
+        }),
+      })),
+    }
+  }
+
   return {
     canonicalAppId,
     displayName,
@@ -6040,8 +6180,7 @@ export function getAppDetailPayload(
     totalSeconds,
     sessionCount,
     topArtifacts,
-    topPages,
-    topDomains: topDomainsForBrowser(db, canonicalAppId, sessions, fromMs, todayTo),
+    browserActivity,
     pairedApps,
     blockAppearances,
     blockMemoryRollups,
@@ -6052,41 +6191,6 @@ export function getAppDetailPayload(
     computedAt: profile.computedAt,
     rangeKey,
   }
-}
-
-// When the selected app is a browser, resolve the per-domain rollup grouped
-// by `canonical_browser_id` so Chrome profiles merge into one total. Returns
-// undefined for non-browser apps so the renderer can hide the section.
-//
-// Detection strategy: treat the app as a browser if any of its sessions are
-// categorised `browsing` OR the canonical id matches the bundle-resolved
-// browser id of a website_visits row inside the range. This avoids a
-// hardcoded browser-id list and keeps the check resilient to new browsers.
-function topDomainsForBrowser(
-  db: Database.Database,
-  canonicalAppId: string,
-  sessions: AppSession[],
-  fromMs: number,
-  toMs: number,
-): AppDetailPayload['topDomains'] {
-  if (sessions.length === 0) return undefined
-  const isBrowser = sessions.some((session) => isBrowserSession(session))
-  if (!isBrowser) return undefined
-  const summaries = getDomainSummariesForBrowser(db, fromMs, toMs, canonicalAppId, 40)
-  if (summaries.length === 0) return []
-  return summaries
-    .sort((left, right) => {
-      const kindDelta = Number(kindForDomain(left.domain) === 'leisure')
-        - Number(kindForDomain(right.domain) === 'leisure')
-      return kindDelta || right.totalSeconds - left.totalSeconds
-    })
-    .slice(0, 16)
-    .map((summary) => ({
-      domain: summary.domain,
-      totalSeconds: summary.totalSeconds,
-      visitCount: summary.visitCount,
-      topTitle: summary.topTitle,
-    }))
 }
 
 export function getDistractionCostPayload(
