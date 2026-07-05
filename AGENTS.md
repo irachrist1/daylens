@@ -46,6 +46,44 @@ ones it owns. The cross-cutting set:
 5. **Hand it to the founder to test.** The founder's only job is to test; everything up to
    the test is yours. Only the founder marks something done, after a real day.
 
+## Model routing doctrine
+
+Use the cheapest model that can meet the bar, but cost is only a tie-breaker. For anything
+that ships, the priority is **intelligence > taste > cost**. Defaults are not limits: if an
+agent's output is weak, rerun or redo the work with a stronger model without asking.
+
+Route by role, not by brand:
+
+- **Mechanical implementation** (boilerplate, formatting, file mapping, clear-spec edits):
+  use the fastest cheap worker that can finish correctly in one pass. Escalate immediately
+  if tests, review, or code reading show weakness.
+- **Architecture / root-cause / algorithms / ambiguous bugs**: use the strongest reasoning
+  lane available. Return decisions, evidence, and acceptance criteria, not a wall of
+  hidden reasoning.
+- **User-facing product, UI, copy, API design, and docs that shape taste**: use a model with
+  strong product taste. Do not let low-cost mechanical agents invent the look or voice.
+- **Review**: use an independent pass that has not seen the implementer's conclusions.
+  Reviews lead with bugs, regressions, missing tests, and mismatches with specs.
+- **Rescue**: if one serious attempt stalls, hand the problem to a peer model with a
+  self-contained prompt and verify its claims against code, data, and tests.
+- **High-stakes decisions**: run two independent passes blind. Do not average opinions;
+  resolve disagreements with specs, real data, acceptance tests, or a founder question.
+
+Practical model map:
+
+- **Claude / Cursor Claude models**: use Sonnet for scoped implementation and orchestration;
+  use Opus or Fable for hard reasoning, taste-heavy work, and reviews.
+- **Codex / GPT-5.5**: use Codex as the GPT lane for implementation, rescue, and independent
+  review, especially when Cursor or Claude cannot route directly to GPT. Prefer
+  `codex exec -s read-only` for review-only tasks and a self-contained prompt.
+- **Composer / fast lanes**: good for mechanical edits when the task is clear and the test
+  surface is known.
+- **Never use Haiku** for this repo.
+
+When invoking a peer, keep it blind: do not show it another agent's answer unless the task
+is explicitly to adjudicate disagreement. When a peer finds a plausible issue, reproduce it
+with a test or direct code/data inspection before treating it as true.
+
 ## Fix the foundation, not the symptom
 
 When something reads wrong on screen, the bug is almost never where it shows. A wrap that
