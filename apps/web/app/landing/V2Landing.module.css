@@ -56,10 +56,8 @@
 }
 .githubButton { border: 1px solid #e7e7eb; }
 .primaryButton, .blueButton { background: var(--blue); color: white !important; }
-.headerPlatform { min-height: 38px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #e2e3e8; border-radius: 999px; color: #303139; font-size: 11px; font-weight: 700; }
-.headerPlatformPrimary { border-color: var(--blue); background: var(--blue); color: white; }
 
-.hero { padding: 0 24px 240px; background: #fff; }
+.hero { padding: 0 24px 72px; background: #fff; }
 .heroRail, .rail {
   position: relative;
   width: min(1424px, 100%);
@@ -70,7 +68,7 @@
   background-size: 72px 72px;
 }
 .heroRail {
-  min-height: 940px;
+  min-height: 760px;
   border-radius: 70px 70px 62px 62px;
   background-color: var(--navy);
   background-image:
@@ -102,7 +100,6 @@
 .heroDownload { min-height: 58px; padding: 0 24px; display: inline-flex; align-items: center; gap: 12px; border: 5px solid white; border-radius: 999px; background: white; color: #151a48 !important; box-shadow: inset 0 0 0 1px #dde0ee; font-size: 14px; font-weight: 700; }
 .heroDownloadSecondary { border-color: rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: white !important; box-shadow: none; backdrop-filter: blur(12px); }
 .textButton { color: #d9defe !important; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,.35); padding: 8px 0; }
-.heroFrameWrap { position: absolute; z-index: 3; left: 7%; right: 7%; top: 620px; }
 
 .productFrame { overflow: hidden; border: 1px solid rgba(30, 33, 56, .15); border-radius: 22px; background: white; box-shadow: 0 28px 80px rgba(0,0,0,.18); }
 .productFrame img { display: block; width: 100%; height: auto; }
@@ -214,7 +211,7 @@
 
 @media (max-width: 1000px) {
   .headerInner { grid-template-columns: 1fr auto; }.nav { display: none; }
-  .hero { padding-inline: 12px; padding-bottom: 130px; }.heroRail { min-height: 750px; border-radius: 36px; }.heroFrameWrap { left: 4%; right: 4%; top: 535px; }
+  .hero { padding-inline: 12px; padding-bottom: 64px; }.heroRail { min-height: 720px; border-radius: 36px; }
   .rail { width: calc(100% - 24px); }.proofSection, .stackSection, .thesisSection, .transitionSection, .navyIntro, .navyQuote, .capabilitiesSection, .localSection, .privacySection, .gallerySection { padding-left: 40px; padding-right: 40px; }
   .proofIntro, .localHeading, .privacyHeading { grid-template-columns: 1fr; gap: 40px; }.proofGrid, .surfaceGrid { grid-template-columns: repeat(2, 1fr); }
   .surfaceTabs { grid-template-columns: repeat(4, 1fr); }.darkSplit, .darkImagePair, .capabilityGrid { grid-template-columns: 1fr; }.darkImagePair .productFrame:nth-child(2) { margin-top: 0; }
@@ -222,8 +219,8 @@
 }
 
 @media (max-width: 640px) {
-  .header { height: 76px; }.headerInner { width: calc(100% - 28px); }.headerActions { gap: 5px; }.headerActions .githubButton { display: none; }.headerPlatform { min-height: 36px; padding: 0 8px; font-size: 10px; }.primaryButton { padding-inline: 15px; }
-  .hero { padding-bottom: 100px; }.heroRail { min-height: 790px; border-radius: 28px; background-size: 42px 42px; }.heroContent { padding-top: 70px; }.hero h1 { margin-top: 32px; font-size: 54px; }.heroContent > p { font-size: 15px; }.heroActions { flex-direction: column; }.textButton { display: none; }.heroFrameWrap { top: 650px; left: 12px; right: 12px; }.windowBar { height: 22px; }.windowBar div { display: none; }
+  .header { height: 76px; }.headerInner { width: calc(100% - 28px); }.headerActions .githubButton { display: inline-flex; }.primaryButton { padding-inline: 15px; }
+  .hero { padding-bottom: 48px; }.heroRail { min-height: 720px; border-radius: 28px; background-size: 42px 42px; }.heroContent { padding-top: 70px; }.hero h1 { margin-top: 32px; font-size: 54px; }.heroContent > p { font-size: 15px; }.heroActions { flex-direction: column; }.textButton { display: none; }.windowBar { height: 22px; }.windowBar div { display: none; }
   .rail { width: calc(100% - 16px); background-size: 42px 42px; }.proofSection, .stackSection, .thesisSection, .transitionSection, .navyIntro, .navyQuote, .capabilitiesSection, .localSection, .privacySection, .gallerySection, .footer { padding-left: 20px; padding-right: 20px; }
   .proofSection { padding-top: 110px; padding-bottom: 100px; }.sectionLabel { margin-bottom: 28px; }.proofIntro h2, .centerHeading h2, .localHeading h2, .privacyHeading h2, .downloadSection h2, .gallerySection > h2 { font-size: 41px; }
   .proofGrid, .surfaceGrid, .privacyGrid { grid-template-columns: 1fr; }.proofGrid { margin-top: 60px; }.surfaceTabs { grid-template-columns: repeat(2, 1fr); border-radius: 20px; }.surfaceCard { min-height: 390px; }.thesisSection { min-height: 530px; }.thesisSection blockquote { font-size: 34px; }.thesisSection > p { margin-left: 0; }

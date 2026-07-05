@@ -64,10 +64,6 @@
 .v2-site-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
 .v2-site-source { min-height: 42px; padding: 0 16px; display: inline-flex; align-items: center; gap: 8px; color: #17171a; border: 1px solid #e7e7eb; border-radius: 999px; font-size: 13px; font-weight: 650; text-decoration: none; }
 
-.v2-platform-links { display: flex; align-items: center; gap: 6px; }
-.v2-platform-links a { min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; color: #303139; border: 1px solid #e2e3e8; border-radius: 999px; font-size: 11px; font-weight: 700; text-decoration: none; }
-.v2-platform-links a:first-child { color: white; border-color: #1748ff; background: #1748ff; }
-.v2-platform-links a:hover { border-color: #1748ff; }
 
 .v2-public-page .lp-docs-nav { display: none !important; }
 
@@ -228,8 +224,6 @@
   .v2-site-header { height: 76px; }
   .v2-site-header-inner { width: calc(100% - 28px); }
   .v2-site-source { display: none; }
-  .v2-platform-links { gap: 4px; }
-  .v2-platform-links a { min-height: 36px; padding: 0 8px; font-size: 10px; }
   .v2-public-page .lp-docs-hero { width: calc(100% - 16px); min-height: 520px; padding: 90px 30px 70px; border-radius: 28px; background-size: 42px 42px; }
   .v2-public-page .lp-docs-hero::before { inset: 20px; border-radius: 20px; }
   .v2-public-page .lp-docs-hero h1 { font-size: 58px !important; }

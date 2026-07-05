@@ -164,9 +164,6 @@ export function V2Landing() {
               <Code2 size={16} />
               <span>GitHub</span>
             </a>
-            <a className={`${styles.headerPlatform} ${styles.headerPlatformPrimary}`} href={MAC_DOWNLOAD_HREF}>macOS</a>
-            <a className={styles.headerPlatform} href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
-            <a className={styles.headerPlatform} href={LINUX_STATUS_HREF}>Linux</a>
           </div>
         </div>
       </header>
@@ -204,13 +201,6 @@ export function V2Landing() {
                   Linux
                 </a>
               </div>
-            </div>
-            <div className={styles.heroFrameWrap}>
-              <ProductFrame
-                src="/hackathon/01-timeline-day.png"
-                alt="Daylens Timeline showing a reconstructed day"
-                priority
-              />
             </div>
           </div>
         </section>

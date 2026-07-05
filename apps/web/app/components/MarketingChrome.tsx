@@ -26,16 +26,6 @@ function DaylensMark() {
   );
 }
 
-export function PlatformDownloadLinks() {
-  return (
-    <div className="v2-platform-links" aria-label="Download Daylens">
-      <a href={MAC_DOWNLOAD_HREF}>macOS</a>
-      <a href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
-      <a href={LINUX_STATUS_HREF}>Linux</a>
-    </div>
-  );
-}
-
 export function MarketingInnerNav({ current }: { current: MarketingNavKey; theme?: "dark" | "light"; variant?: "default" | "capsule"; landing?: boolean }) {
   return (
     <header className="v2-site-header">
@@ -56,7 +46,6 @@ export function MarketingInnerNav({ current }: { current: MarketingNavKey; theme
             <Code2 size={15} />
             <span>GitHub</span>
           </a>
-          <PlatformDownloadLinks />
         </div>
       </div>
     </header>
