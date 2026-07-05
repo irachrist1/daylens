@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronDown, Code2, Download } from "lucide-react";
+import { Code2 } from "lucide-react";
 import {
   LINUX_STATUS_HREF,
   MAC_DOWNLOAD_HREF,
@@ -26,20 +26,13 @@ function DaylensMark() {
   );
 }
 
-export function PlatformDownloadMenu({ compact = false }: { compact?: boolean }) {
+export function PlatformDownloadLinks() {
   return (
-    <details className={`v2-download-menu${compact ? " is-compact" : ""}`}>
-      <summary>
-        <Download size={15} />
-        Download
-        <ChevronDown size={14} />
-      </summary>
-      <div className="v2-download-popover">
-        <a href={MAC_DOWNLOAD_HREF}><span>macOS</span><small>Apple silicon</small></a>
-        <a href={WINDOWS_DOWNLOAD_HREF}><span>Windows</span><small>Installer</small></a>
-        <a href={LINUX_STATUS_HREF}><span>Linux</span><small>Install and status</small></a>
-      </div>
-    </details>
+    <div className="v2-platform-links" aria-label="Download Daylens">
+      <a href={MAC_DOWNLOAD_HREF}>macOS</a>
+      <a href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
+      <a href={LINUX_STATUS_HREF}>Linux</a>
+    </div>
   );
 }
 
@@ -63,7 +56,7 @@ export function MarketingInnerNav({ current }: { current: MarketingNavKey; theme
             <Code2 size={15} />
             <span>GitHub</span>
           </a>
-          <PlatformDownloadMenu compact />
+          <PlatformDownloadLinks />
         </div>
       </div>
     </header>

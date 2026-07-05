@@ -164,10 +164,9 @@ export function V2Landing() {
               <Code2 size={16} />
               <span>GitHub</span>
             </a>
-            <a className={styles.primaryButton} href="#download">
-              Download
-              <ArrowRight size={16} />
-            </a>
+            <a className={`${styles.headerPlatform} ${styles.headerPlatformPrimary}`} href={MAC_DOWNLOAD_HREF}>macOS</a>
+            <a className={styles.headerPlatform} href={WINDOWS_DOWNLOAD_HREF}>Windows</a>
+            <a className={styles.headerPlatform} href={LINUX_STATUS_HREF}>Linux</a>
           </div>
         </div>
       </header>
