@@ -8,12 +8,14 @@
 import type Database from 'better-sqlite3'
 import {
   getAppSummariesForRange,
+  getReconciledDomainIntervals,
   getSessionsForRange,
   getWebsiteSummariesForRange,
   searchSessions as dbSearchSessions,
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
 } from '../db/queries'
+import { localDateString } from '../lib/localDate'
 import { computeFocusScoreV2 } from '../lib/focusScore'
 import {
   findClientByName,
@@ -452,17 +454,31 @@ function aggregateSiteUsage(
   if (matchedDomains.length === 0) return null
 
   const placeholders = matchedDomains.map(() => '?').join(', ')
-  const dayRows = db.prepare(`
+
+  // Visit COUNT stays a raw navigation count, but the TIME is reconciled:
+  // raw SUM(duration_sec) double-counts the two capture sources and keeps
+  // crediting background tabs, so the AI's "how long on youtube" answer
+  // disagreed with every other surface (invariant 7).
+  const wanted = new Set(matchedDomains)
+  const daySeconds = new Map<string, number>()
+  for (const interval of getReconciledDomainIntervals(db, fromMs, toMs, (domain) => wanted.has(domain))) {
+    const day = localDateString(new Date(interval.start))
+    daySeconds.set(day, (daySeconds.get(day) ?? 0) + (interval.end - interval.start) / 1000)
+  }
+
+  const visitRows = db.prepare(`
     SELECT strftime('%Y-%m-%d', visit_time / 1000, 'unixepoch', 'localtime') AS day,
-           SUM(duration_sec) AS sec,
            COUNT(*) AS visits
     FROM website_visits
     WHERE visit_time >= ? AND visit_time < ? AND domain IN (${placeholders})
     GROUP BY day ORDER BY day DESC
-  `).all(fromMs, toMs, ...matchedDomains) as { day: string; sec: number; visits: number }[]
+  `).all(fromMs, toMs, ...matchedDomains) as { day: string; visits: number }[]
 
-  const totalSeconds = dayRows.reduce((s, r) => s + (r.sec ?? 0), 0)
-  const visitCount = dayRows.reduce((s, r) => s + (r.visits ?? 0), 0)
+  const visitsByDay = new Map(visitRows.map((r) => [r.day, r.visits ?? 0]))
+  const allDays = [...new Set([...daySeconds.keys(), ...visitsByDay.keys()])].sort().reverse()
+
+  const totalSeconds = Math.round([...daySeconds.values()].reduce((s, v) => s + v, 0))
+  const visitCount = visitRows.reduce((s, r) => s + (r.visits ?? 0), 0)
   if (visitCount <= 0) return null
 
   const titleRows = db.prepare(`
@@ -477,9 +493,13 @@ function aggregateSiteUsage(
     domain: matchedDomains.slice().sort((a, b) => a.length - b.length)[0],
     totalSeconds,
     visitCount,
-    dailyBreakdown: dayRows
-      .filter((r) => (r.sec ?? 0) > 0 || (r.visits ?? 0) > 0)
-      .map((r) => ({ date: r.day, totalSeconds: r.sec ?? 0, sessionCount: r.visits ?? 0 })),
+    dailyBreakdown: allDays
+      .map((day) => ({
+        date: day,
+        totalSeconds: Math.round(daySeconds.get(day) ?? 0),
+        sessionCount: visitsByDay.get(day) ?? 0,
+      }))
+      .filter((r) => r.totalSeconds > 0 || r.sessionCount > 0),
     titles: titleRows.map((r) => r.page_title),
   }
 }

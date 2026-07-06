@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { AppCategory, WorkMemoryCategory } from '@shared/types'
 import { tableExists } from './database'
+import { getReconciledDomainIntervals } from '../db/queries'
 
 type WorkMemoryFactOrigin = 'drafted' | 'user'
 // Display provenance (memory.md §2.1 "marked as such"). Durability is keyed on
@@ -483,18 +484,19 @@ function draftFactsFromEvidence(db: Database.Database): DraftFact[] {
     })
   }
 
-  // Background sites — what the user treats as not-focus.
-  const bgRows = db.prepare(`
-    SELECT domain, SUM(duration_sec) AS total
-    FROM website_visits
-    WHERE visit_time >= ? AND domain IS NOT NULL
-    GROUP BY domain
-    ORDER BY total DESC
-    LIMIT 20
-  `).all(lookback) as Array<{ domain: string; total: number }>
-  const background = bgRows
-    .map((row) => row.domain.replace(/^www\./, ''))
-    .filter((domain) => BACKGROUND_DOMAINS.some((bg) => domain === bg || domain.endsWith(`.${bg}`)))
+  // Background sites — what the user treats as not-focus. Reconciled credits
+  // so background-tab history accrual can't inflate a domain's ranking (invariant 7).
+  const bgByDomain = new Map<string, number>()
+  for (const interval of getReconciledDomainIntervals(db, lookback, now())) {
+    const domain = interval.domain.replace(/^www\./, '')
+    if (BACKGROUND_DOMAINS.some((bg) => domain === bg || domain.endsWith(`.${bg}`))) {
+      bgByDomain.set(domain, (bgByDomain.get(domain) ?? 0) + (interval.end - interval.start) / 1000)
+    }
+  }
+  const background = [...bgByDomain.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([domain]) => domain)
   const uniqueBackground = [...new Set(background)].slice(0, 3)
   if (uniqueBackground.length > 0) {
     facts.push({

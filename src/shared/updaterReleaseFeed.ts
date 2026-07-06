@@ -6,8 +6,20 @@ export interface RemoteUpdateDescriptor {
   installUrl: string
   installFileName: string
   installSizeBytes?: number | null
+  // SHA-256 of the install artifact as published by the release service
+  // (GitHub asset digest). The client refuses to auto-install without it.
+  installSha256?: string | null
   manualUrl: string | null
   releasePageUrl: string | null
+}
+
+// Accepts a bare 64-hex digest or the GitHub "sha256:<hex>" form; returns
+// lowercase bare hex, or null when the value is not a usable SHA-256.
+export function normalizeInstallSha256(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim().toLowerCase()
+  const hex = raw.startsWith('sha256:') ? raw.slice('sha256:'.length) : raw
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null
 }
 
 interface ParsedVersion {
@@ -50,6 +62,7 @@ export function isRemoteUpdateDescriptor(value: unknown): value is RemoteUpdateD
     typeof candidate.installUrl === 'string' &&
     typeof candidate.installFileName === 'string' &&
     (candidate.installSizeBytes === undefined || candidate.installSizeBytes === null || typeof candidate.installSizeBytes === 'number') &&
+    (candidate.installSha256 === undefined || candidate.installSha256 === null || typeof candidate.installSha256 === 'string') &&
     (candidate.releaseName === null || typeof candidate.releaseName === 'string') &&
     (candidate.releaseNotesText === null || typeof candidate.releaseNotesText === 'string') &&
     (candidate.releaseDate === null || typeof candidate.releaseDate === 'string') &&

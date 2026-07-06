@@ -54,9 +54,10 @@ From the repository root, `npm run web:dev`, `npm run web:typecheck`, and `npm r
 ## How it works
 
 - **Foreground polling, not screenshots.** Captures your active app and window every few seconds via OS APIs; sub-10-second noise is discarded before it hits SQLite.
-- **Browser history ingestion.** Safely reads Chrome, Edge, Brave, Arc, and Firefox history into the same timeline — no cloud upload.
+- **Browser history ingestion.** Safely reads Chrome, Edge, Brave, Arc, Dia, Comet, Safari, and Firefox history into the same timeline — no cloud upload. Browser detection uses the OS app registry, so new browsers work without a code change.
 - **Blocks, not raw sessions.** Groups fragmented app switches and tab hops into named work blocks you can scan at a glance.
-- **Hybrid query router.** Simple questions (durations, focus stats, weekly reading) resolve deterministically from the database; complex synthesis falls through to your AI provider with tool-calling.
+- **Resolver-first AI.** Every question resolves deterministically from the database first; the model phrases the answer in Daylens's voice. No agentic tool-loop, no hallucinated numbers.
+- **Verified updates.** macOS ad-hoc updates verify the download's SHA-256 against the published release digest before swapping the app bundle; unverified releases fall back to manual download.
 - **Opt-in MCP server.** Exposes your local timeline to Cursor and Claude Desktop when you toggle it on — off by default.
 - **Zero-cloud by design.** Everything lives in `daylens.sqlite` on your machine; API keys sit in the OS keychain.
 

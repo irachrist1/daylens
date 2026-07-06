@@ -22,6 +22,10 @@ export default function UpdateBanner() {
     return null
   }
 
+  // False only when the update check explicitly said the artifact cannot be
+  // verified before install; older payloads without the field stay installable.
+  const canAutoInstall = update.canAutoInstall !== false
+
   if (update.status === 'available') {
     return (
       <div
@@ -53,38 +57,42 @@ export default function UpdateBanner() {
           Daylens {update.version ?? ''} is available
         </span>
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-          Click install — Daylens will download the new build, replace the app in place, and relaunch automatically.
+          {canAutoInstall
+            ? 'Click install — Daylens will download the new build, replace the app in place, and relaunch automatically.'
+            : 'This release cannot be verified for automatic install. Download it manually instead.'}
         </span>
         {highlights[0] && (
           <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
             Includes: {highlights[0]}
           </span>
         )}
-        <button
-          onClick={() => {
-            track(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
-              surface: 'banner',
-              trigger: 'banner',
-              version: update.version ?? undefined,
-            })
-            void ipc.updater.install()
-          }}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 999,
-            border: 'none',
-            background: 'var(--gradient-primary)',
-            color: 'var(--color-primary-contrast)',
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: 'pointer',
-            fontFamily: 'inherit',
-            letterSpacing: '-0.01em',
-            boxShadow: '0 10px 22px rgba(15,99,219,0.18)',
-          }}
-        >
-          Install update
-        </button>
+        {canAutoInstall && (
+          <button
+            onClick={() => {
+              track(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {
+                surface: 'banner',
+                trigger: 'banner',
+                version: update.version ?? undefined,
+              })
+              void ipc.updater.install()
+            }}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 999,
+              border: 'none',
+              background: 'var(--gradient-primary)',
+              color: 'var(--color-primary-contrast)',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              letterSpacing: '-0.01em',
+              boxShadow: '0 10px 22px rgba(15,99,219,0.18)',
+            }}
+          >
+            Install update
+          </button>
+        )}
         {update.downloadUrl && (
           <button
             onClick={() => ipc.shell.openExternal(update.downloadUrl as string)}

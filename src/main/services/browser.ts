@@ -13,6 +13,7 @@
 //   Windows: Chrome, Edge, Brave, Arc, Dia, Comet (all Chromium profiles), Firefox
 
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -270,13 +271,37 @@ function windowsBrowsersStatic(): BrowserEntry[] {
     }
   }
 
+  // Zen uses Firefox's places.sqlite format under its own roaming profile root.
+  const zenIni = path.join(roaming, 'Zen/profiles.ini')
+  const zenProfiles = parseFirefoxProfilesIni(zenIni)
+  for (let i = 0; i < zenProfiles.length; i++) {
+    const dbPath = path.join(zenProfiles[i], 'places.sqlite')
+    if (fs.existsSync(dbPath)) {
+      entries.push({
+        name:        i === 0 ? 'Zen' : `Zen (Profile ${i})`,
+        bundleId:    i === 0 ? 'zen.exe' : `zen.exe:${i}`,
+        historyPath: dbPath,
+        type:        'firefox',
+      })
+    }
+  }
+
   return entries
+}
+
+function uniqueBrowserEntries(entries: BrowserEntry[]): BrowserEntry[] {
+  const seen = new Set<string>()
+  return entries.filter((entry) => {
+    const key = path.resolve(entry.historyPath).toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 function windowsBrowsers(): BrowserEntry[] {
   const registryEntries = windowsBrowsersFromRegistry()
-  if (registryEntries.length > 0) return registryEntries
-  return windowsBrowsersStatic()
+  return uniqueBrowserEntries([...registryEntries, ...windowsBrowsersStatic()])
 }
 
 function linuxBrowsers(): BrowserEntry[] {
@@ -495,12 +520,25 @@ export function getBrowserStatus() {
   }
 }
 
+// Copies a browser History DB (+WAL/SHM) for reading without stalling the
+// main process: COPYFILE_FICLONE makes it an O(1) APFS clone when source and
+// tmpdir share a volume, and the fallback byte copy runs on the libuv
+// threadpool instead of blocking the event loop the way copyFileSync did
+// (History DBs run to hundreds of MB).
+async function copyHistorySnapshot(historyPath: string, tmpDb: string, tmpWal: string, tmpShm: string): Promise<void> {
+  await fsp.copyFile(historyPath, tmpDb, fs.constants.COPYFILE_FICLONE)
+  const walSrc = historyPath + '-wal'
+  const shmSrc = historyPath + '-shm'
+  if (fs.existsSync(walSrc)) await fsp.copyFile(walSrc, tmpWal, fs.constants.COPYFILE_FICLONE)
+  if (fs.existsSync(shmSrc)) await fsp.copyFile(shmSrc, tmpShm, fs.constants.COPYFILE_FICLONE)
+}
+
 // ─── Chromium poll ─────────────────────────────────────────────────────────────
 
-function pollChromium(
+async function pollChromium(
   browser: BrowserEntry,
   db: ReturnType<typeof getDb>,
-): { inserted: number; error: string | null } {
+): Promise<{ inserted: number; error: string | null }> {
   const tmpBase = path.join(os.tmpdir(), `daylens_bh_${Date.now()}`)
   const tmpDb   = tmpBase + '.sqlite'
   const tmpWal  = tmpBase + '.sqlite-wal'
@@ -515,11 +553,7 @@ function pollChromium(
   const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
-    fs.copyFileSync(browser.historyPath, tmpDb)
-    const walSrc = browser.historyPath + '-wal'
-    const shmSrc = browser.historyPath + '-shm'
-    if (fs.existsSync(walSrc)) fs.copyFileSync(walSrc, tmpWal)
-    if (fs.existsSync(shmSrc)) fs.copyFileSync(shmSrc, tmpShm)
+    await copyHistorySnapshot(browser.historyPath, tmpDb, tmpWal, tmpShm)
 
     const histDb = new Database(tmpDb, { readonly: true })
     histDb.defaultSafeIntegers(true)
@@ -610,10 +644,10 @@ function pollChromium(
 
 // ─── Firefox poll ─────────────────────────────────────────────────────────────
 
-function pollFirefox(
+async function pollFirefox(
   browser: BrowserEntry,
   db: ReturnType<typeof getDb>,
-): { inserted: number; error: string | null } {
+): Promise<{ inserted: number; error: string | null }> {
   const tmpBase = path.join(os.tmpdir(), `daylens_ff_${Date.now()}`)
   const tmpDb   = tmpBase + '.sqlite'
   const tmpWal  = tmpBase + '.sqlite-wal'
@@ -628,11 +662,7 @@ function pollFirefox(
   const controls = trackingControlsStateFromSettings(getSettings())
 
   try {
-    fs.copyFileSync(browser.historyPath, tmpDb)
-    const walSrc = browser.historyPath + '-wal'
-    const shmSrc = browser.historyPath + '-shm'
-    if (fs.existsSync(walSrc)) fs.copyFileSync(walSrc, tmpWal)
-    if (fs.existsSync(shmSrc)) fs.copyFileSync(shmSrc, tmpShm)
+    await copyHistorySnapshot(browser.historyPath, tmpDb, tmpWal, tmpShm)
 
     const histDb = new Database(tmpDb, { readonly: true })
     histDb.defaultSafeIntegers(true)
@@ -709,10 +739,10 @@ function pollFirefox(
   return { inserted, error }
 }
 
-function pollWebKit(
+async function pollWebKit(
   browser: BrowserEntry,
   db: ReturnType<typeof getDb>,
-): { inserted: number; error: string | null } {
+): Promise<{ inserted: number; error: string | null }> {
   const tmpBase = path.join(os.tmpdir(), `daylens_wk_${Date.now()}`)
   const tmpDb = `${tmpBase}.sqlite`
   const tmpWal = `${tmpBase}.sqlite-wal`
@@ -725,12 +755,10 @@ function pollWebKit(
   const fromWebKitSeconds = fromMs / 1_000 - WEBKIT_EPOCH_OFFSET_SEC
 
   try {
-    fs.copyFileSync(browser.historyPath, tmpDb)
+    await copyHistorySnapshot(browser.historyPath, tmpDb, tmpWal, tmpShm)
     // Reaching here means the TCC-protected copy of History.db succeeded, i.e.
     // Full Disk Access is granted — clear any prior 'denied' status.
     setSafariHistoryAccessStatus('ok', browser)
-    if (fs.existsSync(`${browser.historyPath}-wal`)) fs.copyFileSync(`${browser.historyPath}-wal`, tmpWal)
-    if (fs.existsSync(`${browser.historyPath}-shm`)) fs.copyFileSync(`${browser.historyPath}-shm`, tmpShm)
 
     const histDb = new Database(tmpDb, { readonly: true })
     const rows = histDb.prepare(`
@@ -794,7 +822,21 @@ function pollWebKit(
 
 // ─── Poll all browsers ────────────────────────────────────────────────────────
 
+// Async polls must never overlap: an overlapping run would race the
+// per-browser cursor writes and double-insert the same visits window.
+let pollInFlight = false
+
 async function pollAll(): Promise<void> {
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    await pollAllInner()
+  } finally {
+    pollInFlight = false
+  }
+}
+
+async function pollAllInner(): Promise<void> {
   const browsers = getBrowserEntries()
   const db       = getDb()
   const pollNow  = Date.now()
@@ -810,10 +852,10 @@ async function pollAll(): Promise<void> {
     pollable++
 
     const result = browser.type === 'firefox'
-      ? pollFirefox(browser, db)
+      ? await pollFirefox(browser, db)
       : browser.type === 'webkit'
-        ? pollWebKit(browser, db)
-        : pollChromium(browser, db)
+        ? await pollWebKit(browser, db)
+        : await pollChromium(browser, db)
 
     totalInserted += result.inserted
     if (result.error) lastError = result.error

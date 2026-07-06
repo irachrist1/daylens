@@ -3,6 +3,7 @@ import {
   fetchPublishedReleases,
   findLatestMatchingReleaseAsset,
   releaseAssetDownloadUrl,
+  releaseAssetSha256,
 } from "../download/_releaseAsset";
 
 const CANONICAL_PUBLIC_ORIGIN = "https://christian-tonny.dev";
@@ -91,6 +92,7 @@ export async function GET(request: NextRequest) {
           ),
         installFileName: install.asset.name,
         installSizeBytes: install.asset.size ?? null,
+        installSha256: releaseAssetSha256(install.asset),
         manualUrl: manualAsset
           ? releaseAssetDownloadUrl(manualAsset) ??
             withBasePath(
@@ -134,6 +136,7 @@ export async function GET(request: NextRequest) {
       installUrl: windowsUrl,
       installFileName: install.asset.name,
       installSizeBytes: install.asset.size ?? null,
+      installSha256: releaseAssetSha256(install.asset),
       manualUrl: windowsUrl,
       releasePageUrl: install.release.html_url ?? null,
     });

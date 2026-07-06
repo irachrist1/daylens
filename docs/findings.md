@@ -12,6 +12,27 @@ for a problem in the eyes.
 
 ---
 
+## 2026-07-07 — Windows shipping blockers
+
+**Status:** Fixed in code · **Source:** Windows code audit + focused fixtures; live local
+`DaylensWindows/daylens.sqlite` only contained `darwin` focus rows, so real Windows capture
+still needs manual verification.
+
+- Windows private detection had no structured helper signal. The UIA helper now emits
+  `is_private` without URL/title payload, and tracking drops the foreground window before
+  creating app sessions or site visits.
+- The helper's private detector originally covered only a short Chromium-style browser list;
+  Firefox-family browsers already known to the helper must also participate or private
+  windows in Waterfox/LibreWolf/Pale Moon/Floorp can be tracked.
+- Browser context flushes used `Math.max(endTime, lastSeenAt)`, which defeated backdated
+  idle/sleep cutoffs and could store inflated raw `website_visits.duration_sec`. Explicit
+  cutoffs now win.
+- Windows updater shipping needed two gates: unsigned packaged builds disable built-in
+  updates at runtime, and release CI must require a valid Authenticode signer whose subject
+  matches packaged updater metadata.
+
+---
+
 ## 1. The proof: what the AI was actually handed
 
 The June 20 block from 10:41–12:29 was named **"Computer activity," category uncategorized**.
@@ -979,3 +1000,104 @@ Lesson for the audit record: `recoverPersistedLiveSnapshot` faithfully preserves
 poisoned live session — recovery-from-snapshot is only as honest as the session that was
 open. When a hole or a phantom is found, check BOTH sides of midnight; the midnight
 split cuts one lie into two days' worth.
+
+# 2026-07-07 — pre-shipping audit: security, performance, reconciliation, sweep
+
+**Status:** Fixed + tested · **Source:** codebase audit + live DB verification
+
+A full sweep of every macOS-facing surface after three sessions of tracking fixes.
+Codex adversarial review shaped the plan before any code was touched.
+
+## Security: macOS ad-hoc updater verified downloads (highest priority)
+
+The ad-hoc Mac updater downloaded a ZIP from the update feed, verified only byte-count
+vs `installSizeBytes`, then a detached bash script `rm -rf`'d the installed app, moved
+the staged bundle in, re-signed ad-hoc, and `xattr -cr` stripped quarantine — no hash
+or signature verification. A tampered or truncated download would have been swapped in
+and its quarantine cleared.
+
+Fix (fail-closed, layered):
+1. The update feed (`apps/web/app/api/update-feed/route.ts`) now populates
+   `installSha256` from the GitHub release asset `digest` field (GitHub REST returns
+   `sha256:<hex>` for all assets since 2025).
+2. `RemoteUpdateDescriptor` (`src/shared/updaterReleaseFeed.ts`) carries an optional
+   `installSha256`; `normalizeInstallSha256` accepts bare hex or the `sha256:` prefix.
+3. `updater.ts` computes SHA-256 of the downloaded file (streaming, `node:crypto`)
+   and compares to the descriptor before staging. Mismatch → temp files deleted, error
+   state. No digest in the feed → `canAutoInstall = false`: the UI offers only the
+   manual download, never auto-install. Install URL must be HTTPS.
+4. Before the swap script runs, `stageAdhocMacUpdate` reads the staged bundle's
+   `CFBundleIdentifier` via `defaults` and rejects a bundle that doesn't identify as
+   Daylens — so a hash-matched zip with the wrong content never reaches the swap.
+5. Temp files (download dir + extract dir) are cleaned up on any failure path.
+
+Regression: `tests/updaterReleaseFeed.test.ts` (descriptor validation + hash normalization).
+
+## Performance: browser history reads no longer block the main process
+
+`browser.ts` (60s poll) and `browserContext.ts` (5s poll fallback) both used
+`fs.copyFileSync` to copy entire browser History DBs (100s of MB) synchronously on the
+Electron main process, stalling the event loop for the whole copy.
+
+Fix:
+- **60s poll (`browser.ts`)**: `pollChromium`/`pollFirefox`/`pollWebKit` are now async.
+  `copyHistorySnapshot` uses `fsp.copyFile(src, dst, COPYFILE_FICLONE)` — O(1) APFS
+  clone when source and tmpdir share a volume, libuv threadpool fallback otherwise.
+  A reentrancy guard (`pollInFlight`) prevents overlapping polls from racing cursor
+  writes.
+- **5s fallback (`browserContext.ts`)**: `copyHistoryDb` uses `COPYFILE_FICLONE_FORCE`
+  first (clone-only, O(1) on APFS). When cloning is impossible, only files <64 MB are
+  byte-copied; larger files skip the read entirely and the 60s poll backfills. Returns
+  `null` on skip so callers short-circuit cleanly.
+
+Site attribution semantics are unchanged — the same SQLite queries run on the same
+temp copies; only the copy mechanism changed.
+
+## Reconciliation: three raw-SUM consumers routed through the reconciled engine
+
+The 2026-07-06 audit flagged three consumer families still running raw
+`SUM(duration_sec)` over `website_visits` (double-counting the two capture sources
+and counting background-tab history estimates as real time):
+
+1. **`getDistractionByMonth/Hour/Domain`** (`queries.ts`): rewrote all three to bucket
+   `getReconciledDomainIntervals` credits by month/hour/domain instead of raw SQL SUM.
+2. **AI `aggregateSiteUsage`** (`aiTools.ts`): site time now comes from
+   `getReconciledDomainIntervals`; visit COUNT stays raw (it's a navigation count, not
+   time). Daily breakdown merges reconciled seconds with raw visit counts per day.
+3. **`workMemoryProfile` background-site ranking** (`workMemoryProfile.ts`): background
+   domain ranking now uses reconciled credits so background-tab accrual can't inflate
+   a domain's position.
+
+A new `getReconciledDomainIntervals` export in `queries.ts` chunks by 24h windows so
+multi-month ranges stay bounded; visit straddling a chunk boundary is clipped per chunk.
+
+Regression: `tests/aiResolvers.test.ts` updated to seed a Safari session (the reconciler
+requires browser foreground to credit site time).
+
+## Sweep fixes: two silent bugs in the attribution and projection paths
+
+1. **`attribution.ts` `loadIdlePeriods`** (MEDIUM): event-type matching used
+   `lower === 'lock'` (never matches `lock_screen`), `lower === 'sleep'` (never matches
+   `suspend`), `lower === 'unlock'` (never matches `unlock_screen`). Lock/sleep/idle
+   periods were not detected in the attribution segmentation path, so activity segments
+   weren't sliced around them. Fixed to match the same event types as
+   `reconcileWebsiteVisits`: `idle_start`, `lock_screen`, `suspend`, `away_start` →
+   start; `idle_end`, `unlock_screen`, `resume`, `away_end` → end.
+
+2. **`chunk2.ts` `IDLE_GAP_MS`** (LOW): was 5 min, but the founder decision (2026-07-02)
+   set the block break threshold to 15 min (`IDLE_GAP_THRESHOLD_MS` in `workBlocks.ts`).
+   The derived-session projection path split blocks at 5-min gaps while the main engine
+   used 15 min, causing past days to show more fragmented blocks. Fixed to 15 min.
+
+## Verified clean (no bugs found)
+
+- **Apps view**: per-app totals, browser site breakdowns, category filters, range
+  switching, "Smaller or Fleeting" — all verified against the live DB for 2026-07-06.
+- **Timeline**: block colors (no provisional override), gap labels (Asleep/Away/Idle),
+  day/week/month shared color resolver, context menu on provisional blocks.
+- **Settings**: color overrides, privacy/tracking gates, memory, capture health — all
+  persist correctly and read from real data.
+- **AI/Insights**: resolver-first, reconciled site time, no raw SUM, shares data path
+  with Timeline and Apps.
+- **History/Recap**: day totals from app_sessions via blocks, corrections survive
+  rebuilds.

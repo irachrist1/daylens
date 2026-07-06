@@ -166,23 +166,56 @@ function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab |
   return output == null ? null : parseChromiumTabOutput(output)
 }
 
-function copyHistoryDb(historyPath: string, prefix: string): { dbPath: string; walPath: string; shmPath: string } {
-  const tmpBase = path.join(os.tmpdir(), `${prefix}_${process.pid}_${Date.now()}_${Math.random().toString(16).slice(2)}`)
-  const dbPath = `${tmpBase}.sqlite`
-  const walPath = `${tmpBase}.sqlite-wal`
-  const shmPath = `${tmpBase}.sqlite-shm`
-
-  fs.copyFileSync(historyPath, dbPath)
-  if (fs.existsSync(`${historyPath}-wal`)) fs.copyFileSync(`${historyPath}-wal`, walPath)
-  if (fs.existsSync(`${historyPath}-shm`)) fs.copyFileSync(`${historyPath}-shm`, shmPath)
-
-  return { dbPath, walPath, shmPath }
-}
-
 function cleanupHistoryCopy(paths: { dbPath: string; walPath: string; shmPath: string }): void {
   for (const target of [paths.dbPath, paths.walPath, paths.shmPath]) {
     try { if (fs.existsSync(target)) fs.unlinkSync(target) } catch { /* best-effort: temp file may already be gone */ }
   }
+}
+
+// This fallback runs on the synchronous 5s foreground poll path, so a full
+// byte copy of a multi-hundred-MB History DB would freeze the main process
+// for the whole copy. Clone first (O(1) copy-on-write on APFS); when cloning
+// is impossible, only small files are byte-copied and anything larger skips
+// the read entirely — the 60s history poll backfills those sites.
+const MAX_SYNC_HISTORY_COPY_BYTES = 64 * 1024 * 1024
+
+function copyHistoryDb(historyPath: string, prefix: string): { dbPath: string; walPath: string; shmPath: string } | null {
+  const tmpBase = path.join(os.tmpdir(), `${prefix}_${process.pid}_${Date.now()}_${Math.random().toString(16).slice(2)}`)
+  const paths = {
+    dbPath: `${tmpBase}.sqlite`,
+    walPath: `${tmpBase}.sqlite-wal`,
+    shmPath: `${tmpBase}.sqlite-shm`,
+  }
+
+  const cloneOrBoundedCopy = (src: string, dst: string): boolean => {
+    try {
+      fs.copyFileSync(src, dst, fs.constants.COPYFILE_FICLONE_FORCE)
+      return true
+    } catch {
+      try {
+        if (fs.statSync(src).size > MAX_SYNC_HISTORY_COPY_BYTES) return false
+        fs.copyFileSync(src, dst)
+        return true
+      } catch {
+        return false
+      }
+    }
+  }
+
+  if (!cloneOrBoundedCopy(historyPath, paths.dbPath)) {
+    cleanupHistoryCopy(paths)
+    return null
+  }
+  if (fs.existsSync(`${historyPath}-wal`) && !cloneOrBoundedCopy(`${historyPath}-wal`, paths.walPath)) {
+    cleanupHistoryCopy(paths)
+    return null
+  }
+  if (fs.existsSync(`${historyPath}-shm`) && !cloneOrBoundedCopy(`${historyPath}-shm`, paths.shmPath)) {
+    cleanupHistoryCopy(paths)
+    return null
+  }
+
+  return paths
 }
 
 function titleTokens(value: string | null | undefined): string[] {
@@ -200,6 +233,7 @@ function titleMatchesWindow(pageTitle: string | null, windowTitle: string | null
 
 function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string | null): ActiveBrowserTab | null {
   const copy = copyHistoryDb(entry.historyPath, 'daylens_active_chromium')
+  if (!copy) return null
   try {
     const db = new Database(copy.dbPath, { readonly: true })
     db.defaultSafeIntegers(true)
@@ -224,6 +258,7 @@ function recentChromiumTab(entry: BrowserEntry, now: number, windowTitle: string
 
 function recentFirefoxTab(entry: BrowserEntry, now: number, windowTitle: string | null): ActiveBrowserTab | null {
   const copy = copyHistoryDb(entry.historyPath, 'daylens_active_firefox')
+  if (!copy) return null
   try {
     const db = new Database(copy.dbPath, { readonly: true })
     db.defaultSafeIntegers(true)
@@ -305,7 +340,10 @@ function readActiveBrowserTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrow
   }
 
   if (process.platform === 'win32') {
-    return winActiveTab(snapshot) ?? recentHistoryTab(snapshot)
+    // Windows has a UIA helper for live Chromium tabs. If that helper has no
+    // observed tab, do not synchronously copy browser History DBs on the 5s
+    // foreground poll path; the 60s browser-history poll will backfill sites.
+    return winActiveTab(snapshot)
   }
 
   if (process.platform === 'linux') {
@@ -468,7 +506,9 @@ export class ActiveBrowserContextTracker {
       return false
     }
 
-    const effectiveEnd = Math.max(endTime, context.lastSeenAt)
+    // Explicit cutoffs (idle/away/sleep-gap) are backdated to the last proven
+    // active instant. Do not stretch the visit back out to a later cached sample.
+    const effectiveEnd = Math.max(endTime, context.startedAt)
     const durationSec = Math.round((effectiveEnd - context.startedAt) / 1000)
     if (durationSec < MIN_CONTEXT_SEC) return false
 

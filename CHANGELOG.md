@@ -4,6 +4,69 @@ Released versions only. Each entry is one line, factually verifiable, no aspirat
 Prior entries that overclaimed shipped behavior were removed during the May 2026
 focus reset.
 
+## Unreleased — 2026-07-07 pre-shipping audit
+
+### Security
+- macOS ad-hoc updater verifies SHA-256 of the downloaded ZIP against the GitHub release digest before staging. Fail-closed: no digest → manual download only. Bundle identity check (CFBundleIdentifier) before the swap script runs. Temp files cleaned up on failure.
+
+### Performance
+- Browser history reads (60s poll) moved from sync `copyFileSync` to async `fsp.copyFile` with `COPYFILE_FICLONE` (O(1) APFS clone). Reentrancy guard prevents overlapping polls.
+- Active-tab fallback (5s poll) uses clone-first with a 64 MB size guard; larger History DBs skip the sync read and let the 60s poll backfill.
+
+### Reconciliation
+- `getDistractionByMonth/Hour/Domain` now bucket reconciled per-domain credits instead of raw `SUM(duration_sec)`, so distraction cost agrees with foreground time.
+- AI `aggregateSiteUsage` uses `getReconciledDomainIntervals` for site time; visit count stays raw.
+- `workMemoryProfile` background-site ranking uses reconciled credits.
+
+### Sweep fixes
+- `attribution.ts` `loadIdlePeriods`: event-type matching fixed to match `lock_screen`, `suspend`, `away_start`, `unlock_screen`, `away_end` (was matching `'lock'`, `'sleep'`, `'unlock'`, `'wake'` which never matched the real event types).
+- `chunk2.ts` gap threshold: 5 min → 15 min (matches the founder decision from 2026-07-02 and the main engine).
+
+## Unreleased — 2026-07-06/07 tracking engine fixes (commits fad6cc0, 6df04fa, 93f5ffb)
+
+### Sleep and idle
+- Poll-gap detection (>60s hole between ticks) ends the open session at the last evidence of activity, flushes browser context, and backdates an `away_start` event. `suspend`/`lock_screen`/`resume`/`unlock_screen` also cut a still-open session (belt-and-braces).
+- `recoverPersistedLiveSnapshot` splits a cross-midnight recovered session into one slice per calendar day.
+- `IDLE_GAP_THRESHOLD_MS` set to 15 min (founder decision, supersedes the 45-min sitting). Block span ceilings rose to 3h/5h/6h.
+
+### Incognito
+- Private/incognito windows are never tracked — no website visit, no app session — regardless of the Tracking Controls master switch (founder rule). Structured Chromium `mode of front window` signal where supported; title fallback applied unconditionally. Dia's AppleScript exposes no window mode (known limitation).
+
+### Browser detection
+- Browser detection uses the app catalog + OS registry instead of a hardcoded name regex. Zen, Dia, Comet, and future browsers work without a code change.
+- Safari history capture tracks Full Disk Access status (ok/denied/unknown) from the copy outcome and surfaces it in Settings' capture health with a Privacy_AllFiles deeplink.
+
+### Categories and colors
+- Block category distribution is site-weighted: each browser session's seconds split across the categories of the sites reconciled inside the block. Dia recataloged `browsing`; heuristic bumped to `timeline-v10`.
+- Block colors always use `activityColorForCategory(block.dominantCategory)` — no provisional grey override. Live blocks color correctly as evidence accumulates.
+- Entertainment/social artifacts may refine a non-focused base but never override a focused base unless strictly majority. Notion/Google Docs/Linear pages carry `productivity` weight.
+
+### Reconciliation
+- Site time reconciles against browser foreground time: visits clip to when the hosting browser was frontmost, partition the browser's time (one active tab at a time), and are zeroed behind other apps or during absence signals. `getWebsiteSummariesForRange`, `getTopPagesForDomains`, `getBrowserActivityBreakdown`, and the App Detail view all read from the same reconciled ledger.
+- Background-tab history accrual (Netflix "playing" through idle, a Meet tab "earning" 33m while Warp was focused) is eliminated.
+- Sites render nested under their browser in the inspector and edit modal, never as additive siblings.
+
+### Auto-analyze
+- The AI regroup that merges same-intent neighbours runs on day rollover + startup-finalize, not just the manual Analyze click. Gated by `persistedDayWasProcessed` so tokens are spent at most once per day. Falls back to heuristic blocks on provider outage.
+
+### Background AI budget
+- A hard daily budget breaker (`BACKGROUND_AI_DAILY_CALL_CAP = 250`) caps background AI calls at the execution choke point. The dead passive cleanup loop that caused $110/week of runaway labeling is deleted.
+
+### Evidence and naming
+- `looksLikeRawArtifactLabel` rejects SCREAMING / SCREAMING-KEBAB stems from block names (e.g. `AGENT`, `AGENT-EXECUTION-PLAN.md`).
+- Evidence title selection prefers specific page titles over generic hub/index titles.
+- `workBlockPrompt` names the site ("in Notion") over the browser ("in Dia").
+
+### Corrections survival
+- Corrections store `span_start_ms`/`span_end_ms` (migration 41); the boundary scorer erases proposed boundaries inside user-fused spans regardless of session id namespace.
+- Label/category reviews and merge corrections survive across the `app_sessions` ↔ `derived_sessions` id flip.
+
+### Data repairs
+- July 6 night window (00:00–03:06) rebuilt from `focus_events` after the broken build's never-flushed Dia blob was discovered. 112 sessions / 2.77h inserted with `capture_source='recovery_backfill'`.
+- July 6 afternoon (12:52–18:11) rebuilt from `focus_events` after the sleep-gap phantom was discarded. 136 sessions / 5.36h inserted.
+- Both windows' `active_browser_context` visits clamped to rebuilt browser foreground (46,062s → 5,231s night; 19,003s → 10,086s afternoon).
+- Post-repair reconciliation vs Screen Time: every app within minutes.
+
 ## v1.0.43 - 2026-06-01 — AI Tab Polish
 
 - One command palette: ⌘K now holds every chat and message action plus history search, so there is a single place to find things instead of a separate search box and action menu.

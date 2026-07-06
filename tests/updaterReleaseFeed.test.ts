@@ -6,6 +6,7 @@ import {
   compareReleaseVersions,
   downloadProgressPercent,
   isRemoteUpdateDescriptor,
+  normalizeInstallSha256,
   normalizeRemoteUpdaterError,
 } from '../src/shared/updaterReleaseFeed.ts'
 
@@ -42,6 +43,36 @@ test('isRemoteUpdateDescriptor validates the expected payload shape', () => {
     version: '1.0.31',
     installUrl: 42,
   }), false)
+})
+
+test('isRemoteUpdateDescriptor accepts and validates the installSha256 slot', () => {
+  const base = {
+    version: '1.0.31',
+    releaseName: null,
+    releaseNotesText: null,
+    releaseDate: null,
+    installUrl: 'https://example.com/mac.zip',
+    installFileName: 'Daylens-1.0.31-arm64.zip',
+    manualUrl: null,
+    releasePageUrl: null,
+  }
+  assert.equal(isRemoteUpdateDescriptor({ ...base, installSha256: 'a'.repeat(64) }), true)
+  assert.equal(isRemoteUpdateDescriptor({ ...base, installSha256: null }), true)
+  assert.equal(isRemoteUpdateDescriptor(base), true)
+  assert.equal(isRemoteUpdateDescriptor({ ...base, installSha256: 42 }), false)
+})
+
+test('normalizeInstallSha256 accepts bare hex and the GitHub sha256: prefix, rejects everything else', () => {
+  const hex = 'ab'.repeat(32)
+  assert.equal(normalizeInstallSha256(hex), hex)
+  assert.equal(normalizeInstallSha256(`sha256:${hex}`), hex)
+  assert.equal(normalizeInstallSha256(` SHA256:${hex.toUpperCase()} `), hex)
+  assert.equal(normalizeInstallSha256(hex.slice(0, 63)), null)
+  assert.equal(normalizeInstallSha256(`md5:${hex}`), null)
+  assert.equal(normalizeInstallSha256(`${hex}zz`), null)
+  assert.equal(normalizeInstallSha256(undefined), null)
+  assert.equal(normalizeInstallSha256(null), null)
+  assert.equal(normalizeInstallSha256(42), null)
 })
 
 test('normalizeRemoteUpdaterError collapses noisy upstream failures into concise UI copy', () => {

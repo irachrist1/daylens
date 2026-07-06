@@ -545,6 +545,9 @@ function UpdatesContent() {
 
   const isDownloaded = status?.status === 'downloaded'
   const isAvailableManual = status?.status === 'available' && !!status.downloadUrl
+  // Explicit false only — the updater refuses in-place install when the feed
+  // published no verification digest for the artifact.
+  const canAutoInstall = status?.canAutoInstall !== false
   const isBusy = checking || status?.status === 'checking' || status?.status === 'downloading' || status?.status === 'installing'
 
   return (
@@ -584,6 +587,7 @@ function UpdatesContent() {
               )}
               {isAvailableManual && (
                 <>
+                  {canAutoInstall && (
                   <button
                     type="button"
                     onClick={() => {
@@ -608,6 +612,7 @@ function UpdatesContent() {
                   >
                     Install update
                   </button>
+                  )}
                   {status?.downloadUrl && (
                     <button
                       type="button"

@@ -14,7 +14,17 @@ export type ReleaseAsset = {
   browser_download_url?: string;
   content_type?: string;
   size?: number;
+  // GitHub asset digest, e.g. "sha256:<64 hex>". Present on assets uploaded
+  // since GitHub started computing digests; older releases may lack it.
+  digest?: string | null;
 };
+
+// Normalizes a GitHub asset digest to bare lowercase SHA-256 hex, or null.
+export function releaseAssetSha256(asset: ReleaseAsset): string | null {
+  const raw = (asset.digest ?? "").trim().toLowerCase();
+  const hex = raw.startsWith("sha256:") ? raw.slice("sha256:".length) : raw;
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
+}
 
 export type ReleaseRecord = {
   tag_name?: string;

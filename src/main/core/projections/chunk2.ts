@@ -15,7 +15,7 @@ import { naturalizeProjectionLabel } from './chunk2Label'
 // any rows whose stored version is older. Idempotent.
 export const PROJECTION_VERSION = 1
 
-const IDLE_GAP_MS = 5 * 60 * 1000   // 5 min boundary between blocks
+const IDLE_GAP_MS = 15 * 60 * 1000   // 15 min boundary between blocks (founder decision 2026-07-02)
 const MIN_SESSION_MS = 1000          // drop sub-second flicker
 
 interface FocusEventRow {

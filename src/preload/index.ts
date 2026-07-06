@@ -77,6 +77,7 @@ export interface UpdaterStatusInfo {
   supported?: boolean
   supportMessage?: string | null
   downloadUrl?: string | null
+  canAutoInstall?: boolean
 }
 
 export interface SearchOptions {

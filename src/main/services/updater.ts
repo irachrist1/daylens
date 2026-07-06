@@ -1,7 +1,8 @@
 import { app, BrowserWindow, ipcMain, net } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { spawn, spawnSync } from 'node:child_process'
-import { createWriteStream, constants as fsConstants, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, createWriteStream, constants as fsConstants, readFileSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,7 @@ import {
   compareReleaseVersions,
   downloadProgressPercent,
   isRemoteUpdateDescriptor,
+  normalizeInstallSha256,
   normalizeRemoteUpdaterError,
   type RemoteUpdateDescriptor,
 } from '@shared/updaterReleaseFeed'
@@ -33,6 +35,10 @@ export interface UpdaterState {
   supported: boolean
   supportMessage: string | null
   downloadUrl: string | null
+  // False when an available update cannot be verified before install (feed
+  // published no SHA-256 digest, or the artifact URL is not HTTPS). The UI
+  // must then offer only the manual download.
+  canAutoInstall: boolean
 }
 
 let _updateAvailable: string | null = null
@@ -54,6 +60,7 @@ let _state: UpdaterState = {
   supported: false,
   supportMessage: null,
   downloadUrl: null,
+  canAutoInstall: true,
 }
 
 export function isInstallingUpdate(): boolean { return _installingUpdate }
@@ -69,6 +76,7 @@ export function getUpdaterState(): UpdaterState { return { ..._state } }
 // script the responsibility of replacing /Applications/Daylens.app once the
 // running process exits.
 let _macAdhocCache: boolean | null = null
+let _windowsAuthenticodeCache: boolean | null = null
 
 // The ad-hoc signing status only changes when the bundle changes, i.e. on a new
 // version. Persist it in userData keyed by version so subsequent launches of the
@@ -128,6 +136,29 @@ function canUseElectronUpdaterInstall(): boolean {
   return true
 }
 
+function isWindowsAuthenticodeSigned(): boolean {
+  if (process.platform !== 'win32' || !app.isPackaged) return false
+  if (_windowsAuthenticodeCache !== null) return _windowsAuthenticodeCache
+
+  try {
+    const script = [
+      '$sig = Get-AuthenticodeSignature -FilePath $env:DAYLENS_EXE_PATH',
+      "if ($sig.Status -eq 'Valid') { 'valid' } else { 'invalid' }",
+    ].join('; ')
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      encoding: 'utf8',
+      env: { ...process.env, DAYLENS_EXE_PATH: process.execPath },
+      timeout: 5_000,
+      windowsHide: true,
+    })
+    _windowsAuthenticodeCache = result.status === 0 && result.stdout.trim().toLowerCase() === 'valid'
+  } catch {
+    _windowsAuthenticodeCache = false
+  }
+
+  return _windowsAuthenticodeCache
+}
+
 function getAutoUpdateSupport(): { supported: boolean; message: string | null; packageType: LinuxPackageType } {
   if (!app.isPackaged) {
     return {
@@ -138,6 +169,13 @@ function getAutoUpdateSupport(): { supported: boolean; message: string | null; p
   }
 
   if (process.platform === 'win32') {
+    if (!isWindowsAuthenticodeSigned()) {
+      return {
+        supported: false,
+        message: 'This Windows build is unsigned, so built-in updates are disabled. Install a signed Daylens build to receive automatic updates.',
+        packageType: null,
+      }
+    }
     return {
       supported: true,
       message: 'Daylens downloads updates silently in the background and applies them the next time you quit the app.',
@@ -326,6 +364,26 @@ function resetNoUpdateState(support: ReturnType<typeof getAutoUpdateSupport>): v
     supported: support.supported,
     supportMessage: support.message,
     downloadUrl: null,
+    canAutoInstall: true,
+  })
+}
+
+function remoteUpdateIsVerifiable(descriptor: RemoteUpdateDescriptor): boolean {
+  if (normalizeInstallSha256(descriptor.installSha256) === null) return false
+  try {
+    return new URL(descriptor.installUrl).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function sha256OfFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => resolve(hash.digest('hex')))
+    stream.on('error', reject)
   })
 }
 
@@ -378,6 +436,13 @@ async function checkRemoteFeed(trigger: 'manual' | 'background', support: Return
     _pendingRemoteUpdate = remoteUpdate
     _updateAvailable = remoteUpdate.version
 
+    // An update is only auto-installable when it can be verified end to end:
+    // the artifact must travel over HTTPS and the feed must publish a SHA-256
+    // digest to check the download against. Otherwise the user gets the
+    // manual download path only (fail closed — never swap in an unverified
+    // bundle and strip its quarantine).
+    const canAutoInstall = remoteUpdateIsVerifiable(remoteUpdate)
+
     capture(ANALYTICS_EVENT.UPDATE_AVAILABLE, {
       result: 'available',
       status: 'available',
@@ -400,6 +465,10 @@ async function checkRemoteFeed(trigger: 'manual' | 'background', support: Return
       releaseNotesText: remoteUpdate.releaseNotesText,
       releaseDate: remoteUpdate.releaseDate,
       downloadUrl: remoteUpdate.manualUrl ?? MANUAL_DOWNLOAD_URL,
+      canAutoInstall,
+      supportMessage: canAutoInstall
+        ? support.message
+        : 'This release was published without a verification digest, so Daylens will not replace the app automatically. Use the manual download instead.',
     })
     return getUpdaterState()
   } catch (err) {
@@ -507,15 +576,36 @@ function downloadToFile(
 async function downloadRemoteInstaller(onProgress: (pct: number | null) => void): Promise<string> {
   if (!_pendingRemoteUpdate) throw new Error('Daylens does not have a pending update to install.')
   const url = _pendingRemoteUpdate.installUrl
+
+  // Fail closed: never download-and-install an artifact that cannot be
+  // verified. The check state already routed unverifiable updates to manual
+  // download; this guard is the backstop if install is invoked anyway.
+  const expectedSha256 = normalizeInstallSha256(_pendingRemoteUpdate.installSha256)
+  if (!expectedSha256) {
+    throw new Error('This release was published without a verification digest, so Daylens cannot install it automatically. Use the manual download instead.')
+  }
+  if (!remoteUpdateIsVerifiable(_pendingRemoteUpdate)) {
+    throw new Error('The update artifact is not served over HTTPS, so Daylens cannot install it automatically. Use the manual download instead.')
+  }
+
   const fileName = _pendingRemoteUpdate.installFileName || `daylens-update-${_pendingRemoteUpdate.version}`
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-update-'))
   const tmpFile = path.join(tmpDir, fileName)
-  await downloadToFile(url, tmpFile, onProgress, _pendingRemoteUpdate.installSizeBytes)
-  if (_pendingRemoteUpdate.installSizeBytes) {
-    const stat = await fs.stat(tmpFile)
-    if (stat.size !== _pendingRemoteUpdate.installSizeBytes) {
-      throw new Error(`Downloaded update was incomplete (${stat.size} of ${_pendingRemoteUpdate.installSizeBytes} bytes).`)
+  try {
+    await downloadToFile(url, tmpFile, onProgress, _pendingRemoteUpdate.installSizeBytes)
+    if (_pendingRemoteUpdate.installSizeBytes) {
+      const stat = await fs.stat(tmpFile)
+      if (stat.size !== _pendingRemoteUpdate.installSizeBytes) {
+        throw new Error(`Downloaded update was incomplete (${stat.size} of ${_pendingRemoteUpdate.installSizeBytes} bytes).`)
+      }
     }
+    const actualSha256 = await sha256OfFile(tmpFile)
+    if (actualSha256 !== expectedSha256) {
+      throw new Error('The downloaded update did not match the published checksum, so it was discarded. Try again, or use the manual download.')
+    }
+  } catch (err) {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => { /* best-effort temp cleanup */ })
+    throw err
   }
   return tmpFile
 }
@@ -526,6 +616,20 @@ interface StagedAdhocMacUpdate {
   zipParent: string
 }
 
+function readMacBundleIdentifier(appBundlePath: string): string | null {
+  try {
+    const result = spawnSync('/usr/bin/defaults', ['read', path.join(appBundlePath, 'Contents', 'Info'), 'CFBundleIdentifier'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    if (result.status !== 0) return null
+    const value = (result.stdout ?? '').trim()
+    return value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
 async function stageAdhocMacUpdate(zipPath: string): Promise<StagedAdhocMacUpdate> {
   const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), 'daylens-extract-'))
   const extract = spawnSync('/usr/bin/ditto', ['-x', '-k', zipPath, extractDir], { encoding: 'utf8' })
@@ -533,22 +637,39 @@ async function stageAdhocMacUpdate(zipPath: string): Promise<StagedAdhocMacUpdat
     throw new Error(`Update archive could not be opened: ${(extract.stderr || extract.stdout || '').trim() || `exit ${extract.status}`}`)
   }
 
-  const entries = await fs.readdir(extractDir)
-  const appName = entries.find((name) => name.endsWith('.app'))
-  if (!appName) throw new Error('Update archive did not contain a .app bundle')
-  const stagedApp = path.join(extractDir, appName)
-
-  const targetApp = path.resolve(process.execPath, '..', '..', '..')
   try {
-    await fs.access(path.dirname(targetApp), fsConstants.W_OK)
-  } catch {
-    throw new Error(`Daylens cannot write to ${path.dirname(targetApp)} — move the app to /Applications and try again, or download the update manually.`)
-  }
+    const entries = await fs.readdir(extractDir)
+    const appName = entries.find((name) => name.endsWith('.app'))
+    if (!appName) throw new Error('Update archive did not contain a .app bundle')
+    const stagedApp = path.join(extractDir, appName)
 
-  return {
-    extractDir,
-    stagedApp,
-    zipParent: path.dirname(zipPath),
+    const targetApp = path.resolve(process.execPath, '..', '..', '..')
+
+    // The hash pinned the bytes to the published release; this pins the
+    // CONTENT to being a Daylens bundle before the swap script rm -rfs the
+    // installed app and strips quarantine. A zip that hash-matched but does
+    // not identify as this app never reaches the swap.
+    const stagedBundleId = readMacBundleIdentifier(stagedApp)
+    const runningBundleId = readMacBundleIdentifier(targetApp)
+    if (!stagedBundleId || (runningBundleId && stagedBundleId !== runningBundleId)) {
+      throw new Error('The downloaded update does not identify as Daylens, so it was discarded. Use the manual download instead.')
+    }
+
+    try {
+      await fs.access(path.dirname(targetApp), fsConstants.W_OK)
+    } catch {
+      throw new Error(`Daylens cannot write to ${path.dirname(targetApp)} — move the app to /Applications and try again, or download the update manually.`)
+    }
+
+    return {
+      extractDir,
+      stagedApp,
+      zipParent: path.dirname(zipPath),
+    }
+  } catch (err) {
+    await fs.rm(extractDir, { recursive: true, force: true }).catch(() => { /* best-effort temp cleanup */ })
+    await fs.rm(path.dirname(zipPath), { recursive: true, force: true }).catch(() => { /* best-effort temp cleanup */ })
+    throw err
   }
 }
 
@@ -628,6 +749,18 @@ echo "[swap] done $(date)"
 
 async function performAdhocMacInstall(): Promise<boolean> {
   if (_installingUpdate || !_pendingRemoteUpdate) return false
+
+  if (!remoteUpdateIsVerifiable(_pendingRemoteUpdate)) {
+    setUpdaterState({
+      status: 'available',
+      errorMessage: null,
+      progressPct: null,
+      canAutoInstall: false,
+      downloadUrl: _pendingRemoteUpdate.manualUrl ?? MANUAL_DOWNLOAD_URL,
+      supportMessage: 'This release was published without a verification digest, so Daylens will not replace the app automatically. Use the manual download instead.',
+    })
+    return false
+  }
 
   const version = _pendingRemoteUpdate.version
   capture(ANALYTICS_EVENT.UPDATE_INSTALL_REQUESTED, {

@@ -172,9 +172,9 @@ function loadIdlePeriods(db: Database.Database, fromMs: number, toMs: number): I
   let openStart: number | null = null
   for (const event of events) {
     const lower = event.type.toLowerCase()
-    if (lower.includes('idle_start') || lower === 'lock' || lower === 'sleep') {
+    if (lower === 'idle_start' || lower === 'lock_screen' || lower === 'suspend' || lower === 'away_start') {
       if (openStart === null) openStart = event.ts
-    } else if (lower.includes('idle_end') || lower === 'unlock' || lower === 'wake' || lower === 'resume') {
+    } else if (lower === 'idle_end' || lower === 'unlock_screen' || lower === 'resume' || lower === 'away_end') {
       if (openStart !== null && event.ts > openStart) {
         if (event.ts - openStart >= EXCLUDE_IDLE_OVER_MS) {
           periods.push({ startedAt: openStart, endedAt: event.ts })

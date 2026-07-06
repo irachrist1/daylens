@@ -89,6 +89,19 @@ test('getApp on an unknown app reports empty without throwing', (t) => {
 })
 
 function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {
+  // The reconciler credits site time only when the hosting browser was
+  // foreground, so seed a Safari session covering the visit window.
+  const saStart = localMs(day, 14, 55)
+  const saEnd = localMs(day, 15, 25)
+  db.prepare(`
+    INSERT INTO app_sessions (bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, canonical_app_id, app_instance_id,
+      capture_source, capture_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'test', 1)
+  `).run('com.apple.Safari', 'Safari', saStart, saEnd,
+    Math.round((saEnd - saStart) / 1000),
+    'browsing', 0, 'YouTube', 'Safari', 'safari', 'com.apple.Safari')
+
   const insert = db.prepare(`
     INSERT INTO website_visits (domain, page_title, url, visit_time, visit_time_us, duration_sec, browser_bundle_id, source)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'history')

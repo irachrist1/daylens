@@ -2730,6 +2730,44 @@ export function getReconciledWebsiteVisitsForRange(
   }))
 }
 
+export interface DomainCreditInterval {
+  domain: string
+  start: number
+  end: number
+  visitId: number
+}
+
+// Reconciled per-domain credited time slices for a range, from the SAME
+// per-visit ledger every other surface reads (invariant 7). Consumers that
+// used to run raw SUM(duration_sec) over website_visits double-counted the
+// two capture sources and counted background-tab history estimates as real
+// time; this hands them only the seconds that survived reconciliation.
+// Chunked internally by 24h windows so multi-month ranges stay bounded; a
+// visit straddling a chunk boundary is clipped per chunk, so its slices stay
+// disjoint by construction.
+export function getReconciledDomainIntervals(
+  db: Database.Database,
+  fromMs: number,
+  toMs: number,
+  domainFilter?: (domain: string) => boolean,
+): DomainCreditInterval[] {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const out: DomainCreditInterval[] = []
+  for (let chunkStart = fromMs; chunkStart < toMs; chunkStart += DAY_MS) {
+    const chunkEnd = Math.min(chunkStart + DAY_MS, toMs)
+    for (const { visit, freeIntervals } of reconcileWebsiteVisits(db, chunkStart, chunkEnd)) {
+      if (!visit.domain) continue
+      if (domainFilter && !domainFilter(visit.domain)) continue
+      for (const interval of freeIntervals) {
+        const start = Math.max(interval.start, chunkStart)
+        const end = Math.min(interval.end, chunkEnd)
+        if (end > start) out.push({ domain: visit.domain, start, end, visitId: visit.id })
+      }
+    }
+  }
+  return out
+}
+
 export interface WebsiteVisitRecord {
   id: number
   domain: string
@@ -3026,23 +3064,35 @@ export function upsertWorkContextInsight(
   )
 }
 
+// The distraction rollups previously ran raw SUM(duration_sec) over
+// website_visits, which double-counts the two capture sources and counts
+// background-tab history estimates as real minutes. All three now bucket the
+// reconciled per-domain credits instead, so "cost of distraction" agrees with
+// the foreground time every other surface shows (invariant 7).
+function distractionCreditIntervals(
+  db: Database.Database,
+  domains: string[],
+  fromMs: number,
+): DomainCreditInterval[] {
+  const wanted = new Set(domains)
+  return getReconciledDomainIntervals(db, fromMs, Date.now(), (domain) => wanted.has(domain))
+}
+
 export function getDistractionByMonth(
   db: Database.Database,
   domains: string[],
   fromMs: number,
 ): { month: string; totalSeconds: number }[] {
   if (domains.length === 0) return []
-  const placeholders = domains.map(() => '?').join(', ')
-  const rows = db.prepare(`
-    SELECT strftime('%Y-%m', datetime(visit_time / 1000, 'unixepoch', 'localtime')) AS month,
-           SUM(duration_sec) AS total_sec
-    FROM website_visits
-    WHERE domain IN (${placeholders})
-      AND visit_time >= ?
-    GROUP BY month
-    ORDER BY month ASC
-  `).all(...domains, fromMs) as { month: string; total_sec: number }[]
-  return rows.map(r => ({ month: r.month, totalSeconds: r.total_sec }))
+  const byMonth = new Map<string, number>()
+  for (const interval of distractionCreditIntervals(db, domains, fromMs)) {
+    const date = new Date(interval.start)
+    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+    byMonth.set(month, (byMonth.get(month) ?? 0) + (interval.end - interval.start) / 1000)
+  }
+  return [...byMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, totalSeconds]) => ({ month, totalSeconds: Math.round(totalSeconds) }))
 }
 
 export function getDistractionByHour(
@@ -3051,17 +3101,14 @@ export function getDistractionByHour(
   fromMs: number,
 ): { hour: number; totalSeconds: number }[] {
   if (domains.length === 0) return []
-  const placeholders = domains.map(() => '?').join(', ')
-  const rows = db.prepare(`
-    SELECT CAST(strftime('%H', datetime(visit_time / 1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
-           SUM(duration_sec) AS total_sec
-    FROM website_visits
-    WHERE domain IN (${placeholders})
-      AND visit_time >= ?
-    GROUP BY hour
-    ORDER BY hour ASC
-  `).all(...domains, fromMs) as { hour: number; total_sec: number }[]
-  return rows.map(r => ({ hour: r.hour, totalSeconds: r.total_sec }))
+  const byHour = new Map<number, number>()
+  for (const interval of distractionCreditIntervals(db, domains, fromMs)) {
+    const hour = new Date(interval.start).getHours()
+    byHour.set(hour, (byHour.get(hour) ?? 0) + (interval.end - interval.start) / 1000)
+  }
+  return [...byHour.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([hour, totalSeconds]) => ({ hour, totalSeconds: Math.round(totalSeconds) }))
 }
 
 export function getDistractionByDomain(
@@ -3070,16 +3117,13 @@ export function getDistractionByDomain(
   fromMs: number,
 ): { domain: string; totalSeconds: number }[] {
   if (domains.length === 0) return []
-  const placeholders = domains.map(() => '?').join(', ')
-  const rows = db.prepare(`
-    SELECT domain, SUM(duration_sec) AS total_sec
-    FROM website_visits
-    WHERE domain IN (${placeholders})
-      AND visit_time >= ?
-    GROUP BY domain
-    ORDER BY total_sec DESC
-  `).all(...domains, fromMs) as { domain: string; total_sec: number }[]
-  return rows.map(r => ({ domain: r.domain, totalSeconds: r.total_sec }))
+  const byDomain = new Map<string, number>()
+  for (const interval of distractionCreditIntervals(db, domains, fromMs)) {
+    byDomain.set(interval.domain, (byDomain.get(interval.domain) ?? 0) + (interval.end - interval.start) / 1000)
+  }
+  return [...byDomain.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .map(([domain, totalSeconds]) => ({ domain, totalSeconds: Math.round(totalSeconds) }))
 }
 
 export function getDaysTracked(
