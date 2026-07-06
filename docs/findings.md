@@ -928,3 +928,54 @@ OPEN, ranked:
    is gone; the sleep-gap flush (fad6cc0) is the fix, and the recovery above repaired
    the data. If another silent hole appears with the CURRENT build, focus_events is the
    ground truth to reconstruct from (see scripts in the 2026-07-06 session scratchpad).
+
+---
+
+# 2026-07-07 (post-midnight) — the night had the same disease as the afternoon, untreated: one 3h06m Dia blob swallowed Cursor's entire day
+
+**Status:** Data repaired in place (scripts in the 2026-07-07 session scratchpad; backup `daylens-backup-pre-night-recovery.sqlite` taken first)
+
+The founder's Screen Time cross-check exposed two numbers the afternoon repair didn't
+explain: Dia over-counted by ~1h50m (Daylens 6h04m vs Screen Time 4h13m) and **Cursor
+(55m in Screen Time) absent from Daylens entirely**. Both traced to one row: the
+00:00–03:06 night window survived only as the single Dia slice
+`recoverPersistedLiveSnapshot` cut at midnight from the broken build's never-flushed
+live session (row 49042, 11,197s, `ended_reason: recovered_after_restart`). The old
+build never flushed on app switch, so the whole night is Dia in `app_sessions` — while
+`focus_events` (404 Cursor events across 00:00–03:00) proves the founder alternated
+Dia/Cursor/Warp all night. The afternoon recovery (12:52–18:11) never touched this
+window. Downstream, every symptom follows: Dia inflated by exactly Cursor+Warp+idle,
+Cursor invisible, the block's "No page recorded 3h 5m" residual (Dia wasn't foreground),
+and the "Watching YouTube and Netflix / entertainment" misclassification.
+
+Second corruption in the same window, same as the afternoon's: `active_browser_context`
+visits summed 46,062s in a 3.1h window — one youtube.com row carried **36,011s (10h)**,
+the last tab before sleep credited through the entire lid-closed hole (02:52 → 12:53).
+
+Repair (mirrors the afternoon scripts, poll-equivalent semantics):
+- Rebuilt 00:00:00→03:06:39 from focus_events — 112 sessions / 2.77h inserted
+  (`capture_source='recovery_backfill'`), blob row 49042 deleted. Unlike the afternoon,
+  this window had two idle spans crossing the 300s away threshold (02:39:33→02:47:18,
+  02:55:34→03:06:04, from `activity_state_events`); both excised, exactly where
+  production would have flushed. Short provisional idles held open, as production does.
+- Clamped the window's measured visits to rebuilt browser foreground: 46,062s → 5,231s
+  against 5,328s of Dia/Safari foreground (25 updated, 0 deleted; the 10h youtube row → 195s).
+
+Post-repair reconciliation vs Screen Time (Jul 6): Dia 4h18m vs 4h13m, Cursor 54m vs
+55m, Claude 1h01m vs 57m, Figma 17m vs 18m, Excel 14m vs 15m, Safari 13m vs 14m — every
+app within minutes (Screen Time snapshot predates the last ~15 min of the day; Finder is
+Daylens system-noise by design). Night visits ≤ browser foreground by construction.
+
+Founder actions still required (data is fixed; the running app is not):
+1. **Restart the dev app.** It has been running since 18:16 — before the 23:33 commit
+   (nesting backfill, incognito gate, reconcile fixes) and before the color-override
+   reset; electron-store still holds the scrambled palette in memory and could rewrite
+   it on any settings change.
+2. **Re-analyze July 6.** The persisted AI blocks (esp. "Watching YouTube and Netflix",
+   00:00–03:59, entertainment) were built from the blob + uncorrected visits and are
+   kept by design for AI-processed days; re-analyze to rebuild from the repaired rows.
+
+Lesson for the audit record: `recoverPersistedLiveSnapshot` faithfully preserves a
+poisoned live session — recovery-from-snapshot is only as honest as the session that was
+open. When a hole or a phantom is found, check BOTH sides of midnight; the midnight
+split cuts one lie into two days' worth.
