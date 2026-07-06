@@ -1085,6 +1085,7 @@ const SELF_NOISE_EXE_NAMES = new Set([
   'daylens windows.exe',
   'daylenswindows.exe',
   'electron.exe',      // dev mode — raw electron runner, not a user app
+  'electron',          // same runner on macOS (node_modules/electron/dist/Electron.app)
 ])
 
 const DAYLENS_SELF_BUNDLE_IDS = new Set([

@@ -493,7 +493,7 @@ function mapAIThreadMessage(
 export function insertAppSession(
   db: Database.Database,
   session: Omit<AppSession, 'id'>,
-): number {
+): number | null {
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO app_sessions (
       bundle_id,
@@ -539,7 +539,11 @@ export function insertAppSession(
     endedReason: session.endedReason ?? null,
     captureVersion: session.captureVersion ?? 1,
   })
-  return result.lastInsertRowid as number
+  // INSERT OR IGNORE: on a dedup conflict (bundle_id, start_time) nothing was
+  // written and lastInsertRowid still points at some earlier insert. Returning
+  // it would make callers treat the skip as a real insert (identity
+  // observations, projection invalidations) against a phantom row.
+  return result.changes > 0 ? result.lastInsertRowid as number : null
 }
 
 export function upsertLiveAppSessionSnapshot(
@@ -2382,7 +2386,11 @@ function reconcileWebsiteVisits(
   // domain).
   const visitsByBrowser = new Map<string, ReconciledVisitRow[]>()
   for (const visit of visits) {
-    const browserKey = visit.browser_bundle_id ?? visit.canonical_browser_id
+    // Canonical id first: the same browser's visits exist under two bundle-id
+    // forms in history (exe path vs real bundle id). Keying pools by the raw
+    // bundle id would give one browser two claim pools, letting two identity
+    // forms of the same browser credit the same second twice.
+    const browserKey = visit.canonical_browser_id ?? visit.browser_bundle_id
     if (!browserKey) {
       // Unknown browser: nothing to reconcile against - clip to the range.
       const start = Math.max(visit.visit_time, fromMs)
@@ -2395,12 +2403,29 @@ function reconcileWebsiteVisits(
     else visitsByBrowser.set(browserKey, [visit])
   }
 
+  // Overlap-merge so an interval reachable under two keys (a session indexed
+  // by both its bundle id and its canonical id) can't credit a second twice.
+  const mergeIntervals = (intervals: { start: number; end: number }[]): { start: number; end: number }[] => {
+    const sorted = [...intervals].sort((a, b) => a.start - b.start)
+    const merged: { start: number; end: number }[] = []
+    for (const interval of sorted) {
+      const last = merged[merged.length - 1]
+      if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end)
+      else merged.push({ ...interval })
+    }
+    return merged
+  }
+
   for (const browserVisits of visitsByBrowser.values()) {
-    const sample = browserVisits[0]
-    const browserForeground = (sample.browser_bundle_id && foregroundByBundle.get(sample.browser_bundle_id))
-      || (sample.canonical_browser_id && foregroundByCanonical.get(sample.canonical_browser_id))
-      || []
-    const allowed = [...browserForeground, ...untracked]
+    // Union of every identity form's foreground time: visits recorded under
+    // either bundle-id form must reconcile against all of the browser's
+    // sessions, not just the ones stored under the same form.
+    const foregroundPieces: { start: number; end: number }[] = []
+    for (const visit of browserVisits) {
+      if (visit.browser_bundle_id) foregroundPieces.push(...(foregroundByBundle.get(visit.browser_bundle_id) ?? []))
+      if (visit.canonical_browser_id) foregroundPieces.push(...(foregroundByCanonical.get(visit.canonical_browser_id) ?? []))
+    }
+    const allowed = mergeIntervals([...foregroundPieces, ...untracked])
     // The observed active tab beats a history record; among equals the later
     // navigation supersedes the earlier one.
     const ordered = [...browserVisits].sort((a, b) => {
@@ -2546,7 +2571,13 @@ export function getWebsiteSummariesForRange(
       visitCount: entry.visitCount,
       topTitle: entry.topTitle,
       browserBundleId: entry.browserBundleId,
-      canonicalBrowserId: entry.canonicalBrowserId,
+      // Visits recorded before canonical browser ids were stamped (e.g. Comet
+      // rows keyed by exe path) carry none; resolve at read so the site can
+      // still find its browser row when the bundle-id forms differ.
+      canonicalBrowserId: entry.canonicalBrowserId
+        ?? (entry.browserBundleId
+          ? resolveCanonicalApp(entry.browserBundleId, '').canonicalAppId
+          : null),
     })
   }
   return summaries

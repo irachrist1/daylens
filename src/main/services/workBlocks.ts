@@ -521,8 +521,18 @@ export function appCategoryForSessionSummary(
 export function normalizeAppSummaryForBlockDisplay(summary: WorkContextAppSummary): WorkContextAppSummary {
   const isBrowser = isBrowserSession(summary)
   const category = isBrowser ? 'browsing' : summary.category
-  if (summary.category === category && summary.isBrowser === isBrowser) return summary
-  return { ...summary, category, isBrowser }
+  // Blocks persisted before canonicalAppId was written into evidence.apps carry
+  // none, which breaks site→browser nesting whenever the visit rows use the
+  // browser's other identity form (exe path vs bundle id — both exist in
+  // history). Backfill at read so old blocks nest like new ones.
+  const canonicalAppId = summary.canonicalAppId
+    ?? resolveCanonicalApp(summary.bundleId, summary.appName).canonicalAppId
+  if (
+    summary.category === category
+    && summary.isBrowser === isBrowser
+    && (summary.canonicalAppId ?? null) === canonicalAppId
+  ) return summary
+  return { ...summary, category, isBrowser, canonicalAppId }
 }
 
 function normalizeAppSummariesForBlockDisplay(summaries: WorkContextAppSummary[]): WorkContextAppSummary[] {

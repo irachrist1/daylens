@@ -809,3 +809,122 @@ flush-left and read as additive siblings of the browser row. Fix: the indent is 
 whose children fall short of its total gets an explicit "No page recorded" child
 (≥60s), so Σ children = parent by construction — same rule the Apps view breakdown
 follows (invariant 7).
+
+# 2026-07-06 (evening) — the lost afternoon recovered from focus_events; site durations from the broken build clamped
+
+**Status:** Data repaired in place (scripts preserved in session scratchpad); backup taken pre-repair
+
+When the overnight Dia phantom was discarded (previous session), the real 12:52–18:11
+activity went with it: `app_sessions` jumped 03:06 → 18:16 while the founder was
+demonstrably active (idle_start/idle_end pairs at 14:30/14:51/…, 78 website visits,
+2,833 focus_events in the hole). Recovery: `unlock_screen` at 12:52:33 in
+`activity_state_events` fixed the resume boundary; foreground intervals were rebuilt
+from `focus_events` (app_activated/window_changed) with poll-equivalent semantics —
+sub-5s blips absorbed, same-app runs merged, system-noise/cmux dropped, sub-10s
+sessions dropped, provisional idles (<5 min, all verified) held open. 136 sessions /
+5.36h inserted with `capture_source='recovery_backfill'`,
+`ended_reason='recovered_from_focus_events'` — distinguishable from live capture
+forever. Per-app identity/category/is_focused cloned from each app's most recent
+production row so the rows are pipeline-consistent.
+
+Same window, second corruption: the broken pre-restart build had kept crediting
+wall-clock time to the last-seen tab while non-browser apps were foreground —
+`active_browser_context` visits in the hole summed 19,003s against ~10,250s of real
+browser foreground (one "ACET" visit claimed 5,386s; the founder was in Excel/Figma).
+Each visit was clamped to its overlap with the recovered browser-foreground intervals
+(16 updated, 0 deleted): 19,003s → 10,086s ≤ 10,250s. Site time now reconciles with
+app time for the day.
+
+# 2026-07-06 (evening) — block colors: the palette was scrambled by activityColorOverrides, not the plumbing
+
+**Status:** Fixed (config reset; backup of old value in the session scratchpad). Requires app restart.
+
+The founder reported categories rendering the same color after the category fix. The
+render path is direct and correct (`activityColorForCategory(block.dominantCategory)` →
+stripe/border/fill), and `dominant_category` in the DB is varied. The actual cause:
+`activityColorOverrides` in `config.json` (written 2026-07-06 01:11, during the previous
+session) mapped entertainment/social to `#64748b` — the same slate as the
+browsing/research DEFAULT — and moved development to green, browsing to violet. Result:
+leisure and browsing genuinely indistinguishable, and nothing rendered its expected
+default. Reset to `{}`; defaults now apply (development blue `#3b82f6`, entertainment
+red `#ef4444`, browsing slate, writing gold, meetings violet). Note: electron-store
+caches in memory — the running app must be restarted before changing any setting or the
+old overrides can be rewritten.
+
+# 2026-07-06 (evening) — website nesting: canonical ids missing on both sides of the owner match
+
+**Status:** Fixed in code (read-time backfill, both sides) + verified by simulation over 73 real blocks
+
+Sites render standalone when `ownerKeyFor` (blockDetailRowTree.ts / the edit modal) finds
+no app row matching the site's `browserBundleId` OR `canonicalBrowserId`. Two data eras
+broke both match keys at once: (1) blocks persisted before `canonicalAppId` was written
+into `evidence_summary_json.apps` carry none, and (2) visits/sessions exist under TWO
+bundle-id forms per browser (exe path `/Applications/Dia.app/...` until ~Jul 4, real
+bundle id after) so the exact-bundle match fails across the era boundary. Simulated the
+exact owner-match over every persisted block since Jun 25: **53 orphaned site rows**
+(netflix, youtube, claude.ai, x.com … all standalone). Fixes: `normalizeAppSummary-
+ForBlockDisplay` backfills `canonicalAppId` via `resolveCanonicalApp` at read;
+`getWebsiteSummariesForRange` backfills `canonicalBrowserId` the same way (Comet's
+path-form rows had NULL). Re-simulation: 53 → 1 orphan, and the survivor is CORRECT (a
+Dia visit inside a block whose only browser app row is Safari — nesting it would lie).
+
+# 2026-07-06 (evening) — full tracking-pipeline audit (poll → flush → visits → reconciliation → UI)
+
+**Status:** Audit record. Items marked FIXED landed in this commit; others are open, ranked.
+
+Read end-to-end: tracking.ts, focusCapture.ts, browserContext.ts, browserRegistry.ts,
+attribution.ts, queries.ts (insert/reconcile/summaries), projections (chunk2 read paths),
+workBlocks hydration, blockDetailRowTree, Timeline render path.
+
+FIXED in this commit:
+1. **Incognito URLs leaked into focus_events** (founder-rule violation). The
+   `shouldCaptureFocusEvent` gate only consulted Tracking Controls, which is a strict
+   passthrough while the master switch is OFF (the default) — so private-window tab
+   events (URL + title) were written to focus_events even though app sessions and
+   website visits correctly dropped them. The incognito title check now runs
+   unconditionally (`tests/focusCaptureGate.test.ts`).
+2. **insertAppSession returned a stale rowid on dedup conflict** (INSERT OR IGNORE +
+   unconditional lastInsertRowid): callers logged identity observations and fired
+   invalidations for rows that were never inserted. Returns null on conflict now.
+3. **reconcileWebsiteVisits could double-credit across a browser's two identity forms**:
+   claim pools were keyed by raw `browser_bundle_id`, so path-form and bundle-form
+   visits of the SAME browser reconciled in separate pools (same second claimable
+   twice), and the foreground lookup honored only one form's sessions. Pools now key on
+   canonical id first, and the allowed intervals are the overlap-merged union of every
+   identity form's foreground time.
+4. **Dev-mode self-capture**: the dev app's exe basename is `Electron`, which passed the
+   self-noise gate (`electron.exe` was listed for Windows; bare `electron` was not) —
+   the dev Daylens tracked itself as "Electron / development". Added `electron` to
+   SELF_NOISE_EXE_NAMES.
+
+OPEN, ranked:
+1. (HIGH, from prior audit, still open) macOS ad-hoc updater strips quarantine without
+   hash/signature verification.
+2. (HIGH, from prior audit, still open) browserContext copies whole browser History DBs
+   synchronously on the main process every uncached tab-read fallback.
+3. (MEDIUM, reconciliation) Raw `SUM(duration_sec)` over website_visits survives in
+   three consumer families and none reconcile against foreground time — they
+   double-count the two capture sources (chrome_history + active_browser_context record
+   the same seconds) and count background-tab history estimates as real time:
+   `getDistractionByMonth/Hour/Domain` (queries.ts), the AI tool domain-time answer
+   (aiTools.ts ~457), and workMemoryProfile domain weights (~488). Route them through
+   reconcileWebsiteVisits (or per-day getWebsiteSummariesForRange loops).
+4. (MEDIUM, honesty) chrome_history durations are estimates (next-visit gap, clamped
+   5s–1800s, last row defaults 30s) stored in the same column as measured
+   active-tab durations, distinguished only by `source`. Every consumer must know this;
+   the three above didn't. Consider a `duration_estimated` flag column.
+5. (LOW) `evidence_summary_json` of pre-v10 blocks is stale (no canonicalAppId, old app
+   summaries) and is never rebuilt by in-place recolor; read-time backfill (this commit)
+   covers nesting, but any future consumer of evidence.apps must expect missing fields.
+6. (LOW) Two parallel hydration paths build WorkContextBlock (workBlocks.ts ~4740 and
+   ~5630) with subtly different fallbacks (e.g. one fabricates zero-second website rows
+   from `evidence.domains` with `browserBundleId: null`). They will drift; extract one.
+7. (NOTE) `dominantCategoryForBlock` re-labels an entertainment/social/browsing-dominant
+   block to its largest focused sub-category when that clears 30% share (or focused
+   work is the majority) — spec'd in timeline.md §3.6; keep in mind when a block's
+   color surprises: the category is intent-level, not time-plurality.
+8. (NOTE) The 2026-07-06 afternoon hole itself: the pre-restart build's poll loop ran
+   (idle events prove it) but never flushed sessions after the sleep gap — that build
+   is gone; the sleep-gap flush (fad6cc0) is the fix, and the recovery above repaired
+   the data. If another silent hole appears with the CURRENT build, focus_events is the
+   ground truth to reconstruct from (see scripts in the 2026-07-06 session scratchpad).

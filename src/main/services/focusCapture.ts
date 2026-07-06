@@ -9,7 +9,7 @@ import { app } from 'electron'
 import { getDb } from './database'
 import { getSettings } from './settings'
 import { resolveCanonicalApp } from '../lib/appIdentity'
-import { decideAppCapture, decideSiteCapture, trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
+import { decideAppCapture, decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings, type TrackingControlsState } from '@shared/trackingControls'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 const FOCUS_EVENT_SCHEMA_VERSION = 1
 const FOCUS_EVENT_TYPES = [
@@ -198,6 +198,11 @@ export function shouldCaptureFocusEvent(
   ev: Pick<HelperEvent, 'app_bundle_id' | 'app_name' | 'window_title' | 'url'>,
   controls: TrackingControlsState,
 ): boolean {
+  // Private/incognito windows are never tracked, regardless of the Tracking
+  // Controls master switch (founder rule, 2026-07-06). decideApp/SiteCapture
+  // below are passthroughs while the switch is off, so the title check must
+  // run unconditionally here or private tab URLs land in focus_events.
+  if (detectIncognitoFromTitle(ev.window_title)) return false
   if (ev.app_bundle_id || ev.app_name) {
     if (isSystemNoiseApp({ bundleId: ev.app_bundle_id, appName: ev.app_name })) return false
     const identity = resolveCanonicalApp(ev.app_bundle_id ?? '', ev.app_name ?? '')

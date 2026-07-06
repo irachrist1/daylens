@@ -39,3 +39,8 @@ test('focus capture drops an unparseable url defensively', () => {
 test('focus capture drops incognito windows when enabled', () => {
   assert.equal(shouldCaptureFocusEvent({ app_bundle_id: 'com.google.Chrome', app_name: 'Chrome', window_title: 'Secret (Incognito)', url: null }, on), false)
 })
+
+test('focus capture drops incognito windows even with controls off (founder rule 2026-07-06)', () => {
+  assert.equal(shouldCaptureFocusEvent({ app_bundle_id: 'com.google.Chrome', app_name: 'Chrome', window_title: 'Secret (Incognito)', url: null }, off), false)
+  assert.equal(shouldCaptureFocusEvent({ app_bundle_id: 'com.google.Chrome', app_name: 'Chrome', window_title: 'Docs — InPrivate', url: 'https://example.com/x' }, off), false)
+})
