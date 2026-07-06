@@ -716,3 +716,96 @@ to reconcile to domain seconds. Verified against the real DB: Safari Jul 4 = 58m
 across 19 domains + 3m 37s no-page = 1h 1m 57s header, exact. Regressions:
 `tests/appsTopDomains.test.ts` (reconciliation identities), `tests/appDetailPayload.test.ts`
 (overlapping visits claim disjoint slices: 1200s+600s raw → 1200s credited, never 1800s).
+
+# 2026-07-06 — the 16h34m "Active now": sleep is invisible to the tracker FSM
+
+**Status:** Root-caused + fixed + regression-tested (`tests/trackingSleepGap.test.ts`)
+
+Founder report: Daylens tracked the entire night with the laptop closed — "Active now
+11:57 PM – 4:31 PM · 16h 34m". Verified in the raw DB before touching code: the live
+session (Dia) started 23:57:14; `activity_state_events` shows `idle_start` 03:08:39 then
+NOTHING until `unlock_screen`/`resume` at 12:52:33 — **no `suspend` or `lock_screen`
+event was written for the lid-close sleep**, and `app_sessions` has zero rows for Jul 6.
+
+The chain: (1) at 03:08 idle crossed the 120s threshold → `provisional_idle`, session
+held open; (2) the machine slept ~3 min later, BEFORE idle could reach the 300s away
+flush; (3) interval timers freeze during sleep, so nothing ran for 9h44m; (4) on wake,
+unlock reset the OS idle counter, the first poll saw idleSec < 120 and treated it as a
+"return from provisional idle" — which by design attributes the idle span to the open
+session (meant for 2–5 min gaps); (5) same app focused before and after → never flushed.
+`poll()` had no wall-clock gap detection at all, and the block/App/AI layers all read the
+poisoned span (block spans exceeded raw session sums day after day: Jul 4 12.3h raw →
+22.1h of blocks).
+
+Fix, layered so no single unreliable signal is load-bearing:
+- **Poll-gap detection is the primary sleep signal**: a >60s hole between two ticks ends
+  the open session at the last evidence of activity (`provisionalIdleStart` when already
+  idle — the true last-input time — else the last completed tick), flushes browser
+  context at the same boundary, and backdates an `away_start` event so website
+  reconciliation excludes the hole too (Codex review shaped both the flush boundary and
+  the event choice).
+- `resume`/`unlock-screen` also cut a still-open session (belt-and-braces; those DID fire
+  on Jul 6); `suspend`/`lock-screen` flushes now trim to `provisionalIdleStart` instead
+  of crediting the idle tail.
+- `recoverPersistedLiveSnapshot` now splits a cross-midnight recovered session into one
+  slice per calendar day, same ownership rule as `flushCurrent`'s midnight split.
+
+# 2026-07-06 — every block one color: the browser's catalog category swamped the day
+
+**Status:** Root-caused + fixed + regression-tested (`tests/weightedCategoryDistribution.test.ts`, `tests/domainCategories.test.ts`)
+
+Founder report: activity colors "aren't being applied at all" despite repeated fixes on
+the color side. The color plumbing was fine — the CATEGORY underneath was broken: Dia
+was cataloged `defaultCategory: aiTools` (and force-mapped to aiTools in
+`inferredFocusedCategoryForSession`), and block distributions were computed purely from
+per-app session categories, so on a Dia-centric day every block was aiTools → one violet
+everywhere. The 2026-07-02 "week view one color" finding was this same bug at a
+different altitude; the artifact-override fix treated a symptom.
+
+Fix: block facts now use a **site-weighted distribution**
+(`weightedCategoryDistributionFor`): each browser session's seconds split across the
+categories of the sites reconciled inside the block (`categoryForDomain` in
+`src/shared/domainCategories.ts`: canva→design, youtube→entertainment, claude.ai→aiTools,
+github→research…), residual stays `browsing`. Two invariants hold by construction:
+Σ distribution = Σ session seconds (visit credit is clipped to the browser's own
+foreground sessions — capture-gap credit stays page EVIDENCE only), and background
+history rows contribute nothing. Dia is recataloged `browsing`; heuristic bump to
+`timeline-v10` makes `refreshStaleBlockCategoryFacts` recompute persisted category facts
+(and now `block_kind`, which the month/range readers consume) in place for processed
+days — old blocks recolor immediately, labels and boundaries untouched, and a
+user-corrected category is never overwritten (Codex review findings #1/#7).
+
+# 2026-07-06 — incognito was tracked: the gate was a title regex Dia never matches
+
+**Status:** Fixed + regression-tested (`tests/incognitoNeverTracked.test.ts`); Dia-specific structured signal still unavailable
+
+Tracking Controls was ON with skip-incognito ON, yet private windows were tracked: the
+only detector was `detectIncognitoFromTitle` (a window-title regex) and Dia's private
+windows carry no such marker. Worse, the history-DB fallback could attribute incognito
+dwell to whatever regular-history row matched the window title.
+
+**Founder decision (2026-07-06): a private/incognito window is never tracked — no
+website visit, no app session — regardless of the Tracking Controls master switch.**
+Implemented OUTSIDE the opt-in module (whose disabled-passthrough contract and tests are
+unchanged): the browser-context sample now runs BEFORE any session is created and
+returns a structured `isPrivate` signal — Chromium's AppleScript `mode of front window`
+where supported, plus the title fallback applied unconditionally — and a private sample
+flushes the open session (`ended_reason: incognito`), records nothing, and never falls
+through to browser history. Known limitation, flagged to founder: Dia's AppleScript
+dictionary exposes no window mode (verified live), so a Dia private window without a
+title marker is still not structurally detectable; revisit when Dia ships one.
+
+# 2026-07-06 — nested site rows rendered flat: a CSS shorthand ate the indent
+
+**Status:** Fixed (one line) + reconciliation footer added (`tests/blockDetailRowTree.test.ts`)
+
+The inspector's row tree WAS nesting (screenshot row order proved children under Dia
+with the orphan last) but the indent never rendered: the clickable-row branch spread
+`{...baseStyle, padding: 0, paddingLeft: indented ? 34 : 0}` — object-spread dedup keeps
+`paddingLeft` at its FIRST key position (from baseStyle), so React applied
+`paddingLeft: 34px` BEFORE `padding: 0` and the shorthand reset it. Children rendered
+flush-left and read as additive siblings of the browser row. Fix: the indent is a single
+`padding` shorthand. Also added the inspector's reconciliation footer: a browser row
+whose children fall short of its total gets an explicit "No page recorded" child
+(≥60s), so Σ children = parent by construction — same rule the Apps view breakdown
+follows (invariant 7).

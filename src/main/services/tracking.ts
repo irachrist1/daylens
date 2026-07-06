@@ -88,6 +88,14 @@ const SNAPSHOT_PERSIST_MS = 15_000
 const MIN_SESSION_SEC   = 10    // discard sub-10s noise (5s/10s micro-fragments)
 const IDLE_THRESHOLD_SEC = 120  // 2 min of no input → hold the session open provisionally
 const AWAY_THRESHOLD_SEC = 300  // 5 min of no input → treat as away and flush
+// A wall-clock hole between two poll ticks longer than this means the machine
+// was asleep (or the process frozen): interval timers do not run during sleep,
+// so the pre-sleep session would otherwise survive the gap and absorb it as
+// active time. macOS lid-close proved able to sleep WITHOUT emitting the
+// powerMonitor suspend/lock-screen events (2026-07-06: idle_start 03:08 →
+// unlock 12:52 with nothing in between, 9h44m counted as one Dia session), so
+// gap detection is the primary sleep signal, not a fallback.
+const GAP_FLUSH_MS = 60_000
 
 // A finished foreground session flushes on every app/window switch. Firing a
 // full-day timeline rebuild on each one is the dominant cost behind the app
@@ -1179,6 +1187,9 @@ let returnFromIdleAtMs: number | null = null
 // End boundary of the most recently flushed session. A restamped start is
 // clamped to be ≥ this so sessions never overlap backwards.
 let lastFlushEndMs: number | null = null
+// Wall-clock time of the previous completed poll tick, for sleep-gap
+// detection. Null until the first poll after start/reset.
+let lastPollTickMs: number | null = null
 let powerMonitorListenersRegistered = false
 const trackingTickListeners = new Set<() => void>()
 const ATTRIBUTION_REFRESH_DEBOUNCE_MS = 3_000
@@ -1293,15 +1304,31 @@ function recoverPersistedLiveSnapshot(): void {
     if (!snapshot) return
 
     const endTime = Math.min(Date.now(), Math.max(snapshot.lastSeenAt, snapshot.startTime))
-    const durationSeconds = Math.max(0, Math.round((endTime - snapshot.startTime) / 1_000))
-    const duplicate = db.prepare(`
-      SELECT 1
-      FROM app_sessions
-      WHERE bundle_id = ? AND start_time = ?
-      LIMIT 1
-    `).get(snapshot.bundleId, snapshot.startTime)
 
-    if (!duplicate && durationSeconds >= MIN_SESSION_SEC) {
+    // Same calendar-ownership rule as flushCurrent: a recovered session that
+    // crosses local midnight is persisted as one slice per day, so each day's
+    // raw totals only include time that actually fell within that day.
+    const slices: Array<{ startMs: number; endMs: number }> = []
+    let sliceStart = snapshot.startTime
+    while (localDateString(new Date(sliceStart)) !== localDateString(new Date(endTime))) {
+      const [, midnightMs] = localDayBounds(localDateString(new Date(sliceStart)))
+      slices.push({ startMs: sliceStart, endMs: midnightMs })
+      sliceStart = midnightMs
+    }
+    slices.push({ startMs: sliceStart, endMs: endTime })
+
+    let recovered = false
+    for (const slice of slices) {
+      const durationSeconds = Math.max(0, Math.round((slice.endMs - slice.startMs) / 1_000))
+      if (durationSeconds < MIN_SESSION_SEC) continue
+      const duplicate = db.prepare(`
+        SELECT 1
+        FROM app_sessions
+        WHERE bundle_id = ? AND start_time = ?
+        LIMIT 1
+      `).get(snapshot.bundleId, slice.startMs)
+      if (duplicate) continue
+
       const { isFocused, category } = classifyResult(snapshot.bundleId, snapshot.appName)
       const insertedId = persistTrackedForegroundSession(db, {
         bundleId: snapshot.bundleId,
@@ -1313,34 +1340,35 @@ function recoverPersistedLiveSnapshot(): void {
         captureSource: snapshot.captureSource,
         endedReason: 'recovered_after_restart',
         captureVersion: 2,
-        startTime: snapshot.startTime,
-        endTime,
+        startTime: slice.startMs,
+        endTime: slice.endMs,
         durationSeconds,
         category,
         isFocused,
       })
       if (insertedId !== null) {
+        recovered = true
         upsertAppIdentityObservation(db, {
           bundleId: snapshot.bundleId,
           rawAppName: snapshot.rawAppName,
           appInstanceId: snapshot.appInstanceId,
           observedCategory: category,
-          firstSeenAt: snapshot.startTime,
-          lastSeenAt: endTime,
+          firstSeenAt: slice.startMs,
+          lastSeenAt: slice.endMs,
         })
         invalidateProjectionScope('timeline', 'activity_recorded', {
-          date: localDateString(new Date(endTime)),
+          date: localDateString(new Date(slice.endMs)),
         })
         invalidateProjectionScope('apps', 'activity_recorded', {
           canonicalAppId: snapshot.canonicalAppId,
         })
         invalidateProjectionScope('insights', 'activity_recorded', {
-          date: localDateString(new Date(endTime)),
+          date: localDateString(new Date(slice.endMs)),
         })
-        scheduleAttributionRefreshForSession(snapshot.startTime, endTime)
-        console.log('[tracking] recovered live session snapshot after restart')
+        scheduleAttributionRefreshForSession(slice.startMs, slice.endMs)
       }
     }
+    if (recovered) console.log('[tracking] recovered live session snapshot after restart')
 
     clearPersistedLiveSnapshot()
   } catch (err) {
@@ -1350,10 +1378,12 @@ function recoverPersistedLiveSnapshot(): void {
 
 function handleLockScreen(): void {
   if (currentSession) {
-    flushCurrent(undefined, 'lock_screen')
+    // If the user was already idle when the lock fired, end at the true
+    // last-input time, not the lock moment — the idle minutes were not work.
+    flushCurrent(provisionalIdleStart ?? undefined, 'lock_screen')
     console.log('[tracking] screen locked — session flushed')
   }
-  flushActiveBrowserContext(getDb())
+  flushActiveBrowserContext(getDb(), provisionalIdleStart ?? undefined)
   recordActivityEvent('lock_screen')
   idleState = 'away'
   provisionalIdleStart = null
@@ -1361,30 +1391,50 @@ function handleLockScreen(): void {
 
 function handleSuspend(): void {
   if (currentSession) {
-    flushCurrent(undefined, 'suspend')
+    flushCurrent(provisionalIdleStart ?? undefined, 'suspend')
     console.log('[tracking] system suspended — session flushed')
   }
-  flushActiveBrowserContext(getDb())
+  flushActiveBrowserContext(getDb(), provisionalIdleStart ?? undefined)
   recordActivityEvent('suspend')
   idleState = 'away'
   provisionalIdleStart = null
 }
 
+// Wake-side belt-and-braces: lid-close sleep has been observed to skip the
+// suspend/lock-screen events entirely, so the open session may still be
+// carrying the whole sleep. End it at the last evidence of activity; the
+// poll-level gap check catches the same hole if these events don't fire
+// either.
+function cutSessionAfterWake(reason: 'unlock_screen' | 'resume'): void {
+  if (!currentSession) return
+  const endMs = provisionalIdleStart ?? lastPollTickMs ?? undefined
+  flushCurrent(endMs, reason)
+  flushActiveBrowserContext(getDb(), endMs)
+  idleState = 'away'
+  provisionalIdleStart = null
+  console.log(`[tracking] ${reason} with a session still open — flushed at last activity`)
+}
+
 function handleUnlockScreen(): void {
+  cutSessionAfterWake('unlock_screen')
   recordActivityEvent('unlock_screen')
 }
 
 function handleResume(): void {
+  cutSessionAfterWake('resume')
   recordActivityEvent('resume')
 }
 
 function recordActivityEvent(
   eventType: 'idle_start' | 'idle_end' | 'away_start' | 'away_end' | 'lock_screen' | 'unlock_screen' | 'suspend' | 'resume',
   metadata: Record<string, unknown> = {},
+  // Backdated events (a sleep gap discovered on the first poll after wake)
+  // pass the true boundary; live events default to now.
+  eventTs: number = Date.now(),
 ): void {
   try {
     recordActivityStateEvent(getDb(), {
-      eventTs: Date.now(),
+      eventTs,
       eventType,
       source: 'tracking',
       metadata,
@@ -1434,6 +1484,7 @@ export function stopTracking(): void {
   idleState = 'active'
   provisionalIdleStart = null
   returnFromIdleAtMs = null
+  lastPollTickMs = null
   console.log('[tracking] stopped')
 }
 
@@ -1480,6 +1531,7 @@ export function __setTrackingFsmTestHarness(harness: TrackingFsmTestHarness | nu
   provisionalIdleStart = null
   returnFromIdleAtMs = null
   lastFlushEndMs = null
+  lastPollTickMs = null
   lastSnapshotPersistAt = 0
   if (attributionRefreshTimer) {
     clearTimeout(attributionRefreshTimer)
@@ -1493,6 +1545,12 @@ export function __pollForTest(): Promise<void> {
   return poll()
 }
 
+// Test-only recovery driver: production runs it once inside startTracking(),
+// which needs the real powerMonitor and interval timer.
+export function __recoverPersistedLiveSnapshotForTest(): void {
+  recoverPersistedLiveSnapshot()
+}
+
 function nowMs(): number {
   return fsmTestHarness ? fsmTestHarness.now() : Date.now()
 }
@@ -1503,6 +1561,30 @@ function getIdleSeconds(): number {
 
 async function poll(): Promise<void> {
   try {
+    // ── Sleep-gap detection ──────────────────────────────────────────────────
+    // Interval timers freeze while the machine sleeps, so a sleep shows up as
+    // one poll tick landing far beyond the last. Everything inside that hole
+    // was absence: end the open session at the last evidence of activity (the
+    // provisional-idle input boundary when we were already idle, else the last
+    // completed tick) and log the hole as away so website reconciliation
+    // excludes it too. This is the primary sleep signal — the powerMonitor
+    // suspend/lock events have been observed not to fire on lid-close.
+    const tickMs = nowMs()
+    if (lastPollTickMs != null && tickMs - lastPollTickMs > GAP_FLUSH_MS) {
+      const gapStartMs = provisionalIdleStart ?? lastPollTickMs
+      if (currentSession) {
+        flushCurrent(gapStartMs, 'sleep_gap')
+        console.log(`[tracking] ${Math.round((tickMs - gapStartMs) / 1000)}s poll gap — session flushed at last activity`)
+      }
+      flushActiveBrowserContext(getDb(), gapStartMs)
+      // Backdate the absence start to where activity really ended; the normal
+      // return-from-away path below emits the matching away_end this tick.
+      recordActivityEvent('away_start', { inferredFrom: 'poll_gap', gapMs: tickMs - lastPollTickMs }, gapStartMs)
+      idleState = 'away'
+      provisionalIdleStart = null
+    }
+    lastPollTickMs = tickMs
+
     // ── Idle detection ───────────────────────────────────────────────────────
     const idleSec = getIdleSeconds()
     if (idleSec >= AWAY_THRESHOLD_SEC) {
@@ -1767,6 +1849,25 @@ async function poll(): Promise<void> {
       return
     }
 
+    // Browser context is sampled BEFORE any session is created or continued,
+    // because the tab read is also the private-window signal: an incognito
+    // window must produce no website visit AND no app session (founder rule,
+    // 2026-07-06 — applies regardless of the Tracking Controls master switch;
+    // the opt-in title gate above stays for parity with user exclusions).
+    // For non-browser apps this call flushes whatever browser context was open.
+    const browserSample = recordActiveBrowserContextSample(getDb(), {
+      bundleId,
+      appName: identity.displayName,
+      windowTitle: resolvedWindowTitle,
+      capturedAt: Date.now(),
+      executablePath: resolvedWin.path,
+    })
+    if (browserSample.isPrivate) {
+      if (currentSession) flushCurrent(undefined, 'incognito')
+      clearPersistedLiveSnapshot()
+      return
+    }
+
     // Consume the one-shot return-from-idle signal set earlier this poll. It
     // applies only to a session that starts on this same poll; anything that
     // doesn't start a session (excluded/noise apps returned above, or a session
@@ -1833,14 +1934,6 @@ async function poll(): Promise<void> {
       }
       persistLiveSnapshot()
     }
-
-    recordActiveBrowserContextSample(getDb(), {
-      bundleId,
-      appName: identity.displayName,
-      windowTitle: resolvedWindowTitle,
-      capturedAt: Date.now(),
-      executablePath: resolvedWin.path,
-    })
   } catch (err) {
     // active-window can throw on permissions denial (macOS) or unsupported platform
     trackingStatus.pollError = formatError(err)

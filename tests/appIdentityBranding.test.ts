@@ -13,8 +13,12 @@ test('mac-specific app aliases resolve to the right canonical app identities', (
 })
 
 test('browser capability stays separate from the app category on every platform', () => {
+  // Dia is a browser first (2026-07-06): its default category is browsing so
+  // the site-weighted block distribution decides what the time really was —
+  // cataloging it aiTools collapsed every block of a Dia-centric day into one
+  // category and one color.
   const dia = resolveCanonicalApp('company.thebrowser.dia', 'Dia')
-  assert.equal(dia.defaultCategory, 'aiTools')
+  assert.equal(dia.defaultCategory, 'browsing')
   assert.equal(dia.isBrowser, true)
 
   const safari = resolveCanonicalApp('com.apple.Safari', 'Safari')

@@ -193,3 +193,44 @@ test('a PageRef carrying only browser-owner fields (no ownerBundleId/canonicalAp
   assert.equal(diaRow.key, `app:${DIA_BUNDLE}`)
   assert.equal(diaRow.children.length, 2, 'both pages nest under Dia via the browser-field fallback')
 })
+
+test('a browser row whose children fall short of its total gets an explicit "No page recorded" residual (invariant 7)', () => {
+  // Dia tracked 44 minutes; its only nested page accounts for 10. The other
+  // 34 minutes must appear as an explicit residual child — never a silent
+  // hole that makes the panel's numbers read as a lie.
+  const dia = makeApp({ bundleId: DIA_BUNDLE, appName: 'Dia', canonicalAppId: 'dia', totalSeconds: 2640, isBrowser: true })
+  const page: ArtifactRef = {
+    id: 'art:short',
+    artifactType: 'page',
+    displayTitle: 'One page',
+    totalSeconds: 600,
+    confidence: 0.85,
+    ownerBundleId: DIA_BUNDLE,
+    canonicalAppId: 'dia',
+    host: 'example.com',
+    openTarget: { kind: 'unsupported', value: null },
+  }
+
+  const block = makeBlock({ topApps: [dia], topArtifacts: [page] })
+  const { evidence } = buildDetailRowTree(block)
+
+  const diaRow = evidence.find((row) => row.key === `app:${DIA_BUNDLE}`)
+  assert.ok(diaRow)
+  assert.equal(diaRow!.children.length, 2, 'the page plus the residual footer')
+  const residual = diaRow!.children[diaRow!.children.length - 1]
+  assert.equal(residual.kind, 'residual')
+  assert.equal(residual.seconds, 2640 - 600)
+  const childSum = diaRow!.children.reduce((sum, row) => sum + row.seconds, 0)
+  assert.equal(childSum, diaRow!.seconds, 'children must sum exactly to the parent row')
+
+  // A non-browser app never gets a residual, and sub-minute residue is
+  // rounding, not a hole.
+  const nonBrowser = makeApp({ bundleId: ELECTRON_BUNDLE, appName: 'Electron', totalSeconds: 2640, category: 'development' })
+  const tight = makeApp({ bundleId: DIA_BUNDLE, appName: 'Dia', canonicalAppId: 'dia', totalSeconds: 630, isBrowser: true })
+  const tightBlock = makeBlock({ topApps: [nonBrowser, tight], topArtifacts: [page] })
+  const { evidence: tightEvidence } = buildDetailRowTree(tightBlock)
+  const tightDia = tightEvidence.find((row) => row.key === `app:${DIA_BUNDLE}`)
+  assert.equal(tightDia!.children.filter((row) => row.kind === 'residual').length, 0, '30s residue stays invisible')
+  const electronRow = tightEvidence.find((row) => row.key === `app:${ELECTRON_BUNDLE}`)
+  assert.equal(electronRow!.children.length, 0)
+})

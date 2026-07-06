@@ -357,6 +357,16 @@ test('a sub-30-minute block with no related neighbour keeps its own block', () =
   // rather than being forced into something it is not.
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
   insertSession(db, { title: 'Inbox - Gmail - Google Chrome', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'email', startMinute: 40, durationMinutes: 20 })
+  // A browser session's category comes from the sites reconciled inside it
+  // (site-weighted distribution, 2026-07-06) — the Gmail visit is what makes
+  // this stretch email.
+  insertWebsiteVisit(db, {
+    domain: 'mail.google.com',
+    pageTitle: 'Inbox - Gmail',
+    url: 'https://mail.google.com/mail/u/0/#inbox',
+    startMinute: 40,
+    durationSeconds: 20 * 60,
+  })
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 60, durationMinutes: 40 })
 
   const categories = getTimelineDayPayload(db, TEST_DATE).blocks.map((b) => b.dominantCategory)
@@ -557,6 +567,16 @@ test('GitHub repo review pages badge as focused research rather than browsing', 
 test('contiguous AI assistant and GitHub repo review collapse into one assisted work block', () => {
   const db = createDb()
   insertSession(db, { title: 'Claude Code - Dia', bundleId: 'company.thebrowser.dia', appName: 'Dia', category: 'aiTools', startMinute: 0, durationMinutes: 120 })
+  // Dia is a browser: the claude.ai visit is what makes its stretch aiTools
+  // under the site-weighted distribution (2026-07-06).
+  insertWebsiteVisit(db, {
+    domain: 'claude.ai',
+    pageTitle: 'Claude Code',
+    url: 'https://claude.ai/code',
+    startMinute: 0,
+    durationSeconds: 120 * 60,
+    browserBundleId: 'company.thebrowser.dia',
+  })
   insertSession(db, { title: 'irachrist1/daylens-v1: Daylens - GitHub - Google Chrome', startMinute: 120, durationMinutes: 115, category: 'browsing' })
   insertWebsiteVisit(db, {
     domain: 'github.com',
@@ -591,7 +611,7 @@ test('a stale, never-processed past day is reconstructed on revisit', () => {
 
   // Revisiting an older, unprocessed day rebuilds it more accurately.
   getTimelineDayPayload(db, TEST_DATE)
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v9'), 'stale unprocessed day should be rebuilt')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale unprocessed day should be rebuilt')
   db.close()
 })
 
@@ -649,7 +669,7 @@ test('a processed stale day refreshes its category facts in place, without touch
   // too, and stamped so it runs once per heuristic bump.
   const row = db.prepare(`SELECT dominant_category, heuristic_version FROM timeline_blocks WHERE id = ?`).get(blockId) as { dominant_category: string; heuristic_version: string }
   assert.equal(row.dominant_category, 'development')
-  assert.equal(row.heuristic_version, 'timeline-v9')
+  assert.equal(row.heuristic_version, 'timeline-v10')
   db.close()
 })
 
@@ -676,6 +696,15 @@ test('a deleted block stays deleted through a rebuild and is not absorbed by a n
   // Two separate stretches: real work, then a video block the user deletes.
   insertSession(db, { title: 'router.ts - daylens - Cursor', bundleId: 'com.todesktop.cursor', appName: 'Cursor', category: 'development', startMinute: 0, durationMinutes: 40 })
   insertSession(db, { title: 'Video A - YouTube', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 40, durationMinutes: 25 })
+  // The YouTube visit is what makes the browser stretch entertainment under
+  // the site-weighted distribution (2026-07-06).
+  insertWebsiteVisit(db, {
+    domain: 'youtube.com',
+    pageTitle: 'Video A - YouTube',
+    url: 'https://www.youtube.com/watch?v=videoA',
+    startMinute: 40,
+    durationSeconds: 25 * 60,
+  })
 
   const before = getTimelineDayPayload(db, TEST_DATE).blocks
   assert.equal(before.length, 2)
@@ -721,7 +750,7 @@ test('timeline block correction survives rebuild through evidence lineage', () =
   assert.equal(rebuilt.review.state, 'corrected')
   assert.equal(rebuilt.review.source, 'stored_evidence')
   assert.equal(rebuilt.review.correctedLabel, 'Router refactor')
-  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v9'), 'stale day should rebuild while preserving correction')
+  assert.ok(heuristicVersions(db).every((v) => v === 'timeline-v10'), 'stale day should rebuild while preserving correction')
   db.close()
 })
 
@@ -732,6 +761,15 @@ test('timeline block correction survives rebuild through evidence lineage', () =
 test('a category correction wins, recolors the kind, and survives rebuild', () => {
   const db = createDb()
   insertSession(db, { title: 'Stranger Things - Netflix', bundleId: 'com.google.Chrome', appName: 'Google Chrome', category: 'entertainment', startMinute: 0, durationMinutes: 40 })
+  // The Netflix visit is what makes the browser stretch entertainment under
+  // the site-weighted distribution (2026-07-06).
+  insertWebsiteVisit(db, {
+    domain: 'netflix.com',
+    pageTitle: 'Stranger Things - Netflix',
+    url: 'https://www.netflix.com/watch/1',
+    startMinute: 0,
+    durationSeconds: 40 * 60,
+  })
 
   const block = getTimelineDayPayload(db, TEST_DATE).blocks[0]
   assert.ok(block)

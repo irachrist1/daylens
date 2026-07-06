@@ -220,7 +220,7 @@
     "perplexity": { "displayName": "Perplexity", "defaultCategory": "aiTools" },
     "comet": { "displayName": "Comet", "defaultCategory": "browsing", "capabilities": ["browser"] },
     "copilot": { "displayName": "Copilot", "defaultCategory": "aiTools" },
-    "dia": { "displayName": "Dia", "defaultCategory": "aiTools", "capabilities": ["browser"] },
+    "dia": { "displayName": "Dia", "defaultCategory": "browsing", "capabilities": ["browser"] },
 
     "spotify": { "displayName": "Spotify", "defaultCategory": "entertainment" },
     "apple-music": { "displayName": "Apple Music", "defaultCategory": "entertainment" },

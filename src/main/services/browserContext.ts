@@ -10,7 +10,7 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { localDateString } from '../lib/localDate'
 import { getBrowserEntries, type BrowserEntry } from './browser'
 import { getSettings } from './settings'
-import { decideSiteCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
+import { decideSiteCapture, detectIncognitoFromTitle, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import {
   resolveBrowserApplication,
   type BrowserApplication,
@@ -36,6 +36,11 @@ export interface ActiveBrowserWindowSnapshot {
 export interface ActiveBrowserTab {
   url: string
   title: string | null
+  // True when the read produced a structured private/incognito signal (e.g.
+  // Chromium's AppleScript `mode of front window`). Private windows are never
+  // tracked — no website visit, no app session — regardless of the
+  // Tracking Controls master switch (founder rule, 2026-07-06).
+  isPrivate?: boolean
 }
 
 export type ActiveBrowserTabReader = (snapshot: ActiveBrowserWindowSnapshot) => ActiveBrowserTab | null
@@ -88,17 +93,21 @@ function parseTabOutput(output: string): ActiveBrowserTab | null {
   return { url, title }
 }
 
-function runOsaScript(script: string): ActiveBrowserTab | null {
+function execOsaScript(script: string): string | null {
   try {
-    const output = execFileSync('osascript', ['-e', script], {
+    return execFileSync('osascript', ['-e', script], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1_500,
     })
-    return parseTabOutput(output)
   } catch {
     return null
   }
+}
+
+function runOsaScript(script: string): ActiveBrowserTab | null {
+  const output = execOsaScript(script)
+  return output == null ? null : parseTabOutput(output)
 }
 
 function browserApplicationFor(snapshot: ActiveBrowserWindowSnapshot): BrowserApplication | null {
@@ -107,6 +116,26 @@ function browserApplicationFor(snapshot: ActiveBrowserWindowSnapshot): BrowserAp
     appName: snapshot.appName,
     executablePath: snapshot.executablePath,
   })
+}
+
+// Chromium exposes the front window's mode ("normal"/"incognito") through its
+// AppleScript dictionary; browsers whose fork dropped the property (Dia does
+// not implement it) answer "unknown" via the try block and read as normal.
+function parseChromiumTabOutput(output: string): ActiveBrowserTab | null {
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const url = lines[0]
+  if (!url) return null
+  const mode = (lines[1] ?? '').toLowerCase()
+  if (mode.includes('incognito')) {
+    // Never carry the private URL/title out of the read — the signal is all
+    // the caller needs to drop the sample.
+    return { url: '', title: null, isPrivate: true }
+  }
+  const title = lines.slice(2).join(' ').trim() || null
+  return { url, title }
 }
 
 function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab | null {
@@ -123,13 +152,18 @@ function macActiveTab(snapshot: ActiveBrowserWindowSnapshot): ActiveBrowserTab |
     `)
   }
 
-  return runOsaScript(`
+  const output = execOsaScript(`
     tell application "${application.name}"
       if (count of windows) is 0 then return ""
+      set windowMode to "unknown"
+      try
+        set windowMode to (mode of front window) as text
+      end try
       if (count of tabs of front window) is 0 then return ""
-      return URL of active tab of front window & linefeed & title of active tab of front window
+      return URL of active tab of front window & linefeed & windowMode & linefeed & title of active tab of front window
     end tell
   `)
+  return output == null ? null : parseChromiumTabOutput(output)
 }
 
 function copyHistoryDb(historyPath: string, prefix: string): { dbPath: string; walPath: string; shmPath: string } {
@@ -351,12 +385,23 @@ export class ActiveBrowserContextTracker {
     }
   }
 
-  sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): void {
+  sample(db: BetterSqlite.Database, snapshot: ActiveBrowserWindowSnapshot): { isPrivate: boolean } {
     if (!this.isBrowser(snapshot)) {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return
+      return { isPrivate: false }
+    }
+
+    // Private windows are never tracked, independent of the Tracking Controls
+    // master switch (founder rule, 2026-07-06). The window-title markers are
+    // the cross-browser fallback; the structured Chromium signal comes back on
+    // the tab read below.
+    if (detectIncognitoFromTitle(snapshot.windowTitle)) {
+      this.flush(db, snapshot.capturedAt)
+      this.pending = null
+      this.lastWindowTitle = null
+      return { isPrivate: true }
     }
 
     // Same browser window + same title + still inside the trust window → almost
@@ -376,23 +421,34 @@ export class ActiveBrowserContextTracker {
         cached.lastSeenAt = snapshot.capturedAt
         if (this.pending) this.promotePending(db, snapshot.capturedAt)
       }
-      return
+      return { isPrivate: false }
     }
 
     const tab = this.readTab(snapshot)
     this.lastTabReadAt = snapshot.capturedAt
+
+    if (tab?.isPrivate) {
+      // Structured private signal: flush whatever regular context was open
+      // (its time ended when the private window took focus) and record nothing.
+      this.flush(db, snapshot.capturedAt)
+      this.pending = null
+      this.lastWindowTitle = null
+      return { isPrivate: true }
+    }
+
     const domain = tab ? extractDomain(tab.url) : null
     if (!tab || !domain) {
       this.flush(db, snapshot.capturedAt)
       this.pending = null
       this.lastWindowTitle = null
-      return
+      return { isPrivate: false }
     }
 
     this.lastWindowTitle = snapshot.windowTitle ?? null
 
     const normalizedUrl = normalizeUrlForStorage(tab.url)
     this.observeTab(db, snapshot, tab, normalizedUrl)
+    return { isPrivate: false }
   }
 
   flush(db: BetterSqlite.Database, endTime = Date.now()): boolean {
@@ -448,13 +504,20 @@ export class ActiveBrowserContextTracker {
   }
 }
 
-const activeBrowserContextTracker = new ActiveBrowserContextTracker()
+let activeBrowserContextTracker = new ActiveBrowserContextTracker()
+
+// Test seam: swap the module singleton so the tracking poll's private-window
+// drop can be driven with a scripted tab reader (no osascript, no registry).
+// Pass null to restore a fresh default tracker.
+export function __setActiveBrowserContextTrackerForTest(tracker: ActiveBrowserContextTracker | null): void {
+  activeBrowserContextTracker = tracker ?? new ActiveBrowserContextTracker()
+}
 
 export function recordActiveBrowserContextSample(
   db: BetterSqlite.Database,
   snapshot: ActiveBrowserWindowSnapshot,
-): void {
-  activeBrowserContextTracker.sample(db, snapshot)
+): { isPrivate: boolean } {
+  return activeBrowserContextTracker.sample(db, snapshot)
 }
 
 export function flushActiveBrowserContext(

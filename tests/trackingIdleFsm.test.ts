@@ -85,14 +85,24 @@ function makeRig(): Rig {
   }
 }
 
+// The production poller ticks every 5s whenever the machine is awake, so the
+// wall clock never jumps more than a tick while someone idles at the desk.
+// These scripted scenarios therefore advance in ≤55s steps: a larger hole
+// between two ticks IS a sleep and (since 2026-07-06) trips the sleep-gap
+// flush — that path has its own suite in trackingSleepGap.test.ts.
+async function pollThrough(rig: Rig, fromMs: number, toMs: number): Promise<void> {
+  for (let t = fromMs + 55_000; t < toMs; t += 55_000) await rig.poll(t)
+  await rig.poll(toMs)
+}
+
 // Drive an ordinary session (S0) to a genuine "away" flush so that idleState is
 // 'away' and lastFlushEndMs is set, matching the real precondition for the
 // return-from-away path. Returns the wall-clock instant of S0's flushed end.
 async function driveToAway(rig: Rig): Promise<number> {
   await rig.poll(BASE, { input: true }) // S0 starts, active
   await rig.poll(BASE + 60_000, { input: true }) // still active, 60s of real work
-  await rig.poll(BASE + 185_000) // idle 125s → provisional_idle (held open)
-  await rig.poll(BASE + 365_000) // idle 305s → away → S0 flushed
+  await pollThrough(rig, BASE + 60_000, BASE + 185_000) // idle 125s → provisional_idle (held open)
+  await pollThrough(rig, BASE + 185_000, BASE + 365_000) // idle 305s → away → S0 flushed
   return BASE + 60_000 // S0's input-derived end (last real input)
 }
 
@@ -109,8 +119,8 @@ test('mechanism: no session is ever flushed with endTime < startTime (return →
     const touch = BASE + 399_000
     rig.input(touch) // wake-touch between polls
     await rig.poll(touch + 1_000) // return poll, idle≈1s → new session S1 starts
-    await rig.poll(touch + 126_000) // idle 126s → provisional_idle, provisionalIdleStart = touch
-    await rig.poll(touch + 306_000) // idle 306s → away → S1 flushed
+    await pollThrough(rig, touch + 1_000, touch + 126_000) // idle 126s → provisional_idle, provisionalIdleStart = touch
+    await pollThrough(rig, touch + 126_000, touch + 306_000) // idle 306s → away → S1 flushed
 
     // The invariant the fix guarantees: every flush has end ≥ start. Pre-fix, the
     // away flush of S1 computed end = idleStart(touch) < start(poll wall-clock),
@@ -149,8 +159,8 @@ test('positive control: return + second input ~34s later writes a real short awa
     const secondTouch = returnTouch + 34_000 // ~34s of real activity after the return
     await rig.poll(returnTouch, { input: true }) // S1 starts, input-derived start = returnTouch
     await rig.poll(secondTouch, { input: true }) // still active (idle resets), session continues
-    await rig.poll(secondTouch + 125_000) // idle 125s → provisional_idle, provisionalIdleStart = secondTouch
-    await rig.poll(secondTouch + 305_000) // idle 305s → away → S1 flushed
+    await pollThrough(rig, secondTouch, secondTouch + 125_000) // idle 125s → provisional_idle, provisionalIdleStart = secondTouch
+    await pollThrough(rig, secondTouch + 125_000, secondTouch + 305_000) // idle 305s → away → S1 flushed
 
     // A real short session lands with input-derived bounds and the away reason.
     const s1 = rig.db
@@ -181,8 +191,8 @@ test('single-touch reproduction (17:51 sitting): one wake-touch then grace then 
     const touch = BASE + 399_000
     rig.input(touch) // lone wake-touch between polls
     await rig.poll(touch + 1_000) // return poll, idle≈1s → S1 starts
-    await rig.poll(touch + 126_000) // idle 126s → provisional_idle
-    await rig.poll(touch + 306_000) // idle 306s → away → S1 collapses to 0s and dies at MIN_SESSION_SEC
+    await pollThrough(rig, touch + 1_000, touch + 126_000) // idle 126s → provisional_idle
+    await pollThrough(rig, touch + 126_000, touch + 306_000) // idle 306s → away → S1 collapses to 0s and dies at MIN_SESSION_SEC
 
     // FOUNDER-PENDING POLICY DECISION: a bare wake-touch with no follow-up input
     // is intentionally NOT credited. Making these visible would mean crediting the

@@ -52,6 +52,7 @@ import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES, isAppCategory } from '@shared/
 import { isAppFocused } from '../lib/focusScore'
 import { getSettings } from './settings'
 import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForAppsRail, policyForHost } from '@shared/domainPolicy'
+import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
@@ -203,7 +204,12 @@ const TIMELINE_MIN_CHILD_SPAN_MS = 15 * 60_000
 // buildTimelineBlocksForDay) so the stale "Canva development" / "Notifications
 // development" labels get replaced — unless the day was already AI/user
 // processed, in which case that curated result is kept and its IDs stay stable.
-const TIMELINE_HEURISTIC_VERSION = 'timeline-v9'
+// v10: site-weighted category distribution (browser sessions split across the
+// categories of the sites reconciled inside the block; Dia recataloged
+// browsing) — the bump makes refreshStaleBlockCategoryFacts recompute the
+// persisted category facts of every already-processed day in place, so old
+// blocks pick up their real colors immediately (labels/boundaries untouched).
+const TIMELINE_HEURISTIC_VERSION = 'timeline-v10'
 
 // A single unbroken block this long is almost never real (~11 hours of
 // continuous engagement is suspicious on its face) — it usually means
@@ -602,7 +608,11 @@ function sessionEndMs(session: Pick<AppSession, 'startTime' | 'endTime' | 'durat
 function inferredFocusedCategoryForSession(session: AppSession): AppCategory {
   if (session.category !== 'uncategorized') return session.category
   const haystack = `${session.bundleId} ${session.appName} ${session.rawAppName ?? ''}`.toLowerCase()
-  if (/\b(codex|claude|chatgpt|copilot|perplexity|comet|dia)\b/.test(haystack)) return 'aiTools'
+  // Dia and Comet are BROWSERS, not AI tools: their sessions go through the
+  // site-weighted distribution, where claude.ai time (etc.) becomes aiTools on
+  // its own merit. Forcing the app to aiTools here made every block of a
+  // browser-centric day one category (2026-07-06 founder audit).
+  if (/\b(codex|claude|chatgpt|copilot|perplexity)\b/.test(haystack)) return 'aiTools'
   if (/\b(antigravity|cursor|vscode|visual studio code|zed|xcode|sublime|warp|ghostty|iterm|terminal|cmux)\b/.test(haystack)) return 'development'
   return session.category
 }
@@ -642,6 +652,114 @@ function categoryDistributionFor(sessions: EffectiveSession[]): Partial<Record<A
   for (const entry of sessions) {
     distribution[entry.effectiveCategory] = (distribution[entry.effectiveCategory] ?? 0) + entry.session.durationSeconds
   }
+  return distribution
+}
+
+// ─── Site-weighted category distribution ─────────────────────────────────────
+// A browser session's category used to be whatever the browser APP was
+// cataloged as, so a user who lives in one browser had every block collapse
+// into that single category — one color across the whole calendar, whatever
+// they actually did inside it (2026-07-06 founder audit). The block facts now
+// split each browser session's seconds across the categories of the sites
+// reconciled inside the block (canva.com → design, youtube.com →
+// entertainment, claude.ai → aiTools…); seconds no site accounts for stay
+// plain 'browsing'.
+//
+// Two invariants hold by construction:
+//   * Σ distribution = Σ session seconds — a visit's credited intervals are
+//     clipped to the browser's own foreground sessions, so capture-gap credit
+//     (valid as page EVIDENCE) can never add seconds a session never had, and
+//     each browser's credited total is capped at its pool.
+//   * Only foreground-reconciled site time re-weights — background-accrued
+//     history rows contribute nothing (same ledger as page artifacts).
+// Boundary heuristics (analyzeSessions and friends) intentionally keep the
+// cheap app-only distribution: boundaries are about app coherence; these
+// weighted facts are about what the finished block WAS.
+
+interface BrowserCreditPool {
+  intervals: { start: number; end: number }[]
+  totalSeconds: number
+  creditedSeconds: number
+}
+
+function overlapWithIntervalsMs(
+  interval: { start: number; end: number },
+  intervals: { start: number; end: number }[],
+): number {
+  let total = 0
+  for (const candidate of intervals) {
+    const start = Math.max(interval.start, candidate.start)
+    const end = Math.min(interval.end, candidate.end)
+    if (end > start) total += end - start
+  }
+  return total
+}
+
+export function weightedCategoryDistributionFor(
+  db: Database.Database,
+  sessions: AppSession[],
+  blockStart: number,
+  blockEnd: number,
+): Partial<Record<AppCategory, number>> {
+  const effective = effectiveSessionsFor(sessions)
+  const distribution: Partial<Record<AppCategory, number>> = {}
+  const add = (category: AppCategory, seconds: number) => {
+    if (seconds > 0) distribution[category] = (distribution[category] ?? 0) + seconds
+  }
+
+  // Pool every browser session's time per browser; everything else keeps its
+  // app-derived (effective) category unchanged.
+  const pools = new Map<string, BrowserCreditPool>()
+  const poolKeyByCanonicalId = new Map<string, string>()
+  for (const entry of effective) {
+    const session = entry.session
+    if (!isBrowserSession(session)) {
+      add(entry.effectiveCategory, session.durationSeconds)
+      continue
+    }
+    let pool = pools.get(session.bundleId)
+    if (!pool) {
+      pool = { intervals: [], totalSeconds: 0, creditedSeconds: 0 }
+      pools.set(session.bundleId, pool)
+    }
+    pool.intervals.push({
+      start: session.startTime,
+      end: session.endTime ?? (session.startTime + session.durationSeconds * 1000),
+    })
+    pool.totalSeconds += session.durationSeconds
+    if (session.canonicalAppId) poolKeyByCanonicalId.set(session.canonicalAppId, session.bundleId)
+  }
+
+  if (pools.size > 0) {
+    let credits: ReturnType<typeof getReconciledWebsiteVisitsForRange> = []
+    try {
+      credits = getReconciledWebsiteVisitsForRange(db, blockStart, blockEnd)
+    } catch (err) {
+      console.warn('[timeline] weighted category distribution: visit reconciliation failed', err)
+    }
+    for (const { visit, freeIntervals } of credits) {
+      const category = categoryForDomain(visit.domain)
+      if (!category || category === 'browsing') continue
+      const poolKey = visit.browserBundleId && pools.has(visit.browserBundleId)
+        ? visit.browserBundleId
+        : (visit.canonicalBrowserId ? poolKeyByCanonicalId.get(visit.canonicalBrowserId) ?? null : null)
+      if (!poolKey) continue
+      const pool = pools.get(poolKey)
+      if (!pool) continue
+      let clippedMs = 0
+      for (const interval of freeIntervals) {
+        clippedMs += overlapWithIntervalsMs(interval, pool.intervals)
+      }
+      const credited = Math.min(Math.round(clippedMs / 1000), pool.totalSeconds - pool.creditedSeconds)
+      if (credited <= 0) continue
+      pool.creditedSeconds += credited
+      add(category, credited)
+    }
+    for (const pool of pools.values()) {
+      add('browsing', pool.totalSeconds - pool.creditedSeconds)
+    }
+  }
+
   return distribution
 }
 
@@ -2518,13 +2636,15 @@ function buildBlockFromCandidate(
   db: Database.Database,
   context?: TimelineBuildContext,
 ): WorkContextBlock {
-  const effectiveSessions = effectiveSessionsFor(candidate.sessions)
-  const distribution = categoryDistributionFor(effectiveSessions)
-  const coherence = coherenceScore(distribution)
-  const switchCount = countAppSwitches(candidate.sessions)
   const blockStart = candidate.sessions[0].startTime
   const lastSession = candidate.sessions[candidate.sessions.length - 1]
   const blockEnd = lastSession.endTime ?? (lastSession.startTime + lastSession.durationSeconds * 1000)
+  // The persisted block facts use the site-weighted distribution so a
+  // browser-heavy block's category reflects what happened INSIDE the browser,
+  // not which browser it was.
+  const distribution = weightedCategoryDistributionFor(db, candidate.sessions, blockStart, blockEnd)
+  const coherence = coherenceScore(distribution)
+  const switchCount = countAppSwitches(candidate.sessions)
   const computedAt = Date.now()
   const websites = getWebsiteSummariesForRange(db, blockStart, blockEnd).slice(0, 5)
   const keyPagesByDomain = getTopPagesForDomains(db, blockStart, blockEnd, websites.map((site) => site.domain), 2)
@@ -4863,22 +4983,35 @@ function refreshStaleBlockCategoryFacts(db: Database.Database, blocks: WorkConte
 
   const update = db.prepare(`
     UPDATE timeline_blocks
-    SET dominant_category = ?, category_distribution_json = ?, heuristic_version = ?
+    SET dominant_category = ?, category_distribution_json = ?, block_kind = ?, heuristic_version = ?
     WHERE id = ?
   `)
 
   for (const block of stale) {
+    // A user recategorization is a correction and corrections survive every
+    // rebuild (invariant 8): refresh the distribution facts underneath, but
+    // never overwrite the corrected dominant category (in memory it was
+    // already applied by applyReviewToBlock; the persisted row must not
+    // regress it either).
+    const userCorrectedCategory = block.review?.state === 'corrected' && block.review.correctedCategory
+      ? block.review.correctedCategory
+      : null
     // No resolvable sessions (e.g. their raw rows were pruned): keep the
     // persisted facts rather than replace them with an empty guess.
     if (block.sessions.length > 0) {
-      const distribution = categoryDistributionFor(effectiveSessionsFor(block.sessions))
+      const distribution = weightedCategoryDistributionFor(db, block.sessions, block.startTime, block.endTime)
       block.categoryDistribution = distribution
-      block.dominantCategory = dominantCategoryForBlock(distribution, block.topArtifacts)
+      block.dominantCategory = userCorrectedCategory
+        ?? dominantCategoryForBlock(distribution, block.topArtifacts)
     }
     block.heuristicVersion = TIMELINE_HEURISTIC_VERSION
+    // block_kind feeds the month/range readers directly
+    // (timelineCalendarRange.ts); refreshing category without it would leave
+    // the two persisted facts disagreeing about the same block.
     update.run(
       block.dominantCategory,
       JSON.stringify(block.categoryDistribution),
+      blockKindFor(block),
       TIMELINE_HEURISTIC_VERSION,
       block.id,
     )

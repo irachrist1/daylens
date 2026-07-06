@@ -1527,6 +1527,16 @@ function BlockDetailInspector({
         onOpen: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? undefined : () => void openArtifact(artifact),
       }
     }
+    if (row.kind === 'residual') {
+      // The reconciliation footer: browser time no page accounts for. Shown so
+      // the child rows visibly sum to the parent (invariant 7) instead of
+      // leaving a silent hole the user reads as a lie.
+      return {
+        name: 'No page recorded',
+        detail: null,
+        icon: <EntityIcon artifactType="page" title="No page recorded" size={24} />,
+      }
+    }
     const site = row.site
     return {
       name: site ? shortDomainLabel(site.domain) : '',
@@ -1556,10 +1566,15 @@ function BlockDetailInspector({
     )
     // Rows that happened inside another app indent under it: their minutes are
     // a breakdown of the parent's time, so they must not read as additive.
-    const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1, paddingLeft: indented ? 34 : 0 }
+    // The indent must stay a single `padding` shorthand: mixing the shorthand
+    // with a `paddingLeft` longhand in one spread object lets the shorthand
+    // land AFTER the longhand in key order (spread dedup keeps the longhand's
+    // first position) and silently reset the indent to 0 — which flattened
+    // every nested site row under its browser (2026-07-06 founder audit).
+    const baseStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, opacity: dimmed ? 0.6 : 1, padding: indented ? '0 0 0 34px' : 0 }
     const rowNode = onOpen
       ? (
-        <button type="button" onClick={onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', padding: 0, paddingLeft: indented ? 34 : 0, textAlign: 'left', cursor: 'pointer' }}>
+        <button type="button" onClick={onOpen} style={{ ...baseStyle, border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' }}>
           {content}
         </button>
       )

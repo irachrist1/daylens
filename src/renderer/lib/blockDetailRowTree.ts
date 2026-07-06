@@ -12,7 +12,7 @@
 import type { ArtifactRef, AppCategory, PageRef, WebsiteSummary, WorkContextAppSummary, WorkContextBlock } from '@shared/types'
 import { kindForDomain } from '@shared/workKind'
 
-export type DetailRowKind = 'app' | 'artifact' | 'site'
+export type DetailRowKind = 'app' | 'artifact' | 'site' | 'residual'
 
 export interface DetailRowNode {
   key: string
@@ -109,10 +109,29 @@ export function buildDetailRowTree(block: WorkContextBlock): DetailRowTree {
   // Nest each on-task site/page/file under the app it happened in; rows whose
   // app isn't listed stay top-level. Off-task rows keep flowing to detours.
   const childRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && row.ownerKey)
-  const nested = appRows.map((app) => ({
-    ...app,
-    children: childRows.filter((row) => row.ownerKey === app.key).sort((a, b) => b.seconds - a.seconds),
-  }))
+  const nested = appRows.map((app) => {
+    const children = childRows.filter((row) => row.ownerKey === app.key).sort((a, b) => b.seconds - a.seconds)
+    // Numbers must reconcile (invariant 7): when a browser row's children
+    // don't add up to the parent, the difference is rendered as an explicit
+    // "No page recorded" residual instead of a silent hole — same rule the
+    // Apps view breakdown follows. Only for browsers with at least one child;
+    // sub-minute residue is rounding, not a hole.
+    if (app.app?.isBrowser && children.length > 0) {
+      const childSeconds = children.reduce((sum, row) => sum + row.seconds, 0)
+      const residual = app.seconds - childSeconds
+      if (residual >= 60) {
+        children.push({
+          key: `residual:${app.key}`,
+          kind: 'residual',
+          seconds: residual,
+          offTask: false,
+          ownerKey: app.key,
+          children: [],
+        })
+      }
+    }
+    return { ...app, children }
+  })
   const orphanRows = [...artifactRows, ...siteRows].filter((row) => !row.offTask && !row.ownerKey)
   const allEvidence = [...nested, ...orphanRows].sort((a, b) => b.seconds - a.seconds)
   const evidence = allEvidence.filter((row) => !row.offTask)
