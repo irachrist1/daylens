@@ -137,6 +137,13 @@ async function loadIdentityAndState(): Promise<void> {
   }
 }
 
+// Intercom uses the same id as PostHog so both tools see one person per install.
+// Valid after initAnalytics() has run (app startup); before that it's a
+// throwaway UUID that never leaves the process.
+export function getAnalyticsDistinctId(): string {
+  return distinctId
+}
+
 async function persistAnalyticsState(): Promise<void> {
   try {
     const store = await getStore()

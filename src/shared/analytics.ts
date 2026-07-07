@@ -106,6 +106,47 @@ export function isPaywallTrigger(value: unknown): value is PaywallTrigger {
   return typeof value === 'string' && (PAYWALL_TRIGGERS as readonly string[]).includes(value)
 }
 
+export interface AIGenerationUsage {
+  traceId: string
+  jobType: string
+  provider?: string | null
+  model?: string | null
+  latencyMs: number
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  isError?: boolean
+  daylensCostUsd?: number | null
+  daylensCostSource?: 'provider' | 'estimated' | null
+}
+
+// The $ai_generation payload for PostHog LLM analytics. Two invariants this
+// build must never break: (1) no prompt or completion content — only numeric
+// usage, model, and job names leave the machine; (2) no $ai_*_cost_usd
+// properties — PostHog then prices the tokens itself (OpenRouter data), which
+// is the point: an independent cost figure to check the local meter
+// (daylens_cost_usd, same call, our pricing table) against.
+export function buildAIGenerationProperties(usage: AIGenerationUsage): Record<string, string | number | boolean> {
+  const properties: Record<string, string | number | boolean> = {
+    $ai_trace_id: usage.traceId,
+    $ai_span_name: usage.jobType,
+    $ai_latency: Math.max(0, usage.latencyMs) / 1000,
+  }
+  if (usage.provider) properties.$ai_provider = usage.provider
+  if (usage.model) properties.$ai_model = usage.model
+  if (usage.inputTokens != null) properties.$ai_input_tokens = usage.inputTokens
+  if (usage.outputTokens != null) properties.$ai_output_tokens = usage.outputTokens
+  if (usage.cacheReadTokens != null) properties.$ai_cache_read_input_tokens = usage.cacheReadTokens
+  if (usage.cacheWriteTokens != null) properties.$ai_cache_creation_input_tokens = usage.cacheWriteTokens
+  if (usage.isError) properties.$ai_is_error = true
+  if (usage.daylensCostUsd != null) {
+    properties.daylens_cost_usd = usage.daylensCostUsd
+    properties.daylens_cost_source = usage.daylensCostSource ?? 'estimated'
+  }
+  return properties
+}
+
 export type AnalyticsFeature =
   | 'timeline'
   | 'apps'

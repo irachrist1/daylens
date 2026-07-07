@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { countBackgroundAIUsageEventsSince, finishAIUsageEvent, startAIUsageEvent } from '../db/queries'
 import { getDb } from './database'
-import { capture } from './analytics'
+import { capture, captureAIGeneration } from './analytics'
+import { estimateUsageCostUsd } from './modelPricing'
 import { ANALYTICS_EVENT, classifyFailureKind } from '@shared/analytics'
 import { getApiKey, getSettings, getSettingsAsync } from './settings'
 import { friendlyProviderError as friendlyProviderErrorClassified } from './providerErrors'
@@ -563,6 +564,20 @@ export async function executeTextAIJob(
         cache_hit: cacheHit,
         cache_policy: definition.cachePolicy,
       })
+      captureAIGeneration({
+        traceId: eventId,
+        jobType: payload.jobType,
+        provider: config.provider,
+        model: config.model,
+        latencyMs: completedAt - startedAt,
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        cacheReadTokens: usage?.cacheReadTokens ?? null,
+        cacheWriteTokens: usage?.cacheWriteTokens ?? null,
+        daylensCostUsd: usage?.costUsd
+          ?? estimateUsageCostUsd(config.model, usage?.inputTokens, usage?.outputTokens, usage?.cacheReadTokens, usage?.cacheWriteTokens),
+        daylensCostSource: usage?.costUsd != null ? 'provider' : 'estimated',
+      })
 
       return {
         text: response.text,
@@ -601,6 +616,14 @@ export async function executeTextAIJob(
     trigger_source: payload.triggerSource,
     latency_ms: completedAt - startedAt,
     cache_policy: definition.cachePolicy,
+  })
+  captureAIGeneration({
+    traceId: eventId,
+    jobType: payload.jobType,
+    provider: lastConfig?.provider ?? null,
+    model: lastConfig?.model ?? null,
+    latencyMs: completedAt - startedAt,
+    isError: true,
   })
 
   throw friendlyError

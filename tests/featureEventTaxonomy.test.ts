@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ANALYTICS_EVENT, sanitizeAnalyticsProperties } from '../src/shared/analytics.ts'
+import { ANALYTICS_EVENT, buildAIGenerationProperties, sanitizeAnalyticsProperties } from '../src/shared/analytics.ts'
 
 // The ten-event feature taxonomy (2026-07-07). Each entry mirrors the exact
 // payload its call site sends; the assertion is that the sanitizer's allowlist
@@ -80,4 +80,58 @@ test('what_changed and date_context enums pass as plain strings', () => {
   for (const value of ['today', 'past']) {
     assert.equal(sanitizeAnalyticsProperties({ date_context: value }).date_context, value)
   }
+})
+
+// $ai_generation (PostHog LLM analytics). Two invariants the build must never
+// break: no prompt/completion content leaves the machine, and no $ai_*cost*
+// property is sent — omitting cost is what makes PostHog price the tokens
+// independently, so its number can arbitrate the local meter's accuracy.
+test('$ai_generation payload maps usage without content or cost properties', () => {
+  const properties = buildAIGenerationProperties({
+    traceId: 'a1b2c3d4-0000-4000-8000-000000000000',
+    jobType: 'day_summary',
+    provider: 'anthropic',
+    model: 'claude-sonnet-5',
+    latencyMs: 1500,
+    inputTokens: 1200,
+    outputTokens: 340,
+    cacheReadTokens: 800,
+    cacheWriteTokens: 0,
+    daylensCostUsd: 0.0123,
+    daylensCostSource: 'estimated',
+  })
+
+  assert.equal(properties.$ai_trace_id, 'a1b2c3d4-0000-4000-8000-000000000000')
+  assert.equal(properties.$ai_span_name, 'day_summary')
+  assert.equal(properties.$ai_provider, 'anthropic')
+  assert.equal(properties.$ai_model, 'claude-sonnet-5')
+  assert.equal(properties.$ai_latency, 1.5)
+  assert.equal(properties.$ai_input_tokens, 1200)
+  assert.equal(properties.$ai_output_tokens, 340)
+  assert.equal(properties.$ai_cache_read_input_tokens, 800)
+  assert.equal(properties.$ai_cache_creation_input_tokens, 0)
+  assert.equal(properties.daylens_cost_usd, 0.0123)
+  assert.equal(properties.daylens_cost_source, 'estimated')
+
+  for (const key of Object.keys(properties)) {
+    assert.ok(!/cost_usd$/.test(key) || key === 'daylens_cost_usd', `unexpected cost property ${key}`)
+    assert.ok(!['$ai_input', '$ai_output_choices', '$ai_error'].includes(key), `content property ${key} must never be sent`)
+  }
+})
+
+test('$ai_generation failure payload carries the error flag and omits token fields', () => {
+  const properties = buildAIGenerationProperties({
+    traceId: 'a1b2c3d4-0000-4000-8000-000000000001',
+    jobType: 'block_labeling',
+    provider: null,
+    model: null,
+    latencyMs: 200,
+    isError: true,
+  })
+
+  assert.equal(properties.$ai_is_error, true)
+  assert.ok(!('$ai_provider' in properties))
+  assert.ok(!('$ai_model' in properties))
+  assert.ok(!('$ai_input_tokens' in properties))
+  assert.ok(!('daylens_cost_usd' in properties))
 })
