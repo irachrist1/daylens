@@ -57,6 +57,7 @@ interface HelperEvent {
   page_title?: string | null
   source: FocusEventSource
   confidence: FocusEventConfidence
+  is_private?: boolean | null
   platform?: string | null
   schema_ver?: number | null
 }
@@ -70,6 +71,17 @@ let spawnedAt = 0
 const MAX_RESTART_DELAY = 30_000
 const STABLE_UPTIME_MS = 10_000
 const SHUTDOWN_KILL_DELAY_MS = 1500
+const PRIVATE_SIGNAL_MAX_AGE_MS = 10_000
+
+interface WindowsPrivateWindowSignal {
+  observedAt: number
+  appBundleId: string | null
+  appName: string | null
+  pid: number | null
+  windowTitle: string | null
+}
+
+let recentPrivateWindowSignal: WindowsPrivateWindowSignal | null = null
 
 function helperPath(): string {
   const fileName = 'windows-capture-helper.exe'
@@ -90,6 +102,57 @@ function isNullableNumber(value: unknown): value is number | null | undefined {
   return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value))
 }
 
+function isNullableBoolean(value: unknown): value is boolean | null | undefined {
+  return value === undefined || value === null || typeof value === 'boolean'
+}
+
+function normalizeIdentity(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase()
+}
+
+function rememberPrivateWindowSignal(ev: HelperEvent): void {
+  recentPrivateWindowSignal = {
+    observedAt: ev.ts_ms,
+    appBundleId: ev.app_bundle_id ?? null,
+    appName: ev.app_name ?? null,
+    pid: ev.pid ?? null,
+    windowTitle: ev.window_title ?? null,
+  }
+}
+
+export function getRecentWindowsPrivateWindowSignal(candidate: {
+  bundleId?: string | null
+  appName?: string | null
+  pid?: number | null
+  windowTitle?: string | null
+  nowMs?: number
+}): boolean {
+  if (process.platform !== 'win32') return false
+  const signal = recentPrivateWindowSignal
+  if (!signal) return false
+  const now = candidate.nowMs ?? Date.now()
+  if (now - signal.observedAt > PRIVATE_SIGNAL_MAX_AGE_MS) return false
+
+  const candidatePid = candidate.pid ?? null
+  if (candidatePid != null && signal.pid != null && candidatePid === signal.pid) return true
+
+  const bundle = normalizeIdentity(candidate.bundleId)
+  const signalBundle = normalizeIdentity(signal.appBundleId)
+  if (bundle && signalBundle && bundle === signalBundle) return true
+
+  const appName = normalizeIdentity(candidate.appName)
+  const signalName = normalizeIdentity(signal.appName)
+  if (appName && signalName && appName === signalName) return true
+
+  const title = normalizeIdentity(candidate.windowTitle)
+  const signalTitle = normalizeIdentity(signal.windowTitle)
+  return Boolean(title && signalTitle && title === signalTitle)
+}
+
+export function __setRecentWindowsPrivateWindowSignalForTest(signal: WindowsPrivateWindowSignal | null): void {
+  recentPrivateWindowSignal = signal
+}
+
 export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
   if (!isObject(raw)) return null
   const eventType = raw.event_type
@@ -108,6 +171,7 @@ export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
   if (!isNullableString(raw.window_title)) return null
   if (!isNullableString(raw.url)) return null
   if (!isNullableString(raw.page_title)) return null
+  if (!isNullableBoolean(raw.is_private)) return null
   if (!isNullableString(raw.platform)) return null
 
   const typedEventType = eventType as FocusEventType
@@ -115,6 +179,7 @@ export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
   const typedConfidence = confidence as FocusEventConfidence
   const url = raw.url ?? null
   const pageTitle = raw.page_title ?? null
+  const isPrivate = raw.is_private ?? false
 
   if (typedSource === 'uia_foreground' && !FOREGROUND_EVENT_TYPES.has(typedEventType)) return null
   if (typedSource === 'uia_tab' && !TAB_EVENT_TYPES.has(typedEventType)) return null
@@ -134,6 +199,7 @@ export function normalizeWindowsHelperEvent(raw: unknown): HelperEvent | null {
     page_title: pageTitle,
     source: typedSource,
     confidence: typedConfidence,
+    is_private: isPrivate,
     platform: raw.platform ?? 'win32',
     schema_ver: FOCUS_EVENT_SCHEMA_VERSION,
   }
@@ -187,6 +253,10 @@ function flushFocusEvents(): void {
 }
 
 function enqueueEvent(ev: HelperEvent): void {
+  if (ev.is_private) {
+    rememberPrivateWindowSignal(ev)
+    return
+  }
   if (!shouldCaptureFocusEvent(ev, trackingControlsStateFromSettings(getSettings()))) return
   pendingEvents.push(ev)
   if (pendingEvents.length >= FOCUS_FLUSH_MAX_BATCH) {

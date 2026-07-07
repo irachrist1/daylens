@@ -63,7 +63,8 @@ internal static class Program
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var mono = Stopwatch.GetTimestamp();
 
-        var foregroundKey = $"{pid}:{hwnd}:{windowTitle}";
+        var isPrivate = LooksLikeBrowser(bundleId, appName, exePath) && IsPrivateBrowserWindow(hwnd, windowTitle);
+        var foregroundKey = $"{pid}:{hwnd}:{windowTitle}:{isPrivate}";
         if (!string.Equals(foregroundKey, lastForegroundKey, StringComparison.Ordinal))
         {
             lastForegroundKey = foregroundKey;
@@ -80,12 +81,35 @@ internal static class Program
                 Source = "uia_foreground",
                 Confidence = "observed",
                 Platform = "win32",
+                IsPrivate = isPrivate,
                 SchemaVer = SchemaVersion,
             });
         }
 
         if (!LooksLikeBrowser(bundleId, appName, exePath))
         {
+            return;
+        }
+
+        if (isPrivate)
+        {
+            var tabKey = $"private:{pid}:{hwnd}";
+            lastTabKey = tabKey;
+            Emit(new HelperEvent
+            {
+                TsMs = now,
+                MonoNs = mono,
+                EventType = "tab_sampled",
+                AppBundleId = bundleId,
+                AppName = appName,
+                Pid = pid,
+                WindowTitle = windowTitle,
+                Source = "uia_tab",
+                Confidence = "unknown",
+                Platform = "win32",
+                IsPrivate = true,
+                SchemaVer = SchemaVersion,
+            });
             return;
         }
 
@@ -174,13 +198,53 @@ internal static class Program
             || haystack.Contains("comet")
             || haystack.Contains("opera")
             || haystack.Contains("vivaldi")
-            || haystack.Contains("browser");
+            || haystack.Contains("browser")
+            || FirefoxFamily.Any(token => haystack.Contains(token));
     }
 
     private static bool IsFirefoxFamily(string bundleId, string appName, string exePath)
     {
         var haystack = $"{bundleId} {appName} {exePath}".ToLowerInvariant();
         return FirefoxFamily.Any(token => haystack.Contains(token));
+    }
+
+    private static bool LooksLikePrivateModeText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var text = value.ToLowerInvariant();
+        return text.Contains("incognito")
+            || text.Contains("inprivate")
+            || text.Contains("private browsing")
+            || text.Contains("private window")
+            || text.Contains("private mode");
+    }
+
+    private static bool IsPrivateBrowserWindow(IntPtr hwnd, string? windowTitle)
+    {
+        if (LooksLikePrivateModeText(windowTitle)) return true;
+
+        try
+        {
+            var root = AutomationElement.FromHandle(hwnd);
+            if (root is null) return false;
+
+            var buttons = root.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+
+            var max = Math.Min(buttons.Count, 256);
+            for (var i = 0; i < max; i++)
+            {
+                var name = buttons[i].Current.Name;
+                if (LooksLikePrivateModeText(name)) return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static bool TryReadChromiumTab(IntPtr hwnd, out string? url, out string? pageTitle)
@@ -282,6 +346,9 @@ internal static class Program
 
         [JsonPropertyName("platform")]
         public string Platform { get; init; } = "win32";
+
+        [JsonPropertyName("is_private")]
+        public bool? IsPrivate { get; init; }
 
         [JsonPropertyName("schema_ver")]
         public int SchemaVer { get; init; } = SchemaVersion;

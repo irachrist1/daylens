@@ -1101,3 +1101,79 @@ requires browser foreground to credit site time).
   with Timeline and Apps.
 - **History/Recap**: day totals from app_sessions via blocks, corrections survive
   rebuilds.
+
+---
+
+# 2026-07-07 — Anthropic prompt cache hit rate dropped 80%: not bad, the killing of the $110/wk loop
+
+**Status:** Investigated — not a bug, expected artifact of the fix in 476d17b. Documented
+so future agents don't waste time re-learning this.
+
+**Source:** Anthropic Console notification + live `DaylensWindows/daylens.sqlite` query
+
+## What happened
+
+Anthropic Console alerted that prompt cache hit rate dropped 80% vs the previous week. Live
+DB query of `ai_usage_events` confirms why:
+
+### Primary cause: the runaway loop was producing artificial cache hits
+
+Before 476d17b, `block_cleanup_relabel` background calls were ~20-45k/day (June 23: 16,344;
+July 1: 13,833; July 4: 19,207). After the fix (deleted cleanup queue + 250/day cap): 3-6
+calls/day. Total call volume dropped ~99.5%.
+
+The old calls included repeated labeling of the same 3 blocks with identical system prompts
+— exactly the pattern where `stable_prefix` caching produces server-side cache hits. Those
+hits inflated the hit rate. Now they're gone.
+
+### Secondary: the system prompt gained one line, invalidating one first-call cache
+
+Commit 476d17b added `'  - Name the site or tool where the work happened ("in Notion" ...)'`
+to `workBlockPrompt()` (`aiService.ts:3949`). The `stable_prefix` cache is keyed on the
+system prompt text, so this line changes the cache key. Every block type gets one cache miss
+the first time it runs after the update — minor relative to the loop effect above.
+
+## Deeper finding: prompt caching is effectively not working right now
+
+Querying `ai_usage_events` reveals:
+
+| job_type | calls (30d) | avg input | avg cache_write_tokens | avg cache_read_tokens |
+|---|---|---|---|---|
+| block_cleanup_relabel | 110,747 | 1,064 | **0.0** | **0.0** |
+| block_label_finalize | 18,491 | 1,733 | **0.0** | **0.0** |
+| chat_answer | 84 | 1,458 | 230.7 | **0.0** |
+| day_summary | 8 | 447 | 5,452.5 | **0.0** |
+| report_generation | 8 | 757 | 6,304.4 | **0.0** |
+
+Key signal: **cache_read_tokens is 0 for 100% of rows.** Not one cache read across 130k+
+calls. Cache_write_tokens only appears for `chat_answer`, `day_summary`, and
+`report_generation` — all jobs whose cached payload (the whole user message via
+`repeated_payload`, or a system prompt large enough to cross Anthropic's minimum
+threshold) exceeds ~1,024 tokens.
+
+The 110k block-labeling calls (`stable_prefix` policy, system prompt marked with
+`cache_control: { type: 'ephemeral' }`) never produce a single cache write or read. Two
+likely reasons:
+
+1. **Anthropic's minimum cache threshold.** The block-labeling system prompt
+   (`workBlockPrompt(block)`) includes ~15 lines of instructions + per-block evidence.
+   Average total input is 1,064 tokens, but the system prompt alone might be under the
+   ~1,024-token minimum, causing Anthropic to silently ignore the `cache_control` marker.
+2. **The streaming API may not propagate cache metrics.** `stream.finalMessage()` returns
+   `Message.usage` which should include `cache_read_input_tokens`, but this SDK version
+   (v0.100.1) may not populate them correctly in streaming mode.
+
+Even the jobs that DO write to cache (`day_summary`, `report_generation`) never read back
+— suggesting cache entries always expire or get invalidated before the same request repeats.
+
+### Practical impact
+
+- The Anthropic Console alert is **not actionable** — it's an expected side effect of the
+  476d17b fix.
+- The cache policy definitions in `JOB_DEFINITIONS` (`aiOrchestration.ts:82-228`) are
+  aspirational: three of the four heaviest job types (`block_cleanup_relabel`,
+  `block_label_finalize`, `chat_answer`) see no cache benefit from `stable_prefix`, and
+  the `repeated_payload` jobs (`day_summary`, etc.) write but never read.
+- Should Daylens ever need cache savings at scale, `repeated_payload` strategy for
+  day/week summaries is the only path that measurably writes to cache. Block-label caching
+  via `stable_prefix` would need the system prompt to credibly exceed ~1,024 tokens.

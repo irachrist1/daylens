@@ -75,48 +75,80 @@ jobs:
         run: npm run typecheck
 
       - name: Build Vite bundles
+        # Analytics/crash keys are compiled into the main bundle at build time;
+        # without them every release ships with telemetry hard-disabled.
+        env:
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: npm run build:all
 
-      # ── Code signing (optional) ───────────────────────────────────────────
-      # Signing is detected automatically from GitHub Actions secrets. Without a
-      # certificate the build still ships — users will see a SmartScreen warning
-      # on first launch, the same as all unsigned Windows apps. With a certificate
-      # the warning is gone. See docs/WINDOWS_SIGNING.md for setup instructions.
+      # ── Code signing (required) ───────────────────────────────────────────
+      # Production Windows releases must be Authenticode-signed. The updater is
+      # disabled for unsigned packaged builds, and this workflow fails before
+      # packaging if the signing secrets are missing.
       #
       # Required secrets (set via gh secret set --repo irachrist1/daylens):
       #   WIN_CERTIFICATE_FILE      — base64-encoded PFX
       #   WIN_CERTIFICATE_PASSWORD  — PFX password
-      #   WIN_CERT_SUBJECT_NAME     — Authenticode subject (e.g. "Daylens")
+      #   WIN_CERT_SUBJECT_NAME     — exact Authenticode subject DN
       - name: Detect code-signing credentials
         id: signing
         shell: pwsh
         run: |
           $hasCert = (-not [string]::IsNullOrWhiteSpace($env:WIN_CERTIFICATE_FILE)) -and `
-                     (-not [string]::IsNullOrWhiteSpace($env:WIN_CERTIFICATE_PASSWORD))
+                     (-not [string]::IsNullOrWhiteSpace($env:WIN_CERTIFICATE_PASSWORD)) -and `
+                     (-not [string]::IsNullOrWhiteSpace($env:WIN_CERT_SUBJECT_NAME))
           if ($hasCert) {
             Write-Host "Authenticode credentials found — installer will be signed."
             echo "enabled=true" >> $env:GITHUB_OUTPUT
           } else {
-            Write-Warning "No Authenticode credentials found. Building unsigned installer. SmartScreen will warn on first launch until a certificate is added (see docs/WINDOWS_SIGNING.md) or the app ships via the Microsoft Store."
-            echo "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Error "No Authenticode credentials found. Windows release builds must be signed before they can ship or auto-update. Configure WIN_CERTIFICATE_FILE, WIN_CERTIFICATE_PASSWORD, and WIN_CERT_SUBJECT_NAME."
+            exit 1
           }
 
       - name: Decode code-signing certificate
         if: steps.signing.outputs.enabled == 'true'
-        shell: bash
+        shell: pwsh
         run: |
-          echo "$WIN_CERTIFICATE_FILE" | base64 --decode > /tmp/cert.pfx
-          echo "WIN_CERTIFICATE_FILE_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
-          echo "WIN_CERTIFICATE_PASSWORD=$WIN_CERTIFICATE_PASSWORD" >> "$GITHUB_ENV"
-          echo "WIN_CERT_SUBJECT_NAME=$WIN_CERT_SUBJECT_NAME" >> "$GITHUB_ENV"
+          $certPath = Join-Path $env:RUNNER_TEMP 'daylens-signing.pfx'
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WIN_CERTIFICATE_FILE))
+          if (-not (Test-Path $certPath)) {
+            Write-Error "Decoded certificate is missing: $certPath"
+            exit 1
+          }
+
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certPath, $env:WIN_CERTIFICATE_PASSWORD)
+          if ($cert.Subject -ne $env:WIN_CERT_SUBJECT_NAME) {
+            Write-Error "WIN_CERT_SUBJECT_NAME must equal the PFX signer subject. Expected '$env:WIN_CERT_SUBJECT_NAME', got '$($cert.Subject)'."
+            exit 1
+          }
+
+          echo "WIN_CERTIFICATE_FILE_PATH=$certPath" >> $env:GITHUB_ENV
+          echo "WIN_CERTIFICATE_PASSWORD=$env:WIN_CERTIFICATE_PASSWORD" >> $env:GITHUB_ENV
+          echo "WIN_CERT_SUBJECT_NAME=$env:WIN_CERT_SUBJECT_NAME" >> $env:GITHUB_ENV
 
       - name: Package with electron-builder
+        env:
+          DAYLENS_REQUIRE_WIN_SIGNING: "1"
         run: npx electron-builder --win --publish never --config electron-builder.config.js
 
       - name: Verify Authenticode signatures
         if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
         run: |
+          $expectedSubject = $env:WIN_CERT_SUBJECT_NAME
+          $updateConfig = 'dist-release\win-unpacked\resources\app-update.yml'
+          if (-not (Test-Path $updateConfig)) {
+            Write-Error "Expected updater config is missing: $updateConfig"
+            exit 1
+          }
+          $updateConfigContent = Get-Content -Raw -Path $updateConfig
+          if ($updateConfigContent -notmatch [regex]::Escape($expectedSubject)) {
+            Write-Error "Packaged updater metadata does not pin the expected publisher subject: $expectedSubject"
+            exit 1
+          }
+
           $requiredPaths = @(
             'dist-release\win-unpacked\Daylens.exe',
             'dist-release\Daylens-${{ steps.meta.outputs.version }}-Setup.exe'
@@ -139,6 +171,10 @@ jobs:
             $signature = Get-AuthenticodeSignature -FilePath $path
             if ($signature.Status -ne 'Valid') {
               Write-Error "$path is not Authenticode-signed with a valid trusted signature. Status: $($signature.Status). Message: $($signature.StatusMessage)"
+              exit 1
+            }
+            if ($signature.SignerCertificate.Subject -ne $expectedSubject) {
+              Write-Error "$path was signed by '$($signature.SignerCertificate.Subject)', expected '$expectedSubject'."
               exit 1
             }
             Write-Host "$path signed by $($signature.SignerCertificate.Subject)"

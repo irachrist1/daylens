@@ -74,6 +74,29 @@ test('frontmost Safari tab context is persisted as website evidence', () => {
   assert.equal(row.source, 'active_browser_context')
 })
 
+test('explicit browser-context cutoff beats a later cached last-seen timestamp', () => {
+  const db = createDb()
+  const tracker = new ActiveBrowserContextTracker(
+    () => ({
+      url: 'https://github.com/irachrist1/daylens',
+      title: 'daylens',
+    }),
+    () => true,
+  )
+  const at = (seconds: number) => 1_800_000_000_000 + seconds * 1_000
+
+  tracker.sample(db, snapshot({ capturedAt: at(0) }))
+  tracker.sample(db, snapshot({ capturedAt: at(60) }))
+  assert.equal(tracker.flush(db, at(30)), true)
+
+  const row = db.prepare('SELECT domain, duration_sec FROM website_visits').get() as {
+    domain: string
+    duration_sec: number
+  }
+  assert.equal(row.domain, 'github.com')
+  assert.equal(row.duration_sec, 30)
+})
+
 test('browser tab switches flush separate page visits', () => {
   const db = createDb()
   let current = {

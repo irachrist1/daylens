@@ -1,3 +1,5 @@
+const fs = require('node:fs')
+
 const win = {
   target: [
     {
@@ -76,6 +78,18 @@ if (process.env.WIN_CERTIFICATE_PASSWORD) {
 
 if (process.env.WIN_CERT_SUBJECT_NAME) {
   win.certificateSubjectName = process.env.WIN_CERT_SUBJECT_NAME
+  win.publisherName = [process.env.WIN_CERT_SUBJECT_NAME]
+}
+
+if (
+  process.env.DAYLENS_REQUIRE_WIN_SIGNING === '1'
+  && (!process.env.WIN_CERTIFICATE_FILE_PATH || !process.env.WIN_CERTIFICATE_PASSWORD || !process.env.WIN_CERT_SUBJECT_NAME)
+) {
+  throw new Error('DAYLENS_REQUIRE_WIN_SIGNING=1 requires WIN_CERTIFICATE_FILE_PATH, WIN_CERTIFICATE_PASSWORD, and WIN_CERT_SUBJECT_NAME')
+}
+
+if (process.env.DAYLENS_REQUIRE_WIN_SIGNING === '1' && !fs.existsSync(process.env.WIN_CERTIFICATE_FILE_PATH)) {
+  throw new Error(`DAYLENS_REQUIRE_WIN_SIGNING=1 requires WIN_CERTIFICATE_FILE_PATH to exist: ${process.env.WIN_CERTIFICATE_FILE_PATH}`)
 }
 
 module.exports = {

@@ -33,6 +33,7 @@ import { capture, captureException, captureRateLimited } from './analytics'
 import { resolveLinuxDesktopIdentity } from './linuxDesktop'
 import { flushActiveBrowserContext, recordActiveBrowserContextSample } from './browserContext'
 import { resolveBrowserApplication } from './browserRegistry'
+import { getRecentWindowsPrivateWindowSignal } from './windowsFocusCapture'
 import { getSettings } from './settings'
 import { decideAppCapture, trackingControlsStateFromSettings } from '@shared/trackingControls'
 import { isSystemNoiseApp, isSystemNoiseTitle } from '@shared/systemNoise'
@@ -993,11 +994,53 @@ function resolveWindowIdentity(win: ActiveWinResult): ActiveWinResult & { bundle
     return finalizeLinuxWindowIdentity(win)
   }
 
-  const exeName = win.path ? path.basename(win.path) : ''
+  const exeName = win.path ? windowsAwareBasename(win.path) : ''
   const uwpPackage = win.windows?.isUWPApp ? win.windows.uwpPackage : ''
-  const appName = win.application || exeName || uwpPackage || 'Unknown app'
-  const bundleId = win.path || uwpPackage || appName
+  const reportedAppName = win.application || ''
+  const normalizedWindowsAppName = process.platform === 'win32'
+    ? windowsBrowserExecutableAppName(reportedAppName, exeName)
+    : reportedAppName
+  const isWindowsUwp = process.platform === 'win32' && Boolean(win.windows?.isUWPApp && uwpPackage)
+  const appName = isWindowsUwp
+    ? windowsUwpDisplayName(uwpPackage, normalizedWindowsAppName || exeName)
+    : (normalizedWindowsAppName || exeName || uwpPackage || 'Unknown app')
+  const bundleId = isWindowsUwp ? uwpPackage : (win.path || uwpPackage || appName)
   return { ...win, bundleId, appName }
+}
+
+function windowsAwareBasename(filePath: string): string {
+  return process.platform === 'win32' ? path.win32.basename(filePath) : path.basename(filePath)
+}
+
+function windowsBrowserExecutableAppName(reportedAppName: string, exeName: string): string {
+  if (!reportedAppName || !exeName) return reportedAppName
+  const exeStem = exeName.replace(/\.exe$/i, '')
+  if (reportedAppName.toLowerCase() !== exeStem.toLowerCase()) return reportedAppName
+  if (!/^(?:msedge|chrome|firefox|brave|zen|arc|dia|comet|opera|vivaldi)$/i.test(exeStem)) return reportedAppName
+  return exeName
+}
+
+function windowsUwpDisplayName(packageFamily: string, fallback: string): string {
+  const trimmedFallback = fallback.trim()
+  if (trimmedFallback && !/^applicationframehost(?:\.exe)?$/i.test(trimmedFallback)) return trimmedFallback
+
+  const packageName = packageFamily.split('_')[0] || packageFamily
+  const segments = packageName
+    .split('.')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part, index) => {
+      const lower = part.toLowerCase()
+      if (index === 0 && lower === 'microsoft') return false
+      return lower !== 'windows'
+    })
+  const labelParts = segments.length > 0 ? segments : [packageName]
+  return labelParts
+    .map((part) => part.replace(/([a-z])([A-Z])/g, '$1 $2'))
+    .join(' ')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || packageName
 }
 
 function recentMacFocusEventWindow(maxAgeMs = 15 * 60_000): MacFocusEventWindow | null {
@@ -1845,6 +1888,19 @@ async function poll(): Promise<void> {
     // work and must not accumulate (invariant 11).
     if (isOsNoise(bundleId, appName, resolvedWin.path) || isSystemNoiseTitle(resolvedWindowTitle)) {
       if (currentSession) flushCurrent(undefined, 'system_noise')
+      flushActiveBrowserContext(getDb())
+      clearPersistedLiveSnapshot()
+      return
+    }
+
+    if (process.platform === 'win32' && getRecentWindowsPrivateWindowSignal({
+      bundleId,
+      appName,
+      pid: resolvedWin.pid,
+      windowTitle: resolvedWindowTitle,
+      nowMs: tickMs,
+    })) {
+      if (currentSession) flushCurrent(undefined, 'incognito')
       flushActiveBrowserContext(getDb())
       clearPersistedLiveSnapshot()
       return
