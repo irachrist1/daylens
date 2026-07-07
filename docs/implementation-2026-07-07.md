@@ -184,3 +184,19 @@ import graph and deliberately stayed inside the `apps/web` workspace; the CI wor
 still call the deprecated `electron-rebuild` CLI (fine on their Node 20/22, breaks on
 Node ≥ 26); and Session D's uncommitted `.env` gitignore line was left uncommitted on
 purpose (the committed `.gitignore` contains only the `artifacts/` addition).
+
+---
+
+Session D (shipping checklist + Linear) wrote `docs/shipping-checklist.md` and ran a
+real `npm run dist:mac`, confirming the build is clean but still stamped `1.0.0` —
+the version regression is not yet fixed, only documented as the required first step.
+It also found that the Windows shipping plan itself was stale: `release-windows.yml`
+and `docs/WINDOWS_SIGNING.md` already hard-require a real Authenticode certificate
+and refuse to ship an unsigned auto-updating build, so the audit's "ship unsigned,
+bypass SmartScreen" framing no longer matches what the code enforces. All 41 audit
+findings from `full-audit-2026-07-07.md` and `issues-2026-07-06.md` were imported
+into Linear as DEV-120 through DEV-160 (11 already-fixed findings closed as Done
+with citations, 30 left open across new Tracking Engine / UI · Product /
+Infrastructure projects — Linear has no team-creation API, so projects substitute
+for the teams the session asked for). The Mac DMG install, Windows installer, and
+the update-flow test all still need the founder at a keyboard before shipping.
