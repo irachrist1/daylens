@@ -8,6 +8,10 @@ const env = (name: string): string => process.env[name] || fileEnv[name] || ''
 // The Intercom App ID is public — it ships in the widget URL for every Intercom
 // customer — so a checked-in default is safe. Secrets never enter this config.
 const intercomAppId = JSON.stringify(env('INTERCOM_APP_ID') || 'y4l8ype0')
+// Regional Messenger endpoint. Wrong region => blank Messenger. Default US; set
+// INTERCOM_API_BASE to https://api-iam.eu.intercom.io (EU) or
+// https://api-iam.au.intercom.io (AU) if the workspace is hosted there.
+const intercomApiBase = JSON.stringify(env('INTERCOM_API_BASE') || 'https://api-iam.intercom.io')
 
 export default defineConfig({
   // index.html lives in src/renderer/, not the project root
@@ -16,6 +20,7 @@ export default defineConfig({
   plugins: [tailwindcss()],
   define: {
     __INTERCOM_APP_ID__: intercomAppId,
+    __INTERCOM_API_BASE__: intercomApiBase,
   },
   resolve: {
     alias: {

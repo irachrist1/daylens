@@ -306,12 +306,9 @@ export default function App() {
       applyTheme(s.theme)
       applyAppearanceSettings(s)
       setSettings(s)
-      // Identify on launch; keep the floating launcher hidden until onboarding
-      // is done so the bubble can't overlap the setup flow (Onboarding reveals
-      // it on completion). Settings → Help & support can always open the chat.
-      void bootIntercom({
-        showLauncher: s.onboardingComplete && s.onboardingState.stage === 'complete',
-      })
+      // Identify on launch. The Messenger has no floating launcher — it's opened
+      // only from Settings → Help & support.
+      void bootIntercom()
     }).catch((err) => {
       if (!active) return
       setLoadError(err instanceof Error ? err.message : String(err))
