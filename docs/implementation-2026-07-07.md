@@ -242,6 +242,24 @@ directory the live landing page is.
 
 **Intercom dashboard work the founder still needs to author (code fires the signals):**
 
+None of the following is code-configurable — Fin's answering, the Messenger's name,
+and the workspace name all live in the Intercom dashboard. The app only opens the
+Messenger and identifies the user. Specifically:
+
+- **Make Fin answer instead of routing to the team.** Symptom seen 2026-07-07: Fin
+  fronts the Messenger but every message goes straight to "SPCS Technology will reply /
+  Waiting for a teammate." On a Fin-Pro workspace this is almost always **no content
+  sources connected** — Fin has nothing to answer from, so it hands off. Fix in
+  Intercom → AI / Fin: connect content (publish Help Center articles or add Snippets),
+  set Fin **live for the Messenger channel + Users/Visitors audience**, and check the
+  "when Fin can't help" workflow isn't set to route-to-team-first. Test with a real
+  question ("How do I export my data?"), not "Hey."
+- **Rename the Messenger from "Fin" / "SPCS Technology" to Daylens.** Both are dashboard
+  branding, not code: "SPCS Technology" is the **workspace name** (Intercom → Settings →
+  General/Workspace → Name) shown on new conversations; "Fin" is the **AI agent's
+  display name** (Intercom → AI / Fin → Fin's name/persona). Set the workspace name to
+  "Daylens" and rename the agent (e.g. "Daylens AI" or "Daylens Support") plus its
+  avatar; the Messenger header then reads Daylens instead of Fin/SPCS Technology.
 - **Post-onboarding tour** — 3-step tooltip tour pointing at **Timeline, Apps, AI
   Chat**, triggered on the Intercom custom event `onboarding_completed` (fired once
   when onboarding finishes).
