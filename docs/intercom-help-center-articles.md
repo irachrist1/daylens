@@ -1,10 +1,18 @@
 # Daylens Help Center — full knowledge base (for Intercom / Fin)
 
-Paste each article below into Intercom → **Help Center → Create article** (one article
-per `##` heading: the heading is the title, the text beneath it is the body). The
-*Collection:* line under each title is the suggested Help Center collection. Once
-published, connect the Help Center as a **Fin content source** (Intercom → AI / Fin →
-Content) so Fin answers from it instead of routing to the team.
+**Two ways to get these into Intercom:**
+
+- **Automatic (recommended):** put your Intercom access token in `services/billing/.env`
+  as `INTERCOM_ACCESS_TOKEN=…`, then run `node scripts/intercom-import-articles.mjs`
+  (add `--dry-run` first to preview). It creates the collections and every article as a
+  draft via the Intercom API. Review and publish them in Intercom.
+- **Manual:** paste each article below into Intercom → **Help Center → Create article**
+  (one article per `##` heading: the heading is the title, the text beneath it is the
+  body). The *Collection:* line is the suggested Help Center collection.
+
+Either way, once the articles are **published**, connect the Help Center as a **Fin
+content source** (Intercom → AI / Fin → Content) so Fin answers from it instead of
+routing to the team.
 
 Everything here is written against the app as it actually ships (checked 2026-07-07).
 Two deliberate rules, because Fin will repeat whatever these say verbatim:
