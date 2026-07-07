@@ -597,6 +597,7 @@ export default function Onboarding({
   const [settingsHandoff, setSettingsHandoff] = useState(false)
   const onboardingTrackedRef = useRef(false)
   const proofTrackedRef = useRef(false)
+  const paywallTrackedRef = useRef(false)
   const onboardingStateRef = useRef(settings.onboardingState)
 
   const platform = settings.onboardingState.platform
@@ -632,6 +633,17 @@ export default function Onboarding({
   useEffect(() => {
     onboardingStateRef.current = settings.onboardingState
   }, [settings.onboardingState])
+
+  // paywall_seen: once per onboarding run, when the AI-setup stage actually
+  // shows plans the user could buy (managed billing reachable, nothing paid
+  // yet). Mirrors the Settings→Billing fire, with trigger 'onboarding'.
+  useEffect(() => {
+    if (paywallTrackedRef.current || stage !== 'ai_setup') return
+    if (!billing || billing.mode === 'unavailable') return
+    if (billing.mode === 'subscription' || billing.mode === 'local_pass') return
+    paywallTrackedRef.current = true
+    track(ANALYTICS_EVENT.PAYWALL_SEEN, { trigger: 'onboarding' })
+  }, [stage, billing])
 
   // Migrate any state persisted on the old single "personalize" stage onto the
   // first of its replacements so a mid-onboarding reload never lands nowhere.
@@ -1163,7 +1175,7 @@ export default function Onboarding({
     setBillingBusy(true)
     setErrorMessage(null)
     try {
-      await ipc.billing.createPolarCheckout()
+      await ipc.billing.createPolarCheckout('onboarding')
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))
     } finally {

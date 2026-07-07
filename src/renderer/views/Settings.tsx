@@ -1369,9 +1369,9 @@ function BillingPage({
   }, [])
 
   // paywall_seen: once per Billing-page open, when the page shows plans the
-  // user could buy (not when a subscription is already active). Settings is
-  // the only paywall surface in the app today — there is no onboarding,
-  // proof-screen, or day-3 paywall.
+  // user could buy (not when a subscription is already active). Onboarding's
+  // AI-setup plans screen is the other paywall surface; it fires its own with
+  // trigger 'onboarding'.
   const paywallTrackedRef = useRef(false)
   useEffect(() => {
     if (paywallTrackedRef.current || !access) return
@@ -1417,7 +1417,7 @@ function BillingPage({
               {busy === 'portal' ? 'Opening…' : 'Manage subscription'}
             </button>
           ) : access?.checkoutAvailable ? (
-            <button type="button" disabled={busy != null} onClick={() => void run('polar', () => ipc.billing.createPolarCheckout())} style={{ ...inlineButtonStyle, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)' }}>
+            <button type="button" disabled={busy != null} onClick={() => void run('polar', () => ipc.billing.createPolarCheckout('settings'))} style={{ ...inlineButtonStyle, border: 'none', background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)' }}>
               {busy === 'polar' ? 'Opening…' : 'See price and subscribe'}
             </button>
           ) : undefined}
@@ -1441,7 +1441,7 @@ function BillingPage({
               <button
                 type="button"
                 disabled={busy != null || !email.trim()}
-                onClick={() => void run('flutterwave', () => ipc.billing.createFlutterwaveCheckout(email))}
+                onClick={() => void run('flutterwave', () => ipc.billing.createFlutterwaveCheckout(email, 'settings'))}
                 style={inlineButtonStyle}
               >
                 {busy === 'flutterwave' ? 'Opening…' : 'Pay with mobile money'}

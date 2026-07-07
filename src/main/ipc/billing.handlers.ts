@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import { dialog, ipcMain, shell } from 'electron'
+import { isPaywallTrigger, type PaywallTrigger } from '@shared/analytics'
 import { IPC } from '@shared/types'
 import {
   createFlutterwaveCheckout,
@@ -17,6 +18,13 @@ function csvCell(value: unknown): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
+// The trigger crosses the bridge from the renderer — accept only known
+// paywall surfaces, defaulting to 'settings' for anything else.
+function checkoutTrigger(payload: unknown): PaywallTrigger {
+  const trigger = (payload as { trigger?: unknown } | null)?.trigger
+  return isPaywallTrigger(trigger) ? trigger : 'settings'
+}
+
 export function registerBillingHandlers(): void {
   ipcMain.handle(IPC.BILLING.GET_ACCESS, () => getBillingAccess())
   ipcMain.handle(IPC.BILLING.REFRESH, () => {
@@ -26,12 +34,12 @@ export function registerBillingHandlers(): void {
   ipcMain.handle(IPC.BILLING.GET_USAGE, (_event, payload: { from: number; to: number }) => (
     getBillingUsage(payload.from, payload.to)
   ))
-  ipcMain.handle(IPC.BILLING.CREATE_POLAR_CHECKOUT, async () => {
-    await shell.openExternal(await createPolarCheckout())
+  ipcMain.handle(IPC.BILLING.CREATE_POLAR_CHECKOUT, async (_event, payload?: { trigger?: string }) => {
+    await shell.openExternal(await createPolarCheckout(checkoutTrigger(payload)))
     return true
   })
-  ipcMain.handle(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, async (_event, payload: { email: string }) => {
-    await shell.openExternal(await createFlutterwaveCheckout(payload.email))
+  ipcMain.handle(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, async (_event, payload: { email: string; trigger?: string }) => {
+    await shell.openExternal(await createFlutterwaveCheckout(payload.email, checkoutTrigger(payload)))
     return true
   })
   ipcMain.handle(IPC.BILLING.OPEN_PORTAL, async () => {

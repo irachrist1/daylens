@@ -162,6 +162,15 @@ were sent through the real `posthog-node` config and PostHog returned `200 {"sta
 — but the live in-app check (launch → three views → Analyze Day → chat, events landing
 within 60s) is pending the founder, and requires Settings → Privacy → analytics opt-in ON.
 
+A post-session verification pass caught two gaps in the above and fixed them: the
+"Settings is the only paywall surface" claim was false — onboarding's AI-setup screen
+shows plan cards with a Subscribe to Plus checkout, so `paywall_seen` now fires there
+with `trigger: 'onboarding'` — and `subscription_started` hardcoded `trigger: 'settings'`,
+so checkouts now thread a validated `PaywallTrigger` from the launching surface through
+IPC into `billing.ts`, which attributes the purchase to the last checkout opened
+(falling back to `'settings'`). Note the opt-in caveat above is stale: the later
+telemetry-always-on commit removed the opt-in entirely, so the founder check needs no toggle.
+
 ---
 
 Session C (monorepo cleanup) turned the two-lockfile, hand-symlinked repo into a real

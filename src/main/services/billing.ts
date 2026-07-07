@@ -11,7 +11,7 @@ import type {
   BillingUsageType,
   PaymentRecord,
 } from '@shared/types'
-import { ANALYTICS_EVENT } from '@shared/analytics'
+import { ANALYTICS_EVENT, type PaywallTrigger } from '@shared/analytics'
 import { capture } from './analytics'
 import { getDb } from './database'
 import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
@@ -47,6 +47,11 @@ type JobSummaryKey = string
 
 let cachedAccess: { value: BillingAccessSnapshot; at: number } | null = null
 const usageReportCache = new Map<string, { value: BillingUsageReport; at: number }>()
+
+// The surface that launched the most recent checkout. A purchase completes in
+// the browser, so when the access snapshot later flips into a paid mode this
+// is the only record of where the sale actually started.
+let lastCheckoutTrigger: PaywallTrigger | null = null
 
 export interface ManagedAIConfig {
   accessToken: string
@@ -172,11 +177,13 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
     const value = await request<BillingAccessSnapshot>('/v1/billing')
     // subscription_started: the app learns a purchase completed only by the
     // access snapshot flipping into a paid mode after the browser checkout.
-    // (The API reports no price; Settings is the only checkout entry point.)
+    // (The API reports no price; `plan` carries the billing mode.) `trigger`
+    // is the surface that launched the checkout, falling back to 'settings'
+    // for purchases completed without an in-app checkout (e.g. portal).
     const previousMode = cachedAccess?.value.mode
     const enteredPaidMode = (value.mode === 'subscription' || value.mode === 'local_pass') && previousMode !== value.mode
     if (previousMode && enteredPaidMode) {
-      capture(ANALYTICS_EVENT.SUBSCRIPTION_STARTED, { plan: value.mode, trigger: 'settings' })
+      capture(ANALYTICS_EVENT.SUBSCRIPTION_STARTED, { plan: value.mode, trigger: lastCheckoutTrigger ?? 'settings' })
     }
     cachedAccess = { value, at: Date.now() }
     return value
@@ -642,11 +649,13 @@ export async function getBillingUsage(from: number, to: number): Promise<Billing
   return report
 }
 
-export async function createPolarCheckout(): Promise<string> {
+export async function createPolarCheckout(trigger: PaywallTrigger = 'settings'): Promise<string> {
+  lastCheckoutTrigger = trigger
   return (await request<{ url: string }>('/v1/checkout/polar', { method: 'POST', body: '{}' })).url
 }
 
-export async function createFlutterwaveCheckout(email: string): Promise<string> {
+export async function createFlutterwaveCheckout(email: string, trigger: PaywallTrigger = 'settings'): Promise<string> {
+  lastCheckoutTrigger = trigger
   return (await request<{ url: string }>('/v1/checkout/flutterwave', {
     method: 'POST',
     body: JSON.stringify({ email: email.trim() }),

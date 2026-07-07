@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import os from 'node:os'
+import type { PaywallTrigger } from '@shared/analytics'
 import type { ProjectionInvalidationEvent } from '@shared/core'
 import type {
   AppCategory,
@@ -295,9 +296,10 @@ const api = {
     refresh: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.REFRESH),
     getUsage: (from: number, to: number): Promise<BillingUsageReport> =>
       ipcRenderer.invoke(IPC.BILLING.GET_USAGE, { from, to }),
-    createPolarCheckout: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.CREATE_POLAR_CHECKOUT),
-    createFlutterwaveCheckout: (email: string): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, { email }),
+    createPolarCheckout: (trigger?: PaywallTrigger): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.BILLING.CREATE_POLAR_CHECKOUT, { trigger }),
+    createFlutterwaveCheckout: (email: string, trigger?: PaywallTrigger): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.BILLING.CREATE_FLUTTERWAVE_CHECKOUT, { email, trigger }),
     openPortal: (): Promise<boolean> => ipcRenderer.invoke(IPC.BILLING.OPEN_PORTAL),
     exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
       ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),

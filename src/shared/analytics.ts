@@ -93,6 +93,19 @@ export function isKnownAnalyticsEvent(event: string): event is AnalyticsEventNam
   return KNOWN_ANALYTICS_EVENTS.has(event)
 }
 
+// Where a paywall was shown or a checkout was launched from. Shared by
+// paywall_seen and subscription_started so a purchase attributes to the
+// surface that sold it, not a hardcoded default.
+export const PAYWALL_TRIGGERS = ['onboarding', 'proof_screen', 'day3_prompt', 'settings'] as const
+
+export type PaywallTrigger = (typeof PAYWALL_TRIGGERS)[number]
+
+// Checkout trigger strings cross the IPC bridge from the renderer — validate
+// them the same way event names are validated above.
+export function isPaywallTrigger(value: unknown): value is PaywallTrigger {
+  return typeof value === 'string' && (PAYWALL_TRIGGERS as readonly string[]).includes(value)
+}
+
 export type AnalyticsFeature =
   | 'timeline'
   | 'apps'
