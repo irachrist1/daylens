@@ -16,7 +16,7 @@ import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { VOICE_SAMPLES, DEFAULT_SUMMARY_VOICE } from '@shared/summaryVoice'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
-import { trackIntercomEvent } from '../lib/intercom'
+import { showIntercom, trackIntercomEvent } from '../lib/intercom'
 import { todayString } from '../lib/format'
 import ConnectAI from '../components/ConnectAI'
 import Mascot, { type MascotExpression } from '../components/Mascot'
@@ -250,13 +250,20 @@ function Stage({
         {canGoBack
           ? <button className="ob-back" onClick={onBack}>‹ Back</button>
           : <span className="ob-back-ph" aria-hidden="true" />}
-        <div className="ob-progress" role="progressbar" aria-valuenow={activeStepIndex + 1} aria-valuemin={1} aria-valuemax={steps.length} aria-label="Setup progress">
-          {steps.map((s, i) => (
-            <span
-              key={`${s.label}-${i}`}
-              className={`ob-seg${i === activeStepIndex ? ' is-active' : i < activeStepIndex ? ' is-done' : ''}`}
-            />
-          ))}
+        <div className="ob-rail-right">
+          <div className="ob-progress" role="progressbar" aria-valuenow={activeStepIndex + 1} aria-valuemin={1} aria-valuemax={steps.length} aria-label="Setup progress">
+            {steps.map((s, i) => (
+              <span
+                key={`${s.label}-${i}`}
+                className={`ob-seg${i === activeStepIndex ? ' is-active' : i < activeStepIndex ? ' is-done' : ''}`}
+              />
+            ))}
+          </div>
+          {/* Fin is reachable before setup finishes — a question shouldn't block onboarding. */}
+          <button type="button" className="ob-help" onClick={() => showIntercom()} aria-label="Questions? Chat with us">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M2.6 3.4h10.8v7.2H8.4L5.4 13.2v-2.6H2.6Z" /></svg>
+            Questions?
+          </button>
         </div>
       </div>
 
@@ -1873,6 +1880,14 @@ const ONBOARDING_CSS = `
 }
 .ob-back:hover { color: var(--ob-ink); background: rgba(17,24,39,0.05); }
 .ob-back-ph { width: 1px; height: 1px; }
+.ob-rail-right { display: flex; align-items: center; gap: 14px; }
+.ob-help {
+  -webkit-app-region: no-drag; display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: none; cursor: pointer; color: var(--ob-ink-3);
+  font-size: 12.5px; font-weight: 650; padding: 4px 8px; margin-right: -8px;
+  border-radius: 8px; transition: color 140ms ease, background 140ms ease;
+}
+.ob-help:hover { color: var(--ob-ink); background: rgba(17,24,39,0.05); }
 .ob-progress { display: flex; align-items: center; gap: 5px; }
 .ob-seg { width: 14px; height: 5px; border-radius: 999px; background: rgba(17,24,39,0.10); transition: width 320ms ease, background 320ms ease; }
 .ob-seg.is-done { background: rgba(79,110,240,0.42); }
