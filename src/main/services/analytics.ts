@@ -159,6 +159,26 @@ function isSentryEnabled(): boolean {
   return isTelemetryEnabled() && Boolean(__SENTRY_DSN__)
 }
 
+const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com'
+
+// posthog-node forwards `host` straight into fetch() with no scheme check of
+// its own — a misconfigured build secret (typo, accidental http://, a stray
+// query string) would otherwise send telemetry in plaintext or to whatever
+// host that string names. This is the one place that risk is closed off:
+// only an https: URL is ever handed to the client.
+function safePosthogHost(): string {
+  const configured = __POSTHOG_HOST__.trim()
+  if (!configured) return DEFAULT_POSTHOG_HOST
+  try {
+    const parsed = new URL(configured)
+    if (parsed.protocol === 'https:') return configured
+  } catch {
+    // Malformed host string — fall through to the safe default.
+  }
+  console.warn('[analytics] POSTHOG_HOST is not a valid https URL; using the default host instead.')
+  return DEFAULT_POSTHOG_HOST
+}
+
 function getPosthog(): PostHogClient | null {
   if (!isPosthogEnabled()) return null
 
@@ -170,7 +190,7 @@ function getPosthog(): PostHogClient | null {
         disableGeoip: true,
         flushAt: 5,
         flushInterval: 15_000,
-        host: __POSTHOG_HOST__ || 'https://us.i.posthog.com',
+        host: safePosthogHost(),
       }) as unknown as PostHogClient
       posthogClient.register?.(globalProperties())
       if (!posthogErrorHandlerAttached) {

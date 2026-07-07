@@ -186,6 +186,49 @@ test('initAnalytics wires telemetry with default settings — analytics is alway
   }
 })
 
+test('getPosthog refuses a non-https POSTHOG_HOST and falls back to the safe default', async () => {
+  resetHarnessState()
+  globalThis.__POSTHOG_HOST__ = 'http://attacker.example.com'
+
+  const posthogHarness = createPostHogHarness()
+  const sentryHarness = createSentryHarness()
+  const restoreRequire = installRequireStub(posthogHarness, sentryHarness)
+  let analyticsModule: Awaited<ReturnType<typeof importFreshAnalyticsModule>> | null = null
+
+  try {
+    analyticsModule = await importFreshAnalyticsModule()
+    await analyticsModule.initAnalytics()
+
+    assert.equal(posthogHarness.instances.length, 1)
+    // Never the attacker-controlled or plaintext host — a bad build secret
+    // must never cause telemetry to leave over http or go somewhere else.
+    assert.equal(posthogHarness.instances[0].options.host, 'https://us.i.posthog.com')
+  } finally {
+    await analyticsModule?.shutdown()
+    restoreRequire()
+  }
+})
+
+test('getPosthog rejects a malformed POSTHOG_HOST string the same way', async () => {
+  resetHarnessState()
+  globalThis.__POSTHOG_HOST__ = 'not a url at all'
+
+  const posthogHarness = createPostHogHarness()
+  const sentryHarness = createSentryHarness()
+  const restoreRequire = installRequireStub(posthogHarness, sentryHarness)
+  let analyticsModule: Awaited<ReturnType<typeof importFreshAnalyticsModule>> | null = null
+
+  try {
+    analyticsModule = await importFreshAnalyticsModule()
+    await analyticsModule.initAnalytics()
+
+    assert.equal(posthogHarness.instances[0].options.host, 'https://us.i.posthog.com')
+  } finally {
+    await analyticsModule?.shutdown()
+    restoreRequire()
+  }
+})
+
 test('initAnalytics wires PostHog and Sentry when telemetry is enabled, and shutdown flushes safely', async () => {
   resetHarnessState()
   __setSettings({

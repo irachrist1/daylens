@@ -1,12 +1,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  ANALYTICS_EVENT,
   blockCountBucket,
   classifyAIOutputIntent,
+  isKnownAnalyticsEvent,
   sanitizeAnalyticsProperties,
   sanitizeSettingsChangedKeys,
   trackedTimeBucket,
 } from '../src/shared/analytics.ts'
+
+test('isKnownAnalyticsEvent is the IPC bridge\'s only line of defense against a renderer sending an arbitrary event name', () => {
+  for (const event of Object.values(ANALYTICS_EVENT)) {
+    assert.equal(isKnownAnalyticsEvent(event), true, `${event} should be recognized`)
+  }
+  assert.equal(isKnownAnalyticsEvent('drop_table_users'), false)
+  assert.equal(isKnownAnalyticsEvent('__proto__'), false)
+  assert.equal(isKnownAnalyticsEvent(''), false)
+})
 
 test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsafe text', () => {
   const sanitized = sanitizeAnalyticsProperties({

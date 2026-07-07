@@ -47,7 +47,7 @@ import { BrowserWindow, Menu, app, dialog, ipcMain, nativeImage, nativeTheme, po
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ANALYTICS_EVENT, classifyFailureKind, type AnalyticsEventName } from '@shared/analytics'
+import { ANALYTICS_EVENT, classifyFailureKind, isKnownAnalyticsEvent } from '@shared/analytics'
 import { capture, captureException, initAnalytics, shutdown } from './services/analytics'
 import { getBillingAccess } from './services/billing'
 import { registerAIHandlers } from './ipc/ai.handlers'
@@ -777,9 +777,17 @@ app.on('before-quit', (event) => {
   })()
 })
 
-// Analytics IPC — renderer sends events through main process (network stays in main)
+// Analytics IPC — renderer sends events through main process (network stays in main).
+// The renderer only ever runs our own bundled code (contextIsolation on, no
+// remote content, navigation locked to app URLs), but the bridge itself
+// doesn't know that — it must not forward an arbitrary string as an event
+// name to PostHog just because something called ipcRenderer.send.
 ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, unknown>) => {
-  capture(event as AnalyticsEventName, properties)
+  if (!isKnownAnalyticsEvent(event)) {
+    console.warn('[analytics] ignored unknown event name from renderer:', event)
+    return
+  }
+  capture(event, properties)
 })
 
 app.whenReady()

@@ -83,6 +83,16 @@ export const ANALYTICS_EVENT = {
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENT)[keyof typeof ANALYTICS_EVENT]
 
+const KNOWN_ANALYTICS_EVENTS = new Set<string>(Object.values(ANALYTICS_EVENT))
+
+// The renderer reaches capture() only through IPC (analytics:capture) — this
+// is the main process's check that the string it received is actually one of
+// ours before forwarding it to PostHog, not whatever a compromised or buggy
+// renderer sent across the bridge.
+export function isKnownAnalyticsEvent(event: string): event is AnalyticsEventName {
+  return KNOWN_ANALYTICS_EVENTS.has(event)
+}
+
 export type AnalyticsFeature =
   | 'timeline'
   | 'apps'
