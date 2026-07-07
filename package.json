@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "description": "Cross-platform activity tracker that turns your laptop history into a searchable, AI-ready work timeline.",
   "main": ".vite/build/main.js",
+  "workspaces": [
+    "apps/web",
+    "packages/*",
+    "services/billing"
+  ],
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
@@ -44,7 +49,7 @@
     "dist:win:store": "npm run build:all && electron-builder --win appx --config electron-builder.config.js --publish never",
     "dist:mac": "npm run build:all && electron-builder --mac zip dmg --config electron-builder.config.js",
     "dist:linux": "npm run build:all && electron-builder --linux AppImage deb rpm tar.gz --config electron-builder.config.js",
-    "postinstall": "electron-rebuild -f -w better-sqlite3,@paymoapp/active-window,keytar"
+    "postinstall": "node scripts/rebuild-natives.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
@@ -79,6 +84,7 @@
     "depcheck": "^1.4.7",
     "electron": "^34.5.8",
     "electron-builder": "^25.1.8",
+    "@electron/rebuild": "^3.7.2",
     "electron-rebuild": "^3.2.9",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",

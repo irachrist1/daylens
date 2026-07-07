@@ -161,3 +161,26 @@ integrity check exists in the app to hook. Headless verification passed —
 were sent through the real `posthog-node` config and PostHog returned `200 {"status":"Ok"}`
 — but the live in-app check (launch → three views → Analyze Day → chat, events landing
 within 60s) is pending the founder, and requires Settings → Privacy → analytics opt-in ON.
+
+---
+
+Session C (monorepo cleanup) turned the two-lockfile, hand-symlinked repo into a real
+npm-workspaces monorepo — `workspaces: ["apps/web", "packages/*", "services/billing"]`,
+a `package.json` for `packages/mcp-server`, the `apps/web` lockfile deleted, and one root
+`npm install` now resolving all 1497 packages (billing's `pg` included) — verified by a
+green `build:all`, `web:build`, `typecheck`, and both contract checks. Along the way it
+fixed two build-breakers: the dead `recharts` reference in `vite.renderer.config.ts:28`
+(audit roadmap #1), and the `postinstall` crash on Node ≥ 26 (yargs 17's extensionless CJS
+shim parsed as ESM by `require(esm)`) — replaced with `scripts/rebuild-natives.mjs` calling
+the `@electron/rebuild` JS API; it also added `STRUCTURE.md`, and with founder approval
+deleted the untracked 23 MB `artifacts/` pile (now gitignored), removed the two empty
+orphan dirs (`apps/web/shared/`, `apps/web/packages/remote-contract/`), and bumped
+`Casks/daylens.rb` 1.0.29 → 1.0.44 (sha256 from the GitHub release digest) since the
+founder wants brew as the agent-friendly install path. Flagged instead of done: Codex was
+unavailable (usage limit until Jul 8) so the import graph was built by direct grep; the
+audit's SwiftUI archival does not apply to this repo (no such directory — separate-repo
+task); `apps/web/packages/{ai-models,prompt-builder,snapshot-schema}` are web-only by
+import graph and deliberately stayed inside the `apps/web` workspace; the CI workflows
+still call the deprecated `electron-rebuild` CLI (fine on their Node 20/22, breaks on
+Node ≥ 26); and Session D's uncommitted `.env` gitignore line was left uncommitted on
+purpose (the committed `.gitignore` contains only the `artifacts/` addition).

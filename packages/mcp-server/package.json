@@ -1,0 +1,8 @@
+{
+  "name": "@daylens/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local stdio MCP server for the Daylens database. Not built from here: bundled by the root vite.mcp.config.ts into dist/mcp-server/index.cjs and spawned by src/main/services/mcpServer.ts. Dependencies come from the repo root.",
+  "main": "src/index.ts"
+}

@@ -1,6 +1,6 @@
 cask "daylens" do
-  version "1.0.29"
-  sha256 "b2d21f8bba3be1e2b618f81fb28428b13273a193cf3aed61eae62146d32e0e85"
+  version "1.0.44"
+  sha256 "99e1d954dbb2aea6424ed0a268baec303c88577ff2b66a0ef427253577f91098"
 
   url "https://github.com/irachrist1/daylens/releases/download/v#{version}/Daylens-#{version}-arm64.dmg"
   name "Daylens"

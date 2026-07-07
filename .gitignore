@@ -27,3 +27,6 @@ tests/ai-bench/.last-results.json
 
 # overnight verification runtime logs
 logs/
+
+# QA screenshot output from verification scripts — regenerable, never commit
+artifacts/
