@@ -1366,7 +1366,8 @@ export interface SyncStatus {
 
 export interface AppSettings {
   // Provider API keys are stored in OS keychain via keytar (never in plain-text)
-  analyticsOptIn: boolean       // false = no telemetry (default)
+  // Anonymous analytics is always on (2026-07-07); the only kill switch is
+  // building without a PostHog key.
   shareAIFeedbackExamples: boolean // legacy setting; cloud feedback upload is disabled in local-only builds
   launchOnLogin: boolean
   theme: AppTheme

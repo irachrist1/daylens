@@ -7,7 +7,7 @@ import {
   setApiKey,
   clearApiKey,
 } from '../services/settings'
-import { capture, captureTrackingPauseTransition, updateAnalyticsPreference } from '../services/analytics'
+import { capture, captureTrackingPauseTransition } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
@@ -48,13 +48,6 @@ export function registerSettingsHandlers(): void {
       captureTrackingPauseTransition(Boolean(partial.trackingPaused), 'user')
     }
 
-    const analyticsWillEnable = !previous.analyticsOptIn && partial.analyticsOptIn === true
-    const analyticsWillDisable = previous.analyticsOptIn && partial.analyticsOptIn === false
-
-    if (analyticsWillEnable) {
-      await updateAnalyticsPreference(true)
-    }
-
     if ('launchOnLogin' in partial && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: Boolean(partial.launchOnLogin) })
       await syncLinuxLaunchOnLogin(Boolean(partial.launchOnLogin))
@@ -92,10 +85,6 @@ export function registerSettingsHandlers(): void {
         surface: 'settings',
         trigger: 'settings',
       })
-    }
-
-    if (analyticsWillDisable) {
-      await updateAnalyticsPreference(false)
     }
   })
 

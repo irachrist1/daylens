@@ -164,7 +164,7 @@ function resetHarnessState() {
   globalThis.__SENTRY_DSN__ = 'https://public@example.ingest.sentry.io/1'
 }
 
-test('initAnalytics respects analytics opt-out while still persisting anonymous state', async () => {
+test('initAnalytics wires telemetry with default settings — analytics is always on', async () => {
   resetHarnessState()
   const posthogHarness = createPostHogHarness()
   const sentryHarness = createSentryHarness()
@@ -178,8 +178,8 @@ test('initAnalytics respects analytics opt-out while still persisting anonymous 
     const storeSnapshot = __getElectronStoreSnapshot()
 
     assert.equal(typeof storeSnapshot.analyticsId, 'string')
-    assert.equal(posthogHarness.instances.length, 0)
-    assert.equal(sentryHarness.initCalls.length, 0)
+    assert.equal(posthogHarness.instances.length, 1)
+    assert.equal(sentryHarness.initCalls.length, 1)
   } finally {
     await analyticsModule?.shutdown()
     restoreRequire()
@@ -189,7 +189,6 @@ test('initAnalytics respects analytics opt-out while still persisting anonymous 
 test('initAnalytics wires PostHog and Sentry when telemetry is enabled, and shutdown flushes safely', async () => {
   resetHarnessState()
   __setSettings({
-    analyticsOptIn: true,
     onboardingState: {
       trackingPermissionState: 'granted',
     },
@@ -233,38 +232,8 @@ test('initAnalytics wires PostHog and Sentry when telemetry is enabled, and shut
   }
 })
 
-test('updateAnalyticsPreference disables active analytics clients when the user opts out', async () => {
-  resetHarnessState()
-  __setSettings({
-    analyticsOptIn: true,
-  })
-
-  const posthogHarness = createPostHogHarness()
-  const sentryHarness = createSentryHarness()
-  const restoreRequire = installRequireStub(posthogHarness, sentryHarness)
-  let analyticsModule: Awaited<ReturnType<typeof importFreshAnalyticsModule>> | null = null
-
-  try {
-    analyticsModule = await importFreshAnalyticsModule()
-    await analyticsModule.initAnalytics()
-
-    const client = posthogHarness.instances[0]
-    await analyticsModule.updateAnalyticsPreference(false)
-
-    assert.equal(client.disableCount, 1)
-    assert.deepEqual(sentryHarness.closeCalls, [2_000])
-  } finally {
-    await analyticsModule?.shutdown()
-    restoreRequire()
-  }
-})
-
 test('ai question milestone only records for question answers and remains one-time', async () => {
   resetHarnessState()
-  __setSettings({
-    analyticsOptIn: true,
-  })
-
   const posthogHarness = createPostHogHarness()
   const sentryHarness = createSentryHarness()
   const restoreRequire = installRequireStub(posthogHarness, sentryHarness)
@@ -317,7 +286,6 @@ test('ai question milestone only records for question answers and remains one-ti
 test('timeline activation milestones derive from a non-empty reconstructed timeline once', async () => {
   resetHarnessState()
   __setSettings({
-    analyticsOptIn: true,
     onboardingComplete: true,
   })
 

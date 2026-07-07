@@ -108,7 +108,9 @@ off by default and safe in production.
     per-category (rather than per-group) colors.
 - **Updates** — packaged builds auto-update; dev builds explain that updates come through the
   dev workflow.
-- **Analytics** — anonymous, opt-in/out, and the "local-only" promise is real when set.
+- **Analytics** — anonymous and always on (founder decision, 2026-07-07): event names and
+  allowlisted coarse properties only; no titles, URLs, or file paths ever leave the device.
+  The Privacy page states this plainly instead of offering a toggle.
 
 ## 9. Invariants (rules this view must always obey)
 

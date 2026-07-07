@@ -3456,8 +3456,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <SettingsRow
                 first
                 title="Analytics"
-                description="Anonymous product telemetry."
-                control={<Toggle checked={settings.analyticsOptIn} onChange={(value) => void persist({ analyticsOptIn: value })} />}
+                description="Anonymous product telemetry — event names and counts only. No titles, URLs, or file paths ever leave this machine."
+                control={<StatusPill label="Anonymous" />}
               />
               <SettingsRow
                 title="Local data"

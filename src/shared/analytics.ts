@@ -216,7 +216,6 @@ const AI_SETTING_KEYS = [
 ] as const
 
 const PRIVACY_SETTING_KEYS = [
-  'analyticsOptIn',
   'shareAIFeedbackExamples',
   'allowThirdPartyWebsiteIconFallback',
 ] as const

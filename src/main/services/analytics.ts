@@ -145,7 +145,10 @@ async function persistAnalyticsState(): Promise<void> {
 }
 
 function isTelemetryEnabled(): boolean {
-  return getSettings().analyticsOptIn
+  // Telemetry ships on by default (founder decision, 2026-07-07). Events are
+  // anonymous and allowlist-sanitized; the only kill switch is building
+  // without a PostHog key.
+  return true
 }
 
 function isPosthogEnabled(): boolean {
@@ -451,37 +454,10 @@ function identifyAnonymousIdentity(): void {
   try {
     const Sentry = getSentry()
     if (!Sentry) return
-    Sentry.setTag('analytics_opt_in', String(isTelemetryEnabled()))
     Sentry.setUser({ id: distinctId })
   } catch {
     // Best effort only.
   }
-}
-
-export async function updateAnalyticsPreference(enabled: boolean): Promise<void> {
-  if (enabled) {
-    await initAnalytics()
-    return
-  }
-
-  try {
-    posthogClient?.disable?.()
-  } catch {
-    // Best effort only.
-  }
-
-  posthogClient = null
-  posthogErrorHandlerAttached = false
-
-  if (sentryMain) {
-    try {
-      void sentryMain.close(2_000)
-    } catch {
-      // Best effort only.
-    }
-  }
-
-  sentryMain = null
 }
 
 export function capture(event: AnalyticsEventName, properties?: Record<string, unknown>): void {

@@ -17,7 +17,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     query_kind: 'report',
     reason: 'https://example.com/private/doc',
     score: 5,
-    settings_changed_keys: ['analyticsOptIn', 'windowTitle', 'theme'],
+    settings_changed_keys: ['shareAIFeedbackExamples', 'windowTitle', 'theme'],
     suggestion_text: 'Summarize the repo named daylens-windows',
     surface: 'ai',
     tracked_time_bucket: '1_3h',
@@ -31,7 +31,7 @@ test('sanitizeAnalyticsProperties keeps coarse analytics fields and strips unsaf
     has_comment: true,
     query_kind: 'report',
     score: 5,
-    settings_changed_keys: ['analyticsOptIn', 'theme'],
+    settings_changed_keys: ['shareAIFeedbackExamples', 'theme'],
     surface: 'ai',
     tracked_time_bucket: '1_3h',
     trigger: 'freeform',
@@ -43,11 +43,11 @@ test('sanitizeSettingsChangedKeys only keeps supported settings keys', () => {
   assert.deepEqual(
     sanitizeSettingsChangedKeys([
       'theme',
-      'analyticsOptIn',
+      'shareAIFeedbackExamples',
       'windowTitle',
       'theme',
     ]),
-    ['analyticsOptIn', 'theme'],
+    ['shareAIFeedbackExamples', 'theme'],
   )
 })
 

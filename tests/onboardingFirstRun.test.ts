@@ -8,7 +8,6 @@ import { validateProviderConnection } from '../src/main/services/providerValidat
 function buildSettings(overrides: Partial<AppSettings> = {}): AppSettings {
   const onboardingState = overrides.onboardingState ?? createDefaultOnboardingState(false)
   return {
-    analyticsOptIn: false,
     shareAIFeedbackExamples: true,
     theme: 'system',
     onboardingComplete: false,
