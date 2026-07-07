@@ -128,3 +128,15 @@ verification are done — build on them, don't re-fix them. The audit's structur
 items (pipeline collapse, build repair, version, push, billing, observability, DB
 lifecycle) are all still open, and roadmap #1 (fix the build) remains the gate on
 everything else.
+
+---
+
+Session A also produced `docs/user-journey.html` — a self-contained interactive map
+of every screen, gate, data write, and dead end from first launch onward, with each
+node's color justified by a cited `file:line` (128 anchors machine-verified against
+the working tree, zero external references). Notable facts it pinned beyond the
+audit: the three report notifications all default off and silently never fire
+without an AI provider, there is no "seen Wrapped before" flag or Wrapped telemetry
+anywhere, and period Wrapped is reachable only through the command palette. It is
+headless-verified only — the founder still needs to open it in a browser and click
+through the nodes before it counts as done.

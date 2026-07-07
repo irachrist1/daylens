@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daylens — User Journey Map (2026-07-07)</title>
+<style>
+  :root {
+    --bg: #f6f7fb; --surface: #ffffff; --ink: #1f2633; --ink-2: #5c6474; --ink-3: #8b93a3;
+    --line: rgba(17,24,39,0.12); --accent: #4f6ef0;
+    --green: #1e9e5a; --green-bg: #e7f6ee; --yellow: #b7791f; --yellow-bg: #fdf3e0;
+    --red: #d43d3d; --red-bg: #fdeaea; --gray: #7c8494; --gray-bg: #eef0f5;
+    --panel-shadow: 0 12px 40px rgba(15,23,42,0.18);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12141a; --surface:#1b1e27; --ink:#e8eaf1; --ink-2:#a7adbd; --ink-3:#767d8e;
+      --line:rgba(255,255,255,0.13); --green-bg:#12301f; --yellow-bg:#332811; --red-bg:#391b1b; --gray-bg:#242835;
+      --panel-shadow: 0 12px 40px rgba(0,0,0,0.55); }
+  }
+  :root[data-theme="light"] { --bg:#f6f7fb; --surface:#ffffff; --ink:#1f2633; --ink-2:#5c6474; --ink-3:#8b93a3;
+    --line:rgba(17,24,39,0.12); --green-bg:#e7f6ee; --yellow-bg:#fdf3e0; --red-bg:#fdeaea; --gray-bg:#eef0f5;
+    --panel-shadow: 0 12px 40px rgba(15,23,42,0.18); }
+  :root[data-theme="dark"] { --bg:#12141a; --surface:#1b1e27; --ink:#e8eaf1; --ink-2:#a7adbd; --ink-3:#767d8e;
+    --line:rgba(255,255,255,0.13); --green-bg:#12301f; --yellow-bg:#332811; --red-bg:#391b1b; --gray-bg:#242835;
+    --panel-shadow: 0 12px 40px rgba(0,0,0,0.55); }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header.page { padding: 28px 28px 10px; max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 21px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--ink-2); font-size: 13px; max-width: 860px; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; margin:14px 0 4px; font-size:12.5px; color:var(--ink-2); align-items:center; }
+  .legend .chip { display:inline-flex; align-items:center; gap:6px; }
+  .dot { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  .dot.g{background:var(--green);} .dot.y{background:var(--yellow);} .dot.r{background:var(--red);} .dot.n{background:var(--gray);}
+  .hint { font-size:12px; color:var(--ink-3); }
+
+  main { max-width: 1280px; margin: 0 auto; padding: 6px 28px 80px; }
+  section.lane { background: var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px 20px; margin: 18px 0; overflow-x:auto; }
+  section.lane h2 { font-size:15px; margin:0 0 2px; }
+  section.lane .lane-sub { font-size:12.5px; color:var(--ink-2); margin:0 0 14px; }
+  .flow { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; width:max-content; min-width:100%; padding:2px 0; }
+  .flow + .flow { margin-top:10px; }
+  .rowlabel { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); min-width:86px; flex-shrink:0; }
+  .arr { color: var(--ink-3); flex-shrink:0; user-select:none; }
+  .node { border:1px solid var(--line); border-left-width:4px; border-radius:9px; background:var(--surface);
+    padding:7px 11px; font-size:12.5px; font-weight:600; cursor:pointer; color:var(--ink); flex-shrink:0;
+    display:inline-flex; flex-direction:column; gap:1px; text-align:left; max-width:230px; }
+  .node small { font-weight:400; color:var(--ink-2); font-size:11px; }
+  .node:hover { border-color: var(--accent); }
+  .node.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .node.g { border-left-color:var(--green); background: var(--green-bg); }
+  .node.y { border-left-color:var(--yellow); background: var(--yellow-bg); }
+  .node.r { border-left-color:var(--red); background: var(--red-bg); }
+  .node.n { border-left-color:var(--gray); background: var(--gray-bg); }
+  .node.dec { border-style:dashed; border-left-style:solid; }
+  .node.dec .q { color:var(--accent); }
+  .node.dead::after { content:"⛔ dead end"; font-size:10px; font-weight:700; color:var(--red); }
+  .branch { display:flex; flex-direction:column; gap:8px; flex-shrink:0; }
+  .branch .b { display:flex; align-items:center; gap:6px; }
+  .blabel { font-size:10.5px; font-weight:700; color:var(--ink-3); text-transform:uppercase; letter-spacing:0.05em; flex-shrink:0; }
+
+  table.parity { border-collapse: collapse; font-size:12.5px; width:100%; min-width:820px; }
+  table.parity th, table.parity td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  table.parity th { background: var(--gray-bg); font-size:11.5px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.g { background:var(--green-bg); } td.y { background:var(--yellow-bg); } td.r { background:var(--red-bg); }
+  .anchor { font-family: var(--mono); font-size:11px; color:var(--ink-2); }
+
+  #panel { position: fixed; top:0; right:-460px; width:440px; max-width:94vw; height:100%;
+    background:var(--surface); border-left:1px solid var(--line); box-shadow: var(--panel-shadow);
+    transition: right .18s ease; overflow-y:auto; padding: 20px 22px 40px; z-index: 50; }
+  #panel.open { right: 0; }
+  #panel h3 { margin:0 0 2px; font-size:15px; padding-right:30px; }
+  #panel .status { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:12px; display:inline-block; padding:2px 8px; border-radius:6px; }
+  #panel .status.g { color:var(--green); background:var(--green-bg);} #panel .status.y{ color:var(--yellow); background:var(--yellow-bg);} #panel .status.r{color:var(--red); background:var(--red-bg);} #panel .status.n{color:var(--gray); background:var(--gray-bg);}
+  #panel dl { margin:0; }
+  #panel dt { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-3); margin:14px 0 3px; }
+  #panel dd { margin:0; font-size:13px; color:var(--ink); }
+  #panel code, .filepin { font-family: var(--mono); font-size:11.5px; background:var(--gray-bg); border-radius:5px; padding:1px 6px; display:inline-block; margin:1px 2px 1px 0; }
+  #panel .why { font-size:13px; }
+  #closep { position:absolute; top:14px; right:14px; border:1px solid var(--line); background:var(--surface); color:var(--ink-2); width:28px; height:28px; border-radius:8px; cursor:pointer; font-size:14px; }
+  ul.tight { margin:4px 0 0; padding-left:18px; } ul.tight li { margin:3px 0; font-size:12.5px; }
+  .note { font-size:12px; color:var(--ink-2); background:var(--gray-bg); border-radius:8px; padding:8px 12px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>Daylens — user journey map</h1>
+  <p class="sub">Every screen, gate, data write, and dead end from first launch onward, drawn from the code on 2026-07-07
+  (post-audit, post-repair commits <span class="anchor">fad6cc0…8c6f438</span>). This is a diagnostic map, not a wireframe:
+  when something breaks, find where it sits and what it touches. <strong>Click any node</strong> for the defining
+  <span class="anchor">file:line</span>, the evidence for its color, what it writes to SQLite, what leaves the machine, and which PostHog event fires.</p>
+  <div class="legend">
+    <span class="chip"><span class="dot g"></span> working (confirmed from code)</span>
+    <span class="chip"><span class="dot y"></span> partial / inconsistent</span>
+    <span class="chip"><span class="dot r"></span> broken, unreachable, or missing</span>
+    <span class="chip"><span class="dot n"></span> neutral (data / infrastructure)</span>
+    <span class="chip">▷ dashed border = decision point</span>
+  </div>
+  <p class="hint">Shipped-build lens: billing API URL, PostHog and Sentry keys are absent from every release workflow, so anything downstream of them is judged as shipped, not as it behaves on a dev machine with a filled <code>.env</code>.</p>
+</header>
+<main>
+
+<!-- ─── LANE 1: FIRST LAUNCH ─────────────────────────────────────────── -->
+<section class="lane">
+  <h2>1 · First launch</h2>
+  <p class="lane-sub">A fresh install is just a missing electron-store key. One boolean gates the entire app.</p>
+  <div class="flow">
+    <span class="rowlabel">Boot</span>
+    <button class="node n" data-id="boot">App boots<small>load settings via IPC</small></button>
+    <span class="arr">→</span>
+    <button class="node r" data-id="boot-fail">Settings load fails<small>error + Retry</small></button>
+    <span class="arr">·</span>
+    <button class="node n dec" data-id="gate-onb"><span class="q">?</span> Onboarding complete &amp; stage=complete<small>the one gate for the whole app</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">no</span><button class="node g" data-id="onb-enter">Onboarding flow<small>lane 2</small></button></div>
+      <div class="b"><span class="blabel">yes</span><button class="node g" data-id="shell">Main app shell<small>lane 3</small></button></div>
+    </div>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Platform</span>
+    <button class="node n dec" data-id="plat"><span class="q">?</span> macOS / Windows / Linux<small>decided at state creation</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">mac</span><button class="node y" data-id="mac-perm-birth">Permission starts “missing”<small>tracking blocked until granted</small></button></div>
+      <div class="b"><span class="blabel">win/linux</span><button class="node y" data-id="winux-consent">Tracking starts before “welcome”<small>no consent moment, ever</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node n" data-id="reconcile">Startup reconciliation<small>re-checks mac permission every boot</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 2: ONBOARDING ───────────────────────────────────────────── -->
+<section class="lane">
+  <h2>2 · Onboarding — 12-step flow (+3 mac-only system stages)</h2>
+  <p class="lane-sub">STAGE_FLOW: welcome → why → proof → tour → superpowers → about → voice → work → connections → privacy → ai_setup → ready. macOS inserts permission → relaunch → verifying before proof. Every step fires <code>onboarding_step_completed</code>.</p>
+  <div class="flow">
+    <span class="rowlabel">Start</span>
+    <button class="node g" data-id="s-welcome">welcome<small>name entry</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="s-why">why<small>3 story beats · skippable</small></button>
+    <span class="arr">→</span>
+    <button class="node n dec" data-id="d-mac"><span class="q">?</span> isMac<small>permission gate or straight to proof</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">mac</span>
+        <button class="node y" data-id="s-perm">permission<small>Accessibility ask</small></button><span class="arr">→</span>
+        <button class="node y" data-id="s-relaunch">relaunch_required<small>app quits &amp; reopens</small></button><span class="arr">→</span>
+        <button class="node y dead" data-id="s-verify">verifying_permission<small>no button; timer-only</small></button>
+      </div>
+      <div class="b"><span class="blabel">win/linux</span><button class="node g" data-id="skip-perm">(no permission step)<small>straight to proof</small></button></div>
+    </div>
+    <span class="arr">→</span>
+    <button class="node y dead" data-id="s-proof">proof<small>“it's already watching” — the aha</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Personalize</span>
+    <button class="node g" data-id="s-tour">tour</button><span class="arr">→</span>
+    <button class="node g" data-id="s-superpowers">superpowers</button><span class="arr">→</span>
+    <button class="node g" data-id="s-about">about<small>role · goals</small></button><span class="arr">→</span>
+    <button class="node g" data-id="s-voice">voice<small>summary tone</small></button><span class="arr">→</span>
+    <button class="node g" data-id="s-work">work<small>focus apps</small></button><span class="arr">→</span>
+    <button class="node g" data-id="s-connections">connections<small>clients · rhythm</small></button><span class="arr">→</span>
+    <button class="node g" data-id="s-privacy">privacy<small>exclusions</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Monetize</span>
+    <button class="node n dec" data-id="d-managed"><span class="q">?</span> managedAvailable<small>billing.mode ≠ 'unavailable'</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">never in shipped builds</span>
+        <button class="node r" data-id="s-ai-managed">ai_setup: Free + Plus cards<small>“$5 / month” copy bug · Subscribe</small></button></div>
+      <div class="b"><span class="blabel">always in shipped builds</span>
+        <button class="node g" data-id="s-ai-byok">ai_setup: BYOK only<small>“Turn on Daylens AI”</small></button></div>
+    </div>
+    <span class="arr">→</span>
+    <button class="node g" data-id="s-ready">ready<small>profile recap</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="s-complete">complete → DashboardBuild<small>hand-off animation</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 3: MAIN SHELL ───────────────────────────────────────────── -->
+<section class="lane">
+  <h2>3 · Main app shell</h2>
+  <p class="lane-sub">HashRouter + sidebar. Every route change fires <code>view_opened</code>. Legacy routes (/today /focus /history /clients → /timeline; /insights → /ai) all redirect.</p>
+  <div class="flow">
+    <span class="rowlabel">Nav</span>
+    <button class="node g" data-id="v-timeline">Timeline<small>/timeline · default</small></button>
+    <button class="node g" data-id="v-apps">Apps<small>/apps</small></button>
+    <button class="node g" data-id="v-ai">AI<small>/ai (Insights = re-export)</small></button>
+    <button class="node g" data-id="v-settings">Settings<small>/settings</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Overlays</span>
+    <button class="node g" data-id="o-palette">Command palette<small>⌘K / Ctrl-K — only route to period Wrapped</small></button>
+    <button class="node g" data-id="o-wrapped">Day Wrapped<small>overlay, not a route</small></button>
+    <button class="node y" data-id="o-period">Week/Month/Year Wrapped<small>palette-only; no scheduled entry</small></button>
+    <button class="node g" data-id="o-feedback">Day-7 feedback modal<small>one-shot</small></button>
+    <button class="node g" data-id="o-update">Update banner<small>lane 8</small></button>
+    <button class="node r" data-id="o-errb">ErrorBoundary<small>catches render crash — reports nowhere</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 4: TRACKING → TIMELINE (the daily loop) ─────────────────── -->
+<section class="lane">
+  <h2>4 · The daily loop — capture → timeline → analyze</h2>
+  <p class="lane-sub">Two capture pipelines still run side by side (the audit's one structural fault). Today renders provisional until “Analyze day”.</p>
+  <div class="flow">
+    <span class="rowlabel">Capture</span>
+    <button class="node y" data-id="t-poll">Foreground poll (5s)<small>tracking.ts FSM → app_sessions</small></button>
+    <button class="node y" data-id="t-focus">Native focus events<small>helpers → focus_events</small></button>
+    <button class="node g" data-id="t-web">Browser history poll (60s)<small>→ website_visits</small></button>
+    <span class="arr">→</span>
+    <button class="node n" data-id="t-db">SQLite (local only)<small>app_sessions · focus_events · website_visits</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="t-day">Day payload<small>today = provisional blocks</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Timeline</span>
+    <button class="node g" data-id="tl-day">Day view<small>day/week/month switcher</small></button>
+    <span class="arr">→</span>
+    <button class="node n dec" data-id="d-2h"><span class="q">?</span> ≥ ~2h tracked today<small>enoughToAnalyze</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">yes</span><button class="node g" data-id="tl-analyze">“Analyze day” → opens Wrap<small>then AI regroup + relabel</small></button></div>
+      <div class="b"><span class="blabel">no</span><button class="node g" data-id="tl-wait">Button disabled<small>“Available after ~2 hours”</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node n dec" data-id="d-provisional"><span class="q">?</span> day analyzed<small>blocks.some(provisional)</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="tl-reanalyze">Re-analyze · recap<small>past / analyzed days</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">AI gate</span>
+    <button class="node n dec" data-id="d-provider"><span class="q">?</span> any provider available<small>own key/CLI → managed → none</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">key/CLI</span><button class="node g" data-id="ai-run">AI labels the day<small>writes blocks + labels + corrections</small></button></div>
+      <div class="b"><span class="blabel">none</span><button class="node y" data-id="ai-paused">“AI access is paused”<small>error surfaced; day stays provisional</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node g" data-id="tl-week">Week view + review card<small>generate on demand, needs AI</small></button>
+    <button class="node g" data-id="tl-month">Month calendar<small>read-only grid</small></button>
+    <button class="node g" data-id="tl-empty">Empty day state<small>“No tracked activity for this day”</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 5: WRAPPED & REPORTS ────────────────────────────────────── -->
+<section class="lane">
+  <h2>5 · Wrapped &amp; reports — the re-engagement loop</h2>
+  <p class="lane-sub">All three scheduled notifications default OFF, and none fires without a working AI provider — a silent no-op, the funnel's quietest dead end. There is no “has used Wrapped before” flag anywhere.</p>
+  <div class="flow">
+    <span class="rowlabel">Wrapped</span>
+    <button class="node n dec" data-id="d-wrapai"><span class="q">?</span> AI provider connected<small>getWrapProviderState</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">yes</span>
+        <button class="node g" data-id="w-day">Day Wrapped<small>live-day 2h gate + “Generate anyway”</small></button>
+        <button class="node g" data-id="w-week">Week Wrapped<small>live week allowed</small></button>
+        <button class="node y" data-id="w-monthyear">Month/Year Wrapped<small>blocked while period open</small></button></div>
+      <div class="b"><span class="blabel">no</span><button class="node y" data-id="w-noai">“Connect AI in Settings” message<small>Wrapped refuses narrative</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node y" data-id="w-telemetry">Wrapped telemetry<small>none — zero open/share events</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Notify</span>
+    <button class="node n dec" data-id="d-notif-on"><span class="q">?</span> toggles on + AI narrative exists<small>both default to “no”</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">yes</span>
+        <button class="node g" data-id="n-evening">Evening wrap notification</button>
+        <button class="node g" data-id="n-recap">“Yesterday, in one line”</button>
+        <button class="node g" data-id="n-carry">Morning carryover nudge</button></div>
+      <div class="b"><span class="blabel">no</span><button class="node y dead" data-id="n-silent">Nothing fires — silently<small>no fallback, no explanation</small></button></div>
+    </div>
+    <span class="arr">→</span>
+    <button class="node g" data-id="n-click">Click → deep link<small>opens Wrapped / report route</small></button>
+    <span class="arr">·</span>
+    <button class="node r" data-id="n-monthly">Monthly report<small>does not exist</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 6: APPS & AI TAB ────────────────────────────────────────── -->
+<section class="lane">
+  <h2>6 · Apps view &amp; AI chat</h2>
+  <div class="flow">
+    <span class="rowlabel">Apps</span>
+    <button class="node g" data-id="a-list">App list<small>apps_opened</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="a-detail">App detail<small>app_detail_opened</small></button>
+    <span class="arr">·</span>
+    <button class="node n dec" data-id="d-icon"><span class="q">?</span> icon resolves<small>per-platform chain</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">mac</span><button class="node g" data-id="i-mac">Bundle icons<small>rich chain incl. sips</small></button></div>
+      <div class="b"><span class="blabel">windows</span><button class="node g" data-id="i-win">File icon + UWP manifest</button></div>
+      <div class="b"><span class="blabel">linux</span><button class="node y" data-id="i-linux">Exe-path icon only<small>.desktop Icon= never parsed</small></button></div>
+    </div>
+    <span class="arr">→</span>
+    <button class="node g" data-id="i-fallback">Miss → initials tile<small>graceful, never blank</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">AI tab</span>
+    <button class="node n dec" data-id="d-haskey"><span class="q">?</span> hasApiKey<small>key, CLI, or managed</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">no</span><button class="node g" data-id="ai-hero">ConnectAI hero<small>full-screen setup, 4 providers</small></button></div>
+      <div class="b"><span class="blabel">yes</span><button class="node g" data-id="ai-chat">Chat workspace<small>threads · artifacts · ⌘K</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node g" data-id="ai-validate">Key validation<small>invalid = rejected · unreachable = “Save anyway”</small></button>
+    <button class="node g" data-id="ai-gemini">Gemini support<small>google provider, real @google/genai path</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 7: BILLING — THE SUBSCRIPTION GATE ──────────────────────── -->
+<section class="lane">
+  <h2>7 · Billing — where the money would flow (and why it can't)</h2>
+  <p class="lane-sub">The gate blocks exactly one thing: managed AI calls. Capture and timeline are never gated. In shipped builds the build pipeline never sets <code>DAYLENS_BILLING_API_URL</code>, so mode is hard-coded 'unavailable' and every buy affordance hides itself.</p>
+  <div class="flow">
+    <span class="rowlabel">Access</span>
+    <button class="node n dec" data-id="d-ownkey"><span class="q">?</span> own key / CLI selected<small>checked first, wins always</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">yes</span><button class="node g" data-id="b-ownkey">mode: own_key<small>local meter is the whole truth</small></button></div>
+      <div class="b"><span class="blabel">no</span>
+        <button class="node n dec" data-id="d-apiurl"><span class="q">?</span> billing URL baked into build</button>
+        <span class="arr">→</span>
+        <button class="node r" data-id="b-unavail">mode: unavailable<small>the shipped reality — checkout hidden</small></button></div>
+    </div>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Buy</span>
+    <button class="node r" data-id="b-onb-sub">Onboarding “Subscribe to Plus”<small>unreachable + “$5/month” copy bug</small></button>
+    <button class="node r" data-id="b-set-sub">Settings “See price and subscribe”<small>hidden: checkoutAvailable=false</small></button>
+    <button class="node r" data-id="b-flutter">Rwanda mobile money<small>hidden: localCheckoutAvailable=false</small></button>
+    <span class="arr">→</span>
+    <button class="node r dead" data-id="b-server">Billing server<small>real code, never deployed</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Meter</span>
+    <button class="node g" data-id="b-meter">Every AI call metered<small>ai_usage_events: tokens, cost, mode</small></button>
+    <span class="arr">→</span>
+    <button class="node g" data-id="b-usage">Settings ▸ Usage<small>full-range SQL aggregation + chart</small></button>
+    <span class="arr">→</span>
+    <button class="node y" data-id="b-csv">CSV export<small>works, but zero feedback on completion</small></button>
+  </div>
+</section>
+
+<!-- ─── LANE 8: BACKGROUND SYSTEMS ───────────────────────────────────── -->
+<section class="lane">
+  <h2>8 · Background systems — updater · analytics · sync</h2>
+  <div class="flow">
+    <span class="rowlabel">Updater</span>
+    <button class="node n dec" data-id="d-verifiable"><span class="q">?</span> release has SHA-256 + HTTPS<small>fail-closed since 8c6f438</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">yes</span><button class="node y" data-id="u-auto">Verified auto-install (mac)<small>hash + bundle-id checked; ad-hoc path remains</small></button></div>
+      <div class="b"><span class="blabel">no</span><button class="node g" data-id="u-manual">Manual download only<small>never installs unverified bytes</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node y" data-id="u-win">Windows: disabled if unsigned<small>Authenticode gate</small></button>
+    <button class="node y" data-id="u-linux">Linux: AppImage/deb/rpm only<small>pacman never auto-updates</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Telemetry</span>
+    <button class="node n dec" data-id="d-ph"><span class="q">?</span> build key present AND user opted in<small>both required; both default absent</small></button>
+    <span class="arr">→</span>
+    <div class="branch">
+      <div class="b"><span class="blabel">dev only</span><button class="node y" data-id="ph-on">PostHog live<small>94 call sites, sanitized</small></button></div>
+      <div class="b"><span class="blabel">shipped</span><button class="node r dead" data-id="ph-off">Telemetry dead<small>keys in zero release workflows</small></button></div>
+    </div>
+    <span class="arr">·</span>
+    <button class="node r" data-id="ph-crash">Renderer crashes unreported<small>no componentDidCatch → nothing</small></button>
+  </div>
+  <div class="flow">
+    <span class="rowlabel">Cloud</span>
+    <button class="node r" data-id="c-sync">Cloud sync<small>throws: “disabled in this offline private build”</small></button>
+    <button class="node g" data-id="c-aiout">Outbound AI calls<small>only to the user's own provider</small></button>
+    <button class="node g" data-id="c-mcp">MCP server<small>local stdio for Claude/other agents</small></button>
+    <button class="node g" data-id="c-health">Capture health page<small>per-platform troubleshoot steps</small></button>
+  </div>
+</section>
+
+<!-- ─── PLATFORM PARITY ──────────────────────────────────────────────── -->
+<section class="lane">
+  <h2>9 · Platform parity</h2>
+  <table class="parity">
+    <tr><th>Surface</th><th>macOS</th><th>Windows</th><th>Linux</th></tr>
+    <tr><td>Consent / permission</td>
+      <td class="y">Accessibility ask + forced relaunch mid-setup <span class="anchor">Onboarding.tsx:1288</span></td>
+      <td class="y">None — tracking starts pre-welcome <span class="anchor">onboardingState.ts:21-23</span></td>
+      <td class="y">Same as Windows</td></tr>
+    <tr><td>Native focus capture</td>
+      <td class="g">Swift helper, event-driven</td>
+      <td class="g">.NET UIA helper (500ms)</td>
+      <td class="r">No native helper; XWayland required</td></tr>
+    <tr><td>Live tab URL</td>
+      <td class="g">AppleScript (Chromium; Firefox unsupported)</td>
+      <td class="y">UIA titles; Firefox “unknown”</td>
+      <td class="r">No live URL at all</td></tr>
+    <tr><td>App icons</td>
+      <td class="g">Bundle chain incl. sips <span class="anchor">iconResolver.ts:1339-1374</span></td>
+      <td class="g">File icon + UWP manifests <span class="anchor">iconResolver.ts:602-641</span></td>
+      <td class="y">Exe-path only; .desktop Icon= unread → frequent initials <span class="anchor">linuxDesktop.ts:100-145</span></td></tr>
+    <tr><td>Auto-update</td>
+      <td class="y">Ad-hoc path, now SHA-256-verified <span class="anchor">updater.ts:371-444</span></td>
+      <td class="y">Disabled unless Authenticode-signed <span class="anchor">updater.ts:139-180</span></td>
+      <td class="y">AppImage/deb/rpm only</td></tr>
+    <tr><td>Notifications</td>
+      <td class="g">Full incl. action buttons</td>
+      <td class="g">Body-click only</td>
+      <td class="y">Settings warns unsupported setups <span class="anchor">Settings.tsx:3297-3303</span></td></tr>
+    <tr><td>Onboarding proof stage</td>
+      <td class="g">Data within seconds post-grant</td>
+      <td class="g">Data within seconds</td>
+      <td class="r">Can hard-block: “support not ready” + no skip <span class="anchor">Onboarding.tsx:1371-1373</span></td></tr>
+  </table>
+</section>
+
+<!-- ─── DEAD-END REGISTRY ────────────────────────────────────────────── -->
+<section class="lane">
+  <h2>10 · Dead-end registry — where a user gets stuck with no feedback</h2>
+  <ul class="tight">
+    <li><strong>verifying_permission (mac):</strong> no button; recovery rides on a 650ms timer whose IPC errors are uncaught. <span class="anchor">Onboarding.tsx:1309, 755-759, 698-746</span></li>
+    <li><strong>proof stage:</strong> Continue disabled until data appears, no skip; all three data calls swallow failures — “Waiting for the first signal…” can last forever. <span class="anchor">Onboarding.tsx:1340, 788-790</span></li>
+    <li><strong>Linux proof:</strong> tells you to fix Capture health “after setup” while blocking setup on the thing it can't capture. <span class="anchor">Onboarding.tsx:1371-1373</span></li>
+    <li><strong>Silent report no-op:</strong> notifications enabled but no AI provider → nothing ever fires, nothing says why. <span class="anchor">dailySummaryNotifier.ts:112-130</span></li>
+    <li><strong>Shipped crash black hole:</strong> renderer error → ErrorBoundary fallback UI, reported nowhere (no componentDidCatch; no keys in release workflows). <span class="anchor">ErrorBoundary.tsx:6-9</span></li>
+    <li><strong>Checkout without checkout:</strong> billing unavailable removes the buttons but shows no explanation of what Plus even is. <span class="anchor">Settings.tsx:1411, 1438</span></li>
+    <li><strong>Usage CSV export:</strong> fire-and-forget; no success or failure feedback. <span class="anchor">Settings.tsx:1958</span></li>
+    <li><strong>persistOnboarding failures:</strong> most stage transitions are <code>void</code>-called; a failed settings write leaves the user on the same screen with no message. <span class="anchor">Onboarding.tsx:685-696</span></li>
+    <li><strong>DB corruption (from the audit):</strong> fatal crash loop, no integrity check, no repair path — the terminal dead end. <span class="anchor">database.ts:46-124</span></li>
+  </ul>
+  <div class="note">Sources: full-audit-2026-07-07.md, implementation-2026-07-07.md, and direct file reads on 2026-07-07. Colors are claimed only where the cited lines were verified against the working tree.</div>
+</section>
+</main>
+
+<aside id="panel" aria-live="polite">
+  <button id="closep" title="Close">✕</button>
+  <h3 id="p-title">—</h3>
+  <span class="status n" id="p-status">—</span>
+  <dl>
+    <dt>Defined at</dt><dd id="p-file">—</dd>
+    <dt>Why this color</dt><dd class="why" id="p-why">—</dd>
+    <dt>SQLite writes</dt><dd id="p-db">—</dd>
+    <dt>Leaves the machine</dt><dd id="p-cloud">—</dd>
+    <dt>PostHog event</dt><dd id="p-ph">—</dd>
+    <dt>Notes</dt><dd id="p-notes">—</dd>
+  </dl>
+</aside>
+
+<script>
+const STATUS_LABEL = { g:'Working', y:'Partial / inconsistent', r:'Broken or unreachable', n:'Data / decision' };
+const D = {
+"boot":{t:"App boot",f:["src/renderer/App.tsx:288"],why:"Settings fetched over IPC before anything renders; null settings renders nothing (App.tsx:335).",db:"—",cloud:"—",ph:"app_launched (main process, on ready)",notes:"Theme + appearance applied from settings before first paint (App.tsx:290-291)."},
+"boot-fail":{t:"Settings load failure",f:["src/renderer/App.tsx:320-331"],why:"Red: the only recovery is a manual Retry that reloads the window; if electron-store is corrupt this loops.",db:"—",cloud:"—",ph:"none",notes:"Distinct from DB corruption (main process), which quits the app entirely per the audit (database.ts:46-124)."},
+"gate-onb":{t:"Onboarding gate",f:["src/renderer/App.tsx:337","src/renderer/App.tsx:341-357"],why:"Decision: settings.onboardingComplete && stage==='complete' selects Onboarding vs HashRouter shell.",db:"—",cloud:"—",ph:"—",notes:"Dev reset: Cmd/Ctrl+Shift+Alt+O rebuilds a fresh OnboardingState without touching tracked data (App.tsx:119-142)."},
+"onb-enter":{t:"Enter onboarding",f:["src/renderer/views/Onboarding.tsx:613"],why:"Green: fires onboarding_started once per entry and resumes at the persisted stage.",db:"electron-store settings.onboardingState on every stage change (Onboarding.tsx:685-696)",cloud:"—",ph:"onboarding_started (Onboarding.tsx:613)",notes:"15-stage machine; stage union at src/shared/types.ts:1288-1305."},
+"shell":{t:"Main app shell",f:["src/renderer/App.tsx:259-270"],why:"Green: four lazy routes inside ErrorBoundaries; legacy paths all redirect.",db:"—",cloud:"—",ph:"view_opened on every route change (App.tsx:190-193)",notes:"Sidebar nav: Timeline/Apps/AI + Settings (Sidebar.tsx:56-60,151)."},
+"plat":{t:"Platform decision",f:["src/main/lib/onboardingState.ts:10-23"],why:"Decision node: process.platform stamps platform + initial permission state into OnboardingState at creation.",db:"electron-store onboardingState",cloud:"—",ph:"—",notes:"'macos' → permission 'missing'; anything else → 'granted' from birth."},
+"mac-perm-birth":{t:"macOS: permission starts missing",f:["src/main/lib/onboardingState.ts:21-23","src/main/lib/onboardingState.ts:68-71"],why:"Yellow: correct gating (no tracking until granted) but it forces the relaunch dance mid-onboarding.",db:"—",cloud:"—",ph:"tracking_permission_updated on grant",notes:"shouldStartTrackingForSettings blocks tracking start until 'granted' on mac only."},
+"winux-consent":{t:"Windows/Linux: tracking pre-consent",f:["src/main/lib/onboardingState.ts:21-23","src/main/lib/onboardingState.ts:68-71"],why:"Yellow: tracking works, but starts before the user clicks past 'welcome' — there is no consent moment on these platforms (audit §5; roadmap #8 open).",db:"app_sessions / focus_events begin immediately",cloud:"—",ph:"—",notes:"shouldStartTrackingForSettings returns true unconditionally off-mac."},
+"reconcile":{t:"Startup onboarding reconciliation",f:["src/main/services/onboarding.ts:12-65"],why:"Neutral: every boot re-reads real mac permission; a revoked permission drags the stage back to 'permission' (onboarding.ts:45-49).",db:"electron-store onboardingState when drift found",cloud:"—",ph:"—",notes:"This is how the post-relaunch flow lands on verifying_permission (src/shared/onboarding.ts:12-15)."},
+"s-welcome":{t:"Stage: welcome",f:["src/renderer/views/Onboarding.tsx:1208"],why:"Green: name entry with sensible placeholder from OS username; Enter submits.",db:"settings.userName (Onboarding.tsx:1019)",cloud:"—",ph:"onboarding_step_completed {step:'welcome'} (Onboarding.tsx:1010)",notes:"Continue → 'why' (Onboarding.tsx:1020)."},
+"s-why":{t:"Stage: why",f:["src/renderer/views/Onboarding.tsx:1234"],why:"Green: three narrative beats, skippable; both paths land on the same next stage.",db:"onboardingState",cloud:"—",ph:"onboarding_step_completed {step:'why'} (Onboarding.tsx:1028, skip 1035)",notes:"Next: mac → permission; else → proof (Onboarding.tsx:1029-1031)."},
+"d-mac":{t:"Decision: isMac",f:["src/renderer/views/Onboarding.tsx:1029-1031","src/renderer/views/Onboarding.tsx:594"],why:"Decision: platform from onboardingState picks MAC_STEPS vs NON_MAC_STEPS rails.",db:"—",cloud:"—",ph:"—",notes:"No Windows-specific branch exists anywhere in Onboarding.tsx — Windows is just 'not mac'."},
+"s-perm":{t:"Stage: permission (mac)",f:["src/renderer/views/Onboarding.tsx:1257","src/renderer/views/Onboarding.tsx:970-989"],why:"Yellow: works, but refreshPermissionState has no try/catch (Onboarding.tsx:698-746) and the flow's next beat is an app relaunch users read as a crash (audit §5).",db:"onboardingState.trackingPermissionState",cloud:"—",ph:"onboarding_step_completed {step:'permission'} (Onboarding.tsx:1001)",notes:"While in System Settings: focus listener + 2s poll picks up the toggle (Onboarding.tsx:767-778). Skip → proof (Onboarding.tsx:1006)."},
+"s-relaunch":{t:"Stage: relaunch_required (mac)",f:["src/renderer/views/Onboarding.tsx:1288","src/renderer/views/Onboarding.tsx:1297"],why:"Yellow: the single most confusing moment of the journey (audit §5) — the app quits and reopens mid-setup. Relaunch call itself has no error handling.",db:"—",cloud:"—",ph:"—",notes:"After relaunch, startup reconciliation maps the stage to verifying_permission (src/shared/onboarding.ts:12-15)."},
+"s-verify":{t:"Stage: verifying_permission (mac)",f:["src/renderer/views/Onboarding.tsx:1309","src/renderer/views/Onboarding.tsx:755-759"],why:"Yellow + dead-end: the screen has no button. A 650ms timer calls refreshPermissionState; if that IPC rejects, the user is stuck with no next action and no error.",db:"onboardingState on transition",cloud:"—",ph:"—",notes:"Not-granted drops back to 'permission' (Onboarding.tsx:707-714); granted → proof (Onboarding.tsx:739-744)."},
+"skip-perm":{t:"Win/Linux: no permission step",f:["src/renderer/views/Onboarding.tsx:1029-1031"],why:"Green mechanically — why → proof directly. The consent gap is scored on lane 1's node.",db:"—",cloud:"—",ph:"—",notes:"Tracking has already been running since app start (onboardingState.ts:68-71)."},
+"s-proof":{t:"Stage: proof — the aha",f:["src/renderer/views/Onboarding.tsx:1329","src/renderer/views/Onboarding.tsx:798-806"],why:"Yellow + dead-end risk: the one genuine trust moment (live data in ~2.5s) — but Continue stays disabled until data appears and there is NO skip; all three data fetches swallow errors (Onboarding.tsx:788-790).",db:"onboardingState.proofState (Onboarding.tsx:810-820)",cloud:"—",ph:"tracking_proof_ready (Onboarding.tsx:839)",notes:"Polls getTimelineDay + getLiveSession + diagnostics every 2.5s. Linux with support-not-ready = hard block (Onboarding.tsx:1371-1373)."},
+"s-tour":{t:"Stage: tour",f:["src/renderer/views/Onboarding.tsx:1381"],why:"Green: multi-beat walkthrough; skip works.",db:"onboardingState",cloud:"—",ph:"onboarding_step_completed {step:'tour'} (Onboarding.tsx:1057) — skip path fires NO event (Onboarding.tsx:1392)",notes:"A funnel-measurement hole, not a UX one."},
+"s-superpowers":{t:"Stage: superpowers",f:["src/renderer/views/Onboarding.tsx:1399"],why:"Green.",db:"onboardingState",cloud:"—",ph:"onboarding_step_completed {step:'superpowers'} (Onboarding.tsx:1062)",notes:"—"},
+"s-about":{t:"Stage: about",f:["src/renderer/views/Onboarding.tsx:1422"],why:"Green: role/goals/intent persisted.",db:"settings.userRole/userGoals/userIntent (Onboarding.tsx:1068-1072)",cloud:"—",ph:"onboarding_step_completed {step:'about'} (Onboarding.tsx:1067)",notes:"Legacy 'personalize' stage migrates here (Onboarding.tsx:627)."},
+"s-voice":{t:"Stage: voice",f:["src/renderer/views/Onboarding.tsx:1476"],why:"Green: summary tone choice, applied to every recap/wrap/brief.",db:"settings.summaryVoice (Onboarding.tsx:1083)",cloud:"—",ph:"onboarding_step_completed {step:'voice'} (Onboarding.tsx:1082)",notes:"—"},
+"s-work":{t:"Stage: work",f:["src/renderer/views/Onboarding.tsx:1511"],why:"Green.",db:"settings.focusApps/interestedCategories (Onboarding.tsx:1135)",cloud:"—",ph:"onboarding_step_completed {step:'work'} (Onboarding.tsx:1134)",notes:"—"},
+"s-connections":{t:"Stage: connections",f:["src/renderer/views/Onboarding.tsx:1570"],why:"Green.",db:"settings.userClients/workRhythm (Onboarding.tsx:1144)",cloud:"—",ph:"onboarding_step_completed {step:'connections'} (Onboarding.tsx:1143)",notes:"workRhythm tunes brief timing and day boundaries."},
+"s-privacy":{t:"Stage: privacy",f:["src/renderer/views/Onboarding.tsx:1635"],why:"Green: picking any private app implicitly enables the tracking-controls master switch (Onboarding.tsx:1151-1156).",db:"settings.trackingControlsEnabled/trackingExcludedApps",cloud:"—",ph:"onboarding_step_completed {step:'privacy'} (Onboarding.tsx:1149)",notes:"Skip button only exists when nothing is excluded (Onboarding.tsx:1645)."},
+"d-managed":{t:"Decision: managedAvailable",f:["src/renderer/views/Onboarding.tsx:1204","src/renderer/views/Onboarding.tsx:676-683"],why:"Decision: billing.getAccess() fetched only on entering ai_setup; errors are swallowed into the BYOK-only branch.",db:"—",cloud:"billing:get-access → HTTP only if a billing URL is baked in; none in shipped builds",ph:"—",notes:"billing.mode!=='unavailable' is impossible in shipped builds — apiUrl() is '' (billing.ts:57-59,167)."},
+"s-ai-managed":{t:"ai_setup: managed plans (unreachable)",f:["src/renderer/views/Onboarding.tsx:1699-1717","src/renderer/views/Onboarding.tsx:1704"],why:"Red: never rendered in a shipped build (managedAvailable always false), and when it does render, the Free card says '$5 / month' while the backend grants $5 once, ever (audit §6).",db:"—",cloud:"Subscribe → billing:create-polar-checkout → external browser (billing.handlers.ts:29-32)",ph:"—",notes:"Checkout errors DO surface via errorMessage (Onboarding.tsx:1164-1167)."},
+"s-ai-byok":{t:"ai_setup: BYOK (shipped reality)",f:["src/renderer/views/Onboarding.tsx:1721-1734"],why:"Green: embedded ConnectAI validates and stores a key; details element is open by default when managed is unavailable.",db:"keytar-backed key via settings:set-api-key; settings.aiProvider; aiSetupState",cloud:"one validation request to the chosen provider (providerValidation)",ph:"ai_provider_connection_* (from ConnectAI flow)",notes:"No price, no pitch anywhere in the shipped first-run — the audit's 'funnel has no bottom'."},
+"s-ready":{t:"Stage: ready",f:["src/renderer/views/Onboarding.tsx:1738"],why:"Green: recaps everything learned; finish writes stage complete.",db:"settings (finishOnboarding, Onboarding.tsx:932-955)",cloud:"—",ph:"onboarding_completed (Onboarding.tsx:957)",notes:"Also calls app:complete-onboarding IPC (Onboarding.tsx:956)."},
+"s-complete":{t:"complete → DashboardBuild",f:["src/renderer/App.tsx:341-358"],why:"Green: onComplete flips the app to the shell behind a 'building your dashboard' animation.",db:"—",cloud:"—",ph:"—",notes:"Stage 'complete' has no render case in the switch — App.tsx swaps components before that matters (Onboarding.tsx:1772-1773)."},
+"v-timeline":{t:"Timeline view",f:["src/renderer/App.tsx:266","src/renderer/views/Timeline.tsx:361-371"],why:"Green: default route, day/week/month via query params.",db:"reads only",cloud:"—",ph:"view_opened + timeline_opened (Timeline.tsx:2347)",notes:"Block click → inspector, timeline_block_opened (Timeline.tsx:2489)."},
+"v-apps":{t:"Apps view",f:["src/renderer/App.tsx:267","src/renderer/views/Apps.tsx:179"],why:"Green.",db:"reads only",cloud:"site favicons may hit external favicon services (audit §9 flags DuckDuckGo leakage for domains)",ph:"apps_opened (Apps.tsx:179)",notes:"—"},
+"v-ai":{t:"AI view (/ai)",f:["src/renderer/App.tsx:268","src/renderer/views/Insights.tsx:5"],why:"Green: Insights.tsx is a 5-line re-export of insights/AIWorkspace — the 'Insights' name survives only as a legacy redirect.",db:"ai_threads / ai_usage_events on use",cloud:"AI provider calls",ph:"view_opened {view:'ai'}",notes:"/insights redirects here (App.tsx:265)."},
+"v-settings":{t:"Settings view",f:["src/renderer/App.tsx:269","src/renderer/views/Settings.tsx:1099-1125"],why:"Green: 12 sections behind a searchable rail; deep links validated (Settings.tsx:2043).",db:"settings via persist()",cloud:"—",ph:"settings_changed on every set (settings.handlers.ts:89)",notes:"Sections: General, Notifications, Billing, Usage, AI, Memory, Labels, Clients, Privacy, MCP, Capture health, Updates."},
+"o-palette":{t:"Command palette",f:["src/renderer/App.tsx:106-116","src/renderer/components/CommandPalette.tsx:213-222"],why:"Green: ⌘K/Ctrl-K plus a global OS shortcut; the ONLY user path to week/month/year Wrapped.",db:"—",cloud:"—",ph:"—",notes:"If a user never discovers ⌘K, period Wrapped effectively doesn't exist for them."},
+"o-wrapped":{t:"Day Wrapped overlay",f:["src/renderer/App.tsx:226-243"],why:"Green: overlay state, not a route; reachable from palette, notifications, and Analyze-day.",db:"wrapped_narratives cache",cloud:"AI narrative call",ph:"none dedicated (gap)",notes:"Close/Settings/Report actions navigate out (App.tsx:232-240)."},
+"o-period":{t:"Period Wrapped overlay",f:["src/renderer/App.tsx:244-250"],why:"Yellow: works, but no scheduled or discoverable entry point besides the palette and a dev shortcut.",db:"wrapped_narratives",cloud:"AI narrative call",ph:"none",notes:"—"},
+"o-feedback":{t:"Day-7 feedback modal",f:["src/renderer/App.tsx:196-206"],why:"Green: one-shot prompt 7 days after firstLaunchDate; flag set immediately so it never re-fires.",db:"settings.feedbackPromptShown",cloud:"feedback submission",ph:"feedback_submitted",notes:"The only in-app re-engagement besides notifications."},
+"o-update":{t:"Update banner",f:["src/renderer/App.tsx:210"],why:"Green: renders updater state; see lane 8 for the trust story.",db:"—",cloud:"—",ph:"update_* events",notes:"—"},
+"o-errb":{t:"ErrorBoundary",f:["src/renderer/components/ErrorBoundary.tsx:6-9"],why:"Red: getDerivedStateFromError shows a fallback, but there is no componentDidCatch and no renderer→Sentry path — a shipped render crash is invisible to the developer (audit §7).",db:"—",cloud:"nothing — that's the problem",ph:"none",notes:"34-line file; wired around each route (App.tsx:266-269)."},
+"t-poll":{t:"Foreground poll pipeline",f:["src/main/services/tracking.ts:87","src/main/services/tracking.ts:99"],why:"Yellow: works and freshly hardened (sleep-gap flush, wake cut, idle trim — commits fad6cc0/79512ae), but it is one of TWO concurrent pipelines; the audit's verdict 4 calls the duality the root structural fault.",db:"app_sessions (+ live snapshot for crash recovery)",cloud:"—",ph:"tracking_engine_health",notes:"5s poll; GAP_FLUSH_MS=60s is the primary sleep signal. Working tree carries further uncommitted Windows changes."},
+"t-focus":{t:"Native focus-event pipeline",f:["src/main/services/focusCapture.ts:197"],why:"Yellow: the designated future single source of truth (audit roadmap #7), already the repair ground-truth — but Linux has no native helper at all.",db:"focus_events (append-only)",cloud:"—",ph:"—",notes:"Incognito dropped unconditionally since 79512ae (focusCapture.ts:198-206)."},
+"t-web":{t:"Browser history poll",f:["src/main/services/browserContext.ts"],why:"Green: 60s history copy is now an O(1) APFS clone with reentrancy guard and size cap (8c6f438); private windows never recorded (fad6cc0).",db:"website_visits",cloud:"—",ph:"browser_tracking_health",notes:"Firefox/Linux: no live tab URL — history only."},
+"t-db":{t:"SQLite store",f:["src/main/db/schema.ts:128","src/main/db/schema.ts:349"],why:"Neutral with a red asterisk: all data local; but no retention, no VACUUM, no corruption recovery (audit verdict 2) — DB corruption is a fatal crash loop.",db:"everything",cloud:"nothing — sync is disabled",ph:"database_health",notes:"639MB live DB incl. a permanent 359MB retry-storm scar."},
+"t-day":{t:"Day payload (provisional)",f:["src/main/services/workBlocks.ts:5482"],why:"Green: founder rule — today stays one neutral provisional block until analyzed; past days come from persisted blocks.",db:"timeline_blocks (materialized)",cloud:"—",ph:"—",notes:"provisional flag documented at src/shared/types.ts:228-232."},
+"tl-day":{t:"Timeline day view",f:["src/renderer/views/Timeline.tsx:2675","src/renderer/views/Timeline.tsx:2798"],why:"Green: switcher, live now-block, block inspector; honest empty state.",db:"reads",cloud:"—",ph:"timeline_opened (Timeline.tsx:2347)",notes:"—"},
+"d-2h":{t:"Decision: enough to analyze (~2h)",f:["src/renderer/views/Timeline.tsx:1381-1398"],why:"Decision: enoughToAnalyze gates the Analyze button on today.",db:"—",cloud:"—",ph:"—",notes:"Disabled state explains itself: 'Available after ~2 hours of tracked time.'"},
+"tl-analyze":{t:"Analyze day",f:["src/renderer/views/Timeline.tsx:1381-1398","src/main/ipc/db.handlers.ts:367"],why:"Green: the button actually opens the Wrap overlay, which runs the analyze pipeline (REBUILD_TIMELINE_DAY → analyzeTimelineDay).",db:"timeline_blocks + timeline_block_members + timeline_block_labels (workBlocks.ts:5059-5101); merge corrections → timeline_boundary_corrections (schema.ts:349)",cloud:"AI provider calls (labeling)",ph:"ai_job_completed / ai_job_failed",notes:"Pipeline defined at analyzeDay.ts:84."},
+"tl-wait":{t:"Analyze disabled (<2h)",f:["src/renderer/views/Timeline.tsx:1395-1398"],why:"Green: clear copy, not a dead end.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"d-provisional":{t:"Decision: day analyzed?",f:["src/renderer/views/Timeline.tsx:1281"],why:"Decision: payload.blocks.some(provisional) selects Analyze vs Re-analyze affordances.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"tl-reanalyze":{t:"Re-analyze / recap",f:["src/renderer/views/Timeline.tsx:1427-1444"],why:"Green: past days offer Re-analyze with AI + Generate recap side by side.",db:"same as analyze",cloud:"AI calls",ph:"ai_job_*",notes:"—"},
+"d-provider":{t:"Decision: AI provider resolution",f:["src/main/services/aiOrchestration.ts:396-430"],why:"Decision: own key/CLI first, managed second, then throw. This single funnel gates every AI feature in the app.",db:"—",cloud:"—",ph:"—",notes:"Managed branch requires billing (lane 7) — dead in shipped builds, so BYOK is the only live path."},
+"ai-run":{t:"AI labels the day",f:["src/main/services/analyzeDay.ts:84"],why:"Green: regroup + relabel with corrections persisted on durable time-span keys.",db:"timeline_block_labels ('ai' row), timeline_boundary_corrections, ai_usage_events",cloud:"provider API",ph:"ai_job_completed",notes:"—"},
+"ai-paused":{t:"“AI access is paused”",f:["src/main/services/aiOrchestration.ts:429"],why:"Yellow: error is surfaced (good), but the message says 'Subscribe or add your own key' — and subscribing is impossible in shipped builds.",db:"—",cloud:"—",ph:"ai_job_failed",notes:"The day simply stays provisional."},
+"tl-week":{t:"Week view + review card",f:["src/renderer/views/Timeline.tsx:1755"],why:"Green: on-demand Generate/Refresh; result cached in ai_surface_summaries. Needs AI like everything else.",db:"ai_surface_summaries",cloud:"AI call (week_review job)",ph:"ai_job_*",notes:"'No tracked days' / 'Waiting for tracked time' empty states (Timeline.tsx:1904,1934)."},
+"tl-month":{t:"Month calendar",f:["src/renderer/views/Timeline.tsx:2675"],why:"Green: read-only grid of range blocks and totals.",db:"reads",cloud:"—",ph:"—",notes:"—"},
+"tl-empty":{t:"Empty day state",f:["src/renderer/views/Timeline.tsx:2798"],why:"Green: explicit 'No tracked activity for this day' — no silent blank.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"d-wrapai":{t:"Decision: Wrap provider state",f:["src/renderer/components/DayWrapped.tsx:349","src/renderer/components/PeriodWrapped.tsx:319"],why:"Decision: getWrapProviderState; disconnected → no narrative fetch, Settings pointer shown instead.",db:"—",cloud:"—",ph:"—",notes:"The no-credits rule: every wrap word comes from a real API call — no canned fallback."},
+"w-day":{t:"Day Wrapped",f:["src/renderer/components/DayWrapped.tsx:17-21","src/renderer/components/DayWrapped.tsx:336"],why:"Green: story-arc wrap; live-day 2h gate has an explicit 'Generate anyway' escape (DayWrapped.tsx:367).",db:"wrapped_narratives",cloud:"AI call (wrapped_narrative job)",ph:"only generic ai_job_* — no wrapped events",notes:"There is NO 'seen Wrapped before' flag anywhere in AppSettings — the intro plays the same every time."},
+"w-week":{t:"Week Wrapped",f:["src/renderer/components/PeriodWrapped.tsx:306-308"],why:"Green: current week is allowed live.",db:"wrapped_narratives",cloud:"AI call (wrapped_period_narrative)",ph:"ai_job_* only",notes:"—"},
+"w-monthyear":{t:"Month/Year Wrapped (current period)",f:["src/renderer/components/PeriodWrapped.tsx:306-308"],why:"Yellow: current month/year are blocked as 'still being written' — by design, but the palette offers the command anyway, so the click can end in a refusal.",db:"—",cloud:"—",ph:"—",notes:"Past periods generate fine."},
+"w-noai":{t:"Wrapped without AI",f:["src/renderer/components/DayWrapped.tsx:349-390"],why:"Yellow: honest message pointing to Settings — but it's the third distinct 'go set up AI' surface with no unified nudge.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"w-telemetry":{t:"Wrapped telemetry",f:["src/shared/analytics.ts:1-75"],why:"Yellow: the flagship shareable feature has zero dedicated events — no open, no completion, no share (audit §7).",db:"—",cloud:"—",ph:"nothing to fire",notes:"Only the underlying AI jobs are counted."},
+"d-notif-on":{t:"Decision: notification gates",f:["src/main/services/settings.ts:55-56","src/main/services/dailySummaryNotifier.ts:112-130"],why:"Decision stack: dailySummaryEnabled/morningNudgeEnabled BOTH default false; then getAiNarrative must return provider-sourced content or nothing fires.",db:"daily-summary-state.json (userData)",cloud:"—",ph:"—",notes:"Checks run every minute once started (dailySummaryNotifier.ts:350; started from index.ts:337)."},
+"n-evening":{t:"Evening wrap notification",f:["src/main/services/dailySummaryNotifier.ts:182-188","src/main/lib/dailySummaryScheduler.ts:71"],why:"Green when gates pass: AI teaser body, deep-links to evening Wrapped.",db:"notifier state file",cloud:"AI call to build the teaser",ph:"—",notes:"Freezes the day snapshot so period wraps sum a finalized day."},
+"n-recap":{t:"Yesterday's recap",f:["src/main/services/dailySummaryNotifier.ts:221-230","src/main/lib/dailySummaryScheduler.ts:96"],why:"Green when gates pass; warms a Day-report AI thread in the background.",db:"ai_threads (report prep)",cloud:"AI call",ph:"—",notes:"prepareDailyReport at aiService.ts:4826."},
+"n-carry":{t:"Morning carryover nudge",f:["src/main/services/dailySummaryNotifier.ts:262-265","src/main/lib/dailySummaryScheduler.ts:132"],why:"Green when gates pass: fires after ~1-2h of morning work.",db:"notifier state file",cloud:"AI call",ph:"—",notes:"—"},
+"n-silent":{t:"Silent no-fire",f:["src/main/services/dailySummaryNotifier.ts:112-130"],why:"Yellow + dead end: no provider/credits → the notifier returns without firing, forever, with no explanation anywhere. A user who enabled notifications but skipped AI setup gets nothing and never learns why.",db:"—",cloud:"—",ph:"—",notes:"Dev test shortcut also returns {ok:false,reason:'no-provider'} (dailySummaryNotifier.ts:306-312)."},
+"n-click":{t:"Notification click-through",f:["src/renderer/App.tsx:88-94"],why:"Green: routes are queued if the renderer isn't up yet, then drained — clicks while booting aren't lost.",db:"—",cloud:"—",ph:"—",notes:"Wrapped routes open the overlay; others navigate (dailySummaryNavigation.ts)."},
+"n-monthly":{t:"Monthly report",f:["src/main/lib/dailySummaryScheduler.ts:71-159"],why:"Red as an expectation: no monthly report or notification path exists anywhere — only the three daily-cadence types.",db:"—",cloud:"—",ph:"—",notes:"Month Wrapped via palette is the closest thing, and it's blocked for the current month."},
+"a-list":{t:"Apps list",f:["src/renderer/views/Apps.tsx:179"],why:"Green: usage rollups with per-row icons and page-titled browser blocks.",db:"reads",cloud:"—",ph:"apps_opened (Apps.tsx:179)",notes:"—"},
+"a-detail":{t:"App detail",f:["src/renderer/views/Apps.tsx:462"],why:"Green.",db:"reads",cloud:"—",ph:"app_detail_opened (Apps.tsx:462)",notes:"—"},
+"d-icon":{t:"Decision: icon resolution",f:["src/renderer/hooks/useResolvedIcon.ts:62","src/main/services/iconResolver.ts:1416-1419"],why:"Decision: renderer asks main over icons:resolve; a miss returns {dataUrl:null,source:'miss'} and is cached briefly.",db:"icon cache",cloud:"—",ph:"—",notes:"—"},
+"i-mac":{t:"macOS icons",f:["src/main/services/iconResolver.ts:1339-1374"],why:"Green: bundle-id/name resolution, resource extraction, sips conversion — the rich chain.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"i-win":{t:"Windows icons",f:["src/main/services/iconResolver.ts:602-641"],why:"Green: app.getFileIcon on exe paths plus UWP AppxManifest logo assets via PowerShell.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"i-linux":{t:"Linux icons",f:["src/main/services/linuxDesktop.ts:100-145"],why:"Yellow: .desktop files are parsed for Name/Exec identity only — the Icon= field is never read — so icon resolution rides entirely on getFileIcon over exe paths and falls back to initials more than the other platforms.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"i-fallback":{t:"Initials fallback tile",f:["src/renderer/components/AppIcon.tsx:70-99"],why:"Green: branded tile or initials — never a broken image.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"d-haskey":{t:"Decision: hasApiKey (AI tab)",f:["src/renderer/views/insights/AIWorkspace.tsx:459"],why:"Decision: no key → hero setup; key/CLI → chat. Loading and load-error states both handled (AIWorkspace.tsx:328-345).",db:"—",cloud:"—",ph:"—",notes:"CLI providers count as 'has key' only when the CLI binary is detected."},
+"ai-hero":{t:"ConnectAI hero (no key)",f:["src/renderer/views/insights/AIWorkspace.tsx:459-466"],why:"Green: not a dead end — the empty AI tab is itself the setup surface.",db:"—",cloud:"—",ph:"—",notes:"Warns when a selected CLI provider isn't installed (AIWorkspace.tsx:467-470)."},
+"ai-chat":{t:"AI chat workspace",f:["src/renderer/views/insights/AIWorkspace.tsx:369"],why:"Green: threads, archive, per-thread model override, command-palette actions.",db:"ai_threads, ai_usage_events per call",cloud:"provider API per message",ph:"ai_query_sent / ai_query_answered / ai_answer_*",notes:"—"},
+"ai-validate":{t:"API-key validation",f:["src/renderer/components/ConnectAI.tsx:190-197","src/renderer/components/ConnectAI.tsx:496-513"],why:"Green: rejected credentials are refused with a message; an unreachable provider offers explicit 'Save anyway' (providerValidation.ts:116-130).",db:"keytar via settings:set-api-key (settings.handlers.ts:106)",cloud:"one validation call",ph:"ai_provider_connection_started/completed/failed",notes:"Key never stored in plaintext; env override DAYLENS_<PROVIDER>_API_KEY exists."},
+"ai-gemini":{t:"Gemini path",f:["src/main/jobs/aiService.ts:1241"],why:"Green: sendWithGoogle streams via @google/genai; default googleModel gemini-3.1-flash-lite (settings.ts:42). 'Does it run on Gemini?' — only if the user selects google or a managed session returns it; default BYOK provider is Anthropic (settings.ts:39).",db:"ai_usage_events (provider:'google')",cloud:"generativelanguage.googleapis.com",ph:"ai_job_*",notes:"—"},
+"d-ownkey":{t:"Decision: own key first",f:["src/main/services/billing.ts:155-166"],why:"Decision: a configured own key/CLI short-circuits billing entirely — mode 'own_key', canUseAI true, no network.",db:"—",cloud:"—",ph:"—",notes:"—"},
+"b-ownkey":{t:"mode: own_key",f:["src/main/services/billing.ts:158-165"],why:"Green: the one fully working monetization-adjacent state — user pays their provider directly.",db:"ai_usage_events metered locally",cloud:"provider only",ph:"—",notes:"Billing page shows 'Your own key' as the active plan (Settings.tsx:1440-1452)."},
+"d-apiurl":{t:"Decision: billing URL in build",f:["src/main/services/billing.ts:57-59","src/main/services/billing.ts:167"],why:"Decision: __DAYLENS_BILLING_API_URL__ build constant; empty → unavailableSnapshot. No release workflow sets it (audit verdict 1, re-verified).",db:"—",cloud:"—",ph:"—",notes:"Even forced, request() throws 'Managed AI is not configured for this build.' (billing.ts:106)."},
+"b-unavail":{t:"mode: unavailable (shipped)",f:["src/main/services/billing.ts:61-80"],why:"Red: checkoutAvailable/localCheckoutAvailable/portalAvailable all false → every subscribe affordance hides. A shipped user can never see a price.",db:"—",cloud:"—",ph:"—",notes:"Message shown: 'Managed AI is unavailable in this build. You can still use your own provider key.'"},
+"b-onb-sub":{t:"Onboarding subscribe CTA",f:["src/renderer/views/Onboarding.tsx:1714-1716"],why:"Red: gated behind managedAvailable (never true shipped); plus the '$5 / month' copy bug at Onboarding.tsx:1704 vs a one-time $5 grant.",db:"—",cloud:"would open Polar checkout in external browser",ph:"—",notes:"—"},
+"b-set-sub":{t:"Settings subscribe CTA",f:["src/renderer/views/Settings.tsx:1407-1411"],why:"Red: rendered only when access.checkoutAvailable — false in every shipped build; the else-branch renders nothing at all (Settings.tsx:1411).",db:"—",cloud:"billing:create-polar-checkout → external browser",ph:"—",notes:"Manage-subscription portal likewise gated (Settings.tsx:1403-1405)."},
+"b-flutter":{t:"Rwanda mobile money",f:["src/renderer/views/Settings.tsx:1419-1438"],why:"Red for the same reason: localCheckoutAvailable never true shipped. Real Flutterwave integration behind it.",db:"—",cloud:"billing:create-flutterwave-checkout → external browser",ph:"—",notes:"—"},
+"b-server":{t:"Billing service",f:["services/billing/src/server.mjs"],why:"Red + dead end: genuinely good code (Polar + Flutterwave, webhook signature verification, 402 enforcement) with no deploy artifact anywhere and no host. Three independent blockers to a first dollar (audit §6).",db:"its own Postgres (not deployed)",cloud:"—",ph:"—",notes:"Defaults: DAYLENS_MANAGED_PROVIDER 'anthropic', model 'anthropic/claude-sonnet-4-6' (server.mjs:25-28) — managed AI is Anthropic-first, not Gemini."},
+"b-meter":{t:"Local AI usage meter",f:["src/main/db/schema.ts:128","src/main/services/billing.ts:423"],why:"Green: every call start/finish recorded with tokens, cost, billing mode; spend = tokens × published prices, reconciling to the provider bill within a percent or two.",db:"ai_usage_events",cloud:"—",ph:"—",notes:"This is how the $110/week stale-build burn was eventually caught — and why Usage matters."},
+"b-usage":{t:"Settings ▸ Usage",f:["src/renderer/views/Settings.tsx:1765"],why:"Green: full-range SQL aggregation (memory-flat), per-day chart, per-feature spend, 2000-row detail table.",db:"reads ai_usage_events",cloud:"managed users would merge remote /v1/usage; own-key users purely local (billing.ts:605-620)",ph:"—",notes:"'Is AI usage tracked in Billing?' — yes, and it's one of the app's most trustworthy numbers."},
+"b-csv":{t:"Usage CSV export",f:["src/renderer/views/Settings.tsx:1958","src/main/ipc/billing.handlers.ts:41-71"],why:"Yellow: reads the whole range (not the 2000-row cap) — but the renderer fire-and-forgets the IPC; no success toast, no error surface.",db:"reads ai_usage_events",cloud:"—",ph:"first_report_exported exists as a constant but is not fired here",notes:"—"},
+"d-verifiable":{t:"Decision: update verifiable",f:["src/main/services/updater.ts:371","src/main/services/updater.ts:444"],why:"Decision: feed must publish a SHA-256 digest and serve over HTTPS, else canAutoInstall=false and the UI offers manual download only. Fail-closed backstop repeated at download time.",db:"—",cloud:"GitHub releases feed",ph:"update_available",notes:"New since 8c6f438 — this closed the audit's 'no checksum' half of the updater RCE."},
+"u-auto":{t:"Verified auto-install (mac)",f:["src/main/services/updater.ts:380","src/main/services/updater.ts:633"],why:"Yellow: SHA-256 verified, CFBundleIdentifier pinned before swap, temp cleanup on failure — but the ad-hoc re-sign + quarantine strip path still exists at all. Audit's full fix (Developer ID + notarization, delete the bypass) remains open.",db:"—",cloud:"downloads release ZIP",ph:"update_downloaded / update_install_started",notes:"Do-not-ship-without note in audit §9 is now conditionally satisfied: unverifiable feeds can't auto-install."},
+"u-manual":{t:"Manual download fallback",f:["src/main/services/updater.ts:444-470"],why:"Green: honest state with a working download link; explains why auto-install is off.",db:"—",cloud:"opens browser",ph:"update_*",notes:"—"},
+"u-win":{t:"Windows updater gate",f:["src/main/services/updater.ts:139","src/main/services/updater.ts:172-178"],why:"Yellow: unsigned builds get updates disabled with an honest message. Correct behavior, but today's builds ARE unsigned, so shipped Windows users have no auto-update.",db:"—",cloud:"—",ph:"—",notes:"Authenticode checked once per version via PowerShell."},
+"u-linux":{t:"Linux update coverage",f:["src/main/services/updater.ts"],why:"Yellow: AppImage/deb/rpm supported; pacman installs never auto-update (audit §8).",db:"—",cloud:"—",ph:"—",notes:"—"},
+"d-ph":{t:"Decision: telemetry enabled",f:["src/main/services/analytics.ts:147-153","src/main/services/settings.ts:22-24"],why:"Decision: needs BOTH a build-time __POSTHOG_KEY__ and analyticsOptIn=true (defaults false). Release workflows contain zero POSTHOG/SENTRY references (re-verified today) — shipped builds cannot report anything.",db:"—",cloud:"—",ph:"—",notes:"Dev .env now carries POSTHOG_PROJECT_TOKEN (posthog-setup-report.md), so dev builds can be live."},
+"ph-on":{t:"PostHog live (dev)",f:["src/main/services/analytics.ts:159-180"],why:"Yellow: excellent instrument — 94 call sites, allowlist-sanitized (no titles/URLs/paths ever) — enabled only where it matters least.",db:"—",cloud:"us.i.posthog.com",ph:"the full taxonomy (src/shared/analytics.ts:1-75)",notes:"Renderer has no posthog-js; everything funnels through analytics:capture IPC."},
+"ph-off":{t:"Telemetry dead in shipped builds",f:["vite.main.config.ts:8-13"],why:"Red + dead end: when a real user's app crashes, nobody finds out — the audit's 'you built a good instrument and never plugged it in.' The $110/week retry burn ran for days precisely because of this.",db:"—",cloud:"nothing",ph:"nothing",notes:"Fix is roadmap #3: keys into release workflows + componentDidCatch."},
+"ph-crash":{t:"Renderer crash reporting",f:["src/renderer/components/ErrorBoundary.tsx:6-9"],why:"Red: no componentDidCatch, no renderer→Sentry IPC — even with keys present, React render errors would report nowhere.",db:"—",cloud:"—",ph:"—",notes:"Main-process side has RENDERER_PROCESS_GONE for full process death only."},
+"c-sync":{t:"Cloud sync",f:["src/main/ipc/sync.handlers.ts:18"],why:"Red by design: 'Sync is disabled in this offline private build.' The entire Convex/web backend has no desktop producer (audit §3). Web-side browser-linking is live while the desktop throws — a half-shipped seam.",db:"—",cloud:"none",ph:"sync_link_* (would fire if enabled)",notes:"—"},
+"c-aiout":{t:"Outbound AI calls",f:["src/main/services/aiOrchestration.ts:396-430"],why:"Green: the only data that leaves the machine in a shipped build goes to the user's own chosen provider, metered locally.",db:"ai_usage_events",cloud:"provider APIs only",ph:"ai_job_*",notes:"Near-zero exfiltration posture as shipped (audit §9)."},
+"c-mcp":{t:"MCP server",f:["src/renderer/views/Settings.tsx:3317"],why:"Green: Settings renders setup + copyable config for Claude and other agent clients; local stdio only.",db:"reads",cloud:"—",ph:"—",notes:"Config path differs per platform (Settings.tsx:3347)."},
+"c-health":{t:"Capture health",f:["src/renderer/views/Settings.tsx:3429","src/renderer/views/Settings.tsx:782"],why:"Green: per-platform troubleshoot steps (mac permissions incl. Safari Full Disk Access, Windows helper, Linux session type) — the app's best self-diagnostic surface.",db:"reads diagnostics",cloud:"—",ph:"tracking_engine_health",notes:"—"}
+};
+const panel = document.getElementById('panel');
+let selected = null;
+function esc(s){ const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
+function fmt(text){
+  return esc(text).replace(/([A-Za-z0-9_.\/-]+\.(?:tsx?|mjs|ts|json)):?(\d[\d,-]*)?/g, (m,f,l)=> '<code>'+f+(l?':'+l:'')+'</code>');
+}
+document.querySelectorAll('.node').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const d = D[btn.dataset.id]; if (!d) return;
+    if (selected) selected.classList.remove('sel');
+    selected = btn; btn.classList.add('sel');
+    const cls = [...btn.classList].find(c => ['g','y','r','n'].includes(c)) || 'n';
+    document.getElementById('p-title').textContent = d.t;
+    const st = document.getElementById('p-status');
+    st.textContent = STATUS_LABEL[cls]; st.className = 'status ' + cls;
+    document.getElementById('p-file').innerHTML = d.f.map(x => '<code>'+esc(x)+'</code>').join(' ');
+    document.getElementById('p-why').innerHTML = fmt(d.why);
+    document.getElementById('p-db').innerHTML = fmt(d.db);
+    document.getElementById('p-cloud').innerHTML = fmt(d.cloud);
+    document.getElementById('p-ph').innerHTML = fmt(d.ph);
+    document.getElementById('p-notes').innerHTML = fmt(d.notes);
+    panel.classList.add('open');
+  });
+});
+document.getElementById('closep').addEventListener('click', () => { panel.classList.remove('open'); if (selected) selected.classList.remove('sel'); selected = null; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { panel.classList.remove('open'); if (selected) selected.classList.remove('sel'); selected=null; } });
+</script>
+</body>
+</html>
