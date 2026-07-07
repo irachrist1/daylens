@@ -64,9 +64,6 @@ Two beliefs shaped it:
 The goal isn't to make you feel guilty about screen time. It's to give you a calm, true
 picture of where your attention goes — and, with AI, to help you make sense of it.
 
-[founder: add a personal line here if you'd like — why *you* started building this. Keep
-it true; Fin will quote it.]
-
 — The Daylens team
 
 ---
@@ -337,10 +334,6 @@ Tracking, the Timeline, and the Apps view are always available and are never bil
 AI features run on **your own provider key**, so any AI cost is billed by that provider
 directly to you — Daylens doesn't add a charge on top. See your estimated AI spend and
 export it in **Settings → Usage** (there's an **Export CSV** button).
-
-[founder: if/when the managed Daylens AI plan (use AI without your own key) is live, add an
-article here describing it. It is not generally available yet, so nothing about a paid
-Daylens subscription should be promised until then.]
 
 ---
 

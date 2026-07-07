@@ -44,7 +44,14 @@ const valueOf = (flag, fallback) => {
 const dryRun = has('--dry-run')
 const publish = has('--publish')
 const force = has('--force')
+// --update: update articles that already exist (match by title) with the current
+// markdown body/state instead of creating new ones. Combine with --publish to set
+// them live. Use after editing the source file or to publish existing drafts.
+const update = has('--update')
 const useCollections = !has('--no-collections')
+// --dedupe-collections: delete empty collections (cleans up duplicates left when a
+// name with an HTML entity like & didn't match on a prior run).
+const dedupeCollections = has('--dedupe-collections')
 const sourceFile = path.resolve(repoRoot, valueOf('--file', 'docs/intercom-help-center-articles.md'))
 
 // ── load INTERCOM_ACCESS_TOKEN from services/billing/.env if not already set ────
@@ -171,6 +178,14 @@ async function firstAdminId() {
   return admin.id
 }
 
+// Intercom returns collection names HTML-encoded (e.g. "AI &amp; billing"), so
+// decode before comparing or every "&"/"'" name looks new and gets duplicated.
+function decodeEntities(s) {
+  return (s || '')
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+}
+
 async function ensureCollections(names) {
   const map = new Map()
   if (!useCollections) return map
@@ -183,7 +198,7 @@ async function ensureCollections(names) {
     return map
   }
   for (const name of names) {
-    const found = existing.find((c) => (c.name || '').toLowerCase() === name.toLowerCase())
+    const found = existing.find((c) => decodeEntities(c.name).toLowerCase() === name.toLowerCase())
     if (found) { map.set(name, found.id); continue }
     try {
       const created = await api('POST', '/help_center/collections', { name })
@@ -196,13 +211,27 @@ async function ensureCollections(names) {
   return map
 }
 
-async function existingTitles() {
-  const titles = new Set()
+async function existingArticles() {
+  // Paginate through all articles (Intercom pages at 250 max).
+  const all = []
   try {
-    const res = await api('GET', '/articles?per_page=250')
-    for (const a of res.data || []) titles.add((a.title || '').trim())
+    let page = 1
+    for (;;) {
+      const res = await api('GET', `/articles?per_page=250&page=${page}`)
+      const data = res.data || []
+      all.push(...data)
+      const totalPages = res.pages?.total_pages || 1
+      if (page >= totalPages || data.length === 0) break
+      page++
+    }
   } catch { /* fresh workspace or no access — treat as none */ }
-  return titles
+  return all
+}
+
+async function existingTitleMap() {
+  const map = new Map()
+  for (const a of await existingArticles()) map.set((a.title || '').trim(), a.id)
+  return map
 }
 
 // ── main ────────────────────────────────────────────────────────────────────────
@@ -210,6 +239,25 @@ async function main() {
   if (!fs.existsSync(sourceFile)) throw new Error(`Source file not found: ${sourceFile}`)
   const articles = parseArticles(fs.readFileSync(sourceFile, 'utf8'))
   console.log(`Parsed ${articles.length} articles from ${path.relative(repoRoot, sourceFile)}`)
+
+  if (dedupeCollections) {
+    if (!token) throw new Error('INTERCOM_ACCESS_TOKEN is not set.')
+    const arts = await existingArticles()
+    const usedParents = new Set(arts.map((a) => a.parent_id).filter(Boolean).map(String))
+    const res = await api('GET', '/help_center/collections?per_page=250')
+    const cols = res.data || []
+    let deleted = 0
+    for (const c of cols) {
+      const hasArticles = usedParents.has(String(c.id))
+      const hasChildren = cols.some((o) => String(o.parent_id) === String(c.id))
+      if (!hasArticles && !hasChildren) {
+        try { await api('DELETE', `/help_center/collections/${c.id}`); console.log(`  - deleted empty collection "${decodeEntities(c.name)}" (${c.id})`); deleted++ }
+        catch (e) { console.warn(`  (could not delete ${c.id}):`, e.message) }
+      }
+    }
+    console.log(`\nDone. Deleted ${deleted} empty collection(s).`)
+    return
+  }
 
   if (dryRun) {
     for (const a of articles) {
@@ -228,7 +276,30 @@ async function main() {
   const collectionNames = [...new Set(articles.map((a) => a.collection).filter(Boolean))]
   const collections = await ensureCollections(collectionNames)
 
-  const already = force ? new Set() : await existingTitles()
+  // ── --update: update (and optionally publish) articles that already exist ──────
+  if (update) {
+    const byTitle = await existingTitleMap()
+    let updated = 0, missing = 0
+    for (const a of articles) {
+      const id = byTitle.get(a.title)
+      if (!id) { console.log(`  ? not found (run without --update to create): ${a.title}`); missing++; continue }
+      const payload = { title: a.title, body: bodyToHtml(a.body), state: publish ? 'published' : 'draft' }
+      const parentId = a.collection && collections.get(a.collection)
+      if (parentId) { payload.parent_id = parentId; payload.parent_type = 'collection' }
+      try {
+        await api('PUT', `/articles/${id}`, payload)
+        console.log(`  ~ ${payload.state}: ${a.title} (${id})`)
+        updated++
+      } catch (e) {
+        console.error(`  ! failed: ${a.title}: ${e.message}`)
+      }
+    }
+    console.log(`\nDone. Updated ${updated}, not found ${missing}. ${publish ? 'Articles are now PUBLISHED. ' : ''}Connect the Help Center as a Fin content source if you haven't.`)
+    return
+  }
+
+  // ── default: create new articles ──────────────────────────────────────────────
+  const already = force ? new Set() : new Set((await existingTitleMap()).keys())
   let created = 0, skipped = 0
 
   for (const a of articles) {
@@ -250,7 +321,7 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. Created ${created}, skipped ${skipped}. ${publish ? '' : 'Articles are DRAFTS — review and publish in Intercom, '}then connect the Help Center as a Fin content source.`)
+  console.log(`\nDone. Created ${created}, skipped ${skipped}. ${publish ? '' : 'Articles are DRAFTS — publish them (re-run with --update --publish), '}then connect the Help Center as a Fin content source.`)
 }
 
 main().catch((e) => { console.error('\nError:', e.message); process.exit(1) })
