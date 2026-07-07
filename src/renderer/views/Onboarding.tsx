@@ -16,6 +16,7 @@ import { nextMacStageAfterGrantedPermission } from '@shared/onboarding'
 import { VOICE_SAMPLES, DEFAULT_SUMMARY_VOICE } from '@shared/summaryVoice'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
+import { setIntercomLauncherVisible, trackIntercomEvent } from '../lib/intercom'
 import { todayString } from '../lib/format'
 import ConnectAI from '../components/ConnectAI'
 import Mascot, { type MascotExpression } from '../components/Mascot'
@@ -997,6 +998,10 @@ export default function Onboarding({
         selected_goal_count: goals.size,
         surface: 'onboarding',
       })
+      // Intercom: the dashboard-authored post-onboarding tour targets this event,
+      // and the default launcher (hidden during setup) becomes visible now.
+      trackIntercomEvent('onboarding_completed')
+      setIntercomLauncherVisible(true)
       onComplete()
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err))

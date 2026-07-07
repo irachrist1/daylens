@@ -4,9 +4,11 @@ import {
   ANALYTICS_EVENT,
   NOTIFICATION_SETTING_KEYS,
   blockCountBucket,
+  buildAIGenerationProperties,
   classifyFailureKind,
   featureForView,
   sanitizeAnalyticsProperties,
+  type AIGenerationUsage,
   type AnalyticsEventName,
   type AnalyticsFeature,
   type AnalyticsPropertyValue,
@@ -492,6 +494,31 @@ export function capture(event: AnalyticsEventName, properties?: Record<string, u
 // are momentary per-sample skips, not pause transitions, and do not fire this.
 export function captureTrackingPauseTransition(paused: boolean, reason: 'user' | 'app_excluded' | 'incognito'): void {
   capture(paused ? ANALYTICS_EVENT.TRACKING_PAUSED : ANALYTICS_EVENT.TRACKING_RESUMED, { reason })
+}
+
+// PostHog LLM analytics ($ai_generation). Deliberately bypasses the
+// feature-event sanitizer: the $ai_* namespace is PostHog's own schema (the
+// allowlist would strip it), and the payload is built entirely in the main
+// process from numeric usage data — buildAIGenerationProperties guarantees no
+// prompt/completion content and no cost properties, so PostHog prices the
+// tokens independently of the local meter.
+export function captureAIGeneration(usage: AIGenerationUsage): void {
+  try {
+    const client = getPosthog()
+    if (!client) return
+    client.capture({
+      disableGeoip: true,
+      distinctId,
+      event: '$ai_generation',
+      properties: {
+        ...globalProperties(),
+        ...buildAIGenerationProperties(usage),
+        $process_person_profile: false,
+      },
+    })
+  } catch {
+    // Never let analytics crash the app.
+  }
 }
 
 export function captureRateLimited(

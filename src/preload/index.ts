@@ -30,6 +30,7 @@ import type {
   BrowserLinkResult,
   BillingAccessSnapshot,
   BillingUsageReport,
+  IntercomIdentity,
   CategoryOverrideEffect,
   ClientRecord,
   BreakRecommendation,
@@ -304,6 +305,9 @@ const api = {
     exportUsageCsv: (from: number, to: number): Promise<{ canceled: boolean; path?: string }> =>
       ipcRenderer.invoke(IPC.BILLING.EXPORT_USAGE_CSV, { from, to }),
     getPayments: (): Promise<PaymentRecord[]> => ipcRenderer.invoke(IPC.BILLING.GET_PAYMENTS),
+  },
+  intercom: {
+    getIdentity: (): Promise<IntercomIdentity> => ipcRenderer.invoke(IPC.INTERCOM.GET_IDENTITY),
   },
   tracking: {
     getLiveSession: () => ipcRenderer.invoke(IPC.TRACKING.GET_LIVE),

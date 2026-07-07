@@ -56,6 +56,7 @@ import { registerDebugHandlers } from './ipc/debug.handlers'
 import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerBillingHandlers } from './ipc/billing.handlers'
+import { registerIntercomHandlers } from './ipc/intercom.handlers'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
@@ -849,6 +850,7 @@ app.whenReady()
     registerAIHandlers()
     registerSettingsHandlers()
     registerBillingHandlers()
+    registerIntercomHandlers()
     registerSearchHandlers()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()

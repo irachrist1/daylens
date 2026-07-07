@@ -209,3 +209,49 @@ with citations, 30 left open across new Tracking Engine / UI · Product /
 Infrastructure projects — Linear has no team-creation API, so projects substitute
 for the teams the session asked for). The Mac DMG install, Windows installer, and
 the update-flow test all still need the founder at a keyboard before shipping.
+
+---
+
+Session E (Intercom/Fin) installed the Messenger in the Electron renderer — a
+programmatic loader in `src/renderer/lib/intercom.ts` boots with
+`api_base: api-iam.intercom.io` and the public app id `y4l8ype0` (build-time
+`__INTERCOM_APP_ID__` define in `vite.renderer.config.ts`), identified on launch from
+main-process truth over a new `intercom:get-identity` IPC
+(`src/main/ipc/intercom.handlers.ts`: `user_id` = the PostHog `analyticsId` so both
+tools see one person, `platform`, `version`, `subscription_status` from the billing
+snapshot, `days_since_install` from `firstLaunchDate`, `total_tracked_days` via
+`getDaysTracked`), plus a new Settings → System → **Help & support** section whose
+"Chat with us" button calls `Intercom('show')`, with the floating launcher hidden
+during onboarding and revealed when `finishOnboarding` fires the Intercom
+`onboarding_completed` custom event. Identity Verification is stubbed exactly at the
+security boundary: `services/billing/src/server.mjs` gained an authenticated
+`POST /v1/intercom/user-hash` (HMAC-SHA256 computed server-side; 503 until
+`INTERCOM_IDENTITY_VERIFICATION_SECRET` is set), the desktop fetches it through
+`getIntercomUserHash` in `src/main/services/billing.ts` (resolves null in every current
+build since `DAYLENS_BILLING_API_URL` is never set), the secret slots exist only in
+`services/billing/.env` (created locally, gitignored by the root `.env` entry) and
+`.env.example`, and no `email` attribute is sent because the app stores no account email
+anywhere (verified — the identify contract keeps a null `email` field for the day one
+exists). Still open: the founder pastes the IV secret + REST access token into
+`services/billing/.env`, does the live Messenger check (launch → Settings → Help &
+support → chat reaches Fin with the right user properties), and authors the dashboard
+pieces below; two stale premises were flagged — the session prompt's "existing Help
+area at `Settings.tsx:659`" did not exist (the section was created), and the
+landing-page Fin surface remains out of scope pending the founder confirming which
+directory the live landing page is.
+
+**Intercom dashboard work the founder still needs to author (code fires the signals):**
+
+- **Post-onboarding tour** — 3-step tooltip tour pointing at **Timeline, Apps, AI
+  Chat**, triggered on the Intercom custom event `onboarding_completed` (fired once
+  when onboarding finishes).
+- **Day-3 proactive message** — target user attribute `days_since_install >= 3`
+  (refreshed on every launch). Draft copy, refine in dashboard: *"Hey — you've had
+  Daylens for a few days now. What were you hoping it would help you figure out? And is
+  the timeline matching how your days actually feel? I read every reply — if something
+  looks off, tell me here and it usually turns into a fix. — Christian"*
+- **Identity Verification** — do not enforce IV in the dashboard until the IV secret is
+  in `services/billing/.env` AND the billing service is deployed with
+  `DAYLENS_BILLING_API_URL` wired into the build, or every Messenger boot gets rejected.
+- Segmentation attributes available now: `platform`, `version`, `subscription_status`,
+  `days_since_install`, `total_tracked_days`.

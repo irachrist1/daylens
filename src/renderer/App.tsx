@@ -12,6 +12,7 @@ import CommandPalette from './components/CommandPalette'
 import { registerCommandPaletteOpener } from './lib/commandSurface'
 import { ipc } from './lib/ipc'
 import { track } from './lib/analytics'
+import { bootIntercom } from './lib/intercom'
 import { todayString, shiftDateString } from './lib/format'
 import { handleDailySummaryNavigation } from './lib/dailySummaryNavigation'
 import Onboarding from './views/Onboarding'
@@ -305,6 +306,12 @@ export default function App() {
       applyTheme(s.theme)
       applyAppearanceSettings(s)
       setSettings(s)
+      // Identify on launch; keep the floating launcher hidden until onboarding
+      // is done so the bubble can't overlap the setup flow (Onboarding reveals
+      // it on completion). Settings → Help & support can always open the chat.
+      void bootIntercom({
+        showLauncher: s.onboardingComplete && s.onboardingState.stage === 'complete',
+      })
     }).catch((err) => {
       if (!active) return
       setLoadError(err instanceof Error ? err.message : String(err))

@@ -1779,6 +1779,23 @@ export interface DayWorkSessionsPayload {
   total_unattributed_ms: number
 }
 
+// Identity payload the renderer passes to the Intercom Messenger on boot. Only
+// public values cross this bridge — the Identity Verification secret stays in
+// services/billing, which computes userHash server-side (null until that secret
+// is configured and the billing service is reachable).
+export interface IntercomIdentity {
+  userId: string
+  // The desktop app has no connected-account email today; kept in the contract
+  // so the Messenger picks it up the day one exists.
+  email: string | null
+  userHash: string | null
+  platform: string
+  version: string
+  subscriptionStatus: string
+  daysSinceInstall: number
+  totalTrackedDays: number
+}
+
 // IPC channel names — single source of truth
 export const IPC = {
   DB: {
@@ -1914,6 +1931,9 @@ export const IPC = {
     RELAUNCH: 'app:relaunch',
     COMPLETE_ONBOARDING: 'app:complete-onboarding',
     GET_COMPUTER_NAME: 'app:get-computer-name',
+  },
+  INTERCOM: {
+    GET_IDENTITY: 'intercom:get-identity',
   },
   SYNC: {
     GET_STATUS: 'sync:get-status',

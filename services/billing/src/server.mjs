@@ -529,6 +529,22 @@ async function verifyFlutterwaveTransaction(id) {
   return payload
 }
 
+// Intercom Identity Verification: user_hash = HMAC-SHA256(user_id, IV secret).
+// The IV secret lives only in this service's .env — the desktop client must never
+// bundle it (anything in the Electron bundle is extractable), so the hash is
+// computed here and returned to the app.
+// TODO(intercom): once identity verification is enforced, bind userId to the
+// calling account on first use (first-write-wins) so one install token cannot
+// mint hashes for arbitrary ids.
+async function intercomUserHash(req, res) {
+  const secret = process.env.INTERCOM_IDENTITY_VERIFICATION_SECRET
+  if (!secret) return json(res, 503, { error: 'Intercom identity verification is not configured yet.' })
+  const { json: payload } = await body(req, 10_000)
+  const userId = typeof payload.userId === 'string' ? payload.userId.trim() : ''
+  if (!userId || userId.length > 128) return json(res, 400, { error: 'userId is required.' })
+  return json(res, 200, { userHash: crypto.createHmac('sha256', secret).update(userId).digest('hex') })
+}
+
 async function managedCompletion(req, res) {
   const account = await accountForToken(req, 'ai')
   const mode = accessMode(account)
@@ -678,6 +694,7 @@ async function route(req, res) {
       mode: snapshot.mode,
     })
   }
+  if (req.method === 'POST' && url.pathname === '/v1/intercom/user-hash') return intercomUserHash(req, res)
   if (req.method === 'POST' && url.pathname === '/v1/checkout/polar') return createPolarCheckout(account, res)
   if (req.method === 'POST' && url.pathname === '/v1/checkout/flutterwave') return createFlutterwaveCheckout(account, req, res)
   if (req.method === 'POST' && url.pathname === '/v1/billing/portal') {

@@ -18,6 +18,7 @@ import type {
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
+import { showIntercom } from '../lib/intercom'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
 import { formatUsdAmount } from '@shared/formatUsd'
@@ -1087,7 +1088,7 @@ type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory'
   | 'labels' | 'clients' | 'privacy'
-  | 'mcp' | 'capture' | 'updates'
+  | 'mcp' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
 interface SectionGroup { label: string; items: SectionDef[] }
@@ -1123,6 +1124,7 @@ const SECTION_GROUPS: SectionGroup[] = [
       { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
       { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
       { id: 'updates', label: 'Updates', keywords: 'version install download release' },
+      { id: 'help', label: 'Help & support', keywords: 'chat support contact message question bug feedback talk intercom' },
     ],
   },
 ]
@@ -1149,6 +1151,7 @@ function SectionIcon({ id }: { id: SectionId }) {
     mcp: <><rect x="2" y="3" width="12" height="10" rx="1.6" /><path d="M4.6 6.6 7 8.5 4.6 10.4" /><path d="M8.4 10.4h3" /></>,
     capture: <path d="M2 8h2.6l1.4-4.2 2.6 8.4 1.4-4.2H14" />,
     updates: <><path d="M8 2.6v6.8" /><path d="M5.2 7 8 9.8 10.8 7" /><path d="M3.2 13h9.6" /></>,
+    help: <><path d="M2.6 3.4h10.8v7.2H8.4L5.4 13.2v-2.6H2.6Z" /><path d="M5.4 6.4h5.2" /></>,
   }
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}>
@@ -3321,6 +3324,24 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       content = (
         <SectionPage title="Updates" description="Daylens keeps itself up to date. In a dev build, updates come through the dev workflow." maxWidth={760}>
           <UpdatesContent />
+        </SectionPage>
+      )
+      break
+    case 'help':
+      content = (
+        <SectionPage title="Help & support" description="Stuck, confused, or found something broken? Talk to us — a real answer, not a ticket number." maxWidth={760}>
+          <div>
+            <SettingsRow
+              first
+              title="Chat with us"
+              description="Opens the in-app messenger. Ask a question, report a bug, or tell us what you wish Daylens did — replies land right here in the app."
+              control={
+                <button type="button" style={inlineButtonStyle} onClick={() => showIntercom()}>
+                  Open chat
+                </button>
+              }
+            />
+          </div>
         </SectionPage>
       )
       break

@@ -139,6 +139,26 @@ async function request<T>(path: string, init: RequestInit = {}, retryBootstrap =
   }
 }
 
+// Intercom Identity Verification. The user_hash is HMAC-SHA256(user_id, IV secret)
+// and the secret lives only in services/billing/.env — never in this bundle, since
+// anything shipped in the client is extractable. Resolves null whenever the hash
+// can't be fetched; the Messenger then boots without identity verification.
+// TODO(intercom): inert until the founder pastes INTERCOM_IDENTITY_VERIFICATION_SECRET
+// into services/billing/.env and the billing service is deployed with
+// DAYLENS_BILLING_API_URL wired into the build.
+export async function getIntercomUserHash(userId: string): Promise<string | null> {
+  if (!apiUrl() || !userId) return null
+  try {
+    const payload = await request<{ userHash?: string }>('/v1/intercom/user-hash', {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    })
+    return typeof payload.userHash === 'string' && payload.userHash ? payload.userHash : null
+  } catch {
+    return null
+  }
+}
+
 async function bootstrap(): Promise<string> {
   const payload = await request<{ token: string }>('/v1/installations/bootstrap', {
     method: 'POST',
