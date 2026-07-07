@@ -1,16 +1,20 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import path from 'node:path'
 
 const isStandalone = process.env.STANDALONE_BUILD === '1'
+// Local .env supplies the analytics/crash keys for dev and local dist builds;
+// CI sets them as real env vars, which win over the file.
+const fileEnv = loadEnv(process.env.NODE_ENV || 'development', __dirname, '')
+const env = (name: string): string => process.env[name] || fileEnv[name] || ''
 const convexSiteUrl = JSON.stringify(
-  process.env.DAYLENS_CONVEX_SITE_URL || 'https://decisive-aardvark-847.convex.site',
+  env('DAYLENS_CONVEX_SITE_URL') || 'https://decisive-aardvark-847.convex.site',
 )
 // No hardcoded fallback keys — analytics requires an explicit POSTHOG_KEY env var.
 // When the key is absent the analytics module is a no-op.
-const posthogKey = JSON.stringify(process.env.POSTHOG_KEY || '')
-const posthogHost = JSON.stringify(process.env.POSTHOG_HOST || '')
-const sentryDsn = JSON.stringify(process.env.SENTRY_DSN || '')
-const billingApiUrl = JSON.stringify(process.env.DAYLENS_BILLING_API_URL || '')
+const posthogKey = JSON.stringify(env('POSTHOG_PROJECT_TOKEN') || env('POSTHOG_KEY'))
+const posthogHost = JSON.stringify(env('POSTHOG_HOST'))
+const sentryDsn = JSON.stringify(env('SENTRY_DSN'))
+const billingApiUrl = JSON.stringify(env('DAYLENS_BILLING_API_URL'))
 
 export default defineConfig({
   resolve: {

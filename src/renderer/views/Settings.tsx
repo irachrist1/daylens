@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ANALYTICS_EVENT } from '@shared/analytics'
@@ -1367,6 +1367,18 @@ function BillingPage({
       setError(reason instanceof Error ? reason.message : String(reason))
     })
   }, [])
+
+  // paywall_seen: once per Billing-page open, when the page shows plans the
+  // user could buy (not when a subscription is already active). Settings is
+  // the only paywall surface in the app today — there is no onboarding,
+  // proof-screen, or day-3 paywall.
+  const paywallTrackedRef = useRef(false)
+  useEffect(() => {
+    if (paywallTrackedRef.current || !access) return
+    if (access.mode === 'subscription' || access.mode === 'local_pass') return
+    paywallTrackedRef.current = true
+    track(ANALYTICS_EVENT.PAYWALL_SEEN, { trigger: 'settings' })
+  }, [access])
 
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key)

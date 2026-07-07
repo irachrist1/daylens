@@ -370,9 +370,12 @@ function maybeRecordDerivedEvents(
     maybeRecordRetention()
   }
 
-  if (event === ANALYTICS_EVENT.VIEW_OPENED && typeof properties.view === 'string') {
-    const feature = featureForView(properties.view)
-    if (feature) recordFeatureAdoption(feature, properties.view)
+  if (event === ANALYTICS_EVENT.VIEW_OPENED) {
+    const viewName = typeof properties.view_name === 'string'
+      ? properties.view_name
+      : typeof properties.view === 'string' ? properties.view : null
+    const feature = viewName ? featureForView(viewName) : null
+    if (feature && viewName) recordFeatureAdoption(feature, viewName)
   }
 
   if (event === ANALYTICS_EVENT.TIMELINE_OPENED) {
@@ -485,6 +488,14 @@ export function capture(event: AnalyticsEventName, properties?: Record<string, u
   const sanitized = sanitizeAnalyticsProperties(properties)
   captureInternal(event, sanitized)
   maybeRecordDerivedEvents(event, sanitized)
+}
+
+// The single call site for tracking_paused / tracking_resumed: every pause
+// toggle path (settings IPC, tray) reports the transition through here.
+// `reason` is 'user' for explicit toggles; excluded-app and incognito gates
+// are momentary per-sample skips, not pause transitions, and do not fire this.
+export function captureTrackingPauseTransition(paused: boolean, reason: 'user' | 'app_excluded' | 'incognito'): void {
+  capture(paused ? ANALYTICS_EVENT.TRACKING_PAUSED : ANALYTICS_EVENT.TRACKING_RESUMED, { reason })
 }
 
 export function captureRateLimited(

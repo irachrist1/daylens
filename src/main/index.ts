@@ -49,6 +49,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ANALYTICS_EVENT, classifyFailureKind, type AnalyticsEventName } from '@shared/analytics'
 import { capture, captureException, initAnalytics, shutdown } from './services/analytics'
+import { getBillingAccess } from './services/billing'
 import { registerAIHandlers } from './ipc/ai.handlers'
 import { registerDbHandlers } from './ipc/db.handlers'
 import { registerDebugHandlers } from './ipc/debug.handlers'
@@ -814,10 +815,19 @@ app.whenReady()
       ? true
       : await hasApiKey(launchProvider)
 
+    // getBillingAccess resolves locally (own key / no API URL) without network.
+    const billingAccess = await getBillingAccess().catch(() => null)
+    const daysSinceInstall = launchSettings.firstLaunchDate > 0
+      ? Math.floor((Date.now() - launchSettings.firstLaunchDate) / 86_400_000)
+      : 0
+
     capture(ANALYTICS_EVENT.APP_LAUNCHED, {
+      version: app.getVersion(),
+      days_since_install: daysSinceInstall,
+      has_completed_onboarding: reconciledSettings.onboardingComplete,
+      subscription_status: billingAccess?.mode ?? 'unavailable',
       has_ai_provider: hasAiProvider,
       os_version: os.release(),
-      onboarding_complete: reconciledSettings.onboardingComplete,
     })
 
     initDb()

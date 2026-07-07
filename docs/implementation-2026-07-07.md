@@ -140,3 +140,24 @@ without an AI provider, there is no "seen Wrapped before" flag or Wrapped teleme
 anywhere, and period Wrapped is reachable only through the command palette. It is
 headless-verified only — the founder still needs to open it in a browser and click
 through the nodes before it counts as done.
+
+---
+
+Session B (PostHog feature events) confirmed the audit's "nothing fires" verdict and
+found two independent kill switches — no build ever received the key (`.env` was never
+loaded by `vite.main.config.ts`, and no release workflow sets the secrets) and
+`analyticsOptIn` defaults off with no onboarding prompt — then fixed key injection via
+`loadEnv` plus env blocks in the macOS/Linux/Store/preview release workflows (the
+dirty `release-windows.yml` still needs the same 6-line block when Session D commits).
+Nine of the ten taxonomy events are implemented with single fire-once call sites
+(`app_launched`, `view_opened`, `analyze_day_clicked`, `ai_chat_sent`, `block_edited`,
+`tracking_paused`/`tracking_resumed` — tray toggle now instrumented too,
+`onboarding_step_completed` — centralized in `persistOnboarding` replacing 11 scattered
+calls, `paywall_seen` — Settings→Billing is the only real paywall surface, and
+`subscription_started` — fired on the billing-mode transition, price unavailable from
+the API); `crash_recovery_shown` was not implemented because no corruption screen or
+integrity check exists in the app to hook. Headless verification passed —
+`tests/featureEventTaxonomy.test.ts` guards the sanitizer allowlist, all ten payloads
+were sent through the real `posthog-node` config and PostHog returned `200 {"status":"Ok"}`
+— but the live in-app check (launch → three views → Analyze Day → chat, events landing
+within 60s) is pending the founder, and requires Settings → Privacy → analytics opt-in ON.

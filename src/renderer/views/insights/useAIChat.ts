@@ -388,6 +388,16 @@ export function useAIChat() {
     if (queryKind !== 'question') {
       track(ANALYTICS_EVENT.AI_OUTPUT_REQUESTED, analyticsContext({ export_type: queryKind, trigger }))
     }
+    // ai_chat_sent: one per user-initiated send — scheduled auto-retries of a
+    // rate-limited turn are not a new user action.
+    if (autoRetryCount === 0) {
+      track(ANALYTICS_EVENT.AI_CHAT_SENT, {
+        thread_id: requestThreadId != null ? String(requestThreadId) : 'new',
+        message_length: prompt.length,
+        has_date_context: Boolean(options?.contextOverride?.dateRange),
+        model_used: activeModel ?? 'unknown',
+      })
+    }
 
     // A fresh send supersedes any scheduled rate-limit auto-retry.
     for (const handle of Object.values(autoRetryTimeoutsRef.current)) window.clearTimeout(handle)
@@ -490,7 +500,7 @@ export function useAIChat() {
       setLoading(false)
       clearStreamingSnapshot(assistantId)
     }
-  }, [activeThreadId, hasApiKey, analyticsContext, refreshThreadsAfterTurn])
+  }, [activeThreadId, hasApiKey, analyticsContext, activeModel, refreshThreadsAfterTurn])
 
   // Stable submit reference for the memoized composer: its only re-render
   // trigger should be `loading`, not a fresh callback identity each render.

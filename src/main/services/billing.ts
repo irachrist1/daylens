@@ -11,6 +11,8 @@ import type {
   BillingUsageType,
   PaymentRecord,
 } from '@shared/types'
+import { ANALYTICS_EVENT } from '@shared/analytics'
+import { capture } from './analytics'
 import { getDb } from './database'
 import { estimateUsageCostUsd, lookupModelPricing } from './modelPricing'
 import { getSecureStore } from './secureStore'
@@ -168,6 +170,14 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
   if (!options.force && cachedAccess && Date.now() - cachedAccess.at < MANAGED_STATE_TTL_MS) return cachedAccess.value
   try {
     const value = await request<BillingAccessSnapshot>('/v1/billing')
+    // subscription_started: the app learns a purchase completed only by the
+    // access snapshot flipping into a paid mode after the browser checkout.
+    // (The API reports no price; Settings is the only checkout entry point.)
+    const previousMode = cachedAccess?.value.mode
+    const enteredPaidMode = (value.mode === 'subscription' || value.mode === 'local_pass') && previousMode !== value.mode
+    if (previousMode && enteredPaidMode) {
+      capture(ANALYTICS_EVENT.SUBSCRIPTION_STARTED, { plan: value.mode, trigger: 'settings' })
+    }
     cachedAccess = { value, at: Date.now() }
     return value
   } catch (error) {

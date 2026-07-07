@@ -96,6 +96,18 @@ const MAKE_IT_YOURS: OnboardingStage[] = ['about', 'voice', 'work', 'connections
 const STAGE_FLOW: OnboardingStage[] = ['welcome', 'why', 'proof', 'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
 const SYSTEM_STAGES = new Set<OnboardingStage>(['relaunch_required', 'verifying_permission'])
 
+// Ordered flow for onboarding_step_completed indexing. Unlike STAGE_FLOW (the
+// Back button), this includes the mac permission stage — completing it is a
+// real funnel step the analytics must count.
+const MAC_ANALYTICS_FLOW: OnboardingStage[] = ['welcome', 'why', 'permission', 'proof', 'tour', 'superpowers', 'about', 'voice', 'work', 'connections', 'privacy', 'ai_setup', 'ready']
+
+// Collapse system / legacy stages onto the funnel step they belong to.
+function analyticsStage(stage: OnboardingStage): OnboardingStage {
+  if (SYSTEM_STAGES.has(stage)) return 'permission'
+  if (stage === 'personalize') return 'about'
+  return stage
+}
+
 // The "why am I installing this?" story, told one calm beat at a time, with Lumen
 // acting it out, not three stacked FAQ boxes.
 const WHY_BEATS: Array<{ scene: 'diary' | 'device' | 'recap'; expression: MascotExpression; title: string; body: string }> = [
@@ -686,6 +698,20 @@ export default function Onboarding({
     nextStage: OnboardingStage,
     partial: Partial<AppSettings['onboardingState']> = {},
   ) {
+    // onboarding_step_completed fires here — the single choke point every
+    // stage transition passes through — exactly once per forward step.
+    // Backward navigation and same-stage state updates don't fire.
+    const flow = isMac ? MAC_ANALYTICS_FLOW : STAGE_FLOW
+    const fromIndex = flow.indexOf(analyticsStage(settings.onboardingState.stage))
+    const toIndex = flow.indexOf(analyticsStage(nextStage))
+    if (fromIndex >= 0 && toIndex > fromIndex) {
+      track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+        step_name: flow[fromIndex],
+        step_index: fromIndex,
+        total_steps: flow.length,
+      })
+    }
+
     const nextState = {
       ...settings.onboardingState,
       ...partial,
@@ -998,20 +1024,10 @@ export default function Onboarding({
   // proceed without granting (capture simply has nothing to read until they do)
   // and grant later in Settings.
   async function skipPermission() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-      platform,
-      step: 'permission',
-      surface: 'onboarding',
-    })
     await persistOnboarding('proof', { proofState: 'collecting' })
   }
 
   async function handleContinueFromWelcome() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-      platform,
-      step: 'welcome',
-      surface: 'onboarding',
-    })
     // Persist the name as soon as it's given so the rest of the flow (and a
     // mid-flow reload) is already personalized. Fall back to the placeholder.
     const resolvedName = nameDraft.trim() || namePlaceholder.trim()
@@ -1025,25 +1041,18 @@ export default function Onboarding({
       setWhyIndex((i) => i + 1)
       return
     }
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'why', surface: 'onboarding' })
     void persistOnboarding(isMac ? 'permission' : 'proof', {
       proofState: isMac ? 'idle' : 'collecting',
     })
   }
 
   function skipWhy() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'why', surface: 'onboarding' })
     void persistOnboarding(isMac ? 'permission' : 'proof', {
       proofState: isMac ? 'idle' : 'collecting',
     })
   }
 
   async function continueFromProof() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-      platform,
-      step: 'proof',
-      surface: 'onboarding',
-    })
     await persistOnboarding('tour', {
       proofState: proof.ready ? 'ready' : settings.onboardingState.proofState,
     })
@@ -1054,17 +1063,14 @@ export default function Onboarding({
       setTourIndex((index) => index + 1)
       return
     }
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'tour', surface: 'onboarding' })
     void persistOnboarding('superpowers')
   }
 
   function continueFromSuperpowers() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'superpowers', surface: 'onboarding' })
     void persistOnboarding('about')
   }
 
   async function continueFromAbout() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'about', surface: 'onboarding' })
     await ipc.settings.set({
       userRole: userRoleLabel,
       userGoals: Array.from(goals),
@@ -1079,7 +1085,6 @@ export default function Onboarding({
   }
 
   async function continueFromVoice() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'voice', surface: 'onboarding' })
     await ipc.settings.set({ summaryVoice })
     await persistOnboarding('work')
   }
@@ -1131,7 +1136,6 @@ export default function Onboarding({
   }
 
   async function continueFromWork() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'work', surface: 'onboarding' })
     await ipc.settings.set({
       focusApps: Array.from(focusApps),
       interestedCategories: Array.from(interestedCategories),
@@ -1140,13 +1144,11 @@ export default function Onboarding({
   }
 
   async function continueFromConnections() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'connections', surface: 'onboarding' })
     await ipc.settings.set({ userClients: clients, workRhythm })
     await persistOnboarding('privacy')
   }
 
   async function continueFromPrivacy() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, { platform, step: 'privacy', surface: 'onboarding' })
     const nextExcludedApps = Array.from(excludedApps)
     await ipc.settings.set({
       // Excluding specific apps requires the controls master switch on. Turn it
@@ -1170,11 +1172,6 @@ export default function Onboarding({
   }
 
   async function continueFromAiSetup() {
-    track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-      platform,
-      step: 'ai_setup',
-      surface: 'onboarding',
-    })
     await persistOnboarding('ready', {
       aiSetupState: aiConnected ? 'connected' : 'dismissed',
     })

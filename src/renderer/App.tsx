@@ -186,11 +186,26 @@ function AppContent({ settings }: { settings: AppSettings | null }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [platform])
 
-  // Track route changes
+  // Track route changes. Timeline fires its own view_opened (it knows the
+  // date context and block count); the wrap overlays fire view_name 'recap'.
   useEffect(() => {
-    const view = location.pathname.replace('/', '') || 'timeline'
-    track(ANALYTICS_EVENT.VIEW_OPENED, { view })
+    const route = location.pathname.replace('/', '') || 'timeline'
+    if (route === 'timeline') return
+    const viewName = route === 'ai' ? 'insights' : route
+    track(ANALYTICS_EVENT.VIEW_OPENED, { view_name: viewName })
   }, [location.pathname])
+
+  const wrapOpen = wrappedOpen || periodWrap !== null
+  useEffect(() => {
+    if (!wrapOpen) return
+    const wrapDate = wrappedOpen ? wrappedDay?.date : periodWrap?.anchorDate
+    track(ANALYTICS_EVENT.VIEW_OPENED, {
+      view_name: 'recap',
+      date_context: wrapDate === todayString() ? 'today' : 'past',
+    })
+    // Fire once per overlay open, not on unrelated re-renders while it's up.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrapOpen])
 
   // Day-7 automatic feedback prompt
   useEffect(() => {

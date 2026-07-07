@@ -7,7 +7,7 @@ import {
   setApiKey,
   clearApiKey,
 } from '../services/settings'
-import { capture, updateAnalyticsPreference } from '../services/analytics'
+import { capture, captureTrackingPauseTransition, updateAnalyticsPreference } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
@@ -45,6 +45,7 @@ export function registerSettingsHandlers(): void {
         // The event is best-effort telemetry for gap labeling; the pause
         // itself is already persisted in settings.
       }
+      captureTrackingPauseTransition(Boolean(partial.trackingPaused), 'user')
     }
 
     const analyticsWillEnable = !previous.analyticsOptIn && partial.analyticsOptIn === true

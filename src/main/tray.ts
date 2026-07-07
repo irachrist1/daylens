@@ -3,6 +3,7 @@ import path from 'node:path'
 import { getSettings, setSettings } from './services/settings'
 import { getDb } from './services/database'
 import { recordActivityStateEvent } from './db/queries'
+import { captureTrackingPauseTransition } from './services/analytics'
 
 let tray: Tray | null = null
 let trayError: string | null = null
@@ -102,6 +103,7 @@ function buildContextMenu(controller: TrayController): Electron.Menu {
             source: 'tray',
           })
         } catch { /* best-effort gap labeling; the pause itself still applies */ }
+        captureTrackingPauseTransition(!paused, 'user')
         void setSettings({ trackingPaused: !paused }).then(() => refreshTrayMenu(controller))
       },
     },

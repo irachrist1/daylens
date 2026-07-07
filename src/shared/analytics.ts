@@ -2,6 +2,13 @@ export const ANALYTICS_EVENT = {
   APP_LAUNCHED: 'app_launched',
   APP_CRASHED: 'app_crashed',
   VIEW_OPENED: 'view_opened',
+  ANALYZE_DAY_CLICKED: 'analyze_day_clicked',
+  AI_CHAT_SENT: 'ai_chat_sent',
+  BLOCK_EDITED: 'block_edited',
+  TRACKING_PAUSED: 'tracking_paused',
+  TRACKING_RESUMED: 'tracking_resumed',
+  PAYWALL_SEEN: 'paywall_seen',
+  SUBSCRIPTION_STARTED: 'subscription_started',
 
   ONBOARDING_STARTED: 'onboarding_started',
   ONBOARDING_STEP_COMPLETED: 'onboarding_step_completed',
@@ -128,6 +135,17 @@ const SAFE_STRING_KEYS = new Set([
   'artifact_kind',
   'byte_size_bucket',
   'thread_action',
+  // Feature-event taxonomy (2026-07-07): the ten core product events.
+  'view_name',
+  'date_context',
+  'date',
+  'what_changed',
+  'block_id',
+  'thread_id',
+  'model_used',
+  'step_name',
+  'subscription_status',
+  'plan',
 ])
 
 const SAFE_NUMBER_KEYS = new Set([
@@ -149,6 +167,15 @@ const SAFE_NUMBER_KEYS = new Set([
   'rejected_shape_count',
   'duration_sec',
   'target_minutes',
+  // Feature-event taxonomy (2026-07-07).
+  'block_count',
+  'block_count_before',
+  'tracked_hours',
+  'message_length',
+  'days_since_install',
+  'step_index',
+  'total_steps',
+  'price',
 ])
 
 const SAFE_BOOLEAN_KEYS = new Set([
@@ -160,6 +187,9 @@ const SAFE_BOOLEAN_KEYS = new Set([
   'onboarding_complete',
   'reset_context',
   'reused_context',
+  // Feature-event taxonomy (2026-07-07).
+  'has_completed_onboarding',
+  'has_date_context',
 ])
 
 const SAFE_ARRAY_KEYS = new Set([
@@ -250,7 +280,9 @@ export function sanitizeAnalyticsProperties(
 
     if (SAFE_NUMBER_KEYS.has(key)) {
       if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
-        sanitized[key] = Math.round(rawValue)
+        // Two decimals: integers pass through unchanged; fractional metrics
+        // (e.g. tracked_hours) keep useful precision without leaking noise.
+        sanitized[key] = Math.round(rawValue * 100) / 100
       }
       continue
     }
@@ -341,6 +373,7 @@ export function classifyFailureKind(error: unknown): string {
 export function featureForView(view: string): AnalyticsFeature | null {
   if (view === 'timeline') return 'timeline'
   if (view === 'apps') return 'apps'
-  if (view === 'ai') return 'ai'
+  // 'ai' is the route name; 'insights' is the view_name the taxonomy uses.
+  if (view === 'ai' || view === 'insights') return 'ai'
   return null
 }

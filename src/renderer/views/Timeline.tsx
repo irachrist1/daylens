@@ -927,6 +927,7 @@ function BlockEditModal({
     try {
       const { purged } = await ipc.db.purgeTimelineBlock({ blockId: block.id, date: payload.date })
       if (purged) {
+        track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: 'deleted' })
         daySummaryRecapCache.delete(payload.date)
         onDeleted()
         await onRefresh()
@@ -959,6 +960,16 @@ function BlockEditModal({
       if (spanDraft?.changed) {
         // Applied last: a trim re-shapes the day and retires block ids.
         await ipc.db.setBlockSpan({ blockId: block.id, date: payload.date, startMs: spanDraft.startMs, endMs: spanDraft.endMs })
+      }
+      // One event per save; when several fields changed, report the most
+      // structural one (time > category > label).
+      const whatChanged = spanDraft?.changed
+        ? 'time'
+        : categoryDraft !== block.dominantCategory
+          ? 'category'
+          : (title && title !== block.label.current) ? 'label' : null
+      if (whatChanged) {
+        track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: whatChanged })
       }
       daySummaryRecapCache.delete(payload.date)
       await onRefresh()
@@ -1298,6 +1309,11 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
   // evidence is thin.
   const handleAnalyze = async (hint?: string) => {
     if (analyzing) return
+    track(ANALYTICS_EVENT.ANALYZE_DAY_CLICKED, {
+      date: payload.date,
+      tracked_hours: payload.totalSeconds / 3600,
+      block_count_before: payload.blocks.length,
+    })
     setAnalyzing(true)
     setAnalyzeStatus(null)
     try {
@@ -2166,6 +2182,7 @@ export default function Timeline() {
   const [nowMs, setNowMs] = useState(() => Date.now())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const lastTimelineOpenKeyRef = useRef<string | null>(null)
+  const lastViewOpenedKeyRef = useRef<string | null>(null)
   const lastBlockOpenKeyRef = useRef<string | null>(null)
   // After a merge the old block ids vanish; we stash the merged span's start
   // time so the next payload can reselect the single block that now covers it.
@@ -2350,6 +2367,21 @@ export default function Timeline() {
       tracked_time_bucket: trackedTimeBucket(payload?.totalSeconds ?? 0),
       trigger: 'navigation',
       view,
+    })
+  }, [date, payload, view])
+
+  // view_opened for the timeline: once per navigation (view+date), with the
+  // block count — unlike TIMELINE_OPENED above, it does not re-fire as live
+  // tracking grows the same day's data. Non-timeline routes fire in App.tsx.
+  useEffect(() => {
+    if (!payload) return
+    const key = `${view}:${date}`
+    if (lastViewOpenedKeyRef.current === key) return
+    lastViewOpenedKeyRef.current = key
+    track(ANALYTICS_EVENT.VIEW_OPENED, {
+      view_name: 'timeline',
+      date_context: date === todayString() ? 'today' : 'past',
+      block_count: payload.blocks.length,
     })
   }, [date, payload, view])
 
