@@ -236,7 +236,15 @@ function parseSessionsForDate(jsonPath: string, date: string): ParsedSession[] {
 
 /** Plausible local-store locations per known focus app. Store formats are not
  *  documented, so these are best guesses — parsing is a bonus, not a
- *  requirement (see parseSessionsForDate's silent fallbacks). */
+ *  requirement (see parseSessionsForDate's silent fallbacks).
+ *
+ *  Investigated on a real install 2026-07-08: Raycast keeps its activity
+ *  history (including Focus sessions) in raycast-activities-enc.sqlite,
+ *  which is SQLCipher-ENCRYPTED — no SQLite magic header, unreadable without
+ *  Raycast's own key. Its defaults hold only the last-used session settings,
+ *  not history. So for Raycast, presence + empty sessions is not a shortcut,
+ *  it is the ceiling; the JSON candidates below stay only in case a future
+ *  Raycast version exports one. */
 function candidateStorePaths(app: string, homeDir: string): string[] {
   switch (app) {
     case 'Raycast Focus':

@@ -2,7 +2,7 @@
 // trusted blocks the Timeline reads.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDaySnapshot, computeSnapshotHash } from '../src/main/lib/daySnapshot.ts'
+import { buildDaySnapshot, computeSnapshotHash, isCurrentSnapshot, SNAPSHOT_BUILDER_VERSION } from '../src/main/lib/daySnapshot.ts'
 import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import type { WorkKind } from '../src/shared/workKind.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
@@ -141,4 +141,33 @@ test('an empty day yields an empty snapshot', () => {
   assert.equal(snap.dominantWorkCategory, null)
   assert.equal(snap.threads.length, 0)
   assert.equal(snap.longestBlock, null)
+})
+
+// ─── Stage 0 period audit regressions (2026-07-08) ───────────────────────────
+
+test('snapshots are stamped with the current builder version', () => {
+  const snap = buildDaySnapshot(makePayload([
+    makeBlock({ label: 'Real work', startOffsetMin: 0, durationMin: 60, kind: 'work', category: 'development' }),
+  ]))
+  assert.equal(snap.builderVersion, SNAPSHOT_BUILDER_VERSION)
+  assert.ok(isCurrentSnapshot(snap))
+  assert.ok(!isCurrentSnapshot({ builderVersion: undefined }))
+  assert.ok(!isCurrentSnapshot({ builderVersion: SNAPSHOT_BUILDER_VERSION - 1 }))
+})
+
+test('a tool brand or terminal command never becomes a thread or stretch label', () => {
+  const snap = buildDaySnapshot(makePayload([
+    makeBlock({ label: '✳ Claude Code', startOffsetMin: 0, durationMin: 60, kind: 'work', category: 'communication', intentRole: 'execution', intentSubject: '✳ Claude Code' }),
+    makeBlock({ label: 'npx @agent-native/core@latest skills add visual-plans', startOffsetMin: 70, durationMin: 60, kind: 'work', category: 'development', intentRole: 'execution', intentSubject: 'npx @agent-native/core@latest skills add visual-plans' }),
+  ]))
+  assert.equal(snap.threads.length, 0, `leaked threads: ${snap.threads.map((t) => t.subject).join(', ')}`)
+  if (snap.longestBlock) assert.equal(snap.longestBlock.label, '')
+})
+
+test('meetings snapshot field is the SPAN of meeting blocks', () => {
+  // A 73-minute meeting block with only 60 active minutes: span is the truth.
+  const meeting = makeBlock({ label: 'Team sync', startOffsetMin: 0, durationMin: 60, kind: 'work', category: 'meetings' })
+  meeting.endTime = meeting.startTime + 73 * 60_000
+  const snap = buildDaySnapshot(makePayload([meeting]))
+  assert.equal(snap.meetingsSpanSeconds, 73 * 60)
 })

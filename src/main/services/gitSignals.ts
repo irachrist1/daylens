@@ -33,8 +33,9 @@ const SKIP_DIR_NAMES = new Set([
 ])
 
 /** HOME children that look like development roots: "Dev", "Dev-Personal",
- *  "Projects", "code", "workspace-acme"… */
-const DEV_ROOT_RE = /^(dev|develop|developer|development|projects?|code|coding|src|repos?|git|github|work|workspaces?)([-_ ].*)?$/i
+ *  "Projects", "code", "workspace-acme", and Visual Studio's default
+ *  "source" (C:\Users\<name>\source\repos). */
+const DEV_ROOT_RE = /^(dev|develop|developer|development|projects?|code|coding|source|src|repos?|git|github|work|workspaces?)([-_ ].*)?$/i
 
 function exec(cmd: string, args: string[], timeoutMs: number, cwd?: string): Promise<string | null> {
   return new Promise((resolve) => {

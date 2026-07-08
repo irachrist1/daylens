@@ -1167,6 +1167,10 @@ export interface DaySnapshot {
    *  active seconds (a 73-minute call is 73 minutes even hands-off). Additive;
    *  absent on snapshots frozen before 2026-07-08. */
   meetingsSpanSeconds?: number
+  /** SNAPSHOT_BUILDER_VERSION at freeze time. A frozen row whose version is
+   *  older than the current builder is stale by construction and gets rebuilt
+   *  once on read — a hash comparison alone can't see a LOGIC change. */
+  builderVersion?: number
   /** Hash of the source facts — lets us detect when a frozen day needs refreezing. */
   factsHash: string
   /** ms epoch when frozen; 0 means provisional (today, still live). */

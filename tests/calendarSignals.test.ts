@@ -183,9 +183,9 @@ test('parses a full PowerShell output block, dropping malformed lines', () => {
 // ─── resolveIcalBuddyBinary ──────────────────────────────────────────────────
 
 test('resolveIcalBuddyBinary returns null when nothing on PATH or the known Homebrew locations exists', () => {
-  // Hermetic: point PATH at an empty scratch dir so this never depends on
-  // whether the machine running the suite actually has icalBuddy installed.
-  const binary = resolveIcalBuddyBinary({ PATH: '/nonexistent/scratch/dir' })
+  // Hermetic: point PATH and the fallback dirs at nonexistent locations so
+  // this never depends on whether the machine actually has icalBuddy.
+  const binary = resolveIcalBuddyBinary({ PATH: '/nonexistent/scratch/dir' }, ['/nonexistent/homebrew'])
   assert.equal(binary, null)
 })
 

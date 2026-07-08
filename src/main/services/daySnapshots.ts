@@ -17,7 +17,7 @@ import {
   upsertDaySnapshot,
 } from '../db/queries'
 import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
-import { buildDaySnapshot } from '../lib/daySnapshot'
+import { buildDaySnapshot, isCurrentSnapshot } from '../lib/daySnapshot'
 
 function hasActivityOn(db: Database.Database, date: string): boolean {
   const [fromMs, toMs] = localDayBounds(date)
@@ -85,7 +85,11 @@ export function getDaySnapshotsForRange(startDate: string, endDate: string): Day
   for (let i = 0; i <= 400 && cursor <= endDate; i += 1) {
     if (cursor < today) {
       const cached = frozen.get(cursor)
-      if (cached && cached.totalActiveSeconds > 0 && cached.finalizedAt > 0) {
+      // Serve a frozen row only when the CURRENT builder made it. A row from
+      // an older builder is stale by construction (kind resolution, meeting
+      // truth, and subject guards all changed 2026-07-08) and would otherwise
+      // be served forever — the hash check below never runs on this fast path.
+      if (cached && cached.totalActiveSeconds > 0 && cached.finalizedAt > 0 && isCurrentSnapshot(cached)) {
         out.push(cached)
       } else {
         const built = getOrBuildDaySnapshot(cursor)

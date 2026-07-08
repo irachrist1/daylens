@@ -20,6 +20,19 @@ import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { effectiveBlockKind, kindForDomain } from '@shared/workKind'
 import { friendlyDomain } from '@shared/humanize'
+import { cleanWorkSubject } from '@shared/workNameGuards'
+
+/** Bumped when the snapshot builder's semantics change (kind resolution,
+ *  meeting truth, subject guards) so the range reader knows a frozen row
+ *  predates the current logic and must be rebuilt once. v2: 2026-07-08 —
+ *  distribution-first kind, span-based meetings, work-subject guards. */
+export const SNAPSHOT_BUILDER_VERSION = 2
+
+/** True when a frozen row was built by the CURRENT builder and can be served
+ *  as-is; a versionless or older row must go through a rebuild-and-compare. */
+export function isCurrentSnapshot(snapshot: Pick<DaySnapshot, 'builderVersion'>): boolean {
+  return snapshot.builderVersion === SNAPSHOT_BUILDER_VERSION
+}
 
 const THREAD_MIN_SECONDS = 10 * 60
 const LONGEST_MIN_SECONDS = 10 * 60
@@ -120,7 +133,11 @@ export function buildDaySnapshot(payload: DayTimelinePayload): DaySnapshot {
     if (seconds < LONGEST_MIN_SECONDS) continue
     if (!longest || seconds > longest.seconds) {
       const intent = effectiveIntent(block)
-      longest = { label: intent.subject ?? effectiveLabel(block), seconds: Math.round(seconds), startClock: formatClock(block.startTime) }
+      // Same guard as threads: the stretch is real even when its name isn't;
+      // an empty label lets the display fall back honestly instead of
+      // presenting "✳ Claude Code" as what the work WAS.
+      const label = cleanWorkSubject(intent.subject ?? effectiveLabel(block)) ?? ''
+      longest = { label, seconds: Math.round(seconds), startClock: formatClock(block.startTime) }
     }
   }
 
@@ -141,6 +158,7 @@ export function buildDaySnapshot(payload: DayTimelinePayload): DaySnapshot {
     threads,
     longestBlock: longest,
     meetingsSpanSeconds: Math.round(meetingsSpanSeconds),
+    builderVersion: SNAPSHOT_BUILDER_VERSION,
     factsHash: '',
     finalizedAt: 0,
   }
@@ -159,8 +177,13 @@ function deriveThreads(blocks: WorkContextBlock[]): DaySnapshotThread[] {
     if (seconds < THREAD_MIN_SECONDS) continue
     const intent = effectiveIntent(block)
     if (!THREAD_ROLES.has(intent.role)) continue
-    const subject = (intent.subject ?? effectiveLabel(block)).trim()
-    if (subject.length < 3) continue
+    // Sanitize-then-check: capture decorations are stripped ("⠂ Review
+    // article skills" keeps its real subject), while a tool brand, terminal
+    // command, or joined tab title dies. Real leaks from the Jul 1-7 week:
+    // "✳ Claude Code" as the week's biggest thread, "npx @agent-native/
+    // core@latest skills add visual-plans" as a thread.
+    const subject = cleanWorkSubject(intent.subject ?? effectiveLabel(block))
+    if (!subject) continue
     const key = subject.toLowerCase()
     const prev = bySubject.get(key)
     if (prev) prev.seconds += seconds

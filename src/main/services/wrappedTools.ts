@@ -29,7 +29,7 @@ import { inferWorkIntent } from '@shared/workIntent'
 import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import { getSettings } from './settings'
 import { getTimelineDayPayload } from './workBlocks'
-import { buildDaySnapshot } from '../lib/daySnapshot'
+import { buildDaySnapshot, isCurrentSnapshot } from '../lib/daySnapshot'
 import { getDaySnapshotRowsForRange, getReconciledDomainIntervals, getSessionsForRange } from '../db/queries'
 import { collectExternalSignals, getExternalSignal } from './externalSignals'
 import type { DaySnapshot } from '@shared/types'
@@ -81,7 +81,9 @@ function snapshotsForRange(db: Database.Database, startDate: string, endDate: st
   const out: DaySnapshot[] = []
   for (let date = startDate; date <= endDate; date = shiftLocalDateString(date, 1)) {
     const stored = frozen.get(date)
-    if (stored) { out.push(stored); continue }
+    // A frozen row from an older builder is stale by construction — recompute
+    // live (read-only path: never persist here; the service owns refreezing).
+    if (stored && isCurrentSnapshot(stored)) { out.push(stored); continue }
     const [fromMs, toMs] = localDayBounds(date)
     if (getSessionsForRange(db, fromMs, toMs).length === 0) continue
     try {
