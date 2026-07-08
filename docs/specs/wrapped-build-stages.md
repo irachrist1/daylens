@@ -6,7 +6,7 @@ stamped here when it lands.
 
 | Stage | Status |
 | --- | --- |
-| 0 — Data layer | **Done** 2026-07-08, commit `c60d41e` (renderer-side 0.1 fixes ride uncommitted with the deck rewrite until the founder tests it) |
+| 0 — Data layer | **Done** 2026-07-08, commits `c60d41e` + `9323dfe` (period audit, live-verified calendar, Windows review). Renderer-side 0.1 fixes ride uncommitted with the deck rewrite until the founder tests it. Known edges: Windows paths reviewed by GPT-5.5 but never run on real Windows; Outlook Restrict filter is locale-sensitive (needs a non-US-locale check); Raycast Focus history is SQLCipher-encrypted so focus signals are presence-only. |
 
 ---
 
