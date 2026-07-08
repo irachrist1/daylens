@@ -9,6 +9,7 @@ import type {
   ProofState,
   TrackingPermissionDetails,
   TrackingPermissionState,
+  NotificationPermissionState,
   LinuxTrackingDiagnostics,
 } from '@shared/types'
 import type { AppCategory, SummaryVoice, WorkRhythm } from '@shared/types'
@@ -603,6 +604,7 @@ export default function Onboarding({
   const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
   const [linuxTracking, setLinuxTracking] = useState<LinuxTrackingDiagnostics | null>(null)
   const [settingsHandoff, setSettingsHandoff] = useState(false)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>('not-determined')
   const onboardingTrackedRef = useRef(false)
   const proofTrackedRef = useRef(false)
   const paywallTrackedRef = useRef(false)
@@ -641,6 +643,44 @@ export default function Onboarding({
   useEffect(() => {
     onboardingStateRef.current = settings.onboardingState
   }, [settings.onboardingState])
+
+  useEffect(() => {
+    if (stage !== 'ai_setup' && stage !== 'ready') return
+    void ipc.notifications.getPermissionState().then(setNotificationPermission).catch(() => {
+      setNotificationPermission('unsupported')
+    })
+  }, [stage])
+
+  // Refresh notification permission on window focus during ready stage so the
+  // status updates when the user returns from System Settings after toggling.
+  useEffect(() => {
+    if (!isMac || stage !== 'ready') return
+    if (notificationPermission !== 'not-determined' && notificationPermission !== 'denied') return
+    const onFocus = () => {
+      void ipc.notifications.getPermissionState().then(setNotificationPermission).catch(() => {
+        setNotificationPermission('unsupported')
+      })
+    }
+    window.addEventListener('focus', onFocus)
+    return () => { window.removeEventListener('focus', onFocus) }
+  }, [isMac, stage, notificationPermission])
+
+  async function requestNotificationPermission() {
+    setBusy(true)
+    setErrorMessage(null)
+    try {
+      const next = await ipc.notifications.requestPermission()
+      setNotificationPermission(next)
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function openNotificationSettings() {
+    await ipc.notifications.openSettings()
+  }
 
   // paywall_seen: once per onboarding run, when the AI-setup stage actually
   // shows plans the user could buy (managed billing reachable, nothing paid
@@ -998,6 +1038,9 @@ export default function Onboarding({
         interestedCategories: Array.from(interestedCategories),
         trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
         trackingExcludedApps: nextExcludedApps,
+        dailySummaryEnabled: true,
+        morningNudgeEnabled: true,
+        distractionAlertsEnabled: true,
       })
       await ipc.app.completeOnboarding()
       track(ANALYTICS_EVENT.ONBOARDING_COMPLETED, {
@@ -1195,6 +1238,11 @@ export default function Onboarding({
   }
 
   async function continueFromAiSetup() {
+    if (notificationPermission === 'not-determined') {
+      await requestNotificationPermission()
+    } else if (notificationPermission === 'denied') {
+      await openNotificationSettings()
+    }
     await persistOnboarding('ready', {
       aiSetupState: aiConnected ? 'connected' : 'dismissed',
     })
@@ -1213,6 +1261,22 @@ export default function Onboarding({
     permissionState === 'granted' || permissionState === 'awaiting_relaunch'
       ? 'ok'
       : settingsHandoff
+        ? 'waiting'
+        : 'pending'
+
+  const notificationStatusLabel =
+    notificationPermission === 'granted'
+      ? 'Enabled'
+      : notificationPermission === 'denied'
+        ? 'Blocked in System Settings'
+        : notificationPermission === 'unsupported'
+          ? 'Not supported on this system'
+          : 'Not yet enabled'
+
+  const notificationStatusTone: 'ok' | 'waiting' | 'pending' =
+    notificationPermission === 'granted'
+      ? 'ok'
+      : notificationPermission === 'denied'
         ? 'waiting'
         : 'pending'
 
@@ -1721,9 +1785,9 @@ export default function Onboarding({
                 <div className="ob-plan ob-plan-free">
                   <div className="ob-plan-head">
                     <span className="ob-plan-name">Free, on us</span>
-                    <span className="ob-plan-badge">$5 / month</span>
+                    <span className="ob-plan-badge">$5 once</span>
                   </div>
-                  <div className="ob-plan-body">Enough AI for your daily recaps, wraps and briefs. No card, no key. You are on this the moment you open Daylens.</div>
+                  <div className="ob-plan-body">$5 of AI credit to get started. No card, no key. You are on this the moment you open Daylens.</div>
                 </div>
                 <div className="ob-plan ob-plan-plus">
                   <div className="ob-plan-head">
@@ -1740,8 +1804,8 @@ export default function Onboarding({
 
             <details className="ob-ai-byok" open={!managedAvailable}>
               <summary>
-                <span className="ob-ai-byok-title">Bring your own key</span>
-                <span className="ob-ai-byok-sub">Already have a Claude, OpenAI, Gemini or OpenRouter key? Use it and you control billing.</span>
+                <span className="ob-ai-byok-title">Bring your own AI</span>
+                <span className="ob-ai-byok-sub">Use an API key, or route through your local Claude, ChatGPT or Gemini CLI if it is installed.</span>
               </summary>
               <div className="ob-ai-byok-body">
                 <ConnectAI
@@ -1752,6 +1816,35 @@ export default function Onboarding({
                 />
               </div>
             </details>
+
+            <div className="ob-callout">
+              <div>
+                <div className="ob-callout-title">Morning briefs and evening wraps</div>
+                <div className="ob-callout-body">
+                  Daylens can nudge you at the start and end of your day, plus warn when focus drifts. We need macOS notification permission before you finish setup.
+                </div>
+              </div>
+              <div className={`ob-status ob-status-${notificationStatusTone}`} style={{ marginTop: 12 }}>
+                <span className="ob-status-dot" />
+                <span className="ob-status-label">{notificationStatusLabel}</span>
+              </div>
+              {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+                <button
+                  type="button"
+                  className="ob-btn-secondary ob-btn-sm"
+                  style={{ marginTop: 12 }}
+                  onClick={() => void (notificationPermission === 'denied' ? openNotificationSettings() : requestNotificationPermission())}
+                  disabled={busy}
+                >
+                  {notificationPermission === 'denied' ? 'Open System Settings' : 'Turn on notifications'}
+                </button>
+              )}
+              {notificationPermission === 'denied' && (
+                <div className="ob-callout-body" style={{ marginTop: 8 }}>
+                  Notifications are off for Daylens. Open System Settings → Notifications → Daylens and allow alerts.
+                </div>
+              )}
+            </div>
           </Stage>
         )
 
@@ -1786,6 +1879,26 @@ export default function Onboarding({
                 <div key={q} className="ob-try-chip">{q}</div>
               ))}
             </div>
+
+            {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+              <div className="ob-callout" style={{ marginTop: 16 }}>
+                <div className="ob-callout-title">Notifications still off</div>
+                <div className="ob-callout-body">
+                  {notificationPermission === 'denied'
+                    ? 'Daylens cannot send morning briefs or evening wraps until you enable notifications in System Settings → Notifications → Daylens.'
+                    : 'Allow notifications so Daylens can reach you with briefs, wraps, and focus nudges.'}
+                </div>
+                <button
+                  type="button"
+                  className="ob-btn-secondary ob-btn-sm"
+                  style={{ marginTop: 12 }}
+                  onClick={() => void (notificationPermission === 'denied' ? openNotificationSettings() : requestNotificationPermission())}
+                  disabled={busy}
+                >
+                  {notificationPermission === 'denied' ? 'Open System Settings' : 'Turn on notifications'}
+                </button>
+              </div>
+            )}
           </Stage>
         )
 

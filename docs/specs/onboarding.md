@@ -60,7 +60,7 @@ normal person — a proposal, a call, an inbox — **never developer-specific**.
 11. **Keep it private** — apps to **never track**, added via a "+ keep private" affordance with
     quick-add from your real apps (reuses tracking exclusions). Not a repeated full app list.
 12. **AI setup** — care-first money moment, adaptive to the real `getBillingAccess()` snapshot:
-    leads with **$5 of AI free every month, on us** (covers recaps/wraps/briefs), offers a paid
+    leads with **$5 of AI credit, on us** (covers recaps/wraps/briefs), offers a paid
     plan for unlimited chat when checkout is live, and **bring your own key** for anyone who'd
     rather not pay. Optional and clearly separate; capture and Timeline work without it.
 13. **Ready** — *"You're all set, {name}."* Reflects the whole profile back — role, voice, real-work

@@ -47,7 +47,16 @@ export function registerWrappedNarrativeProvider(runner: ProviderRunner): void {
   providerRunner = runner
 }
 
-const NARRATIVE_TIMEOUT_MS = 12_000
+// Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_narrative = 40s); sits
+// just above it so the job timeout governs. A full Sonnet deck runs ~15-25s.
+// Overridable for the offline benchmark on slower days.
+const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 45_000
+
+/** A stored narrative from before the deck rewrite has no `lines` object; it
+ *  cannot drive the new deck, so treat it as absent and generate once. */
+function isDeckNarrative(value: unknown): value is AIWrappedNarrative {
+  return Boolean(value && typeof value === 'object' && typeof (value as AIWrappedNarrative).lines === 'object')
+}
 
 export async function getWrappedNarrative(
   payload: DayTimelinePayload,
@@ -65,7 +74,9 @@ export async function getWrappedNarrative(
   // Regenerate (force) spends a new call and overwrites it.
   if (!options.force) {
     const stored = getStoredWrappedNarrative<AIWrappedNarrative>(db, 'day', periodKey)
-    if (stored) return { ...stored.narrative, generatedAt: stored.generatedAt }
+    if (stored && isDeckNarrative(stored.narrative)) {
+      return { ...stored.narrative, generatedAt: stored.generatedAt }
+    }
   }
 
   // Persist a freshly produced wrap and stamp it with its generation time.

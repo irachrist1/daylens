@@ -11,13 +11,16 @@ import type {
   BillingUsageReport,
   ClientRecord,
   TrackingDiagnosticsPayload,
+  NotificationPermissionState,
   WorkMemoryFact,
   ClientMemoryGroup,
   MemoryAuditEntry,
+  EnrichmentSourcesState,
 } from '@shared/types'
 import { ACTIVITY_COLOR_CHOICES, ACTIVITY_COLOR_GROUPS, applyAppearanceSettings } from '@shared/activityColors'
 import { ipc } from '../lib/ipc'
 import { track } from '../lib/analytics'
+import { setPendingChatSeed } from '../lib/aiSeed'
 import { showIntercom } from '../lib/intercom'
 import type { UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
@@ -1088,7 +1091,7 @@ type SectionId =
   | 'general' | 'notifications' | 'billing' | 'usage'
   | 'ai' | 'memory'
   | 'labels' | 'clients' | 'privacy'
-  | 'mcp' | 'capture' | 'updates' | 'help'
+  | 'mcp' | 'enrichment' | 'capture' | 'updates' | 'help'
 
 interface SectionDef { id: SectionId; label: string; keywords: string }
 interface SectionGroup { label: string; items: SectionDef[] }
@@ -1122,6 +1125,7 @@ const SECTION_GROUPS: SectionGroup[] = [
     label: 'System',
     items: [
       { id: 'mcp', label: 'MCP server', keywords: 'claude desktop cursor query external clients' },
+      { id: 'enrichment', label: 'Enrichment sources', keywords: 'wrapped git calendar notion linear jira focus mcp connectors signals' },
       { id: 'capture', label: 'Capture health', keywords: 'window titles permissions browsers samples' },
       { id: 'updates', label: 'Updates', keywords: 'version install download release' },
       { id: 'help', label: 'Help & support', keywords: 'chat support contact message question bug feedback talk intercom' },
@@ -1149,6 +1153,7 @@ function SectionIcon({ id }: { id: SectionId }) {
     clients: <><rect x="2.3" y="5" width="11.4" height="7.6" rx="1.2" /><path d="M6 5V3.6h4V5" /></>,
     privacy: <path d="M8 1.9 13 3.7v4.1c0 3-2.2 5-5 6.3-2.8-1.3-5-3.3-5-6.3V3.7Z" />,
     mcp: <><rect x="2" y="3" width="12" height="10" rx="1.6" /><path d="M4.6 6.6 7 8.5 4.6 10.4" /><path d="M8.4 10.4h3" /></>,
+    enrichment: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v2.4M8 11.8v2.4M1.8 8h2.4M11.8 8h2.4" /></>,
     capture: <path d="M2 8h2.6l1.4-4.2 2.6 8.4 1.4-4.2H14" />,
     updates: <><path d="M8 2.6v6.8" /><path d="M5.2 7 8 9.8 10.8 7" /><path d="M3.2 13h9.6" /></>,
     help: <><path d="M2.6 3.4h10.8v7.2H8.4L5.4 13.2v-2.6H2.6Z" /><path d="M5.4 6.4h5.2" /></>,
@@ -1300,19 +1305,32 @@ const KEY_PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
   'claude-cli': 'Claude CLI',
   openai: 'OpenAI',
+  'chatgpt-cli': 'ChatGPT CLI',
+  'gemini-cli': 'Gemini CLI',
   'codex-cli': 'Codex CLI',
   google: 'Google',
   openrouter: 'OpenRouter',
+}
+
+type CLIToolDetection = {
+  claude: string | null
+  chatgpt: string | null
+  gemini: string | null
+  codex: string | null
+}
+
+function cliToolForProvider(provider: string): keyof CLIToolDetection | null {
+  if (provider === 'claude-cli') return 'claude'
+  if (provider === 'chatgpt-cli') return 'chatgpt'
+  if (provider === 'gemini-cli') return 'gemini'
+  if (provider === 'codex-cli') return 'codex'
+  return null
 }
 
 // The provider's display name, or null when we don't have a friendly label —
 // callers phrase the fallback so it never reads "your own your provider key".
 function providerName(provider: string): string | null {
   return KEY_PROVIDER_LABELS[provider] ?? null
-}
-
-function providerLabel(provider: string): string {
-  return providerName(provider) ?? 'your provider'
 }
 
 function PlanCard({
@@ -1453,18 +1471,18 @@ function BillingPage({
           ) : undefined}
         />
         <PlanCard
-          name="Your own key"
+          name="Your own provider"
           active={onOwnKey}
           blurb={onOwnKey
-            ? `You're using your own ${providerLabel(provider)} key. Calls go straight to the provider — Daylens never bills you and never sees them.`
-            : 'Paste a provider key and pay the provider directly. Calls go straight from your machine to the provider.'}
+            ? `You're using ${providerName(provider) ?? 'your own provider'}. Calls go straight from this machine — Daylens never bills you and never sees them.`
+            : 'Use a provider key or local CLI and pay the provider directly. Calls go straight from your machine to the provider.'}
           action={
             <button
               type="button"
               onClick={onGoToAI}
               style={{ ...inlineButtonStyle, background: onOwnKey ? 'var(--color-surface-high)' : 'var(--gradient-primary)', color: onOwnKey ? 'var(--color-text-primary)' : 'var(--color-primary-contrast)', border: onOwnKey ? '1px solid var(--color-border-ghost)' : 'none' }}
             >
-              {onOwnKey ? 'Manage key in AI →' : 'Set up your key in AI →'}
+              {onOwnKey ? 'Manage in AI →' : 'Set up in AI →'}
             </button>
           }
         />
@@ -2060,7 +2078,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [sectionSearch, setSectionSearch] = useState('')
   const [navOrigin, setNavOrigin] = useState<SectionId | null>(null)
   const [hasApiKey, setHasApiKey] = useState(false)
-  const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null }>({ claude: null, codex: null })
+  const [cliTools, setCliTools] = useState<CLIToolDetection>({ claude: null, chatgpt: null, gemini: null, codex: null })
   const [trackingDiagnostics, setTrackingDiagnostics] = useState<TrackingDiagnosticsPayload | null>(null)
   const [defaultUserName, setDefaultUserName] = useState('')
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
@@ -2092,6 +2110,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [mcpConfig, setMcpConfig] = useState<{ command: string; args: string[]; env: Record<string, string>; isPackaged: boolean; dbPath: string } | null>(null)
   const [mcpSnippetCopied, setMcpSnippetCopied] = useState(false)
   const [mcpAdvancedOpen, setMcpAdvancedOpen] = useState(false)
+  const [enrichmentSources, setEnrichmentSources] = useState<EnrichmentSourcesState | null>(null)
   const [clients, setClients] = useState<ClientRecord[]>([])
   const [clientsLoaded, setClientsLoaded] = useState(false)
   const [newClientName, setNewClientName] = useState('')
@@ -2102,6 +2121,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [editingClientId, setEditingClientId] = useState<string | null>(null)
   const [editingClientName, setEditingClientName] = useState('')
   const [editingClientColor, setEditingClientColor] = useState('')
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>('not-determined')
 
   useEffect(() => {
     let cancelled = false
@@ -2119,18 +2139,21 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
 
       // Optimistic AI-access guess based on persisted provider, refined below
       // when CLI detection or hasApiKey resolves.
-      if (current.aiProvider !== 'claude-cli' && current.aiProvider !== 'codex-cli') {
+      if (!cliToolForProvider(current.aiProvider)) {
         void ipc.settings.hasApiKey(current.aiProvider).then((access) => {
           if (!cancelled) setHasApiKey(access)
         })
       }
 
-      void ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null })).then((tools) => {
+      void ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null })).then((tools) => {
         if (cancelled) return
-        setCliTools(tools as { claude: string | null; codex: string | null })
+        setCliTools(tools as CLIToolDetection)
       })
       void ipc.tracking.getDiagnostics().catch(() => null).then((tracking) => {
         if (!cancelled) setTrackingDiagnostics(tracking as TrackingDiagnosticsPayload | null)
+      })
+      void ipc.notifications.getPermissionState().catch(() => 'unsupported' as NotificationPermissionState).then((state) => {
+        if (!cancelled) setNotificationPermission(state)
       })
       // Every app the user has used — including uncategorized ones — so any app
       // (e.g. Zen) is reachable and categorizable (settings spec §4, invariant #3).
@@ -2180,12 +2203,9 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
 
   useEffect(() => {
     if (!settings) return
-    if (settings.aiProvider === 'claude-cli') {
-      setHasApiKey(!!cliTools.claude)
-      return
-    }
-    if (settings.aiProvider === 'codex-cli') {
-      setHasApiKey(!!cliTools.codex)
+    const cliTool = cliToolForProvider(settings.aiProvider)
+    if (cliTool) {
+      setHasApiKey(!!cliTools[cliTool])
       return
     }
     void ipc.settings.hasApiKey(settings.aiProvider).then((access) => setHasApiKey(access))
@@ -2195,6 +2215,21 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
     if (!settings?.mcpServerEnabled) return
     void ipc.mcp.getConfig().then((cfg) => setMcpConfig(cfg))
   }, [settings?.mcpServerEnabled])
+
+  useEffect(() => {
+    if (activeSection !== 'enrichment') return
+    void ipc.settings.getEnrichmentSources().then(setEnrichmentSources).catch(() => setEnrichmentSources(null))
+  }, [activeSection])
+
+  function toggleEnrichmentSource(key: string, value: boolean) {
+    if (!settings) return
+    const next = { ...(settings.enrichmentSources ?? {}), [key]: value }
+    void persist({ enrichmentSources: next })
+    setEnrichmentSources((prev) => prev && ({
+      mcpServers: prev.mcpServers.map((s) => (`mcp:${s.name}` === key ? { ...s, enabled: value } : s)),
+      focusApps: prev.focusApps.map((f) => (`focus:${f.app}` === key ? { ...f, enabled: value } : f)),
+    }))
+  }
 
   async function persist(partial: Partial<AppSettings>) {
     if (!settings) return
@@ -2463,11 +2498,8 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
 
   async function refreshAIAccess() {
     const current = await ipc.settings.get()
-    const access = current.aiProvider === 'claude-cli'
-      ? !!cliTools.claude
-      : current.aiProvider === 'codex-cli'
-        ? !!cliTools.codex
-        : await ipc.settings.hasApiKey(current.aiProvider)
+    const cliTool = cliToolForProvider(current.aiProvider)
+    const access = cliTool ? !!cliTools[cliTool] : await ipc.settings.hasApiKey(current.aiProvider)
     setSettings(current)
     setHasApiKey(access)
   }
@@ -2696,10 +2728,12 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-low)' }}>
             <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--color-text-primary)' }}>
               {hasApiKey
-                ? `Using your own ${KEY_PROVIDER_LABELS[settings.aiProvider] ?? settings.aiProvider} key`
+                ? cliToolForProvider(settings.aiProvider)
+                  ? `Using your local ${KEY_PROVIDER_LABELS[settings.aiProvider] ?? settings.aiProvider}`
+                  : `Using your own ${KEY_PROVIDER_LABELS[settings.aiProvider] ?? settings.aiProvider} key`
                 : 'Using Daylens managed AI'}
             </span>
-            <StatusPill label={hasApiKey ? 'Your key' : 'Managed'} tone={hasApiKey ? 'success' : 'neutral'} />
+            <StatusPill label={hasApiKey ? 'BYOK' : 'Managed'} tone={hasApiKey ? 'success' : 'neutral'} />
             <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>
               {hasApiKey
                 ? 'Calls go straight to the provider — Daylens never bills you.'
@@ -2724,7 +2758,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               <button
                 type="button"
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent('daylens:seed-chat', { detail: 'What do you remember about me?' }))
+                  setPendingChatSeed("I want to talk about my work patterns and what you know about me — let's start there.")
                   navigate('/ai')
                 }}
                 style={{ ...inlineButtonStyle, background: 'var(--gradient-primary)', color: 'var(--color-primary-contrast)', border: 'none' }}
@@ -3279,17 +3313,17 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               first
               title="Evening wrap"
               description="End-of-day recap of what you worked on."
-              control={<Toggle checked={settings.dailySummaryEnabled ?? false} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
+              control={<Toggle checked={settings.dailySummaryEnabled ?? true} onChange={(value) => void persist({ dailySummaryEnabled: value })} />}
             />
             <SettingsRow
               title="Morning brief"
               description="Short morning recap of yesterday and the day ahead."
-              control={<Toggle checked={settings.morningNudgeEnabled ?? false} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
+              control={<Toggle checked={settings.morningNudgeEnabled ?? true} onChange={(value) => void persist({ morningNudgeEnabled: value })} />}
             />
             <SettingsRow
               title="Distraction alerts"
               description="Warn when a focus session drifts."
-              control={<Toggle checked={settings.distractionAlertsEnabled ?? false} onChange={(value) => void persist({ distractionAlertsEnabled: value })} />}
+              control={<Toggle checked={settings.distractionAlertsEnabled ?? true} onChange={(value) => void persist({ distractionAlertsEnabled: value })} />}
             />
             <SettingsRow
               title="Distraction threshold (minutes)"
@@ -3309,6 +3343,20 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 />
               }
             />
+            {notificationPermission === 'denied' && (
+              <div style={infoPanelStyle}>
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
+                  Notifications are off for Daylens. Open System Settings → Notifications → Daylens and allow alerts, then restart Daylens if briefs still do not appear.
+                </div>
+                <button
+                  type="button"
+                  style={{ ...inlineButtonStyle, marginTop: 10 }}
+                  onClick={() => void ipc.notifications.openSettings()}
+                >
+                  Open System Settings
+                </button>
+              </div>
+            )}
             {trackingDiagnostics?.platform === 'linux' && linuxDesktop && !linuxDesktop.notificationSupported && (
               <div style={infoPanelStyle}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.65 }}>
@@ -3453,6 +3501,70 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 )}
               </div>
             )}
+          </div>
+        </SectionPage>
+      )
+      break
+    case 'enrichment':
+      content = (
+        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine, and every source is off until you turn it on.">
+          <div style={{ display: 'grid', gap: 24 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>Always available</div>
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: 10 }}>
+                Git commits and calendar events are read automatically when the tools exist on this machine (git, the gh CLI, icalBuddy). Nothing to configure.
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 10 }}>MCP servers on this machine</div>
+              {enrichmentSources === null ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Looking for installed servers…</div>
+              ) : enrichmentSources.mcpServers.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                  None found in your Claude Desktop config. If you use Notion, Linear, or Jira through MCP, they'll show up here as future wrap sources.
+                </div>
+              ) : (
+                enrichmentSources.mcpServers.map((server, i) => (
+                  <SettingsRow
+                    key={server.name}
+                    first={i === 0}
+                    title={server.name}
+                    description={`Discovered in your Claude Desktop config (${server.transport}). Turning it on marks it as a wrap source; Daylens doesn't read it yet.`}
+                    control={
+                      <Toggle
+                        checked={server.enabled}
+                        onChange={(value) => toggleEnrichmentSource(`mcp:${server.name}`, value)}
+                      />
+                    }
+                  />
+                ))
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 10 }}>Focus apps</div>
+              {enrichmentSources === null ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)' }}>Checking…</div>
+              ) : enrichmentSources.focusApps.filter((f) => f.installed).length === 0 ? (
+                <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                  No focus apps found. Daylens looks for Raycast Focus, Be Focused, and Session.
+                </div>
+              ) : (
+                enrichmentSources.focusApps.filter((f) => f.installed).map((focus, i) => (
+                  <SettingsRow
+                    key={focus.app}
+                    first={i === 0}
+                    title={focus.app}
+                    description="When on, focus sessions from this app can appear in your wraps."
+                    control={
+                      <Toggle
+                        checked={focus.enabled}
+                        onChange={(value) => toggleEnrichmentSource(`focus:${focus.app}`, value)}
+                      />
+                    }
+                  />
+                ))
+              )}
+            </div>
           </div>
         </SectionPage>
       )

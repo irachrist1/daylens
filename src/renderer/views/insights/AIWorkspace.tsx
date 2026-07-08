@@ -12,6 +12,7 @@ import {
   type CommandSurfaceAction,
 } from '../../lib/commandSurface'
 import ConnectAI from '../../components/ConnectAI'
+import { consumePendingChatSeed } from '../../lib/aiSeed'
 import { AICompose, type AIComposeHandle } from './AICompose'
 import { ConversationSidebar } from './ConversationSidebar'
 import { MessageList } from './MessageList'
@@ -29,8 +30,10 @@ const PROVIDER_MODEL_KEY: Record<AIProviderMode, 'anthropicModel' | 'openaiModel
   anthropic: 'anthropicModel',
   'claude-cli': 'anthropicModel',
   openai: 'openaiModel',
+  'chatgpt-cli': 'openaiModel',
   'codex-cli': 'openaiModel',
   google: 'googleModel',
+  'gemini-cli': 'googleModel',
   openrouter: 'openrouterModel',
 }
 
@@ -181,17 +184,34 @@ export default function AIWorkspace() {
   }, [onNewChat])
 
   // Seed the composer from another view (e.g. Settings → Memory → "Chat about
-  // your memory"). The event carries the pre-filled text.
+  // your memory"). Always start a NEW thread so the seeded prompt opens a fresh
+  // conversation instead of appending to whatever chat was last open.
+  const seedChat = useCallback((prompt: string) => {
+    handleNewChat()
+    // Fill and focus after the new-chat state settles this frame.
+    requestAnimationFrame(() => {
+      composerRef.current?.setValue(prompt)
+      composerRef.current?.focus()
+    })
+  }, [handleNewChat])
+
+  // This view mounts only after navigation, so a seed queued before navigate
+  // (Settings stashes it, then navigates here) is read on mount. The old
+  // event-only path fired before this listener existed and dropped the prompt.
+  useEffect(() => {
+    const pending = consumePendingChatSeed()
+    if (pending) seedChat(pending)
+  }, [seedChat])
+
+  // Also honour live events for the case where this view is already mounted.
   useEffect(() => {
     const onSeed = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail
-      if (typeof detail === 'string' && detail.trim()) {
-        composerRef.current?.setValue(detail)
-      }
+      if (typeof detail === 'string' && detail.trim()) seedChat(detail)
     }
     window.addEventListener('daylens:seed-chat', onSeed)
     return () => window.removeEventListener('daylens:seed-chat', onSeed)
-  }, [])
+  }, [seedChat])
 
   const isMac = useMemo(() => navigator.platform.toLowerCase().includes('mac'), [])
   const accel = useCallback(
@@ -353,12 +373,17 @@ export default function AIWorkspace() {
   const displayProviderMeta = AI_PROVIDER_META[overrideActive ? threadSettings.provider! : activeChatProvider]
   const displayModelId = overrideActive ? threadSettings.model! : activeModel
   const displayModelLabel = displayProviderMeta.models.find((m) => m.id === displayModelId)?.label ?? displayModelId ?? displayProviderMeta.shortLabel
-  const isCliProvider = activeChatProvider === 'claude-cli' || activeChatProvider === 'codex-cli'
-  const cliMissing = activeChatProvider === 'claude-cli'
-    ? !cliTools?.claude
-    : activeChatProvider === 'codex-cli'
-      ? !cliTools?.codex
-      : false
+  const cliTool = activeChatProvider === 'claude-cli'
+    ? 'claude'
+    : activeChatProvider === 'chatgpt-cli'
+      ? 'chatgpt'
+      : activeChatProvider === 'gemini-cli'
+        ? 'gemini'
+        : activeChatProvider === 'codex-cli'
+          ? 'codex'
+          : null
+  const isCliProvider = Boolean(cliTool)
+  const cliMissing = cliTool ? !cliTools?.[cliTool] : false
   const hasMessages = messages.length > 0
   const managedAccess = Boolean(billingAccess?.managed)
 

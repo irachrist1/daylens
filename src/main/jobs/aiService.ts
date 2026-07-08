@@ -146,6 +146,7 @@ import { buildCLIProcessPayload, buildCLIProcessSpec } from '../services/cliLaun
 import { inferWorkIntent } from '../../shared/workIntent'
 import { registerWrappedNarrativeProvider } from '../services/wrappedNarrative'
 import { registerWrappedPeriodNarrativeProvider } from '../services/wrappedPeriodNarrative'
+import { registerWrappedQuestionProvider } from '../services/wrappedQuestion'
 import { VOICE_SYSTEM_PROMPT, findBannedVocab } from '../ai/voiceContract'
 import { parseDayRegroupGroups } from '../ai/dayRegroup'
 import { converse, looksLikeGreeting } from '../ai/converse'
@@ -209,8 +210,12 @@ type DirectReportEntity =
   | { entityType: 'client'; id: string; name: string }
   | { entityType: 'project'; id: string; name: string }
 
+type CLITool = 'claude' | 'chatgpt' | 'gemini' | 'codex'
+
 interface CLIToolDetectionResult {
   claude: string | null
+  chatgpt: string | null
+  gemini: string | null
   codex: string | null
 }
 
@@ -239,7 +244,7 @@ const CLI_TIMEOUT_MS = 180_000
 const conversationTemporalContext = new Map<string, TemporalContext | null>()
 const weeklyBriefCache = new Map<string, WeeklyBriefEvidencePack>()
 const daySummaryCache = new Map<string, AIDaySummaryResult>()
-const cliToolCache: Partial<Record<'claude' | 'codex', Promise<ResolvedCLITool | null>>> = {}
+const cliToolCache: Partial<Record<CLITool, Promise<ResolvedCLITool | null>>> = {}
 const STREAM_CHUNK_DELAY_MS = 12
 const STREAM_CHUNK_SIZE = 32
 const USER_VISIBLE_ACTIVITY_PROSE_RULE =
@@ -806,15 +811,20 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   })
 }
 
-function cliBinaryCandidates(tool: 'claude' | 'codex'): string[] {
+function cliBinaryCandidates(tool: CLITool): string[] {
   const appData = process.env.APPDATA
   const userProfile = process.env.USERPROFILE
+  const home = os.homedir()
   return [
     appData ? path.join(appData, 'npm', `${tool}.cmd`) : null,
     userProfile ? path.join(userProfile, 'AppData', 'Roaming', 'npm', `${tool}.cmd`) : null,
     userProfile ? path.join(userProfile, '.local', 'bin', `${tool}.cmd`) : null,
     userProfile ? path.join(userProfile, '.volta', 'bin', `${tool}.cmd`) : null,
     userProfile ? path.join(userProfile, '.npm-global', 'bin', `${tool}.cmd`) : null,
+    home ? path.join(home, '.local', 'bin', tool) : null,
+    home ? path.join(home, '.volta', 'bin', tool) : null,
+    home ? path.join(home, '.npm-global', 'bin', tool) : null,
+    home ? path.join(home, '.nvm', 'versions', 'node', 'current', 'bin', tool) : null,
   ].filter((candidate): candidate is string => Boolean(candidate))
 }
 
@@ -861,7 +871,7 @@ function buildCLIEnv(executablePath: string): NodeJS.ProcessEnv {
   }
 }
 
-async function findCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
+async function findCLIToolPath(tool: CLITool): Promise<string | null> {
   for (const candidate of cliBinaryCandidates(tool)) {
     try {
       await fs.access(candidate)
@@ -872,7 +882,8 @@ async function findCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null>
   }
 
   return new Promise((resolve) => {
-    const child = spawn('where.exe', [tool], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const command = process.platform === 'win32' ? 'where.exe' : 'which'
+    const child = spawn(command, [tool], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     let stdout = ''
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString()
@@ -956,7 +967,7 @@ async function inspectCodexExecCapabilities(executablePath: string): Promise<Cod
   }
 }
 
-async function resolveCLITool(tool: 'claude' | 'codex'): Promise<ResolvedCLITool | null> {
+async function resolveCLITool(tool: CLITool): Promise<ResolvedCLITool | null> {
   if (!cliToolCache[tool]) {
     cliToolCache[tool] = (async () => {
       const executablePath = await findCLIToolPath(tool)
@@ -974,17 +985,19 @@ async function resolveCLITool(tool: 'claude' | 'codex'): Promise<ResolvedCLITool
   return cliToolCache[tool] ?? null
 }
 
-async function resolveCLIToolPath(tool: 'claude' | 'codex'): Promise<string | null> {
+async function resolveCLIToolPath(tool: CLITool): Promise<string | null> {
   const resolved = await resolveCLITool(tool)
   return resolved?.executablePath ?? null
 }
 
 export async function detectCLITools(): Promise<CLIToolDetectionResult> {
-  const [claude, codex] = await Promise.all([
+  const [claude, chatgpt, gemini, codex] = await Promise.all([
     resolveCLIToolPath('claude'),
+    resolveCLIToolPath('chatgpt'),
+    resolveCLIToolPath('gemini'),
     resolveCLIToolPath('codex'),
   ])
-  return { claude, codex }
+  return { claude, chatgpt, gemini, codex }
 }
 
 function openAIInputFromHistory(messages: ConversationMessage[]): Array<{ role: 'user' | 'assistant'; content: string }> {
@@ -1290,7 +1303,7 @@ async function sendWithGoogle(
 }
 
 async function runCLIProvider(
-  tool: 'claude' | 'codex',
+  tool: CLITool,
   prompt: string,
   model?: string,
 ): Promise<string> {
@@ -1302,8 +1315,12 @@ async function runCLIProvider(
 
   const tmpFilePath = path.join(os.tmpdir(), `daylens-${tool}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`)
   const args = tool === 'claude'
-    ? ['-p', '--output-format', 'text', ...(model ? ['--model', model] : []), prompt]
-    : (() => {
+    ? ['-p', '--output-format', 'text', ...(model ? ['--model', model] : [])]
+    : tool === 'chatgpt'
+      ? [...(model ? ['--model', model] : [])]
+      : tool === 'gemini'
+        ? [...(model ? ['--model', model] : [])]
+        : (() => {
         const nextArgs = ['exec', '--skip-git-repo-check']
         if (codexExecCapabilities?.supportsSandbox) {
           nextArgs.push('--sandbox', 'read-only')
@@ -1321,6 +1338,7 @@ async function runCLIProvider(
         nextArgs.push(prompt)
         return nextArgs
       })()
+  const promptViaStdin = tool !== 'codex'
 
   try {
     const output = await new Promise<string>((resolve, reject) => {
@@ -1328,11 +1346,13 @@ async function runCLIProvider(
       const child = spawn(spec.command, spec.args, {
         env: buildCLIEnv(executablePath),
         shell: spec.shell,
-        stdio: spec.usesJsonStdin ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+        stdio: spec.usesJsonStdin || promptViaStdin ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       })
       if (spec.usesJsonStdin) {
         child.stdin?.end(buildCLIProcessPayload(executablePath, args))
+      } else if (promptViaStdin) {
+        child.stdin?.end(prompt)
       }
       const stdoutStream = child.stdout
       const stderrStream = child.stderr
@@ -1403,6 +1423,8 @@ async function sendWithProvider(
   }
   switch (config.provider) {
     case 'claude-cli':
+    case 'chatgpt-cli':
+    case 'gemini-cli':
     case 'codex-cli': {
       const existingCLIPrompt = [
         prior.length > 0
@@ -1411,7 +1433,14 @@ async function sendWithProvider(
         `User: ${userMessage}`,
       ].filter(Boolean).join('\n\n')
       const cliPrompt = `System context:\n${systemPrompt}\n\n${existingCLIPrompt}`
-      const text = await runCLIProvider(config.provider === 'claude-cli' ? 'claude' : 'codex', cliPrompt, config.model)
+      const tool = config.provider === 'claude-cli'
+        ? 'claude'
+        : config.provider === 'chatgpt-cli'
+          ? 'chatgpt'
+          : config.provider === 'gemini-cli'
+            ? 'gemini'
+            : 'codex'
+      const text = await runCLIProvider(tool, cliPrompt, config.model)
       await emitTextDeltas(text, options?.onDelta)
       return {
         text,
@@ -2395,19 +2424,14 @@ function daySummaryCacheKey(payload: DayTimelinePayload): string {
   })
 }
 
-function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
+// Context-trim audit 2026-07-07: the old scaffold sent the top-4 blocks TWICE
+// (once as `dominantBlocks`, again inside `blocks`) and pretty-printed the JSON
+// (2-space indent ≈ +20% tokens for pure whitespace). Now each block is sent
+// once — the 10 longest, in chronological order, ranked so the model still
+// knows which dominated — and the JSON is compact. Rich supporting evidence
+// rides only on the top-4 by duration, matching what dominantBlocks carried.
+export function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
   const trustedBlocks = payload.blocks.filter(isTrustedTimelineBlock)
-  const dominantBlocks = [...trustedBlocks]
-    .sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
-    .slice(0, 4)
-    .map((block) => ({
-      label: block.label.current,
-      timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
-      duration: formatDuration(blockDurationSeconds(block)),
-      reviewState: block.review.state,
-      workIntent: reviewedWorkIntent(block),
-      supportingEvidence: namedEvidenceForSummary(block),
-    }))
 
   const topCategories = Array.from(trustedBlocks.reduce<Map<string, number>>((map, block) => {
     const durationSeconds = blockDurationSeconds(block)
@@ -2418,29 +2442,38 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
     .slice(0, 4)
     .map(([category, seconds]) => ({ category, duration: formatDuration(seconds) }))
 
-  const blocks = trustedBlocks.slice(0, 8).map((block) => ({
-    label: block.label.current,
-    narrative: block.label.narrative,
-    timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
-    duration: formatDuration(blockDurationSeconds(block)),
-    dominantCategory: block.dominantCategory,
-    confidence: block.confidence,
-    reviewState: block.review.state,
-    workIntent: reviewedWorkIntent(block),
-    topApps: block.topApps.slice(0, 3).map((app) => ({
-      appName: app.appName,
-      duration: formatDuration(app.totalSeconds),
-    })),
-    artifacts: block.topArtifacts.slice(0, 4).map((artifact) => ({
-      title: artifact.displayTitle,
-      type: artifact.artifactType,
-    })),
-    pages: block.pageRefs.slice(0, 3).map((page) => ({
-      title: page.displayTitle,
-      domain: page.domain,
-    })),
-    workflows: block.workflowRefs.slice(0, 3).map((workflow) => workflow.label),
-  }))
+  const byDuration = [...trustedBlocks].sort((left, right) => blockDurationSeconds(right) - blockDurationSeconds(left))
+  const durationRank = new Map(byDuration.map((block, index) => [block.id, index + 1]))
+  const selected = byDuration.slice(0, 10).sort((left, right) => left.startTime - right.startTime)
+
+  const blocks = selected.map((block) => {
+    const rank = durationRank.get(block.id) ?? Number.MAX_SAFE_INTEGER
+    return {
+      label: block.label.current,
+      narrative: block.label.narrative,
+      timeRange: `${formatClock(block.startTime)}-${formatClock(block.endTime)}`,
+      duration: formatDuration(blockDurationSeconds(block)),
+      durationRank: rank,
+      dominantCategory: block.dominantCategory,
+      confidence: block.confidence,
+      reviewState: block.review.state,
+      workIntent: reviewedWorkIntent(block),
+      topApps: block.topApps.slice(0, 3).map((app) => ({
+        appName: app.appName,
+        duration: formatDuration(app.totalSeconds),
+      })),
+      artifacts: block.topArtifacts.slice(0, 4).map((artifact) => ({
+        title: artifact.displayTitle.slice(0, 100),
+        type: artifact.artifactType,
+      })),
+      pages: block.pageRefs.slice(0, 3).map((page) => ({
+        title: page.displayTitle.slice(0, 100),
+        domain: page.domain,
+      })),
+      workflows: block.workflowRefs.slice(0, 3).map((workflow) => workflow.label),
+      ...(rank <= 4 ? { supportingEvidence: namedEvidenceForSummary(block) } : {}),
+    }
+  })
 
   const focusSessions = payload.focusSessions.slice(0, 4).map((session) => ({
     label: session.label,
@@ -2460,10 +2493,9 @@ function buildDaySummaryScaffold(payload: DayTimelinePayload): string {
       siteCount: payload.siteCount,
     },
     topCategories,
-    dominantBlocks,
     blocks,
     focusSessions,
-  }, null, 2)
+  })
 }
 
 function parseDaySummaryResult(raw: string, fallbackQuestions: string[]): AIDaySummaryResult | null {
@@ -3903,8 +3935,18 @@ function workBlockPrompt(block: WorkContextBlock): string {
     return `  ${site.domain}${title} — ${dur}`
   })
 
-  // Native window titles (non-browser) — document/file context
-  const pages = block.keyPages.filter(Boolean).slice(0, 5)
+  // Native window titles (non-browser) — document/file context. keyPages often
+  // repeats what the window-title and website evidence already carries; each
+  // fact is sent once (context-trim audit 2026-07-07) and titles cap at 100 chars.
+  const alreadyShownTitles = new Set<string>([
+    ...(block.evidenceSummary.windowTitles ?? []).map((w) => (w.title ?? '').trim().toLowerCase()),
+    ...block.websites.map((site) => (site.topTitle ?? '').trim().toLowerCase()),
+  ])
+  const pages = block.keyPages
+    .filter(Boolean)
+    .filter((page) => !alreadyShownTitles.has(page.trim().toLowerCase()))
+    .slice(0, 5)
+    .map((page) => page.slice(0, 100))
 
   // DEV-87 evidence object: real captured window titles and the files touched.
   // These carry the intent that app names alone never could (the "blindfolded
@@ -4704,6 +4746,8 @@ async function sendMessageInner(payload: AIChatSendRequest, options: SendMessage
   let chatModel = modelForProvider(chatProvider, 'quality', settings)
   if (threadSettings.provider && threadSettings.model) {
     const overrideHasKey = threadSettings.provider === 'claude-cli'
+      || threadSettings.provider === 'chatgpt-cli'
+      || threadSettings.provider === 'gemini-cli'
       || threadSettings.provider === 'codex-cli'
       || Boolean(await getApiKey(threadSettings.provider))
     if (overrideHasKey) {
@@ -4930,7 +4974,7 @@ export function clearAIHistory(): void {
   conversationTemporalContext.clear()
 }
 
-export async function testCLITool(tool: 'claude' | 'codex'): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+export async function testCLITool(tool: CLITool): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
   try {
     const expectedToken = `DAYLENS_OK_${Math.random().toString(36).slice(2, 8).toUpperCase()}`
     const output = await runCLIProvider(
@@ -4954,3 +4998,4 @@ export async function testCLITool(tool: 'claude' | 'codex'): Promise<{ ok: true;
 // the same execution path (provider fallback, usage logging, prompt caching).
 registerWrappedNarrativeProvider(sendWithProvider)
 registerWrappedPeriodNarrativeProvider(sendWithProvider)
+registerWrappedQuestionProvider(sendWithProvider)

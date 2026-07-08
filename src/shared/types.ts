@@ -1086,7 +1086,7 @@ export interface BreakRecommendation {
 }
 
 export type AIProvider = 'anthropic' | 'openai' | 'google' | 'openrouter'
-export type AIProviderMode = AIProvider | 'claude-cli' | 'codex-cli'
+export type AIProviderMode = AIProvider | 'claude-cli' | 'chatgpt-cli' | 'gemini-cli' | 'codex-cli'
 export type AIJobType =
   | 'block_label_preview'
   | 'block_label_finalize'
@@ -1100,27 +1100,28 @@ export type AIJobType =
   | 'attribution_assist'
   | 'wrapped_narrative'
   | 'wrapped_period_narrative'
+  | 'wrapped_question'
   | 'search_intent'
   | 'memory_write'
   | 'weekly_brief'
 
 export interface AIWrappedNarrative {
   /** The hook: a one-line read on the shape of the day. Always present, and
-   *  reused verbatim as the morning/evening notification one-liner. */
+   *  reused verbatim as the morning/evening notification one-liner. Equals the
+   *  opening slide's line. */
   lead: string
-  /** The day as a story: morning / midday / evening, narrated like a friend who
-   *  was there. Each beat is null when that part of the day was thin. */
-  story: {
-    morning: string | null
-    midday: string | null
-    evening: string | null
-  }
-  /** One short caption under the "where the time went" app/site chart. */
-  whereLine: string | null
-  /** The wildcard: one surprising true thing, phrased from a candidate hook. */
-  wildcard: string | null
-  /** A quiet factual sign-off for the finale. */
-  closing: string | null
+  /** Per-slide prose, keyed by the slide ids in the deterministic slide plan
+   *  (`planDayWrapSlides` / `planPeriodWrapSlides`). A missing or null line
+   *  means the slide falls back to its deterministic fallbackLine. The AI only
+   *  ever phrases the numbers already on the slide; it never invents one. */
+  lines: Record<string, string | null>
+  /** The one question the AI is genuinely curious about, for the interactive
+   *  slide. Always ends with a question mark. null when the AI had nothing
+   *  worth asking (the slide is skipped). */
+  question: string | null
+  /** The finale: a one-paragraph end-of-period reflection, written like a
+   *  message the AI would send. Longer than a slide line, still grounded. */
+  reflection: string | null
   /** Tracks whether this came from a validated AI response or the deterministic fallback. */
   source: 'ai' | 'fallback'
   factsHash: string
@@ -1128,6 +1129,27 @@ export interface AIWrappedNarrative {
    *  the UI shows an honest "generated <when>" marker instead of "just now" on
    *  every open. Absent only for a transient, un-persisted result. */
   generatedAt?: number
+}
+
+/** A question asked from inside a wrap slide, answered in context. */
+export interface WrappedAskRequest {
+  cadence: 'day' | 'week' | 'month' | 'year'
+  /** The date (day) or anchor date (period) the wrap was built for. */
+  periodKey: string
+  /** The slide the user asked from, so the answer can be grounded in it. */
+  slideId: string
+  /** The line shown on that slide when the user asked. */
+  slideLine: string | null
+  /** The user's question, or their answer when replying to the AI's question. */
+  question: string
+  /** Set when this is a reply to the wrap's own curious question. */
+  replyingTo?: string | null
+}
+
+export interface WrappedAskResult {
+  answer: string | null
+  /** Honest failure reason when answer is null ("no provider", timeout, ...). */
+  error: string | null
 }
 
 // ─── Frozen daily snapshots (Briefs & Wraps, invariant 4) ──────────────────────
@@ -1302,29 +1324,39 @@ export interface WrappedPeriodFacts {
   leisureSurfaces: string[]
   busiestDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
   quietestActiveDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
-  /** Longest single work stretch in the period — a real superlative. */
-  longestStretch: { dateStr: string; dayLabel: string; seconds: number; label: string } | null
+  /** Longest single work stretch in the period — a real superlative.
+   *  startClock ("9:12am") is carried from the frozen snapshot when known. */
+  longestStretch: { dateStr: string; dayLabel: string; seconds: number; label: string; startClock?: string | null } | null
   /** Sub-rollup: week → 7 days; month → weeks; year → months. */
   buckets: Array<{ label: string; totalSeconds: number; dominantWorkCategory: AppCategory | 'unknown' }>
   busiestBucket: { label: string; totalSeconds: number } | null
+  /** Per-day kind splits from the frozen snapshots, chronological. Powers the
+   *  best/worst-day and work-vs-leisure slides without re-summing anything. */
+  days: Array<{ dateStr: string; dayLabel: string; totalSeconds: number; workSeconds: number; leisureSeconds: number }>
+  /** Meetings-category seconds summed across the period. 0 = no slide. */
+  meetingsSeconds: number
+  /** The real first/last activity clock per active day, read from the same
+   *  trusted timeline blocks the Timeline shows. Empty when unknown — the
+   *  late-night / early-start slides are skipped rather than guessed. */
+  dayEdges: Array<{ dateStr: string; dayLabel: string; firstClock: string; lastClock: string; firstHour: number; lastHour: number }>
 }
 
 export interface WrappedPeriodNarrative {
   period: WrappedPeriod
-  /** The period in one line — the headline story. Always present. */
+  /** The period in one line — the headline story. Always present. Equals the
+   *  opening slide's line. */
   lead: string
-  slides: {
-    /** What mattered — the biggest threads, named for the work. */
-    whatMattered: string | null
-    /** Where the time went, as a story (not a chart readout). */
-    whereTimeWent: string | null
-    /** A real superlative — the standout. */
-    standout: string | null
-    /** The nitty-gritty: which apps and sites actually held the time. */
-    distribution: string | null
-  }
+  /** Per-slide prose keyed by the ids in `planPeriodWrapSlides`. Missing/null
+   *  lines fall back to the slide's deterministic fallbackLine. */
+  lines: Record<string, string | null>
+  /** The AI's one curious question for the interactive slide. */
+  question: string | null
+  /** The finale paragraph: the end-of-period message the AI would send. */
+  reflection: string | null
   source: 'ai' | 'fallback'
   factsHash: string
+  /** Epoch ms when this wrap was generated and persisted. */
+  generatedAt?: number
 }
 
 /** The no-credits rule (briefs-wraps.md §7): with no provider connected, no brief
@@ -1360,6 +1392,8 @@ export interface ProcessSnapshot {
 export type AppTheme = 'system' | 'light' | 'dark'
 
 export type OnboardingPlatform = 'macos' | 'windows' | 'linux'
+
+export type NotificationPermissionState = 'granted' | 'denied' | 'not-determined' | 'unsupported'
 
 export type TrackingPermissionState =
   | 'granted'
@@ -1507,6 +1541,7 @@ export interface AppSettings {
   morningNudgeEnabled?: boolean
   distractionAlertThresholdMinutes?: number
   distractionAlertsEnabled?: boolean
+  notificationPermissionState?: NotificationPermissionState
   mcpServerEnabled?: boolean
   workMemoryConsolidationEnabled?: boolean   // Evening consolidation: archive the day, score and promote patterns, decay stale ones.
   useRemoteAI?: boolean   // legacy setting; remote workspace AI is disabled in local-only builds.
@@ -1976,6 +2011,7 @@ export const IPC = {
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
     GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
     GET_WRAP_PREFLIGHT: 'ai:get-wrap-preflight',
+    ASK_WRAPPED: 'ai:ask-wrapped',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
@@ -2020,6 +2056,11 @@ export const IPC = {
   },
   ICONS: {
     RESOLVE: 'icons:resolve',
+  },
+  NOTIFICATIONS: {
+    GET_PERMISSION_STATE: 'notifications:get-permission-state',
+    REQUEST_PERMISSION: 'notifications:request-permission',
+    OPEN_SETTINGS: 'notifications:open-settings',
   },
   TRACKING: {
     GET_LIVE: 'tracking:get-live',

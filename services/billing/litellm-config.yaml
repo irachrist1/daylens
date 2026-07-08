@@ -7,6 +7,14 @@ model_list:
     litellm_params:
       model: os.environ/DAYLENS_MANAGED_MODEL
       api_key: os.environ/DAYLENS_PROVIDER_API_KEY
+  # Cheap tier for background/balanced jobs (block labels, relabels, wraps).
+  # Set DAYLENS_ECONOMY_MODEL on BOTH the LiteLLM and billing-server deploys —
+  # the billing server only advertises this alias to clients when that env var
+  # is present, so the two deploys stay in lockstep.
+  - model_name: daylens-economy
+    litellm_params:
+      model: os.environ/DAYLENS_ECONOMY_MODEL
+      api_key: os.environ/DAYLENS_PROVIDER_API_KEY
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

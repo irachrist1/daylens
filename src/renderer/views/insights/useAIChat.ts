@@ -36,7 +36,7 @@ import {
 
 // Providers we can offer as a one-tap switch on a hard wall. CLI providers are
 // only surfaced when actually detected on the machine (see the load probe).
-const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'codex-cli']
+const SWITCHABLE_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'chatgpt-cli', 'gemini-cli', 'codex-cli']
 const API_PROVIDERS: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter']
 
 // D1: the thread list now includes archived threads (the sidebar shows an
@@ -66,7 +66,15 @@ type SendOptions = {
 const SEND_TIMEOUT_MS = 90_000
 
 function isCliProvider(provider: string | undefined | null): boolean {
-  return provider === 'claude-cli' || provider === 'codex-cli'
+  return provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli'
+}
+
+function cliToolForProvider(provider: AIProviderMode): 'claude' | 'chatgpt' | 'gemini' | 'codex' | null {
+  if (provider === 'claude-cli') return 'claude'
+  if (provider === 'chatgpt-cli') return 'chatgpt'
+  if (provider === 'gemini-cli') return 'gemini'
+  if (provider === 'codex-cli') return 'codex'
+  return null
 }
 
 export function useAIChat() {
@@ -104,7 +112,7 @@ export function useAIChat() {
   // is actually selected.
   const providerResource = useProjectionResource<{
     settings: AppSettings
-    cliTools: { claude: string | null; codex: string | null }
+    cliTools: { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null }
     hasProviderAccess: boolean
     // Per-provider key/tool availability, so the error card can offer a
     // concrete one-tap switch on a hard wall (R2).
@@ -127,8 +135,8 @@ export function useAIChat() {
       // provider is actually in play (it spawns child processes).
       const [cliToolsResult, apiKeyResults, activeFocusSession, billingAccess] = await Promise.all([
         needsCliDetection
-          ? ipc.ai.detectCliTools().catch(() => ({ claude: null, codex: null }))
-          : Promise.resolve({ claude: null, codex: null }),
+          ? ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null }))
+          : Promise.resolve({ claude: null, chatgpt: null, gemini: null, codex: null }),
         Promise.all(API_PROVIDERS.map((provider) => ipc.settings.hasApiKey(provider).catch(() => false))),
         ipc.focus.getActive().catch(() => null),
         ipc.billing.getAccess(),
@@ -136,15 +144,17 @@ export function useAIChat() {
 
       const providerAvailability: Partial<Record<AIProviderMode, boolean>> = {}
       API_PROVIDERS.forEach((provider, index) => { providerAvailability[provider] = apiKeyResults[index] })
-      providerAvailability['claude-cli'] = !!cliToolsResult.claude
-      providerAvailability['codex-cli'] = !!cliToolsResult.codex
+      for (const provider of SWITCHABLE_PROVIDERS) {
+        const tool = cliToolForProvider(provider)
+        if (tool) providerAvailability[provider] = !!cliToolsResult[tool]
+      }
 
       const providerAccess = billingAccess.canUseAI
         || providersToCheck.some((provider) => providerAvailability[provider] ?? false)
 
       return {
         settings: currentSettings,
-        cliTools: cliToolsResult as { claude: string | null; codex: string | null },
+        cliTools: cliToolsResult as { claude: string | null; chatgpt: string | null; gemini: string | null; codex: string | null },
         hasProviderAccess: providerAccess,
         providerAvailability,
         activeFocusSession: activeFocusSession as FocusSession | null,

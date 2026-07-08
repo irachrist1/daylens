@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDayWrapFacts } from '../src/renderer/lib/dayWrapScenes.ts'
+import { buildDayWrapFacts, workActionPhrase } from '../src/renderer/lib/dayWrapScenes.ts'
 import { looksLikeRawArtifactLabel } from '../src/renderer/lib/wrappedFacts.ts'
 import type { AppCategory, DayTimelinePayload, WorkContextBlock } from '../src/shared/types.ts'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW } from '../src/shared/timelineReview.ts'
@@ -170,8 +170,140 @@ test('the day-as-a-story buckets the day and names the work, never a raw label',
   const facts = buildDayWrapFacts(makeDayPayload([
     makeBlock({ label: 'MLPipeline_Week2.ipynb', start: NINE_AM, durationSeconds: 80 * 60, category: 'development' }),
   ]))
-  assert.ok(facts.dayStory.morning, 'a 9am block lands in the morning bucket')
-  for (const item of facts.dayStory.morning!.items) {
+  const morning = facts.dayStory.find((s) => s.part === 'morning')
+  assert.ok(morning, 'a 9am block lands in the morning bucket')
+  for (const item of morning!.items) {
     assert.ok(!looksLikeRawArtifactLabel(item), `raw label leaked into the story: ${item}`)
   }
+})
+
+test('a pre-dawn leftover is its own late-night beat, never merged into the morning', () => {
+  // The Jul 6 bug: an overnight block plus late-morning work collapsed into one
+  // "morning" beat mislabelled "Late night · 12am to 12:27pm". They must split.
+  const MIDNIGHT = new Date(NINE_AM); MIDNIGHT.setHours(0, 5, 0, 0)
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Building Daylens', start: MIDNIGHT.getTime(), durationSeconds: 40 * 60, category: 'development' }),
+    makeBlock({ label: 'Writing the essay', start: NINE_AM, durationSeconds: 60 * 60, category: 'writing' }),
+  ]))
+  const lateNight = facts.dayStory.find((s) => s.part === 'lateNight')
+  const morning = facts.dayStory.find((s) => s.part === 'morning')
+  assert.ok(lateNight, 'the 12:05am block is its own late-night beat')
+  // A short pre-dawn beat with a real day after it is LAST NIGHT'S TAIL — it
+  // must be marked spillover so the wrap never claims "the day started at 12am".
+  assert.equal(lateNight!.spillover, true)
+  assert.equal(lateNight!.label, "Last night's tail")
+  assert.ok(morning, 'the 9am block stays in the morning beat')
+  assert.equal(morning!.label, 'Morning')
+  // The day PROPER begins at the first real beat, not the spillover sliver.
+  assert.equal(facts.mainStartClock, morning!.clockStart)
+  // Chronological order: late night comes before morning.
+  assert.ok(
+    facts.dayStory.findIndex((s) => s.part === 'lateNight') < facts.dayStory.findIndex((s) => s.part === 'morning'),
+    'the day story is chronological',
+  )
+})
+
+test('a long overnight session is a REAL late-night beat, never dismissed as spillover', () => {
+  const MIDNIGHT = new Date(NINE_AM); MIDNIGHT.setHours(0, 5, 0, 0)
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Building Daylens', start: MIDNIGHT.getTime(), durationSeconds: 150 * 60, category: 'development' }),
+    makeBlock({ label: 'Writing the essay', start: NINE_AM, durationSeconds: 60 * 60, category: 'writing' }),
+  ]))
+  const lateNight = facts.dayStory.find((s) => s.part === 'lateNight')
+  assert.ok(lateNight)
+  assert.ok(!lateNight!.spillover, 'a 2.5h overnight session is the day, not a tail')
+  assert.equal(lateNight!.label, 'Late night')
+})
+
+test('a tool brand never becomes the work subject', () => {
+  // "Designing Claude Code" when the person was designing IN Claude Code was a
+  // real shipped absurdity. The tool is the instrument, never the subject.
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Claude Code', start: NINE_AM, durationSeconds: 80 * 60, category: 'development' }),
+  ]))
+  for (const activity of facts.workActivities) {
+    assert.notEqual(activity.name.toLowerCase(), 'claude code')
+  }
+  for (const seg of facts.dayStory) {
+    for (const item of seg.items) {
+      assert.ok(!/\bclaude code\b/i.test(item), `tool brand leaked into the story: ${item}`)
+    }
+  }
+})
+
+// ─── Stage 0.1 audit regressions (2026-07-08) ─────────────────────────────────
+
+test('meetings count by block SPAN, not active seconds', () => {
+  // The Jul 7 class: an 11:15-12:28 meeting block (73m span) with 67m active
+  // read as 49m-class undercounts across the deck. Span is the meeting truth.
+  const block = makeBlock({ label: 'Team sync', start: NINE_AM, durationSeconds: 73 * 60, category: 'meetings' })
+  block.focusOverlap = { totalSeconds: 60 * 60, pct: 82, sessionIds: [] }
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  assert.equal(facts.meetingsSeconds, 73 * 60)
+})
+
+test('a bucket-spanning block splits its story across the parts it covered', () => {
+  // One 11:25am-8pm work block. Before the fix it landed wholly in "Morning"
+  // with clockEnd 8pm ("Morning · 11:25am to 8pm").
+  const start = new Date('2026-06-23T11:25:00').getTime()
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'Redesigning the company website', start, durationSeconds: (8 * 60 + 35) * 60, category: 'development' }),
+  ]))
+  const parts = facts.dayStory.map((s) => s.part)
+  assert.deepEqual(parts, ['morning', 'midday', 'evening'])
+  const morning = facts.dayStory[0]
+  assert.equal(morning.clockStart, '11:25am')
+  assert.equal(morning.clockEnd, '12pm')
+  // Every part the block really covered names the work.
+  for (const seg of facts.dayStory) {
+    assert.ok(seg.items.length > 0, `part ${seg.part} lost its work name`)
+  }
+  // Allocated seconds still sum to the block's active seconds (±rounding).
+  const storySum = facts.dayStory.reduce((s, seg) => s + seg.seconds, 0)
+  assert.ok(Math.abs(storySum - facts.activeSeconds) <= 3, `story sum ${storySum} vs ${facts.activeSeconds}`)
+})
+
+test('a tool brand with a decorative prefix never becomes the work name', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: '✳ Claude Code', start: NINE_AM, durationSeconds: 80 * 60, category: 'communication' }),
+  ]))
+  for (const activity of facts.workActivities) {
+    assert.ok(!/claude/i.test(activity.name), `tool brand leaked: ${activity.name}`)
+  }
+  for (const seg of facts.dayStory) {
+    for (const item of seg.items) assert.ok(!/claude code/i.test(item), `tool brand leaked in story: ${item}`)
+  }
+})
+
+test('a pipe-joined tab title never becomes the work name', () => {
+  const facts = buildDayWrapFacts(makeDayPayload([
+    makeBlock({ label: 'OC | Apply founder design to chrispin.jpeg', start: NINE_AM, durationSeconds: 70 * 60, category: 'development' }),
+  ]))
+  for (const activity of facts.workActivities) {
+    assert.ok(!activity.name.includes('|'), `pipe title leaked: ${activity.name}`)
+    assert.ok(!/\.jpe?g/i.test(activity.name), `filename leaked: ${activity.name}`)
+  }
+})
+
+test('an app/site slice carries the SITE own category, not the block one', () => {
+  const block = makeBlock({ label: 'Working in the browser', start: NINE_AM, durationSeconds: 60 * 60, category: 'browsing' })
+  block.topApps = [{
+    appName: 'Dia', bundleId: 'com.dia', category: 'browsing', totalSeconds: 60 * 60,
+    isBrowser: true, sessionCount: 1,
+  } as (typeof block.topApps)[number]]
+  block.websites = [
+    { domain: 'youtube.com', totalSeconds: 30 * 60, visitCount: 3 } as (typeof block.websites)[number],
+    { domain: 'canva.com', totalSeconds: 30 * 60, visitCount: 3 } as (typeof block.websites)[number],
+  ]
+  const facts = buildDayWrapFacts(makeDayPayload([block]))
+  const youtube = facts.appSites.find((s) => s.name === 'YouTube')
+  const canva = facts.appSites.find((s) => s.name === 'Canva')
+  assert.ok(youtube && canva, 'expected both site slices')
+  assert.equal(youtube!.category, 'entertainment')
+  assert.equal(canva!.category, 'design')
+})
+
+test('workActionPhrase never stacks a verb on a gerund label', () => {
+  assert.equal(workActionPhrase('Reviewing work projects', 'development'), 'reviewing work projects')
+  assert.equal(workActionPhrase('Daylens', 'development'), 'building Daylens')
 })

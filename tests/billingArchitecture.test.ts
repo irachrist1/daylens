@@ -50,3 +50,51 @@ test('desktop keeps own-key access ahead of managed access', () => {
   assert.ok(managedSession > ownKeyCheck)
   assert.match(source, /Calls go straight to your provider/)
 })
+
+test('release builds inject DAYLENS_BILLING_API_URL into the main bundle', () => {
+  const viteConfig = fs.readFileSync(path.join(root, 'vite.main.config.ts'), 'utf8')
+  assert.match(viteConfig, /env\('DAYLENS_BILLING_API_URL'\)/)
+  assert.match(viteConfig, /__DAYLENS_BILLING_API_URL__:\s*billingApiUrl/)
+
+  for (const workflow of ['release-macos.yml', 'release-linux.yml', 'release-windows.yml', 'release-windows-store.yml']) {
+    const source = fs.readFileSync(path.join(root, '.github/workflows', workflow), 'utf8')
+    assert.match(source, /DAYLENS_BILLING_API_URL:\s*\$\{\{ secrets\.DAYLENS_BILLING_API_URL \}\}/, workflow)
+  }
+})
+
+test('subscribe affordances are gated by real managed billing availability', () => {
+  const onboarding = fs.readFileSync(path.join(root, 'src/renderer/views/Onboarding.tsx'), 'utf8')
+  const settings = fs.readFileSync(path.join(root, 'src/renderer/views/Settings.tsx'), 'utf8')
+  assert.match(onboarding, /billing\.mode !== 'unavailable'/)
+  assert.match(onboarding, /openCheckout\(\)/)
+  assert.doesNotMatch(onboarding, /\$5 \/ month/)
+  assert.match(onboarding, /\$5 once/)
+  assert.match(settings, /access\?\.checkoutAvailable/)
+  assert.match(settings, /createPolarCheckout\('settings'\)/)
+})
+
+test('BYOK CLI providers include Claude, ChatGPT, and Gemini local tools', () => {
+  const catalog = fs.readFileSync(path.join(root, 'src/renderer/lib/aiProvider.ts'), 'utf8')
+  const connector = fs.readFileSync(path.join(root, 'src/renderer/components/ConnectAI.tsx'), 'utf8')
+  const service = fs.readFileSync(path.join(root, 'src/main/jobs/aiService.ts'), 'utf8')
+
+  assert.match(catalog, /'claude-cli'/)
+  assert.match(catalog, /'chatgpt-cli'/)
+  assert.match(catalog, /'gemini-cli'/)
+  assert.match(connector, /CLI_PROVIDERS: AIProviderMode\[\] = \['claude-cli', 'chatgpt-cli', 'gemini-cli'\]/)
+  assert.match(service, /resolveCLIToolPath\('claude'\)/)
+  assert.match(service, /resolveCLIToolPath\('chatgpt'\)/)
+  assert.match(service, /resolveCLIToolPath\('gemini'\)/)
+  assert.match(service, /child\.stdin\?\.end\(prompt\)/)
+})
+
+test('billing service ships Railway deployment config', () => {
+  const billingDockerfile = fs.readFileSync(path.join(root, 'services/billing/Dockerfile'), 'utf8')
+  const billingRailway = fs.readFileSync(path.join(root, 'services/billing/railway.json'), 'utf8')
+  const litellmDockerfile = fs.readFileSync(path.join(root, 'services/billing/litellm/Dockerfile'), 'utf8')
+  const litellmRailway = fs.readFileSync(path.join(root, 'services/billing/litellm/railway.json'), 'utf8')
+  assert.match(billingDockerfile, /CMD \["node", "src\/server\.mjs"\]/)
+  assert.match(billingRailway, /"healthcheckPath": "\/health"/)
+  assert.match(litellmDockerfile, /ghcr\.io\/berriai\/litellm/)
+  assert.match(litellmRailway, /"builder": "DOCKERFILE"/)
+})

@@ -75,12 +75,6 @@ export function pickPalette(seed: number): WrapPalette {
   return out as WrapPalette
 }
 
-/** A small layout flavor (0..2) the seed selects among, so two similar days
- *  still arrange differently. */
-export function layoutVariant(seed: number): number {
-  return Math.floor(seed / PALETTE_HUES.length) % 3
-}
-
 // Delegates to the shared, Settings-aware resolver (src/shared/activityColors.ts)
 // so Wrapped agrees with the calendar and honors the founder's per-category
 // overrides — it used to carry its own hardcoded palette here, disconnected
@@ -172,145 +166,36 @@ export function MessageScene({ kicker, title, body, theme, children }: { kicker:
   )
 }
 
-// ─── Scene model ────────────────────────────────────────────────────────────────
-
-export interface BuiltScene {
-  theme: Theme
-  render: (onRestart: () => void) => ReactNode
-  /** When present, the story shell shows a Save affordance on this slide that
-   *  exports this model as a watermarked image (wrapped.md §8: every slide
-   *  saveable, not just the finale). */
-  share?: ShareCardModel
-  /** A stable filename stem for the exported image. */
-  shareName?: string
+/** A single full-screen wrap message (gates: under-threshold, no provider,
+ *  quiet day, period still open). The same frame the deck uses, one card. */
+export function WrapGate({ theme, kicker, title, body, onClose, children }: {
+  theme: Theme; kicker: string; title: string; body?: string; onClose: () => void; children?: ReactNode
+}) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: theme.bg, animation: 'wrappedOverlayIn 280ms ease forwards', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(ellipse 75% 60% at 50% 40%, ${theme.glow}, transparent 72%)` }} />
+      <MessageScene kicker={kicker} title={title} body={body} theme={theme}>
+        {children}
+      </MessageScene>
+      <button
+        onClick={onClose}
+        style={{ position: 'absolute', top: 30, right: 16, zIndex: 10, width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.16)', color: 'rgba(255,255,255,0.7)', fontSize: 18, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+        aria-label="Close"
+      >×</button>
+    </div>
+  )
 }
 
-// ─── Shareable card (canvas export, no extra deps) ──────────────────────────────
-// A 1080×1350 portrait image that exports cleanly to disk and the clipboard.
+// ─── Seeded export gradient ───────────────────────────────────────────────────
 
-export interface ShareCardModel {
-  eyebrow: string          // "TUE JUN 24" / "JUN 16 to JUN 22"
-  headline: string         // "8h 59m"
-  caption: string          // "tracked across the day"
-  rows: Array<{ name: string; value: string }>
-  statLabel?: string       // "Longest stretch"
-  statValue?: string       // "2h 14m"
-  footer: string           // "wrapped by Daylens"
-  /** Seeded gradient stops + accent so each exported slide matches its palette. */
-  gradient?: [string, string, string]
-  accent?: string
-}
-
-/** Canvas gradient stops + accent for a seed, matching the on-screen cover. */
-export function shareGradient(seed: number): { gradient: [string, string, string]; accent: string } {
-  const hue = PALETTE_HUES[seed % PALETTE_HUES.length][0]
+/** Gradient stops + accent for the Nth slide of a seeded deck, so the exported
+ *  sequence walks the same palette family the on-screen wrap plays through.
+ *  The canvas rendering itself lives in wrapExport.ts. */
+export function slideGradient(seed: number, slideIndex: number): { gradient: [string, string, string]; accent: string } {
+  const hues = PALETTE_HUES[seed % PALETTE_HUES.length]
+  const hue = hues[slideIndex % hues.length]
   return {
-    gradient: [hsl(hue, 58, 7), hsl(hue, 54, 22), hsl(hue, 60, 40)],
+    gradient: [hsl(hue, 58, 7), hsl(hue, 54, 20), hsl(hue, 58, 36)],
     accent: hsl(hue, 82, 80),
   }
-}
-
-export async function renderShareCard(model: ShareCardModel): Promise<Blob | null> {
-  const W = 1080, H = 1350
-  const canvas = document.createElement('canvas')
-  canvas.width = W
-  canvas.height = H
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-
-  const stops = model.gradient ?? ['#0a0f20', '#161f52', '#2a3fa6']
-  const bg = ctx.createLinearGradient(0, 0, W, H)
-  bg.addColorStop(0, stops[0])
-  bg.addColorStop(0.55, stops[1])
-  bg.addColorStop(1, stops[2])
-  ctx.fillStyle = bg
-  ctx.fillRect(0, 0, W, H)
-
-  const accent = model.accent ?? '#bcd0ff'
-  const pad = 110
-  let y = 200
-
-  ctx.textBaseline = 'alphabetic'
-  ctx.fillStyle = accent
-  ctx.font = '700 30px Inter, system-ui, sans-serif'
-  ctx.fillText('DAYLENS', pad, y)
-  ctx.textAlign = 'right'
-  ctx.fillStyle = 'rgba(255,255,255,0.6)'
-  ctx.fillText(model.eyebrow, W - pad, y)
-  ctx.textAlign = 'left'
-
-  y += 150
-  ctx.fillStyle = '#ffffff'
-  ctx.font = '900 150px Inter, system-ui, sans-serif'
-  ctx.fillText(model.headline, pad, y)
-  y += 56
-  ctx.fillStyle = 'rgba(255,255,255,0.6)'
-  ctx.font = '400 34px Inter, system-ui, sans-serif'
-  ctx.fillText(model.caption, pad, y)
-
-  y += 120
-  for (let i = 0; i < model.rows.length; i++) {
-    ctx.fillStyle = accent
-    ctx.font = '800 40px Inter, system-ui, sans-serif'
-    ctx.fillText(`${i + 1}`, pad, y)
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '600 42px Inter, system-ui, sans-serif'
-    ctx.fillText(truncateToWidth(ctx, model.rows[i].name, W - pad * 2 - 230), pad + 64, y)
-    if (model.rows[i].value) {
-      ctx.fillStyle = 'rgba(255,255,255,0.6)'
-      ctx.font = '500 38px Inter, system-ui, sans-serif'
-      ctx.textAlign = 'right'
-      ctx.fillText(model.rows[i].value, W - pad, y)
-      ctx.textAlign = 'left'
-    }
-    y += 92
-  }
-
-  if (model.statLabel && model.statValue) {
-    y += 30
-    ctx.strokeStyle = 'rgba(255,255,255,0.16)'
-    ctx.lineWidth = 2
-    ctx.beginPath(); ctx.moveTo(pad, y - 40); ctx.lineTo(W - pad, y - 40); ctx.stroke()
-    ctx.fillStyle = 'rgba(255,255,255,0.72)'
-    ctx.font = '500 38px Inter, system-ui, sans-serif'
-    ctx.fillText(model.statLabel, pad, y + 28)
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '800 44px Inter, system-ui, sans-serif'
-    ctx.textAlign = 'right'
-    ctx.fillText(model.statValue, W - pad, y + 30)
-    ctx.textAlign = 'left'
-  }
-
-  ctx.fillStyle = 'rgba(255,255,255,0.45)'
-  ctx.font = '500 30px Inter, system-ui, sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText(model.footer, W / 2, H - 90)
-  ctx.textAlign = 'left'
-
-  return await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'))
-}
-
-/** Save a share card to disk and (best-effort) copy it to the clipboard. */
-export async function saveShareCard(model: ShareCardModel, filename: string): Promise<boolean> {
-  const blob = await renderShareCard(model)
-  if (!blob) return false
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-  try {
-    if (navigator.clipboard && 'write' in navigator.clipboard) {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-    }
-  } catch { /* clipboard is best-effort */ }
-  return true
-}
-
-function truncateToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (ctx.measureText(text).width <= maxWidth) return text
-  let t = text
-  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) t = t.slice(0, -1)
-  return `${t}…`
 }

@@ -96,7 +96,9 @@ A daily wrap is worth making only once the day has something to say.
 Never silently regenerate a wrap. For every cadence:
 
 - **Persist** the generated wrap (the narrative plus the facts it was built from),
-  keyed by date or period.
+  keyed by date or period. Period wraps persist too (keyed by period start); a
+  closed period never regenerates without an explicit Regenerate, while the live
+  week regenerates only when its underlying facts change.
 - **On open, if a wrap already exists, show it** with a clear "generated <when>"
   marker. Do not call the model.
 - Offer an explicit **Regenerate** control. Only an explicit click spends tokens.
@@ -131,6 +133,34 @@ These are removals and hard bans, several of them corrections to the current bui
 ---
 
 ## 5. The slide systems
+
+> **2026-07 deck rewrite.** The wrap is now a *deck*: one deterministic slide
+> plan (`src/renderer/lib/wrapDeck.ts` — `planDayWrapSlides` /
+> `planPeriodWrapSlides`) computed from the facts, read by BOTH the prompt
+> builder in main and the renderer, so the AI's prose and the cards can never
+> disagree about which slides exist or what numbers they show. The AI writes
+> one line per slide id, plus one **curious question** (an interactive slide —
+> the user can answer inline and the AI responds in context) and a closing
+> **reflection paragraph** written like an end-of-period message. A rejected
+> line falls back per slide to its deterministic `fallbackLine`; the deck
+> never collapses wholesale. A full working day yields roughly 12 to 16
+> slides; a real week yields **at least 20** (opening, headline, shape,
+> best/worst day, longest stretch, thread deep-dives, biggest time sink,
+> apps, work-by-kind, work-vs-leisure split, leisure, meetings, the thing you
+> forgot, late nights, early starts, last-week comparison, daily average,
+> question, reflection, finale). Thin data still never pads: a slide without
+> its fact simply does not exist.
+>
+> Two amendments to the older rules below: (1) the wrap MAY ask the user
+> exactly one question — the interactive question slide; every other line
+> still never asks. (2) The work-vs-leisure split slide shows the real
+> percentage split; the AI may speak *exactly those* percentages and no
+> other. Scores, focus percentages, and drift stay banned.
+>
+> First open plays a cinematic "Generating your wrap" screen while the AI
+> assembles the deck; the first slide animates in when it is ready. Every
+> slide has an "Ask about this" affordance (`ai:ask-wrapped`) that answers in
+> place from the same compact facts the wrap narrated.
 
 Each cadence has a deliberate arc. Within the arc, which slides actually appear
 varies by what the day/period contains and by the variation engine (§6). Never pad
@@ -273,6 +303,9 @@ you find taste and things you did not expect. The look is never the same twice.
 
 - **Every slide is saveable as its own image,** not just the finale. A save control
   on each card.
+- **The finale has an Export button that renders the WHOLE deck** — every slide
+  as one tall 1080-wide graphic (one 1080×1350 panel per slide) — clean enough
+  to post as-is (`wrapExport.ts`).
 - Each exported image carries a **small Daylens watermark** for branding.
 - Export is a real, clean image (canvas render, no extra deps), saved to disk and
   copied to the clipboard where supported.

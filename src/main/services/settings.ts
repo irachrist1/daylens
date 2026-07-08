@@ -51,10 +51,10 @@ const DEFAULTS: AppSettings = {
   aiRedactEmails: false,
   allowThirdPartyWebsiteIconFallback: false,
   aiReportPersonalizationEnabled: false,
-  dailySummaryEnabled: false,
-  morningNudgeEnabled: false,
+  dailySummaryEnabled: true,
+  morningNudgeEnabled: true,
   distractionAlertThresholdMinutes: 10,
-  distractionAlertsEnabled: false,
+  distractionAlertsEnabled: true,
   mcpServerEnabled: false,
   workMemoryConsolidationEnabled: true,
   useRemoteAI: false,
@@ -123,10 +123,10 @@ export function getSettings(): AppSettings {
     aiRedactEmails: (_store.get('aiRedactEmails', false) as boolean),
     allowThirdPartyWebsiteIconFallback: (_store.get('allowThirdPartyWebsiteIconFallback', false) as boolean),
     aiReportPersonalizationEnabled: (_store.get('aiReportPersonalizationEnabled', false) as boolean),
-    dailySummaryEnabled: (_store.get('dailySummaryEnabled', false) as boolean),
-    morningNudgeEnabled: (_store.get('morningNudgeEnabled', false) as boolean),
+    dailySummaryEnabled: (_store.get('dailySummaryEnabled', true) as boolean),
+    morningNudgeEnabled: (_store.get('morningNudgeEnabled', true) as boolean),
     distractionAlertThresholdMinutes: (_store.get('distractionAlertThresholdMinutes', 10) as number),
-    distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', false) as boolean),
+    distractionAlertsEnabled: (_store.get('distractionAlertsEnabled', true) as boolean),
     mcpServerEnabled: (_store.get('mcpServerEnabled', false) as boolean),
     workMemoryConsolidationEnabled: (_store.get('workMemoryConsolidationEnabled', true) as boolean),
     useRemoteAI: (_store.get('useRemoteAI', false) as boolean),
@@ -193,11 +193,15 @@ const KEYTAR_ACCOUNTS: Record<'anthropic' | 'openai' | 'google' | 'openrouter', 
   openrouter: 'openrouter-api-key',
 }
 
+function isCLIProvider(provider: AIProviderMode): boolean {
+  return provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli'
+}
+
 function keytarAccount(provider: AIProviderMode): string {
-  if (provider === 'claude-cli' || provider === 'codex-cli') {
+  if (isCLIProvider(provider)) {
     throw new Error(`Provider ${provider} does not use stored API keys`)
   }
-  return KEYTAR_ACCOUNTS[provider]
+  return KEYTAR_ACCOUNTS[provider as keyof typeof KEYTAR_ACCOUNTS]
 }
 
 async function readKeyWithMigration(account: string): Promise<string | null> {
@@ -225,7 +229,7 @@ async function readKeyWithMigration(account: string): Promise<string | null> {
 // collide with the SDK-standard ANTHROPIC_API_KEY etc. that a shell may already
 // export. Takes precedence over keytar when set; otherwise keytar is used.
 function envApiKeyOverride(provider: AIProviderMode): string | null {
-  if (provider === 'claude-cli' || provider === 'codex-cli') return null
+  if (isCLIProvider(provider)) return null
   const value = process.env[`DAYLENS_${provider.toUpperCase()}_API_KEY`]
   return value && value.trim() ? value.trim() : null
 }
@@ -238,7 +242,7 @@ function assertApiKeyWritable(provider: AIProviderMode, action: string): void {
 }
 
 export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
-  if (provider === 'claude-cli' || provider === 'codex-cli') return true
+  if (isCLIProvider(provider)) return true
   if (envApiKeyOverride(provider)) return true
   try {
     const key = await readKeyWithMigration(keytarAccount(provider))
@@ -250,7 +254,7 @@ export async function hasApiKey(provider: AIProviderMode): Promise<boolean> {
 }
 
 export async function getApiKey(provider: AIProviderMode): Promise<string | null> {
-  if (provider === 'claude-cli' || provider === 'codex-cli') return null
+  if (isCLIProvider(provider)) return null
   const override = envApiKeyOverride(provider)
   if (override) return override
   try {
@@ -261,7 +265,7 @@ export async function getApiKey(provider: AIProviderMode): Promise<string | null
 }
 
 export async function setApiKey(provider: AIProviderMode, key: string): Promise<void> {
-  if (provider === 'claude-cli' || provider === 'codex-cli') return
+  if (isCLIProvider(provider)) return
   assertApiKeyWritable(provider, `Saving the ${provider} API key`)
   try {
     const keytar = ensureSecureStore(`Saving the ${provider} API key`)
@@ -273,7 +277,7 @@ export async function setApiKey(provider: AIProviderMode, key: string): Promise<
 }
 
 export async function clearApiKey(provider: AIProviderMode): Promise<void> {
-  if (provider === 'claude-cli' || provider === 'codex-cli') return
+  if (isCLIProvider(provider)) return
   assertApiKeyWritable(provider, `Clearing the ${provider} API key`)
   try {
     const keytar = getSecureStore()

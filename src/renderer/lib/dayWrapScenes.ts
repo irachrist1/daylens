@@ -14,6 +14,9 @@ import { effectiveBlockKind, type WorkKind } from '@shared/workKind'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/humanize'
+import { categoryForDomain } from '@shared/domainCategories'
+import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
+import { buildDayTitleContext, type AppTitleContext } from '@shared/windowTitleContext'
 import { looksLikeRawArtifactLabel } from './wrappedFacts'
 
 // ─── Shapes ──────────────────────────────────────────────────────────────────
@@ -73,8 +76,13 @@ export interface WrapHook {
 /** One part of the day, with the human work names touched in it. The model
  *  narrates "morning was X, then Y" from this; the names are already humanized
  *  so a raw filename can never reach the prose. */
+export type DayStoryPart = 'lateNight' | 'morning' | 'midday' | 'evening'
+
 export interface DayStorySegment {
-  part: 'morning' | 'midday' | 'evening'
+  /** The chronological bucket this beat sits in. Pre-dawn work (before 5am) is its
+   *  own `lateNight` beat so an overnight leftover never gets merged into, and
+   *  mislabelled as, the morning ("Late night · 12am to 12:27pm"). */
+  part: DayStoryPart
   /** The honest human word for when this stretch happened, from its real start
    *  clock ("Morning", "Afternoon", "Late night"). Display + prose use this, not
    *  the coarse `part` bucket, so a 1:56am start never reads as "Morning". */
@@ -87,13 +95,15 @@ export interface DayStorySegment {
   items: string[]
   /** A friendly leisure surface that shared this window, if one was notable. */
   aside: string | null
+  /** True for a short pre-dawn beat that is the TAIL OF LAST NIGHT, not this
+   *  day's start. A 27-minute sliver just after midnight must never become
+   *  "your day started at midnight" or "you stayed late into the night". */
+  spillover?: boolean
 }
 
-export interface DayStory {
-  morning: DayStorySegment | null
-  midday: DayStorySegment | null
-  evening: DayStorySegment | null
-}
+/** The day's beats in chronological order (late night → evening). Only beats that
+ *  cleared the threshold appear; thin data never pads. */
+export type DayStory = DayStorySegment[]
 
 export type WrapQuality = 'empty' | 'tooEarly' | 'partial' | 'full'
 
@@ -105,6 +115,8 @@ export interface DayWrapFacts {
   workSeconds: number
   leisureSeconds: number
   personalSeconds: number
+  /** Meetings-category work seconds — powers the calls/meetings slide. */
+  meetingsSeconds: number
   /** The headline number. Equals the ribbon total and the split total. */
   activeSeconds: number
   /** Ranked human work activities (top tracks). May be empty on a rest day. */
@@ -130,6 +142,13 @@ export interface DayWrapFacts {
   wildcardHook: WrapHook | null
   /** The day as a story: morning / midday / evening, each with real work names. */
   dayStory: DayStory
+  /** When the day PROPER began: the first beat that isn't last night's
+   *  spillover. Headline framing uses this, never the 12am sliver. */
+  mainStartClock: string | null
+  /** Per-app semantic context distilled from window titles — what the titles
+   *  suggest was being done in each app ("SPCS Build Proposal CCI, 9 sessions"),
+   *  never the raw strings (Stage 0.1). */
+  titleContext: AppTitleContext[]
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -139,6 +158,7 @@ const PARTIAL_SECONDS = 45 * 60
 const ACTIVITY_MIN_SECONDS = 5 * 60       // a named track has to be real
 const MAX_ACTIVITIES = 4
 const STANDOUT_MIN_SECONDS = 25 * 60      // a stretch worth bragging about
+const SPILLOVER_MAX_SECONDS = 45 * 60     // a pre-dawn beat under this, with a real day after it, is last night's tail
 const RIBBON_MIN_SEGMENT_SECONDS = 3 * 60 // fold slivers into their neighbour
 const MAX_RIBBON_SEGMENTS = 7
 
@@ -153,15 +173,19 @@ function correctedOrCurrentLabel(block: WorkContextBlock): string {
   return (block.review?.correctedLabel?.trim() || block.label.current.trim())
 }
 
+// Tool brands, terminal commands, and joined tab titles are never work
+// subjects — the shared guard is the one vocabulary (workNameGuards.ts),
+// used identically by the frozen snapshots that feed period wraps.
+
 /** The human name for a WORK block: the inferred subject if it reads clean,
  *  else a humanized label, else "" meaning "fold into a few smaller things". */
 function workActivityName(block: WorkContextBlock): string {
   const subject = inferWorkIntent(block).subject?.trim()
-  if (subject && subject.length >= 3 && !looksLikeRawArtifactLabel(subject)) {
+  if (subject && subject.length >= 3 && !looksLikeRawArtifactLabel(subject) && !isDisqualifiedWorkSubject(subject)) {
     return cap(subject)
   }
   const humanized = humanizeTitle(correctedOrCurrentLabel(block))
-  if (humanized && humanized.length >= 3 && !looksLikeRawArtifactLabel(humanized)) {
+  if (humanized && humanized.length >= 3 && !looksLikeRawArtifactLabel(humanized) && !isDisqualifiedWorkSubject(humanized)) {
     return cap(humanized)
   }
   return ''
@@ -224,8 +248,15 @@ export function categoryAction(category: AppCategory): string {
 }
 
 /** A human work phrase: the action plus the subject ("building Daylens"). Used in
- *  prose and the facts handed to the model, never the bare project noun. */
+ *  prose and the facts handed to the model, never the bare project noun. A name
+ *  that already leads with a gerund ("Redesigning the SPCS website") IS the
+ *  action — prepending the category verb produced "building Reviewing work
+ *  projects", so those pass through with only the case lowered. */
 export function workActionPhrase(name: string, category: AppCategory): string {
+  const firstWord = name.trim().split(/\s+/)[0] ?? ''
+  if (/^[A-Za-z]+ing$/.test(firstWord) && firstWord.length > 4) {
+    return /^[A-Z]{2,}/.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1)
+  }
   return `${categoryAction(category)} ${name}`
 }
 
@@ -245,10 +276,18 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
 
   // One reconciled kind split.
   let workSeconds = 0, leisureSeconds = 0, personalSeconds = 0
+  let meetingsSeconds = 0
   const leisureByName = new Map<string, number>()
   for (const block of blocks) {
     const kind = effectiveBlockKind(block)
     const seconds = blockActiveSeconds(block)
+    // Meeting truth is the block's SPAN, not its active seconds: sitting in a
+    // 73-minute call with hands off the keyboard is 73 minutes of meeting.
+    // Active seconds undercounted the Jul 7 11:15-12:28 class as 49m across
+    // the deck while its own timeline card read 1h 13m.
+    if (kind === 'work' && (block.dominantCategory === 'meetings')) {
+      meetingsSeconds += Math.max(seconds, Math.round((block.endTime - block.startTime) / 1000))
+    }
     if (kind === 'work') workSeconds += seconds
     else if (kind === 'leisure') {
       leisureSeconds += seconds
@@ -295,8 +334,11 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
 
   const seed = seedFromDate(payload.date)
   const appSites = buildAppSiteDistribution(blocks, activeSeconds)
-  const dayStory = buildDayStory(blocks)
-  const candidateHooks = buildCandidateHooks(blocks, standout, workActivities, appSites)
+  const dayStartMs = dateObj.getTime()
+  const dayStory = buildDayStory(blocks, dayStartMs)
+  const mainStartClock = dayStory.find((s) => !s.spillover)?.clockStart ?? ribbonStartClock
+  const candidateHooks = buildCandidateHooks(blocks, standout, workActivities, appSites, dayStartMs)
+  const titleContext = buildDayTitleContext(blocks.flatMap((block) => block.sessions))
   const wildcardHook = candidateHooks.length > 0
     ? candidateHooks[seed % candidateHooks.length]
     : null
@@ -308,6 +350,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     workSeconds,
     leisureSeconds,
     personalSeconds,
+    meetingsSeconds,
     activeSeconds,
     workActivities,
     ribbon,
@@ -322,6 +365,8 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     candidateHooks,
     wildcardHook,
     dayStory,
+    mainStartClock,
+    titleContext,
   }
 }
 
@@ -374,8 +419,12 @@ function buildAppSiteDistribution(blocks: WorkContextBlock[], activeSeconds: num
         if (seconds <= 0) continue
         const key = `site:${name.toLowerCase()}`
         const existing = byName.get(key)
+        // A site's category is its OWN (youtube.com is entertainment), never
+        // the block's dominant one — the block-inherited category told the
+        // narrator YouTube was "browsing" and Canva "communication".
+        const category = categoryForDomain(site.domain) ?? block.dominantCategory
         if (existing) existing.seconds += seconds
-        else byName.set(key, { name, seconds, kind: 'site', category: block.dominantCategory })
+        else byName.set(key, { name, seconds, kind: 'site', category })
       }
     }
   }
@@ -392,70 +441,131 @@ function buildAppSiteDistribution(blocks: WorkContextBlock[], activeSeconds: num
 
 // ─── The day as a story (morning / midday / evening) ─────────────────────────
 
-function partOfDay(ms: number): 'morning' | 'midday' | 'evening' {
+/** The chronological bucket a stretch belongs to, from its real start hour.
+ *  Pre-dawn (before 5am) is its own `lateNight` bucket, kept separate from the
+ *  morning so an overnight leftover is never merged with, or mislabelled as, the
+ *  late-morning work that follows it. */
+function partOfDay(ms: number): DayStoryPart {
   const hour = new Date(ms).getHours()
+  if (hour < 5) return 'lateNight'
   if (hour < 12) return 'morning'
   if (hour < 17) return 'midday'
   return 'evening'
 }
 
-/** The honest word for when a stretch began, from its real clock hour. The story
- *  buckets are coarse (everything before noon is "morning"), so a session that
- *  starts at 1:56am must not be labelled "Morning". */
-function partLabel(ms: number): string {
-  const hour = new Date(ms).getHours()
-  if (hour < 5) return 'Late night'
-  if (hour < 12) return 'Morning'
-  if (hour < 17) return 'Afternoon'
-  if (hour < 21) return 'Evening'
-  return 'Night'
+/** The honest human word for a beat, from its bucket. Aligned with `partOfDay`,
+ *  so a 1:56am start reads "Late night" and never "Morning". */
+function partLabel(part: DayStoryPart): string {
+  switch (part) {
+    case 'lateNight': return 'Late night'
+    case 'morning': return 'Morning'
+    case 'midday': return 'Afternoon'
+    case 'evening': return 'Evening'
+  }
 }
 
-function buildDayStory(blocks: WorkContextBlock[]): DayStory {
-  const buckets: Record<'morning' | 'midday' | 'evening', WorkContextBlock[]> = { morning: [], midday: [], evening: [] }
+const STORY_PARTS: readonly DayStoryPart[] = ['lateNight', 'morning', 'midday', 'evening']
+
+/** Bucket bounds in hours from local midnight. Evening runs past 24 so the
+ *  post-midnight tail of a block this day OWNS stays this day's evening. */
+const PART_BOUNDS: Record<DayStoryPart, [number, number]> = {
+  lateNight: [0, 5], morning: [5, 12], midday: [12, 17], evening: [17, 36],
+}
+
+interface PartAllocation {
+  part: DayStoryPart
+  startMs: number
+  endMs: number
+  seconds: number
+}
+
+/** Split one block's active seconds across the parts of the day its SPAN
+ *  actually covers, proportional to span overlap. Before this, a block was
+ *  assigned wholly to the bucket of its start time, so a real 11:25am-midnight
+ *  work block became "Morning · 11:25am to 12am" — nine hours of afternoon and
+ *  evening narrated as morning (2026-07-08 audit, Jul 5). */
+function allocateBlockAcrossParts(block: WorkContextBlock, dayStartMs: number): PartAllocation[] {
+  const active = blockActiveSeconds(block)
+  const spanStart = Math.max(block.startTime, dayStartMs)
+  const spanEnd = Math.max(block.endTime, spanStart)
+  const spanMs = Math.max(1, spanEnd - spanStart)
+  const out: PartAllocation[] = []
+  for (const part of STORY_PARTS) {
+    const [h0, h1] = PART_BOUNDS[part]
+    const from = Math.max(spanStart, dayStartMs + h0 * 3_600_000)
+    const to = Math.min(spanEnd, dayStartMs + h1 * 3_600_000)
+    if (to - from < 60_000) continue
+    out.push({ part, startMs: from, endMs: to, seconds: Math.round(active * ((to - from) / spanMs)) })
+  }
+  if (out.length === 0) {
+    out.push({ part: partOfDay(block.startTime), startMs: block.startTime, endMs: block.endTime, seconds: active })
+  }
+  return out
+}
+
+function buildDayStory(blocks: WorkContextBlock[], dayStartMs: number): DayStory {
+  interface Placed extends PartAllocation { block: WorkContextBlock }
+  const byPart: Record<DayStoryPart, Placed[]> = { lateNight: [], morning: [], midday: [], evening: [] }
+  const dominantPart = new Map<WorkContextBlock, DayStoryPart>()
   for (const block of blocks) {
     if (effectiveBlockKind(block) === 'idle') continue
-    buckets[partOfDay(block.startTime)].push(block)
+    const allocations = allocateBlockAcrossParts(block, dayStartMs)
+    let best = allocations[0]
+    for (const alloc of allocations) {
+      byPart[alloc.part].push({ block, ...alloc })
+      if (alloc.seconds > best.seconds) best = alloc
+    }
+    dominantPart.set(block, best.part)
   }
-  const seg = (part: 'morning' | 'midday' | 'evening'): DayStorySegment | null => {
-    const list = buckets[part].slice().sort((a, b) => a.startTime - b.startTime)
+  const seg = (part: DayStoryPart): DayStorySegment | null => {
+    const list = byPart[part].slice().sort((a, b) => a.startMs - b.startMs)
     if (list.length === 0) return null
-    const seconds = list.reduce((s, b) => s + blockActiveSeconds(b), 0)
+    const seconds = list.reduce((s, a) => s + a.seconds, 0)
     if (seconds < 5 * 60) return null
     // Keyed by the work name so the same activity merges, but we carry the action
     // phrase ("building Daylens") so the prose never frames the work as a place.
     const byName = new Map<string, { phrase: string; seconds: number }>()
     let asideName: string | null = null
     let asideSeconds = 0
-    for (const block of list) {
-      const kind = effectiveBlockKind(block)
-      if (kind === 'work') {
-        const name = workActivityName(block)
+    for (const placed of list) {
+      const kind = effectiveBlockKind(placed.block)
+      // A block names this part of the day when the part holds a real share of
+      // it: its dominant part, or at least 15 minutes here. A sliver never names.
+      const credits = dominantPart.get(placed.block) === part || placed.seconds >= 15 * 60
+      if (kind === 'work' && credits) {
+        const name = workActivityName(placed.block)
         if (name) {
           const key = name.toLowerCase()
           const existing = byName.get(key)
-          if (existing) existing.seconds += blockActiveSeconds(block)
-          else byName.set(key, { phrase: workActionPhrase(name, block.dominantCategory), seconds: blockActiveSeconds(block) })
+          if (existing) existing.seconds += placed.seconds
+          else byName.set(key, { phrase: workActionPhrase(name, placed.block.dominantCategory), seconds: placed.seconds })
         }
-      } else if (kind === 'leisure') {
-        const domains = block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
+      } else if (kind === 'leisure' && credits) {
+        const domains = placed.block.websites.slice().sort((a, b) => b.totalSeconds - a.totalSeconds).map((w) => w.domain)
         const friendly = leisureActivityTitle(domains)
-        const s = blockActiveSeconds(block)
-        if (s > asideSeconds) { asideSeconds = s; asideName = friendly }
+        if (placed.seconds > asideSeconds) { asideSeconds = placed.seconds; asideName = friendly }
       }
     }
     const items = [...byName.values()].sort((a, b) => b.seconds - a.seconds).slice(0, 3).map((v) => v.phrase)
     return {
       part,
-      label: partLabel(list[0].startTime),
-      clockStart: formatClock(list[0].startTime),
-      clockEnd: formatClock(list[list.length - 1].endTime),
+      label: partLabel(part),
+      clockStart: formatClock(list[0].startMs),
+      clockEnd: formatClock(Math.max(...list.map((a) => a.endMs))),
       seconds,
       items,
       aside: asideName,
     }
   }
-  return { morning: seg('morning'), midday: seg('midday'), evening: seg('evening') }
+  const story = STORY_PARTS.map(seg).filter((s): s is DayStorySegment => s !== null)
+  // A short late-night beat followed by a real day is last night's tail, not
+  // this day's start. Mark it so no consumer frames the day as "began at 12am".
+  const first = story[0]
+  if (first && first.part === 'lateNight' && story.length > 1 && first.seconds < SPILLOVER_MAX_SECONDS) {
+    first.spillover = true
+    first.label = "Last night's tail"
+  }
+  return story
 }
 
 // ─── Candidate hooks (true, computed; the model phrases one) ──────────────────
@@ -465,6 +575,7 @@ function buildCandidateHooks(
   standout: WrapStandout | null,
   workActivities: WrapActivity[],
   appSites: AppSiteSlice[],
+  dayStartMs: number,
 ): WrapHook[] {
   const hooks: WrapHook[] = []
 
@@ -477,17 +588,24 @@ function buildCandidateHooks(
     })
   }
 
-  // Peak window: which third of the day held the most work.
-  const windows: Record<'morning' | 'midday' | 'evening', number> = { morning: 0, midday: 0, evening: 0 }
+  // Peak window: which part of the day held the most work. Same proportional
+  // allocation as the story, so a bucket-spanning block credits every part it
+  // actually covered.
+  const windows: Record<DayStoryPart, number> = { lateNight: 0, morning: 0, midday: 0, evening: 0 }
   for (const block of blocks) {
     if (effectiveBlockKind(block) !== 'work') continue
-    windows[partOfDay(block.startTime)] += blockActiveSeconds(block)
+    for (const alloc of allocateBlockAcrossParts(block, dayStartMs)) {
+      windows[alloc.part] += alloc.seconds
+    }
   }
-  const peak = (Object.entries(windows) as Array<['morning' | 'midday' | 'evening', number]>)
+  const peak = (Object.entries(windows) as Array<[DayStoryPart, number]>)
     .sort((a, b) => b[1] - a[1])[0]
   if (peak && peak[1] >= 30 * 60) {
-    const word = peak[0] === 'morning' ? 'the morning' : peak[0] === 'midday' ? 'the afternoon' : 'the evening'
-    hooks.push({ kind: 'peakWindow', value: formatHm(peak[1]), caption: `your best stretch was in ${word}`, seconds: peak[1] })
+    const word = peak[0] === 'morning' ? 'the morning' : peak[0] === 'midday' ? 'the afternoon' : peak[0] === 'evening' ? 'the evening' : 'the late night'
+    // "held the most work", never "best stretch": this value is the SUM of work
+    // across a part of day, not one unbroken block, so it must not be phrased as
+    // a continuous stretch (that word belongs to the longestStretch hook only).
+    hooks.push({ kind: 'peakWindow', value: formatHm(peak[1]), caption: `${word} held the most of your work`, seconds: peak[1] })
     if (peak[0] === 'morning' && windows.morning >= windows.midday + windows.evening) {
       hooks.push({ kind: 'earlyBird', value: formatHm(windows.morning), caption: 'most of the work landed before noon' })
     }

@@ -1,0 +1,204 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  buildWrapExportModels,
+  exportGrid,
+  renderWrapExport,
+  saveWrapExport,
+  EXPORT_PANEL_H,
+  EXPORT_PANEL_W,
+  type WrapExportCanvas,
+  type WrapExportCtx,
+  type WrapExportDeps,
+} from '../src/renderer/components/wrap/wrapExport.ts'
+import { planPeriodWrapSlides, periodWrapDeckMeta } from '../src/renderer/lib/wrapDeck.ts'
+import type { WrappedPeriodFacts } from '../src/shared/types.ts'
+
+// The finale's Export button renders EVERY slide into one tall shareable image.
+// The model builder is pure and pinned here with real facts; the canvas layer
+// runs against a recording stub, so "export produces a file" is proven without
+// a DOM: the pipeline must hand a real PNG-bound Blob to the save sink with
+// the right dimensions and the story's actual content drawn in.
+
+function weekFacts(): WrappedPeriodFacts {
+  return {
+    period: 'week',
+    anchorDate: '2026-06-24',
+    rangeLabel: 'Jun 22 – Jun 28',
+    totalSeconds: 30 * 3600,
+    workSeconds: 25 * 3600,
+    leisureSeconds: 5 * 3600,
+    personalSeconds: 0,
+    previousPeriodSeconds: 26 * 3600,
+    daysWithActivity: 6,
+    dominantWorkCategory: 'development',
+    dominantWorkCategoryPct: 62,
+    categories: [
+      { category: 'development', seconds: 16 * 3600 },
+      { category: 'design', seconds: 5 * 3600 },
+      { category: 'meetings', seconds: 2 * 3600 },
+    ],
+    topApps: [
+      { appName: 'Cursor', seconds: 14 * 3600 },
+      { appName: 'Figma', seconds: 5 * 3600 },
+      { appName: 'Zoom', seconds: 2 * 3600 },
+      { appName: 'Notion', seconds: 90 * 60 },
+    ],
+    threads: [
+      { subject: 'The timeline rework', seconds: 12 * 3600, daysActive: 4 },
+      { subject: 'The onboarding polish', seconds: 6 * 3600, daysActive: 3 },
+    ],
+    leisureSurfaces: ['YouTube'],
+    busiestDay: { dateStr: '2026-06-23', dayLabel: 'Tuesday', totalSeconds: 8 * 3600 },
+    quietestActiveDay: { dateStr: '2026-06-27', dayLabel: 'Saturday', totalSeconds: 2 * 3600 },
+    longestStretch: { dateStr: '2026-06-23', dayLabel: 'Tuesday', seconds: 152 * 60, label: 'The timeline rework', startClock: '9:04am' },
+    buckets: [
+      { label: 'Mon', totalSeconds: 6 * 3600, dominantWorkCategory: 'development' },
+      { label: 'Tue', totalSeconds: 8 * 3600, dominantWorkCategory: 'development' },
+      { label: 'Wed', totalSeconds: 5 * 3600, dominantWorkCategory: 'development' },
+    ],
+    busiestBucket: { label: 'Tue', totalSeconds: 8 * 3600 },
+    days: [
+      { dateStr: '2026-06-22', dayLabel: 'Monday', totalSeconds: 6 * 3600, workSeconds: 5 * 3600, leisureSeconds: 3600 },
+      { dateStr: '2026-06-23', dayLabel: 'Tuesday', totalSeconds: 8 * 3600, workSeconds: 7 * 3600, leisureSeconds: 3600 },
+      { dateStr: '2026-06-24', dayLabel: 'Wednesday', totalSeconds: 5 * 3600, workSeconds: 4 * 3600, leisureSeconds: 3600 },
+    ],
+    meetingsSeconds: 2 * 3600,
+    dayEdges: [],
+  }
+}
+
+const NARRATIVE = {
+  lines: { opening: 'A week that belonged to the rework.' } as Record<string, string | null>,
+  question: 'Which day of this week would you actually want back?',
+  reflection: 'Tuesday carried the week. You went into the code early and stayed with it, and the rest of the days orbited that one long stretch. An honest, front-loaded week.',
+}
+
+function deckAndMeta() {
+  const facts = weekFacts()
+  const slides = planPeriodWrapSlides(facts)
+  const meta = periodWrapDeckMeta(facts)
+  return { facts, slides, meta }
+}
+
+// ─── The pure model builder ───────────────────────────────────────────────────
+
+test('export models: one panel per slide, in deck order', () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  assert.equal(models.length, slides.length)
+  assert.deepEqual(models.map((m) => m.id), slides.map((s) => s.id))
+})
+
+test('export models: the opening carries the AI line, the question its question, the finale the headline', () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  assert.equal(models.find((m) => m.id === 'opening')!.line, 'A week that belonged to the rework.')
+  assert.equal(models.find((m) => m.id === 'question')!.line, NARRATIVE.question)
+  assert.equal(models.find((m) => m.id === 'reflection')!.line, NARRATIVE.reflection)
+  const finale = models.find((m) => m.id === 'finale')!
+  assert.equal(finale.headline, meta.headline)
+})
+
+test('export models: chart slides carry ranked rows with real values', () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const apps = models.find((m) => m.id === 'apps')!
+  assert.equal(apps.rows[0].name, 'Cursor')
+  assert.equal(apps.rows[0].value, '14h')
+  assert.equal(apps.rows[0].pct, 100)
+  const split = models.find((m) => m.id === 'split')!
+  assert.equal(split.rows.length, 2)
+  assert.match(split.rows[0].value, /%$/)
+})
+
+test('export models: a missing AI line falls back to the deterministic line, never blank', () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, {}, { question: null, reflection: null }, meta, 7)
+  for (const model of models) {
+    if (model.id === 'finale') continue
+    assert.ok(model.line.trim().length > 0, `panel ${model.id} exported blank`)
+  }
+})
+
+// ─── The canvas layer, against a recording stub ───────────────────────────────
+
+interface RecordedCanvas extends WrapExportCanvas { texts: string[] }
+
+function stubCanvasDeps(): { deps: WrapExportDeps; created: RecordedCanvas[]; saved: Array<{ blob: Blob; filename: string }> } {
+  const created: RecordedCanvas[] = []
+  const saved: Array<{ blob: Blob; filename: string }> = []
+  const deps: WrapExportDeps = {
+    createCanvas: (width, height) => {
+      const texts: string[] = []
+      const ctx: WrapExportCtx = {
+        fillStyle: '', strokeStyle: '', lineWidth: 0, font: '', textAlign: 'left', textBaseline: 'alphabetic',
+        fillRect: () => {},
+        fillText: (text) => { texts.push(text) },
+        measureText: (text) => ({ width: text.length * 18 }),
+        beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, stroke: () => {},
+        createLinearGradient: () => ({ addColorStop: () => {} }),
+      }
+      const canvas: RecordedCanvas = { width, height, texts, getContext: () => ctx }
+      created.push(canvas)
+      return canvas
+    },
+    toBlob: async (canvas) => new Blob([`png:${canvas.width}x${canvas.height}`], { type: 'image/png' }),
+    save: async (blob, filename) => { saved.push({ blob, filename }) },
+  }
+  return { deps, created, saved }
+}
+
+test('renderWrapExport: renders one canvas, every slide drawn, grid sized to the deck', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, created } = stubCanvasDeps()
+  const blob = await renderWrapExport(models, meta.footer, deps)
+  assert.ok(blob, 'expected a rendered blob')
+  assert.equal(blob!.type, 'image/png')
+  assert.equal(created.length, 1)
+  const { cols, rows } = exportGrid(models.length)
+  assert.equal(created[0].width, EXPORT_PANEL_W * cols)
+  assert.equal(created[0].height, EXPORT_PANEL_H * rows, 'one 1080×1350 panel per slide, grid-packed')
+  const drawn = created[0].texts.join('\n')
+  assert.match(drawn, /DAYLENS/, 'watermark brand missing')
+  assert.match(drawn, /Cursor/, 'chart content missing')
+  assert.match(drawn, /week that belonged to the rework/, 'opening line missing')
+  assert.match(drawn, /back\?/, 'question panel missing')
+})
+
+test('renderWrapExport: a 30-slide month deck stays inside browser canvas limits', async () => {
+  // The real export bug: one column of 1350px panels blows past the ~32k px
+  // canvas cap at ~24 slides, toBlob returns null, and the export silently
+  // fails. A big deck must lay out in two columns and still produce a file.
+  const { slides, meta } = deckAndMeta()
+  const base = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const models = Array.from({ length: 30 }, (_, i) => ({ ...base[i % base.length], id: `panel-${i}` }))
+  const { deps, created } = stubCanvasDeps()
+  const blob = await renderWrapExport(models, meta.footer, deps)
+  assert.ok(blob, 'a 30-slide deck must still export')
+  assert.equal(created[0].width, EXPORT_PANEL_W * 2, 'big decks pack two columns')
+  assert.equal(created[0].height, EXPORT_PANEL_H * 15)
+  assert.ok(created[0].height <= 32_000, `canvas height ${created[0].height} exceeds browser limits`)
+})
+
+test('saveWrapExport: produces a file — the blob reaches the save sink with the filename', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, saved } = stubCanvasDeps()
+  const ok = await saveWrapExport(models, 'daylens-week-2026-06-24.png', meta.footer, deps)
+  assert.equal(ok, true)
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].filename, 'daylens-week-2026-06-24.png')
+  assert.ok(saved[0].blob.size > 0, 'the exported file must not be empty')
+})
+
+test('saveWrapExport: a single slide exports as one panel', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, created, saved } = stubCanvasDeps()
+  const ok = await saveWrapExport([models[0]], 'daylens-week-opening.png', meta.footer, deps)
+  assert.equal(ok, true)
+  assert.equal(created[0].height, EXPORT_PANEL_H)
+  assert.equal(saved[0].filename, 'daylens-week-opening.png')
+})

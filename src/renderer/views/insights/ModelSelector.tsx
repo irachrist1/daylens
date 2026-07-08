@@ -16,7 +16,7 @@ import {
 
 // Only providers the user can actually run (API key present, or CLI detected)
 // are offered — same gate as the per-chat settings panel.
-const PROVIDER_ORDER: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'codex-cli']
+const PROVIDER_ORDER: AIProviderMode[] = ['anthropic', 'openai', 'google', 'openrouter', 'claude-cli', 'chatgpt-cli', 'gemini-cli', 'codex-cli']
 
 type Entry =
   | { kind: 'default' }

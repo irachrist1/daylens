@@ -1,6 +1,11 @@
 // Period (week / month / year) Wrapped — service layer. Builds the facts by
 // SUMMING frozen daily snapshots (so the stat card and narrative agree), then
-// overlays the AI narrative. briefs-wraps.md §6, invariant 4.
+// overlays the AI deck narrative. briefs-wraps.md §6, invariant 4.
+//
+// Persistence (DEV-118 / wrapped.md §3.3): a generated period wrap is stored
+// keyed by cadence + period start. A CLOSED period never regenerates without an
+// explicit force. An OPEN period (this week) is live: it regenerates when the
+// underlying facts change, because "week so far" is allowed to grow.
 
 import type {
   AIInvocationSource,
@@ -16,19 +21,21 @@ import {
 } from './aiOrchestration'
 import { voiceDirective } from '@shared/summaryVoice'
 import { userProfileDirective } from '@shared/userProfile'
+import { isTrustedTimelineBlock } from '@shared/timelineReview'
+import { effectiveBlockKind } from '@shared/workKind'
 import { getSettings } from './settings'
 import { getDaySnapshotsForRange } from './daySnapshots'
+import { getTimelineDayPayload } from './workBlocks'
+import { getDb } from './database'
+import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 import { computePeriodRange } from '../lib/wrappedPeriodRange'
 import { rollupSnapshots, bucketTotals } from '../lib/wrappedPeriodFacts'
 import {
   buildPeriodFallbackNarrative,
   buildPeriodPrompts,
   computePeriodFactsHash,
-  periodNarrativeCacheKey,
   validatePeriodNarrativeResponse,
 } from '../lib/wrappedPeriodNarrative'
-
-const narrativeCache = new Map<string, WrappedPeriodNarrative>()
 
 interface ProviderRunner {
   (
@@ -46,11 +53,62 @@ export function registerWrappedPeriodNarrativeProvider(runner: ProviderRunner): 
   providerRunner = runner
 }
 
-const NARRATIVE_TIMEOUT_MS = 16_000
+// Belt over the per-job timeout (JOB_DEFINITIONS.wrapped_period_narrative = 45s);
+// sits just above it. Overridable for the offline benchmark (see wrappedNarrative).
+const NARRATIVE_TIMEOUT_MS = Number(process.env.WRAPPED_NARRATIVE_TIMEOUT_MS) || 50_000
+
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function formatClock(ms: number): string {
+  return new Date(ms)
+    .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+    .replace(':00', '')
+    .replace(' ', '')
+    .toLowerCase()
+}
+
+/** The real first/last activity clock per active day, from the same trusted
+ *  timeline blocks the Timeline view shows. Clock facts only — every duration
+ *  still comes from the frozen snapshots, so totals cannot drift. */
+function computeDayEdges(
+  activeDates: Array<{ dateStr: string; dayLabel: string }>,
+): WrappedPeriodFacts['dayEdges'] {
+  const db = getDb()
+  const edges: WrappedPeriodFacts['dayEdges'] = []
+  for (const day of activeDates) {
+    try {
+      const payload = getTimelineDayPayload(db, day.dateStr, null)
+      const blocks = payload.blocks
+        .filter(isTrustedTimelineBlock)
+        .filter((b) => b.dominantCategory !== 'system' && b.dominantCategory !== 'uncategorized')
+        .filter((b) => effectiveBlockKind(b) !== 'idle')
+        .sort((a, b) => a.startTime - b.startTime)
+      if (blocks.length === 0) continue
+      const first = blocks[0].startTime
+      const last = blocks[blocks.length - 1].endTime
+      edges.push({
+        dateStr: day.dateStr,
+        dayLabel: day.dayLabel,
+        firstClock: formatClock(first),
+        lastClock: formatClock(last),
+        firstHour: new Date(first).getHours(),
+        lastHour: new Date(last).getHours(),
+      })
+    } catch {
+      // A day that can't be read is a day without edges — the late-night /
+      // early-start slides simply skip it rather than guess (invariant 10).
+    }
+  }
+  return edges
+}
 
 /** Build period facts purely from frozen daily snapshots — the single source the
- *  stat card and the narrative both read. */
-function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): WrappedPeriodFacts {
+ *  stat card and the narrative both read. Day-edge clocks come from the same
+ *  trusted timeline blocks; they carry no durations. */
+export function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): WrappedPeriodFacts {
   const range = computePeriodRange(period, anchorDate)
   const snapshots = getDaySnapshotsForRange(range.startDate, range.endDate)
   const prevSnapshots = getDaySnapshotsForRange(range.prevStartDate, range.prevEndDate)
@@ -58,13 +116,17 @@ function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): Wra
 
   const previousPeriodSeconds = prevSnapshots.reduce((s, snap) => s + snap.totalActiveSeconds, 0)
 
-  const bySnapshotDate = new Map(snapshots.map((s) => [s.date, s]))
   const bucketInput = range.buckets.map((b) => ({
     label: b.label,
     snapshots: snapshots.filter((s) => s.date >= b.startDate && s.date <= b.endDate),
   }))
-  void bySnapshotDate
   const { buckets, busiestBucket } = bucketTotals(bucketInput)
+
+  // Edge clocks only for the week — month/year decks don't show per-day edges
+  // and 30+ timeline reads per open would be waste.
+  const dayEdges = period === 'week'
+    ? computeDayEdges(rollup.days.map((d) => ({ dateStr: d.dateStr, dayLabel: d.dayLabel })))
+    : []
 
   return {
     period,
@@ -87,7 +149,23 @@ function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): Wra
     longestStretch: rollup.longestStretch,
     buckets,
     busiestBucket,
+    days: rollup.days,
+    meetingsSeconds: rollup.meetingsSeconds,
+    dayEdges,
   }
+}
+
+/** True while the period still contains today — a live "so far" period. */
+function periodIsOpen(period: WrappedPeriod, anchorDate: string): boolean {
+  const range = computePeriodRange(period, anchorDate)
+  const today = localToday()
+  return today >= range.startDate && today <= range.endDate
+}
+
+/** A stored narrative from before the deck rewrite has no `lines` object; it
+ *  cannot drive the new deck, so treat it as absent and generate once. */
+function isDeckNarrative(value: unknown): value is WrappedPeriodNarrative {
+  return Boolean(value && typeof value === 'object' && typeof (value as WrappedPeriodNarrative).lines === 'object')
 }
 
 /** Facts + narrative for a period. Facts always come from snapshots; the
@@ -97,7 +175,7 @@ function buildWrappedPeriodFacts(period: WrappedPeriod, anchorDate: string): Wra
 export async function getWrappedPeriodWrap(
   period: WrappedPeriod,
   anchorDate: string,
-  options: { triggerSource?: AIInvocationSource } = {},
+  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
 ): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative }> {
   const facts = buildWrappedPeriodFacts(period, anchorDate)
   const narrative = await getWrappedPeriodNarrative(facts, options)
@@ -106,18 +184,36 @@ export async function getWrappedPeriodWrap(
 
 async function getWrappedPeriodNarrative(
   facts: WrappedPeriodFacts,
-  options: { triggerSource?: AIInvocationSource } = {},
+  options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
 ): Promise<WrappedPeriodNarrative> {
   const factsHash = computePeriodFactsHash(facts)
-  const cacheKey = periodNarrativeCacheKey(facts, factsHash)
+  const db = getDb()
+  const range = computePeriodRange(facts.period, facts.anchorDate)
+  const periodKey = range.startDate
+  const open = periodIsOpen(facts.period, facts.anchorDate)
 
-  const cached = narrativeCache.get(cacheKey)
-  if (cached) return cached
+  if (!options.force) {
+    const stored = getStoredWrappedNarrative<WrappedPeriodNarrative>(db, facts.period, periodKey)
+    if (stored && isDeckNarrative(stored.narrative)) {
+      // A closed period never silently regenerates. An open one is live: show
+      // the stored wrap while the facts still match, regenerate when they grew.
+      if (!open || stored.factsHash === factsHash) {
+        return { ...stored.narrative, generatedAt: stored.generatedAt }
+      }
+    }
+  }
+
+  const persist = (result: WrappedPeriodNarrative): WrappedPeriodNarrative => {
+    const generatedAt = Date.now()
+    putStoredWrappedNarrative(db, facts.period, periodKey, result, factsHash, generatedAt)
+    return { ...result, generatedAt }
+  }
 
   const fallback = buildPeriodFallbackNarrative(facts, factsHash)
 
+  // No data or no provider: do NOT persist — the UI shows its own message, and
+  // a real wrap should generate the moment a provider is connected.
   if (facts.totalSeconds <= 0 || !providerRunner) {
-    narrativeCache.set(cacheKey, fallback)
     return fallback
   }
 
@@ -144,11 +240,11 @@ async function getWrappedPeriodNarrative(
     )
 
     const parsed = validatePeriodNarrativeResponse(text, facts, factsHash)
-    const result = parsed ?? fallback
-    narrativeCache.set(cacheKey, result)
-    return result
+    return persist(parsed ?? fallback)
   } catch (error) {
     console.warn(`[ai] wrapped_period_narrative failed for ${facts.period} ${facts.anchorDate}:`, error)
+    // A transient failure is not a generated wrap — return the floor without
+    // persisting, so a retry can still produce and store the real one.
     return fallback
   }
 }

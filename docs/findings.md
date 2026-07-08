@@ -12,6 +12,89 @@ for a problem in the eyes.
 
 ---
 
+## 2026-07-07 (evening) — Wrapped: ungrounded clock times, spillover framing, tool-brand inversion, export canvas cap
+
+**Status:** Fixed in code · **Source:** founder screenshots of the live Jul 7 wrap +
+the stored `wrapped_narratives` row for 2026-07-07.
+
+Four distinct diseases behind "the wrap reads absurd and sometimes outright wrong":
+
+1. **The model garbles clock times and no guard caught it.** The slide kicker said
+   "MORNING · 11:15AM TO 12:27PM" while the AI line on the same card said "You started at
+   midnight on the Machine Learning Pipeline meeting … until just after 12:30am" (a real
+   11am–1pm meeting narrated as midnight; the ask-anything chat then "corrected" itself to
+   another wrong time). The validators checked hour totals and percentages but never clock
+   times. Fix: `clockTokensIn`/`guardContextTimes` in `wrapNarrativeShared.ts` — any clock
+   token (`8:22pm`, `midnight`, `noon`) in a line must appear in that slide's own
+   kicker/factsNote or the line dies to its deterministic fallback; question/reflection are
+   checked against the whole deck's tokens. Plus a TIME LITERACY block in both prompts and
+   the ask prompt ("12:27pm is 27 minutes after noon…", copy times verbatim, no clock math).
+
+2. **Last night's tail framed the day.** A 27-minute sliver just after midnight made the
+   headline read "12am to 8:22pm" and the opening "You stayed late into the night". Fix: a
+   pre-dawn beat under 45m with a real day after it is marked `spillover` in `buildDayStory`
+   (label "Last night's tail"); `mainStartClock` carries the first real beat's clock, the
+   headline/prompt frame the day as beginning there, and the spillover slide's ask forbids
+   framing it as the day's start.
+
+3. **Tool brands and UI chrome became work subjects.** "designing Claude Code" (the tool he
+   was working IN), "building Earlier today" (a relative-time UI string as a project name),
+   "the AskUserQuestion feature" (a camelCase code token). Fix: `TOOL_BRAND_NAMES` rejection
+   in `workActivityName` (the instrument is never the subject), and `looksLikeRawArtifactLabel`
+   now rejects relative-time phrases and lone camelCase identifiers.
+
+4. **Export silently failed on big decks.** One canvas column of 1350px panels exceeds the
+   ~32k px browser canvas cap at ~24 slides (any month deck), `toBlob` returns null, no file.
+   Fix: `exportGrid` — decks past 12 panels pack two columns; regression test renders a
+   30-slide deck.
+
+Also shipped with it: earned-praise policy (praise unbanned; at most ONE celebratory emoji
+from a curated set, line-final — `emojiUsageAllowed`), the user's first name allowed on a
+couple of slides, seeded shuffle of each deck's middle (`seededShuffle`; stable per
+day/anchor, different across days), rotated narrative angles per seed, month decks gain a
+busiest-week card and four thread deep-dives, the ask-anything prompt now carries the full
+deck outline, and the ask panel no longer covers the slide text (the frame cedes its bottom
+while the panel is open).
+
+## 2026-07-07 — Wrapped: leisure counted as work + midnight day-story split
+
+**Status:** Fixed in code · **Source:** live `DaylensWindows/daylens.sqlite`, blocks for
+2026-07-06 / 07-03 / 06-27; running-app IPC audit.
+
+Three separate diseases behind "Wrapped is broken":
+
+1. **Stale main process (the ghost).** The `ai:ask-wrapped` handler and the whole deck
+   backend existed in source but the running app had an older compiled `dist/main`. That is
+   the "No handler registered for 'ai:ask-wrapped'" error and every slide showing its
+   deterministic fallback. Fix: rebuild `build:main` + `build:preload` and restart. Not a new
+   bug, a build-freshness bug. Always suspect this first when "everything errors."
+
+2. **Leisure stamped as development → counted as work (the real root).** Block
+   `2026-07-06 00:00–04:00` was a mostly-YouTube/Netflix night, stored
+   `dominant_category=development, block_kind=work`. Cause: `dominantCategoryForBlock`'s
+   localhost rule (`workBlocks.ts`) promoted any browsing-base block to `development` whenever
+   a `localhost` page was open AND `distribution.development > 0`, with **no share guard**. The
+   block had a 262s dev sliver (2.7%) and a `localhost:4321` tab, so a 4h leisure block became
+   development → `kind: 'work'` (kind follows `FOCUSED_CATEGORIES.includes(dominantCategory)`).
+   The dev evidence (localhost 2055s + dev 262s = 2317s) was actually out-weighed by leisure
+   (entertainment 2843 + social 510 = 3353s). Fix: the localhost promotion now requires
+   `localhostSeconds + devSeconds >= entertainmentSeconds + socialSeconds`. Regression tests in
+   `blockCategoryDominance.test.ts`. **Propagation:** the wrap reads `block.kind` straight from
+   the stored `block_kind` (`timelineCalendarRange.ts:112`), so already-stored blocks stay
+   wrong until the day is **re-analyzed**; Timeline/Apps/Wrap then correct together (invariant 7).
+
+3. **Midnight split mislabelled the day story.** `buildDayStory` bucketed everything before
+   noon as "morning" and labelled the merged beat from its first block's clock, so an overnight
+   leftover (00:00) + late-morning class collapsed into one beat reading "Late night · 12am to
+   12:27pm". Fix: `dayStory` is now an ordered array of beats with a distinct `lateNight`
+   (before 5am) bucket, so a pre-dawn leftover is its own beat and never mislabels the morning.
+   Consumers (`wrapDeck.ts`, `wrappedNarrative.ts`, timeline-eval) updated; regression test in
+   `dayWrapScenes.test.ts`.
+
+Not-a-bug confirmed: the app/site chart names surfaces by `friendlyDomain(domain)` and
+`app.appName`, never raw page titles, so the em-dash/pipe titles in `evidence_summary_json`
+(e.g. "SPCS Group — …") cannot leak onto any slide.
+
 ## 2026-07-07 — Windows shipping blockers
 
 **Status:** Fixed in code · **Source:** Windows code audit + focused fixtures; live local
@@ -1177,3 +1260,14 @@ Even the jobs that DO write to cache (`day_summary`, `report_generation`) never 
 - Should Daylens ever need cache savings at scale, `repeated_payload` strategy for
   day/week summaries is the only path that measurably writes to cache. Block-label caching
   via `stable_prefix` would need the system prompt to credibly exceed ~1,024 tokens.
+
+## 2026-07-08 — Wrapped Stage 0: why the wrap's numbers were wrong (audit vs the live DB)
+
+Verified `buildDayWrapFacts` field-by-field against the live database for Jul 5-7. Four root causes, all fixed with regression tests (commit c60d41e + uncommitted renderer follow-ons):
+
+1. **Block kind re-derivation ignored the site-weighted distribution.** `effectiveBlockKind` fell back to a top-5-sites read through the short `workKind.ts` domain allowlist, so a whole browser-based design day (canva.com, localhost, the company's own site) resolved to "personal": Jul 5 read **50m work / 9h37m personal** when the truth was ~9h48m work. Fix: trust the block's own persisted, site-weighted `categoryDistribution` first (it already drives category and color), teach `kindForDomain` to consult `domainCategories`. `tests/workKindDistribution.test.ts` pins the real Jul 5 distribution.
+2. **Meetings counted active seconds, not span.** The Jul 7 11:15-12:28 class (73m block) narrated as 49m-1h07m across the deck. Meeting truth is the calendar span; `meetingsSeconds` (day facts) and the new `meetingsSpanSeconds` (day snapshots → period rollup) now use `max(active, span)` per meeting block.
+3. **Day-story bucketed blocks by START hour only.** An 11:25am-midnight block became "Morning · 11:25am to 12am" — nine hours of afternoon/evening narrated as morning. Fix: proportional allocation of a block's active seconds across the day-part windows its span covers, with a 15m/dominant-part rule for which parts get to NAME the work.
+4. **Naming leaks.** `friendlyDomain('app.intercom.com')` → "App" (the literal chart bar); `us.posthog.com` → "Us"; "✳ Claude Code" dodged the tool-brand guard via its decorative prefix; pipe-joined tab titles ("OC | Apply founder design to chrispin.jpeg") and media filenames passed `looksLikeRawArtifactLabel`; `workActionPhrase` stacked verbs on gerund labels ("building Reviewing work projects"). All five closed with tests.
+
+Also: window titles in `app_sessions` are rich (project names, meeting names, doc titles) and were entirely unused by the wrap — now distilled per app into semantic clusters (`src/shared/windowTitleContext.ts`) and a first-class `titleContext` facts field.

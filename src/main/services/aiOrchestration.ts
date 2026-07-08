@@ -80,6 +80,15 @@ interface AIJobDefinition {
   maxOutputTokens?: number
 }
 
+// Cache-policy audit, 2026-07-07: 30 days of ai_usage_events showed cache_read=0
+// on EVERY job while repeated_payload jobs wrote 140k cache tokens at the 1.25×
+// write premium. A repeated_payload marker only pays when the byte-identical
+// request is re-sent within the 5-minute TTL, and none of these payloads ever
+// was (day/wrap/report payloads are date- and data-specific; repeats are served
+// by in-process caches before reaching the provider). So repeated_payload is a
+// pure surcharge and every former repeated_payload job now runs cachePolicy 'off'.
+// stable_prefix stays only on conversational jobs, where a growing multi-turn
+// prefix can genuinely be re-read.
 const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
   block_label_preview: {
     jobType: 'block_label_preview',
@@ -110,7 +119,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_day',
     foreground: true,
     timeoutMs: 15_000,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'balanced',
   },
   week_review: {
@@ -118,7 +127,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'timeline_week',
     foreground: true,
     timeoutMs: 18_000,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'balanced',
     // Week review prose spans multiple days; give it the full 32k budget.
     maxOutputTokens: 32000,
@@ -128,7 +137,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'app_detail',
     foreground: true,
     timeoutMs: 15_000,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'balanced',
     maxOutputTokens: 32000,
   },
@@ -147,7 +156,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     foreground: true,
     timeoutMs: 8_000,
     usesChatOverride: true,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'economy',
     forceEconomyModel: true,
   },
@@ -156,7 +165,7 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     screen: 'ai_chat',
     foreground: true,
     timeoutMs: 60_000,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'quality',
     // No model pin: reports run on the same model the user picked in Settings,
     // like every other surface (invariant #12). A silent Opus swap here is
@@ -175,9 +184,20 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'wrapped_narrative',
     screen: 'timeline_day',
     foreground: true,
-    timeoutMs: 12_000,
-    cachePolicy: 'repeated_payload',
-    modelStrategy: 'balanced',
+    // The deck rewrite made the response a full slide deck (one line per
+    // slide + question + reflection), so the call needs more room than the
+    // old five-field arc did. A 16-slide Sonnet deck runs ~15-25s. Overridable
+    // for the offline benchmark, which tolerates a longer wait to measure
+    // content rather than latency.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 40_000,
+    cachePolicy: 'off',
+    // The wrap is the showcase surface (voice.md §11 — "the most crafted
+    // surface"), so it rides the QUALITY tier (Sonnet, not Haiku). On the
+    // balanced/Haiku tier the deck opening kept failing the voice guard and
+    // collapsing the whole wrap to the deterministic fallback (Stage 1
+    // benchmark, 2026-07-08). AGENTS.md model routing: taste-heavy user-facing
+    // copy never rides a cheap tier.
+    modelStrategy: 'quality',
   },
   // Weekly/monthly Wrapped narration. Mirrors wrapped_narrative but targets the
   // period aggregate (see services/wrappedPeriodNarrative.ts). Same provider
@@ -187,9 +207,22 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     jobType: 'wrapped_period_narrative',
     screen: 'timeline_week',
     foreground: true,
-    timeoutMs: 14_000,
-    cachePolicy: 'repeated_payload',
-    modelStrategy: 'balanced',
+    // A weekly deck is 20+ slides of prose; give it real time.
+    timeoutMs: Number(process.env.WRAPPED_JOB_TIMEOUT_MS) || 45_000,
+    cachePolicy: 'off',
+    modelStrategy: 'quality',
+  },
+  // Ask-anything on a wrap slide, and answering the wrap's own curious
+  // question. One short user-facing call, grounded in the same facts the
+  // slide shows. It is the wrap talking back, so it rides the same quality
+  // tier as the deck itself, not Haiku.
+  wrapped_question: {
+    jobType: 'wrapped_question',
+    screen: 'timeline_day',
+    foreground: true,
+    timeoutMs: 20_000,
+    cachePolicy: 'off',
+    modelStrategy: 'quality',
   },
   // S1: interpret a natural-language search query into FTS terms + a one-line
   // intent. Uses the chat provider (so search rides the same key the user
@@ -223,14 +256,14 @@ const JOB_DEFINITIONS: Record<AIJobType, AIJobDefinition> = {
     foreground: true,
     timeoutMs: 30_000,
     usesChatOverride: true,
-    cachePolicy: 'repeated_payload',
+    cachePolicy: 'off',
     modelStrategy: 'quality',
     maxOutputTokens: LONG_FORM_MAX_OUTPUT_TOKENS,
   },
 }
 
-function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'codex-cli' {
-  return provider === 'claude-cli' || provider === 'codex-cli'
+function providerUsesCLI(provider: AIProviderMode): provider is 'claude-cli' | 'chatgpt-cli' | 'gemini-cli' | 'codex-cli' {
+  return provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli'
 }
 
 // Model tier table — what runs at each cost level per provider.
@@ -264,9 +297,11 @@ const OPENAI_TIER_MODELS: Record<'economy' | 'balanced' | 'quality', string> = {
 function economyModelForProvider(provider: AIProviderMode): string {
   switch (provider) {
     case 'openai':
+    case 'chatgpt-cli':
     case 'codex-cli':
       return OPENAI_TIER_MODELS.economy
     case 'google':
+    case 'gemini-cli':
       return GOOGLE_TIER_MODELS.economy
     case 'openrouter':
       return 'openai/gpt-5.4-mini'
@@ -296,9 +331,11 @@ export function modelForProvider(
 
   switch (provider) {
     case 'openai':
+    case 'chatgpt-cli':
     case 'codex-cli':
       return resolvedSettings.openaiModel || OPENAI_TIER_MODELS.quality
     case 'google':
+    case 'gemini-cli':
       return resolvedSettings.googleModel || GOOGLE_TIER_MODELS.quality
     case 'openrouter':
       return resolvedSettings.openrouterModel || 'anthropic/claude-sonnet-4.6'
@@ -319,6 +356,10 @@ export function providerLabel(provider: AIProviderMode): string {
       return 'OpenRouter'
     case 'claude-cli':
       return 'Claude CLI'
+    case 'chatgpt-cli':
+      return 'ChatGPT CLI'
+    case 'gemini-cli':
+      return 'Gemini CLI'
     case 'codex-cli':
       return 'Codex CLI'
     case 'anthropic':
@@ -413,12 +454,20 @@ async function resolveProviderConfigsForJob(
   if (configs.length === 0) {
     const managed = await getManagedAIConfig()
     if (managed) {
+      // Managed transport: Daylens pays for these tokens, so route by job tier.
+      // Economy AND balanced jobs (block labels, relabels, wraps, summaries)
+      // ride the billing service's cheap alias when it advertises one; only
+      // quality jobs (chat, reports, weekly brief) stay on the default managed
+      // model. This mirrors ANTHROPIC_TIER_MODELS, where balanced == Haiku.
+      // Invariant #12 is not in play here: managed users never pick a model in
+      // Settings, and Usage reports the real model on every call.
+      // NOTE: the value must be a LiteLLM *alias* the proxy knows
+      // (litellm-config.yaml), never a raw provider model id — raw ids 404.
+      const wantsEconomyTier = Boolean(definition.forceEconomyModel) || definition.modelStrategy !== 'quality'
       configs.push({
         provider: managed.provider,
         apiKey: managed.accessToken,
-        model: definition.forceEconomyModel
-          ? economyModelForProvider(managed.provider)
-          : managed.model,
+        model: wantsEconomyTier && managed.economyModel ? managed.economyModel : managed.model,
         transport: 'managed',
         baseUrl: managed.baseUrl,
         billingMode: managed.mode,

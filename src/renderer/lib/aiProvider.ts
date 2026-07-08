@@ -170,6 +170,48 @@ export const AI_PROVIDER_META: Record<AIProviderMode, AIProviderMeta> = {
       },
     ],
   },
+  'chatgpt-cli': {
+    id: 'chatgpt-cli',
+    label: 'ChatGPT CLI',
+    shortLabel: 'ChatGPT CLI',
+    docsUrl: 'https://help.openai.com/',
+    keyPlaceholder: '',
+    helperText: 'Uses the locally installed ChatGPT CLI instead of an API key.',
+    defaultModel: 'gpt-5.5',
+    models: [
+      {
+        id: 'gpt-5.5',
+        label: 'GPT-5.5',
+        description: 'Uses your local ChatGPT CLI install and OpenAI account.',
+      },
+      {
+        id: 'gpt-5.4-mini',
+        label: 'GPT-5.4 mini',
+        description: 'Faster local ChatGPT CLI option.',
+      },
+    ],
+  },
+  'gemini-cli': {
+    id: 'gemini-cli',
+    label: 'Gemini CLI',
+    shortLabel: 'Gemini CLI',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    keyPlaceholder: '',
+    helperText: 'Uses the locally installed Gemini CLI instead of an API key.',
+    defaultModel: 'gemini-3.5-flash',
+    models: [
+      {
+        id: 'gemini-3.5-flash',
+        label: 'Gemini 3.5 Flash',
+        description: 'Uses your local Gemini CLI install and Google account.',
+      },
+      {
+        id: 'gemini-3.1-flash-lite',
+        label: 'Gemini 3.1 Flash-Lite',
+        description: 'Faster local Gemini CLI option.',
+      },
+    ],
+  },
 }
 
 // FB8: per-model capability metadata for the Raycast-style model selector
@@ -236,8 +278,10 @@ export function getSelectedModel(settings: {
   switch (settings.aiProvider) {
     case 'openai':
     case 'codex-cli':
+    case 'chatgpt-cli':
       return settings.openaiModel
     case 'google':
+    case 'gemini-cli':
       return settings.googleModel
     case 'openrouter':
       return settings.openrouterModel

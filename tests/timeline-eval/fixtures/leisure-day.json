@@ -2,7 +2,7 @@
   "id": "leisure-day",
   "name": "Pure leisure day",
   "date": "2026-05-30",
-  "description": "A rest day: YouTube, Netflix, and some X scrolling, no work at all. Must read as leisure end-to-end — no work episodes, no focus scoring, no work intent, no raw video titles as labels.",
+  "description": "A rest day: YouTube, Netflix, and some X scrolling, no work at all. Must read as leisure end-to-end \u2014 no work episodes, no focus scoring, no work intent, no raw video titles as labels.",
   "sessions": [
     {
       "start": "10:00",
@@ -61,7 +61,9 @@
       "start": "10:00",
       "end": "13:00",
       "label": "Watching",
-      "labelIncludes": ["Watching"],
+      "labelIncludes": [
+        "Watching"
+      ],
       "kind": "leisure"
     },
     {
@@ -69,8 +71,16 @@
       "start": "14:00",
       "end": "15:15",
       "label": "On X",
-      "labelIncludes": ["On X", "X"],
+      "labelIncludes": [
+        "On X",
+        "X"
+      ],
       "kind": "leisure"
     }
-  ]
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "isLeisureDay": true,
+    "topLeisureIncludes": "Netflix"
+  }
 }

@@ -1,9 +1,10 @@
-import { BrowserWindow, Notification, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import type { AppCategory } from '@shared/types'
 import { getActiveFocusSession, recordDistractionEvent } from '../db/queries'
 import { getDb } from './database'
 import { getCurrentSession, onTrackingTick } from './tracking'
 import { getSettings, setSettings } from './settings'
+import { deliverNotification } from './notificationDelivery'
 
 // ─── How distraction detection works in Daylens ───────────────────────────────
 //
@@ -75,7 +76,6 @@ let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES
 let lastCheckAtMs: number | null = null
 let navigationWindow: BrowserWindow | null = null
 let unsubscribeFromTrackingTicks: (() => void) | null = null
-const liveNotifications = new Set<Notification>()
 
 function resetLeisureState(): void {
   leisureState = null
@@ -108,23 +108,39 @@ function focusNavigationWindow(route: string): void {
 }
 
 function fireAlert(appName: string, minutes: number, offPlan: boolean): void {
-  if (!Notification.isSupported()) return
   const body = offPlan
     ? `${appName} isn't on your focus plan — you've been there ${minutes} minutes.`
-    : `You've been on ${appName} for ${minutes} minutes.`
-  const notification = new Notification({ title: 'Daylens', body })
-  notification.on('click', () => {
-    focusNavigationWindow('/ai')
+    : `You've been away from focused work for ${minutes} minutes.`
+  deliverNotification({
+    title: 'Daylens',
+    body,
+    onClick: () => {
+      focusNavigationWindow('/ai')
+    },
+    surface: offPlan ? 'focus-nudge' : 'idle-reminder',
   })
-  notification.on('close', () => {
-    liveNotifications.delete(notification)
+}
+
+export function fireTestDistractionNotification(kind: 'idle-reminder' | 'focus-nudge'): boolean {
+  const minutes = Math.max(1, getSettings().distractionAlertThresholdMinutes ?? DEFAULT_THRESHOLD_MINUTES)
+  if (kind === 'focus-nudge') {
+    return deliverNotification({
+      title: 'Daylens',
+      body: `YouTube isn't on your focus plan — you've been there ${minutes} minutes.`,
+      onClick: () => focusNavigationWindow('/ai'),
+      surface: 'harness:focus-nudge',
+    })
+  }
+  return deliverNotification({
+    title: 'Daylens',
+    body: `You've been away from focused work for ${minutes} minutes.`,
+    onClick: () => focusNavigationWindow('/ai'),
+    surface: 'harness:idle-reminder',
   })
-  liveNotifications.add(notification)
-  notification.show()
 }
 
 function checkDistraction(nowMs = Date.now()): void {
-  if (!(getSettings().distractionAlertsEnabled ?? false)) {
+  if (!(getSettings().distractionAlertsEnabled ?? true)) {
     workStateAccumulatorSeconds = 0
     lastWorkStateBundleId = null
     lastCheckAtMs = nowMs

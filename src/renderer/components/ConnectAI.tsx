@@ -20,6 +20,33 @@ const MODEL_SETTING_KEY: Record<AIProvider, 'anthropicModel' | 'openaiModel' | '
   openrouter: 'openrouterModel',
 }
 
+type CLIToolDetection = {
+  claude: string | null
+  chatgpt: string | null
+  gemini: string | null
+  codex?: string | null
+}
+
+const CLI_PROVIDER_TO_TOOL: Partial<Record<AIProviderMode, keyof CLIToolDetection>> = {
+  'claude-cli': 'claude',
+  'chatgpt-cli': 'chatgpt',
+  'gemini-cli': 'gemini',
+  'codex-cli': 'codex',
+}
+
+const CLI_PROVIDER_BASE: Partial<Record<AIProviderMode, AIProvider>> = {
+  'claude-cli': 'anthropic',
+  'chatgpt-cli': 'openai',
+  'gemini-cli': 'google',
+  'codex-cli': 'openai',
+}
+
+const CLI_PROVIDERS: AIProviderMode[] = ['claude-cli', 'chatgpt-cli', 'gemini-cli']
+
+function isCLIProvider(provider: AIProviderMode): boolean {
+  return provider in CLI_PROVIDER_TO_TOOL
+}
+
 function providerLabel(provider: AIProviderMode): string {
   return AI_PROVIDER_META[provider].shortLabel
 }
@@ -40,12 +67,11 @@ export default function ConnectAI({
   const [selectedProvider, setSelectedProvider] = useState<AIProviderMode>(initialProvider)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
-  const [showAdvanced, setShowAdvanced] = useState(initialProvider === 'claude-cli' || initialProvider === 'codex-cli')
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState<{ tone: 'neutral' | 'success' | 'error'; message: string } | null>(null)
   const [allowSaveAnyway, setAllowSaveAnyway] = useState<ProviderConnectionResult | null>(null)
   const [connectedProvider, setConnectedProvider] = useState<AIProviderMode | null>(hasSavedAccess ? initialProvider : null)
-  const [cliTools, setCliTools] = useState<{ claude: string | null; codex: string | null }>({ claude: null, codex: null })
+  const [cliTools, setCliTools] = useState<CLIToolDetection>({ claude: null, chatgpt: null, gemini: null, codex: null })
   const [reducedMotion, setReducedMotion] = useState(false)
   const [savedModels, setSavedModels] = useState<Record<AIProvider, string>>({
     anthropic: AI_PROVIDER_META.anthropic.defaultModel,
@@ -71,9 +97,6 @@ export default function ConnectAI({
   useEffect(() => {
     setSelectedProvider(initialProvider)
     setConnectedProvider(hasSavedAccess ? initialProvider : null)
-    if (initialProvider === 'claude-cli' || initialProvider === 'codex-cli') {
-      setShowAdvanced(true)
-    }
   }, [hasSavedAccess, initialProvider])
 
   useEffect(() => {
@@ -85,27 +108,28 @@ export default function ConnectAI({
   }, [])
 
   useEffect(() => {
-    if (!showAdvanced) return
     void ipc.ai.detectCliTools().then((tools) => {
-      setCliTools(tools as { claude: string | null; codex: string | null })
+      setCliTools(tools as CLIToolDetection)
     }).catch(() => {
-      setCliTools({ claude: null, codex: null })
+      setCliTools({ claude: null, chatgpt: null, gemini: null, codex: null })
     })
-  }, [showAdvanced])
+  }, [])
 
   const detectedProvider = useMemo(() => detectProviderFromApiKey(apiKey), [apiKey])
-  const activeApiProvider: AIProvider = (selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli'
-    ? (detectedProvider ?? 'anthropic')
-    : selectedProvider)
+  const activeApiProvider: AIProvider = (isCLIProvider(selectedProvider)
+    ? (CLI_PROVIDER_BASE[selectedProvider] ?? detectedProvider ?? 'anthropic')
+    : selectedProvider as AIProvider)
   const isEmbedded = variant === 'embedded'
   const selectedProviderConnected = connectedProvider === selectedProvider
-  const selectedCliProvider = selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli'
-  const canSubmitKey = !selectedCliProvider && apiKey.trim().length > 0
+  const selectedCliProvider = isCLIProvider(selectedProvider)
+  const selectedCliTool = CLI_PROVIDER_TO_TOOL[selectedProvider]
+  const selectedCliPath = selectedCliTool ? cliTools[selectedCliTool] : null
+  const canSubmitKey = selectedCliProvider ? Boolean(selectedCliPath) : apiKey.trim().length > 0
 
   useEffect(() => {
     if (!detectedProvider) return
     if (selectedProvider === detectedProvider) return
-    if (selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli' || AI_PROVIDERS.includes(selectedProvider as AIProvider)) {
+    if (isCLIProvider(selectedProvider) || AI_PROVIDERS.includes(selectedProvider as AIProvider)) {
       setSelectedProvider(detectedProvider)
       setFeedback({
         tone: 'neutral',
@@ -120,7 +144,7 @@ export default function ConnectAI({
   }
 
   async function persistConnection(provider: AIProviderMode, key: string | null) {
-    if (key && provider !== 'claude-cli' && provider !== 'codex-cli') {
+    if (key && !isCLIProvider(provider)) {
       await ipc.settings.setApiKey(key, provider)
     }
     const currentSettings = await ipc.settings.get()
@@ -149,16 +173,15 @@ export default function ConnectAI({
     setFeedback(null)
 
     track(ANALYTICS_EVENT.AI_PROVIDER_CONNECTION_STARTED, {
-      connection_kind: selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli' ? 'cli' : 'api_key',
-      provider: selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli' ? selectedProvider : activeApiProvider,
+      connection_kind: isCLIProvider(selectedProvider) ? 'cli' : 'api_key',
+      provider: isCLIProvider(selectedProvider) ? selectedProvider : activeApiProvider,
       surface: isEmbedded ? 'settings' : 'ai',
       trigger: 'manual',
     })
 
     try {
-      if (selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli') {
-        const available = selectedProvider === 'claude-cli' ? cliTools.claude : cliTools.codex
-        if (!available) {
+      if (isCLIProvider(selectedProvider)) {
+        if (!selectedCliPath) {
           track(ANALYTICS_EVENT.AI_PROVIDER_CONNECTION_FAILED, {
             connection_kind: 'cli',
             failure_kind: 'provider',
@@ -263,6 +286,10 @@ export default function ConnectAI({
         transition: reducedMotion ? undefined : 'border-color 160ms ease, background 160ms ease',
       }
   const primaryButtonLabel = busy ? 'Connecting…' : 'Connect'
+  const cliProviderOptions = CLI_PROVIDERS.filter((provider) => {
+    const tool = CLI_PROVIDER_TO_TOOL[provider]
+    return Boolean(tool && cliTools[tool]) || provider === selectedProvider
+  })
 
   const modelFieldStyle: CSSProperties = {
     width: '100%',
@@ -421,10 +448,39 @@ export default function ConnectAI({
             </button>
           )
         })}
+        {cliProviderOptions.map((provider) => {
+          const selected = selectedProvider === provider
+          return (
+            <button
+              type="button"
+              key={provider}
+              onClick={() => { setSelectedProvider(provider); setFeedback(null) }}
+              style={{
+                padding: '8px 14px',
+                borderRadius: 999,
+                border: selected ? '1px solid rgba(125, 193, 255, 0.40)' : '1px solid var(--color-border-ghost)',
+                background: selected ? 'rgba(97, 165, 255, 0.12)' : 'transparent',
+                color: selected ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                fontSize: 12.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {AI_PROVIDER_META[provider].shortLabel}
+            </button>
+          )
+        })}
       </div>
 
       <div style={{ display: 'grid', gap: 10 }}>
-        <div style={{ position: 'relative' }}>
+        {selectedCliProvider && (
+          <div style={{ borderRadius: 12, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface-high)', padding: '11px 12px', fontSize: 12.5, lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>
+            {selectedCliPath
+              ? `${providerLabel(selectedProvider)} found at ${selectedCliPath}. Daylens will send prompts to the local CLI through stdin and read the answer from stdout.`
+              : `${providerLabel(selectedProvider)} is selected, but Daylens did not find it on PATH.`}
+          </div>
+        )}
+        {!selectedCliProvider && <div style={{ position: 'relative' }}>
           <input
             type={showKey ? 'text' : 'password'}
             value={apiKey}
@@ -445,12 +501,12 @@ export default function ConnectAI({
               outline: 'none',
               fontSize: 13,
             }}
-            disabled={busy || selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli'}
+            disabled={busy}
           />
           <button
             type="button"
             onClick={() => setShowKey((value) => !value)}
-            disabled={busy || selectedProvider === 'claude-cli' || selectedProvider === 'codex-cli'}
+            disabled={busy}
             style={{
               position: 'absolute',
               top: 0,
@@ -465,7 +521,7 @@ export default function ConnectAI({
           >
             {showKey ? 'Hide' : 'Show'}
           </button>
-        </div>
+        </div>}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
           <button
@@ -516,7 +572,7 @@ export default function ConnectAI({
 
           <button
             type="button"
-            onClick={() => { ipc.shell.openExternal(AI_PROVIDER_META[activeApiProvider].docsUrl) }}
+            onClick={() => { ipc.shell.openExternal(AI_PROVIDER_META[selectedProvider].docsUrl || AI_PROVIDER_META[activeApiProvider].docsUrl) }}
             style={{
               height: 40,
               padding: '0 14px',

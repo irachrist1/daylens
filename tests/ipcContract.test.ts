@@ -35,6 +35,7 @@ import { registerAIHandlers } from '../src/main/ipc/ai.handlers.ts'
 import { registerSettingsHandlers } from '../src/main/ipc/settings.handlers.ts'
 import { registerBillingHandlers } from '../src/main/ipc/billing.handlers.ts'
 import { registerIntercomHandlers } from '../src/main/ipc/intercom.handlers.ts'
+import { registerNotificationHandlers } from '../src/main/ipc/notifications.handlers.ts'
 import { registerSearchHandlers } from '../src/main/ipc/search.handlers.ts'
 import { registerSyncHandlers } from '../src/main/ipc/sync.handlers.ts'
 import { registerDistractionAlerterHandlers } from '../src/main/services/distractionAlerter.ts'
@@ -51,6 +52,7 @@ const REGISTER_FNS: Array<[string, () => void]> = [
   ['settings', registerSettingsHandlers],
   ['billing', registerBillingHandlers],
   ['intercom', registerIntercomHandlers],
+  ['notifications', registerNotificationHandlers],
   ['search', registerSearchHandlers],
   ['sync', registerSyncHandlers],
   ['distractionAlerter', registerDistractionAlerterHandlers],

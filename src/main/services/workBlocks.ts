@@ -449,12 +449,24 @@ function dominantFocusedCategoryFromDistribution(distribution: Partial<Record<Ap
   return null
 }
 
+function isLocalhostArtifact(artifact: ArtifactRef): boolean {
+  if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
+  const host = artifact.host ?? (artifact as { domain?: string | null }).domain ?? null
+  return typeof host === 'string' && /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?$/i.test(host)
+}
+
 function hasLocalhostPageArtifact(topArtifacts: ArtifactRef[]): boolean {
-  return topArtifacts.some((artifact) => {
-    if (artifact.artifactType !== 'page' && artifact.artifactType !== 'domain') return false
-    const host = artifact.host ?? (artifact as { domain?: string | null }).domain ?? null
-    return typeof host === 'string' && /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?$/i.test(host)
-  })
+  return topArtifacts.some(isLocalhostArtifact)
+}
+
+function localhostArtifactSeconds(topArtifacts: ArtifactRef[]): number {
+  return topArtifacts
+    .filter(isLocalhostArtifact)
+    .reduce((sum, artifact) => sum + (artifact.totalSeconds ?? 0), 0)
+}
+
+function leisureSecondsOfDistribution(distribution: Partial<Record<AppCategory, number>>): number {
+  return (distribution.entertainment ?? 0) + (distribution.social ?? 0)
 }
 
 function focusedShareOfDistribution(distribution: Partial<Record<AppCategory, number>>): number {
@@ -547,8 +559,18 @@ export function dominantCategoryForBlock(
   const focusedCategory = dominantFocusedCategoryFromDistribution(distribution)
   const artifactCategory = categoryForTopPageArtifact(topArtifacts)
 
+  // Browsing on localhost is usually you testing your own dev server, so a
+  // browser-shell block with a localhost page and some editor time reads as
+  // development. But the dev evidence (localhost time + editor time) must not be
+  // dwarfed by genuine leisure: a late-night block that is mostly YouTube and
+  // Netflix, and merely happened to also load localhost, is NOT development.
+  // (2026-07-06 founder audit: a 4h mostly-leisure block with a 262s dev sliver
+  // was being stamped development → counted as work.)
   if (baseCategory === 'browsing' && hasLocalhostPageArtifact(topArtifacts) && (distribution.development ?? 0) > 0) {
-    return 'development'
+    const devEvidenceSeconds = localhostArtifactSeconds(topArtifacts) + (distribution.development ?? 0)
+    if (devEvidenceSeconds >= leisureSecondsOfDistribution(distribution)) {
+      return 'development'
+    }
   }
   if (focusedCategory && (baseCategory === 'browsing' || baseCategory === 'entertainment' || baseCategory === 'social')) {
     return focusedCategory

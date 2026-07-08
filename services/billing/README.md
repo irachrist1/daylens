@@ -57,6 +57,100 @@ psql "$DATABASE_URL" -f services/billing/schema.sql
 
 The schema stores account state, usage metadata, payment events, and payment intents. It does not store prompts, resolved facts, answers, or raw activity.
 
+## Railway deployment
+
+This repo ships Railway-ready Docker service roots:
+
+- `services/billing/` deploys the public Node billing API as `daylens-billing`.
+- `services/billing/litellm/` deploys private LiteLLM as `daylens-litellm`.
+- A Railway Postgres service supplies `DATABASE_URL` to both services.
+
+Create one Railway project, then add three services:
+
+1. `Postgres` - Railway managed Postgres.
+2. `daylens-litellm` - deploy from `services/billing/litellm` with `--path-as-root`.
+3. `daylens-billing` - deploy from `services/billing` with `--path-as-root`.
+
+From the repo root, after `railway login` and `railway link`:
+
+```bash
+railway add --database postgres
+railway up services/billing/litellm --path-as-root --service daylens-litellm --detach
+railway up services/billing --path-as-root --service daylens-billing --detach
+railway domain --service daylens-billing
+```
+
+Set this public domain on `daylens-billing`:
+
+```text
+PUBLIC_BASE_URL=https://<daylens-billing-domain>
+```
+
+Set these variables on **both** Railway services (`daylens-billing` and `daylens-litellm`):
+
+```text
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+LITELLM_MASTER_KEY=<shared high-entropy key>
+DAYLENS_PROVIDER_API_KEY=<upstream provider key for LiteLLM>
+DAYLENS_MANAGED_MODEL=anthropic/claude-sonnet-4-6
+```
+
+Set these variables on **`daylens-litellm` only**:
+
+```text
+PORT=4000
+```
+
+Set these variables on **`daylens-billing` only**:
+
+```text
+NODE_ENV=production
+LITELLM_URL=http://daylens-litellm.railway.internal:4000
+LITELLM_MODEL_ALIAS=daylens-default
+DAYLENS_MANAGED_PROVIDER=anthropic
+SESSION_SECRET=<openssl rand -base64 48>
+INSTALLATION_HASH_SECRET=<openssl rand -base64 48>
+LITELLM_KEY_ENCRYPTION_SECRET=<openssl rand -base64 48>
+SUBSCRIPTION_FAIR_USE_USD=20
+POLAR_API_BASE_URL=https://api.polar.sh/v1
+POLAR_ACCESS_TOKEN=<Polar token>
+POLAR_PRODUCT_ID=<Polar product id>
+POLAR_WEBHOOK_SECRET=<Polar webhook secret>
+CHECKOUT_SUCCESS_URL=https://daylens.app/billing/success
+CHECKOUT_RETURN_URL=https://daylens.app/billing
+FLUTTERWAVE_API_BASE_URL=https://api.flutterwave.com/v3
+FLUTTERWAVE_SECRET_KEY=<Flutterwave secret key>
+FLUTTERWAVE_SECRET_HASH=<Flutterwave webhook hash>
+FLUTTERWAVE_LOCAL_PASS_RWF=15000
+INTERCOM_IDENTITY_VERIFICATION_SECRET=<optional Intercom IV secret>
+```
+
+Generate `SESSION_SECRET`, `INSTALLATION_HASH_SECRET`, `LITELLM_KEY_ENCRYPTION_SECRET`, and `LITELLM_MASTER_KEY` with `openssl rand -base64 48`. `DAYLENS_PROVIDER_API_KEY` is the upstream model-provider key LiteLLM uses, not a desktop secret.
+
+Run the schema once against the Railway Postgres service:
+
+```bash
+railway run --service daylens-billing -- sh -c 'psql "$DATABASE_URL" -f services/billing/schema.sql'
+```
+
+Set this GitHub Actions secret for every desktop release workflow:
+
+```bash
+gh secret set DAYLENS_BILLING_API_URL --body 'https://billing.daylens.app'
+```
+
+Register webhooks after deploy:
+
+- Polar: `https://billing.daylens.app/v1/webhooks/polar`
+- Flutterwave: `https://billing.daylens.app/v1/webhooks/flutterwave`
+
+Then verify:
+
+```bash
+curl -fsS https://billing.daylens.app/health
+npm run billing:sandbox
+```
+
 ## LiteLLM setup
 
 Run LiteLLM with `services/billing/litellm-config.yaml`.
@@ -266,26 +360,26 @@ passes -> Rwanda pass + BYOK. Neither -> ship a **BYOK-only desktop build** (omi
 `DAYLENS_BILLING_API_URL`); the app works fully on users' own keys and no hosting spend is
 wasted.
 
-### Step 2 - Cheapest-viable hosting
+### Step 2 - Hosting
 
-One small VPS (~EUR 4-5/month, e.g. Hetzner CX22) running Docker Compose: `postgres` +
-`litellm` (using `litellm-config.yaml`) + `billing` (`node src/server.mjs`) + `caddy`
-(free automatic HTTPS). Expose only Caddy :443; keep Postgres and LiteLLM on the private
-Docker network. Recurring cost = VPS + your upstream Anthropic usage; Polar/Flutterwave are
-per-transaction with no monthly fee. Managed alternative (more cost, less ops): Neon
-Postgres + Fly.io for the billing service and a private LiteLLM app.
+Use the existing Railway subscription: one Railway project with managed Postgres, private
+LiteLLM, and the public billing API. Expose only `daylens-billing`; keep LiteLLM reachable
+only through `daylens-litellm.railway.internal`. Recurring cost = Railway usage + upstream
+Anthropic usage; Polar/Flutterwave are per-transaction with no monthly fee. Cheapest fallback
+if Railway cost becomes annoying: one small VPS running Docker Compose + Caddy.
 
 ### Step 3 - Deploy order (nothing wasted; the gate already passed)
 
-1. Point `billing.daylens.app` (A record) at the VPS.
-2. Bring up Postgres; run `psql "$DATABASE_URL" -f services/billing/schema.sql`.
-3. Bring up LiteLLM (private) and the billing service behind Caddy.
+1. Create Railway Postgres.
+2. Deploy `daylens-litellm` from `services/billing/litellm`.
+3. Deploy `daylens-billing` from `services/billing`.
 4. Set env vars (map below); generate secrets with `openssl rand -base64 48`.
-5. `curl -fsS https://billing.daylens.app/health` -> `{"ok":true}`.
-6. Register webhooks against **Polar sandbox + Flutterwave test keys** first.
-7. Run the Smoke checks (steps 1-10) end-to-end in sandbox/test mode.
-8. Flip to production tokens/keys, re-register prod webhooks, re-run smoke checks.
-9. Rebuild desktop: `DAYLENS_BILLING_API_URL=https://billing.daylens.app npm run build:all`.
+5. Run `schema.sql` against Railway Postgres.
+6. `curl -fsS https://billing.daylens.app/health` -> `{"ok":true}`.
+7. Register webhooks against **Polar sandbox + Flutterwave test keys** first.
+8. Run the Smoke checks (steps 1-10) end-to-end in sandbox/test mode.
+9. Flip to production tokens/keys, re-register prod webhooks, re-run smoke checks.
+10. Rebuild desktop: `DAYLENS_BILLING_API_URL=https://billing.daylens.app npm run build:all`.
 
 ### Env var sources (maps to `.env.example`)
 

@@ -8,6 +8,7 @@ import type {
   DaySnapshot,
   WrappedPeriodThread,
 } from '@shared/types'
+import { looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
 
 export interface SnapshotRollup {
   totalSeconds: number
@@ -23,7 +24,11 @@ export interface SnapshotRollup {
   leisureSurfaces: string[]
   busiestDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
   quietestActiveDay: { dateStr: string; dayLabel: string; totalSeconds: number } | null
-  longestStretch: { dateStr: string; dayLabel: string; seconds: number; label: string } | null
+  longestStretch: { dateStr: string; dayLabel: string; seconds: number; label: string; startClock?: string | null } | null
+  /** Per-day kind splits, chronological — best/worst-day and ratio slides. */
+  days: Array<{ dateStr: string; dayLabel: string; totalSeconds: number; workSeconds: number; leisureSeconds: number }>
+  /** Meetings-category seconds summed across the period. */
+  meetingsSeconds: number
 }
 
 const MAX_CATEGORIES = 6
@@ -51,6 +56,8 @@ export function rollupSnapshots(
   let busiestDay: SnapshotRollup['busiestDay'] = null
   let quietestActiveDay: SnapshotRollup['quietestActiveDay'] = null
   let longestStretch: SnapshotRollup['longestStretch'] = null
+  let meetingsSeconds = 0
+  const days: SnapshotRollup['days'] = []
 
   for (const snap of snapshots) {
     if (snap.totalActiveSeconds <= 0) continue
@@ -59,13 +66,30 @@ export function rollupSnapshots(
     workSeconds += snap.kind.work
     leisureSeconds += snap.kind.leisure
     personalSeconds += snap.kind.personal
+    days.push({
+      dateStr: snap.date,
+      dayLabel: dayLabel(snap.date),
+      totalSeconds: snap.totalActiveSeconds,
+      workSeconds: snap.kind.work,
+      leisureSeconds: snap.kind.leisure,
+    })
 
+    // Meeting truth: prefer the span-based field (mirrors the daily facts
+    // builder); older frozen snapshots fall back to category-weighted seconds.
+    meetingsSeconds += snap.meetingsSpanSeconds
+      ?? snap.categories.find((cat) => cat.category === 'meetings')?.seconds
+      ?? 0
     for (const cat of snap.categories) {
       // Only work-relevant time feeds "main mode" / "where the work went".
       if (cat.category === 'entertainment' || cat.category === 'social') continue
       workCategory.set(cat.category, (workCategory.get(cat.category) ?? 0) + cat.seconds)
     }
     for (const app of snap.apps) {
+      // Route through the same raw-artifact guard the day-side app/site slices
+      // use (dayWrapScenes.ts) — a corrupted "appName" (a leaked window title,
+      // e.g. "wrapped-agent-plan.mdx.bak | LinkedIn") must never reach a wrap
+      // as if it were a real app (wrapped-agent-plan.md P0 item 4).
+      if (!app.appName || looksLikeRawArtifactLabel(app.appName)) continue
       apps.set(app.appName, (apps.get(app.appName) ?? 0) + app.seconds)
     }
     for (const surface of snap.leisureSurfaces) {
@@ -90,6 +114,7 @@ export function rollupSnapshots(
         dayLabel: dayLabel(snap.date),
         seconds: snap.longestBlock.seconds,
         label: snap.longestBlock.label,
+        startClock: snap.longestBlock.startClock ?? null,
       }
     }
   }
@@ -121,6 +146,8 @@ export function rollupSnapshots(
     // Only meaningful when more than one active day; the caller may drop it.
     quietestActiveDay: daysWithActivity > 1 ? quietestActiveDay : null,
     longestStretch,
+    days,
+    meetingsSeconds,
   }
 }
 

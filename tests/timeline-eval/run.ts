@@ -4,7 +4,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SCHEMA_SQL } from '../../src/main/db/schema.ts'
 import { getTimelineDayPayload, userVisibleLabelForBlock } from '../../src/main/services/workBlocks.ts'
-import { buildFallbackNarrative, buildWrappedFactsFromPayload, computeFactsHash, type WrappedFacts } from '../../src/main/lib/wrappedNarrative.ts'
+import { buildFallbackNarrative, computeFactsHash } from '../../src/main/lib/wrappedNarrative.ts'
+import { buildDayWrapFacts, categoryWord, type DayWrapFacts } from '../../src/renderer/lib/dayWrapScenes.ts'
+import { planDayWrapSlides, resolveSlideLine } from '../../src/renderer/lib/wrapDeck.ts'
+import { humanizeTitle } from '../../src/shared/humanize.ts'
 import { inferWorkIntent } from '../../src/shared/workIntent.ts'
 import { effectiveBlockKind, type WorkKind } from '../../src/shared/workKind.ts'
 import { blockActiveSeconds } from '../../src/shared/blockDuration.ts'
@@ -52,15 +55,15 @@ interface ExpectedEpisode {
 
 interface ExpectedWrap {
   quality?: WrappedQuality
-  dominantCategory?: AppCategory | 'unknown'
-  topAppIncludes?: string
-  topDomain?: string
-  /** A subject/label the "what mattered" spine should name. */
-  matteredSubjectIncludes?: string
-  /** Exact number of pending blocks the wrap should report as needing review. */
-  needsReviewCount?: number
-  /** A subject the "carries into tomorrow" spine should name. */
-  carryoverSubjectIncludes?: string
+  isLeisureDay?: boolean
+  /** A name the ranked work activities ("what you did" tracks) should include. */
+  workActivityIncludes?: string
+  /** A branded app/site the "where the time went" slices should include. */
+  appSiteIncludes?: string
+  /** A friendly leisure surface topLeisure should include ("YouTube"). */
+  topLeisureIncludes?: string
+  /** What the longest-stretch standout should be about. */
+  standoutIncludes?: string
 }
 
 interface TimelineFixture {
@@ -106,6 +109,7 @@ interface EpisodeResult {
 interface FixtureResult {
   fixture: TimelineFixture
   payload: DayTimelinePayload
+  facts: DayWrapFacts
   actualBlocks: ActualBlock[]
   episodes: EpisodeResult[]
   overSplits: EpisodeResult[]
@@ -387,41 +391,56 @@ function findExtras(fixture: TimelineFixture, actualBlocks: ActualBlock[]): Actu
   })
 }
 
-function wrappedTexts(payload: DayTimelinePayload): string[] {
-  const facts = buildWrappedFactsFromPayload(payload)
+// The wrap is a deck: `planDayWrapSlides` computes the slides deterministically
+// and the narrative supplies one line per slide id. The eval exercises the
+// fallback path (no AI), so every slide resolves to its deterministic
+// fallbackLine — those lines plus lead/question/reflection are the user-visible
+// wrap prose the checks below run against.
+function wrappedTexts(facts: DayWrapFacts): string[] {
   const narrative = buildFallbackNarrative(facts, computeFactsHash(facts))
-  return [
-    narrative.lead,
-    narrative.peakInsight,
-    narrative.nudge,
-    ...Object.values(narrative.slides),
-  ].filter((line): line is string => Boolean(line))
+  const slideLines = facts.quality === 'empty' || facts.quality === 'tooEarly'
+    ? []
+    : planDayWrapSlides(facts).map((spec) => resolveSlideLine(spec, narrative.lines))
+  return [narrative.lead, ...slideLines, narrative.question, narrative.reflection]
+    .filter((line): line is string => Boolean(line))
 }
 
-function unsupportedWrapClaims(payload: DayTimelinePayload): string[] {
-  const facts = buildWrappedFactsFromPayload(payload)
-  const allowedDomain = facts.topDomain?.domain.toLowerCase().replace(/^www\./, '') ?? null
+function trackedDomains(payload: DayTimelinePayload): Set<string> {
+  const domains = new Set<string>()
+  for (const block of payload.blocks) {
+    for (const site of block.websites) {
+      domains.add(site.domain.toLowerCase().replace(/^www\./, ''))
+    }
+  }
+  return domains
+}
+
+function unsupportedWrapClaims(facts: DayWrapFacts, texts: string[], payload: DayTimelinePayload): string[] {
+  const allowedDomains = trackedDomains(payload)
   const issues: string[] = []
 
-  // An hour figure is grounded if it matches total tracked OR any reconciled
-  // kind sub-total (a breakdown card legitimately says "Leisure 3h 51m"). Only
-  // numbers matching none of these are invented.
-  const kb = facts.kindBreakdown
+  // An hour figure is grounded if it matches the headline, a kind sub-total, or
+  // any per-item figure the facts carry (activity, slice, ribbon segment,
+  // standout, hook, story part). Only numbers matching none are invented.
+  const storySegments = facts.dayStory
   const allowedHours = [
-    facts.totalSeconds,
-    kb.work, kb.leisure, kb.personal,
-    facts.peakBlock?.durationSeconds ?? 0,
-    ...facts.mattered.map((m) => m.durationSeconds),
-    ...facts.needsReview.items.map((i) => i.durationSeconds),
+    facts.activeSeconds,
+    facts.workSeconds, facts.leisureSeconds, facts.personalSeconds, facts.meetingsSeconds,
+    facts.standout?.seconds ?? 0,
+    ...facts.workActivities.map((a) => a.seconds),
+    ...facts.appSites.map((s) => s.seconds),
+    ...facts.ribbon.map((r) => r.seconds),
+    ...facts.candidateHooks.map((h) => h.seconds ?? 0),
+    ...storySegments.map((s) => s?.seconds ?? 0),
   ]
     .filter((s) => s > 0)
     .map((s) => s / 3600)
 
-  for (const text of wrappedTexts(payload)) {
+  for (const text of texts) {
     const domainMatches = text.match(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|io|dev|app|net|ai|co))\b/gi) ?? []
     for (const match of domainMatches) {
       const normalized = match.toLowerCase().replace(/^www\./, '')
-      if (allowedDomain && normalized === allowedDomain) continue
+      if (allowedDomains.has(normalized)) continue
       issues.push(`untracked domain "${match}" in "${text}"`)
     }
 
@@ -438,95 +457,136 @@ function unsupportedWrapClaims(payload: DayTimelinePayload): string[] {
   return issues
 }
 
-function evaluateWrap(fixture: TimelineFixture, payload: DayTimelinePayload): string[] {
+function evaluateWrap(fixture: TimelineFixture, facts: DayWrapFacts): string[] {
   const expected = fixture.expectedWrap
   if (!expected) return []
-  const facts = buildWrappedFactsFromPayload(payload)
   const issues: string[] = []
 
   if (expected.quality && facts.quality !== expected.quality) {
     issues.push(`quality ${facts.quality}, expected ${expected.quality}`)
   }
-  if (expected.dominantCategory && facts.dominantCategory !== expected.dominantCategory) {
-    issues.push(`dominantCategory ${facts.dominantCategory}, expected ${expected.dominantCategory}`)
+  if (expected.isLeisureDay != null && facts.isLeisureDay !== expected.isLeisureDay) {
+    issues.push(`isLeisureDay ${facts.isLeisureDay}, expected ${expected.isLeisureDay}`)
   }
-  if (expected.topAppIncludes && !containsAny(facts.topApp?.appName, [expected.topAppIncludes])) {
-    issues.push(`topApp ${facts.topApp?.appName ?? 'null'}, expected ${expected.topAppIncludes}`)
-  }
-  if (expected.topDomain && facts.topDomain?.domain !== expected.topDomain) {
-    issues.push(`topDomain ${facts.topDomain?.domain ?? 'null'}, expected ${expected.topDomain}`)
-  }
-  if (expected.matteredSubjectIncludes) {
-    const found = facts.mattered.some((m) =>
-      containsAny(m.intentSubject, [expected.matteredSubjectIncludes!])
-      || containsAny(m.label, [expected.matteredSubjectIncludes!]))
+  if (expected.workActivityIncludes) {
+    const found = facts.workActivities.some((a) => containsAny(a.name, [expected.workActivityIncludes!]))
     if (!found) {
-      const got = facts.mattered.map((m) => m.intentSubject ?? m.label).join(' | ') || 'none'
-      issues.push(`mattered missing "${expected.matteredSubjectIncludes}" (got ${got})`)
+      const got = facts.workActivities.map((a) => a.name).join(' | ') || 'none'
+      issues.push(`workActivities missing "${expected.workActivityIncludes}" (got ${got})`)
     }
   }
-  if (expected.needsReviewCount != null && facts.needsReview.count !== expected.needsReviewCount) {
-    issues.push(`needsReview.count ${facts.needsReview.count}, expected ${expected.needsReviewCount}`)
-  }
-  if (expected.carryoverSubjectIncludes) {
-    const found = facts.carryover.some((c) =>
-      containsAny(c.intentSubject, [expected.carryoverSubjectIncludes!])
-      || containsAny(c.label, [expected.carryoverSubjectIncludes!]))
+  if (expected.appSiteIncludes) {
+    const found = facts.appSites.some((s) => containsAny(s.name, [expected.appSiteIncludes!]))
     if (!found) {
-      const got = facts.carryover.map((c) => c.intentSubject ?? c.label).join(' | ') || 'none'
-      issues.push(`carryover missing "${expected.carryoverSubjectIncludes}" (got ${got})`)
+      const got = facts.appSites.map((s) => s.name).join(' | ') || 'none'
+      issues.push(`appSites missing "${expected.appSiteIncludes}" (got ${got})`)
     }
+  }
+  if (expected.topLeisureIncludes) {
+    const found = facts.topLeisure.some((name) => containsAny(name, [expected.topLeisureIncludes!]))
+    if (!found) {
+      issues.push(`topLeisure missing "${expected.topLeisureIncludes}" (got ${facts.topLeisure.join(' | ') || 'none'})`)
+    }
+  }
+  if (expected.standoutIncludes && !containsAny(facts.standout?.name, [expected.standoutIncludes])) {
+    issues.push(`standout ${facts.standout?.name ?? 'none'}, expected "${expected.standoutIncludes}"`)
   }
 
   return issues
 }
 
-// Structural groundedness: the review-derived spine must trace back to real
-// blocks, recomputed here independently of buildWrappedFactsFromPayload so the
-// check actually guards against the derivation drifting from the timeline.
-const NEEDS_REVIEW_MIN_SECONDS = 5 * 60
-
-function evalEffectiveLabel(block: WorkContextBlock): string {
-  return block.review?.correctedLabel?.trim() || block.label.current.trim()
+// Structural groundedness: the ONE reconciled facts object must actually
+// reconcile (wrapped.md §5 — headline = split total = slice total = ribbon
+// total), and every named work item must trace back to a real trusted block.
+// The split is recounted here independently of buildDayWrapFacts so the check
+// guards against the derivation drifting from the timeline.
+function wrapEligibleBlocks(payload: DayTimelinePayload): WorkContextBlock[] {
+  return payload.blocks
+    .filter(isTrustedTimelineBlock)
+    .filter((b) => b.dominantCategory !== 'system' && b.dominantCategory !== 'uncategorized')
 }
 
-function evalEffectiveSubject(block: WorkContextBlock): string | null {
-  return block.review?.correctedIntentSubject ?? inferWorkIntent(block).subject
+function workBlockNames(block: WorkContextBlock): string {
+  const names: string[] = []
+  const subject = block.review?.correctedIntentSubject ?? inferWorkIntent(block).subject
+  if (subject) names.push(subject)
+  const label = block.review?.correctedLabel?.trim() || block.label.current.trim()
+  if (label) {
+    names.push(label)
+    const humanized = humanizeTitle(label)
+    if (humanized) names.push(humanized)
+  }
+  return names.join(' | ')
 }
 
-function checkWrapGrounding(facts: WrappedFacts, payload: DayTimelinePayload): string[] {
+function checkWrapGrounding(facts: DayWrapFacts, payload: DayTimelinePayload): string[] {
   const issues: string[] = []
-  const trusted = payload.blocks.filter(isTrustedTimelineBlock)
+  const blocks = wrapEligibleBlocks(payload)
 
-  // 1. "Needs review" count must equal the independently-counted pending pile.
-  const pendingCount = trusted.filter((b) =>
-    b.review.state === 'pending' && blockActiveSeconds(b) >= NEEDS_REVIEW_MIN_SECONDS).length
-  if (facts.needsReview.count !== pendingCount) {
-    issues.push(`needsReview.count ${facts.needsReview.count} != ${pendingCount} pending blocks in payload`)
+  // 1. The kind split must equal an independent recount of the trusted blocks.
+  let work = 0
+  let leisure = 0
+  let personal = 0
+  for (const block of blocks) {
+    const kind = effectiveBlockKind(block)
+    const seconds = blockActiveSeconds(block)
+    if (kind === 'work') work += seconds
+    else if (kind === 'leisure') leisure += seconds
+    else if (kind === 'personal') personal += seconds
   }
-
-  // 2. Every "mattered" item is a trusted, decided (non-pending) block — matched
-  //    by rounded active duration, which the facts builder copies verbatim.
-  for (const m of facts.mattered) {
-    if (m.reviewState === 'pending') {
-      issues.push(`mattered "${m.label}" is pending — should never be claimed as decided work`)
-      continue
+  const splits: Array<[string, number, number]> = [
+    ['work', facts.workSeconds, work],
+    ['leisure', facts.leisureSeconds, leisure],
+    ['personal', facts.personalSeconds, personal],
+  ]
+  for (const [name, claimed, recounted] of splits) {
+    if (Math.abs(claimed - recounted) > 1) {
+      issues.push(`${name}Seconds ${claimed} != ${recounted} recounted from payload`)
     }
-    const traced = trusted.some((b) =>
-      b.review.state !== 'pending'
-      && Math.round(blockActiveSeconds(b)) === m.durationSeconds
-      && containsAny(evalEffectiveLabel(b), [m.label]))
-    if (!traced) issues.push(`mattered "${m.label}" (${m.durationSeconds}s) traces to no decided block`)
   }
 
-  // 3. Every "carryover" item traces to a real trusted block by subject.
-  for (const c of facts.carryover) {
-    const traced = trusted.some((b) => {
-      const subject = evalEffectiveSubject(b)
-      return subject != null && c.intentSubject != null
-        && normalizeText(subject) === normalizeText(c.intentSubject)
-    })
-    if (!traced) issues.push(`carryover "${c.intentSubject ?? c.label}" traces to no real block`)
+  // 2. The headline number reconciles with the split exactly.
+  if (facts.activeSeconds !== facts.workSeconds + facts.leisureSeconds + facts.personalSeconds) {
+    issues.push(`activeSeconds ${facts.activeSeconds} != split total ${facts.workSeconds + facts.leisureSeconds + facts.personalSeconds}`)
+  }
+
+  // 3. The "where the time went" slices sum to the headline (slices + Other).
+  const sliceTotal = facts.appSites.reduce((sum, slice) => sum + slice.seconds, 0)
+  if (facts.appSites.length > 0 && Math.abs(sliceTotal - facts.activeSeconds) > 1) {
+    issues.push(`appSites total ${sliceTotal} != activeSeconds ${facts.activeSeconds}`)
+  }
+
+  // 4. The ribbon covers the same time as the headline.
+  const ribbonTotal = facts.ribbon.reduce((sum, segment) => sum + segment.seconds, 0)
+  if (facts.ribbon.length > 0 && Math.abs(ribbonTotal - facts.activeSeconds) > 1) {
+    issues.push(`ribbon total ${ribbonTotal} != activeSeconds ${facts.activeSeconds}`)
+  }
+
+  // 5. Every named work activity traces to a real trusted work block, and no
+  //    activity can claim more time than all work combined.
+  const workBlocks = blocks.filter((b) => effectiveBlockKind(b) === 'work')
+  for (const activity of facts.workActivities) {
+    if (!workBlocks.some((b) => containsAny(workBlockNames(b), [activity.name]))) {
+      issues.push(`work activity "${activity.name}" traces to no trusted work block`)
+    }
+    if (activity.seconds > facts.workSeconds + 1) {
+      issues.push(`work activity "${activity.name}" claims ${activity.seconds}s > workSeconds ${facts.workSeconds}`)
+    }
+  }
+
+  // 6. The standout is a real work stretch: named from a work block (or the
+  //    honest category word when the block is unnameable), no longer than all
+  //    work combined.
+  if (facts.standout) {
+    const traced = workBlocks.some((b) =>
+      containsAny(workBlockNames(b), [facts.standout!.name])
+      || normalizeText(categoryWord(b.dominantCategory)) === normalizeText(facts.standout!.name))
+    if (!traced) {
+      issues.push(`standout "${facts.standout.name}" traces to no trusted work block`)
+    }
+    if (facts.standout.seconds > facts.workSeconds + 1) {
+      issues.push(`standout claims ${facts.standout.seconds}s > workSeconds ${facts.workSeconds}`)
+    }
   }
 
   return issues
@@ -567,10 +627,8 @@ const WRAP_GUILT_PATTERNS = [
   /extrapolat/i,
 ]
 
-function wrapDesignIssues(payload: DayTimelinePayload, actualBlocks: ActualBlock[]): string[] {
+function wrapDesignIssues(facts: DayWrapFacts, texts: string[], actualBlocks: ActualBlock[]): string[] {
   const issues: string[] = []
-  const facts = buildWrappedFactsFromPayload(payload)
-  const texts = wrappedTexts(payload)
 
   for (const text of texts) {
     for (const pattern of WRAP_GUILT_PATTERNS) {
@@ -578,29 +636,27 @@ function wrapDesignIssues(payload: DayTimelinePayload, actualBlocks: ActualBlock
     }
   }
 
-  // A leisure day must carry no focus-% scoring anywhere in the wrap.
-  if (facts.kindBreakdown.isLeisureDay) {
+  // A leisure day is narrated, never graded — no focus scoring anywhere.
+  if (facts.isLeisureDay) {
     for (const text of texts) {
-      if (/\d+\s*%/.test(text) || /\bfocus(?:ed)?\b/i.test(text)) {
+      if (/\bfocus(?:ed)?\b/i.test(text)) {
         issues.push(`leisure-day wrap scores focus: "${text}"`)
       }
     }
   }
 
-  // "What mattered" and carryover must never name a leisure block — watching is
-  // never the work that mattered.
+  // The work surfaces (activities, standout) must never name a leisure block —
+  // watching is never the work that mattered.
   const leisureLabels = new Set(
     actualBlocks.filter((b) => b.kind === 'leisure').map((b) => normalizeText(b.label)),
   )
-  for (const m of facts.mattered) {
-    if (leisureLabels.has(normalizeText(m.label))) {
-      issues.push(`mattered names a leisure block: "${m.label}"`)
+  for (const activity of facts.workActivities) {
+    if (leisureLabels.has(normalizeText(activity.name))) {
+      issues.push(`work activity names a leisure block: "${activity.name}"`)
     }
   }
-  for (const c of facts.carryover) {
-    if (leisureLabels.has(normalizeText(c.label))) {
-      issues.push(`carryover names a leisure block: "${c.label}"`)
-    }
+  if (facts.standout && leisureLabels.has(normalizeText(facts.standout.name))) {
+    issues.push(`standout names a leisure block: "${facts.standout.name}"`)
   }
 
   return issues
@@ -651,9 +707,11 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     const episodes = evaluateEpisodes(fixture, actualBlocks)
     const underSplits = findUnderSplits(fixture, actualBlocks)
     const extras = findExtras(fixture, actualBlocks)
-    const wrapIssues = evaluateWrap(fixture, payload)
-    const unsupported = unsupportedWrapClaims(payload)
-    const wrapGrounding = checkWrapGrounding(buildWrappedFactsFromPayload(payload), payload)
+    const facts = buildDayWrapFacts(payload)
+    const texts = wrappedTexts(facts)
+    const wrapIssues = evaluateWrap(fixture, facts)
+    const unsupported = unsupportedWrapClaims(facts, texts, payload)
+    const wrapGrounding = checkWrapGrounding(facts, payload)
 
     // Every block must explain why it started and stopped — segmentation now
     // records a boundary reason on each edge, so an empty one is a hole in the
@@ -670,7 +728,7 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
 
     const designIssues = [
       ...designInvariantIssues(fixture, actualBlocks, episodes),
-      ...wrapDesignIssues(payload, actualBlocks),
+      ...wrapDesignIssues(facts, texts, actualBlocks),
     ]
 
     const segmentationTotal = episodes.length
@@ -693,6 +751,7 @@ function evaluateFixture(fixture: TimelineFixture): FixtureResult {
     return {
       fixture,
       payload,
+      facts,
       actualBlocks,
       episodes,
       overSplits: episodes.filter((episode) => episode.overlaps.length > 1),
@@ -763,17 +822,19 @@ function formatFixture(result: FixtureResult): string {
     lines.push(`- ${formatActualBlock(actual)}; active ${formatDuration(blockActiveSeconds(actual.block))}${pageText}`)
   }
 
-  const facts = buildWrappedFactsFromPayload(result.payload)
+  const facts = result.facts
   lines.push('')
   lines.push(
-    `Wrap check: quality ${facts.quality}; dominant ${facts.dominantCategory}; `
-    + `top app ${facts.topApp?.appName ?? 'none'}; top domain ${facts.topDomain?.domain ?? 'none'}; `
+    `Wrap check: quality ${facts.quality}; active ${formatDuration(facts.activeSeconds)} `
+    + `(work ${formatDuration(facts.workSeconds)} / leisure ${formatDuration(facts.leisureSeconds)} / personal ${formatDuration(facts.personalSeconds)}); `
+    + `leisure day ${facts.isLeisureDay}; `
     + `unsupported claims ${result.unsupportedWrapClaims.length === 0 ? 'none' : result.unsupportedWrapClaims.length}`,
   )
   lines.push(
-    `Review spine: mattered [${facts.mattered.map((m) => m.intentSubject ?? m.label).join(' | ') || 'none'}]; `
-    + `needs review ${facts.needsReview.count}; `
-    + `carryover [${facts.carryover.map((c) => `${c.intentSubject ?? c.label} (${c.reason})`).join(' | ') || 'none'}]`,
+    `Wrap facts: activities [${facts.workActivities.map((a) => `${a.name} ${formatDuration(a.seconds)}`).join(' | ') || 'none'}]; `
+    + `standout ${facts.standout ? `${facts.standout.name} ${formatDuration(facts.standout.seconds)}` : 'none'}; `
+    + `slices [${facts.appSites.slice(0, 4).map((s) => s.name).join(' | ') || 'none'}]; `
+    + `leisure [${facts.topLeisure.join(' | ') || 'none'}]`,
   )
 
   const issueLines: string[] = []

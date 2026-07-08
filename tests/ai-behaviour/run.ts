@@ -151,7 +151,7 @@ async function main(): Promise<void> {
   process.env.ANTHROPIC_API_KEY = judgeApiKey
 
   const evalProvider = (process.env.DAYLENS_EVAL_PROVIDER ?? 'anthropic') as AIProviderMode
-  const isCliSubject = evalProvider === 'claude-cli' || evalProvider === 'codex-cli'
+  const isCliSubject = evalProvider === 'claude-cli' || evalProvider === 'chatgpt-cli' || evalProvider === 'gemini-cli' || evalProvider === 'codex-cli'
   const subjectApiKey = evalProvider === 'anthropic' ? judgeApiKey : await getApiKey(evalProvider)
   if (!subjectApiKey && !isCliSubject) {
     console.error(color('red', `\n[fatal] No ${evalProvider} key in keytar (DAYLENS_EVAL_PROVIDER=${evalProvider}).`))

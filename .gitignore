@@ -31,3 +31,6 @@ logs/
 
 # QA screenshot output from verification scripts — regenerable, never commit
 artifacts/
+
+# ShipStudio metadata
+.shipstudio/

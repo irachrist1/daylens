@@ -343,6 +343,13 @@ const GENERIC_OR_RAW_LABELS = new Set([
   'browsing',
   'entertainment',
   'uncategorized',
+  // UI chrome that leaks in as a page/window title — never a work subject.
+  'new chat',
+  'new conversation',
+  'new thread',
+  'new tab',
+  'untitled',
+  'ai chat',
 ])
 
 export function looksLikeRawArtifactLabel(label: string): boolean {
@@ -350,8 +357,27 @@ export function looksLikeRawArtifactLabel(label: string): boolean {
   if (!normalized) return true
   const lower = normalized.toLowerCase()
   if (GENERIC_OR_RAW_LABELS.has(lower)) return true
-  if (/\b(youtube|linkedin)\b/i.test(normalized) && /[|–-]/.test(normalized)) return true
-  if (/\|\s*(linkedin|youtube|coursera|outlook|x|twitter)\b/i.test(normalized)) return true
+  // Captured terminal / agent output that leaked in as a "window title": JSON or
+  // tool-call fragments ({...}, "questions":), braille spinner glyphs (⠿ etc.),
+  // and control characters. No real human work title contains these — they come
+  // straight from a Claude Code / terminal capture and must never reach prose.
+  if (/[{}[\]]/.test(normalized)) return true
+  if (/[\u2800-\u28FF]/.test(normalized)) return true
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001F]/.test(normalized)) return true
+  if (/\b(AskUserQuestion|tool_use|"question"|"questions"|"answer")\b/i.test(normalized)) return true
+  // A relative-time phrase is UI chrome (a sidebar section header, a chat
+  // timestamp), never a work subject. "Building Earlier today" must never ship.
+  if (/^(earlier|later)\s+(today|tonight|this week)$/i.test(normalized)) return true
+  if (/^(today|tonight|yesterday|last night|this (morning|afternoon|evening|week|month)|previous \d+ days)$/i.test(normalized)) return true
+  // A lone camelCase identifier ("AskUserQuestion", "useAIChat") is code, not a
+  // human title — one word, no spaces, an internal capital after a lowercase run.
+  if (!/\s/.test(normalized) && /[a-z][A-Z]/.test(normalized)) return true
+  // A pipe is tab-title join syntax ("OC | Apply founder design to
+  // chrispin.jpeg" reached prose on Jul 6). No human names their work with a
+  // pipe; any title carrying one is a raw capture, not a subject.
+  if (/\|/.test(normalized)) return true
+  if (/\b(youtube|linkedin)\b/i.test(normalized) && /[–-]/.test(normalized)) return true
   if (/[-–]\s*youtube\b/i.test(normalized)) return true
   if (/\bseason\s+\d+\s+episode\s+\d+\b/i.test(normalized)) return true
   if (/^watch\s+/i.test(normalized)) return true
@@ -360,7 +386,7 @@ export function looksLikeRawArtifactLabel(label: string): boolean {
   // A bare file: extension, or an underscore/slash-mangled token never typed by
   // a human. "MLPipeline_Week2.ipynb", "src/main/services/tracking.ts",
   // "BofA_Internship_Essay" — Spotify Wrapped never shows you a filename.
-  if (/\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages|tsx?|jsx?|py|rs|go|java|rb|c|cpp|h|md|json|ya?ml|sql|sh)$/i.test(normalized)) return true
+  if (/\.(ipynb|pdf|docx?|xlsx?|pptx?|csv|key|numbers|pages|tsx?|jsx?|py|rs|go|java|rb|c|cpp|h|md|json|ya?ml|sql|sh|jpe?g|png|gif|svg|webp|heic|mp4|mov|mp3|wav|zip|dmg|pkg|exe)$/i.test(normalized)) return true
   if (/\//.test(normalized) && !/\s/.test(normalized)) return true
   if (/_/.test(normalized) && !/\s/.test(normalized)) return true
   if (/\bweek\s*\d+\b/i.test(normalized) && /\b(notebook|assignment|lab|pset|hw|homework)\b/i.test(normalized)) return true

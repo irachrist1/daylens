@@ -110,6 +110,8 @@ const DEFAULT_MAX_ATTEMPTS: Partial<Record<AIProviderMode, number>> = {
   openai: 1,
   openrouter: 1,
   'claude-cli': 1,
+  'chatgpt-cli': 1,
+  'gemini-cli': 1,
   'codex-cli': 1,
 }
 

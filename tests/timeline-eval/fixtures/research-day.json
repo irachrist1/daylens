@@ -101,38 +101,59 @@
       "start": "08:50",
       "end": "10:15",
       "label": "Time tracking competitive research",
-      "labelIncludes": ["Rize", "Toggl", "Time tracking", "competitive"],
+      "labelIncludes": [
+        "Rize",
+        "Toggl",
+        "Time tracking",
+        "competitive"
+      ],
       "category": "research",
       "intentRole": "research",
-      "intentSubjectIncludes": ["Rize", "Toggl", "Time tracking", "competitive"]
+      "intentSubjectIncludes": [
+        "Rize",
+        "Toggl",
+        "Time tracking",
+        "competitive"
+      ]
     },
     {
       "id": "matrix-synthesis",
       "start": "10:15",
       "end": "10:45",
       "label": "Competitive research matrix",
-      "labelIncludes": ["Time tracking competitive matrix", "Competitive research"],
+      "labelIncludes": [
+        "Time tracking competitive matrix",
+        "Competitive research"
+      ],
       "category": "writing",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["matrix", "competitive"]
+      "intentSubjectIncludes": [
+        "matrix",
+        "competitive"
+      ]
     },
     {
       "id": "second-pass-notes",
       "start": "11:00",
       "end": "12:05",
       "label": "ActivityWatch and notes synthesis",
-      "labelIncludes": ["ActivityWatch", "Competitive research notes"],
+      "labelIncludes": [
+        "ActivityWatch",
+        "Competitive research notes"
+      ],
       "category": "research",
       "intentRole": "research",
-      "intentSubjectIncludes": ["ActivityWatch", "Competitive research notes"]
+      "intentSubjectIncludes": [
+        "ActivityWatch",
+        "Competitive research notes"
+      ]
     }
   ],
   "expectedWrap": {
     "quality": "full",
-    "dominantCategory": "research",
-    "topDomain": "activitywatch.net",
-    "matteredSubjectIncludes": "competitive research",
-    "needsReviewCount": 0,
-    "carryoverSubjectIncludes": "Competitive research notes"
+    "isLeisureDay": false,
+    "workActivityIncludes": "competitive research",
+    "appSiteIncludes": "ActivityWatch",
+    "standoutIncludes": "competitive research"
   }
 }

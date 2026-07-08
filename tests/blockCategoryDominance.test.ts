@@ -141,6 +141,54 @@ test('a leisure artifact tied with total work intent does not beat work', () => 
   assert.equal(category, 'aiTools')
 })
 
+function makeLocalhostPage(seconds: number, port = 4321): PageRef {
+  return {
+    id: `page:localhost:${port}:${seconds}`,
+    artifactType: 'page',
+    displayTitle: 'Local dev server',
+    totalSeconds: seconds,
+    confidence: 0.9,
+    domain: `localhost:${port}`,
+    host: `localhost:${port}`,
+    url: `http://localhost:${port}/`,
+    normalizedUrl: `http://localhost:${port}/`,
+    pageTitle: 'Local dev server',
+    openTarget: { kind: 'url', url: `http://localhost:${port}/` },
+  } as unknown as PageRef
+}
+
+test('a late-night mostly-leisure block with a localhost tab is NOT development (2026-07-06 shape)', () => {
+  // Real row: the 00:00-04:00 block. Distribution is browsing-dominant with heavy
+  // entertainment+social; only a 262s dev sliver. A localhost:4321 page was open
+  // (the SPCS site), and the old localhost rule stamped the whole 4h block
+  // 'development' on that sliver alone, so a Netflix/YouTube night was counted as
+  // development WORK. The dev evidence (localhost 2055s + dev 262s = 2317s) is
+  // out-weighed by leisure (entertainment 2843 + social 510 = 3353s): not dev.
+  const distribution: Partial<Record<AppCategory, number>> = {
+    development: 262, aiTools: 7, entertainment: 2843, social: 510, design: 3, browsing: 6220,
+  }
+  const topArtifacts: ArtifactRef[] = [
+    makePage('localhost:4321', 2055, 'SPCS Group') as unknown as PageRef,
+    makePage('youtube.com', 1800, 'Some Video - YouTube'),
+    makePage('netflix.com', 1043, 'Netflix'),
+  ]
+  // Rebuild the localhost artifact with a real localhost host so isLocalhostArtifact matches.
+  topArtifacts[0] = makeLocalhostPage(2055)
+  const category = dominantCategoryForBlock(distribution, topArtifacts)
+  assert.notEqual(category, 'development', 'a mostly-leisure night must not read as development because localhost was open')
+})
+
+test('a genuine local-dev block (localhost + editor, little leisure) still reads as development', () => {
+  // Do not break the case the localhost rule exists for: heavy time on the local
+  // dev server plus editor time, with only a small leisure detour.
+  const distribution: Partial<Record<AppCategory, number>> = {
+    development: 900, browsing: 3000, entertainment: 200,
+  }
+  const topArtifacts: ArtifactRef[] = [makeLocalhostPage(2600)]
+  const category = dominantCategoryForBlock(distribution, topArtifacts)
+  assert.equal(category, 'development', 'localhost dev + editor time, minimal leisure, is development')
+})
+
 test('browser app category is always browsing regardless of block-level category', () => {
   // Block might read productivity from a Notion page, but Dia/Safari/Chrome
   // themselves are always "Browsing" on the app rail — must not regress when

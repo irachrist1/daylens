@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, Notification, app, nativeImage } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import type { AIWrappedNarrative } from '@shared/types'
 import { getSessionsForRange } from '../db/queries'
 import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
@@ -8,7 +8,6 @@ import { getDb } from './database'
 import { getSettings } from './settings'
 import { prepareDailyReport } from './ai'
 import { getWrappedNarrative } from './wrappedNarrative'
-import { getWrapProviderState } from './aiOrchestration'
 import { freezeDaySnapshot } from './daySnapshots'
 import { getCurrentSession } from './tracking'
 import { getTimelineDayPayload } from './workBlocks'
@@ -18,12 +17,16 @@ import {
   openDailySummaryRoute,
   setDailySummaryNavigationWindow,
 } from './dailySummaryNavigation'
+import { deliverNotification } from './notificationDelivery'
 
 import {
   decideDailySummary,
   decideYesterdayRecap,
   decideCarryoverNudge,
   workRhythmWindows,
+  canAttemptAiNarrative,
+  recordAiNarrativeAttempt,
+  type AiAttemptKind,
   type DailyNotifierState,
 } from '../lib/dailySummaryScheduler'
 
@@ -31,25 +34,37 @@ const MAX_TRACKED_RECAP_DATES = 21
 
 // How long to wait for AI report preparation before firing the notification
 // without it. Wrapped opens instantly with deterministic content regardless.
-const AI_REPORT_TIMEOUT_MS = 12_000
+// Must sit ABOVE the wrapped job's own 22–25s timeout: with the old 12s race,
+// a slow-but-successful wrap call was fully paid for and then discarded here,
+// only for the next minute's check to spend another call.
+const AI_REPORT_TIMEOUT_MS = 26_000
+
+// Spend an AI attempt only when the retry budget allows it (cost audit
+// 2026-07-07: a failing wrap call used to retry every 60s for the whole
+// notification window). Records the attempt BEFORE the call so a crash or
+// timeout still counts against the budget.
+function withAiAttemptBudget(kind: AiAttemptKind, date: string): boolean {
+  const state = readState()
+  const now = Date.now()
+  if (!canAttemptAiNarrative(state, kind, date, now)) return false
+  writeState(recordAiNarrativeAttempt(state, kind, date, now))
+  return true
+}
 
 let notifierTimer: ReturnType<typeof setInterval> | null = null
 let dailySummaryPreparing = false
 
-// Hold references so Electron does not GC notifications before the user clicks
-// them. macOS in particular drops the click handler if the JS object is freed.
-const liveNotifications = new Set<Notification>()
-
-function notificationIcon(): Electron.NativeImage | undefined {
-  try {
-    const iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'build', 'icon.png')
-      : path.join(__dirname, '..', '..', 'build', 'icon.png')
-    const img = nativeImage.createFromPath(iconPath)
-    return img.isEmpty() ? undefined : img
-  } catch {
-    return undefined
-  }
+function notifyWithNavigation(title: string, body: string, route: string, options: { actionText?: string } = {}): void {
+  deliverNotification({
+    title,
+    body,
+    actionText: options.actionText,
+    onClick: () => {
+      console.log('[daily-summary] notification clicked, opening route:', route)
+      openDailySummaryRoute(route)
+    },
+    surface: 'daily-summary',
+  })
 }
 
 function statePath(): string {
@@ -66,46 +81,6 @@ function readState(): DailyNotifierState {
 
 function writeState(state: DailyNotifierState): void {
   fs.writeFileSync(statePath(), JSON.stringify(state, null, 2))
-}
-
-function notifyWithNavigation(title: string, body: string, route: string, options: { actionText?: string } = {}): void {
-  if (!Notification.isSupported()) {
-    console.warn('[daily-summary] notifications not supported on this platform')
-    return
-  }
-
-  const icon = notificationIcon()
-  const notification = new Notification({
-    title,
-    body,
-    silent: false,
-    icon,
-    // Action buttons on macOS require notification entitlement; on Windows they
-    // need a registered AppUserModelID toast. Body click is universally reliable,
-    // so we keep actions optional and non-load-bearing.
-    actions: options.actionText && process.platform === 'darwin'
-      ? [{ type: 'button', text: options.actionText }]
-      : undefined,
-  })
-
-  liveNotifications.add(notification)
-
-  const openRoute = () => {
-    console.log('[daily-summary] notification clicked, opening route:', route)
-    openDailySummaryRoute(route)
-  }
-
-  notification.on('click', openRoute)
-  notification.on('action', openRoute)
-  notification.on('show', () => { console.log('[daily-summary] notification shown:', title) })
-  notification.on('failed', (_e, err) => { console.warn('[daily-summary] notification failed:', err) })
-  notification.on('close', () => { liveNotifications.delete(notification) })
-
-  notification.show()
-
-  // Belt-and-suspenders: drop the strong reference after a long timeout in case
-  // 'close' never fires on a given platform.
-  setTimeout(() => { liveNotifications.delete(notification) }, 30 * 60 * 1000)
 }
 
 
@@ -173,7 +148,7 @@ async function checkDailySummary(): Promise<void> {
     now,
     state,
     todaySecondsTracked: secondsTrackedOn(today),
-    dailySummaryEnabled: settings.dailySummaryEnabled ?? false,
+    dailySummaryEnabled: settings.dailySummaryEnabled ?? true,
     todayDateString: today,
     eveningWrapHour: windows.eveningWrapHour,
   })
@@ -181,6 +156,7 @@ async function checkDailySummary(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
+    if (!withAiAttemptBudget('evening-wrap', today)) return
     // No-credits rule: only fire when the body is real AI output (§7).
     const teaser = await tryGetWrappedTeaser(today)
     if (!teaser) return
@@ -208,7 +184,7 @@ async function checkYesterdayRecap(): Promise<void> {
     now,
     state,
     yesterdaySecondsTracked: secondsTrackedOn(yesterday),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
+    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
     todayDateString: today,
     yesterdayDateString: yesterday,
     morningStartHour: windows.morningStartHour,
@@ -218,6 +194,7 @@ async function checkYesterdayRecap(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
+    if (!withAiAttemptBudget('yesterday-recap', yesterday)) return
     const narrative = await getAiNarrative(yesterday)
     if (!narrative) return // no provider / no credits → no brief (§7)
     void tryPrepareAIReport(yesterday) // warm the full report in the background
@@ -250,7 +227,7 @@ async function checkCarryoverNudge(): Promise<void> {
     now,
     state,
     todaySecondsTracked: secondsTrackedOn(today),
-    morningNudgeEnabled: settings.morningNudgeEnabled ?? false,
+    morningNudgeEnabled: settings.morningNudgeEnabled ?? true,
     todayDateString: today,
     yesterdayDateString: yesterday,
     carryoverEndHour: windows.carryoverEndHour,
@@ -259,6 +236,7 @@ async function checkCarryoverNudge(): Promise<void> {
 
   dailySummaryPreparing = true
   try {
+    if (!withAiAttemptBudget('carryover-nudge', today)) return
     const body = await buildCarryoverBody(today, yesterday)
     if (!body) return // no provider / no credits → no brief (§7)
     notifyWithNavigation('Good morning', body, buildEveningWrapRoute(today))
@@ -299,38 +277,29 @@ export function markRecapGenerated(date: string): void {
   }
 }
 
-// Manual trigger used by the developer shortcut. Bypasses time-of-day and
-// once-per-day gates so the user can verify notifications and click-through on
-// demand. Before noon it fires both morning briefs; after noon, the evening wrap.
-// Honours the no-credits rule: nothing fires without real AI content.
-export async function fireTestDailyNotification(): Promise<{ ok: boolean; reason?: string }> {
-  if (!Notification.isSupported()) return { ok: false, reason: 'notifications-unsupported' }
-
-  const providerState = await getWrapProviderState().catch(() => ({ connected: false, provider: null }))
-  if (!providerState.connected) {
-    return { ok: false, reason: 'no-provider' }
-  }
-
+// Manual trigger used by the notification harness. Bypasses time-of-day and
+// once-per-day gates. Uses real AI copy when a provider is connected.
+export async function fireTestDailySummaryNotification(
+  kind: 'evening-wrap' | 'morning-brief',
+): Promise<{ ok: boolean; reason?: string; route?: string }> {
   const now = new Date()
   const today = localDateString(now)
   const yesterday = shiftLocalDateString(today, -1)
-  const isMorning = now.getHours() < 12
 
   try {
-    if (isMorning) {
-      const recap = await getAiNarrative(yesterday)
-      if (recap) {
-        notifyWithNavigation('Yesterday, in one line', recap.lead, `/wrapped?date=${yesterday}&source=daily-summary`, { actionText: 'Open' })
-      }
-      const body = await buildCarryoverBody(today, yesterday)
-      if (body) notifyWithNavigation('Good morning', body, buildEveningWrapRoute(today))
-      if (!recap && !body) return { ok: false, reason: 'no-ai-content' }
-    } else {
-      const teaser = await tryGetWrappedTeaser(today)
-      if (!teaser) return { ok: false, reason: 'no-ai-content' }
-      notifyWithNavigation('Your evening wrap', teaser, buildEveningWrapRoute(today))
+    if (kind === 'morning-brief') {
+      const narrative = await getAiNarrative(yesterday)
+      if (!narrative) return { ok: false, reason: 'no-ai-content' }
+      const route = `/wrapped?date=${yesterday}&source=daily-summary`
+      notifyWithNavigation('Yesterday, in one line', narrative.lead, route, { actionText: 'Open' })
+      return { ok: true, route }
     }
-    return { ok: true }
+
+    const teaser = await tryGetWrappedTeaser(today)
+    if (!teaser) return { ok: false, reason: 'no-ai-content' }
+    const route = buildEveningWrapRoute(today)
+    notifyWithNavigation('Your evening wrap', teaser, route)
+    return { ok: true, route }
   } catch (err) {
     console.warn('[daily-summary] manual trigger failed:', err)
     return { ok: false, reason: err instanceof Error ? err.message : String(err) }

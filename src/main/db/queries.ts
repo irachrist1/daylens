@@ -2416,14 +2416,59 @@ function reconcileWebsiteVisits(
     return merged
   }
 
+  // First index whose interval could touch or overlap `x` from the left — the
+  // earliest interval with end >= x. `claimed` below is kept sorted by start
+  // with no overlaps, so this lets each visit jump straight to the relevant
+  // slice instead of rescanning the whole array from the front.
+  const firstTouchingIndex = (intervals: { start: number; end: number }[], x: number): number => {
+    let lo = 0
+    let hi = intervals.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (intervals[mid].end >= x) hi = mid
+      else lo = mid + 1
+    }
+    return lo
+  }
+
+  // Insert [start,end) into a sorted, non-overlapping interval array, merging
+  // any neighbours it touches. A localized splice keeps `claimed` maintained in
+  // place instead of rebuilding the whole array for every visit.
+  const insertMergedInterval = (intervals: { start: number; end: number }[], start: number, end: number): void => {
+    if (end <= start) return
+    const i = firstTouchingIndex(intervals, start)
+    let ns = start
+    let ne = end
+    let j = i
+    while (j < intervals.length && intervals[j].start <= ne) {
+      if (intervals[j].start < ns) ns = intervals[j].start
+      if (intervals[j].end > ne) ne = intervals[j].end
+      j++
+    }
+    intervals.splice(i, j - i, { start: ns, end: ne })
+  }
+
   for (const browserVisits of visitsByBrowser.values()) {
     // Union of every identity form's foreground time: visits recorded under
     // either bundle-id form must reconcile against all of the browser's
     // sessions, not just the ones stored under the same form.
+    // Gather each identity form's foreground time ONCE per distinct id, not once
+    // per visit. The old per-visit push rebuilt the same ~N foreground intervals
+    // for every one of the browser's (tens of thousands of) visits, producing a
+    // multi-million-entry array that was then sorted — the dominant cost that
+    // froze the Apps view for ~15s on a 30-day browser-heavy range.
     const foregroundPieces: { start: number; end: number }[] = []
+    const seenBundleKeys = new Set<string>()
+    const seenCanonicalKeys = new Set<string>()
     for (const visit of browserVisits) {
-      if (visit.browser_bundle_id) foregroundPieces.push(...(foregroundByBundle.get(visit.browser_bundle_id) ?? []))
-      if (visit.canonical_browser_id) foregroundPieces.push(...(foregroundByCanonical.get(visit.canonical_browser_id) ?? []))
+      if (visit.browser_bundle_id && !seenBundleKeys.has(visit.browser_bundle_id)) {
+        seenBundleKeys.add(visit.browser_bundle_id)
+        foregroundPieces.push(...(foregroundByBundle.get(visit.browser_bundle_id) ?? []))
+      }
+      if (visit.canonical_browser_id && !seenCanonicalKeys.has(visit.canonical_browser_id)) {
+        seenCanonicalKeys.add(visit.canonical_browser_id)
+        foregroundPieces.push(...(foregroundByCanonical.get(visit.canonical_browser_id) ?? []))
+      }
     }
     const allowed = mergeIntervals([...foregroundPieces, ...untracked])
     // The observed active tab beats a history record; among equals the later
@@ -2433,6 +2478,13 @@ function reconcileWebsiteVisits(
       const priorityB = b.source === 'active_browser_context' ? 0 : 1
       return priorityA - priorityB || b.visit_time - a.visit_time
     })
+    // `claimed` is the union of every already-processed visit's clipped time,
+    // kept sorted by start with no overlaps. Each visit's free time is that
+    // visit's clipped span minus `claimed`; we then fold the clipped span back
+    // into `claimed`. Both steps use binary search + a localized splice so the
+    // whole browser reconciles in ~O(visits · log) instead of the previous
+    // O(visits²) full rescan — which blocked the main process for 15-30s and
+    // froze the Apps view on a heavy browser user's 30-day range.
     const claimed: { start: number; end: number }[] = []
     for (const visit of ordered) {
       const start = Math.max(visit.visit_time, fromMs)
@@ -2451,19 +2503,17 @@ function reconcileWebsiteVisits(
       const free: { start: number; end: number }[] = []
       for (const piece of clipped) {
         let cursor = piece.start
-        for (const taken of claimed) {
-          if (taken.end <= cursor || taken.start >= piece.end) continue
+        for (let idx = firstTouchingIndex(claimed, piece.start); idx < claimed.length; idx++) {
+          const taken = claimed[idx]
+          if (taken.start >= piece.end) break
           if (taken.start > cursor) free.push({ start: cursor, end: Math.min(taken.start, piece.end) })
-          cursor = Math.max(cursor, taken.end)
+          if (taken.end > cursor) cursor = taken.end
           if (cursor >= piece.end) break
         }
         if (cursor < piece.end) free.push({ start: cursor, end: piece.end })
       }
       credits.push({ visit, freeIntervals: free })
-      if (free.length > 0) {
-        claimed.push(...free)
-        claimed.sort((a, b) => a.start - b.start)
-      }
+      for (const piece of clipped) insertMergedInterval(claimed, piece.start, piece.end)
     }
   }
 

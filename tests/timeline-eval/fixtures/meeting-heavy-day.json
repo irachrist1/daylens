@@ -77,7 +77,12 @@
       "start": "09:00",
       "end": "09:35",
       "label": "Design critique",
-      "labelIncludes": ["Zoom", "Design critique", "Meeting", "Call"],
+      "labelIncludes": [
+        "Zoom",
+        "Design critique",
+        "Meeting",
+        "Call"
+      ],
       "category": "meetings",
       "intentRole": "coordination"
     },
@@ -86,7 +91,11 @@
       "start": "09:35",
       "end": "09:50",
       "label": "Design critique follow-up",
-      "labelIncludes": ["Design critique", "Communication", "Slack"],
+      "labelIncludes": [
+        "Design critique",
+        "Communication",
+        "Slack"
+      ],
       "category": "communication",
       "intentRole": "communication"
     },
@@ -95,7 +104,12 @@
       "start": "10:00",
       "end": "10:50",
       "label": "Product planning",
-      "labelIncludes": ["Google Meet", "Product planning", "Meeting", "Call"],
+      "labelIncludes": [
+        "Google Meet",
+        "Product planning",
+        "Meeting",
+        "Call"
+      ],
       "category": "meetings",
       "intentRole": "coordination"
     },
@@ -104,17 +118,28 @@
       "start": "10:50",
       "end": "11:05",
       "label": "Roadmap board",
-      "labelIncludes": ["Roadmap", "Linear"],
+      "labelIncludes": [
+        "Roadmap",
+        "Linear"
+      ],
       "category": "productivity",
       "intentRole": "coordination",
-      "intentSubjectIncludes": ["Roadmap", "Linear"]
+      "intentSubjectIncludes": [
+        "Roadmap",
+        "Linear"
+      ]
     },
     {
       "id": "customer-interview",
       "start": "11:15",
       "end": "11:50",
       "label": "Customer interview",
-      "labelIncludes": ["Teams", "Customer interview", "Meeting", "Call"],
+      "labelIncludes": [
+        "Teams",
+        "Customer interview",
+        "Meeting",
+        "Call"
+      ],
       "category": "meetings",
       "intentRole": "coordination"
     },
@@ -123,18 +148,20 @@
       "start": "12:00",
       "end": "12:25",
       "label": "Customer interview notes",
-      "labelIncludes": ["Customer interview notes"],
+      "labelIncludes": [
+        "Customer interview notes"
+      ],
       "category": "writing",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["Customer interview notes"]
+      "intentSubjectIncludes": [
+        "Customer interview notes"
+      ]
     }
   ],
   "expectedWrap": {
     "quality": "full",
-    "dominantCategory": "meetings",
-    "topDomain": "docs.google.com",
-    "matteredSubjectIncludes": "Design critique",
-    "needsReviewCount": 3,
-    "carryoverSubjectIncludes": "Customer interview notes"
+    "isLeisureDay": false,
+    "workActivityIncludes": "Design critique",
+    "appSiteIncludes": "Zoom"
   }
 }

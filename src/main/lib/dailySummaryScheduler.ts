@@ -50,6 +50,62 @@ export interface DailyNotifierState {
   lastCarryoverNudgeDate?: string
   /** Dates the user explicitly generated a recap for (so we don't re-offer it). */
   recapGeneratedDates?: string[]
+  /** AI narrative attempts per "<kind>:<date>" — the retry budget below. */
+  aiAttempts?: Record<string, { count: number; lastAtMs: number }>
+}
+
+// ─── AI attempt budget ────────────────────────────────────────────────────────
+// Cost audit 2026-07-07: the notifier runs its checks every 60s. When a check's
+// window was open but the wrap call failed (or timed out and was discarded), no
+// state was written — so the next minute spent ANOTHER full AI call, an
+// AI-call-per-minute loop for the rest of the window (~116 system-triggered
+// wrapped_narrative calls in 3 days). This budget makes a failed attempt cost
+// something: at most AI_ATTEMPT_MAX_PER_DAY attempts per notification kind per
+// day, spaced at least AI_ATTEMPT_MIN_GAP_MS apart. A SUCCESSFUL attempt ends
+// the loop through the existing last*Date state, so the budget only ever gates
+// retries of failures.
+
+export type AiAttemptKind = 'evening-wrap' | 'yesterday-recap' | 'carryover-nudge'
+
+export const AI_ATTEMPT_MAX_PER_DAY = 3
+export const AI_ATTEMPT_MIN_GAP_MS = 20 * 60_000
+
+function aiAttemptKey(kind: AiAttemptKind, date: string): string {
+  return `${kind}:${date}`
+}
+
+export function canAttemptAiNarrative(
+  state: DailyNotifierState,
+  kind: AiAttemptKind,
+  date: string,
+  nowMs: number,
+): boolean {
+  const entry = state.aiAttempts?.[aiAttemptKey(kind, date)]
+  if (!entry) return true
+  if (entry.count >= AI_ATTEMPT_MAX_PER_DAY) return false
+  return nowMs - entry.lastAtMs >= AI_ATTEMPT_MIN_GAP_MS
+}
+
+/** Returns a new state with the attempt recorded and entries older than 48h
+ *  pruned. Pruning is by attempt age, not by date key, because the morning
+ *  checks legitimately track yesterday's date while the wrap tracks today's. */
+export function recordAiNarrativeAttempt(
+  state: DailyNotifierState,
+  kind: AiAttemptKind,
+  date: string,
+  nowMs: number,
+): DailyNotifierState {
+  const key = aiAttemptKey(kind, date)
+  const previous = state.aiAttempts?.[key]
+  const kept = Object.entries(state.aiAttempts ?? {})
+    .filter(([, entry]) => nowMs - entry.lastAtMs < 48 * 3_600_000)
+  return {
+    ...state,
+    aiAttempts: {
+      ...Object.fromEntries(kept),
+      [key]: { count: (previous?.count ?? 0) + 1, lastAtMs: nowMs },
+    },
+  }
 }
 
 // Minimum tracked seconds before a day has enough signal to be worth a recap.

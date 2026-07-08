@@ -10,7 +10,7 @@
       "bundleId": "com.mitchellh.ghostty",
       "appName": "Ghostty",
       "category": "development",
-      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb — Ghostty"
+      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb \u2014 Ghostty"
     },
     {
       "start": "08:30",
@@ -18,7 +18,7 @@
       "bundleId": "com.openai.codex",
       "appName": "Codex",
       "category": "aiTools",
-      "title": "codex — malaria notebook"
+      "title": "codex \u2014 malaria notebook"
     },
     {
       "start": "08:45",
@@ -26,7 +26,7 @@
       "bundleId": "com.mitchellh.ghostty",
       "appName": "Ghostty",
       "category": "development",
-      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb — Ghostty"
+      "title": "ResNet50_Malaria_Group3_Tonny_Colab.ipynb \u2014 Ghostty"
     },
     {
       "start": "09:00",
@@ -85,17 +85,27 @@
       "start": "08:07",
       "end": "08:59",
       "label": "malaria notebook",
-      "labelIncludes": ["malaria", "notebook", "ResNet"],
+      "labelIncludes": [
+        "malaria",
+        "notebook",
+        "ResNet"
+      ],
       "kind": "work",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["malaria", "notebook", "ResNet"]
+      "intentSubjectIncludes": [
+        "malaria",
+        "notebook",
+        "ResNet"
+      ]
     },
     {
       "id": "watching-morning",
       "start": "09:00",
       "end": "12:00",
       "label": "Watching YouTube & Netflix",
-      "labelIncludes": ["Watching"],
+      "labelIncludes": [
+        "Watching"
+      ],
       "kind": "leisure"
     },
     {
@@ -103,8 +113,16 @@
       "start": "13:00",
       "end": "15:00",
       "label": "Watching YouTube",
-      "labelIncludes": ["Watching"],
+      "labelIncludes": [
+        "Watching"
+      ],
       "kind": "leisure"
     }
-  ]
+  ],
+  "expectedWrap": {
+    "quality": "full",
+    "isLeisureDay": true,
+    "workActivityIncludes": "Malaria notebook",
+    "topLeisureIncludes": "YouTube"
+  }
 }

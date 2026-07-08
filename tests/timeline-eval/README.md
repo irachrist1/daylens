@@ -24,16 +24,20 @@ Fixtures live in `tests/timeline-eval/fixtures/*.json`.
   gap should be treated as a hard boundary.
 - `expectedEpisodes`: the human-expected timeline. These are the unit of
   segmentation, label, category, and intent-role scoring.
-- `expectedWrap`: optional checks against the deterministic wrapped facts and
-  fallback narrative. Beyond `quality` / `dominantCategory` / `topAppIncludes` /
-  `topDomain`, the review-grounded spine (Wraps V2) can be asserted with:
-  - `matteredSubjectIncludes`: a subject/label the "what mattered" spine must name.
-  - `needsReviewCount`: exact number of pending blocks the wrap reports as needing
-    review (a block is pending when it is low-confidence, rule-only, or live).
-  - `carryoverSubjectIncludes`: a subject the "carries into tomorrow" spine must name.
-  The runner also checks these structurally: needs-review counts, mattered items,
-  and carryover threads must each trace back to real blocks in the payload. The
-  per-fixture `Review spine:` line in the report shows what was derived.
+- `expectedWrap`: optional checks against the deterministic wrap facts
+  (`buildDayWrapFacts`) and the deck's fallback narrative:
+  - `quality`: `empty` / `tooEarly` / `partial` / `full`.
+  - `isLeisureDay`: whether the day reads as a leisure day.
+  - `workActivityIncludes`: a name the ranked work activities must include.
+  - `appSiteIncludes`: a branded app/site the "where the time went" slices must
+    include ("Cursor", "Gmail").
+  - `topLeisureIncludes`: a friendly leisure surface ("YouTube", "Netflix").
+  - `standoutIncludes`: what the longest-stretch standout must be about.
+  The runner also checks the facts structurally: the kind split must match an
+  independent recount of the trusted blocks, the headline must reconcile with
+  the split, slice, and ribbon totals, and every work activity and standout
+  must trace back to a real trusted work block. The per-fixture `Wrap facts:`
+  line in the report shows what was derived.
 
 This is a scored baseline, not a strict unit test. Current misses are useful:
 they describe what a future segmentation, labeling, intent, or wrap change

@@ -44,6 +44,9 @@ const LIVE_ONLY = new Set([
   // aiToolUse self-skips its live subtests without RUN_TOOL_CALL_TESTS, but its
   // purpose is live tool-calling and it owns the test:toolcalls script.
   'aiToolUse.test.ts',
+  // The Wrapped benchmark generates real wraps and scores them with a live
+  // judge — real Anthropic key, real DB, network. It owns `npm run wrapped:bench`.
+  'wrappedBenchmark.test.ts',
 ])
 
 function walk(dir) {

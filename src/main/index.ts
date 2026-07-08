@@ -57,6 +57,8 @@ import { registerFocusHandlers } from './ipc/focus.handlers'
 import { registerSettingsHandlers } from './ipc/settings.handlers'
 import { registerBillingHandlers } from './ipc/billing.handlers'
 import { registerIntercomHandlers } from './ipc/intercom.handlers'
+import { registerNotificationHandlers } from './ipc/notifications.handlers'
+import { initNotificationPermissions } from './services/notificationPermissions'
 import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
@@ -73,12 +75,14 @@ import { startSync, stopSync, finalizePreviousDay, syncNowForQuit } from './serv
 import { backfillWindowsHistory } from './services/windowsHistory'
 import { createTray, destroyTray, getTrayDiagnostics, hasTray } from './tray'
 import { getUpdaterState, initUpdater, isInstallingUpdate, registerUpdaterShutdown, getUpdateAvailable } from './services/updater'
-import { fireTestDailyNotification, setDailySummaryNotificationWindow, startDailySummaryNotifier, triggerDailySummaryChecks } from './services/dailySummaryNotifier'
+import { setDailySummaryNotificationWindow, startDailySummaryNotifier, triggerDailySummaryChecks } from './services/dailySummaryNotifier'
+import { fireTestDailyNotification } from './services/notificationHarness'
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
 import { startExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
+import { detectCLITools } from './jobs/aiService'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
 import { shouldStartTrackingForSettings } from './lib/onboardingState'
@@ -808,6 +812,8 @@ app.whenReady()
     // backup if NSIS wiped userData during the update, before electron-store reads it.
     await recoverFromUpdateIfNeeded()
     await initSettings()
+    initNotificationPermissions()
+    void detectCLITools().catch(() => undefined)
     const reconciledSettings = await reconcileOnboardingState()
     await initAnalytics()
     installApplicationMenu()
@@ -824,7 +830,7 @@ app.whenReady()
 
     const launchSettings = getSettings()
     const launchProvider = launchSettings.aiProvider
-    const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'codex-cli'
+    const hasAiProvider = launchProvider === 'claude-cli' || launchProvider === 'chatgpt-cli' || launchProvider === 'gemini-cli' || launchProvider === 'codex-cli'
       ? true
       : await hasApiKey(launchProvider)
 
@@ -858,6 +864,7 @@ app.whenReady()
     registerSearchHandlers()
     registerSyncHandlers()
     registerDistractionAlerterHandlers()
+    registerNotificationHandlers()
 
     // IPC: renderer drains any pending notification-route the main process
     // queued before the renderer's listener was attached.

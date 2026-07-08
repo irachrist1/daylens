@@ -51,6 +51,7 @@ import type {
   TrackingDiagnosticsPayload,
   TrackingPermissionDetails,
   TrackingPermissionState,
+  NotificationPermissionState,
   WorkContextInsight,
   WorkMemorySettingsSummary,
   WorkMemoryProfile,
@@ -59,6 +60,8 @@ import type {
   ScopedMemoryProfile,
   MemoryAuditEntry,
   WorkspaceResult,
+  WrappedAskRequest,
+  WrappedAskResult,
   WrappedPeriod,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
@@ -236,12 +239,14 @@ const api = {
       ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getWrappedNarrative: (date: string, force?: boolean): Promise<AIWrappedNarrative | null> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date, force }),
-    getWrappedPeriodWrap: (period: WrappedPeriod, anchorDate: string): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate }),
+    getWrappedPeriodWrap: (period: WrappedPeriod, anchorDate: string, force?: boolean): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate, force }),
     getWrapProviderState: (): Promise<WrapProviderState> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PROVIDER_STATE),
     getWrapPreflight: (date: string): Promise<WrapPreflightResult> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PREFLIGHT, { date }),
+    askWrapped: (payload: WrappedAskRequest): Promise<WrappedAskResult> =>
+      ipcRenderer.invoke(IPC.AI.ASK_WRAPPED, payload),
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
@@ -407,9 +412,18 @@ const api = {
     // Drain any route that main queued before this listener mounted.
     consumePending: (): Promise<string | null> => ipcRenderer.invoke('navigation:consume-pending'),
   },
+  notifications: {
+    getPermissionState: (): Promise<NotificationPermissionState> =>
+      ipcRenderer.invoke(IPC.NOTIFICATIONS.GET_PERMISSION_STATE),
+    requestPermission: (): Promise<NotificationPermissionState> =>
+      ipcRenderer.invoke(IPC.NOTIFICATIONS.REQUEST_PERMISSION),
+    openSettings: (): Promise<void> => ipcRenderer.invoke(IPC.NOTIFICATIONS.OPEN_SETTINGS),
+  },
   dev: {
     fireTestDailyNotification: (): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('dev:fire-test-daily-notification'),
+    fireTestNotifications: (): Promise<{ permission: NotificationPermissionState; results: Array<{ kind: string; ok: boolean; reason?: string }> }> =>
+      ipcRenderer.invoke('dev:fire-test-notifications'),
   },
   palette: {
     // Fired by the global shortcut handler in main. Renderer should toggle the palette open/closed.

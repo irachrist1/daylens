@@ -19,6 +19,7 @@ import {
 } from '../services/ai'
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
+import { askWrappedQuestion } from '../services/wrappedQuestion'
 import { getWrapProviderState } from '../services/aiOrchestration'
 import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
@@ -41,7 +42,7 @@ import {
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedPeriod } from '@shared/types'
+import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedAskRequest, type WrappedPeriod } from '@shared/types'
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -129,8 +130,8 @@ export function registerAIHandlers(): void {
     return getWrappedNarrative(dayPayload, { triggerSource: 'user', force: payload.force === true })
   })
 
-  ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { period: WrappedPeriod; anchorDate: string }) => {
-    return getWrappedPeriodWrap(payload.period, payload.anchorDate, { triggerSource: 'user' })
+  ipcMain.handle(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, async (_e, payload: { period: WrappedPeriod; anchorDate: string; force?: boolean }) => {
+    return getWrappedPeriodWrap(payload.period, payload.anchorDate, { triggerSource: 'user', force: payload.force === true })
   })
 
   ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
@@ -142,6 +143,12 @@ export function registerAIHandlers(): void {
   // one-tap "Generate anyway".
   ipcMain.handle(IPC.AI.GET_WRAP_PREFLIGHT, async (_e, payload: { date: string }) => {
     return getWrapPreflight(getDb(), payload.date)
+  })
+
+  // Ask-anything on a wrap slide (and answering the wrap's own question). One
+  // short user-triggered call; no thread is created and nothing is persisted.
+  ipcMain.handle(IPC.AI.ASK_WRAPPED, async (_e, payload: WrappedAskRequest) => {
+    return askWrappedQuestion(payload)
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {
@@ -198,7 +205,7 @@ export function registerAIHandlers(): void {
     return detectCLITools()
   })
 
-  ipcMain.handle(IPC.AI.TEST_CLI_TOOL, async (_e, payload: { tool: 'claude' | 'codex' }) => {
+  ipcMain.handle(IPC.AI.TEST_CLI_TOOL, async (_e, payload: { tool: 'claude' | 'chatgpt' | 'gemini' | 'codex' }) => {
     return testCLITool(payload.tool)
   })
 

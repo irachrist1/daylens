@@ -30,6 +30,14 @@ const managedModel = process.env.DAYLENS_MANAGED_MODEL || 'anthropic/claude-sonn
 // match a `model_name` in litellm-config.yaml (which maps it to `managedModel`). Sending
 // the real model name here would match no model_name and every managed call would 404.
 const litellmModelAlias = process.env.LITELLM_MODEL_ALIAS || 'daylens-default'
+// Cheap-tier managed model (cost audit 2026-07-07): background and balanced jobs
+// (block labels, relabels, wraps) ride this alias so a $5/mo subscriber's
+// high-volume background work never burns frontier-model tokens. The alias is
+// advertised to clients ONLY when DAYLENS_ECONOMY_MODEL is explicitly set,
+// because it must also exist as a `model_name` in litellm-config.yaml —
+// advertising an unconfigured alias would 404 every background call.
+const economyModelConfigured = Boolean(process.env.DAYLENS_ECONOMY_MODEL)
+const litellmEconomyModelAlias = process.env.LITELLM_ECONOMY_MODEL_ALIAS || 'daylens-economy'
 const localPassAmount = Number(process.env.FLUTTERWAVE_LOCAL_PASS_RWF || 15000)
 
 function assertProductionSafety() {
@@ -562,7 +570,12 @@ async function managedCompletion(req, res) {
     },
     body: JSON.stringify({
       ...parsed.json,
-      model: litellmModelAlias,
+      // The request model is an allowlist of exactly two aliases: the economy
+      // alias when the client asked for it (and it is configured), else the
+      // default. Never pass a client-supplied model name through to LiteLLM.
+      model: economyModelConfigured && parsed.json?.model === litellmEconomyModelAlias
+        ? litellmEconomyModelAlias
+        : litellmModelAlias,
       stream: false,
       metadata: { account_id: account.id, feature },
     }),
@@ -691,6 +704,7 @@ async function route(req, res) {
       baseUrl: `${publicBaseUrl}/v1/managed`,
       provider: managedProvider,
       model: managedModel,
+      economyModel: economyModelConfigured ? litellmEconomyModelAlias : null,
       mode: snapshot.mode,
     })
   }

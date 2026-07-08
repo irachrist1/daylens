@@ -1,47 +1,56 @@
 // Period (week / month / year) Wrapped narrative — prompt, validation, and a
 // deterministic baseline. Pure helpers, no DB or AI orchestration, so tests can
-// drive them directly. briefs-wraps.md §6.
+// drive them directly.
 //
-// The narrative reads from WrappedPeriodFacts, which is a SUM of frozen daily
-// snapshots. The stat card reads the same facts, so they can't disagree.
+// Like the daily wrap, the period wrap is a DECK: `planPeriodWrapSlides`
+// computes the slides deterministically from WrappedPeriodFacts (a SUM of
+// frozen daily snapshots — the stat card reads the same facts, so they can't
+// disagree), and the model writes one line per slide id, plus one curious
+// question and a closing reflection. Rejected lines fall back per slide.
 
 import { createHash } from 'node:crypto'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
 import type {
-  AppCategory,
   WrappedPeriod,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
 } from '@shared/types'
-
-const MIN_FIELD_CHARS = 24
-const MAX_FIELD_CHARS = 220
-const EMOJI_REGEX = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}]/u
-
-const BANNED_PHRASES = [
-  'dive into', 'unleash', 'navigate the landscape', "in today's fast-paced",
-  'game-changing', 'seamless', 'elevate', 'great question', "let's explore",
-  'at the end of the day', 'fascinating perspective', "you're absolutely right",
-  'harness the power', 'empower', 'robust', 'streamline', 'crush it', 'crushed it',
-  "you've got this", 'you got this', 'great work', 'great job', 'amazing job',
-]
-
-// Grades the wrap must never speak (invariant 5), plus carryover / next-period
-// prediction the locked decision bans every cadence.
-const GRADE_PATTERNS = [
-  /\bfocus(?:ed)?\s+(?:score|percentage|signal)\b/i,
-  /\b\d+\s*%\s*(?:of (?:your|the|a)\b|focused)/i,
-  /\b\d+%\s*of (?:a|your)?\s*\d+\s*-?\s*hour/i,
-  /\bdrift\b/i,
-  /\bproductiv(?:e|ity)\s+score\b/i,
-  /\bpick (?:it|this|that|them) (?:back )?up\b/i,
-  /\bcarry(?:ing)?\b[^.]{0,16}\b(?:forward|over|into next)\b/i,
-  /\bnext (?:week|month|year)\b/i,
-]
+import { planPeriodWrapSlides, type WrapSlideSpec } from '../../renderer/lib/wrapDeck'
+import { seedFromDate } from '../../renderer/lib/dayWrapScenes'
+import {
+  DECK_JSON_CONTRACT,
+  deckPromptSection,
+  guardContextPercents,
+  guardContextTimes,
+  stripCodeFence,
+  validateDeckLines,
+  validateWrapQuestion,
+  validateWrapReflection,
+  type LineGuardContext,
+} from './wrapNarrativeShared'
 
 function periodWord(period: WrappedPeriod): string {
   return period === 'week' ? 'week' : period === 'month' ? 'month' : 'year'
 }
+
+/** Mirrors the day wrap's time contract: clock strings are copied, never
+ *  recomputed, never moved to a different part of the day. */
+const PERIOD_TIME_LITERACY = [
+  'HOW TO READ TIMES. Every time in the facts is a local 12-hour clock string.',
+  '"12am" is midnight, the start of the day. "12pm" is noon. "12:27pm" is early afternoon, 27 minutes after noon, never night.',
+  'CLOCK RULE, STRICT: You may write a clock time on a slide ONLY if that exact time appears in THAT slide\'s own facts, copied CHARACTER FOR CHARACTER. Never round it (write "11:29pm", never "11pm" or "past 11"), never turn it into a word ("noon", "midnight", "dinnertime"), never do clock arithmetic, never move a time onto a slide whose facts do not list it.',
+  'To place something in time without a grounded clock, name the PART OF DAY or the DAY ("Tuesday", "the mornings", "the evenings"), never a bare clock the facts did not give you. "5pm", "9am" are clock times, not parts of day.',
+].join(' ')
+
+/** Rotating emphasis, seeded by the period anchor, so consecutive weeks and
+ *  months never read as the same script re-run. */
+const PERIOD_ANGLES = [
+  'This one, lead with the shape: where it peaked, where it breathed.',
+  'This one, lead with the craft: the thread that mattered most and how the days served it.',
+  'This one, lead with the single moment worth keeping, and let the rest orbit it.',
+  'This one, lead with the contrast between the loud days and the quiet ones, plainly.',
+  'This one, lead with the person: what this stretch says about how they work.',
+] as const
 
 export function computePeriodFactsHash(facts: WrappedPeriodFacts): string {
   const bucket = (s: number) => Math.round(s / 60)
@@ -69,29 +78,46 @@ export function periodNarrativeCacheKey(facts: WrappedPeriodFacts, factsHash: st
   return `${facts.period}|${facts.anchorDate}|${factsHash}`
 }
 
+function guardContext(facts: WrappedPeriodFacts, slides: WrapSlideSpec[]): LineGuardContext {
+  // Week ±1.5h; month ±5h; year ±20h — bigger periods round looser.
+  const tolerance = facts.period === 'week' ? 1.5 : facts.period === 'month' ? 5 : 20
+  return {
+    totalHours: facts.totalSeconds / 3600,
+    hourTolerance: tolerance,
+    allowedPercents: guardContextPercents(slides),
+    allowedTimes: guardContextTimes(slides),
+  }
+}
+
 export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: string; userMessage: string } {
   const label = periodWord(facts.period)
+  const slides = planPeriodWrapSlides(facts)
 
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
-    `You are Daylens, narrating a Spotify-Wrapped-style ${label} recap for one person.`,
-    `You will receive a compact JSON facts object summed from this ${label}'s frozen daily snapshots.`,
-    'Return STRICT JSON with exactly these keys: "lead" (string), "slides" (object with keys "whatMattered", "whereTimeWent", "standout", "distribution", each a string or null).',
-    'No prose outside the JSON. No code fences. No emoji. No markdown. No exclamation marks.',
-    'Never use an em dash (—) anywhere in the output. Use a comma, a period, or "and" instead. Use "to" for ranges, never a dash.',
-    'Voice: warm but grounded, second-person, specific. Like Spotify Wrapped, personal and occasionally surprising. No motivational filler, no hedging ("likely", "approximately").',
-    'Each string is one sentence, 24-200 characters. Never ask the user a question.',
-    `lead — the ${label} in one line: the headline story, grounded in the facts. Name the biggest thread or the dominant work category if the signal is clear.`,
-    'slides.whatMattered: name the biggest threads from facts.threads with their real hours ("12h on the timeline rework across four days"). null if facts.threads is empty.',
-    'slides.whereTimeWent: tell where the WORK time went as a story across facts.categories — not a percentage readout. null if there is no real work.',
-    'slides.standout: one real superlative from facts.busiestDay or facts.longestStretch ("Wednesday was your longest day", "your single longest stretch was 3h on the 14th"). null if neither is present.',
-    'slides.distribution: the nitty-gritty, which apps and sites actually held the time, named from facts.topApps and facts.leisureSurfaces, friendly and skimmable, never a spreadsheet. null if there is nothing concrete.',
-    'Main mode = facts.dominantWorkCategory — your actual WORK, never leisure. A working person\'s week is never "mostly entertainment" because a few videos played on the side; leisure is a quieter, separate note, never the headline.',
-    'NEVER grade: no focus score, no focus percentage, no "X% of your day", no "drift", no productivity score.',
-    'NEVER predict the next period, NEVER say anything carries forward or needs picking up, NEVER assign homework. The recap looks back, never ahead.',
-    `Never invent a duration. If a line claims hours, the number must match facts.totalSeconds/3600 or a sub-total within a small margin.`,
-    'Never invent app, domain, or project names. Only names present in the facts JSON (threads, topApps, categories, leisureSurfaces, dates) may be referenced.',
-    'Never describe yourself or the model.',
+    `You are Daylens, writing a Spotify-Wrapped-style ${label} recap for one person, slide by slide, as if an AI who watched the whole ${label} sat down at its end and reflected on it with them. Every reveal should feel written for THIS ${label}, never a template.`,
+    `You will receive a compact JSON facts object summed from this ${label}'s frozen daily snapshots, plus the list of slides with the exact facts each slide shows. Phrase ONLY what is in them. Never invent a number, an app, a project, a record, or a superlative.`,
+    DECK_JSON_CONTRACT,
+    PERIOD_TIME_LITERACY,
+    'Each slide line is one or two sentences, written to the person ("you"), specific, never generic. Stat/caption slides stay tight (under ~200 characters); the thread and story beats may run to two full sentences. The curious question stays under ~200 characters and contains NO clock time and NO percentage.',
+    'ADD A READ, DO NOT RESTATE. On every stat slide the slide\'s OWN big number is already printed huge on the card. Do not make that one number the subject of your sentence and do not merely repeat it. Lead with what it MEANS. BUT your line must still be concrete: anchor it in at least one real detail that is NOT that headline number, for example the real thread or work, a real day, or a real supporting figure. Never go vague or generic to avoid the number.',
+    'THE REGISTER, by example (never copy these, match their honesty): "Tuesday morning you went straight into the code and stayed there for two and a half hours before your first break." / "Wednesday carried the week and Thursday paid for it, which is a fair trade." / "Three of the five days ended after 11pm, and the work shows where those hours went."',
+    'IN A THREAD OR STORY BEAT, CHOOSE, DO NOT ENUMERATE. Name the one or two things that mattered most, never a long list; listing everything reads like a report and runs too long.',
+    'If the user profile gives their first name, use it naturally on one or two slides at most, like a friend would, especially when giving earned credit.',
+    'EARNED PRAISE IS ALLOWED and welcome when the facts back it: the longest stretch, the biggest day, a thread carried across many days. Say it plainly, with their name if you have it. You may end AT MOST ONE line in the whole deck with a single celebratory emoji from this set: 🏆 🔥 🌙 🎯 ☕ ✨. Never more than one emoji total, never mid-sentence, never unearned.',
+    'STATE ONLY WHAT THE FACTS GIVE YOU. Do not add comparative or consistency claims the facts do not contain ("more than the rest combined", "held even across the week", "every day", "back to back"); if a fact does not state it, do not imply it. A smaller true detail beats a bigger claim you cannot ground.',
+    'NAME THE WORK, NEVER THE FILE. Use the humanized thread names in the facts. Never print a filename, folder, repo, branch, tab title, or video title.',
+    'Tools and apps may be named ONLY on the slides whose facts contain them (timesink, apps, forgotten, leisure). Everywhere else, say what was being made. A tool (Claude Code, Cursor, Warp, Canva) is the instrument, never the thing being made.',
+    `Main mode = facts.dominantWorkCategory, the actual WORK, never leisure. A working person's ${label} is never "mostly entertainment" because a few videos played on the side.`,
+    'NEVER grade: no focus score, no drift, no productivity score. Write a percentage ONLY on the work-versus-leisure split slide, and only the exact percentages that slide hands you; never put a percentage on any other slide.',
+    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focus score", "noon", "midnight", "dinnertime". Use part-of-day words for time; just describe what happened otherwise.',
+    'DO NOT DEFEND OR JUSTIFY REST OR LEISURE. Never argue that downtime was "not drift", "not a distraction", "deliberate", or "earned". Rest is allowed and needs no defense; say plainly what happened and move on.',
+    'Never state how MANY meetings there were; the facts only know the total meeting time.',
+    `NEVER predict the next ${label}, NEVER say anything carries forward or needs picking up, NEVER assign homework. The recap looks back, never ahead.`,
+    'Never use an em dash anywhere. Use a comma, a period, or "and". Use "to" for ranges, never a dash.',
+    'Copy every duration exactly as the facts pre-format it; never round or invent a duration (if the facts say 42m, never write "45 minutes").',
+    'Never describe yourself as a model.',
+    PERIOD_ANGLES[seedFromDate(facts.anchorDate) % PERIOD_ANGLES.length],
   ].join(' ')
 
   const userMessage = [
@@ -99,12 +125,41 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     `Range: ${facts.rangeLabel}`,
     '',
     'Compact facts JSON:',
-    JSON.stringify(facts, null, 2),
+    JSON.stringify(compactPeriodFacts(facts), null, 2),
+    '',
+    deckPromptSection(slides),
     '',
     'Return ONLY the JSON object.',
   ].join('\n')
 
   return { systemPrompt, userMessage }
+}
+
+/** The model-facing projection: pre-formatted durations, no epoch numbers.
+ *  Exported so ask-anything answers ground in what the wrap narrated. */
+export function compactPeriodFacts(facts: WrappedPeriodFacts) {
+  const hm = (s: number) => formatHm(s)
+  return {
+    period: facts.period,
+    range: facts.rangeLabel,
+    total: hm(facts.totalSeconds),
+    split: { work: hm(facts.workSeconds), leisure: hm(facts.leisureSeconds), personal: hm(facts.personalSeconds) },
+    activeDays: facts.daysWithActivity,
+    previousPeriodTotal: facts.previousPeriodSeconds > 0 ? hm(facts.previousPeriodSeconds) : null,
+    mainMode: facts.dominantWorkCategory,
+    threads: facts.threads.map((t) => ({ subject: t.subject, time: hm(t.seconds), days: t.daysActive })),
+    apps: facts.topApps.map((a) => ({ name: a.appName, time: hm(a.seconds) })),
+    workByKind: facts.categories.map((c) => ({ kind: c.category, time: hm(c.seconds) })),
+    leisureSurfaces: facts.leisureSurfaces,
+    days: facts.days.map((d) => ({ day: d.dayLabel, total: hm(d.totalSeconds), work: hm(d.workSeconds), leisure: hm(d.leisureSeconds) })),
+    busiestDay: facts.busiestDay ? { day: facts.busiestDay.dayLabel, total: hm(facts.busiestDay.totalSeconds) } : null,
+    quietestDay: facts.quietestActiveDay ? { day: facts.quietestActiveDay.dayLabel, total: hm(facts.quietestActiveDay.totalSeconds) } : null,
+    longestStretch: facts.longestStretch
+      ? { time: hm(facts.longestStretch.seconds), day: facts.longestStretch.dayLabel, from: facts.longestStretch.startClock ?? null }
+      : null,
+    meetings: facts.meetingsSeconds > 0 ? hm(facts.meetingsSeconds) : null,
+    dayEdges: facts.dayEdges.map((e) => ({ day: e.dayLabel, first: e.firstClock, last: e.lastClock })),
+  }
 }
 
 export function validatePeriodNarrativeResponse(
@@ -124,82 +179,29 @@ export function validatePeriodNarrativeResponse(
   if (!parsed || typeof parsed !== 'object') return null
   const obj = parsed as Record<string, unknown>
 
-  const lead = typeof obj.lead === 'string' ? obj.lead.trim() : ''
-  if (!isFieldValid(lead, facts)) return null
+  const slides = planPeriodWrapSlides(facts)
+  const ctx = guardContext(facts, slides)
+  const linesRaw = (obj.lines && typeof obj.lines === 'object') ? obj.lines as Record<string, unknown> : null
+  const lines = validateDeckLines(linesRaw, slides, ctx)
 
-  const slidesRaw = (obj.slides && typeof obj.slides === 'object') ? obj.slides as Record<string, unknown> : {}
-  const whatMattered = facts.threads.length > 0 ? validateLine(slidesRaw.whatMattered, facts) : null
-  const whereTimeWent = facts.workSeconds > 0 ? validateLine(slidesRaw.whereTimeWent, facts) : null
-  const standout = (facts.busiestDay || facts.longestStretch) ? validateLine(slidesRaw.standout, facts) : null
-  const distribution = (facts.topApps.length > 0 || facts.leisureSurfaces.length > 0)
-    ? validateLine(slidesRaw.distribution, facts) : null
+  const lead = lines.opening
+  if (!lead) return null
 
   return {
     period: facts.period,
     lead,
-    slides: { whatMattered, whereTimeWent, standout, distribution },
+    lines,
+    question: validateWrapQuestion(obj.question, ctx),
+    reflection: validateWrapReflection(obj.reflection, ctx),
     source: 'ai',
     factsHash,
   }
 }
 
-function validateLine(value: unknown, facts: WrappedPeriodFacts): string | null {
-  const trimmed = normalizeOptional(value)
-  if (trimmed == null) return null
-  if (!isFieldValid(trimmed, facts)) return null
-  return trimmed
-}
-
-function normalizeOptional(value: unknown): string | null {
-  if (value == null) return null
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (/^null$/i.test(trimmed)) return null
-  return trimmed
-}
-
-function isFieldValid(text: string, facts: WrappedPeriodFacts): boolean {
-  if (!text) return false
-  if (text.length < MIN_FIELD_CHARS) return false
-  if (text.length > MAX_FIELD_CHARS) return false
-  if (EMOJI_REGEX.test(text)) return false
-  if (/\?$/.test(text)) return false
-  if (/```/.test(text)) return false
-  if (/^\s*\{/.test(text)) return false
-  if (/\b(I'?m not sure|couldn'?t|cannot determine|no data|n\/?a)\b/i.test(text)) return false
-  const lower = text.toLowerCase()
-  if (BANNED_PHRASES.some((p) => lower.includes(p))) return false
-  if (GRADE_PATTERNS.some((p) => p.test(text))) return false
-  if (!claimedHoursAreConsistent(text, facts)) return false
-  return true
-}
-
-function claimedHoursAreConsistent(text: string, facts: WrappedPeriodFacts): boolean {
-  const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h\b)/gi)]
-  if (matches.length === 0) return true
-  const actualHours = facts.totalSeconds / 3600
-  // Week ±1.5h; month ±5h; year ±20h — bigger periods round looser.
-  const tolerance = facts.period === 'week' ? 1.5 : facts.period === 'month' ? 5 : 20
-  for (const m of matches) {
-    const claimed = Number(m[1])
-    if (!Number.isFinite(claimed)) return false
-    // A claim may legitimately reference a sub-total (a thread, an app), so only
-    // reject claims that EXCEED the period total beyond tolerance.
-    if (claimed - actualHours > tolerance) return false
-  }
-  return true
-}
-
-function stripCodeFence(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  return fenced?.[1]?.trim() ?? text
-}
-
 // ─── Deterministic baseline ─────────────────────────────────────────────────
 // briefs-wraps.md §7 forbids showing template text as the wrap. This baseline is
-// NOT shown as a recap; it exists for tests and as an internal last resort the
-// service logs but the UI replaces with the "connect a provider" message.
+// the internal last resort when a CONNECTED provider returns unusable output:
+// every slide renders its deterministic fallbackLine.
 
 export function buildPeriodFallbackNarrative(
   facts: WrappedPeriodFacts,
@@ -211,47 +213,22 @@ export function buildPeriodFallbackNarrative(
     return {
       period: facts.period,
       lead: `Daylens did not see enough activity this ${label} to tell a real story yet.`,
-      slides: { whatMattered: null, whereTimeWent: null, standout: null, distribution: null },
+      lines: {}, question: null, reflection: null,
       source: 'fallback',
       factsHash,
     }
   }
 
-  const catLabel = humanCategory(facts.dominantWorkCategory)
-  const lead = facts.dominantWorkCategory === 'unknown'
-    ? `A mixed ${label} across ${facts.daysWithActivity} day${facts.daysWithActivity === 1 ? '' : 's'} of tracked work.`
-    : `A ${label} led by ${catLabel}. That is where most of the work landed.`
-
-  const top = facts.threads[0]
-  const whatMattered = top
-    ? `${formatHm(top.seconds)} on ${top.subject}${top.daysActive > 1 ? ` across ${top.daysActive} days` : ''}.`
-    : null
-
-  const whereTimeWent = facts.workSeconds > 0
-    ? `Most of the work time went to ${catLabel}${facts.topApps[0] ? `, mostly in ${facts.topApps[0].appName}` : ''}.`
-    : null
-
-  const standout = facts.longestStretch
-    ? `Your longest stretch was ${formatHm(facts.longestStretch.seconds)} on ${facts.longestStretch.dayLabel}.`
-    : facts.busiestDay
-      ? `${facts.busiestDay.dayLabel} was the busiest, at ${formatHm(facts.busiestDay.totalSeconds)}.`
-      : null
-
-  // The nitty-gritty: the apps and sites that actually held the time. Looks
-  // back, never ahead (no carryover, no next-period prediction).
-  const apps = facts.topApps.slice(0, 3).map((a) => a.appName)
-  const sites = facts.leisureSurfaces.slice(0, 2)
-  const distributionParts: string[] = []
-  if (apps.length > 0) distributionParts.push(apps.join(', '))
-  if (sites.length > 0) distributionParts.push(`with ${sites.join(' and ')} on the side`)
-  const distribution = distributionParts.length > 0
-    ? `Most of the time ran through ${distributionParts.join(' ')}.`
-    : null
-
+  const slides = planPeriodWrapSlides(facts)
+  const opening = slides.find((s) => s.id === 'opening')
+  const question = slides.find((s) => s.id === 'question')
+  const reflection = slides.find((s) => s.id === 'reflection')
   return {
     period: facts.period,
-    lead,
-    slides: { whatMattered, whereTimeWent, standout, distribution },
+    lead: opening?.fallbackLine ?? `${formatHm(facts.totalSeconds)} this ${label}.`,
+    lines: {},
+    question: question?.fallbackLine ?? null,
+    reflection: reflection?.fallbackLine ?? null,
     source: 'fallback',
     factsHash,
   }
@@ -262,20 +239,4 @@ function formatHm(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60)
   if (h <= 0) return `${m}m`
   return m > 0 ? `${h}h ${m}m` : `${h}h`
-}
-
-function humanCategory(category: AppCategory | 'unknown'): string {
-  switch (category) {
-    case 'development': return 'development'
-    case 'aiTools': return 'AI-assisted work'
-    case 'productivity': return 'admin and productivity'
-    case 'writing': return 'writing'
-    case 'design': return 'design'
-    case 'research': return 'research'
-    case 'browsing': return 'browser work'
-    case 'communication': return 'communication'
-    case 'email': return 'email'
-    case 'meetings': return 'meetings'
-    default: return 'mixed work'
-  }
 }

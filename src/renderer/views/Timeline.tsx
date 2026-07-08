@@ -262,6 +262,14 @@ const MIN_CARD_HEIGHT = 22
 // (2026-07-02). 44px is the least height that shows both lines.
 const MIN_DAY_CARD_HEIGHT = 44
 
+// The read-only block detail panel is height-capped so it never grows with its
+// content: the title header stays fixed and the evidence below scrolls inside a
+// bounded box. Two candidate caps render side by side under the dev preview
+// (?panelVariants=1) so the founder can pick the final feel before it's fixed.
+const DETAIL_PANEL_MAX_HEIGHT_A = 320
+const DETAIL_PANEL_MAX_HEIGHT_B = 480
+const DETAIL_PANEL_MAX_HEIGHT_DEFAULT = 560
+
 // Daylens won't shape a day into named blocks until there's enough to work with
 // (founder decision: at least 2 hours tracked). Below this the Analyze action
 // stays disabled with a gentle "keep going" nudge.
@@ -1486,10 +1494,18 @@ function BlockDetailInspector({
   block,
   payload,
   onClose,
+  maxHeightPx = DETAIL_PANEL_MAX_HEIGHT_DEFAULT,
+  sticky = true,
 }: {
   block: WorkContextBlock
   payload: DayTimelinePayload
   onClose: () => void
+  // The fixed cap on the whole panel. Content never grows the panel past this;
+  // the evidence body scrolls inside instead.
+  maxHeightPx?: number
+  // Pinned to the scrolling day (the shipping layout) vs. sitting statically in
+  // the dev variant overlay, which does its own centering.
+  sticky?: boolean
 }) {
   const accent = activityColorForCategory(block.dominantCategory)
 
@@ -1623,37 +1639,47 @@ function BlockDetailInspector({
   }
 
   return (
-    <div data-timeline-inspector="true" className="timeline-summary-inspector" style={{
-      position: 'sticky',
-      top: 24,
-      maxHeight: 'calc(100vh - 140px)',
-      overflowY: 'auto',
-      scrollbarWidth: 'none',
-      msOverflowStyle: 'none',
-      overscrollBehavior: 'contain',
-      borderRadius: 18,
-      border: '1px solid var(--color-border-ghost)',
-      background: 'var(--color-surface)',
-      padding: '10px 22px 22px',
-    }}>
-      {/* Read-only panel: close is the only control here — it returns the
-          panel to the day summary. Editing goes through right-click → Edit
-          (the separate editor modal), never this view. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 2, marginBottom: 2 }}>
-        <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={iconButtonStyle()} {...iconHover}>
-          <X size={16} strokeWidth={2} aria-hidden="true" />
-        </button>
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        {/* Color chip + title, GCal event-card style. */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 4, background: accent, flexShrink: 0, marginTop: 5 }} />
+    // Outer wrapper only positions the panel (pinned to the scrolling day, or
+    // static inside the dev variant overlay). The fixed-height card lives
+    // inside it so the cap and the internal scroll are unaffected by sticky.
+    <div
+      data-timeline-inspector="true"
+      style={sticky
+        ? { position: 'sticky', top: 24, alignSelf: 'start' }
+        : { position: 'relative' }}
+    >
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        // The hard cap: content never grows the panel past this — the body
+        // below scrolls instead. overflow:hidden clips the rounded corners so
+        // the internal scrollbar never pokes past the card edge.
+        maxHeight: maxHeightPx,
+        borderRadius: 18,
+        border: '1px solid var(--color-border-ghost)',
+        background: 'var(--color-surface)',
+        overflow: 'hidden',
+      }}>
+        {/* The title header is a fixed flex sibling of the scroll body, so it
+            never scrolls away — the block name + time stay pinned at the top of
+            the panel however far the evidence below is scrolled. The bottom
+            border is the subtle separator from the scrollable content. Read-only
+            panel: close is the only control (editing lives in right-click →
+            Edit). */}
+        <div style={{
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+          padding: '14px 14px 14px 22px',
+          borderBottom: '1px solid var(--color-border-ghost)',
+        }}>
+          <span aria-hidden="true" style={{ width: 14, height: 14, borderRadius: 4, background: accent, flexShrink: 0, marginTop: 4 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
               title={userVisibleBlockLabel(block)}
               style={{
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: 700,
                 color: 'var(--color-text-primary)',
                 lineHeight: 1.3,
@@ -1663,77 +1689,95 @@ function BlockDetailInspector({
             >
               {userVisibleBlockLabel(block)}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginTop: 3 }}>
               {formatFullDate(payload.date)} ⋅ {formatClockTime(block.startTime)} – {formatClockTime(block.endTime)} · {formatDuration(blockActiveSeconds(block))}
             </div>
           </div>
+          <button type="button" aria-label="Back to day summary" title="Back to day summary" onClick={onClose} style={{ ...iconButtonStyle(), flexShrink: 0, marginTop: -3, marginRight: -3 }} {...iconHover}>
+            <X size={16} strokeWidth={2} aria-hidden="true" />
+          </button>
         </div>
-        {/* What kind of block this was, and how the time inside splits. */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10, paddingLeft: 26 }}>
-          <span style={{
-            padding: '3px 9px',
-            borderRadius: 999,
-            fontSize: 11,
-            fontWeight: 700,
-            color: accent,
-            background: `${accent}1c`,
-            border: `1px solid ${accent}40`,
-          }}>
-            {typeTag}
-          </span>
-          {categorySplit.map(([category, seconds]) => (
-            <span key={category} style={{
-              padding: '3px 9px',
-              borderRadius: 999,
-              fontSize: 11,
-              fontWeight: 600,
-              color: 'var(--color-text-tertiary)',
-              border: '1px solid var(--color-border-ghost)',
-            }}>
-              {categoryLabel(category)} · {formatDuration(seconds)}
-            </span>
-          ))}
-        </div>
-      </div>
 
-      {/* The block's summary — AI narrative once it lands, deterministic
-          fallback before, same rule the block card follows. */}
-      <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
-        {blockNarrative(block) ?? blockShortSummary(block)}
-      </p>
-
-      <div style={{ display: 'grid', gap: 18 }}>
-        {evidence.length > 0 && (
-          <section>
-            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
-              What you were in
+        {/* The scroll body owns its own scroll context: overscroll-behavior
+            contain stops a scroll here from chaining out to the timeline, and
+            (being the only scrollport inside the fixed card) scrolling the
+            calendar outside never moves it. Thin styled scrollbar via CSS. */}
+        <div className="timeline-detail-scroll" style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overscrollBehavior: 'contain',
+          padding: '16px 22px 20px',
+        }}>
+          {/* What kind of block this was, and how the time inside splits. */}
+          {(typeTag || categorySplit.length > 0) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+              <span style={{
+                padding: '3px 9px',
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 700,
+                color: accent,
+                background: `${accent}1c`,
+                border: `1px solid ${accent}40`,
+              }}>
+                {typeTag}
+              </span>
+              {categorySplit.map(([category, seconds]) => (
+                <span key={category} style={{
+                  padding: '3px 9px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--color-text-tertiary)',
+                  border: '1px solid var(--color-border-ghost)',
+                }}>
+                  {categoryLabel(category)} · {formatDuration(seconds)}
+                </span>
+              ))}
             </div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {evidence.map((row) => renderEvidenceRow(row, false))}
-            </div>
-          </section>
-        )}
+          )}
 
-        {/* Where active time went elsewhere inside this window: the leisure
-            detours you were actually in. Honest, not a grade. Idle/away time
-            never appears here — it isn't a detour, it's blank space. */}
-        {detours.length > 0 && (
-          <section>
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', textTransform: 'uppercase' }}>
-                Detours
-              </div>
-              {detourSeconds > 0 && (
-                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
-                  {formatDuration(detourSeconds)}
+          {/* The block's summary — AI narrative once it lands, deterministic
+              fallback before, same rule the block card follows. */}
+          <p style={{ fontSize: 13.5, lineHeight: 1.65, color: 'var(--color-text-secondary)', margin: '0 0 20px' }}>
+            {blockNarrative(block) ?? blockShortSummary(block)}
+          </p>
+
+          <div style={{ display: 'grid', gap: 18 }}>
+            {evidence.length > 0 && (
+              <section>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', marginBottom: 10, textTransform: 'uppercase' }}>
+                  What you were in
                 </div>
-              )}
-            </div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {detours.map((row) => renderEvidenceRow(row, true))}
-            </div>
-          </section>
-        )}
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {evidence.map((row) => renderEvidenceRow(row, false))}
+                </div>
+              </section>
+            )}
+
+            {/* Where active time went elsewhere inside this window: the leisure
+                detours you were actually in. Honest, not a grade. Idle/away time
+                never appears here — it isn't a detour, it's blank space. */}
+            {detours.length > 0 && (
+              <section>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', color: 'var(--color-text-tertiary)', textTransform: 'uppercase' }}>
+                    Detours
+                  </div>
+                  {detourSeconds > 0 && (
+                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', fontVariantNumeric: 'tabular-nums' }}>
+                      {formatDuration(detourSeconds)}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {detours.map((row) => renderEvidenceRow(row, true))}
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -2192,6 +2236,9 @@ export default function Timeline() {
   const view = navState.view
   const date = navState.date
   const isToday = date === todayString()
+  // Dev preview (?panelVariants=1): render both height caps side by side so the
+  // founder can compare the short vs. tall detail panel before one is fixed.
+  const panelVariantsPreview = searchParams.get('panelVariants') === '1'
 
   useEffect(() => {
     const next = timelineNavStateFromParams(searchParams)
@@ -2911,6 +2958,34 @@ export default function Timeline() {
                       />
                     ) : (
                       <DaySummaryInspector payload={payload} onRefresh={timelineResource.refresh} />
+                    )}
+                    {/* Dev preview only (?panelVariants=1): the two candidate
+                        height caps side by side, so the founder can compare the
+                        short (320) vs. tall (480) feel before one is fixed. */}
+                    {panelVariantsPreview && selectedBlock && (
+                      <div
+                        data-timeline-inspector="true"
+                        style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 40, padding: 40 }}
+                        onClick={() => { setSelectedBlockId(null); setMergeRangeEndId(null) }}
+                      >
+                        {([
+                          { label: 'Variant A · 320px', cap: DETAIL_PANEL_MAX_HEIGHT_A },
+                          { label: 'Variant B · 480px', cap: DETAIL_PANEL_MAX_HEIGHT_B },
+                        ] as const).map(({ label, cap }) => (
+                          <div key={label} style={{ width: 360, maxWidth: '40vw' }} onClick={(event) => event.stopPropagation()}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: '#fff', marginBottom: 8, textAlign: 'center', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
+                              {label}
+                            </div>
+                            <BlockDetailInspector
+                              block={selectedBlock}
+                              payload={payload}
+                              maxHeightPx={cap}
+                              sticky={false}
+                              onClose={() => { setSelectedBlockId(null); setMergeRangeEndId(null) }}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}

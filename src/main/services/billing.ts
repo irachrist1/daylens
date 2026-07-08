@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { app } from 'electron'
+import { deliverNotification } from './notificationDelivery'
 import type {
   BillingAccessSnapshot,
   BillingUsageCostSource,
@@ -58,6 +61,11 @@ export interface ManagedAIConfig {
   baseUrl: string
   provider: 'anthropic' | 'openai' | 'google' | 'openrouter'
   model: string
+  // LiteLLM alias for the cheap tier (e.g. Haiku), advertised by the billing
+  // service when configured. Background and balanced jobs ride this alias so a
+  // $5/mo subscriber's block labels don't burn frontier-model tokens. Absent on
+  // older billing services — callers must fall back to `model`.
+  economyModel?: string | null
   mode: 'free_credit' | 'subscription' | 'local_pass'
 }
 
@@ -175,8 +183,58 @@ async function bootstrap(): Promise<string> {
 async function selectedOwnKeyProvider(): Promise<string | null> {
   const settings = await getSettingsAsync()
   const provider = settings.aiProvider
-  if (provider === 'claude-cli' || provider === 'codex-cli') return provider
+  if (provider === 'claude-cli' || provider === 'chatgpt-cli' || provider === 'gemini-cli' || provider === 'codex-cli') return provider
   return await hasApiKey(provider) ? provider : null
+}
+
+// ─── Fair-use soft ceiling warning ───────────────────────────────────────────
+// The billing service already enforces a HARD fair-use ceiling per period
+// (SUBSCRIPTION_FAIR_USE_USD): past it, managed calls 429. This is the soft
+// layer in front of it — when a managed plan crosses the warn fraction, tell
+// the user once per billing period so they can slow down, upgrade, or switch
+// to their own key BEFORE AI silently stops working.
+
+const FAIR_USE_WARN_FRACTION = 0.8
+
+function fairUseStatePath(): string {
+  return path.join(app.getPath('userData'), 'billing-fair-use-state.json')
+}
+
+function readWarnedPeriods(): string[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(fairUseStatePath(), 'utf8')) as { warnedPeriods?: string[] }
+    return Array.isArray(parsed.warnedPeriods) ? parsed.warnedPeriods : []
+  } catch {
+    return []
+  }
+}
+
+function maybeWarnFairUse(snapshot: BillingAccessSnapshot): void {
+  try {
+    if (!snapshot.managed) return
+    if (snapshot.mode !== 'subscription' && snapshot.mode !== 'local_pass') return
+    if (snapshot.fairUseRemainingUsd == null) return
+    const ceiling = snapshot.periodSpendUsd + snapshot.fairUseRemainingUsd
+    if (!(ceiling > 0)) return
+    const usedFraction = snapshot.periodSpendUsd / ceiling
+    if (usedFraction < FAIR_USE_WARN_FRACTION) return
+
+    const periodKey = `${snapshot.mode}:${snapshot.renewalAt ?? 'no-renewal'}`
+    const warned = readWarnedPeriods()
+    if (warned.includes(periodKey)) return
+
+    const resetNote = snapshot.renewalAt
+      ? ` It resets on ${new Date(snapshot.renewalAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}.`
+      : ''
+    deliverNotification({
+      title: 'Daylens AI: nearing this period’s included usage',
+      body: `You’ve used ${Math.round(usedFraction * 100)}% of the AI included in your plan.${resetNote} To keep going without limits, add your own API key in Settings.`,
+      surface: 'billing-fair-use',
+    })
+    fs.writeFileSync(fairUseStatePath(), JSON.stringify({ warnedPeriods: [...warned.slice(-11), periodKey] }, null, 2))
+  } catch {
+    // The warning is best-effort; never let it break the access snapshot path.
+  }
 }
 
 export async function getBillingAccess(options: { force?: boolean } = {}): Promise<BillingAccessSnapshot> {
@@ -206,6 +264,7 @@ export async function getBillingAccess(options: { force?: boolean } = {}): Promi
       capture(ANALYTICS_EVENT.SUBSCRIPTION_STARTED, { plan: value.mode, trigger: lastCheckoutTrigger ?? 'settings' })
     }
     cachedAccess = { value, at: Date.now() }
+    maybeWarnFairUse(value)
     return value
   } catch (error) {
     return unavailableSnapshot(error instanceof Error ? error.message : String(error))

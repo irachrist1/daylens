@@ -9,6 +9,11 @@ import {
   decideCarryoverNudge,
   NOTIFY_MIN_SECONDS,
   CARRYOVER_MIN_WORK_SECONDS,
+  AI_ATTEMPT_MAX_PER_DAY,
+  AI_ATTEMPT_MIN_GAP_MS,
+  canAttemptAiNarrative,
+  recordAiNarrativeAttempt,
+  type DailyNotifierState,
 } from '../src/main/lib/dailySummaryScheduler'
 
 const TODAY = '2026-05-12'
@@ -252,4 +257,56 @@ test('once fired, the same call does not fire again until state resets', () => {
     todayDateString: TODAY,
   })
   assert.deepEqual(secondDecision, { fire: false, reason: 'already-fired-today' })
+})
+
+// ─── AI attempt budget (cost audit 2026-07-07) ────────────────────────────────
+// A failing wrap call used to retry every 60s for the whole notification
+// window (~116 system-triggered wrapped_narrative calls in 3 days). The budget
+// caps failed attempts per kind per day and spaces retries.
+
+test('AI attempt budget allows the first attempt and enforces the retry gap', () => {
+  const t0 = Date.parse('2026-07-07T18:00:00')
+  let state: DailyNotifierState = {}
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, t0), true)
+  state = recordAiNarrativeAttempt(state, 'evening-wrap', TODAY, t0)
+
+  // One minute later (the notifier's check cadence): blocked.
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, t0 + 60_000), false)
+  // After the minimum gap: allowed again.
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, t0 + AI_ATTEMPT_MIN_GAP_MS), true)
+})
+
+test('AI attempt budget hard-caps attempts per kind per day', () => {
+  const t0 = Date.parse('2026-07-07T18:00:00')
+  let state: DailyNotifierState = {}
+  for (let i = 0; i < AI_ATTEMPT_MAX_PER_DAY; i += 1) {
+    const at = t0 + i * AI_ATTEMPT_MIN_GAP_MS
+    assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, at), true)
+    state = recordAiNarrativeAttempt(state, 'evening-wrap', TODAY, at)
+  }
+  // Budget exhausted: no attempt, no matter how much time passes today.
+  assert.equal(canAttemptAiNarrative(state, 'evening-wrap', TODAY, t0 + 6 * 3_600_000), false)
+})
+
+test('AI attempt budget is independent per kind and per date', () => {
+  const t0 = Date.parse('2026-07-07T08:00:00')
+  const yesterday = '2026-07-06'
+  let state: DailyNotifierState = {}
+  for (let i = 0; i < AI_ATTEMPT_MAX_PER_DAY; i += 1) {
+    state = recordAiNarrativeAttempt(state, 'yesterday-recap', yesterday, t0 + i * AI_ATTEMPT_MIN_GAP_MS)
+  }
+  assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', yesterday, t0 + 6 * 3_600_000), false)
+  // A different kind on a different date keeps its own budget — and recording
+  // it must not wipe the exhausted one (pruning is by age, not date match).
+  assert.equal(canAttemptAiNarrative(state, 'carryover-nudge', TODAY, t0), true)
+  state = recordAiNarrativeAttempt(state, 'carryover-nudge', TODAY, t0)
+  assert.equal(canAttemptAiNarrative(state, 'yesterday-recap', yesterday, t0 + 6 * 3_600_000), false)
+})
+
+test('AI attempt budget prunes entries older than 48h', () => {
+  const t0 = Date.parse('2026-07-05T18:00:00')
+  let state: DailyNotifierState = recordAiNarrativeAttempt({}, 'evening-wrap', '2026-07-05', t0)
+  const twoDaysLater = t0 + 49 * 3_600_000
+  state = recordAiNarrativeAttempt(state, 'evening-wrap', TODAY, twoDaysLater)
+  assert.deepEqual(Object.keys(state.aiAttempts ?? {}), [`evening-wrap:${TODAY}`])
 })

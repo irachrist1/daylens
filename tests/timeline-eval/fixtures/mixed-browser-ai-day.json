@@ -93,19 +93,26 @@
       "start": "09:00",
       "end": "11:20",
       "label": "AI-assisted timeline eval implementation",
-      "labelIncludes": ["timelineEval", "timeline eval", "Daylens timeline eval", "Review harness"],
+      "labelIncludes": [
+        "timelineEval",
+        "timeline eval",
+        "Daylens timeline eval",
+        "Review harness"
+      ],
       "category": "development",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["timelineEval", "Daylens timeline eval", "Timeline segmentation"]
+      "intentSubjectIncludes": [
+        "timelineEval",
+        "Daylens timeline eval",
+        "Timeline segmentation"
+      ]
     }
   ],
   "expectedWrap": {
     "quality": "full",
-    "dominantCategory": "development",
-    "topAppIncludes": "Cursor",
-    "topDomain": "chatgpt.com",
-    "matteredSubjectIncludes": "timelineEval",
-    "needsReviewCount": 0,
-    "carryoverSubjectIncludes": "timelineEval"
+    "isLeisureDay": false,
+    "workActivityIncludes": "timelineEval",
+    "appSiteIncludes": "Cursor",
+    "standoutIncludes": "timelineEval"
   }
 }

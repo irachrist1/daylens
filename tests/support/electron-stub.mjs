@@ -58,7 +58,18 @@ export const shell = {
 }
 
 export class Notification {
-  show() {}
+  static isSupported() { return true }
+  on(event, fn) {
+    if (!this._events) this._events = {}
+    if (!this._events[event]) this._events[event] = []
+    this._events[event].push(fn)
+  }
+  show() {
+    // Async emit show so the caller can register listeners first
+    Promise.resolve().then(() => {
+      for (const fn of (this._events?.show ?? [])) fn()
+    })
+  }
 }
 
 export const powerMonitor = {

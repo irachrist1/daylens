@@ -31,8 +31,10 @@ function tryFile(basePath) {
   const candidates = [
     basePath,
     `${basePath}.ts`,
+    `${basePath}.tsx`,
     `${basePath}.js`,
     path.join(basePath, 'index.ts'),
+    path.join(basePath, 'index.tsx'),
     path.join(basePath, 'index.js'),
   ]
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null
@@ -63,7 +65,7 @@ export async function resolve(specifier, context, defaultResolve) {
     }
   }
 
-  if (specifier === 'electron') {
+  if (specifier === 'electron' && !process.env.DAYLENS_REAL_ELECTRON) {
     return {
       url: pathToFileURL(path.resolve(projectRoot, 'tests/support/electron-stub.mjs')).href,
       shortCircuit: true,

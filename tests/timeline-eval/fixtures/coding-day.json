@@ -85,17 +85,30 @@
       "start": "09:00",
       "end": "11:10",
       "label": "Timeline eval harness implementation",
-      "labelIncludes": ["timeline-eval", "workBlocks", "daylens"],
+      "labelIncludes": [
+        "timeline-eval",
+        "workBlocks",
+        "daylens"
+      ],
       "category": "development",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["timeline-eval", "workBlocks", "daylens"]
+      "intentSubjectIncludes": [
+        "timeline-eval",
+        "workBlocks",
+        "daylens"
+      ]
     },
     {
       "id": "engineering-sync",
       "start": "11:10",
       "end": "11:50",
       "label": "Engineering sync",
-      "labelIncludes": ["Meet", "Meeting", "Call", "Engineering sync"],
+      "labelIncludes": [
+        "Meet",
+        "Meeting",
+        "Call",
+        "Engineering sync"
+      ],
       "category": "meetings",
       "intentRole": "coordination"
     },
@@ -104,19 +117,22 @@
       "start": "12:10",
       "end": "12:45",
       "label": "Wrapped narrative polish",
-      "labelIncludes": ["wrappedNarrative", "daylens"],
+      "labelIncludes": [
+        "wrappedNarrative",
+        "daylens"
+      ],
       "category": "development",
       "intentRole": "execution",
-      "intentSubjectIncludes": ["wrappedNarrative", "daylens"]
+      "intentSubjectIncludes": [
+        "wrappedNarrative",
+        "daylens"
+      ]
     }
   ],
   "expectedWrap": {
     "quality": "full",
-    "dominantCategory": "development",
-    "topAppIncludes": "Cursor",
-    "topDomain": "github.com",
-    "matteredSubjectIncludes": "run.ts",
-    "needsReviewCount": 1,
-    "carryoverSubjectIncludes": "wrappedNarrative"
+    "isLeisureDay": false,
+    "workActivityIncludes": "wrappedNarrative",
+    "appSiteIncludes": "Cursor"
   }
 }
