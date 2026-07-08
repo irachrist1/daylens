@@ -41,6 +41,11 @@ const DOMAIN_FRIENDLY_NAMES: Record<string, string> = {
   'chatgpt.com': 'ChatGPT',
   'chat.openai.com': 'ChatGPT',
   'stackoverflow.com': 'Stack Overflow',
+  'posthog.com': 'PostHog',
+  'whatsapp.com': 'WhatsApp',
+  'openai.com': 'OpenAI',
+  'localhost': 'Local dev server',
+  '127.0.0.1': 'Local dev server',
 }
 
 // App-name suffixes that browsers/editors append to window titles.
@@ -70,15 +75,33 @@ function normalizeHost(host: string | null | undefined): string {
   return (host ?? '').trim().toLowerCase().replace(/^www\./, '')
 }
 
+// Leading subdomain labels that say WHERE a product is hosted, never WHAT it
+// is. Without this, "app.intercom.com", "app.notion.com", and "app.weavy.ai"
+// all collapse into one chart bar literally labeled "App" (the Jul 7 audit's
+// "App" bar), and "us.posthog.com" becomes "Us".
+const GENERIC_SUBDOMAIN_LABELS = new Set([
+  'app', 'apps', 'web', 'my', 'm', 'mobile', 'us', 'eu', 'en', 'go', 'get',
+  'portal', 'dashboard', 'console', 'admin', 'account', 'accounts', 'auth',
+  'login', 'home', 'beta', 'staging', 'dev', 'api', 'secure', 'online', 'cloud',
+])
+
 // The friendly name for a domain ("youtube.com" → "YouTube"). Falls back to the
-// capitalized stem ("alueducation.com" → "Alueducation").
+// capitalized first meaningful label ("alueducation.instructure.com" →
+// "Alueducation", "app.intercom.com" → "Intercom").
 export function friendlyDomain(host: string | null | undefined): string {
   const normalized = normalizeHost(host)
   if (!normalized) return ''
   if (DOMAIN_FRIENDLY_NAMES[normalized]) return DOMAIN_FRIENDLY_NAMES[normalized]
   const suffix = Object.keys(DOMAIN_FRIENDLY_NAMES).find((key) => normalized.endsWith(`.${key}`))
   if (suffix) return DOMAIN_FRIENDLY_NAMES[suffix]
-  const stem = normalized.split('.')[0] ?? normalized
+  const labels = normalized.split('.').filter(Boolean)
+  // Skip generic hosting labels, but never walk into the TLD: for
+  // "app.intercom.com" the candidates are [app, intercom]; for a bare
+  // "app.com" the stem stays "app" because nothing better exists.
+  const candidates = labels.length > 1 ? labels.slice(0, -1) : labels
+  const stem = candidates.find((label) => !GENERIC_SUBDOMAIN_LABELS.has(label))
+    ?? candidates[candidates.length - 1]
+    ?? normalized
   return stem ? `${stem[0].toUpperCase()}${stem.slice(1)}` : normalized
 }
 

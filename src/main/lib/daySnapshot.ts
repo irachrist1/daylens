@@ -70,10 +70,18 @@ export function buildDaySnapshot(payload: DayTimelinePayload): DaySnapshot {
   const appSeconds = new Map<string, { appName: string; seconds: number; category: AppCategory; isBrowser: boolean }>()
   const domainSeconds = new Map<string, number>()
 
+  let meetingsSpanSeconds = 0
+
   for (const block of blocks) {
     const seconds = blockActiveSeconds(block)
     const blockKind = effectiveBlockKind(block)
     kind[blockKind] += seconds
+
+    // Meeting truth is the block SPAN (mirrors the daily facts builder): a
+    // 73-minute call is 73 minutes of meeting even with hands off the keyboard.
+    if (blockKind === 'work' && block.dominantCategory === 'meetings') {
+      meetingsSpanSeconds += Math.max(seconds, Math.round((block.endTime - block.startTime) / 1000))
+    }
 
     if (isSubstantiveCategory(block.dominantCategory)) {
       categorySeconds.set(block.dominantCategory, (categorySeconds.get(block.dominantCategory) ?? 0) + seconds)
@@ -132,6 +140,7 @@ export function buildDaySnapshot(payload: DayTimelinePayload): DaySnapshot {
     leisureSurfaces: sortDesc([...leisureByDomain.entries()], (e) => e[1]).slice(0, MAX_LEISURE_SURFACES).map(([name]) => name),
     threads,
     longestBlock: longest,
+    meetingsSpanSeconds: Math.round(meetingsSpanSeconds),
     factsHash: '',
     finalizedAt: 0,
   }
@@ -181,6 +190,7 @@ export function computeSnapshotHash(snapshot: DaySnapshot): string {
     apps: snapshot.apps.map((a) => [a.appName.toLowerCase(), bucket(a.seconds)]),
     threads: snapshot.threads.map((t) => [t.subject.toLowerCase(), t.role, bucket(t.seconds)]),
     longest: snapshot.longestBlock ? [snapshot.longestBlock.label.toLowerCase(), bucket(snapshot.longestBlock.seconds)] : null,
+    meetings: bucket(snapshot.meetingsSpanSeconds ?? 0),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
 }

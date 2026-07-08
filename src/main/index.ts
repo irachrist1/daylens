@@ -77,6 +77,7 @@ import { fireTestDailyNotification, setDailySummaryNotificationWindow, startDail
 import { consumePendingNavigationRoute } from './services/dailySummaryNavigation'
 import { registerCommandPaletteShortcut, unregisterCommandPaletteShortcut } from './services/commandPalette'
 import { registerDistractionAlerterHandlers, resetDistractionStateOnResume, setDistractionAlertWindow, startDistractionAlerter } from './services/distractionAlerter'
+import { startExternalSignalCollection } from './services/externalSignals'
 import { getLinuxDesktopDiagnostics, syncLinuxLaunchOnLogin } from './services/linuxDesktop'
 import { stopProcessMonitor } from './services/processMonitor'
 import { reconcileOnboardingState } from './services/onboarding'
@@ -352,6 +353,9 @@ function startBackgroundServices(): void {
     startDailySummaryNotifier(mainWindow)
     setDistractionAlertWindow(mainWindow)
     startDistractionAlerter()
+    // Optional Wrapped connectors (git, calendar, focus apps) — best-effort
+    // background collection into external_signals; silent when unavailable.
+    startExternalSignalCollection()
   }
   backgroundServicesStarted = true
 

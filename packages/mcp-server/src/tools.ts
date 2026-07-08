@@ -203,3 +203,70 @@ export const anthropicTools: AnthropicTool[] = [
     },
   },
 ]
+
+// ---------------------------------------------------------------------------
+// Wrapped data-layer tools (wrapped.md Stage 0.3) — the deeper per-day reads
+// behind Wrapped: title semantics, git/calendar signals, baselines,
+// distraction split, and the computed surprise. Executed asynchronously via
+// executeWrappedTool in src/main/services/wrappedTools.ts.
+
+export const wrappedTools: AnthropicTool[] = [
+  {
+    name: 'getWindowTitleContext',
+    description:
+      'The window titles from one app on one day, clustered into semantic groups that describe what the user was '
+      + 'doing ("SPCS Build Proposal, 9 sessions") — humanized descriptions, never raw titles. '
+      + 'Use this to say WHAT was being done inside an app, not just how long the app was open.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: DATE_PARAM,
+        appName: { type: 'string', description: 'App to inspect ("Cursor", "Safari"). Loose matching is applied.' },
+      },
+      required: ['date', 'appName'],
+    },
+  },
+  {
+    name: 'getGitActivity',
+    description:
+      'Git activity for a day from the user\'s local repositories: repos touched, commit counts, commit subjects, '
+      + 'and PR activity when the gh CLI is available. Returns null when git has nothing for the day.',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+  {
+    name: 'getCalendarEvents',
+    description:
+      'Calendar events for a day: meeting names, durations, and attendee counts (never attendee names). '
+      + 'Returns null when no calendar source is available.',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+  {
+    name: 'getDayComparison',
+    description:
+      'This day\'s tracked time against the user\'s own 7-day rolling average and the same weekday last week. '
+      + 'The evidence behind "this was a long one".',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+  {
+    name: 'getLongestFocusStretch',
+    description:
+      'The single longest unbroken focused work stretch of the day: start, end, duration, primary app, and the '
+      + 'work it was, when a clean name exists.',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+  {
+    name: 'getDistractionProfile',
+    description:
+      'The split between high-distraction (leisure) and low-distraction time for a day, plus which distraction '
+      + 'sites appeared and for how long. Facts, never a score or grade.',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+  {
+    name: 'getMostSurprisingFact',
+    description:
+      'The single most likely-to-surprise true data point of the day, judged against the user\'s own baseline: '
+      + 'the forgotten app, an unusually early or late session, a stretch record, a volume outlier. '
+      + 'Returns null on a day with nothing genuinely surprising.',
+    input_schema: { type: 'object', properties: { date: DATE_PARAM }, required: ['date'] },
+  },
+]

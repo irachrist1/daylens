@@ -71,6 +71,10 @@ export const ANALYTICS_EVENT = {
   DATABASE_INIT_FAILED: 'database_init_failed',
   RENDERER_PROCESS_GONE: 'renderer_process_gone',
 
+  // Which optional Wrapped connectors fired for a day (source NAMES only,
+  // never the data) — tells us what enrichment to prioritize building next.
+  WRAPPED_EXTERNAL_SOURCES: 'wrapped_external_sources',
+
   ACTIVATION_COMPLETED: 'activation_completed',
   FIRST_DAY_WITH_RECONSTRUCTED_TIMELINE: 'first_day_with_reconstructed_timeline',
   FIRST_AI_QUESTION_ANSWERED: 'first_ai_question_answered',
@@ -223,6 +227,7 @@ const SAFE_NUMBER_KEYS = new Set([
   'progress_pct',
   'score',
   'selected_goal_count',
+  'source_count',
   'suggestion_count',
   'missing_entity_count',
   'rejected_generic_count',
@@ -259,6 +264,10 @@ const SAFE_BOOLEAN_KEYS = new Set([
 const SAFE_ARRAY_KEYS = new Set([
   'settings_changed_keys',
 ])
+
+// Connector source names ('git', 'calendar', 'focus_app') — a closed enum, so
+// the sanitizer passes only these exact values and never free text.
+const SAFE_EXTERNAL_SOURCE_VALUES = new Set(['git', 'calendar', 'focus_app'])
 
 const TRACKING_SETTING_KEYS = [
 ] as const
@@ -360,6 +369,14 @@ export function sanitizeAnalyticsProperties(
       sanitized[key] = sanitizeSettingsChangedKeys(
         rawValue.filter((value): value is string => typeof value === 'string'),
       )
+      continue
+    }
+
+    if (key === 'external_sources') {
+      if (!Array.isArray(rawValue)) continue
+      sanitized[key] = rawValue
+        .filter((value): value is string => typeof value === 'string' && SAFE_EXTERNAL_SOURCE_VALUES.has(value))
+        .sort()
       continue
     }
   }

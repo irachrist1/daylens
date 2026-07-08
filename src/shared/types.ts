@@ -1163,10 +1163,106 @@ export interface DaySnapshot {
   threads: DaySnapshotThread[]
   /** The single longest trusted work stretch of the day. */
   longestBlock: { label: string; seconds: number; startClock: string } | null
+  /** Sum of meeting-block SPANS — meeting truth is the calendar span, not
+   *  active seconds (a 73-minute call is 73 minutes even hands-off). Additive;
+   *  absent on snapshots frozen before 2026-07-08. */
+  meetingsSpanSeconds?: number
   /** Hash of the source facts — lets us detect when a frozen day needs refreezing. */
   factsHash: string
   /** ms epoch when frozen; 0 means provisional (today, still live). */
   finalizedAt: number
+}
+
+// ─── External signals (wrapped Stage 0.2) ─────────────────────────────────────
+// Optional, per-day results from local connectors. Each connector is
+// independent: unavailable or unpermissioned sources simply produce no row.
+// Stored in external_signals keyed by date+source.
+
+export type ExternalSignalSource = 'git' | 'calendar' | 'focus_app'
+
+export interface GitRepoActivity {
+  /** Repo folder name — never a path. */
+  repo: string
+  commitCount: number
+  /** Commit subject lines, newest first, truncated. */
+  messages: string[]
+  firstCommitClock: string | null
+  lastCommitClock: string | null
+}
+
+export interface GitPRActivity {
+  title: string
+  /** open | merged | closed | draft */
+  state: string
+  repo: string
+}
+
+export interface GitActivitySignal {
+  repos: GitRepoActivity[]
+  totalCommits: number
+  /** PR activity from the gh CLI; empty when gh is unavailable. */
+  prs: GitPRActivity[]
+}
+
+export interface CalendarEventSignal {
+  title: string
+  startClock: string
+  durationMinutes: number
+  /** Attendee COUNT only — never names. Null when the source doesn't say. */
+  attendeeCount: number | null
+}
+
+export interface CalendarSignal {
+  events: CalendarEventSignal[]
+}
+
+export interface FocusAppSignal {
+  /** Focus tool detected on this machine ("Raycast Focus", "Session"). */
+  app: string
+  /** Parsed focus sessions for the day, when the tool's logs were readable. */
+  sessions: Array<{ startClock: string | null; durationMinutes: number | null; label: string | null }>
+}
+
+export interface StoredExternalSignal<T = unknown> {
+  date: string
+  source: ExternalSignalSource
+  payload: T
+  capturedAt: number
+}
+
+/** Discovered optional enrichment sources shown in Settings (Stage 0.2):
+ *  MCP servers from the Claude Desktop config and focus tools on this machine.
+ *  Discovery only — nothing is called until the user enables it AND a future
+ *  stage actually wires the enrichment. */
+export interface EnrichmentSourcesState {
+  mcpServers: Array<{ name: string; transport: 'stdio' | 'http' | 'unknown'; enabled: boolean }>
+  focusApps: Array<{ app: string; installed: boolean; enabled: boolean }>
+}
+
+// ─── Wrap pre-flight (wrapped Stage 0.4) ──────────────────────────────────────
+// Honest, specific warnings BEFORE a wrap generates. None of them block:
+// the user can always generate anyway with one tap.
+
+export type WrapPreflightWarningKind = 'lowWork' | 'notAnalyzed' | 'missingTitles' | 'staleCapture'
+
+export interface WrapPreflightWarning {
+  kind: WrapPreflightWarningKind
+  /** Honest, specific copy naming the real numbers — never a generic error. */
+  message: string
+}
+
+export interface WrapPreflightResult {
+  date: string
+  warnings: WrapPreflightWarning[]
+  /** True when a generated wrap is already stored for this date — opening it
+   *  shows the stored wrap, so no pre-flight warning is needed. */
+  hasStoredWrap: boolean
+  workSeconds: number
+  /** Percent of the day's app sessions missing a window title (0-100). */
+  missingTitlePct: number | null
+  analyzed: boolean
+  /** Minutes since the last captured session ended; null when nothing tracked. */
+  lastActivityAgoMinutes: number | null
 }
 
 export type WrappedPeriod = 'week' | 'month' | 'year'
@@ -1423,6 +1519,10 @@ export interface AppSettings {
   // #rrggbb + known categories on write (see shared/activityColors.ts).
   activityColorOverrides?: Partial<Record<AppCategory, string>>
   dimLeisureBlocks?: boolean        // fade non-work blocks on the calendar; default true
+  // Optional enrichment sources (wrapped Stage 0.2): user enable/disable flags
+  // for discovered MCP servers ("mcp:notion") and focus apps ("focus:Session").
+  // Discovery is free; nothing is called until enabled AND wired in a later stage.
+  enrichmentSources?: Record<string, boolean>
 }
 
 export type BillingAccessMode = 'free_credit' | 'subscription' | 'local_pass' | 'own_key' | 'none' | 'unavailable'
@@ -1871,6 +1971,7 @@ export const IPC = {
     GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
     GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
+    GET_WRAP_PREFLIGHT: 'ai:get-wrap-preflight',
     GET_HISTORY: 'ai:get-history',
     CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
@@ -1894,6 +1995,7 @@ export const IPC = {
   SETTINGS: {
     GET: 'settings:get',
     SET: 'settings:set',
+    GET_ENRICHMENT_SOURCES: 'settings:get-enrichment-sources',
     HAS_API_KEY: 'settings:has-api-key',
     SET_API_KEY: 'settings:set-api-key',
     CLEAR_API_KEY: 'settings:clear-api-key',

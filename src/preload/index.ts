@@ -62,7 +62,9 @@ import type {
   WrappedPeriod,
   WrappedPeriodFacts,
   WrappedPeriodNarrative,
+  WrapPreflightResult,
   WrapProviderState,
+  EnrichmentSourcesState,
 } from '@shared/types'
 import { IPC } from '@shared/types'
 import type { McpServerConfig } from '../main/services/mcpServer'
@@ -238,6 +240,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_PERIOD_NARRATIVE, { period, anchorDate }),
     getWrapProviderState: (): Promise<WrapProviderState> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PROVIDER_STATE),
+    getWrapPreflight: (date: string): Promise<WrapPreflightResult> =>
+      ipcRenderer.invoke(IPC.AI.GET_WRAP_PREFLIGHT, { date }),
     getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
       ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
     clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
@@ -291,6 +295,8 @@ const api = {
     clearApiKey: (provider?: AIProviderMode): Promise<void> => ipcRenderer.invoke(IPC.SETTINGS.CLEAR_API_KEY, provider),
     validateApiKey: (provider: AIProvider, key: string): Promise<ProviderConnectionResult> =>
       ipcRenderer.invoke(IPC.SETTINGS.VALIDATE_API_KEY, { provider, key }),
+    getEnrichmentSources: (): Promise<EnrichmentSourcesState> =>
+      ipcRenderer.invoke(IPC.SETTINGS.GET_ENRICHMENT_SOURCES),
   },
   billing: {
     getAccess: (): Promise<BillingAccessSnapshot> => ipcRenderer.invoke(IPC.BILLING.GET_ACCESS),

@@ -90,7 +90,10 @@ function makeBlock(overrides: Partial<WorkContextBlock> = {}): WorkContextBlock 
     startTime: overrides.startTime ?? new Date('2026-04-20T09:00:00').getTime(),
     endTime: overrides.endTime ?? new Date('2026-04-20T10:00:00').getTime(),
     dominantCategory: overrides.dominantCategory ?? 'research',
-    categoryDistribution: overrides.categoryDistribution ?? { research: 3600 },
+    // Follow the dominant category so a fixture that overrides the category
+    // stays internally consistent — a real block's distribution is derived
+    // from its sites/apps and never contradicts its own evidence.
+    categoryDistribution: overrides.categoryDistribution ?? { [overrides.dominantCategory ?? 'research']: 3600 },
     ruleBasedLabel: overrides.ruleBasedLabel ?? 'Research',
     aiLabel: overrides.aiLabel ?? null,
     sessions: overrides.sessions ?? [],

@@ -14,6 +14,7 @@
 
 import type { AppCategory, WorkKind } from './types'
 import { policyForHost } from './domainPolicy'
+import { categoryForDomain } from './domainCategories'
 
 export type { WorkKind }
 
@@ -142,6 +143,18 @@ export function kindForDomain(host: string | null | undefined): WorkKind | null 
     if (normalized.endsWith(`.${host}`)) return 'personal'
   }
 
+  // The site → category map (domainCategories.ts) knows far more work surfaces
+  // than the short allowlist above — Canva, Figma, Linear, hosted consoles.
+  // Before this, a whole browser-based design day on canva.com resolved to
+  // "personal" because the domain carried "no signal" here while the category
+  // layer knew exactly what it was (2026-07-08 audit: Jul 5 read 50m work /
+  // 9h37m personal for a day spent redesigning a website in the browser).
+  const category = categoryForDomain(normalized)
+  if (category) {
+    const kind = kindForCategory(category)
+    if (kind === 'work' || kind === 'leisure') return kind
+  }
+
   return null
 }
 
@@ -219,15 +232,53 @@ export function dominantKind(weighted: Array<{ kind: WorkKind; seconds: number }
 interface BlockKindInput {
   kind?: WorkKind
   dominantCategory: AppCategory
+  categoryDistribution?: Partial<Record<AppCategory, number>>
   topApps: Array<{ category: AppCategory; totalSeconds: number; isBrowser?: boolean }>
   websites: Array<{ domain: string; totalSeconds: number }>
 }
 
+// Categories that carry no work/leisure signal of their own inside a
+// distribution. Browsing seconds are whatever the sites underneath them were;
+// the site-weighted split already pulled the identifiable ones into their real
+// categories, so what is left as "browsing" is genuinely unattributed.
+const NEUTRAL_DISTRIBUTION_CATEGORIES = new Set<AppCategory>(['browsing', 'system', 'uncategorized'])
+
+// Minimum non-neutral evidence before the distribution is trusted for the
+// kind call. Below this, fall through to the domain/app resolution.
+const DISTRIBUTION_KIND_MIN_SECONDS = 120
+
+/** The kind implied by a block's site-weighted category distribution, or null
+ *  when the distribution carries no real signal (all browsing/system). This is
+ *  the same reconciled distribution that drives the block's category and color
+ *  (2026-07-06 site-weighted fix), so kind and category can no longer disagree:
+ *  a block that is mostly design + development seconds is work, even when every
+ *  one of those seconds happened inside a browser on a domain the short
+ *  work-domain allowlist has never heard of. */
+export function kindFromCategoryDistribution(
+  distribution: Partial<Record<AppCategory, number>> | undefined,
+): WorkKind | null {
+  if (!distribution) return null
+  const weighted: Array<{ kind: WorkKind; seconds: number }> = []
+  let signalSeconds = 0
+  for (const [category, seconds] of Object.entries(distribution) as Array<[AppCategory, number]>) {
+    if (!seconds || seconds <= 0) continue
+    if (NEUTRAL_DISTRIBUTION_CATEGORIES.has(category)) continue
+    weighted.push({ kind: kindForCategory(category), seconds })
+    signalSeconds += seconds
+  }
+  if (signalSeconds < DISTRIBUTION_KIND_MIN_SECONDS) return null
+  return dominantKind(weighted)
+}
+
 // The kind to use for a block: the stored field when present (segmentation
-// resolved it from per-session domains), else a recomputed fallback for blocks
-// that predate the field.
+// resolved it from per-session domains), else the site-weighted category
+// distribution, else a recomputed fallback from top apps/sites for blocks
+// that predate both.
 export function effectiveBlockKind(block: BlockKindInput): WorkKind {
-  return block.kind ?? resolveBlockKind(block)
+  if (block.kind) return block.kind
+  const fromDistribution = kindFromCategoryDistribution(block.categoryDistribution)
+  if (fromDistribution) return fromDistribution
+  return resolveBlockKind(block)
 }
 
 // The human tag for a block's type — "Focused work", "Meeting", "Research",

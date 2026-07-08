@@ -20,6 +20,7 @@ import {
 import { getWrappedNarrative } from '../services/wrappedNarrative'
 import { getWrappedPeriodWrap } from '../services/wrappedPeriodNarrative'
 import { getWrapProviderState } from '../services/aiOrchestration'
+import { getWrapPreflight } from '../services/wrapPreflight'
 import { markRecapGenerated } from '../services/dailySummaryNotifier'
 import { getTimelineDayPayload, getBlockDetailPayload } from '../services/workBlocks'
 import { commitAction, undoAction } from '../ai/actions'
@@ -134,6 +135,13 @@ export function registerAIHandlers(): void {
 
   ipcMain.handle(IPC.AI.GET_WRAP_PROVIDER_STATE, async () => {
     return getWrapProviderState()
+  })
+
+  // Pre-flight data quality check (wrapped Stage 0.4): honest, specific
+  // warnings before the first generation. Never blocks; the renderer offers a
+  // one-tap "Generate anyway".
+  ipcMain.handle(IPC.AI.GET_WRAP_PREFLIGHT, async (_e, payload: { date: string }) => {
+    return getWrapPreflight(getDb(), payload.date)
   })
 
   ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {

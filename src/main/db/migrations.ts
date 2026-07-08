@@ -2034,6 +2034,23 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 43,
+    description: 'external_signals — per-day results from optional local connectors (git commits, calendar events, focus apps). One row per date+source, replaced on refresh; feeds the Wrapped data layer (wrapped Stage 0.2)',
+    up: () => {
+      getDb().exec(`
+        CREATE TABLE IF NOT EXISTS external_signals (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          date         TEXT    NOT NULL,
+          source       TEXT    NOT NULL,
+          payload_json TEXT    NOT NULL,
+          captured_at  INTEGER NOT NULL,
+          UNIQUE(date, source)
+        );
+        CREATE INDEX IF NOT EXISTS idx_external_signals_date ON external_signals (date);
+      `)
+    },
+  },
 ]
 
 function attentionClassForCategory(category: string): 'focus' | 'supporting' | 'ambient' {

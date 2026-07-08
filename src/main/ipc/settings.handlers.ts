@@ -11,8 +11,9 @@ import { capture, captureTrackingPauseTransition } from '../services/analytics'
 import { syncLinuxLaunchOnLogin } from '../services/linuxDesktop'
 import { validateProviderConnection } from '../services/providerValidation'
 import { getMcpServerConfig, isMcpServerRunning, startMcpServer, stopMcpServer } from '../services/mcpServer'
+import { detectFocusApps, discoverMcpServers } from '../services/enrichmentDiscovery'
 import { IPC } from '@shared/types'
-import type { AIProvider, AIProviderMode, AppSettings } from '@shared/types'
+import type { AIProvider, AIProviderMode, AppSettings, EnrichmentSourcesState } from '@shared/types'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { getDb } from '../services/database'
 import { recordActivityStateEvent } from '../db/queries'
@@ -20,6 +21,26 @@ import { recordActivityStateEvent } from '../db/queries'
 export function registerSettingsHandlers(): void {
   ipcMain.handle(IPC.SETTINGS.GET, async () => {
     return getSettingsAsync()
+  })
+
+  // Discovered optional enrichment sources (wrapped Stage 0.2): MCP servers
+  // from the Claude Desktop config plus focus tools on this machine. Discovery
+  // only — nothing is launched or called from here.
+  ipcMain.handle(IPC.SETTINGS.GET_ENRICHMENT_SOURCES, async (): Promise<EnrichmentSourcesState> => {
+    const settings = await getSettingsAsync()
+    const enabled = settings.enrichmentSources ?? {}
+    return {
+      mcpServers: discoverMcpServers().map((server) => ({
+        name: server.name,
+        transport: server.transport,
+        enabled: enabled[`mcp:${server.name}`] ?? false,
+      })),
+      focusApps: detectFocusApps().map((focus) => ({
+        app: focus.app,
+        installed: focus.installed,
+        enabled: enabled[`focus:${focus.app}`] ?? false,
+      })),
+    }
   })
 
   ipcMain.handle(IPC.SETTINGS.SET, async (_e, partial: Partial<AppSettings>) => {
