@@ -4,6 +4,7 @@
 // sessions today"), and they proceed with one tap. A wrap built on thin data
 // is allowed; a wrap built on thin data WITHOUT saying so is not.
 
+import os from 'node:os'
 import type Database from 'better-sqlite3'
 import type { CalendarSignal, WrapPreflightResult, WrapPreflightWarning } from '@shared/types'
 import { getExternalSignal } from './externalSignals'
@@ -17,6 +18,9 @@ import { getStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 const LOW_WORK_SECONDS = 2 * 60 * 60
 const MISSING_TITLE_WARN_PCT = 30
 const STALE_CAPTURE_MINUTES = 120
+// The machine may be on a while before the user actually starts (coffee, email
+// in a browser we do capture, etc.), so only call it a real blind spot past this.
+const PARTIAL_CAPTURE_GAP_MINUTES = 90
 
 function formatHm(seconds: number): string {
   const total = Math.max(0, Math.round(seconds / 60))
@@ -34,9 +38,16 @@ function formatClock(ms: number): string {
     .toLowerCase()
 }
 
-export function getWrapPreflight(db: Database.Database, date: string): WrapPreflightResult {
+export function getWrapPreflight(
+  db: Database.Database,
+  date: string,
+  // Injectable clock + boot time so the live-day / boot-gap logic is testable
+  // without mocking the global clock. Default to the real values.
+  opts: { bootMs?: number } = {},
+): WrapPreflightResult {
   const warnings: WrapPreflightWarning[] = []
   const isLiveDay = date === localDateString()
+  const bootMs = opts.bootMs ?? (Date.now() - os.uptime() * 1000)
 
   // Work time from the same trusted blocks every wrap number comes from.
   let workSeconds = 0
@@ -131,6 +142,25 @@ export function getWrapPreflight(db: Database.Database, date: string): WrapPrefl
       warnings.push({
         kind: 'partialCapture',
         message: `Daylens only started seeing today at ${firstCaptureClock}, but your calendar had ${missedBefore.length === 1 ? 'an event' : `${missedBefore.length} events`} before that (from ${earliest.startClock}). The morning wasn't tracked, so the wrap only covers the part Daylens saw.`,
+      })
+    }
+  }
+
+  // GENERAL partial capture (no calendar needed): on the live day, if the
+  // machine has been powered on well before Daylens's first captured activity,
+  // Daylens simply wasn't running for that stretch — an honest gap for every
+  // user, calendar or not. Uses os.uptime() (boot time), which works on both
+  // Mac and Windows. Only fires when no calendar-based warning already did, and
+  // only for the live day (os.uptime describes now, not a past day).
+  if (isLiveDay && firstRow?.first && !warnings.some((w) => w.kind === 'partialCapture')) {
+    // The day's blind spot starts whenever the machine was already on: the later
+    // of local midnight and boot time.
+    const seenSinceMs = Math.max(bootMs, fromMs)
+    const unseenMinutes = Math.round((firstRow.first - seenSinceMs) / 60_000)
+    if (unseenMinutes >= PARTIAL_CAPTURE_GAP_MINUTES) {
+      warnings.push({
+        kind: 'partialCapture',
+        message: `Daylens only started tracking at ${firstCaptureClock} today, but this machine had been on for about ${formatHm(unseenMinutes * 60)} before that. Whatever you did earlier wasn't tracked, so the wrap only covers the part Daylens saw.`,
       })
     }
   }

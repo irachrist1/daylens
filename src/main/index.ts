@@ -17,11 +17,52 @@ process.on('uncaughtException', (err) => {
       },
     })
   } catch { /* analytics may not be ready */ }
+  // A crashed main process owns tracking, so staying dead means the user's day
+  // silently stops being captured until they notice and reopen. Auto-relaunch
+  // instead — but guard against a crash LOOP (relaunch → crash → relaunch): if
+  // we've already relaunched too many times in a short window, give up and show
+  // the dialog so we don't hammer the machine. Packaged only; a dev crash should
+  // surface, not respawn.
   try {
-    const { dialog: d } = require('electron') as typeof import('electron') // eslint-disable-line @typescript-eslint/no-require-imports
+    const { app: a, dialog: d } = require('electron') as typeof import('electron') // eslint-disable-line @typescript-eslint/no-require-imports
+    if (a.isPackaged && !recentCrashLoop()) {
+      a.relaunch()
+      a.exit(1)
+      return
+    }
     d.showErrorBox('Daylens crashed', `${err.name}: ${err.message}\n\nPlease restart Daylens.`)
-  } catch { /* dialog may not be ready */ }
+  } catch { /* dialog / app may not be ready */ }
 })
+
+/** True when the main process has crashed-and-relaunched too many times in a
+ *  short window — the signal of a crash loop we should NOT keep respawning
+ *  through. Records this crash's timestamp. Best-effort, temp-file backed so it
+ *  works even before userData is configured; any failure returns false (relaunch
+ *  is the safer default for a lone transient crash). */
+function recentCrashLoop(): boolean {
+  const MAX_CRASHES = 3
+  const WINDOW_MS = 5 * 60 * 1000
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('node:fs') as typeof import('node:fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os') as typeof import('node:os')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof import('node:path')
+    const file = path.join(os.tmpdir(), 'daylens-crash-guard.json')
+    const now = Date.now()
+    let times: number[] = []
+    try {
+      times = (JSON.parse(fs.readFileSync(file, 'utf8')) as { times?: number[] }).times ?? []
+    } catch { /* no prior record */ }
+    times = times.filter((t) => now - t < WINDOW_MS)
+    times.push(now)
+    try { fs.writeFileSync(file, JSON.stringify({ times })) } catch { /* best-effort */ }
+    return times.length > MAX_CRASHES
+  } catch {
+    return false
+  }
+}
 
 process.on('unhandledRejection', (reason) => {
   console.error('[fatal] unhandledRejection:', reason)
@@ -801,9 +842,13 @@ ipcMain.on('analytics:capture', (_e, event: string, properties: Record<string, u
 
 app.whenReady()
   .then(async () => {
-    if (process.platform === 'win32') {
-      app.setAppUserModelId('dev.christiantonny.daylens')
-    }
+    // App identity is set ONCE at module load (APP_USER_MODEL_ID =
+    // 'com.daylens.desktop', line ~133) and must stay consistent with the
+    // electron-builder appId and the notification bundle id. A previous win32
+    // override to 'dev.christiantonny.daylens' split the identity: Windows
+    // toasts (keyed to the installer shortcut's AUMID) silently failed, and
+    // every upgrade risked duplicate login items + re-granted permissions.
+    // One identity, all platforms.
     powerMonitor.on('resume', () => {
       resetDistractionStateOnResume()
       triggerDailySummaryChecks()
@@ -940,13 +985,23 @@ app.whenReady()
   })
 
 app.on('window-all-closed', () => {
-  if (!shouldUseTrayBehavior() || (process.platform !== 'darwin' && !hasTray())) {
-    isQuitting = true
-    void (async () => {
-      await shutdownApp({ awaitFinalSync: false })
-      app.quit()
-    })()
-  }
+  // Keep the background process (and tracking) alive whenever tracking is meant
+  // to be running. This closes a Windows-specific silent-stop path: if the tray
+  // icon fails to create (hasTray() === false), closing the window used to quit
+  // the whole app and stop capture without the user knowing. Now capture
+  // survives a window close on every platform once tracking is on; the user
+  // gets the window back via a Dock/Start-menu relaunch (second-instance →
+  // showMainWindow). An explicit Quit (tray menu / Cmd-Q) sets isQuitting and
+  // still exits. Before onboarding completes, tracking isn't running, so the
+  // old tray/darwin rule still governs whether to quit.
+  const trackingShouldRun = shouldStartTrackingForSettings(getSettings())
+  const persistForTray = shouldUseTrayBehavior() && (process.platform === 'darwin' || hasTray())
+  if (trackingShouldRun || persistForTray) return
+  isQuitting = true
+  void (async () => {
+    await shutdownApp({ awaitFinalSync: false })
+    app.quit()
+  })()
 })
 
 app.on('activate', () => {

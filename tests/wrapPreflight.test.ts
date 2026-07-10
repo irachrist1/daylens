@@ -171,3 +171,34 @@ test('no partialCapture when every calendar event is within the captured window'
   assert.equal(result.warnings.find((w) => w.kind === 'partialCapture'), undefined, 'no false positive when calendar is inside the captured window')
   db.close()
 })
+
+import { localDateString } from '../src/main/lib/localDate.ts'
+
+test('boot-time partialCapture: machine on long before first capture, no calendar needed', () => {
+  const db = makeDb()
+  const today = localDateString()
+  const [y, m, d] = today.split('-').map(Number)
+  const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+  // First capture ~noon today; machine booted at 7am → ~5h unseen, no calendar.
+  seedSessions(db, 20, 1, dayStart + 12 * 3600_000)
+  const bootMs = dayStart + 7 * 3600_000
+  const result = getWrapPreflight(db, today, { bootMs })
+  const warning = result.warnings.find((w) => w.kind === 'partialCapture')
+  assert.ok(warning, 'expected a boot-time partialCapture warning')
+  assert.match(warning!.message, /on for about/)
+  assert.ok(result.firstCaptureClock)
+  db.close()
+})
+
+test('no boot-time partialCapture when the machine booted just before first capture', () => {
+  const db = makeDb()
+  const today = localDateString()
+  const [y, m, d] = today.split('-').map(Number)
+  const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+  const firstCapture = dayStart + 12 * 3600_000
+  seedSessions(db, 20, 1, firstCapture)
+  // Booted only 20 min before first capture → under the 90-min threshold.
+  const result = getWrapPreflight(db, today, { bootMs: firstCapture - 20 * 60_000 })
+  assert.equal(result.warnings.find((w) => w.kind === 'partialCapture'), undefined)
+  db.close()
+})
