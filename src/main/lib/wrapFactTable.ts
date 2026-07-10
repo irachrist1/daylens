@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto'
 import type { WorkContextBlock, WrappedPeriodFacts } from '@shared/types'
 import { formatHm, type DayWrapFacts } from '../../renderer/lib/dayWrapScenes'
-import { looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
+import { largestRemainderPercentages, looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
 
 // ─── Shapes ──────────────────────────────────────────────────────────────────
 
@@ -218,16 +218,9 @@ function addLabel(table: Record<string, WrapFact>, id: string, value: string): v
 }
 
 function splitPercents(work: number, leisure: number, personal: number): { work: number; leisure: number; personal: number } {
-  const total = work + leisure + personal
-  if (total <= 0) return { work: 0, leisure: 0, personal: 0 }
-  const raw = [work, leisure, personal].map((v) => (v / total) * 100)
-  const floors = raw.map(Math.floor)
-  let remaining = 100 - floors.reduce((a, b) => a + b, 0)
-  const order = raw
-    .map((v, i) => [v - Math.floor(v), i] as [number, number])
-    .sort((a, b) => b[0] - a[0] || a[1] - b[1])
-  for (let i = 0; i < remaining && i < order.length; i++) floors[order[i][1]] += 1
-  return { work: floors[0], leisure: floors[1], personal: floors[2] }
+  if (work + leisure + personal <= 0) return { work: 0, leisure: 0, personal: 0 }
+  const [w, l, p] = largestRemainderPercentages([work, leisure, personal])
+  return { work: w, leisure: l, personal: p }
 }
 
 function computeTableHash(facts: Record<string, WrapFact>): string {

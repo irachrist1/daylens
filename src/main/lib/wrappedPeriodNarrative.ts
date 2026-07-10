@@ -16,9 +16,10 @@ import type {
   WrappedPeriodNarrative,
 } from '@shared/types'
 import { planPeriodWrapSlides, type WrapSlideSpec } from '../../renderer/lib/wrapDeck'
-import { seedFromDate } from '../../renderer/lib/dayWrapScenes'
+import { formatHm, seedFromDate } from '../../renderer/lib/dayWrapScenes'
 import {
   DECK_JSON_CONTRACT,
+  EVIDENCE_HONESTY_DIRECTIVES,
   buildRepairUserMessage,
   deckPromptSection,
   guardContextPercents,
@@ -101,6 +102,7 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     `You will receive a compact JSON facts object summed from this ${label}'s frozen daily snapshots, plus the list of slides with the exact facts each slide shows. Phrase ONLY what is in them. Never invent a number, an app, a project, a record, or a superlative.`,
     DECK_JSON_CONTRACT,
     PERIOD_TIME_LITERACY,
+    ...EVIDENCE_HONESTY_DIRECTIVES,
     'Each slide line is one or two sentences, written to the person ("you"), specific, never generic. Stat/caption slides stay tight (under ~200 characters); the thread and story beats may run to two full sentences. The curious question stays under ~200 characters and contains NO clock time and NO percentage.',
     'ADD A READ, DO NOT RESTATE. On every stat slide the slide\'s OWN big number is already printed huge on the card. Do not make that one number the subject of your sentence and do not merely repeat it. Lead with what it MEANS. BUT your line must still be concrete: anchor it in at least one real detail that is NOT that headline number, for example the real thread or work, a real day, or a real supporting figure. Never go vague or generic to avoid the number.',
     'THE REGISTER, by example (never copy these, match their honesty): "Tuesday morning you went straight into the code and stayed there for two and a half hours before your first break." / "Wednesday carried the week and Thursday paid for it, which is a fair trade." / "Three of the five days ended after 11pm, and the work shows where those hours went."',
@@ -292,11 +294,4 @@ export function buildPeriodFallbackNarrative(
     source: 'fallback',
     factsHash,
   }
-}
-
-function formatHm(seconds: number): string {
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  if (h <= 0) return `${m}m`
-  return m > 0 ? `${h}h ${m}m` : `${h}h`
 }

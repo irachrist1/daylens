@@ -12,9 +12,9 @@ import {
   setupBench, generateDayDeck, generatePeriodDeck, scoreDeck,
   appendLog, formatDeckLog, writeResults, type DeckResult,
 } from './harness'
-
-const DAY_FIXTURES = ['2026-07-07', '2026-07-04', '2026-07-02']
-const WEEK_FIXTURES = ['2026-07-06'] // anchor inside a full recent week
+// One fixture list, shared with the gating test — see fixtures.ts for why the
+// set spans rich, thin, boring, and floor day shapes.
+import { DAY_FIXTURES, WEEK_FIXTURES } from './fixtures'
 
 function color(c: 'green' | 'red' | 'yellow' | 'dim' | 'bold', s: string): string {
   const codes = { green: 32, red: 31, yellow: 33, dim: 2, bold: 1 } as const
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const cadence = (args[0] === 'week' || args[0] === 'day') ? args[0] : 'day'
   const explicitDates = args.filter((a) => /^\d{4}-\d{2}-\d{2}$/.test(a))
-  const keys = explicitDates.length ? explicitDates : (cadence === 'week' ? WEEK_FIXTURES : DAY_FIXTURES)
+  const keys = explicitDates.length ? explicitDates : (cadence === 'week' ? WEEK_FIXTURES : DAY_FIXTURES.map((f) => f.date))
 
   const changeNote = process.env.WRAPPED_BENCH_NOTE ?? ''
   const ctx = await setupBench()
@@ -35,9 +35,28 @@ async function main(): Promise<void> {
   try {
     for (const key of keys) {
       process.stdout.write(color('dim', `\n[gen] ${cadence} ${key} …\n`))
-      const deck = cadence === 'week'
-        ? await generatePeriodDeck('week', key)
-        : await generateDayDeck(key)
+      if (cadence === 'day') {
+        const deck = await generateDayDeck(key)
+        // A floor day's correct output is the honest deterministic fallback with
+        // zero provider spend — assert that, don't judge deterministic copy.
+        if (deck.facts.quality === 'empty' || deck.facts.quality === 'tooEarly') {
+          const ok = deck.source === 'fallback'
+          console.log(ok
+            ? color('green', `[${key}] floor day (quality=${deck.facts.quality}) returned the honest fallback — correct`)
+            : color('red', `[${key}] floor day (quality=${deck.facts.quality}) produced AI content — the quality gate is broken`))
+          if (!ok) process.exitCode = 1
+          continue
+        }
+        if (deck.source === 'fallback') {
+          console.log(color('red', `[${key}] WHOLE DECK FELL BACK (source=fallback) — provider/generation failed`))
+        }
+        const result = await scoreDeck(ctx.anthropic, cadence, key, deck)
+        results.push(result)
+        appendLog(formatDeckLog(`${cadence} ${key}`, result, changeNote))
+        printDeck(result)
+        continue
+      }
+      const deck = await generatePeriodDeck('week', key)
       if (deck.source === 'fallback') {
         console.log(color('red', `[${key}] WHOLE DECK FELL BACK (source=fallback) — provider/generation failed`))
       }
@@ -57,7 +76,7 @@ async function main(): Promise<void> {
     const ok = r.allSlidesPassed && r.deckAverage >= 9
     console.log(`${ok ? color('green', 'PASS') : color('red', 'FAIL')}  ${r.cadence} ${r.key}  avg=${r.deckAverage}  failing=[${r.needsWork.filter((s) => !s.passed).map((s) => s.id).join(', ')}]`)
   }
-  process.exit(allPass ? 0 : 1)
+  process.exit(allPass && process.exitCode !== 1 ? 0 : 1)
 }
 
 function printDeck(r: DeckResult): void {

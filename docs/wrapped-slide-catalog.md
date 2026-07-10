@@ -1,5 +1,13 @@
 # Wrapped — the slide catalog
 
+> **Note (2026-07-10).** A richer, example-heavy rewrite of this catalog is in
+> draft at [`wrapped-slide-catalog.v2-draft.md`](wrapped-slide-catalog.v2-draft.md)
+> — the 9-layer model, per-role example galleries, and two proposed new slides.
+> **This file is still the shipping catalog** (the benchmark anchors in
+> `tests/wrapped-bench/anchors.ts` are distilled from it); the v2 draft does not
+> supersede it yet. If you are extending the catalog, read both and prefer
+> adding new material to the draft.
+
 The full catalog of slides Wrapped can produce, for the **day** and **week**
 cadences, and the **rubric** the benchmark scores every one against. This is the
 Stage 1 standard: the benchmark tests (`tests/wrappedBenchmark.test.ts`) are built

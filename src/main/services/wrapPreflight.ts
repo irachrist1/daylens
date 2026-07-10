@@ -6,14 +6,18 @@
 
 import os from 'node:os'
 import type Database from 'better-sqlite3'
-import type { CalendarSignal, WrapPreflightResult, WrapPreflightWarning } from '@shared/types'
+import type { CalendarSignal, WrapDaySources, WrapPreflightResult, WrapPreflightWarning } from '@shared/types'
 import { getExternalSignal } from './externalSignals'
+import { resolveDayEnrichment } from './enrichmentResolve'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind } from '@shared/workKind'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
 import { localDateString, localDayBounds } from '../lib/localDate'
 import { getTimelineDayPayload, persistedDayWasProcessed } from './workBlocks'
 import { getStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
+// One formatting dialect for every wrap surface — preflight copy must match the
+// deck's clocks and durations exactly, so both import the same helpers.
+import { formatClock, formatHm } from '../../renderer/lib/dayWrapScenes'
 
 const LOW_WORK_SECONDS = 2 * 60 * 60
 const MISSING_TITLE_WARN_PCT = 30
@@ -21,22 +25,6 @@ const STALE_CAPTURE_MINUTES = 120
 // The machine may be on a while before the user actually starts (coffee, email
 // in a browser we do capture, etc.), so only call it a real blind spot past this.
 const PARTIAL_CAPTURE_GAP_MINUTES = 90
-
-function formatHm(seconds: number): string {
-  const total = Math.max(0, Math.round(seconds / 60))
-  if (total < 60) return `${total}m`
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  return m > 0 ? `${h}h ${m}m` : `${h}h`
-}
-
-function formatClock(ms: number): string {
-  return new Date(ms)
-    .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-    .replace(':00', '')
-    .replace(' ', '')
-    .toLowerCase()
-}
 
 export function getWrapPreflight(
   db: Database.Database,
@@ -167,6 +155,17 @@ export function getWrapPreflight(
 
   const stored = getStoredWrappedNarrative(db, 'day', date)
 
+  // Source presence for the coverage card — read through the SAME resolver the
+  // wrap writer uses, so "calendar was available" here means the writer really
+  // saw calendar facts, never a stale or unusable stored row.
+  const enrichment = resolveDayEnrichment(db, date)
+  const sources: WrapDaySources = {
+    calendar: Boolean(enrichment?.meetings),
+    git: Boolean(enrichment?.shipped),
+    focus: Boolean(enrichment?.focusSessions),
+    notes: Boolean(enrichment?.meetingNotes),
+  }
+
   return {
     date,
     warnings,
@@ -176,6 +175,7 @@ export function getWrapPreflight(
     analyzed,
     lastActivityAgoMinutes,
     firstCaptureClock,
+    sources,
   }
 }
 

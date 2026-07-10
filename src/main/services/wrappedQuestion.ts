@@ -21,7 +21,7 @@ import { compactDayFacts } from '../lib/wrappedNarrative'
 import { resolveDayEnrichment } from './enrichmentResolve'
 import { compactPeriodFacts } from '../lib/wrappedPeriodNarrative'
 import { buildWrappedPeriodFacts } from './wrappedPeriodNarrative'
-import { EMOJI_REGEX, stripCodeFence } from '../lib/wrapNarrativeShared'
+import { EMOJI_REGEX, EVIDENCE_HONESTY_DIRECTIVES, stripCodeFence } from '../lib/wrapNarrativeShared'
 import {
   executeTextAIJob,
   type ResolvedProviderConfig,
@@ -65,7 +65,17 @@ function groundingFor(req: WrappedAskRequest): AskGrounding {
     const enrichment = resolveDayEnrichment(db, req.periodKey)
     return {
       factsJson: JSON.stringify(compactDayFacts(facts, enrichment), null, 2),
-      deckOutline: deckOutline(planDayWrapSlides(facts)),
+      // Coverage rides into the outline so the answer can say honestly which
+      // sources this day's wrap actually had.
+      deckOutline: deckOutline(planDayWrapSlides(facts, {
+        browser: payload.websites.length > 0,
+        connectors: {
+          calendar: Boolean(enrichment?.meetings),
+          git: Boolean(enrichment?.shipped),
+          focus: Boolean(enrichment?.focusSessions),
+          notes: Boolean(enrichment?.meetingNotes),
+        },
+      })),
     }
   }
   const facts = buildWrappedPeriodFacts(req.cadence, req.periodKey)
@@ -103,6 +113,7 @@ export async function askWrappedQuestion(req: WrappedAskRequest): Promise<Wrappe
     'Ground every claim in the facts JSON and the deck outline. Durations in the facts are pre-formatted; use them as written and never compute a new one. Never invent an app, site, project, or number.',
     'HOW TO READ TIMES. Every time in the facts is a local 12-hour clock string. "12am" is midnight, "12pm" is noon, "12:27pm" is early afternoon just after noon, never night. Copy times exactly as written; never shift an event to a different part of the day, never do clock arithmetic. If the user says a time is wrong, do not invent a corrected time; say what the tracked data shows, verbatim, and that they know their day best.',
     'If the facts cannot answer the question, say so plainly and say what Daylens does know. Never guess.',
+    ...EVIDENCE_HONESTY_DIRECTIVES,
     'No advice or homework unless they explicitly ask for it. No grades, no focus percentages, no guilt.',
     'Never use an em dash. No emoji. No markdown. Plain text only.',
     userProfileDirective(settings),

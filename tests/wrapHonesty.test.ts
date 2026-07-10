@@ -1,0 +1,149 @@
+// The evidence-honesty contract ("wrapped yes or no.md"): a wrap says only what
+// was observed. These tests pin the deterministic guards — shared by the runtime
+// validator AND the benchmark — and the coverage slide that makes every wrap
+// name what it saw and what it didn't.
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  findOverclaimViolation,
+  findRawArtifactLeak,
+  wrapLineViolation,
+  type LineGuardContext,
+} from '../src/main/lib/wrapNarrativeShared.ts'
+import { planDayWrapSlides, planPeriodWrapSlides } from '../src/renderer/lib/wrapDeck.ts'
+import type { DayWrapFacts } from '../src/renderer/lib/dayWrapScenes.ts'
+import type { WrappedPeriodFacts } from '../src/shared/types.ts'
+
+// ─── Overclaim guard ──────────────────────────────────────────────────────────
+
+test('overclaim guard kills attendance claims built on calendar evidence', () => {
+  assert.ok(findOverclaimViolation('You attended the design review before lunch.'))
+  assert.ok(findOverclaimViolation('You sat through a calendar full of meetings.'))
+  assert.ok(findOverclaimViolation('You went to the 1:1 at midday.'))
+  assert.ok(findOverclaimViolation('You showed up for the standup.'))
+})
+
+test('overclaim guard kills idle / off-task characterizations of unobserved time', () => {
+  assert.ok(findOverclaimViolation('The afternoon was mostly idle.'))
+  assert.ok(findOverclaimViolation('An hour went off task after lunch.'))
+  assert.ok(findOverclaimViolation('Some off-task browsing crept in.'))
+})
+
+test('overclaim guard kills speculation words', () => {
+  assert.ok(findOverclaimViolation('You probably kept working after the laptop closed.'))
+  assert.ok(findOverclaimViolation('That break must have been lunch.'))
+  assert.ok(findOverclaimViolation('Likely a walk, given the gap.'))
+})
+
+test('overclaim guard passes honest observed phrasing', () => {
+  assert.equal(findOverclaimViolation('Your calendar had the design review at midday.'), null)
+  assert.equal(findOverclaimViolation('Cursor was in front for 2h 14m this morning.'), null)
+  assert.equal(findOverclaimViolation('Daylens did not see the morning, so the story starts at 12:08pm.'), null)
+  assert.equal(findOverclaimViolation('The 1:1 sat on the calendar and the afternoon built around it.'), null)
+})
+
+// ─── Raw-artifact leak guard ──────────────────────────────────────────────────
+
+test('raw-artifact guard kills paths, branches, files, ids, and JSON', () => {
+  assert.ok(findRawArtifactLeak('Most of it went to src/main/services/tracking.ts today.'))
+  assert.ok(findRawArtifactLeak('You merged feat/wrapped-honesty before dinner.'))
+  assert.ok(findRawArtifactLeak('The morning lived in MLPipeline_Week2.ipynb.'))
+  assert.ok(findRawArtifactLeak('Commit 8a1e115f9c2d landed after lunch.'))
+  assert.ok(findRawArtifactLeak('The response was {"lines": "..."} again.'))
+})
+
+test('raw-artifact guard passes ordinary prose, including slashes people write', () => {
+  assert.equal(findRawArtifactLeak('Two and a half hours on the billing service, unbroken.'), null)
+  assert.equal(findRawArtifactLeak('A back and/or forth kind of afternoon.'), null)
+  assert.equal(findRawArtifactLeak('It ran close to 24/7 energy until the evening.'), null)
+  assert.equal(findRawArtifactLeak('Nine commits to the billing service by 6pm.'), null)
+})
+
+// ─── Runtime integration: the line validator uses the same rules ─────────────
+
+const ctx: LineGuardContext = {
+  totalHours: 8,
+  hourTolerance: 1.05,
+  allowedPercents: new Set(),
+  allowedTimes: new Set(['9am', '6pm']),
+}
+
+test('wrapLineViolation rejects attendance and leak lines with writer-facing reasons', () => {
+  const attendance = wrapLineViolation('You attended the design review and kept building after.', ctx)
+  assert.ok(attendance && /attendance/.test(attendance))
+  const leak = wrapLineViolation('The work lived in src/main/services/tracking.ts most of the day.', ctx)
+  assert.ok(leak && /raw technical text/.test(leak))
+})
+
+test('wrapLineViolation passes an honest calendar-anchored line', () => {
+  assert.equal(wrapLineViolation('Your calendar held the design review, and the code got the rest of the morning from 9am.', ctx), null)
+})
+
+// ─── Coverage slide ───────────────────────────────────────────────────────────
+
+function dayFacts(overrides: Partial<DayWrapFacts> = {}): DayWrapFacts {
+  return {
+    date: '2026-07-07', weekday: 'TUESDAY', dateLabel: 'JUL 7',
+    workSeconds: 4 * 3600, leisureSeconds: 3600, personalSeconds: 0, meetingsSeconds: 0,
+    activeSeconds: 5 * 3600,
+    workActivities: [{ name: 'Daylens', seconds: 4 * 3600, category: 'development', kind: 'work' }],
+    ribbon: [], ribbonStartClock: '9:12am', ribbonEndClock: '6:04pm',
+    standout: null, topLeisure: [], isLeisureDay: false, quality: 'full',
+    seed: 7, appSites: [], candidateHooks: [], wildcardHook: null,
+    dayStory: [], mainStartClock: '9:12am', titleContext: [],
+    ...overrides,
+  }
+}
+
+test('every day deck carries a deterministic coverage slide right after the headline', () => {
+  const slides = planDayWrapSlides(dayFacts())
+  assert.equal(slides[2].id, 'coverage')
+  assert.equal(slides[2].ask, '', 'the coverage slide must never be AI-written')
+  assert.match(slides[2].fallbackLine, /9:12am to 6:04pm on this computer/)
+  assert.match(slides[2].fallbackLine, /didn't observe isn't in the story/)
+})
+
+test('coverage slide names sources honestly: present, absent, and unknown', () => {
+  const withSources = planDayWrapSlides(dayFacts(), {
+    browser: true,
+    connectors: { calendar: true, git: false, focus: false, notes: false },
+  })[2]
+  const names = Object.fromEntries((withSources.coverage?.sources ?? []).map((s) => [s.name, s.present]))
+  assert.equal(names['Browser activity'], true)
+  assert.equal(names['Calendar'], true)
+  assert.equal(names['Git commits'], false)
+  assert.match(withSources.factsNote, /no data from:.*git commits/)
+
+  // Unknown connectors (no preflight) must list nothing rather than claim absence.
+  const unknown = planDayWrapSlides(dayFacts())[2]
+  const unknownNames = (unknown.coverage?.sources ?? []).map((s) => s.name)
+  assert.ok(!unknownNames.includes('Calendar'))
+  assert.ok(!unknownNames.includes('Git commits'))
+})
+
+test('a thin day says so on its coverage slide', () => {
+  const slides = planDayWrapSlides(dayFacts({ activeSeconds: 20 * 60, workSeconds: 20 * 60, leisureSeconds: 0, quality: 'partial' }))
+  assert.match(slides[2].fallbackLine, /thin slice/)
+})
+
+function periodFacts(): WrappedPeriodFacts {
+  return {
+    period: 'week', anchorDate: '2026-07-06', rangeLabel: 'JUN 30 – JUL 6',
+    totalSeconds: 20 * 3600, workSeconds: 15 * 3600, leisureSeconds: 5 * 3600, personalSeconds: 0,
+    meetingsSeconds: 0, daysWithActivity: 5, previousPeriodSeconds: 0,
+    dominantWorkCategory: 'development', dominantWorkCategoryPct: 70,
+    categories: [], topApps: [], threads: [], days: [], buckets: [],
+    busiestDay: null, quietestActiveDay: null, busiestBucket: null,
+    longestStretch: null, leisureSurfaces: [], dayEdges: [],
+  } as unknown as WrappedPeriodFacts
+}
+
+test('period decks pin a coverage slide after the headline, outside the shuffle', () => {
+  const slides = planPeriodWrapSlides(periodFacts())
+  assert.equal(slides[0].id, 'opening')
+  assert.equal(slides[1].id, 'headline')
+  assert.equal(slides[2].id, 'coverage')
+  assert.equal(slides[2].ask, '')
+  assert.match(slides[2].fallbackLine, /5 days of tracked activity on this computer/)
+})

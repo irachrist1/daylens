@@ -17,7 +17,7 @@ import { friendlyDomain, humanizeTitle, leisureActivityTitle } from '@shared/hum
 import { categoryForDomain } from '@shared/domainCategories'
 import { isDisqualifiedWorkSubject } from '@shared/workNameGuards'
 import { buildDayTitleContext, type AppTitleContext } from '@shared/windowTitleContext'
-import { looksLikeRawArtifactLabel } from './wrappedFacts'
+import { computeQuality, looksLikeRawArtifactLabel } from './wrappedFacts'
 
 // ─── Shapes ──────────────────────────────────────────────────────────────────
 
@@ -152,9 +152,8 @@ export interface DayWrapFacts {
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
+// Quality thresholds live in wrappedFacts.QUALITY_THRESHOLDS (one source).
 
-const TOO_EARLY_SECONDS = 5 * 60
-const PARTIAL_SECONDS = 45 * 60
 const ACTIVITY_MIN_SECONDS = 5 * 60       // a named track has to be real
 const MAX_ACTIVITIES = 4
 const STANDOUT_MIN_SECONDS = 25 * 60      // a stretch worth bragging about
@@ -222,7 +221,8 @@ export function categoryWord(category: AppCategory): string {
     case 'communication': return 'Messages'
     case 'email': return 'Email'
     case 'productivity': return 'Admin'
-    case 'browsing': return 'Reading'
+    // Observational: browser foreground time proves the page was open, not read.
+    case 'browsing': return 'On the web'
     case 'entertainment': return 'Watching'
     case 'social': return 'Social'
     default: return 'Work'
@@ -238,7 +238,9 @@ export function categoryAction(category: AppCategory): string {
     case 'writing': return 'writing'
     case 'design': return 'designing'
     case 'research': return 'digging into'
-    case 'browsing': return 'reading up on'
+    // Foreground time on a page proves the page was open, not that it was
+    // read — "looking into" claims attention, never comprehension.
+    case 'browsing': return 'looking into'
     case 'meetings': return 'meeting on'
     case 'communication': return 'talking through'
     case 'email': return 'working through'
@@ -359,7 +361,7 @@ export function buildDayWrapFacts(payload: DayTimelinePayload): DayWrapFacts {
     standout,
     topLeisure,
     isLeisureDay,
-    quality: qualityForSeconds(activeSeconds),
+    quality: computeQuality(activeSeconds),
     seed,
     appSites,
     candidateHooks,
@@ -636,7 +638,8 @@ function buildCandidateHooks(
   return hooks.slice(0, 5)
 }
 
-function lowerName(s: string): string {
+/** Lowercase a name for mid-sentence use, unless it starts with an acronym. */
+export function lowerName(s: string): string {
   return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1)
 }
 
@@ -714,14 +717,9 @@ function selectStandout(blocks: WorkContextBlock[]): WrapStandout | null {
   }
 }
 
-function qualityForSeconds(totalSeconds: number): WrapQuality {
-  if (totalSeconds <= 0) return 'empty'
-  if (totalSeconds < TOO_EARLY_SECONDS) return 'tooEarly'
-  if (totalSeconds < PARTIAL_SECONDS) return 'partial'
-  return 'full'
-}
-
-function formatClock(ms: number): string {
+/** "11:15am" / "8pm" — THE clock format for every wrap surface. Exported so
+ *  preflight and the coverage card speak the identical dialect. */
+export function formatClock(ms: number): string {
   return new Date(ms)
     .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
     .replace(':00', '')

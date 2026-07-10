@@ -42,6 +42,62 @@ export const HOMEWORK_GUILT_PATTERNS = [
   /\bproductiv(?:e|ity)\s+score\b/i,
 ]
 
+// ─── Evidence honesty (say only what was observed) ───────────────────────────
+// The one written-once contract ("wrapped yes or no.md"): every sentence claims
+// only what the tracked data can back. The DIRECTIVES go into both the day and
+// the period system prompts; the PATTERNS below are the deterministic guard the
+// runtime validator AND the benchmark share, so a rule lives in exactly one place.
+
+export const EVIDENCE_HONESTY_DIRECTIVES = [
+  'SAY ONLY WHAT WAS OBSERVED. Every fact you receive is what Daylens saw on this one computer: which app, window, site, or meeting surface was frontmost, for how long, plus any connected signals (git, calendar). Time in an app is evidence the app was open and in front, and with real dwell it is fair to narrate the person doing that work; it is NOT proof they finished, read, watched, or absorbed anything. Never claim an outcome, a completed read, or a finished piece of work unless the facts state it (a git commit, a recorded note).',
+  'CALENDAR IS A SCHEDULE, NOT A RECORD OF ATTENDANCE. A calendar event means the calendar HELD that event; write "your calendar had the design review", "the 1:1 sat on the calendar at midday", never "you attended", "you sat in", "you sat through", or "you went to" a meeting on calendar evidence alone. Time observed in a meeting app is the only ground for saying the person was IN a call.',
+  'UNTRACKED TIME IS UNKNOWN, NOT EMPTY. Time Daylens did not observe is simply not in the story: never call it idle, rest, a break, off task, or a gap in the person\'s effort, and never guess what filled it. If it matters, say plainly that Daylens did not see that part of the day.',
+  'NEVER SPECULATE. No "probably", "must have", "likely", "no doubt", "surely". If the facts do not say it, the wrap does not say it.',
+] as const
+
+/** Speculation and unobserved-time characterizations that turn an honest recap
+ *  into a guess. Shared by the runtime validator and the benchmark. */
+export const OVERCLAIM_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> = [
+  { re: /\b(?:probably|must have|likely|no doubt|surely|presumably)\b/i, reason: 'speculates about something the facts do not state' },
+  { re: /\bidle\b/i, reason: 'characterizes untracked or quiet time as "idle"; unobserved time is unknown, never idle' },
+  { re: /\boff[- ]task\b/i, reason: 'grades time as "off task"' },
+  { re: /\byou (?:attended|sat (?:in|through)|went to|showed up (?:to|at|for))\b/i, reason: 'claims attendance the tracked data cannot prove; calendar evidence only supports "your calendar had ..."' },
+]
+
+/** The first overclaim in the text, or null. One rule, used by the runtime
+ *  guard and the benchmark's deterministic pre-check. */
+export function findOverclaimViolation(text: string): string | null {
+  for (const { re, reason } of OVERCLAIM_PATTERNS) {
+    const m = text.match(re)
+    if (m) return `${reason} ("${m[0]}")`
+  }
+  return null
+}
+
+// Raw technical text that must never reach human-readable prose: paths, file
+// names, branch-like slugs, snake_case identifiers, long hex ids, JSON. Kept
+// deliberately conservative so real prose ("a two-hour stretch") never dies.
+const RAW_ARTIFACT_CHECKS: ReadonlyArray<{ re: RegExp; what: string }> = [
+  // Two or more slashes is a path; one slash only counts when it reads like a
+  // git branch — "and/or", "24/7", "work/life" stay legal prose.
+  { re: /\b[\w.-]+\/[\w.-]+\/[\w.-]+\b/, what: 'a path-like token' },
+  { re: /\b(?:feat|fix|chore|refactor|docs|test|build|ci|perf|hotfix|release)\/[\w.-]+\b/i, what: 'a branch-like token' },
+  { re: /\b[\w-]+\.(?:tsx?|jsx?|py|rs|go|java|rb|cpp?|h|md|json|ya?ml|sql|sh|ipynb|sqlite|exe|dmg|pkg)\b/i, what: 'a file name' },
+  { re: /\b\w+_\w+\b/, what: 'a snake_case identifier' },
+  { re: /\b[0-9a-f]{8,}\b/i, what: 'a raw id or hash' },
+  { re: /[{}`]|\[\[/, what: 'code or JSON syntax' },
+]
+
+/** The first raw technical leak in the text, or null. Shared by the runtime
+ *  guard and the benchmark. */
+export function findRawArtifactLeak(text: string): string | null {
+  for (const { re, what } of RAW_ARTIFACT_CHECKS) {
+    const m = text.match(re)
+    if (m) return `${what} ("${m[0]}")`
+  }
+  return null
+}
+
 export function stripCodeFence(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
   return fenced?.[1]?.trim() ?? text
@@ -161,6 +217,10 @@ export function wrapLineViolation(value: string, ctx: LineGuardContext, opts?: W
     const matched = value.match(guilt)?.[0] ?? ''
     return `contains banned homework/guilt/grading language ("${matched}"); never mention drift, distraction, carryover, or focus scores, not even to negate them`
   }
+  const overclaim = findOverclaimViolation(value)
+  if (overclaim) return `${overclaim}; state only what the tracked data observed, plainly`
+  const leak = findRawArtifactLeak(value)
+  if (leak) return `leaks raw technical text into prose: ${leak}; name the work in human words, never a path, file, branch, or id`
   const hours = hourClaimViolation(value, ctx)
   if (hours) return hours
   const percent = percentClaimViolation(value, ctx)

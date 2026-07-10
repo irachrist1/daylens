@@ -11,6 +11,7 @@
 import type { WrappedPeriodFacts } from '@shared/types'
 import {
   formatHm,
+  lowerName,
   seedFromDate,
   workActionPhrase,
   type DayWrapFacts,
@@ -29,6 +30,7 @@ export type WrapSlideKind =
   | 'split'       // two-sided ratio (work vs leisure)
   | 'compare'     // this period against the previous one
   | 'text'        // prose-led beat (story segments, the forgotten thing)
+  | 'coverage'    // what this wrap saw and what it didn't (deterministic, never AI)
   | 'question'    // interactive: the AI asks, the user can answer inline
   | 'reflection'  // the finale paragraph, written like a message
   | 'finale'      // share card + export
@@ -43,6 +45,30 @@ export interface WrapSlideStat {
 
 export interface WrapSlideBar { name: string; seconds: number; detail?: string }
 
+// ─── Coverage (what the wrap is built on) ─────────────────────────────────────
+// Every wrap carries one deterministic coverage slide: the observed window, the
+// evidence sources that were actually available, and the ones that weren't — so
+// a thin day looks honestly thin instead of dressed up. The AI never writes
+// this slide (ask: ''), so it can never overclaim.
+
+export interface WrapCoverageSource { name: string; present: boolean }
+
+export interface WrapCoverageCard {
+  /** "11:15am to 8:04pm on this computer", or a day-count line for periods. */
+  windowLabel: string | null
+  sources: WrapCoverageSource[]
+  note: string
+}
+
+export interface WrapCoverageInput {
+  /** True when browser/tab context was observed this day. */
+  browser?: boolean
+  /** Connector presence when the caller knows it (preflight / enrichment).
+   *  Undefined/null = unknown: the card then lists nothing about connectors
+   *  rather than falsely claiming they were absent. */
+  connectors?: { calendar: boolean; git: boolean; focus: boolean; notes: boolean } | null
+}
+
 export interface WrapSlideSpec {
   /** Stable id — the key the AI's line comes back under. */
   id: string
@@ -54,6 +80,7 @@ export interface WrapSlideSpec {
   buckets?: Array<{ label: string; seconds: number; peak: boolean }>
   split?: { aLabel: string; aPct: number; aSeconds: number; bLabel: string; bPct: number; bSeconds: number }
   compare?: { currentLabel: string; currentSeconds: number; previousLabel: string; previousSeconds: number }
+  coverage?: WrapCoverageCard
   /** The honest deterministic line shown when the AI line is missing/rejected. */
   fallbackLine: string
   /** What the AI should write for this slide. '' = deterministic-only slide. */
@@ -86,10 +113,6 @@ function pct2(a: number, b: number): [number, number] {
   return [pa, pb]
 }
 
-function lowerName(s: string): string {
-  return /^[A-Z]{2,}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1)
-}
-
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
 }
@@ -111,9 +134,46 @@ export function seededShuffle<T>(items: T[], seed: number): T[] {
   return out
 }
 
+// ─── Coverage slides (deterministic, never AI-written) ───────────────────────
+
+function buildDayCoverageSlide(facts: DayWrapFacts, input?: WrapCoverageInput): WrapSlideSpec {
+  const startClock = facts.mainStartClock ?? facts.ribbonStartClock
+  const windowLabel = startClock && facts.ribbonEndClock
+    ? `${startClock} to ${facts.ribbonEndClock} on this computer`
+    : null
+  const sources: WrapCoverageSource[] = [
+    { name: 'Apps and windows', present: facts.activeSeconds > 0 },
+  ]
+  if (input?.browser !== undefined) sources.push({ name: 'Browser activity', present: Boolean(input.browser) })
+  if (input?.connectors) {
+    sources.push(
+      { name: 'Calendar', present: input.connectors.calendar },
+      { name: 'Git commits', present: input.connectors.git },
+      { name: 'Focus timers', present: input.connectors.focus },
+      { name: 'Meeting notes', present: input.connectors.notes },
+    )
+  }
+  const seen = sources.filter((s) => s.present).map((s) => s.name.toLowerCase())
+  const absent = sources.filter((s) => !s.present).map((s) => s.name.toLowerCase())
+  const fallbackLine = [
+    windowLabel
+      ? `Built from ${formatHm(facts.activeSeconds)} of tracked activity, ${windowLabel}.`
+      : `Built from ${formatHm(facts.activeSeconds)} of tracked activity on this computer.`,
+    facts.quality === 'partial' ? 'That is a thin slice of a day, so this wrap stays small.' : null,
+    "Time Daylens didn't observe isn't in the story.",
+  ].filter(Boolean).join(' ')
+  return {
+    id: 'coverage', kind: 'coverage', kicker: 'What this wrap is built on',
+    coverage: { windowLabel, sources, note: "Time Daylens didn't observe isn't in the story." },
+    fallbackLine,
+    ask: '', // deterministic by design: the coverage card can never overclaim
+    factsNote: `observed ${formatHm(facts.activeSeconds)}${windowLabel ? `, ${windowLabel}` : ''}; sources with data: ${seen.join(', ') || 'none'}${absent.length ? `; no data from: ${absent.join(', ')}` : ''}; unobserved time is not represented`,
+  }
+}
+
 // ─── Day plan ─────────────────────────────────────────────────────────────────
 
-export function planDayWrapSlides(facts: DayWrapFacts): WrapSlideSpec[] {
+export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageInput): WrapSlideSpec[] {
   const out: WrapSlideSpec[] = []
   const hm = formatHm
 
@@ -143,6 +203,11 @@ export function planDayWrapSlides(facts: DayWrapFacts): WrapSlideSpec[] {
       ? `. This was MOSTLY A REST DAY, so lead the read with the downtime, not the work${facts.workActivities[0] ? ` (the only real work was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}, a small part of the day)` : ''}`
       : facts.workActivities[0] ? `, the day's main work was ${workActionPhrase(facts.workActivities[0].name, facts.workActivities[0].category)}` : ''}${spilloverBeat ? `. (A short ${hm(spilloverBeat.seconds)} pre-dawn tail belongs to LAST night, not this day's start, so do not frame the day as running late into the night on the strength of it.)` : ''}`,
   })
+
+  // 2b · Coverage — what this wrap saw and what it didn't. Deterministic and
+  // pinned right after the headline so a thin day announces its thinness up
+  // front instead of dressing up.
+  out.push(buildDayCoverageSlide(facts, coverage))
 
   // 3-6 · The day as a story, in chronological order, from the real segments.
   // dayStory is already ordered late-night → evening; a pre-dawn leftover is its
@@ -343,6 +408,20 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
     fallbackLine: `${hm(facts.totalSeconds)} of tracked time across ${plural(facts.daysWithActivity, 'day')}.`,
     ask: `One line under the ${noun}-total number that ADDS a real read. Anchor it concretely in the thread that filled the ${noun} or where the weight of it sat; do not restate the total and do not lean on vague adjectives.`,
     factsNote: `total ${hm(facts.totalSeconds)}, ${facts.daysWithActivity} active days${threads[0] ? `, the ${noun} was mostly ${threads[0].subject}` : ''}`,
+  })
+
+  // Coverage — what this wrap saw and what it didn't. Deterministic, pinned
+  // right after the headline (the shuffle below starts at index 3).
+  out.push({
+    id: 'coverage', kind: 'coverage', kicker: 'What this wrap is built on',
+    coverage: {
+      windowLabel: `${plural(facts.daysWithActivity, 'day')} with tracked activity on this computer`,
+      sources: [],
+      note: "Days and hours Daylens didn't observe aren't in the story.",
+    },
+    fallbackLine: `Built from ${plural(facts.daysWithActivity, 'day')} of tracked activity on this computer. Days and hours Daylens didn't observe aren't in the story.`,
+    ask: '', // deterministic by design: the coverage card can never overclaim
+    factsNote: `built from ${plural(facts.daysWithActivity, 'day')} with tracked activity; unobserved time is not represented`,
   })
 
   // Consistency — showing up.
@@ -593,13 +672,13 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
     factsNote: 'share card',
   })
 
-  // Shuffle the middle (everything between headline and question) with a seed
+  // Shuffle the middle (everything between coverage and question) with a seed
   // from the anchor date, so each week/month deck has its own rhythm but is
-  // stable on reopen. Opening, headline, question, reflection, finale hold.
+  // stable on reopen. Opening, headline, coverage, question, reflection, finale hold.
   const questionIdx = out.findIndex((s) => s.id === 'question')
-  const head = out.slice(0, 2)
+  const head = out.slice(0, 3)
   const tail = out.slice(questionIdx)
-  const shuffledMiddle = seededShuffle(out.slice(2, questionIdx), seedFromDate(facts.anchorDate))
+  const shuffledMiddle = seededShuffle(out.slice(3, questionIdx), seedFromDate(facts.anchorDate))
   return [...head, ...shuffledMiddle, ...tail]
 }
 
@@ -625,7 +704,8 @@ function humanCategoryWord(category: string): string {
     case 'communication': return 'Messages'
     case 'email': return 'Email'
     case 'productivity': return 'Admin'
-    case 'browsing': return 'Reading'
+    // Observational: browser foreground time proves the page was open, not read.
+    case 'browsing': return 'On the web'
     default: return 'Other work'
   }
 }

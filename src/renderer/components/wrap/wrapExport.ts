@@ -53,6 +53,17 @@ export function buildWrapExportModels(
       models.push({ ...base, headline: null, sublabel: null, line: extras.reflection ?? spec.fallbackLine, rows: [] })
       return
     }
+    if (spec.kind === 'coverage') {
+      // The honesty card exports too: what the wrap saw and what it didn't.
+      models.push({
+        ...base,
+        headline: null,
+        sublabel: null,
+        line: resolveSlideLine(spec, lines),
+        rows: (spec.coverage?.sources ?? []).map((s) => ({ name: s.name, value: s.present ? 'seen' : 'no data', pct: s.present ? 100 : 0 })),
+      })
+      return
+    }
     if (spec.kind === 'finale') {
       models.push({
         ...base,

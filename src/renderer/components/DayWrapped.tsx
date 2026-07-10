@@ -171,7 +171,12 @@ export default function DayWrapped({
 
   // ── The deck ─────────────────────────────────────────────────────────────
 
-  const slides = planDayWrapSlides(facts)
+  // The coverage card's inputs: browser presence from the payload itself,
+  // connector presence from preflight (the same resolver the writer used).
+  const slides = planDayWrapSlides(facts, {
+    browser: data.websites.length > 0,
+    connectors: preflight?.sources ?? null,
+  })
   const meta = dayWrapDeckMeta(facts)
   return (
     <WrapDeck

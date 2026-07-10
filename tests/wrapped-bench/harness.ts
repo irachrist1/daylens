@@ -22,6 +22,10 @@ import { fileURLToPath } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy, type RealDbContext } from '../ai-behaviour/realDb'
 import { anchorsFor, type SlideAnchors } from './anchors'
+// The SAME deterministic honesty rules the runtime guard enforces (one shared
+// source): re-run here independently so a guard regression fails the bench
+// instead of shipping. Pure module — safe to import before the DB boots.
+import { findOverclaimViolation, findRawArtifactLeak } from '../../src/main/lib/wrapNarrativeShared'
 import type { WrapSlideSpec } from '../../src/renderer/lib/wrapDeck'
 import type { DayWrapFacts } from '../../src/renderer/lib/dayWrapScenes'
 import type { WrappedPeriod, WrappedPeriodFacts } from '../../src/shared/types'
@@ -127,6 +131,9 @@ export interface GeneratedDeck {
 // A whole-deck fallback means the generation call itself failed (timeout /
 // transient provider error), NOT a content problem — so retry a few times
 // before treating it as real. Only a persistent fallback is a genuine failure.
+// EXCEPT on empty/tooEarly days: there the fallback IS the correct output
+// (the quality gate refuses to spend tokens on "not enough data"), so
+// retrying would just burn calls proving the gate works.
 const GEN_RETRIES = 3
 
 export async function generateDayDeck(date: string): Promise<{ facts: DayWrapFacts } & GeneratedDeck> {
@@ -148,8 +155,9 @@ export async function generateDayDeck(date: string): Promise<{ facts: DayWrapFac
   const payload = getTimelineDayPayload(getDb(), date, null)
   const facts = buildDayWrapFacts(payload)
   const slides = planDayWrapSlides(facts)
+  const floorDay = facts.quality === 'empty' || facts.quality === 'tooEarly'
   let narrative = await getWrappedNarrative(payload, { force: true, triggerSource: 'user' })
-  for (let i = 0; narrative.source === 'fallback' && i < GEN_RETRIES; i++) {
+  for (let i = 0; !floorDay && narrative.source === 'fallback' && i < GEN_RETRIES; i++) {
     process.stderr.write(`[wrapped-bench] ${date} fell back (transient), retry ${i + 1}/${GEN_RETRIES}…\n`)
     await sleep(1500 * (i + 1))
     narrative = await getWrappedNarrative(payload, { force: true, triggerSource: 'user' })
@@ -326,6 +334,35 @@ function clamp(v: unknown, lo: number, hi: number): number {
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)) }
 
+// ─── Deterministic honesty pre-check ──────────────────────────────────────────
+// Never depends on an LLM's taste ("wrapped yes or no.md" §benchmark item 3):
+// a line that leaks raw technical text (paths, ids, branches, JSON) or claims
+// something the tracked data cannot back (attendance, idle, speculation) fails
+// outright, no matter how well the judge scores its prose.
+
+function deterministicViolation(line: string): string | null {
+  const overclaim = findOverclaimViolation(line)
+  if (overclaim) return overclaim
+  const leak = findRawArtifactLeak(line)
+  if (leak) return `raw technical text in prose: ${leak}`
+  return null
+}
+
+/** Apply the deterministic check on top of the judge's read: a violation zeroes
+ *  accuracy and fails the slide, and the reason is stamped into the reasoning
+ *  so the log shows exactly what tripped. */
+function applyDeterministicChecks(result: SlideResult): SlideResult {
+  const violation = deterministicViolation(result.line)
+  if (!violation) return result
+  const score: SlideScore = {
+    ...result.score,
+    accuracy: 0,
+    total: result.score.specificity + result.score.tone + result.score.motion,
+    reasoning: `[deterministic fail] ${violation}. ${result.score.reasoning}`,
+  }
+  return { ...result, score, passed: false }
+}
+
 // ─── Scoring a whole deck ─────────────────────────────────────────────────────
 
 export async function scoreDeck(
@@ -350,7 +387,7 @@ export async function scoreDeck(
       splitNote: spec.split ? `${spec.split.aLabel} ${spec.split.aPct}%, ${spec.split.bLabel} ${spec.split.bPct}%` : undefined,
       caption, line, role: 'line', anchors: anchorsFor(cadence, spec.id),
     })
-    results.push({ id: spec.id, kind: spec.kind, source, caption, line, score, passed: source === 'ai' && score.total >= 7 })
+    results.push(applyDeterministicChecks({ id: spec.id, kind: spec.kind, source, caption, line, score, passed: source === 'ai' && score.total >= 7 }))
   }
 
   // The question and reflection come from narrative.*, not lines[].
@@ -359,14 +396,14 @@ export async function scoreDeck(
     const source: 'ai' | 'fallback' = deck.question ? 'ai' : 'fallback'
     const line = deck.question ?? questionSpec.fallbackLine
     const score = await judge(anthropic, { cadence, slideId: 'question', kicker: questionSpec.kicker, factsNote: questionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'question', anchors: anchorsFor(cadence, 'question') })
-    results.push({ id: 'question', kind: 'question', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 })
+    results.push(applyDeterministicChecks({ id: 'question', kind: 'question', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 }))
   }
   const reflectionSpec = deck.slides.find((s) => s.id === 'reflection')
   if (reflectionSpec) {
     const source: 'ai' | 'fallback' = deck.reflection ? 'ai' : 'fallback'
     const line = deck.reflection ?? reflectionSpec.fallbackLine
     const score = await judge(anthropic, { cadence, slideId: 'reflection', kicker: reflectionSpec.kicker, factsNote: reflectionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'reflection', anchors: anchorsFor(cadence, 'reflection') })
-    results.push({ id: 'reflection', kind: 'reflection', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 })
+    results.push(applyDeterministicChecks({ id: 'reflection', kind: 'reflection', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 }))
   }
 
   const prose = results.filter((r) => !r.caption)

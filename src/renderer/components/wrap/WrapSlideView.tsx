@@ -133,6 +133,33 @@ export default function WrapSlideView({ spec, line, question, reflection, theme,
         </Scene>
       )
 
+    case 'coverage': {
+      const cov = spec.coverage
+      return (
+        <Scene>
+          <div style={reveal(reduced, 0)}><Kicker accent={theme.accent}>{spec.kicker}</Kicker></div>
+          {cov?.windowLabel && (
+            <h1 style={{ fontSize: 'clamp(22px, 3.4vw, 34px)', fontWeight: 750, lineHeight: 1.24, letterSpacing: '-0.02em', color: '#fff', margin: 0, maxWidth: '28ch', ...reveal(reduced, 240) }}>
+              {cov.windowLabel}
+            </h1>
+          )}
+          {cov && cov.sources.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 30, width: '100%', maxWidth: 420, ...reveal(reduced, 520) }}>
+              {cov.sources.map((s) => (
+                <div key={s.name} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 14 }}>
+                  <span style={{ fontSize: 15, fontWeight: 650, color: s.present ? '#fff' : 'rgba(255,255,255,0.42)' }}>{s.name}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: s.present ? theme.accent : 'rgba(255,255,255,0.42)', whiteSpace: 'nowrap' }}>
+                    {s.present ? 'seen today' : 'no data today'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          <p style={{ ...subtleLine, ...reveal(reduced, 900) }}>{cov?.note ?? line}</p>
+        </Scene>
+      )
+    }
+
     case 'question':
       return (
         <Scene>
