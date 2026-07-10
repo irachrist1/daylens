@@ -1296,3 +1296,37 @@ Two findings from making the benchmark pass reliably on real days (Jul 9 + 10):
    `cache-v6.json.enc`; the plaintext `cache-v6.json` is a stale stub) — meeting notes are
    NOT locally reachable and need an authenticated connector (P4 MCP work). Honest
    position until then: the wrap narrates meetings from calendar + blocks only.
+
+## 2026-07-10 — Renderer architecture audit: duplicated policy had become separate truth
+
+The renderer's large files were not just verbose. Several copies had independently become
+behavioral authorities:
+
+1. **A block edit was three writes, so one Save could partially succeed.** Timeline wrote
+   review, label/category override, and time trim through separate IPC calls. A failed trim
+   left the earlier corrections committed. `timelineBlockEdits.ts` now validates first and
+   commits the full edit in one SQLite transaction; `tests/timelineBlockEditAtomicity.test.ts`
+   pins rollback and all-fields success.
+2. **Onboarding client names and canonical clients were separate stores.** Onboarding only
+   saved `userClients`, while Settings and attribution read `clients`. Onboarding now ensures
+   canonical clients, and every client mutation re-syncs the compatibility name list.
+3. **Read failures were presented as real emptiness.** Settings and onboarding converted
+   failed IPC reads to `[]`, `{}`, `null`, or “unsupported,” making “could not read” look like
+   “you have no data.” Section reads are now lazy, retain their last known value, and show an
+   explicit load error. Privacy-history deletion also reports a failed cleanup instead of
+   silently claiming the exclusion completed.
+4. **Category labels, range keys, live totals, work-first ordering, and date navigation had
+   competing copies.** They now live in shared contracts (`activityCategories.ts`,
+   `appNarrativeContract.ts`, `liveAppSummaries.ts`, `workKind.ts`, and renderer date helpers),
+   with contract tests in `tests/rendererSharedContracts.test.ts`.
+5. **The Apps read model lived inside the timeline formation engine.** App-range selection,
+   artifact ownership, browser reconciliation, and appearance rollups now live in
+   `appDetail.ts`. Existing reconciliation and heavy-history tests exercise the extracted
+   boundary.
+6. **Linux MCP discovery used the macOS Claude Desktop path.** Main-process discovery and
+   Settings copy now distinguish macOS, Windows, and Linux. `tests/enrichmentDiscovery.test.ts`
+   asserts all three paths.
+
+Load-bearing warning: the browser domain/page reconciliation and “No page recorded” remainder
+remain backend-owned and unchanged. Do not move that arithmetic into renderer components; the
+existing app-detail reconciliation tests are the minimum gate for edits in that area.
