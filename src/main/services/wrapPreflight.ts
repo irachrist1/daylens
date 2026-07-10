@@ -5,7 +5,8 @@
 // is allowed; a wrap built on thin data WITHOUT saying so is not.
 
 import type Database from 'better-sqlite3'
-import type { WrapPreflightResult, WrapPreflightWarning } from '@shared/types'
+import type { CalendarSignal, WrapPreflightResult, WrapPreflightWarning } from '@shared/types'
+import { getExternalSignal } from './externalSignals'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { effectiveBlockKind } from '@shared/workKind'
 import { isTrustedTimelineBlock } from '@shared/timelineReview'
@@ -105,6 +106,35 @@ export function getWrapPreflight(db: Database.Database, date: string): WrapPrefl
     }
   }
 
+  // When Daylens actually started seeing the day. The tracker only captures
+  // while the app is running, so a day it launched late has a real blind spot
+  // before this clock — the wrap must not narrate that gap as if it saw it.
+  const firstRow = db.prepare(`
+    SELECT MIN(start_time) AS first FROM app_sessions
+    WHERE start_time >= ? AND start_time < ?
+  `).get(fromMs, toMs) as { first: number | null } | undefined
+  const firstCaptureClock = firstRow?.first ? formatClock(firstRow.first) : null
+
+  // PROVABLE partial capture: a calendar event that started before Daylens's
+  // first captured activity is something the tracker demonstrably missed (the
+  // founder's exact case: a 9am meeting but capture began at noon). Calendar is
+  // independent of tracker uptime, so it is honest evidence, not a guess. No
+  // event-before-first-capture means no false positive.
+  if (firstRow?.first) {
+    const calendar = getExternalSignal<CalendarSignal>(db, date, 'calendar')?.payload ?? null
+    const firstCaptureMinutes = clockToMinutes(firstCaptureClock)
+    const missedBefore = (calendar?.events ?? [])
+      .filter((e) => e.title && clockToMinutes(e.startClock) != null && clockToMinutes(e.startClock)! < (firstCaptureMinutes ?? 0))
+      .sort((a, b) => (clockToMinutes(a.startClock) ?? 0) - (clockToMinutes(b.startClock) ?? 0))
+    if (missedBefore.length > 0) {
+      const earliest = missedBefore[0]
+      warnings.push({
+        kind: 'partialCapture',
+        message: `Daylens only started seeing today at ${firstCaptureClock}, but your calendar had ${missedBefore.length === 1 ? 'an event' : `${missedBefore.length} events`} before that (from ${earliest.startClock}). The morning wasn't tracked, so the wrap only covers the part Daylens saw.`,
+      })
+    }
+  }
+
   const stored = getStoredWrappedNarrative(db, 'day', date)
 
   return {
@@ -115,5 +145,20 @@ export function getWrapPreflight(db: Database.Database, date: string): WrapPrefl
     missingTitlePct,
     analyzed,
     lastActivityAgoMinutes,
+    firstCaptureClock,
   }
+}
+
+/** "12:08pm" / "9am" / "noon" / "midnight" → minutes since local midnight, or
+ *  null when unparseable. Mirrors the clock format formatClock emits. */
+function clockToMinutes(clock: string | null): number | null {
+  if (!clock) return null
+  const c = clock.trim().toLowerCase()
+  if (c === 'noon') return 12 * 60
+  if (c === 'midnight') return 0
+  const m = c.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)$/)
+  if (!m) return null
+  let hour = Number(m[1]) % 12
+  if (m[3] === 'pm') hour += 12
+  return hour * 60 + (m[2] ? Number(m[2]) : 0)
 }

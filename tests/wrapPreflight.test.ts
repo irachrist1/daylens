@@ -141,3 +141,33 @@ test('an unanalyzed day with blocks warns notAnalyzed; a processed day does not'
   assert.ok(!after.warnings.some((w) => w.kind === 'notAnalyzed'), 'a processed day has no notAnalyzed warning')
   db.close()
 })
+
+import { putExternalSignal } from '../src/main/services/externalSignals.ts'
+import type { CalendarSignal } from '../src/shared/types.ts'
+
+test('partialCapture warns when a calendar event predates the first captured activity', () => {
+  const db = makeDb()
+  // Capture only began at ~11am (sessions seeded from DAY_START = 9am here, so
+  // shift them to 11am to simulate a late tracker start).
+  const ELEVEN = new Date(2026, 5, 23, 11, 0, 0, 0).getTime()
+  seedSessions(db, 20, 1, ELEVEN)
+  // But the calendar had a 9am meeting Daylens never saw.
+  const cal: CalendarSignal = { events: [{ title: 'Standup', startClock: '9am', durationMinutes: 30, attendeeCount: 4 }] }
+  putExternalSignal(db, DATE, 'calendar', cal)
+
+  const result = getWrapPreflight(db, DATE)
+  const warning = result.warnings.find((w) => w.kind === 'partialCapture')
+  assert.ok(warning, 'expected a partialCapture warning')
+  assert.match(warning!.message, /9am/)
+  assert.ok(result.firstCaptureClock, 'firstCaptureClock is exposed')
+})
+
+test('no partialCapture when every calendar event is within the captured window', () => {
+  const db = makeDb()
+  seedSessions(db, 20, 1) // from 9am
+  const cal: CalendarSignal = { events: [{ title: 'Lunch sync', startClock: '12pm', durationMinutes: 30, attendeeCount: 2 }] }
+  putExternalSignal(db, DATE, 'calendar', cal)
+  const result = getWrapPreflight(db, DATE)
+  assert.equal(result.warnings.find((w) => w.kind === 'partialCapture'), undefined, 'no false positive when calendar is inside the captured window')
+  db.close()
+})

@@ -1301,7 +1301,7 @@ export interface EnrichmentSourcesState {
 // Honest, specific warnings BEFORE a wrap generates. None of them block:
 // the user can always generate anyway with one tap.
 
-export type WrapPreflightWarningKind = 'lowWork' | 'notAnalyzed' | 'missingTitles' | 'staleCapture'
+export type WrapPreflightWarningKind = 'lowWork' | 'notAnalyzed' | 'missingTitles' | 'staleCapture' | 'partialCapture'
 
 export interface WrapPreflightWarning {
   kind: WrapPreflightWarningKind
@@ -1321,6 +1321,10 @@ export interface WrapPreflightResult {
   analyzed: boolean
   /** Minutes since the last captured session ended; null when nothing tracked. */
   lastActivityAgoMinutes: number | null
+  /** The clock of the FIRST activity Daylens captured this day, e.g. "12:08pm".
+   *  Null when nothing was tracked. The wrap uses this to be honest about when
+   *  its view of the day actually began. */
+  firstCaptureClock: string | null
 }
 
 export type WrappedPeriod = 'week' | 'month' | 'year'
