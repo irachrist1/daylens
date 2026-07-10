@@ -4,10 +4,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  claudeDesktopConfigPath,
   discoverMcpServers,
   detectFocusApps,
   collectFocusAppSignals,
 } from '../src/main/services/enrichmentDiscovery.ts'
+import { claudeDesktopConfigDisplayPath } from '../src/shared/platformPaths.ts'
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -17,6 +19,24 @@ function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(value))
 }
+
+test('Claude Desktop config paths are correct on macOS, Windows, and Linux', () => {
+  assert.equal(
+    claudeDesktopConfigPath('/Users/alex', 'darwin'),
+    path.join('/Users/alex', 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+  )
+  assert.equal(
+    claudeDesktopConfigPath('C:\\Users\\alex', 'win32', 'C:\\Users\\alex\\AppData\\Roaming'),
+    path.join('C:\\Users\\alex\\AppData\\Roaming', 'Claude', 'claude_desktop_config.json'),
+  )
+  assert.equal(
+    claudeDesktopConfigPath('/home/alex', 'linux'),
+    path.join('/home/alex', '.config', 'Claude', 'claude_desktop_config.json'),
+  )
+  assert.equal(claudeDesktopConfigDisplayPath('darwin'), '~/Library/Application Support/Claude/claude_desktop_config.json')
+  assert.equal(claudeDesktopConfigDisplayPath('win32'), '%APPDATA%\\Claude\\claude_desktop_config.json')
+  assert.equal(claudeDesktopConfigDisplayPath('linux'), '~/.config/Claude/claude_desktop_config.json')
+})
 
 test('discoverMcpServers reads stdio, http, and malformed entries from a fixture config', () => {
   const dir = tempDir('daylens-mcp-config-')

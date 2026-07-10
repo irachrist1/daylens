@@ -53,6 +53,9 @@ export function claudeDesktopConfigPath(
     const base = appData && appData.length > 0 ? appData : path.join(homeDir, 'AppData', 'Roaming')
     return path.join(base, 'Claude', 'claude_desktop_config.json')
   }
+  if (platform === 'linux') {
+    return path.join(homeDir, '.config', 'Claude', 'claude_desktop_config.json')
+  }
   return path.join(homeDir, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
 }
 
