@@ -123,3 +123,42 @@ test('a day with no stored signals resolves to null (never invented)', () => {
   assert.equal(resolveDayEnrichment(db, DATE), null)
   db.close()
 })
+
+// notes connector (bridge read-side): a stored 'notes' signal resolves into a
+// sanitized meetingNotes block — first names only, no emails, action items kept.
+import type { MeetingNotesSignal } from '../src/shared/types.ts'
+
+test('notes: a stored notes signal resolves into sanitized meetingNotes', () => {
+  const db = makeDb()
+  const notes: MeetingNotesSignal = {
+    app: 'Granola',
+    notes: [
+      {
+        title: 'Andersen Weekly AI Training',
+        participants: ['Norman', 'catherine@alueducation.com', 'Husna Doe'],
+        actionItems: ['agreed to revise the onboarding timeline', 'follow up on the model comparison in src/eval/run.ts'],
+      },
+    ],
+  }
+  putExternalSignal(db, DATE, 'notes', notes)
+
+  const enrichment = resolveDayEnrichment(db, DATE, { focusEnabled: () => false, notesEnabled: true })
+  const mn = enrichment!.meetingNotes!
+  assert.equal(mn.app, 'Granola')
+  assert.equal(mn.items[0].title, 'Andersen Weekly AI Training')
+  // First names only, email refused, surname dropped.
+  assert.deepEqual(mn.items[0].participants, ['Norman', 'Husna'])
+  // Action items kept, but the path stripped from the second one.
+  const joined = mn.items[0].actionItems.join(' | ')
+  assert.ok(joined.includes('revise the onboarding timeline'))
+  assert.ok(!/src\/eval/.test(joined), `no path leaks in action items: ${joined}`)
+  db.close()
+})
+
+test('notes: the off-switch suppresses a stored notes signal', () => {
+  const db = makeDb()
+  putExternalSignal(db, DATE, 'notes', { app: 'Granola', notes: [{ title: 'Standup', participants: [], actionItems: ['ship it'] }] } as MeetingNotesSignal)
+  const off = resolveDayEnrichment(db, DATE, { focusEnabled: () => false, notesEnabled: false })
+  assert.equal(off, null, 'disabled notes source never surfaces')
+  db.close()
+})

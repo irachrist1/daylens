@@ -47,6 +47,11 @@ function enrichmentFingerprint(enrichment: DayEnrichment | null | undefined): un
       items: enrichment.meetings.items.map((i) => [i.title?.toLowerCase() ?? '', i.scheduled]),
     },
     focus: enrichment.focusSessions && [enrichment.focusSessions.tool, enrichment.focusSessions.sessions, enrichment.focusSessions.focused],
+    // notes connector: fingerprint the meeting notes so a changed note reflows the wrap.
+    meetingNotes: enrichment.meetingNotes && {
+      app: enrichment.meetingNotes.app,
+      items: enrichment.meetingNotes.items.map((i) => [i.title.toLowerCase(), i.participants.map((p) => p.toLowerCase()), i.actionItems.map((a) => a.toLowerCase())]),
+    },
   }
 }
 
@@ -148,6 +153,9 @@ export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment 
     ...(enrichment?.shipped ? { shipped: enrichment.shipped } : {}),
     ...(enrichment?.meetings ? { meetings: enrichment.meetings } : {}),
     ...(enrichment?.focusSessions ? { focusSessions: enrichment.focusSessions } : {}),
+    // notes connector: what actually happened IN meetings (title + first-name
+    // participants + the user's recorded action items), already sanitized.
+    ...(enrichment?.meetingNotes ? { meetingNotes: enrichment.meetingNotes } : {}),
   }
 }
 
@@ -198,6 +206,9 @@ function enrichmentDirectives(enrichment: DayEnrichment | null | undefined): str
   }
   if (enrichment.focusSessions) {
     out.push('"focusSessions" records focus-timer runs. You may name the tool, how many sessions there were, and the total focused time copied exactly. Describe it plainly as time set aside to work; never turn it into a score, a percentage, or a grade.')
+  }
+  if (enrichment.meetingNotes) {
+    out.push('"meetingNotes" comes from the notes taken IN the user\'s meetings. Each item has a title, the first names of who was there (meetingNotes.items[].participants), and the action items or decisions the user recorded (meetingNotes.items[].actionItems). Use them to say what actually happened in a meeting and what came out of it, in plain words, for example "in the Andersen AI training you agreed to revise the timeline." Ground every claim in the recorded action items; never invent an outcome, a decision, or a follow-up that is not written there, and never paste the notes verbatim or quote a transcript. You may use a participant\'s first name naturally when it fits; never write an email address or a full name. These carry no clock times, so write none for them.')
   }
   return out
 }

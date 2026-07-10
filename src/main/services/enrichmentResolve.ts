@@ -14,6 +14,7 @@ import type {
   DayEnrichment,
   FocusAppSignal,
   GitActivitySignal,
+  MeetingNotesSignal, // notes connector
 } from '@shared/types'
 import { formatHm } from '../../renderer/lib/dayWrapScenes'
 import { looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
@@ -162,20 +163,81 @@ function focusEnabledFromSettings(): (app: string) => boolean {
   return (app: string) => enrichment[`focus:${app}`] === true
 }
 
+// notes connector: sanitize + humanize stored meeting notes into the writer's
+// `meetingNotes` block. Titles and action items run through the SAME path/branch
+// + clock-time strippers as calendar titles (sanitizeMeetingTitle); participants
+// are hard-capped to a first name with any email refused.
+const MAX_NOTES = 5
+const MAX_NOTE_PARTICIPANTS = 8
+const MAX_NOTE_ACTION_ITEMS = 6
+
+/** First name only, never an email. Defense in depth over the connector. */
+function sanitizeFirstName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed || /@|https?:/i.test(trimmed)) return null
+  const token = trimmed.split(/[\s,]+/).filter(Boolean)[0]
+  if (!token || /@/.test(token)) return null
+  return token.length > 40 ? token.slice(0, 40) : token
+}
+
+/** An action-item line for the prompt: strip paths/branches and any embedded
+ *  clock time (same rules as a meeting title), cap length. Null when empty. */
+function sanitizeActionItem(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const stripped = stripPathsAndBranches(raw).replace(CLOCK_IN_TEXT, ' ').replace(/\s+/g, ' ').trim()
+  if (stripped.length < 3) return null
+  return stripped.length > MAX_TITLE ? `${stripped.slice(0, MAX_TITLE - 1)}…` : stripped
+}
+
+/** Turn stored meeting notes into the writer's `meetingNotes` block, or null. */
+function resolveMeetingNotes(notes: MeetingNotesSignal | null): DayEnrichment['meetingNotes'] {
+  if (!notes || typeof notes.app !== 'string' || !Array.isArray(notes.notes)) return null
+  const items: NonNullable<DayEnrichment['meetingNotes']>['items'] = []
+  for (const note of notes.notes) {
+    if (!note || typeof note !== 'object') continue
+    const title = sanitizeMeetingTitle(note.title)
+    if (!title) continue // no groundable title: nothing honest to narrate
+    const participants = (Array.isArray(note.participants) ? note.participants : [])
+      .map(sanitizeFirstName)
+      .filter((n): n is string => n !== null)
+      .slice(0, MAX_NOTE_PARTICIPANTS)
+    const actionItems = (Array.isArray(note.actionItems) ? note.actionItems : [])
+      .map(sanitizeActionItem)
+      .filter((a): a is string => a !== null)
+      .slice(0, MAX_NOTE_ACTION_ITEMS)
+    items.push({ title, participants, actionItems })
+    if (items.length >= MAX_NOTES) break
+  }
+  if (items.length === 0) return null
+  return { app: notes.app, items }
+}
+
+/** The notes off-switch from Settings (default ON): a since-disabled source's
+ *  stale row never leaks, mirroring how focus toggles gate resolution. */
+function notesEnabledFromSettings(): boolean {
+  try { return getSettings().enrichmentSources?.['notes'] !== false } catch { return true }
+}
+
 /** The day's resolved enrichment for the wrap writer, or null when no connector
  *  had anything. Reads stored signals only — never collects, never throws. */
 export function resolveDayEnrichment(
   db: Database.Database,
   date: string,
-  options: { focusEnabled?: (app: string) => boolean } = {},
+  options: { focusEnabled?: (app: string) => boolean; notesEnabled?: boolean } = {},
 ): DayEnrichment | null {
   try {
     const focusEnabled = options.focusEnabled ?? focusEnabledFromSettings()
+    const notesEnabled = options.notesEnabled ?? notesEnabledFromSettings()
     const shipped = resolveShipped(getExternalSignal<GitActivitySignal>(db, date, 'git')?.payload ?? null)
     const meetings = resolveMeetings(getExternalSignal<CalendarSignal>(db, date, 'calendar')?.payload ?? null)
     const focusSessions = resolveFocus(getExternalSignal<FocusAppSignal[]>(db, date, 'focus_app')?.payload ?? null, focusEnabled)
-    if (!shipped && !meetings && !focusSessions) return null
-    return { shipped, meetings, focusSessions }
+    // notes connector: resolved only when the off-switch is on.
+    const meetingNotes = notesEnabled
+      ? resolveMeetingNotes(getExternalSignal<MeetingNotesSignal>(db, date, 'notes')?.payload ?? null)
+      : null
+    if (!shipped && !meetings && !focusSessions && !meetingNotes) return null
+    return { shipped, meetings, focusSessions, meetingNotes }
   } catch {
     // A malformed stored row must never break wrap generation.
     return null

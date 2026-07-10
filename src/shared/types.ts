@@ -1204,7 +1204,8 @@ export interface DaySnapshot {
 // independent: unavailable or unpermissioned sources simply produce no row.
 // Stored in external_signals keyed by date+source.
 
-export type ExternalSignalSource = 'git' | 'calendar' | 'focus_app'
+// notes connector: 'notes' is the meeting-notes source (Granola / Notion sync).
+export type ExternalSignalSource = 'git' | 'calendar' | 'focus_app' | 'notes'
 
 export interface GitRepoActivity {
   /** Repo folder name — never a path. */
@@ -1272,6 +1273,28 @@ export type EventType =
   | 'deep_work'
   | 'generic'
 
+// notes connector: what actually happened IN one meeting, read from a
+// meeting-notes source (Granola / a Notion sync). Metadata-level only — the
+// user's recorded action items / decisions, NEVER the full verbatim transcript.
+export interface MeetingNoteSignal {
+  /** Meeting title. */
+  title: string
+  /** Participant FIRST NAMES only — never emails, never surnames. */
+  participants: string[]
+  /** The user's recorded action items / decisions. Short note lines, capped;
+   *  never the transcript. */
+  actionItems: string[]
+  /** Scheduled start clock ("2pm") when the source recorded one. Optional. */
+  scheduledClock?: string | null
+}
+
+// notes connector: the day's meeting notes from one meeting-notes source.
+export interface MeetingNotesSignal {
+  /** The source the notes came from ("Granola", "Notion"). */
+  app: string
+  notes: MeetingNoteSignal[]
+}
+
 /** The day's external signals, RESOLVED for the wrap writer (Stage 0 Gap 1):
  *  sanitized, humanized, pre-formatted, and stripped of anything the model must
  *  never echo (raw paths, branches, clock times it can't ground). Each block is
@@ -1304,6 +1327,14 @@ export interface DayEnrichment {
     sessions: number
     /** Pre-formatted total focused time. */
     focused: string
+  } | null
+  /** notes connector: what actually happened IN meetings, from a meeting-notes
+   *  source (Granola / Notion) — title, first-name participants, and the user's
+   *  recorded action items / decisions. Sanitized; metadata-level, never a
+   *  transcript. Null when no notes source had anything. */
+  meetingNotes: {
+    app: string
+    items: Array<{ title: string; participants: string[]; actionItems: string[] }>
   } | null
 }
 
