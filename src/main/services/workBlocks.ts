@@ -2,10 +2,7 @@ import type Database from 'better-sqlite3'
 import crypto from 'node:crypto'
 import {
   getActivityStateEventsForRange,
-  getAppCharacter,
-  getAppSummariesForRange,
   getBlockLabelOverride,
-  getBrowserActivityBreakdown,
   getFocusSessionsForDateRange,
   getSessionsForRange,
   getReconciledWebsiteVisitsForRange,
@@ -22,7 +19,6 @@ import {
 import type {
   AppDetailPayload,
   AppCategory,
-  AppProfile,
   AppSession,
   ArtifactRef,
   BlockBoundary,
@@ -85,7 +81,7 @@ import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
  * e.g. "/System/Volumes/.../Safari.app/Contents/MacOS/Safari" → "Safari"
  * Returns null if the result is still not display-worthy.
  */
-function sanitizeBlockLabel(label: string | null | undefined): string | null {
+export function sanitizeBlockLabel(label: string | null | undefined): string | null {
   if (!label) return null
   // Path-like strings: contain slashes and likely contain an app path segment
   if ((label.includes('/') || label.includes('\\')) && label.length > 40) {
@@ -278,7 +274,7 @@ interface PersistedWorkflow {
   artifactKeys: string[]
 }
 
-interface AppDetailBlockSlice {
+export interface AppDetailBlockSlice {
   id: string
   startTime: number
   endTime: number
@@ -321,7 +317,7 @@ const GENERIC_LABELS = new Set([
 const isBrowserSessionCache = new Map<string, boolean>()
 const IS_BROWSER_CACHE_LIMIT = 5000
 
-function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
+export function isBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName' | 'category'>): boolean {
   const cacheKey = `${session.category} ${session.bundleId} ${session.appName}`
   const cached = isBrowserSessionCache.get(cacheKey)
   if (cached !== undefined) return cached
@@ -346,7 +342,7 @@ function computeIsBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName
   })
 }
 
-function prettyCategory(category: AppCategory): string {
+export function prettyCategory(category: AppCategory): string {
   if (category === 'aiTools') return 'AI Tools'
   return category
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -362,7 +358,7 @@ function formatDuration(seconds: number): string {
   return `${seconds}s`
 }
 
-function localDateKeyForTimestamp(timestamp: number): string {
+export function localDateKeyForTimestamp(timestamp: number): string {
   const date = new Date(timestamp)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
@@ -371,7 +367,7 @@ function appCategoryIsFocused(category: AppCategory): boolean {
   return FOCUSED_CATEGORIES.includes(category)
 }
 
-function dominantCategoryFromDistribution(distribution: Partial<Record<AppCategory, number>>): AppCategory {
+export function dominantCategoryFromDistribution(distribution: Partial<Record<AppCategory, number>>): AppCategory {
   const entries = Object.entries(distribution) as Array<[AppCategory, number]>
   return entries
     .sort((left, right) => {
@@ -633,7 +629,7 @@ function averageDwellTime(sessions: AppSession[]): number {
   return sessions.reduce((sum, session) => sum + session.durationSeconds, 0) / sessions.length
 }
 
-function sessionEndMs(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
+export function sessionEndMs(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
   return session.endTime ?? (session.startTime + session.durationSeconds * 1000)
 }
 
@@ -1231,7 +1227,7 @@ function shortDomainLabel(domain: string): string {
 // block participates in a rollup only when `pattern_occurrences` records a
 // match for one of its block IDs. Blocks without a match fall through as
 // single-row rollups so the Apps view can still render every appearance.
-function memoryRollupsForBlocks(
+export function memoryRollupsForBlocks(
   db: Database.Database,
   appearances: Array<{ blockId: string; startTime: number; endTime: number; label: string }>,
 ): AppDetailPayload['blockMemoryRollups'] {
@@ -1364,7 +1360,7 @@ function workflowRefsByBlockId(
   return grouped
 }
 
-function loadPersistedAppDetailBlocksForDates(
+export function loadPersistedAppDetailBlocksForDates(
   db: Database.Database,
   dates: string[],
 ): Map<string, AppDetailBlockSlice[]> {
@@ -1443,7 +1439,7 @@ function confidenceForCandidate(candidate: CandidateBlock, coherence: number): B
   return 'medium'
 }
 
-function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
+export function topAppsFromSessions(sessions: AppSession[]): WorkContextAppSummary[] {
   const grouped = new Map<string, WorkContextAppSummary>()
 
   for (const session of sessions) {
@@ -1480,7 +1476,7 @@ function sha1(value: string): string {
   return crypto.createHash('sha1').update(value).digest('hex')
 }
 
-function artifactIdFor(canonicalKey: string): string {
+export function artifactIdFor(canonicalKey: string): string {
   return `art_${sha1(canonicalKey).slice(0, 16)}`
 }
 
@@ -1986,7 +1982,7 @@ function looksLikeShellPromptTitle(title: string): boolean {
   return false
 }
 
-function usefulWindowTitle(session: AppSession): string | null {
+export function usefulWindowTitle(session: AppSession): string | null {
   if (!titleLooksUseful(session.windowTitle)) return null
   const title = session.windowTitle.trim()
   const lowerTitle = title.toLowerCase()
@@ -1999,7 +1995,7 @@ function usefulWindowTitle(session: AppSession): string | null {
   return title
 }
 
-function compactWindowTitle(title: string): string {
+export function compactWindowTitle(title: string): string {
   return title
     .split(/\s[—-]\s/)
     .map((part) => part.trim())
@@ -5316,7 +5312,7 @@ function withFocusApps(sessions: AppSession[]): AppSession[] {
   })
 }
 
-function mergeLiveSession(sessions: AppSession[], liveSession?: LiveSession | null): AppSession[] {
+export function mergeLiveSession(sessions: AppSession[], liveSession?: LiveSession | null): AppSession[] {
   if (!liveSession) return sessions
 
   const liveEnd = Date.now()
@@ -5832,7 +5828,7 @@ export function getRecapRange(
   })
 }
 
-function localDateStringForOffset(offsetDays: number): string {
+export function localDateStringForOffset(offsetDays: number): string {
   const target = new Date()
   target.setDate(target.getDate() + offsetDays)
   const year = target.getFullYear()
@@ -5851,98 +5847,6 @@ function lookupPersistedTimelineBlockDate(db: Database.Database, blockId: string
   `).get(blockId) as { date: string } | undefined
 
   return row?.date ?? null
-}
-
-const APP_DETAIL_FALLBACK_MERGE_GAP_MS = 5 * 60_000
-
-function dominantCategoryForSessions(sessions: AppSession[]): AppCategory {
-  const distribution: Partial<Record<AppCategory, number>> = {}
-  for (const session of sessions) {
-    distribution[session.category] = (distribution[session.category] ?? 0) + session.durationSeconds
-  }
-  return dominantCategoryFromDistribution(distribution)
-}
-
-function labelForSessionCluster(sessions: AppSession[]): string {
-  if (sessions.length === 0) return 'Work block'
-
-  const lead = sessions.reduce((best, current) => (
-    current.durationSeconds > best.durationSeconds ? current : best
-  ))
-  const titled = usefulWindowTitle(lead)
-  if (titled) return compactWindowTitle(titled)
-
-  const identity = resolveCanonicalApp(lead.bundleId, lead.appName)
-  return sanitizeBlockLabel(identity.displayName)
-    ?? sanitizeBlockLabel(lead.appName)
-    ?? prettyCategory(lead.category)
-}
-
-function normalizedAppActivityLabel(value: string | null | undefined): string {
-  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
-
-function labelMatchesSelectedApp(label: string, displayName: string): boolean {
-  return normalizedAppActivityLabel(label) === normalizedAppActivityLabel(displayName)
-}
-
-function buildSessionDerivedAppDetailBlocksByDate(
-  sessions: AppSession[],
-  canonicalAppId: string,
-): Map<string, AppDetailBlockSlice[]> {
-  const sessionsByDate = new Map<string, AppSession[]>()
-
-  for (const session of sessions) {
-    const dateKey = localDateKeyForTimestamp(session.startTime)
-    const current = sessionsByDate.get(dateKey) ?? []
-    current.push(session)
-    sessionsByDate.set(dateKey, current)
-  }
-
-  const blocksByDate = new Map<string, AppDetailBlockSlice[]>()
-  for (const [dateKey, appSessions] of sessionsByDate.entries()) {
-    const ordered = [...appSessions].sort((left, right) => left.startTime - right.startTime)
-    const clusters: AppSession[][] = []
-
-    for (const session of ordered) {
-      const currentCluster = clusters[clusters.length - 1]
-      if (!currentCluster || currentCluster.length === 0) {
-        clusters.push([session])
-        continue
-      }
-
-      const previous = currentCluster[currentCluster.length - 1]
-      const gapMs = session.startTime - sessionEndMs(previous)
-      if (gapMs <= APP_DETAIL_FALLBACK_MERGE_GAP_MS) {
-        currentCluster.push(session)
-      } else {
-        clusters.push([session])
-      }
-    }
-
-    const slices = clusters.map((cluster) => {
-      const startTime = cluster[0].startTime
-      const endTime = cluster.reduce((latest, session) => Math.max(latest, sessionEndMs(session)), startTime)
-      const signature = `${canonicalAppId}:${startTime}:${endTime}:${cluster.map((session) => session.id).join(',')}`
-      return {
-        id: `appd_${sha1(signature).slice(0, 16)}`,
-        startTime,
-        endTime,
-        dominantCategory: dominantCategoryForSessions(cluster),
-        label: {
-          current: labelForSessionCluster(cluster),
-        },
-        topApps: topAppsFromSessions(cluster),
-        topArtifacts: [],
-        pageRefs: [],
-        workflowRefs: [],
-      }
-    })
-
-    blocksByDate.set(dateKey, slices)
-  }
-
-  return blocksByDate
 }
 
 export function getBlockDetailPayload(
@@ -6072,289 +5976,6 @@ export function getArtifactDetails(
         ? { kind: 'local_path', value: row.path }
         : { kind: 'unsupported', value: null },
     metadata,
-  }
-}
-
-export function getAppDetailPayload(
-  db: Database.Database,
-  canonicalAppId: string,
-  daysOrDate: number | string = 7,
-  liveSession?: LiveSession | null,
-): AppDetailPayload {
-  const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
-  const today = isDate ? (daysOrDate as string) : localDateStringForOffset(0)
-  const rawDays = isDate ? 1 : Number(daysOrDate)
-  const days = Number.isFinite(rawDays) ? Math.max(1, Math.floor(rawDays)) : 7
-
-  const [todayFrom, todayTo] = localDayBounds(today)
-  const anchor = new Date(todayFrom)
-  const fromMs = days >= 36500
-    ? 0
-    : new Date(
-      anchor.getFullYear(),
-      anchor.getMonth(),
-      anchor.getDate() - Math.max(0, days - 1),
-    ).getTime()
-  const rangeKey = isDate ? `1d:${today}` : `${days}d:${today}`
-  const effectiveLiveSession = !isDate || today === localDateStringForOffset(0)
-    ? liveSession
-    : null
-
-  const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), effectiveLiveSession)
-  const sessions = allSessions.filter((session) => {
-    const identity = resolveCanonicalApp(session.bundleId, session.appName)
-    return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
-  })
-
-  const relevantDates = Array.from(new Set(sessions.map((session) => localDateKeyForTimestamp(session.startTime))))
-  const historicalDates = relevantDates.filter((date) => !(date === today && effectiveLiveSession))
-  const persistedBlocksByDate = loadPersistedAppDetailBlocksForDates(db, historicalDates)
-  const blocksByDate = new Map<string, AppDetailBlockSlice[]>(persistedBlocksByDate)
-  const sessionDerivedBlocksByDate = buildSessionDerivedAppDetailBlocksByDate(sessions, canonicalAppId)
-
-  for (const date of relevantDates) {
-    const fallbackBlocks = sessionDerivedBlocksByDate.get(date) ?? []
-    const persistedBlocks = blocksByDate.get(date) ?? []
-
-    // Keep app detail responsive even when timeline blocks have not yet been
-    // persisted for this date by deriving coarse slices from app sessions.
-    if (persistedBlocks.length === 0 && fallbackBlocks.length > 0) {
-      blocksByDate.set(date, fallbackBlocks)
-      continue
-    }
-
-    // For today with a live session, prefer the session-derived slices so the
-    // currently running block is reflected immediately in the app panel.
-    if (date === today && effectiveLiveSession && fallbackBlocks.length > 0) {
-      blocksByDate.set(date, fallbackBlocks)
-    }
-  }
-
-  const relatedBlocks = Array.from(blocksByDate.values()).flat()
-    .filter((block) => block.topApps.some((app) => {
-      const identity = resolveCanonicalApp(app.bundleId, app.appName)
-      return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
-    }))
-
-  const artifactTotals = new Map<string, ArtifactRef>()
-  for (const block of relatedBlocks) {
-    const blockContainsOnlySelectedApp = block.topApps.every((app) => {
-      const identity = resolveCanonicalApp(app.bundleId, app.appName)
-      return (identity.canonicalAppId ?? app.bundleId) === canonicalAppId
-    })
-
-    for (const artifact of block.topArtifacts) {
-      let belongsToSelectedApp: boolean
-      if (artifact.canonicalAppId) {
-        belongsToSelectedApp = artifact.canonicalAppId === canonicalAppId
-      } else if (artifact.ownerBundleId) {
-        const ownerIdentity = resolveCanonicalApp(artifact.ownerBundleId, artifact.ownerAppName ?? artifact.ownerBundleId)
-        belongsToSelectedApp = (ownerIdentity.canonicalAppId ?? artifact.ownerBundleId) === canonicalAppId
-      } else if (artifact.artifactType === 'page') {
-        // Pages always belong to the browser that tracked them. For legacy data where
-        // canonicalAppId was not persisted, resolve ownership from browserBundleId.
-        const pageArtifact = artifact as PageRef
-        const browserId = pageArtifact.canonicalBrowserId
-          ?? (pageArtifact.browserBundleId
-            ? resolveCanonicalApp(pageArtifact.browserBundleId, pageArtifact.browserBundleId).canonicalAppId
-            : null)
-        belongsToSelectedApp = browserId !== null ? browserId === canonicalAppId : false
-      } else {
-        belongsToSelectedApp = blockContainsOnlySelectedApp
-      }
-
-      if (!belongsToSelectedApp) continue
-
-      const existing = artifactTotals.get(artifact.id)
-      if (existing) {
-        existing.totalSeconds += artifact.totalSeconds
-      } else {
-        artifactTotals.set(artifact.id, { ...artifact })
-      }
-    }
-  }
-
-  const topArtifacts = Array.from(artifactTotals.values())
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
-    .slice(0, 8)
-
-  const pairedAppsMap = new Map<string, { canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>()
-  for (const block of relatedBlocks) {
-    for (const app of block.topApps) {
-      const identity = resolveCanonicalApp(app.bundleId, app.appName)
-      const pairedCanonicalId = identity.canonicalAppId ?? app.bundleId
-      if (pairedCanonicalId === canonicalAppId) continue
-      const existing = pairedAppsMap.get(pairedCanonicalId)
-      if (existing) {
-        existing.totalSeconds += app.totalSeconds
-        if (!existing.bundleId && app.bundleId) existing.bundleId = app.bundleId
-      } else {
-        pairedAppsMap.set(pairedCanonicalId, {
-          canonicalAppId: pairedCanonicalId,
-          bundleId: app.bundleId ?? null,
-          displayName: identity.displayName,
-          totalSeconds: app.totalSeconds,
-        })
-      }
-    }
-  }
-
-  const pairedApps = Array.from(pairedAppsMap.values())
-    .sort((left, right) => right.totalSeconds - left.totalSeconds)
-    .slice(0, 8)
-
-  const timeOfDayDistribution = Array.from({ length: 24 }, (_, hour) => ({
-    hour,
-    totalSeconds: 0,
-  }))
-  for (const session of sessions) {
-    const hour = new Date(session.startTime).getHours()
-    timeOfDayDistribution[hour].totalSeconds += session.durationSeconds
-  }
-
-  const sampleSession = sessions[0]
-  const appCharacter = sampleSession
-    ? getAppCharacter(db, sampleSession.bundleId, days)
-    : null
-  const displayName = sampleSession
-    ? resolveCanonicalApp(sampleSession.bundleId, sampleSession.appName).displayName
-    : resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
-  const profile: AppProfile = {
-    canonicalAppId,
-    displayName,
-    roleSummary: appCharacter?.label ?? 'Activity profile',
-    topArtifacts,
-    pairedApps,
-    topBlockIds: relatedBlocks.slice(0, 8).map((block) => block.id),
-    computedAt: Date.now(),
-  }
-  const rawAppearances = Array.from(sessionDerivedBlocksByDate.values())
-    .flat()
-    .sort((left, right) => right.startTime - left.startTime)
-    .map((block) => {
-      const rawLabel = block.label.current
-      const cleanLabel = sanitizeBlockLabel(rawLabel) ?? prettyCategory(block.dominantCategory)
-      return {
-        blockId: block.id,
-        startTime: block.startTime,
-        endTime: block.endTime,
-        label: cleanLabel,
-        dominantCategory: block.dominantCategory,
-      }
-    })
-    .filter((block) => !labelMatchesSelectedApp(block.label, displayName))
-
-  // Collapse identical labels so "What you did there" doesn't repeat the same
-  // generic line for every session (e.g. eight rows all reading "Running
-  // Daylens Locally"). Same-label sessions merge into one entry spanning their
-  // combined time range. The memory-rollup path handles pattern-based grouping;
-  // this is the fallback for when no learned pattern matched.
-  const mergedByLabel = new Map<string, typeof rawAppearances[number]>()
-  for (const appearance of rawAppearances) {
-    const key = appearance.label.toLowerCase()
-    const existing = mergedByLabel.get(key)
-    if (existing) {
-      existing.startTime = Math.min(existing.startTime, appearance.startTime)
-      existing.endTime = Math.max(existing.endTime, appearance.endTime)
-    } else {
-      mergedByLabel.set(key, { ...appearance })
-    }
-  }
-  const blockAppearances = Array.from(mergedByLabel.values())
-    .sort((left, right) => right.startTime - left.startTime)
-    .slice(0, 12)
-
-  const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
-
-  // Totals and session counts must match the Apps rail so the same app on the
-  // same day reads identically in every surface. Both derive from
-  // getAppSummariesForRange (no MIN_DISPLAY_SEC filter, canonicalApp keyed).
-  // The `sessions` list above keeps the ≥15s filter for legibility — that is
-  // a display concern, not a totals concern. See BUGS.md B4.
-  const summariesForRange = getAppSummariesForRange(db, fromMs, todayTo)
-  const canonicalSummary = summariesForRange.find((row) => row.canonicalAppId === canonicalAppId)
-    ?? summariesForRange.find((row) => row.bundleId === canonicalAppId)
-    ?? null
-  // The rail mixes in the ongoing live session via liveAwareSummaries in
-  // src/renderer/views/Apps.tsx. Mirror the same math here so a currently-
-  // running app's total/sessionCount also agrees.
-  let liveExtraSeconds = 0
-  let liveExtraSessions = 0
-  if (effectiveLiveSession) {
-    const liveCanonicalId = effectiveLiveSession.canonicalAppId ?? effectiveLiveSession.bundleId
-    if (liveCanonicalId === canonicalAppId) {
-      const liveStart = Math.max(effectiveLiveSession.startTime, fromMs)
-      liveExtraSeconds = Math.max(0, Math.round((Date.now() - liveStart) / 1000))
-      liveExtraSessions = canonicalSummary ? 0 : 1
-    }
-  }
-  const totalSeconds = (canonicalSummary?.totalSeconds ?? sessions.reduce((sum, s) => sum + s.durationSeconds, 0))
-    + liveExtraSeconds
-  const sessionCount = (canonicalSummary?.sessionCount ?? sessions.length) + liveExtraSessions
-
-  // Browser apps get the reconciled where-the-time-went tree; native apps get
-  // nothing so the renderer hides the section. Built AFTER totalSeconds so the
-  // "No page recorded" remainder is derived from the exact number the header
-  // shows — the sum the user checks on screen closes by construction.
-  let browserActivity: AppDetailPayload['browserActivity']
-  if (sessions.some((session) => isBrowserSession(session))) {
-    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId)
-    browserActivity = {
-      totalSeconds,
-      attributedSeconds: breakdown.attributedSeconds,
-      unattributedSeconds: Math.max(0, totalSeconds - breakdown.attributedSeconds),
-      domains: breakdown.domains.map((domain) => ({
-        domain: domain.domain,
-        totalSeconds: domain.totalSeconds,
-        visitCount: domain.visitCount,
-        pages: domain.pages.map((page) => {
-          const normalizedTitle = normalizeWebsiteTitleForDisplay(page.domain, page.title)
-          const displayTitle = normalizedTitle ?? websiteDisplayLabel(page.domain)
-          const canonicalKey = page.normalizedUrl ?? page.pageKey ?? page.url ?? `domain:${page.domain}`
-          return {
-            id: artifactIdFor(`page:${canonicalKey}`),
-            artifactType: 'page' as const,
-            canonicalKey: `page:${canonicalKey}`,
-            displayTitle,
-            subtitle: page.domain,
-            totalSeconds: page.totalSeconds,
-            confidence: 0.9,
-            canonicalAppId,
-            url: page.url ?? undefined,
-            host: page.domain,
-            openTarget: page.url
-              ? { kind: 'external_url' as const, value: page.url }
-              : { kind: 'unsupported' as const, value: null },
-            metadata: { normalizedUrl: page.normalizedUrl },
-            domain: page.domain,
-            normalizedUrl: page.normalizedUrl,
-            pageKey: page.pageKey,
-            pageTitle: normalizedTitle,
-            visitCount: page.visitCount,
-          }
-        }),
-      })),
-    }
-  }
-
-  return {
-    canonicalAppId,
-    displayName,
-    appCharacter,
-    profile,
-    totalSeconds,
-    sessionCount,
-    topArtifacts,
-    browserActivity,
-    pairedApps,
-    blockAppearances,
-    blockMemoryRollups,
-    workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
-      .filter((workflow, index, workflows) => workflows.findIndex((entry) => entry.id === workflow.id) === index)
-      .slice(0, 10),
-    timeOfDayDistribution,
-    computedAt: profile.computedAt,
-    rangeKey,
   }
 }
 

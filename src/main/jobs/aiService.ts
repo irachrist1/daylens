@@ -40,7 +40,8 @@ import {
 } from '../lib/followUpSuggestions'
 import { transformInstruction, transformLabel } from '@shared/answerTransforms'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
-import { kindForDomain } from '@shared/workKind'
+import { partitionDomainsWorkFirst } from '@shared/workKind'
+import { appNarrativeScopeKey, THIN_APP_NARRATIVE_SUMMARY } from '@shared/appNarrativeContract'
 import { userProfileDirective } from '@shared/userProfile'
 import { parseDaySummaryResultText } from '../lib/daySummarySuggestions'
 import {
@@ -132,10 +133,10 @@ import { phraseAnswer } from '../ai/phrase'
 import { runResolverQueries } from '../ai/resolvers'
 import {
   fallbackNarrativeForBlock,
-  getAppDetailPayload,
   getTimelineDayPayload,
   userVisibleLabelForBlock,
 } from '../services/workBlocks'
+import { getAppDetailPayload } from '../services/appDetail'
 import {
   buildWeeklyBriefEvidencePack,
   buildWeeklyBriefScaffold,
@@ -2852,16 +2853,6 @@ function dedupeByTitle<T>(rows: T[], title: (row: T) => string): T[] {
 // Stable work-first ordering: rows whose domain is leisure (streaming/social)
 // sink below the rest, preserving each group's incoming duration order. Work
 // surfaces before leisure (spec invariant 8) without dropping anything.
-function workFirstByDomain<T>(rows: T[], domain: (row: T) => string | null | undefined): T[] {
-  const work: T[] = []
-  const leisure: T[] = []
-  for (const row of rows) {
-    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
-    else work.push(row)
-  }
-  return [...work, ...leisure]
-}
-
 function buildAppNarrativeBundle(
   canonicalAppId: string,
   daysOrDate: number | string = 7,
@@ -2882,14 +2873,16 @@ function buildAppNarrativeBundle(
   // read from the same reconciled browserActivity tree the view renders, so
   // the recap can never cite a number the screen doesn't show.
   const activityDomains = detail.browserActivity?.domains ?? []
-  const orderedDomains = workFirstByDomain(activityDomains, (d) => d.domain)
-  const orderedPages = workFirstByDomain(
+  const domainGroups = partitionDomainsWorkFirst(activityDomains, (d) => d.domain)
+  const orderedDomains = [...domainGroups.work, ...domainGroups.leisure]
+  const pageGroups = partitionDomainsWorkFirst(
     dedupeByTitle(
       activityDomains.flatMap((entry) => entry.pages).sort((a, b) => b.totalSeconds - a.totalSeconds),
       (p) => p.displayTitle,
     ),
     (p) => p.domain,
   )
+  const orderedPages = [...pageGroups.work, ...pageGroups.leisure]
 
   // B3: collapse the 24-bucket per-hour distribution into the top whole-hour
   // ranges. The model previously confabulated sub-hour windows like
@@ -3208,7 +3201,7 @@ async function generateAppNarrative(
   }
 
   const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
-  const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
+  const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
   const isDate = typeof daysOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daysOrDate)
   const days = isDate ? 1 : Math.max(1, Number(daysOrDate) || 7)
   const [memoryFromMs, memoryToMs] = isDate
@@ -3262,7 +3255,7 @@ async function generateAppNarrative(
     // from the structured evidence (block labels, artifacts, pages, domains).
     // Evidence-thin apps must say so plainly — a filler sentence like "used
     // for development work" is not acceptable.
-    'The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page titles, or domain names. If the evidence is too thin to cite two entities, say "Daylens has only thin app-specific signal for this app." and stop — do not pad with generic prose.',
+    `The "summary" field must cite at least two concrete entities from the evidence: block labels, artifact titles, page titles, or domain names. If the evidence is too thin to cite two entities, say "${THIN_APP_NARRATIVE_SUMMARY}" and stop — do not pad with generic prose.`,
     // DEV-89 invariant 10: never repeat an artifact and never name one absent
     // from the evidence. The evidence is already deduped; do not list the same
     // site, page, or artifact twice ("Netflix, Netflix") or invent one.
@@ -4959,7 +4952,7 @@ export async function getAppNarrative(
 ): Promise<AISurfaceSummary | null> {
   if (!force) {
     const detail = getAppDetailPayload(getDb(), canonicalAppId, daysOrDate, getCurrentSession())
-    const scopeKey = `app:${detail.canonicalAppId}:${detail.rangeKey}`
+    const scopeKey = appNarrativeScopeKey(detail.canonicalAppId, detail.rangeKey)
     const existing = getAISurfaceSummary(getDb(), 'app_detail', scopeKey)
     if (existing) return existing
     return getAISurfaceSummary(getDb(), 'app_detail', scopeKey, { stale: true })

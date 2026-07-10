@@ -10,7 +10,8 @@ import type {
   WeeklySummary,
   WorkflowPattern,
 } from '@shared/types'
-import { getArtifactDetails, getAppDetailPayload, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay, buildSegmentsForDay } from '../../services/workBlocks'
+import { getArtifactDetails, getHistoryDayPayload, getTimelineDayPayload, getWorkflowSummaries, buildTimelineBlocksForDay, buildSegmentsForDay } from '../../services/workBlocks'
+import { getAppDetailPayload } from '../../services/appDetail'
 import { getFocusSessionsForDateRange, getWeeklySummary, getWebsiteSummariesForRange } from '../../db/queries'
 import { readDerivedDay, PROJECTION_VERSION, type DerivedDayResult } from '../projections/chunk2'
 import { localDateString } from '../../lib/localDate'

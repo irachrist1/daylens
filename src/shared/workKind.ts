@@ -18,6 +18,19 @@ import { categoryForDomain } from './domainCategories'
 
 export type { WorkKind }
 
+export function partitionDomainsWorkFirst<T>(
+  rows: T[],
+  domain: (row: T) => string | null | undefined,
+): { work: T[]; leisure: T[] } {
+  const work: T[] = []
+  const leisure: T[] = []
+  for (const row of rows) {
+    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
+    else work.push(row)
+  }
+  return { work, leisure }
+}
+
 export interface KindSignal {
   category: AppCategory
   /** Whether the underlying app is a web browser (Safari, Chrome, Arc…). */

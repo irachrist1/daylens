@@ -146,7 +146,7 @@ function parsePath(page: Pick<PageRef, 'normalizedUrl' | 'url'>): string {
 }
 
 function looksLikeBrowserApp(app: WorkContextAppSummary): boolean {
-  return app.isBrowser || /chrome|safari|firefox|edge|arc|dia|browser/i.test(app.appName)
+  return app.isBrowser
 }
 
 function usefulText(value: string | null | undefined): string | null {

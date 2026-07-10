@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { SCHEMA_SQL } from '../src/main/db/schema.ts'
-import { getAppDetailPayload } from '../src/main/services/workBlocks.ts'
+import { getAppDetailPayload } from '../src/main/services/appDetail.ts'
 
 function localDateString(offset = 0): string {
   const d = new Date()

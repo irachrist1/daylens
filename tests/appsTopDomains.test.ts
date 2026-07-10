@@ -9,7 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setupFixture } from './ai-bench/fixtures'
-import { getAppDetailPayload } from '../src/main/services/workBlocks'
+import { getAppDetailPayload } from '../src/main/services/appDetail'
 
 function localDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
