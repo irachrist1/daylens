@@ -467,3 +467,98 @@ test('enrichment: a real meeting count does NOT authorize an invented commit cou
   assert.ok(result)
   assert.equal(result!.lines[askable[0]], null, '"2 commits" must die even though "2 meetings" is real')
 })
+
+// ─── The repair round (verify + at most one repair call) ─────────────────────
+
+import {
+  buildWrappedRepairMessage,
+  mergeWrapRepair,
+  parseWrapResponse,
+  validateWrappedNarrativeObject,
+} from '../src/main/lib/wrappedNarrative.ts'
+
+test('repair: a guard death is recorded with a reason that names the offending value', () => {
+  const facts = workingDayFacts()
+  const slides = planDayWrapSlides(facts)
+  const victim = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)[0]
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  ;(raw.lines as Record<string, string>)[victim] = 'The push started at 7:43am and did not let go until well after.'
+  const { narrative, rejections } = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  assert.ok(narrative, 'the deck survives; only the poisoned slide dies')
+  assert.equal(narrative!.lines[victim], null)
+  const rejection = rejections.find((r) => r.id === victim)
+  assert.ok(rejection, 'the death must be recorded')
+  assert.match(rejection!.reason, /7:43am/, 'the reason names the ungrounded clock token')
+  assert.equal(rejection!.candidate, (raw.lines as Record<string, string>)[victim])
+})
+
+test('repair: a missing question and reflection are rejections the repair round can fix', () => {
+  const facts = workingDayFacts()
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  delete raw.question
+  delete raw.reflection
+  const { narrative, rejections } = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  assert.ok(narrative)
+  assert.equal(narrative!.question, null)
+  assert.ok(rejections.some((r) => r.id === 'question'))
+  assert.ok(rejections.some((r) => r.id === 'reflection'))
+})
+
+test('repair: the repair message carries the ask, the rejected line, and the reason', () => {
+  const facts = workingDayFacts()
+  const slides = planDayWrapSlides(facts)
+  const victim = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)[0]
+  const spec = slides.find((s) => s.id === victim)!
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  ;(raw.lines as Record<string, string>)[victim] = 'The push started at 7:43am and did not let go until well after.'
+  const { rejections } = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  const message = buildWrappedRepairMessage(facts, rejections.filter((r) => r.id === victim))
+  assert.ok(message.includes(`"${victim}"`), 'names the slide id')
+  assert.ok(message.includes(spec.factsNote), 'repeats the slide facts')
+  assert.ok(message.includes('7:43am'), 'quotes the rejected line')
+  assert.ok(message.includes('rejected because'), 'explains the violation')
+  assert.ok(message.includes('Rewrite ONLY'), 'restricts the rewrite to the failed pieces')
+})
+
+test('repair: the merge takes rewrites for rejected ids only, never an accepted line', () => {
+  const facts = workingDayFacts()
+  const slides = planDayWrapSlides(facts)
+  const victim = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)[0]
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  const originalOpening = (raw.lines as Record<string, string>).opening
+  ;(raw.lines as Record<string, string>)[victim] = 'The push started at 7:43am and did not let go until well after.'
+  const { rejections } = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  const repair = JSON.stringify({ lines: {
+    [victim]: 'A steady, honest stretch of the day, told without a clock.',
+    opening: 'A sneaky overwrite of an accepted line.',
+  } })
+  const merged = mergeWrapRepair(raw, repair, rejections)
+  const second = validateWrappedNarrativeObject(merged, facts, 'h', null)
+  assert.ok(second.narrative)
+  assert.equal(second.narrative!.lines[victim], 'A steady, honest stretch of the day, told without a clock.')
+  assert.equal(second.narrative!.lines.opening, originalOpening, 'the accepted opening is final')
+  assert.ok(!second.rejections.some((r) => r.id === victim), 'the repaired slide no longer rejects')
+})
+
+test('repair: a dead opening can be repaired into a live narrative', () => {
+  const facts = workingDayFacts()
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  ;(raw.lines as Record<string, string>).opening = 'Should you dive into it again? A grade of 87% focus.'
+  const first = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  assert.equal(first.narrative, null, 'a dead opening fails the deck')
+  assert.ok(first.rejections.some((r) => r.id === 'opening'))
+  const repair = JSON.stringify({ lines: { opening: 'A steady one, mostly heads-down on the auth work.' } })
+  const merged = mergeWrapRepair(raw, repair, first.rejections)
+  const second = validateWrappedNarrativeObject(merged, facts, 'h', null)
+  assert.ok(second.narrative, 'the repaired opening revives the deck')
+  assert.equal(second.narrative!.lead, 'A steady one, mostly heads-down on the auth work.')
+})
+
+test('repair: an unparseable repair response leaves the original result intact', () => {
+  const facts = workingDayFacts()
+  const raw = JSON.parse(deckResponse(facts)) as Record<string, unknown>
+  const { rejections } = validateWrappedNarrativeObject(raw, facts, 'h', null)
+  const merged = mergeWrapRepair(raw, 'not json at all', rejections)
+  assert.deepEqual(merged, raw)
+  assert.equal(parseWrapResponse('not json at all'), null)
+})

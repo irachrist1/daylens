@@ -19,14 +19,16 @@ import { planPeriodWrapSlides, type WrapSlideSpec } from '../../renderer/lib/wra
 import { seedFromDate } from '../../renderer/lib/dayWrapScenes'
 import {
   DECK_JSON_CONTRACT,
+  buildRepairUserMessage,
   deckPromptSection,
   guardContextPercents,
   guardContextTimes,
   stripCodeFence,
-  validateDeckLines,
-  validateWrapQuestion,
-  validateWrapReflection,
+  validateDeckLinesDetailed,
+  wrapQuestionViolation,
+  wrapReflectionViolation,
   type LineGuardContext,
+  type WrapLineRejection,
 } from './wrapNarrativeShared'
 
 function periodWord(period: WrappedPeriod): string {
@@ -162,14 +164,10 @@ export function compactPeriodFacts(facts: WrappedPeriodFacts) {
   }
 }
 
-export function validatePeriodNarrativeResponse(
-  raw: string,
-  facts: WrappedPeriodFacts,
-  factsHash: string,
-): WrappedPeriodNarrative | null {
+/** Parse the model's raw response into the deck JSON object, or null. */
+export function parsePeriodWrapResponse(raw: string): Record<string, unknown> | null {
   const jsonText = stripCodeFence(raw).trim()
   if (!jsonText) return null
-
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonText)
@@ -177,24 +175,86 @@ export function validatePeriodNarrativeResponse(
     return null
   }
   if (!parsed || typeof parsed !== 'object') return null
-  const obj = parsed as Record<string, unknown>
+  return parsed as Record<string, unknown>
+}
 
+export interface PeriodNarrativeValidation {
+  /** Null only when the OPENING died — the wrap has no lead to show. */
+  narrative: WrappedPeriodNarrative | null
+  /** Every rejected piece with its writer-facing reason (repair-round input). */
+  rejections: WrapLineRejection[]
+}
+
+/** Validate a parsed period deck response, recording every guard death with
+ *  its reason so one repair round can rewrite exactly the failed pieces. */
+export function validatePeriodNarrativeObject(
+  obj: Record<string, unknown>,
+  facts: WrappedPeriodFacts,
+  factsHash: string,
+): PeriodNarrativeValidation {
   const slides = planPeriodWrapSlides(facts)
   const ctx = guardContext(facts, slides)
   const linesRaw = (obj.lines && typeof obj.lines === 'object') ? obj.lines as Record<string, unknown> : null
-  const lines = validateDeckLines(linesRaw, slides, ctx)
+  const { lines, rejections } = validateDeckLinesDetailed(linesRaw, slides, ctx)
+
+  const question = wrapQuestionViolation(obj.question, ctx)
+  if (question.reason) rejections.push({ id: 'question', candidate: typeof obj.question === 'string' ? obj.question : null, reason: question.reason })
+  const reflection = wrapReflectionViolation(obj.reflection, ctx)
+  if (reflection.reason) rejections.push({ id: 'reflection', candidate: typeof obj.reflection === 'string' ? obj.reflection : null, reason: reflection.reason })
 
   const lead = lines.opening
-  if (!lead) return null
+  if (!lead) return { narrative: null, rejections }
 
   return {
-    period: facts.period,
-    lead,
-    lines,
-    question: validateWrapQuestion(obj.question, ctx),
-    reflection: validateWrapReflection(obj.reflection, ctx),
-    source: 'ai',
-    factsHash,
+    narrative: {
+      period: facts.period,
+      lead,
+      lines,
+      question: question.value,
+      reflection: reflection.value,
+      source: 'ai',
+      factsHash,
+    },
+    rejections,
+  }
+}
+
+export function validatePeriodNarrativeResponse(
+  raw: string,
+  facts: WrappedPeriodFacts,
+  factsHash: string,
+): WrappedPeriodNarrative | null {
+  const obj = parsePeriodWrapResponse(raw)
+  if (!obj) return null
+  return validatePeriodNarrativeObject(obj, facts, factsHash).narrative
+}
+
+/** The repair-round user message for this period's rejections. */
+export function buildPeriodRepairMessage(facts: WrappedPeriodFacts, rejections: WrapLineRejection[]): string {
+  return buildRepairUserMessage(planPeriodWrapSlides(facts), rejections)
+}
+
+/** Overlay the repair round's rewrites onto the original response object —
+ *  ONLY for the pieces that were rejected; accepted lines are final. */
+export function mergePeriodWrapRepair(
+  original: Record<string, unknown>,
+  repairRaw: string,
+  rejections: WrapLineRejection[],
+): Record<string, unknown> {
+  const repair = parsePeriodWrapResponse(repairRaw)
+  if (!repair) return original
+  const rejectedIds = new Set(rejections.map((r) => r.id))
+  const originalLines = (original.lines && typeof original.lines === 'object') ? original.lines as Record<string, unknown> : {}
+  const repairLines = (repair.lines && typeof repair.lines === 'object') ? repair.lines as Record<string, unknown> : {}
+  const mergedLines: Record<string, unknown> = { ...originalLines }
+  for (const [id, value] of Object.entries(repairLines)) {
+    if (rejectedIds.has(id)) mergedLines[id] = value
+  }
+  return {
+    ...original,
+    lines: mergedLines,
+    question: rejectedIds.has('question') && repair.question != null ? repair.question : original.question,
+    reflection: rejectedIds.has('reflection') && repair.reflection != null ? repair.reflection : original.reflection,
   }
 }
 

@@ -19,14 +19,16 @@ import {
 import { planDayWrapSlides, type WrapSlideSpec } from '../../renderer/lib/wrapDeck'
 import {
   DECK_JSON_CONTRACT,
+  buildRepairUserMessage,
   deckPromptSection,
   guardContextPercents,
   guardContextTimes,
   stripCodeFence,
-  validateDeckLines,
-  validateWrapQuestion,
-  validateWrapReflection,
+  validateDeckLinesDetailed,
+  wrapQuestionViolation,
+  wrapReflectionViolation,
   type LineGuardContext,
+  type WrapLineRejection,
 } from './wrapNarrativeShared'
 
 // ─── Hashing & cache key ──────────────────────────────────────────────────────
@@ -264,15 +266,10 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
-export function validateWrappedNarrativeResponse(
-  raw: string,
-  facts: DayWrapFacts,
-  factsHash: string,
-  enrichment?: DayEnrichment | null,
-): AIWrappedNarrative | null {
+/** Parse the model's raw response into the deck JSON object, or null. */
+export function parseWrapResponse(raw: string): Record<string, unknown> | null {
   const jsonText = stripCodeFence(raw).trim()
   if (!jsonText) return null
-
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonText)
@@ -280,25 +277,90 @@ export function validateWrappedNarrativeResponse(
     return null
   }
   if (!parsed || typeof parsed !== 'object') return null
-  const obj = parsed as Record<string, unknown>
+  return parsed as Record<string, unknown>
+}
 
+export interface WrappedNarrativeValidation {
+  /** Null only when the OPENING died — the wrap has no lead to show. */
+  narrative: AIWrappedNarrative | null
+  /** Every rejected piece with its writer-facing reason (repair-round input). */
+  rejections: WrapLineRejection[]
+}
+
+/** Validate a parsed deck response. Every guard death is returned with its
+ *  reason so one repair round can rewrite exactly the failed pieces. */
+export function validateWrappedNarrativeObject(
+  obj: Record<string, unknown>,
+  facts: DayWrapFacts,
+  factsHash: string,
+  enrichment?: DayEnrichment | null,
+): WrappedNarrativeValidation {
   const slides = planDayWrapSlides(facts)
   const ctx = guardContext(facts, slides, enrichment)
   const linesRaw = (obj.lines && typeof obj.lines === 'object') ? obj.lines as Record<string, unknown> : null
-  const lines = validateDeckLines(linesRaw, slides, ctx)
+  const { lines, rejections } = validateDeckLinesDetailed(linesRaw, slides, ctx)
+
+  const question = wrapQuestionViolation(obj.question, ctx)
+  if (question.reason) rejections.push({ id: 'question', candidate: typeof obj.question === 'string' ? obj.question : null, reason: question.reason })
+  const reflection = wrapReflectionViolation(obj.reflection, ctx)
+  if (reflection.reason) rejections.push({ id: 'reflection', candidate: typeof obj.reflection === 'string' ? obj.reflection : null, reason: reflection.reason })
 
   // The opening line is the wrap's lead (and the notification one-liner). A
   // response whose opening dies has failed the whole job.
   const lead = lines.opening
-  if (!lead) return null
+  if (!lead) return { narrative: null, rejections }
 
   return {
-    lead,
-    lines,
-    question: validateWrapQuestion(obj.question, ctx),
-    reflection: validateWrapReflection(obj.reflection, ctx),
-    source: 'ai',
-    factsHash,
+    narrative: {
+      lead,
+      lines,
+      question: question.value,
+      reflection: reflection.value,
+      source: 'ai',
+      factsHash,
+    },
+    rejections,
+  }
+}
+
+export function validateWrappedNarrativeResponse(
+  raw: string,
+  facts: DayWrapFacts,
+  factsHash: string,
+  enrichment?: DayEnrichment | null,
+): AIWrappedNarrative | null {
+  const obj = parseWrapResponse(raw)
+  if (!obj) return null
+  return validateWrappedNarrativeObject(obj, facts, factsHash, enrichment).narrative
+}
+
+/** The repair-round user message for this day's rejections. */
+export function buildWrappedRepairMessage(facts: DayWrapFacts, rejections: WrapLineRejection[]): string {
+  return buildRepairUserMessage(planDayWrapSlides(facts), rejections)
+}
+
+/** Overlay the repair round's rewrites onto the original response object —
+ *  ONLY for the pieces that were rejected; accepted lines are final and a
+ *  repair may never overwrite one. Returns the merged object for revalidation. */
+export function mergeWrapRepair(
+  original: Record<string, unknown>,
+  repairRaw: string,
+  rejections: WrapLineRejection[],
+): Record<string, unknown> {
+  const repair = parseWrapResponse(repairRaw)
+  if (!repair) return original
+  const rejectedIds = new Set(rejections.map((r) => r.id))
+  const originalLines = (original.lines && typeof original.lines === 'object') ? original.lines as Record<string, unknown> : {}
+  const repairLines = (repair.lines && typeof repair.lines === 'object') ? repair.lines as Record<string, unknown> : {}
+  const mergedLines: Record<string, unknown> = { ...originalLines }
+  for (const [id, value] of Object.entries(repairLines)) {
+    if (rejectedIds.has(id)) mergedLines[id] = value
+  }
+  return {
+    ...original,
+    lines: mergedLines,
+    question: rejectedIds.has('question') && repair.question != null ? repair.question : original.question,
+    reflection: rejectedIds.has('reflection') && repair.reflection != null ? repair.reflection : original.reflection,
   }
 }
 

@@ -1271,3 +1271,28 @@ Verified `buildDayWrapFacts` field-by-field against the live database for Jul 5-
 4. **Naming leaks.** `friendlyDomain('app.intercom.com')` → "App" (the literal chart bar); `us.posthog.com` → "Us"; "✳ Claude Code" dodged the tool-brand guard via its decorative prefix; pipe-joined tab titles ("OC | Apply founder design to chrispin.jpeg") and media filenames passed `looksLikeRawArtifactLabel`; `workActionPhrase` stacked verbs on gerund labels ("building Reviewing work projects"). All five closed with tests.
 
 Also: window titles in `app_sessions` are rich (project names, meeting names, doc titles) and were entirely unused by the wrap — now distilled per app into semantic clusters (`src/shared/windowTitleContext.ts`) and a first-class `titleContext` facts field.
+
+## 2026-07-10 — Wrapped reliability: guard deaths were silent and unrecoverable; meeting-notes had no collector
+
+Two findings from making the benchmark pass reliably on real days (Jul 9 + 10):
+
+1. **A single guard-tripped line meant a permanent fallback slide, with no visibility.**
+   `isWrapLineValid` returned a bare boolean, so when the model wrote one ungrounded clock
+   ("12:08pm" on a slide whose facts don't list it), that slide silently fell back to the
+   deterministic floor and the whole deck failed the all-AI gate — the Jul 10 wildcard
+   fallback was exactly this class. Fix at the root, per the approved plan's "verify + at
+   most one repair call": every guard rejection now carries a writer-facing reason naming
+   the offending value and what was allowed (`wrapLineViolation`), and both the day and
+   period pipelines make ONE repair call feeding the model its own rejected lines with
+   those reasons; it rewrites exactly the failed pieces, accepted lines are final
+   (`mergeWrapRepair` refuses overlays on non-rejected ids). Still-failing pieces fall
+   back honestly, per slide. Rejections are logged (`[ai] wrapped_narrative <date>: … →
+   repair round: …`) so a fallback is never a mystery again. Tests:
+   `tests/wrappedNarrative.test.ts` (repair section).
+2. **The meeting-notes read-side is dormant: nothing writes the 'notes' signal.**
+   `resolveMeetingNotes` + prompt directives + fingerprint shipped in 0aca70e, but no
+   collector produces a `external_signals` row with source `notes`. Granola's local store
+   is now encrypted (`granola.db` has no SQLite header; the live cache is
+   `cache-v6.json.enc`; the plaintext `cache-v6.json` is a stale stub) — meeting notes are
+   NOT locally reachable and need an authenticated connector (P4 MCP work). Honest
+   position until then: the wrap narrates meetings from calendar + blocks only.

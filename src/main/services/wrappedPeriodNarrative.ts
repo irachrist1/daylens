@@ -33,8 +33,11 @@ import { rollupSnapshots, bucketTotals } from '../lib/wrappedPeriodFacts'
 import {
   buildPeriodFallbackNarrative,
   buildPeriodPrompts,
+  buildPeriodRepairMessage,
   computePeriodFactsHash,
-  validatePeriodNarrativeResponse,
+  mergePeriodWrapRepair,
+  parsePeriodWrapResponse,
+  validatePeriodNarrativeObject,
 } from '../lib/wrappedPeriodNarrative'
 
 interface ProviderRunner {
@@ -239,8 +242,47 @@ async function getWrappedPeriodNarrative(
       'wrapped_period_narrative timed out',
     )
 
-    const parsed = validatePeriodNarrativeResponse(text, facts, factsHash)
-    return persist(parsed ?? fallback)
+    const parsed = parsePeriodWrapResponse(text)
+    if (!parsed) return persist(fallback)
+    let { narrative, rejections } = validatePeriodNarrativeObject(parsed, facts, factsHash)
+
+    // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
+    if (rejections.length > 0) {
+      console.warn(`[ai] wrapped_period_narrative ${facts.period} ${facts.anchorDate}: ${rejections.length} piece(s) rejected → repair round:`, rejections.map((r) => `${r.id}: ${r.reason}`).join(' | '))
+      try {
+        const { text: repairText } = await withTimeout(
+          executeTextAIJob(
+            {
+              jobType: 'wrapped_period_narrative',
+              screen: 'timeline_week',
+              triggerSource: options.triggerSource ?? 'user',
+              systemPrompt: tunedSystemPrompt,
+              prior: [
+                { role: 'user', content: userMessage },
+                { role: 'assistant', content: text },
+              ],
+              userMessage: buildPeriodRepairMessage(facts, rejections),
+            },
+            providerRunner,
+          ),
+          NARRATIVE_TIMEOUT_MS,
+          'wrapped_period_narrative repair timed out',
+        )
+        const merged = mergePeriodWrapRepair(parsed, repairText, rejections)
+        const second = validatePeriodNarrativeObject(merged, facts, factsHash)
+        if (second.narrative) {
+          narrative = second.narrative
+          rejections = second.rejections
+        }
+        if (rejections.length > 0) {
+          console.warn(`[ai] wrapped_period_narrative ${facts.period} ${facts.anchorDate}: still rejected after repair:`, rejections.map((r) => `${r.id}: ${r.reason}`).join(' | '))
+        }
+      } catch (repairError) {
+        console.warn(`[ai] wrapped_period_narrative repair failed for ${facts.period} ${facts.anchorDate}:`, repairError)
+      }
+    }
+
+    return persist(narrative ?? fallback)
   } catch (error) {
     console.warn(`[ai] wrapped_period_narrative failed for ${facts.period} ${facts.anchorDate}:`, error)
     // A transient failure is not a generated wrap — return the floor without

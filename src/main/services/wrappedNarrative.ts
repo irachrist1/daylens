@@ -21,8 +21,11 @@ import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import {
   buildFallbackNarrative,
   buildWrappedPrompts,
+  buildWrappedRepairMessage,
   computeFactsHash,
-  validateWrappedNarrativeResponse,
+  mergeWrapRepair,
+  parseWrapResponse,
+  validateWrappedNarrativeObject,
 } from '../lib/wrappedNarrative'
 import { getDb } from './database'
 import { resolveDayEnrichment } from './enrichmentResolve'
@@ -129,8 +132,50 @@ export async function getWrappedNarrative(
       'wrapped_narrative timed out',
     )
 
-    const parsed = validateWrappedNarrativeResponse(text, facts, factsHash, enrichment)
-    return persist(parsed ?? fallback)
+    const parsed = parseWrapResponse(text)
+    if (!parsed) return persist(fallback)
+    let { narrative, rejections } = validateWrappedNarrativeObject(parsed, facts, factsHash, enrichment)
+
+    // ONE repair round (wrapped-agent-plan: verify + at most one repair call).
+    // The writer gets its own rejected lines back with the exact violations and
+    // rewrites only those; anything still failing falls back honestly per slide.
+    if (rejections.length > 0) {
+      console.warn(`[ai] wrapped_narrative ${facts.date}: ${rejections.length} piece(s) rejected → repair round:`, rejections.map((r) => `${r.id}: ${r.reason}`).join(' | '))
+      try {
+        const { text: repairText } = await withTimeout(
+          executeTextAIJob(
+            {
+              jobType: 'wrapped_narrative',
+              screen: 'timeline_day',
+              triggerSource: options.triggerSource ?? 'user',
+              systemPrompt: tunedSystemPrompt,
+              prior: [
+                { role: 'user', content: userMessage },
+                { role: 'assistant', content: text },
+              ],
+              userMessage: buildWrappedRepairMessage(facts, rejections),
+            },
+            providerRunner,
+          ),
+          NARRATIVE_TIMEOUT_MS,
+          'wrapped_narrative repair timed out',
+        )
+        const merged = mergeWrapRepair(parsed, repairText, rejections)
+        const second = validateWrappedNarrativeObject(merged, facts, factsHash, enrichment)
+        if (second.narrative) {
+          narrative = second.narrative
+          rejections = second.rejections
+        }
+        if (rejections.length > 0) {
+          console.warn(`[ai] wrapped_narrative ${facts.date}: still rejected after repair:`, rejections.map((r) => `${r.id}: ${r.reason}`).join(' | '))
+        }
+      } catch (repairError) {
+        // The first pass's survivors still ship; only the repair was lost.
+        console.warn(`[ai] wrapped_narrative repair failed for ${facts.date}:`, repairError)
+      }
+    }
+
+    return persist(narrative ?? fallback)
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)
     // A transient failure is not a generated wrap — return the floor without
