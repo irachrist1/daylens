@@ -1574,3 +1574,46 @@ Deck average (prose slides): **9.23** · all slides passed: **true**
 - **reflection** (10): Names the real anchor meeting, the 2:27am start, and the top three leisure apps (X, YouTube, Netflix), all traceable to facts. Warm and observational without hype or self-reference, and the read about the late-night start explaining a quieter pace adds genuine motion beyond the numbers.
 
 </details>
+
+
+## Runner 2026-07-10T11:30:42.440Z (day)
+
+### day 2026-07-09 — day 2026-07-09
+
+Deck average (prose slides): **9.27** · all slides passed: **true**
+
+
+_What changed this iteration:_ anchored judge + median-of-3 + enrichment-aware facts; founder review run
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | Thursday was a deep study day, anchored in the Machine Learning Pipeline and a proposal t… |
+| headline | ai | 2 | 2 | 3 | 2 | **9** | The Machine Learning Pipeline held the weight of it, from the morning all the way into th… |
+| story-morning | ai | 3 | 2 | 3 | 2 | **10** | You opened with the SPCS Build Proposal and the ML Pipeline class running almost in paral… |
+| story-midday | ai | 2 | 2 | 3 | 1 | **8** | The afternoon belonged almost entirely to reading and following along with the ML Pipelin… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | Google Colab was where the actual ML Pipeline study happened, so 54m there was the work i… |
+| split | ai | 3 | 1 | 3 | 1 | **8** | 83% of the day was work, 17% leisure. Honest numbers for a day that was mostly study and … |
+| wildcard | ai | 2 | 1 | 3 | 1 | **7** | The afternoon held 2h 58m of work, the heaviest concentration of the day. |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | From 11:09am to 1:13pm you stayed with the Machine Learning Pipeline without breaking, th… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | The time spread across a fair number of tools, with Google Colab and Google Meet doing th… |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Pinterest showed up for 24m, quietly, in a day that was otherwise all ML and proposals. |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The ML Pipeline block ran nearly two hours straight, was that a class session, a recordin… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Thursday held real depth. You spent the better part of the morning and afternoon inside t… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the ML Pipeline and the proposal build, both true from the facts, and characterizes the day as a study day which the 5h 2m work split supports. Reads warm and human, and 'anchored in' plus 'needed building' add a genuine read beyond the raw numbers.
+- **headline** (9): Names the real main work (Machine Learning Pipeline) and captures the morning-into-afternoon span, both traceable to facts; reads human and adds a read over the raw 6h 3m rather than restating it. Slightly short of full specificity since it leans on a qualitative characterization without a hard number.
+- **story-morning** (10): Names the real morning work (SPCS Build Proposal, ML Pipeline class) plus the Meet and YouTube from the slide facts, all accurate. The 'in parallel, one corner...the other' framing adds a genuine read of how the morning was split, and the tone is warm and human without hype.
+- **story-midday** (8): Names the two real afternoon activities (ML Pipeline, PowerPoint) but skips the concrete 3h 11m duration that would lift it to full specificity. Tone is warm and human. Accurate to the slide facts. Motion is modest — it characterizes the stretch as long and steady but doesn't add much read beyond restating the block.
+- **timesink** (10): Names the app, the 54m, and ties it to the true ML pipeline work; the read that this is work rather than a detour adds motion the card cannot show, and the tone is warm and human.
+- **split** (8): Percentages match the slide facts and the qualitative read (study and proposal-building) traces to workedOn. It largely restates the card split with only a light characterization added, and the phrasing leans slightly report-like rather than a friend's warm read.
+- **wildcard** (7): The 2h 58m and afternoon-being-heaviest both trace to the slide facts, so accuracy holds. But the line mostly restates the printed number and card fact with little added read, and 'heaviest concentration' reads slightly report-like rather than a real human observation.
+- **focus** (10): Names the exact stretch (11:09am to 1:13pm) and the real topic, all traceable to facts. Warm, natural phrasing that reads like a friend, and 'the one stretch where nothing else cut in' adds a genuine read beyond the printed number.
+- **apps** (10): Names real apps in correct order (Colab and Meet top, then Canva/Pinterest/YouTube) and characterizes the spread rather than just listing, which adds a read over the chart. Warm, natural phrasing without hype, and all values trace to the slide facts.
+- **forgotten** (10): Names Pinterest and its exact 24m, and the contrast with ML and proposals traces to workedOn (Meet ML Pipeline, SPCS Build Proposal). Warm, understated tone matching the 'forgotten' framing, and the read adds context the bare number cannot.
+- **question** (10): Names the real longest stretch (1h 53m on Meet - Machine Learning Pipeline) accurately and asks a genuine, curious question about its nature. Warm, specific, and adds a read beyond the raw number.
+- **reflection** (10): Names the ML Pipeline material, SPCS Build Proposal, and the accurate 1h 53m longest stretch across the midday boundary (11:09am to 1:13pm matches). Reads like a thoughtful friend, varied and warm without hype, and the 'quiet, serious day' adds a genuine read the chart can't show.
+
+</details>

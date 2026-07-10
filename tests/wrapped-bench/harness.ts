@@ -21,6 +21,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy, type RealDbContext } from '../ai-behaviour/realDb'
+import { anchorsFor, type SlideAnchors } from './anchors'
 import type { WrapSlideSpec } from '../../src/renderer/lib/wrapDeck'
 import type { DayWrapFacts } from '../../src/renderer/lib/dayWrapScenes'
 import type { WrappedPeriod, WrappedPeriodFacts } from '../../src/shared/types'
@@ -30,6 +31,10 @@ export const LOG_PATH = path.resolve(HERE, '../../docs/wrapped-benchmark-log.md'
 export const RESULTS_PATH = path.resolve(HERE, '.last-results.json')
 
 const JUDGE_MODEL = process.env.WRAPPED_JUDGE_MODEL ?? 'claude-opus-4-8'
+// The judge is sampled N times and each dimension is scored by the MEDIAN, so a
+// single unlucky read can't sink (or inflate) a line. 3 is enough to kill the
+// ±0.4 run-to-run swing the abstract-rubric judge used to have.
+const JUDGE_SAMPLES = Math.max(1, Number(process.env.WRAPPED_JUDGE_SAMPLES) || 3)
 
 // ─── Rubric shapes ────────────────────────────────────────────────────────────
 
@@ -131,6 +136,14 @@ export async function generateDayDeck(date: string): Promise<{ facts: DayWrapFac
   const { planDayWrapSlides } = await import('../../src/renderer/lib/wrapDeck')
   const { getWrappedNarrative } = await import('../../src/main/services/wrappedNarrative')
   const { compactDayFacts } = await import('../../src/main/lib/wrappedNarrative')
+  const { collectExternalSignals } = await import('../../src/main/services/externalSignals')
+  const { resolveDayEnrichment } = await import('../../src/main/services/enrichmentResolve')
+
+  // Collect git/calendar so the day's enrichment is fresh, then resolve it — the
+  // judge must score against the SAME facts the writer saw, or a calendar/git
+  // grounded line reads as "invented" and is unfairly docked (Gap 1).
+  await collectExternalSignals(date, { force: true }).catch(() => {})
+  const enrichment = resolveDayEnrichment(getDb(), date)
 
   const payload = getTimelineDayPayload(getDb(), date, null)
   const facts = buildDayWrapFacts(payload)
@@ -148,7 +161,7 @@ export async function generateDayDeck(date: string): Promise<{ facts: DayWrapFac
     question: narrative.question ?? null,
     reflection: narrative.reflection ?? null,
     source: narrative.source,
-    factsSummary: JSON.stringify(compactDayFacts(facts)),
+    factsSummary: JSON.stringify(compactDayFacts(facts, enrichment)),
   }
 }
 
@@ -199,10 +212,12 @@ const JUDGE_SYSTEM = [
   'Hard voice rules (breaking any caps TONE at 0): no focus/productivity scores or grades, no percentages except ones present in the facts, no hype/flattery, no therapy, no self-reference to the product, no em dashes, no homework or predictions about tomorrow, no raw filenames/repos/branches/tab titles.',
   'For a CAPTION slide (a chart/finale caption) judge against the lighter job a one-line caption does: a caption that adds a read over the chart earns full specificity and motion; do not penalize it for not restating chart rows.',
   '',
+  'CALIBRATION. For most slides you are given EXCELLENT lines (what a 9-10 reads like for this slide) and FAILING lines (what a line below 7 reads like). These are illustrative, not templates: the writer\'s line is different copy about a different real day. Use them ONLY to anchor your scale. A line as specific, human, and grounded as the excellent examples scores 9-10; a line as vague, robotic, hype-y, card-restating, or invented as the failing examples scores below 7. Do not reward a line for merely resembling an example, and do not punish it for differing — score the qualities, calibrated to these anchors.',
+  '',
   'Return ONLY strict JSON: {"specificity":0-3,"tone":0-2,"accuracy":0-3,"motion":0-2,"reasoning":"one or two sentences, concrete about what earned or lost points"}. No prose outside the JSON.',
 ].join('\n')
 
-interface JudgeInput {
+export interface JudgeInput {
   cadence: 'day' | 'week'
   slideId: string
   kicker: string
@@ -214,6 +229,7 @@ interface JudgeInput {
   caption: boolean
   line: string
   role: 'line' | 'question' | 'reflection'
+  anchors?: SlideAnchors | null
 }
 
 function buildJudgeUser(input: JudgeInput): string {
@@ -228,6 +244,14 @@ function buildJudgeUser(input: JudgeInput): string {
   if (input.role === 'question') facts.role = 'This is the ONE interactive question slide — it SHOULD end in a question mark; that is not a violation here.'
   if (input.role === 'reflection') facts.role = 'This is the closing reflection paragraph (3-5 sentences allowed).'
   if (input.caption) facts.slideType = 'CAPTION slide — judge against the lighter caption bar.'
+  const anchorBlock = input.anchors
+    ? [
+        '',
+        `Calibration for the "${input.slideId}" slide (illustrative, not templates):`,
+        `EXCELLENT (9-10) lines:\n${input.anchors.perfect.map((l) => `  • ${l}`).join('\n')}`,
+        `FAILING (<7) lines:\n${input.anchors.bad.map((l) => `  • ${l}`).join('\n')}`,
+      ].join('\n')
+    : ''
   return [
     `Cadence: ${input.cadence}`,
     'wholeDayFacts (every true fact of the whole day/week — accuracy may draw on any of these):',
@@ -235,6 +259,7 @@ function buildJudgeUser(input: JudgeInput): string {
     '',
     'This slide (its kicker and its own facts):',
     JSON.stringify(facts, null, 2),
+    anchorBlock,
     '',
     'The line the writer produced:',
     JSON.stringify(input.line),
@@ -243,7 +268,8 @@ function buildJudgeUser(input: JudgeInput): string {
   ].join('\n')
 }
 
-async function judge(anthropic: Anthropic, input: JudgeInput): Promise<SlideScore> {
+/** One judge read (with transient-retry). */
+async function judgeOnce(anthropic: Anthropic, input: JudgeInput): Promise<SlideScore> {
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -267,6 +293,28 @@ async function judge(anthropic: Anthropic, input: JudgeInput): Promise<SlideScor
     }
   }
   throw new Error(`[wrapped-bench] judge failed after retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`)
+}
+
+function median(values: number[]): number {
+  const sorted = values.slice().sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? Math.round((sorted[mid - 1] + sorted[mid]) / 2) : sorted[mid]
+}
+
+/** Sample the judge JUDGE_SAMPLES times and score each dimension by the MEDIAN,
+ *  so one unlucky read can't sink or inflate a line. The reasoning is taken from
+ *  the sample whose total is closest to the median total. */
+export async function judge(anthropic: Anthropic, input: JudgeInput): Promise<SlideScore> {
+  const samples: SlideScore[] = []
+  for (let i = 0; i < JUDGE_SAMPLES; i++) samples.push(await judgeOnce(anthropic, input))
+  if (samples.length === 1) return samples[0]
+  const specificity = median(samples.map((s) => s.specificity))
+  const tone = median(samples.map((s) => s.tone))
+  const accuracy = median(samples.map((s) => s.accuracy))
+  const motion = median(samples.map((s) => s.motion))
+  const total = specificity + tone + accuracy + motion
+  const nearest = samples.slice().sort((a, b) => Math.abs(a.total - total) - Math.abs(b.total - total))[0]
+  return { specificity, tone, accuracy, motion, total, reasoning: nearest.reasoning }
 }
 
 function clamp(v: unknown, lo: number, hi: number): number {
@@ -299,7 +347,7 @@ export async function scoreDeck(
       cadence, slideId: spec.id, kicker: spec.kicker, factsNote: spec.factsNote, wholeDayFacts: deck.factsSummary,
       statValue: spec.stat?.value, statSublabel: spec.stat?.sublabel,
       splitNote: spec.split ? `${spec.split.aLabel} ${spec.split.aPct}%, ${spec.split.bLabel} ${spec.split.bPct}%` : undefined,
-      caption, line, role: 'line',
+      caption, line, role: 'line', anchors: anchorsFor(cadence, spec.id),
     })
     results.push({ id: spec.id, kind: spec.kind, source, caption, line, score, passed: source === 'ai' && score.total >= 7 })
   }
@@ -309,14 +357,14 @@ export async function scoreDeck(
   if (questionSpec) {
     const source: 'ai' | 'fallback' = deck.question ? 'ai' : 'fallback'
     const line = deck.question ?? questionSpec.fallbackLine
-    const score = await judge(anthropic, { cadence, slideId: 'question', kicker: questionSpec.kicker, factsNote: questionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'question' })
+    const score = await judge(anthropic, { cadence, slideId: 'question', kicker: questionSpec.kicker, factsNote: questionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'question', anchors: anchorsFor(cadence, 'question') })
     results.push({ id: 'question', kind: 'question', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 })
   }
   const reflectionSpec = deck.slides.find((s) => s.id === 'reflection')
   if (reflectionSpec) {
     const source: 'ai' | 'fallback' = deck.reflection ? 'ai' : 'fallback'
     const line = deck.reflection ?? reflectionSpec.fallbackLine
-    const score = await judge(anthropic, { cadence, slideId: 'reflection', kicker: reflectionSpec.kicker, factsNote: reflectionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'reflection' })
+    const score = await judge(anthropic, { cadence, slideId: 'reflection', kicker: reflectionSpec.kicker, factsNote: reflectionSpec.factsNote, wholeDayFacts: deck.factsSummary, caption: false, line, role: 'reflection', anchors: anchorsFor(cadence, 'reflection') })
     results.push({ id: 'reflection', kind: 'reflection', source, caption: false, line, score, passed: source === 'ai' && score.total >= 7 })
   }
 
