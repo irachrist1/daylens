@@ -1256,6 +1256,22 @@ export interface StoredExternalSignal<T = unknown> {
   capturedAt: number
 }
 
+// event-type inference: what a calendar event most likely WAS (a class, a 1:1,
+// a presentation, ...), inferred deterministically from the title, attendee
+// count, and duration already on CalendarEventSignal — never a network call or
+// an AI guess. See src/main/services/eventTypeInference.ts for the classifier
+// and docs/specs/voice.md for how the writer may use it (only at high
+// confidence; otherwise it stays literal, "the meeting").
+export type EventType =
+  | 'class'
+  | 'one_on_one'
+  | 'presentation'
+  | 'interview'
+  | 'workout'
+  | 'team_meeting'
+  | 'deep_work'
+  | 'generic'
+
 /** The day's external signals, RESOLVED for the wrap writer (Stage 0 Gap 1):
  *  sanitized, humanized, pre-formatted, and stripped of anything the model must
  *  never echo (raw paths, branches, clock times it can't ground). Each block is
@@ -1276,8 +1292,11 @@ export interface DayEnrichment {
   meetings: {
     count: number
     /** Titles + pre-formatted scheduled length, longest first. title null when
-     *  the source gave none. Never an attendee name or count. */
-    items: Array<{ title: string | null; scheduled: string }>
+     *  the source gave none. Never an attendee name or count.
+     *  // event-type inference: `type` + `confidence` from eventTypeInference.ts,
+     *  so the writer may say "your ML class" instead of "the meeting" at high
+     *  confidence, and must stay literal when it is not. */
+    items: Array<{ title: string | null; scheduled: string; type: EventType; confidence: number }>
   } | null
   /** Focus-timer runs, when the user enabled a focus app. Barest by design. */
   focusSessions: {

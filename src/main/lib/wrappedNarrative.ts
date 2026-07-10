@@ -188,6 +188,11 @@ function enrichmentDirectives(enrichment: DayEnrichment | null | undefined): str
   }
   if (enrichment.meetings) {
     out.push('"meetings" tells you what the day\'s meetings were. You may say how many there were (meetings.count) and name a meeting by the title in meetings.items when it reads like a meeting. Never state an attendee count. The meetings slide\'s big number is time spent IN meeting apps; a meeting\'s "scheduled" length is a different fact. You may cite ONE meeting\'s scheduled length as color, copied exactly, but never add scheduled lengths together, never present their sum as the slide\'s number, and never claim a meeting total that disagrees with that card.')
+    // event-type inference: each item carries a `type` + `confidence` (Daylens's
+    // own read of what the event was). High confidence unlocks richer phrasing;
+    // low confidence or 'generic' stays literal. Never invent a type, never
+    // print the word "confidence" or the number, never hedge toward a type.
+    out.push('Each item in meetings.items also carries a "type" (class, one_on_one, presentation, interview, workout, team_meeting, deep_work, or generic) and a "confidence" number, Daylens\'s own read of what that event actually was. When an item\'s confidence is 0.75 or higher AND its type is not "generic", you MAY describe it by that type instead of the bare word "meeting": "your ML class" for a class, "the 1:1 with [whoever the title names]" for one_on_one, "you presented" or "you pitched" for presentation, "the interview" for interview, "the workout" for workout, "the team sync" for team_meeting, "a stretch of deep work" for deep_work. Ground it in the real title when the title is present and reads naturally. When confidence is below 0.75 or type is "generic", say only "the meeting" or "a meeting" and do not guess or hedge toward a type ("looked like a class", "possibly a 1:1"); a plain literal noun beats a soft guess. Never print the word "confidence" or the number; it exists only to decide how you phrase this.')
   } else {
     out.push('Never state how MANY meetings there were; the facts only know the total meeting time.')
   }

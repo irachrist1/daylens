@@ -20,6 +20,10 @@ import { looksLikeRawArtifactLabel } from '../../renderer/lib/wrappedFacts'
 import { cleanSubject, stripPathsAndBranches } from './gitSignals'
 import { getExternalSignal } from './externalSignals'
 import { getSettings } from './settings'
+// event-type inference: classify each meeting from signals already on
+// CalendarEventSignal (title, attendeeCount, durationMinutes) — pure,
+// deterministic, no network/AI. See eventTypeInference.ts for the rules.
+import { inferEventType } from './eventTypeInference'
 
 const MAX_PROJECTS = 4
 const MAX_HIGHLIGHTS = 6
@@ -115,10 +119,18 @@ function resolveMeetings(calendar: CalendarSignal | null): DayEnrichment['meetin
     .slice()
     .sort((a, b) => b.durationMinutes - a.durationMinutes)
     .slice(0, MAX_MEETINGS)
-    .map((e) => ({
-      title: sanitizeMeetingTitle(e.title),
-      scheduled: formatHm(Math.max(0, e.durationMinutes) * 60),
-    }))
+    .map((e) => {
+      // event-type inference: classify against the ORIGINAL event (title,
+      // attendeeCount, durationMinutes) before the title is sanitized for
+      // display — the classifier reads the same object the connector produced.
+      const { type, confidence } = inferEventType(e)
+      return {
+        title: sanitizeMeetingTitle(e.title),
+        scheduled: formatHm(Math.max(0, e.durationMinutes) * 60),
+        type,
+        confidence,
+      }
+    })
   return { count: events.length, items }
 }
 
