@@ -18,6 +18,7 @@ import { localDateString } from '../lib/localDate'
 import { buildDayWrapFacts } from '../../renderer/lib/dayWrapScenes'
 import { planDayWrapSlides, planPeriodWrapSlides } from '../../renderer/lib/wrapDeck'
 import { compactDayFacts } from '../lib/wrappedNarrative'
+import { resolveDayEnrichment } from './enrichmentResolve'
 import { compactPeriodFacts } from '../lib/wrappedPeriodNarrative'
 import { buildWrappedPeriodFacts } from './wrappedPeriodNarrative'
 import { EMOJI_REGEX, stripCodeFence } from '../lib/wrapNarrativeShared'
@@ -57,11 +58,13 @@ interface AskGrounding {
 
 function groundingFor(req: WrappedAskRequest): AskGrounding {
   if (req.cadence === 'day') {
+    const db = getDb()
     const liveSession = req.periodKey === localDateString() ? getCurrentSession() : null
-    const payload = getTimelineDayPayload(getDb(), req.periodKey, liveSession)
+    const payload = getTimelineDayPayload(db, req.periodKey, liveSession)
     const facts = buildDayWrapFacts(payload)
+    const enrichment = resolveDayEnrichment(db, req.periodKey)
     return {
-      factsJson: JSON.stringify(compactDayFacts(facts), null, 2),
+      factsJson: JSON.stringify(compactDayFacts(facts, enrichment), null, 2),
       deckOutline: deckOutline(planDayWrapSlides(facts)),
     }
   }

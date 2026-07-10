@@ -68,6 +68,12 @@ export interface LineGuardContext {
    *  the facts. "You started at midnight" when the facts say 11:15am is the
    *  single worst wrap failure; any ungrounded clock time kills the line. */
   allowedTimes: ReadonlySet<string>
+  /** The only counts a line may attach to an enrichment noun, keyed by category
+   *  ("commits:9", "meetings:2"). Enrichment rides no slide, so this is how an
+   *  invented "12 commits" dies. Keyed by noun so a real "2 meetings" does NOT
+   *  authorize an invented "2 commits". Empty/absent means no enrichment counts
+   *  exist, so ANY such count is invented and killed. */
+  allowedCounts?: ReadonlySet<string>
 }
 
 export function guardContextPercents(slides: WrapSlideSpec[]): Set<number> {
@@ -139,8 +145,42 @@ export function isWrapLineValid(value: string, ctx: LineGuardContext, opts?: { m
   if (!claimedHoursConsistent(value, ctx)) return false
   if (!claimedPercentsAllowed(value, ctx)) return false
   if (!claimedTimesGrounded(value, opts?.allowedTimes ?? ctx.allowedTimes)) return false
+  if (!claimedCountsAllowed(value, ctx)) return false
   return true
 }
+
+/** A number attached to an enrichment noun ("9 commits", "two pull requests")
+ *  must be a real count from the enrichment facts. Word-form small numbers are
+ *  normalized so "two meetings" is checked too. Only enrichment nouns are
+ *  policed, so ordinary lines ("you opened it 14 times") are untouched. */
+const WORD_NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+}
+/** Map an enrichment noun to its count category, so counts are checked against
+ *  the RIGHT source ("2 meetings" never vouches for "2 commits"). */
+export function countNounCategory(noun: string): 'commits' | 'prs' | 'meetings' | 'sessions' | null {
+  const n = noun.toLowerCase()
+  if (/^commits?$/.test(n)) return 'commits'
+  if (/^(?:pull requests?|prs?|merge requests?)$/.test(n)) return 'prs'
+  if (/^(?:meetings?|calls?)$/.test(n)) return 'meetings'
+  if (/^(?:focus sessions?|sessions?)$/.test(n)) return 'sessions'
+  return null
+}
+function claimedCountsAllowed(text: string, ctx: LineGuardContext): boolean {
+  const allowed = ctx.allowedCounts ?? EMPTY_COUNTS
+  const re = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(commits?|pull requests?|prs?|merge requests?|meetings?|calls?|focus sessions?|sessions?)\b/gi
+  for (const m of text.matchAll(re)) {
+    const raw = m[1].toLowerCase()
+    const n = /^\d+$/.test(raw) ? Number(raw) : WORD_NUMBERS[raw]
+    if (!Number.isFinite(n)) return false
+    const category = countNounCategory(m[2])
+    if (!category) return false
+    if (!allowed.has(`${category}:${n}`)) return false
+  }
+  return true
+}
+const EMPTY_COUNTS: ReadonlySet<string> = new Set()
 
 function claimedHoursConsistent(text: string, ctx: LineGuardContext): boolean {
   const matches = [...text.matchAll(/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h\b)/gi)]

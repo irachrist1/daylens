@@ -16,6 +16,7 @@ import type { ExternalSignalSource, StoredExternalSignal } from '@shared/types'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import { getDb } from './database'
 import { capture } from './analytics'
+import { getSettings } from './settings'
 import { collectGitActivity } from './gitSignals'
 import { collectCalendarEvents } from './calendarSignals'
 import { collectFocusAppSignals } from './enrichmentDiscovery'
@@ -36,6 +37,19 @@ export function putExternalSignal(
       payload_json = excluded.payload_json,
       captured_at = excluded.captured_at
   `).run(date, source, JSON.stringify(payload), Date.now())
+}
+
+/** Tombstone a (date, source): remove the stored row so a connector that now
+ *  finds nothing can't keep serving yesterday's commits/meetings. Called after a
+ *  REAL connector run returns empty/null — never speculatively. */
+export function deleteExternalSignal(
+  db: Database.Database,
+  date: string,
+  source: ExternalSignalSource,
+): void {
+  try {
+    db.prepare('DELETE FROM external_signals WHERE date = ? AND source = ?').run(date, source)
+  } catch { /* missing table (pre-v43 DB): nothing to tombstone */ }
 }
 
 export function getExternalSignal<T>(
@@ -72,47 +86,96 @@ function isFresh(db: Database.Database, date: string, source: ExternalSignalSour
 
 let collecting = false
 
+/** The moving parts of a collection run, injectable so the tombstone/toggle
+ *  logic can be tested hermetically without git, a calendar, or a live DB. */
+export interface CollectExternalSignalsDeps {
+  db: Database.Database
+  collectGit: (date: string) => Promise<import('@shared/types').GitActivitySignal | null>
+  collectCalendar: (date: string) => Promise<import('@shared/types').CalendarSignal | null>
+  collectFocus: (date: string) => Promise<import('@shared/types').FocusAppSignal[] | null>
+  enrichmentSources: Record<string, boolean>
+}
+
+function defaultDeps(): CollectExternalSignalsDeps {
+  const enrichmentSources = (() => {
+    try { return getSettings().enrichmentSources ?? {} } catch { return {} as Record<string, boolean> }
+  })()
+  return {
+    db: getDb(),
+    collectGit: collectGitActivity,
+    collectCalendar: collectCalendarEvents,
+    // Only read the local store of a focus app whose toggle is on (privacy: a
+    // disabled app's store is never opened).
+    collectFocus: (date) => collectFocusAppSignals(date, {}, (app) => enrichmentSources[`focus:${app}`] === true),
+    enrichmentSources,
+  }
+}
+
 /** Run every available connector for a date and persist what they found.
  *  Fire-and-forget safe: never throws, never blocks a wrap. Returns the list
  *  of sources that produced a signal this run (for telemetry and tests). */
 export async function collectExternalSignals(
   date: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; deps?: CollectExternalSignalsDeps } = {},
 ): Promise<ExternalSignalSource[]> {
   if (collecting) return []
   collecting = true
   const fired: ExternalSignalSource[] = []
   try {
-    const db = getDb()
+    const { db, collectGit, collectCalendar, collectFocus, enrichmentSources } =
+      options.deps ?? defaultDeps()
+
+    // Git and calendar are ALWAYS-ON: read whenever the underlying tools exist
+    // (git/gh/icalBuddy/Outlook), no toggle. Focus apps are opt-in per app via
+    // the Settings enrichment toggles (`focus:<app>`) — read only what's enabled.
+    const focusEnabledFor = (app: string) => enrichmentSources[`focus:${app}`] === true
+
+    // Tombstone rule (Gap 2): a connector that comes back empty must not keep
+    // serving stale data — BUT only on an explicit forced refresh (the user
+    // asking to replace truth). A background run that returns empty could just
+    // be a transient timeout (git/icalBuddy slow or missing), so it leaves any
+    // prior row intact rather than risk deleting good data.
+    const tombstoneIfForced = (source: ExternalSignalSource) => {
+      if (options.force) deleteExternalSignal(db, date, source)
+    }
 
     if (options.force || !isFresh(db, date, 'git')) {
       try {
-        const git = await collectGitActivity(date)
+        const git = await collectGit(date)
         if (git && (git.repos.length > 0 || git.prs.length > 0)) {
           putExternalSignal(db, date, 'git', git)
           fired.push('git')
+        } else {
+          tombstoneIfForced('git')
         }
-      } catch { /* optional source — skip silently */ }
+      } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
     if (options.force || !isFresh(db, date, 'calendar')) {
       try {
-        const calendar = await collectCalendarEvents(date)
+        const calendar = await collectCalendar(date)
         if (calendar && calendar.events.length > 0) {
           putExternalSignal(db, date, 'calendar', calendar)
           fired.push('calendar')
+        } else {
+          tombstoneIfForced('calendar')
         }
-      } catch { /* optional source — skip silently */ }
+      } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
     if (options.force || !isFresh(db, date, 'focus_app')) {
       try {
-        const focus = await collectFocusAppSignals(date)
-        if (focus && focus.length > 0) {
-          putExternalSignal(db, date, 'focus_app', focus)
+        const focus = await collectFocus(date)
+        // Only store the apps the user turned on (belt-and-suspenders: the real
+        // collector already reads only enabled apps).
+        const enabled = (focus ?? []).filter((f) => focusEnabledFor(f.app))
+        if (enabled.length > 0) {
+          putExternalSignal(db, date, 'focus_app', enabled)
           fired.push('focus_app')
+        } else {
+          tombstoneIfForced('focus_app')
         }
-      } catch { /* optional source — skip silently */ }
+      } catch { /* optional source — connector threw; leave any prior row intact */ }
     }
 
     // Which connectors fired, never the data: tells us what to build next.

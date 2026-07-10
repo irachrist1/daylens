@@ -370,3 +370,100 @@ test('validate: emoji confetti still dies — multiple, mid-line, or off-set emo
   assert.equal(result!.lines[askable[0]], null, 'two emoji must die')
   assert.equal(result!.lines[askable[1]], null, 'an off-set mid-line emoji must die')
 })
+
+// ─── Enrichment feeding the wrap (Stage 0 Gap 1) ──────────────────────────────
+
+import type { DayEnrichment } from '../src/shared/types.ts'
+import { compactDayFacts } from '../src/main/lib/wrappedNarrative.ts'
+
+function sampleEnrichment(): DayEnrichment {
+  return {
+    shipped: {
+      commitsByProject: [{ project: 'billing service', commits: 9 }],
+      highlights: ['add invoice export', 'fix the rate limiter'],
+      pullRequests: [{ project: 'billing service', state: 'open', count: 1 }],
+    },
+    meetings: {
+      count: 2,
+      items: [{ title: 'Design review', scheduled: '1h 15m' }, { title: 'Standup', scheduled: '15m' }],
+    },
+    focusSessions: null,
+  }
+}
+
+test('enrichment: compactDayFacts includes shipped and meetings when present', () => {
+  const facts = workingDayFacts()
+  const compact = compactDayFacts(facts, sampleEnrichment()) as Record<string, unknown>
+  assert.ok(compact.shipped, 'shipped rides along')
+  assert.ok(compact.meetings, 'meetings ride along')
+  assert.equal((compact.shipped as { commitsByProject: unknown[] }).commitsByProject.length, 1)
+})
+
+test('enrichment: compactDayFacts omits the keys entirely when absent', () => {
+  const facts = workingDayFacts()
+  const compact = compactDayFacts(facts, null) as Record<string, unknown>
+  assert.ok(!('shipped' in compact), 'no shipped key when no enrichment')
+  assert.ok(!('meetings' in compact), 'no meetings key when no enrichment')
+  assert.ok(!('focusSessions' in compact))
+})
+
+test('enrichment: the prompt gains shipped/meetings directives and the facts JSON', () => {
+  const facts = workingDayFacts()
+  const withE = buildWrappedPrompts(facts, sampleEnrichment())
+  assert.match(withE.systemPrompt, /shipped/i)
+  assert.match(withE.systemPrompt, /commits to the billing service|shipped\.commitsByProject/i)
+  assert.match(withE.userMessage, /"shipped"/)
+  // The old "never state how many meetings" rule is replaced when calendar exists.
+  assert.doesNotMatch(withE.systemPrompt, /Never state how MANY meetings/)
+  // Without enrichment, that guard is back and no shipped directive appears.
+  const without = buildWrappedPrompts(facts, null)
+  assert.match(without.systemPrompt, /Never state how MANY meetings/)
+  assert.doesNotMatch(without.userMessage, /"shipped"/)
+})
+
+test('enrichment: a real commit count survives, an invented one dies', () => {
+  const facts = workingDayFacts()
+  const enrichment = sampleEnrichment()
+  const slides = planDayWrapSlides(facts)
+  const askable = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)
+
+  const good = JSON.parse(deckResponse(facts)) as { lines: Record<string, string> }
+  good.lines[askable[0]] = 'You wrote 9 commits to the billing service and opened a pull request.'
+  const okResult = validateWrappedNarrativeResponse(JSON.stringify(good), facts, 'h', enrichment)
+  assert.ok(okResult)
+  assert.equal(okResult!.lines[askable[0]], 'You wrote 9 commits to the billing service and opened a pull request.')
+
+  const bad = JSON.parse(deckResponse(facts)) as { lines: Record<string, string> }
+  bad.lines[askable[1]] = 'You wrote 42 commits to the billing service today.'
+  const badResult = validateWrappedNarrativeResponse(JSON.stringify(bad), facts, 'h', enrichment)
+  assert.ok(badResult)
+  assert.equal(badResult!.lines[askable[1]], null, 'an invented commit count must fall back')
+})
+
+test('enrichment: with no enrichment, any commit-count claim is treated as invented', () => {
+  const facts = workingDayFacts()
+  const slides = planDayWrapSlides(facts)
+  const askable = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)
+  const raw = JSON.parse(deckResponse(facts)) as { lines: Record<string, string> }
+  raw.lines[askable[0]] = 'You pushed 5 commits before lunch.'
+  const result = validateWrappedNarrativeResponse(JSON.stringify(raw), facts, 'h', null)
+  assert.ok(result)
+  assert.equal(result!.lines[askable[0]], null, 'an ungrounded commit count dies with no enrichment')
+})
+
+test('enrichment: a real meeting count does NOT authorize an invented commit count', () => {
+  // meetings.count = 2 but there is NO shipped/commit enrichment.
+  const enrichment: DayEnrichment = {
+    shipped: null,
+    meetings: { count: 2, items: [{ title: 'Standup', scheduled: '15m' }, { title: 'Review', scheduled: '45m' }] },
+    focusSessions: null,
+  }
+  const facts = workingDayFacts()
+  const slides = planDayWrapSlides(facts)
+  const askable = slides.filter((s) => s.ask && s.id !== 'opening').map((s) => s.id)
+  const raw = JSON.parse(deckResponse(facts)) as { lines: Record<string, string> }
+  raw.lines[askable[0]] = 'You had 2 meetings and pushed 2 commits before lunch.'
+  const result = validateWrappedNarrativeResponse(JSON.stringify(raw), facts, 'h', enrichment)
+  assert.ok(result)
+  assert.equal(result!.lines[askable[0]], null, '"2 commits" must die even though "2 meetings" is real')
+})

@@ -3507,7 +3507,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       break
     case 'enrichment':
       content = (
-        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine, and every source is off until you turn it on.">
+        <SectionPage title="Enrichment sources" description="Optional local sources that make your Wrapped richer: what you shipped, what meetings you had, when you focused. Everything stays on this machine. Git and calendar are read automatically when the tools exist; focus apps and MCP servers stay off until you turn them on.">
           <div style={{ display: 'grid', gap: 24 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 4 }}>Always available</div>

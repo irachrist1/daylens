@@ -25,6 +25,7 @@ import {
   validateWrappedNarrativeResponse,
 } from '../lib/wrappedNarrative'
 import { getDb } from './database'
+import { resolveDayEnrichment } from './enrichmentResolve'
 import { getStoredWrappedNarrative, putStoredWrappedNarrative } from '../db/wrappedNarrativeStore'
 
 interface ProviderRunner {
@@ -63,8 +64,11 @@ export async function getWrappedNarrative(
   options: { triggerSource?: AIInvocationSource; force?: boolean } = {},
 ): Promise<AIWrappedNarrative> {
   const facts = buildDayWrapFacts(payload)
-  const factsHash = computeFactsHash(facts)
   const db = getDb()
+  // Resolve the day's external signals (git / calendar / focus) deterministically
+  // from stored rows — no tool loop, never blocks. Absent → null, never invented.
+  const enrichment = resolveDayEnrichment(db, facts.date)
+  const factsHash = computeFactsHash(facts, enrichment)
   // Keyed by the DATE, not the facts hash, so today's wrap is stable as the day
   // accrues more activity (it does not rebuild every open). Only Regenerate replaces it.
   const periodKey = facts.date
@@ -100,7 +104,7 @@ export async function getWrappedNarrative(
     return fallback
   }
 
-  const { systemPrompt, userMessage } = buildWrappedPrompts(facts)
+  const { systemPrompt, userMessage } = buildWrappedPrompts(facts, enrichment)
   // Apply the user's chosen summary voice and who-they-are profile. The
   // facts/validation stay untouched — this only steers wording, never the numbers.
   const settings = getSettings()
@@ -125,7 +129,7 @@ export async function getWrappedNarrative(
       'wrapped_narrative timed out',
     )
 
-    const parsed = validateWrappedNarrativeResponse(text, facts, factsHash)
+    const parsed = validateWrappedNarrativeResponse(text, facts, factsHash, enrichment)
     return persist(parsed ?? fallback)
   } catch (error) {
     console.warn(`[ai] wrapped_narrative failed for ${facts.date}:`, error)

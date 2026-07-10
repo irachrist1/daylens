@@ -41,6 +41,20 @@ function seedSessions(db: Database.Database, count: number, titledEvery: number,
   }
 }
 
+/** Persist a non-live, labelled block for the day so persistedDayWasProcessed
+ *  reports it analyzed (an 'ai' label source is what it looks for). */
+function markDayProcessed(db: Database.Database, date: string): void {
+  const blockId = `blk-${date}`
+  db.prepare(`
+    INSERT INTO timeline_blocks (id, date, start_time, end_time, block_kind, dominant_category, label_current, label_source, is_live, heuristic_version, computed_at)
+    VALUES (?, ?, ?, ?, 'work', 'development', 'Building the thing', 'ai', 0, 'test', ?)
+  `).run(blockId, date, DAY_START, DAY_START + 60 * 60_000, Date.now())
+  db.prepare(`
+    INSERT INTO timeline_block_labels (id, block_id, label, source, confidence, created_at)
+    VALUES (?, ?, 'Building the thing', 'ai', 0.9, ?)
+  `).run(`lbl-${date}`, blockId, Date.now())
+}
+
 test('a thin, unanalyzed day warns specifically without blocking', () => {
   const db = makeDb()
   seedSessions(db, 4, 1)
@@ -109,5 +123,21 @@ test('an empty day never throws and reports zero work', () => {
   assert.equal(result.workSeconds, 0)
   assert.ok(result.warnings.some((w) => w.kind === 'lowWork'))
   assert.equal(result.missingTitlePct, null)
+  db.close()
+})
+
+test('an unanalyzed day with blocks warns notAnalyzed; a processed day does not', () => {
+  const db = makeDb()
+  // A real, full day of work sessions, but never processed/analyzed.
+  seedSessions(db, 30, 1)
+  const before = getWrapPreflight(db, DATE)
+  assert.ok(before.warnings.some((w) => w.kind === 'notAnalyzed'), 'unanalyzed day with blocks warns')
+  assert.equal(before.analyzed, false)
+
+  // Mark the day processed the way persistedDayWasProcessed detects it.
+  markDayProcessed(db, DATE)
+  const after = getWrapPreflight(db, DATE)
+  assert.equal(after.analyzed, true)
+  assert.ok(!after.warnings.some((w) => w.kind === 'notAnalyzed'), 'a processed day has no notAnalyzed warning')
   db.close()
 })

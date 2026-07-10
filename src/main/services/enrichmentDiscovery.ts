@@ -271,8 +271,11 @@ function candidateStorePaths(app: string, homeDir: string): string[] {
 export async function collectFocusAppSignals(
   date: string,
   roots: FocusAppRoots = {},
+  includeApp: (app: string) => boolean = () => true,
 ): Promise<FocusAppSignal[] | null> {
-  const installedApps = detectFocusApps(roots).filter((entry) => entry.installed)
+  // Only read the local store of an app the caller allows (the `focus:<app>`
+  // toggle) — a disabled app's store is never even opened.
+  const installedApps = detectFocusApps(roots).filter((entry) => entry.installed && includeApp(entry.app))
   if (installedApps.length === 0) return null
 
   const homeDir = roots.homeDir ?? os.homedir()

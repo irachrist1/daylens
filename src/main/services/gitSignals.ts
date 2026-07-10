@@ -109,12 +109,56 @@ function clock(ms: number): string {
     .toLowerCase()
 }
 
-/** One line of defense on commit subjects: truncate, strip control chars. The
- *  tool boundary (sanitizeToolResult) is the second. */
-function cleanSubject(subject: string): string {
+/** Path-like and branch-like tokens that must never reach a wrap or a tool
+ *  result (Stage 0.3 promise, voice.md: name the work, never the plumbing).
+ *  Each matches a WHOLE risky token so ordinary slashes in prose ("CI/CD",
+ *  "and/or", "TCP/IP") survive; only things that read as a file path or a git
+ *  ref are stripped. Applied before storage AND before tool output. */
+const PATH_BRANCH_PATTERNS: RegExp[] = [
+  // A URL: strip whole so a github.com/acme/repo/pull/123 link never leaks.
+  /\bhttps?:\/\/[^\s]+/gi,
+  // Windows absolute path: C:\Users\me\src\foo.ts
+  /[A-Za-z]:\\[^\s]+/g,
+  // Windows RELATIVE backslash path: src\main\services\gitSignals.ts, a\b\c
+  /\b[\w.-]+(?:\\[\w.-]+)+/g,
+  // Leading slash / dot-slash / tilde path: /Users/me/x, ./src/x, ../a/b, ~/dev/x
+  /(?:^|\s)[~.]{0,2}\/[^\s]+/g,
+  // A whole slashed path ending in a file extension: vendor/lib/thing.min.js,
+  // api/schema.graphql, packages/app/index.tsx. Must contain at least one slash,
+  // so ordinary "CI/CD" (no extension) and bare "v2.0" (no slash) are left alone.
+  /\b[\w.-]+(?:\/[\w.-]+)+\.[A-Za-z0-9]{1,10}\b/g,
+  // A branch/PR ref carrying a ticket id: bug/DEV-123, jira/PROJ-42, x/ABC-7
+  /\b[\w.-]+\/[A-Z][A-Z0-9]+-\d+\b/g,
+  // A git ref with a remote/branch prefix: origin/main, refs/heads/x,
+  // feature/login, fix/DEV-123, bug/x, chore/bump-deps, spike/y
+  /\b(?:origin|upstream|refs\/heads|refs\/remotes|feat|feature|fix|fixes|bug|bugfix|hotfix|chore|release|wip|dev|develop|task|spike|story|epic|jira|ticket)\/[\w.\-/]+/gi,
+  // A relative path under a known code dir, even without an extension:
+  // src/main/services, packages/app/y
+  /\b(?:src|lib|tests?|dist|build|node_modules|packages?|apps?|components?|services?|main|renderer|shared|scripts?|docs?|public|assets?|styles?|utils?|hooks?|pages?)\/[\w.\-/]+/gi,
+]
+
+/** Strip path-like and branch-like tokens, then tidy the wreckage: collapse the
+ *  gaps, drop a now-dangling trailing connective ("harden the parser in" →
+ *  "harden the parser"), and trim stray edge punctuation. */
+export function stripPathsAndBranches(input: string): string {
+  let out = input
+  for (const re of PATH_BRANCH_PATTERNS) out = out.replace(re, ' ')
+  out = out.replace(/\s+/g, ' ').trim()
+  // A preposition/article left hanging at the end after its object was removed.
+  out = out.replace(/\s+(?:in|to|from|on|for|at|into|under|the|a|an|of|and|with)\s*$/i, '')
+  // Stray connective punctuation left at either edge.
+  out = out.replace(/^[\s:;,.\-/\\]+/, '').replace(/[\s:;,\-/\\]+$/, '').trim()
+  return out
+}
+
+/** One line of defense on commit subjects and PR titles: strip control chars,
+ *  strip file paths and branch names (Stage 0.3), collapse whitespace, truncate.
+ *  The tool boundary (sanitizeToolResult) is a second, secrets-focused pass. */
+export function cleanSubject(subject: string): string {
   // eslint-disable-next-line no-control-regex
   const cleaned = subject.replace(/[\u0000-\u001F]/g, ' ').replace(/\s+/g, ' ').trim()
-  return cleaned.length > MAX_MESSAGE_LENGTH ? `${cleaned.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : cleaned
+  const stripped = stripPathsAndBranches(cleaned)
+  return stripped.length > MAX_MESSAGE_LENGTH ? `${stripped.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : stripped
 }
 
 async function repoActivityForDate(repo: string, date: string): Promise<GitRepoActivity | null> {

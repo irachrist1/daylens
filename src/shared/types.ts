@@ -1256,6 +1256,38 @@ export interface StoredExternalSignal<T = unknown> {
   capturedAt: number
 }
 
+/** The day's external signals, RESOLVED for the wrap writer (Stage 0 Gap 1):
+ *  sanitized, humanized, pre-formatted, and stripped of anything the model must
+ *  never echo (raw paths, branches, clock times it can't ground). Each block is
+ *  null when its connector found nothing. This is what turns "4h in Cursor" into
+ *  "wrote 9 commits to the billing service and opened a PR". */
+export interface DayEnrichment {
+  /** What the day PRODUCED, from git + gh. */
+  shipped: {
+    /** Commits per repo, humanized folder name, biggest first. */
+    commitsByProject: Array<{ project: string; commits: number }>
+    /** Sanitized, humanized commit subjects / PR titles worth naming — never a
+     *  raw path or branch (already stripped). Deduped, capped. */
+    highlights: string[]
+    /** PRs grouped by project + state (open | merged | closed | draft). */
+    pullRequests: Array<{ project: string; state: string; count: number }>
+  } | null
+  /** What MEETINGS shaped the day, from the calendar connector. */
+  meetings: {
+    count: number
+    /** Titles + pre-formatted scheduled length, longest first. title null when
+     *  the source gave none. Never an attendee name or count. */
+    items: Array<{ title: string | null; scheduled: string }>
+  } | null
+  /** Focus-timer runs, when the user enabled a focus app. Barest by design. */
+  focusSessions: {
+    tool: string
+    sessions: number
+    /** Pre-formatted total focused time. */
+    focused: string
+  } | null
+}
+
 /** Discovered optional enrichment sources shown in Settings (Stage 0.2):
  *  MCP servers from the Claude Desktop config and focus tools on this machine.
  *  Discovery only — nothing is called until the user enables it AND a future

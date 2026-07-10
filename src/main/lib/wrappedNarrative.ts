@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto'
 import { VOICE_SYSTEM_PROMPT } from '../ai/voiceContract'
-import type { AIWrappedNarrative } from '@shared/types'
+import type { AIWrappedNarrative, DayEnrichment } from '@shared/types'
 import {
   formatHm,
   workActionPhrase,
@@ -31,7 +31,43 @@ import {
 
 // ─── Hashing & cache key ──────────────────────────────────────────────────────
 
-export function computeFactsHash(facts: DayWrapFacts): string {
+/** A compact, order-stable fingerprint of the enrichment the model saw, so the
+ *  stored factsHash honestly changes when what was shipped/met changes (a
+ *  post-commit Regenerate yields a new hash). */
+function enrichmentFingerprint(enrichment: DayEnrichment | null | undefined): unknown {
+  if (!enrichment) return null
+  return {
+    shipped: enrichment.shipped && {
+      commits: enrichment.shipped.commitsByProject.map((c) => [c.project, c.commits]),
+      prs: enrichment.shipped.pullRequests.map((p) => [p.project, p.state, p.count]),
+      highlights: enrichment.shipped.highlights.map((h) => h.toLowerCase()),
+    },
+    meetings: enrichment.meetings && {
+      count: enrichment.meetings.count,
+      items: enrichment.meetings.items.map((i) => [i.title?.toLowerCase() ?? '', i.scheduled]),
+    },
+    focus: enrichment.focusSessions && [enrichment.focusSessions.tool, enrichment.focusSessions.sessions, enrichment.focusSessions.focused],
+  }
+}
+
+/** All counts the model may legitimately attach to an enrichment noun, keyed by
+ *  category ("commits:9") so a real meeting count can't vouch for a commit count.
+ *  A total commit count across projects is also allowed (the model may sum). */
+export function enrichmentAllowedCounts(enrichment: DayEnrichment | null | undefined): Set<string> {
+  const counts = new Set<string>()
+  if (!enrichment) return counts
+  let commitTotal = 0
+  for (const c of enrichment.shipped?.commitsByProject ?? []) { counts.add(`commits:${c.commits}`); commitTotal += c.commits }
+  if (commitTotal > 0) counts.add(`commits:${commitTotal}`)
+  let prTotal = 0
+  for (const p of enrichment.shipped?.pullRequests ?? []) { counts.add(`prs:${p.count}`); prTotal += p.count }
+  if (prTotal > 0) counts.add(`prs:${prTotal}`)
+  if (enrichment.meetings) counts.add(`meetings:${enrichment.meetings.count}`)
+  if (enrichment.focusSessions) counts.add(`sessions:${enrichment.focusSessions.sessions}`)
+  return counts
+}
+
+export function computeFactsHash(facts: DayWrapFacts, enrichment?: DayEnrichment | null): string {
   const bucket = (s: number) => Math.round(s / 60)
   const canonical = JSON.stringify({
     date: facts.date,
@@ -46,6 +82,7 @@ export function computeFactsHash(facts: DayWrapFacts): string {
     standout: facts.standout ? [facts.standout.name.toLowerCase(), bucket(facts.standout.seconds)] : null,
     wildcard: facts.wildcardHook ? [facts.wildcardHook.kind, facts.wildcardHook.value] : null,
     story: facts.dayStory.map((seg) => [seg.part, seg.items.map((i) => i.toLowerCase()), bucket(seg.seconds)]),
+    enrichment: enrichmentFingerprint(enrichment),
   })
   return createHash('sha1').update(canonical).digest('hex').slice(0, 12)
 }
@@ -54,12 +91,13 @@ export function wrappedNarrativeCacheKey(facts: DayWrapFacts, factsHash: string)
   return `${facts.date}|${factsHash}`
 }
 
-function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[]): LineGuardContext {
+function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[], enrichment?: DayEnrichment | null): LineGuardContext {
   return {
     totalHours: facts.activeSeconds / 3600,
     hourTolerance: 1.05,
     allowedPercents: guardContextPercents(slides),
     allowedTimes: guardContextTimes(slides),
+    allowedCounts: enrichmentAllowedCounts(enrichment),
   }
 }
 
@@ -67,8 +105,10 @@ function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[]): LineGuardCo
 
 /** The compact, model-facing projection of the facts. Durations are
  *  pre-formatted so the model never does math. Exported so ask-anything
- *  answers ground themselves in exactly what the wrap narrated. */
-export function compactDayFacts(facts: DayWrapFacts) {
+ *  answers ground themselves in exactly what the wrap narrated. `enrichment`
+ *  (git / calendar / focus, already sanitized) rides along when present so the
+ *  wrap can say what was PRODUCED, not only what was open. */
+export function compactDayFacts(facts: DayWrapFacts, enrichment?: DayEnrichment | null) {
   const storyBeats = facts.dayStory.map((s) => ({
     when: `${s.clockStart} to ${s.clockEnd}`,
     partOfDay: s.label,
@@ -102,6 +142,12 @@ export function compactDayFacts(facts: DayWrapFacts) {
       app: app.appName,
       workedOn: app.clusters.map((c) => `${c.label} (${c.sessions === 1 ? '1 session' : `${c.sessions} sessions`}, ${formatHm(c.seconds)})`),
     })),
+    // Enrichment (git / calendar / focus). Each key present only when its
+    // connector had something; already sanitized and pre-formatted. These carry
+    // NO clock times on purpose (the per-slide clock guard would kill them).
+    ...(enrichment?.shipped ? { shipped: enrichment.shipped } : {}),
+    ...(enrichment?.meetings ? { meetings: enrichment.meetings } : {}),
+    ...(enrichment?.focusSessions ? { focusSessions: enrichment.focusSessions } : {}),
   }
 }
 
@@ -129,8 +175,31 @@ const TIME_LITERACY = [
   '"5pm", "9am", "10pm" and the like ARE clock times, not parts of day. Never write "after 5pm" to mean "the evening"; write "the evening". A clock time is allowed ONLY when it is in that slide\'s own facts.',
 ].join(' ')
 
-export function buildWrappedPrompts(facts: DayWrapFacts): { systemPrompt: string; userMessage: string } {
+/** The enrichment directives, added only for the blocks that are present. They
+ *  govern how the model may speak git / calendar / focus without inventing or
+ *  leaking plumbing. Kept in the same terse imperative voice as the rest. */
+function enrichmentDirectives(enrichment: DayEnrichment | null | undefined): string[] {
+  if (!enrichment) return []
+  const out: string[] = [
+    'SOME FACTS COME FROM OUTSIDE THE SCREEN TIME. The facts may include "shipped" (real git commits and pull requests, by project), "meetings" (calendar events with titles and scheduled lengths), and "focusSessions" (focus-timer runs). They are real and specific; use them to say what was PRODUCED, not only what was open. They carry no clock times, so write none for them. Copy every duration exactly and never invent a count.',
+  ]
+  if (enrichment.shipped) {
+    out.push('"shipped" names the work the day produced. Say what was committed and to which project using the humanized project names in shipped.commitsByProject (for example "wrote 9 commits to the billing service"), draw on shipped.highlights to describe what was actually built in plain words, and note a pull request opened, merged, closed, or left a draft from shipped.pullRequests. Use the EXACT commit and pull-request counts the facts give you, never a different number. A commit is a commit and a pull request is a pull request; do not upgrade it into a shipped feature or invent what the code did beyond what the facts say. Never print a filename, path, folder, or branch; the project name and the highlight phrasing are the only code identifiers you may write, and you must phrase highlights as human work, never paste them verbatim as a label.')
+  }
+  if (enrichment.meetings) {
+    out.push('"meetings" tells you what the day\'s meetings were. You may say how many there were (meetings.count) and name a meeting by the title in meetings.items when it reads like a meeting. Never state an attendee count. The meetings slide\'s big number is time spent IN meeting apps; a meeting\'s "scheduled" length is a different fact. You may cite ONE meeting\'s scheduled length as color, copied exactly, but never add scheduled lengths together, never present their sum as the slide\'s number, and never claim a meeting total that disagrees with that card.')
+  } else {
+    out.push('Never state how MANY meetings there were; the facts only know the total meeting time.')
+  }
+  if (enrichment.focusSessions) {
+    out.push('"focusSessions" records focus-timer runs. You may name the tool, how many sessions there were, and the total focused time copied exactly. Describe it plainly as time set aside to work; never turn it into a score, a percentage, or a grade.')
+  }
+  return out
+}
+
+export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichment | null): { systemPrompt: string; userMessage: string } {
   const slides = planDayWrapSlides(facts)
+  const hasMeetingsEnrichment = Boolean(enrichment?.meetings)
   const systemPrompt = [
     VOICE_SYSTEM_PROMPT,
     'You are Daylens, writing a Spotify-Wrapped-style recap of one person\'s day, slide by slide, as if an AI who watched the whole day sat down to reflect on it with them. Every reveal should feel like it was written for THIS day, never a template.',
@@ -153,20 +222,21 @@ export function buildWrappedPrompts(facts: DayWrapFacts): { systemPrompt: string
     'DO NOT DEFEND OR JUSTIFY REST OR LEISURE. Never argue that downtime was "not drift", "not a distraction", "deliberate", or "earned". Rest is allowed and needs no defense; just say plainly what the person did and move on.',
     'Copy every DURATION exactly as the facts pre-format it (if the facts say 42m, never write "45 minutes" or "about 45m"); never round or invent a duration.',
     'The curious question must contain NO clock time and NO percentage.',
-    'Never state how MANY meetings there were; the facts only know the total meeting time.',
+    ...(hasMeetingsEnrichment ? [] : ['Never state how MANY meetings there were; the facts only know the total meeting time.']),
+    ...enrichmentDirectives(enrichment),
     'NEVER predict tomorrow, NEVER assign homework, NEVER tell the user to pick something up.',
     'Never use an em dash anywhere. Use a comma, a period, or "and". Use "to" for ranges, never a dash.',
     'Any duration you write must appear pre-formatted in the facts. Never compute a new one.',
     'Never describe yourself as a model. You are the small, honest voice of the app.',
     'If facts.quality is "partial", keep every line modest and short.',
     NARRATIVE_ANGLES[facts.seed % NARRATIVE_ANGLES.length],
-  ].join(' ')
+  ].filter(Boolean).join(' ')
 
   const userMessage = [
     `Date: ${facts.date}`,
     '',
     'Compact facts JSON:',
-    JSON.stringify(compactDayFacts(facts), null, 2),
+    JSON.stringify(compactDayFacts(facts, enrichment), null, 2),
     '',
     deckPromptSection(slides),
     '',
@@ -182,6 +252,7 @@ export function validateWrappedNarrativeResponse(
   raw: string,
   facts: DayWrapFacts,
   factsHash: string,
+  enrichment?: DayEnrichment | null,
 ): AIWrappedNarrative | null {
   const jsonText = stripCodeFence(raw).trim()
   if (!jsonText) return null
@@ -196,7 +267,7 @@ export function validateWrappedNarrativeResponse(
   const obj = parsed as Record<string, unknown>
 
   const slides = planDayWrapSlides(facts)
-  const ctx = guardContext(facts, slides)
+  const ctx = guardContext(facts, slides, enrichment)
   const linesRaw = (obj.lines && typeof obj.lines === 'object') ? obj.lines as Record<string, unknown> : null
   const lines = validateDeckLines(linesRaw, slides, ctx)
 
