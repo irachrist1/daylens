@@ -559,6 +559,90 @@ function WhyScene({ scene, name }: { scene: 'diary' | 'device' | 'recap'; name: 
 
 // ── Main view ────────────────────────────────────────────────────────────────
 
+function AddItemRow({
+  value,
+  onChange,
+  onAdd,
+  placeholder,
+  maxLength,
+  buttonLabel = 'Add',
+}: {
+  value: string
+  onChange: (value: string) => void
+  onAdd: (value: string) => void
+  placeholder: string
+  maxLength: number
+  buttonLabel?: string
+}) {
+  return (
+    <div className="ob-addrow">
+      <input
+        className="ob-input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            onAdd(value)
+          }
+        }}
+      />
+      <button className="ob-add-btn" onClick={() => onAdd(value)} disabled={!value.trim()}>{buttonLabel}</button>
+    </div>
+  )
+}
+
+function TokenChips({
+  items,
+  kind,
+  onRemove,
+  removeLabel,
+}: {
+  items: string[]
+  kind: 'token' | 'private'
+  onRemove: (item: string) => void
+  removeLabel: (item: string) => string
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="ob-chipwrap">
+      {items.map((item) => (
+        <span key={item} className={`ob-chip is-${kind}`}>
+          {kind === 'private' ? '🔒 ' : ''}{item}
+          <button className="ob-token-x" aria-label={removeLabel(item)} onClick={() => onRemove(item)}>×</button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function NotificationPermissionButton({
+  permission,
+  busy,
+  onRequest,
+  onOpenSettings,
+}: {
+  permission: NotificationPermissionState
+  busy: boolean
+  onRequest: () => Promise<void>
+  onOpenSettings: () => Promise<void>
+}) {
+  if (permission === 'granted' || permission === 'unsupported') return null
+  return (
+    <button
+      type="button"
+      className="ob-btn-secondary ob-btn-sm"
+      style={{ marginTop: 12 }}
+      onClick={() => void (permission === 'denied' ? onOpenSettings() : onRequest())}
+      disabled={busy}
+    >
+      {permission === 'denied' ? 'Open notification settings' : 'Turn on notifications'}
+    </button>
+  )
+}
+
 export default function Onboarding({
   initialSettings,
   onComplete,
@@ -602,6 +686,7 @@ export default function Onboarding({
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [proof, setProof] = useState<ProofSnapshot>({ liveSession: null, timeline: null, ready: false })
+  const [proofLoadError, setProofLoadError] = useState<string | null>(null)
   const [linuxTracking, setLinuxTracking] = useState<LinuxTrackingDiagnostics | null>(null)
   const [settingsHandoff, setSettingsHandoff] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>('not-determined')
@@ -609,6 +694,7 @@ export default function Onboarding({
   const proofTrackedRef = useRef(false)
   const paywallTrackedRef = useRef(false)
   const onboardingStateRef = useRef(settings.onboardingState)
+  const transitionBusyRef = useRef(false)
 
   const platform = settings.onboardingState.platform
   const stage = settings.onboardingState.stage
@@ -647,23 +733,23 @@ export default function Onboarding({
   useEffect(() => {
     if (stage !== 'ai_setup' && stage !== 'ready') return
     void ipc.notifications.getPermissionState().then(setNotificationPermission).catch(() => {
-      setNotificationPermission('unsupported')
+      setErrorMessage('Could not check notification permission. You can retry with the button below.')
     })
   }, [stage])
 
   // Refresh notification permission on window focus during ready stage so the
-  // status updates when the user returns from System Settings after toggling.
+  // status updates after an OS settings round-trip on every platform.
   useEffect(() => {
-    if (!isMac || stage !== 'ready') return
+    if (stage !== 'ready') return
     if (notificationPermission !== 'not-determined' && notificationPermission !== 'denied') return
     const onFocus = () => {
       void ipc.notifications.getPermissionState().then(setNotificationPermission).catch(() => {
-        setNotificationPermission('unsupported')
+        setErrorMessage('Could not refresh notification permission. Daylens is keeping the last known state.')
       })
     }
     window.addEventListener('focus', onFocus)
     return () => { window.removeEventListener('focus', onFocus) }
-  }, [isMac, stage, notificationPermission])
+  }, [stage, notificationPermission])
 
   async function requestNotificationPermission() {
     setBusy(true)
@@ -757,28 +843,42 @@ export default function Onboarding({
   async function persistOnboarding(
     nextStage: OnboardingStage,
     partial: Partial<AppSettings['onboardingState']> = {},
-  ) {
+  ): Promise<boolean> {
+    if (transitionBusyRef.current) return false
+    transitionBusyRef.current = true
+    setBusy(true)
+    setErrorMessage(null)
     // onboarding_step_completed fires here — the single choke point every
     // stage transition passes through — exactly once per forward step.
     // Backward navigation and same-stage state updates don't fire.
     const flow = isMac ? MAC_ANALYTICS_FLOW : STAGE_FLOW
-    const fromIndex = flow.indexOf(analyticsStage(settings.onboardingState.stage))
+    const currentState = onboardingStateRef.current
+    const fromIndex = flow.indexOf(analyticsStage(currentState.stage))
     const toIndex = flow.indexOf(analyticsStage(nextStage))
-    if (fromIndex >= 0 && toIndex > fromIndex) {
-      track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
-        step_name: flow[fromIndex],
-        step_index: fromIndex,
-        total_steps: flow.length,
-      })
-    }
-
     const nextState = {
-      ...settings.onboardingState,
+      ...currentState,
       ...partial,
       stage: nextStage,
     }
-    setSettings((current) => ({ ...current, onboardingState: nextState }))
-    await ipc.settings.set({ onboardingState: nextState })
+    try {
+      await ipc.settings.set({ onboardingState: nextState })
+      onboardingStateRef.current = nextState
+      setSettings((current) => ({ ...current, onboardingState: nextState }))
+      if (fromIndex >= 0 && toIndex > fromIndex) {
+        track(ANALYTICS_EVENT.ONBOARDING_STEP_COMPLETED, {
+          step_name: flow[fromIndex],
+          step_index: fromIndex,
+          total_steps: flow.length,
+        })
+      }
+      return true
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+      return false
+    } finally {
+      transitionBusyRef.current = false
+      setBusy(false)
+    }
   }
 
   async function refreshPermissionState() {
@@ -871,9 +971,9 @@ export default function Onboarding({
     async function loadProof() {
       try {
         const [timeline, liveSession, diagnostics] = await Promise.all([
-          ipc.db.getTimelineDay(todayString()).catch(() => null),
-          ipc.tracking.getLiveSession().catch(() => null),
-          isLinux ? ipc.tracking.getDiagnostics().catch(() => null) : Promise.resolve(null),
+          ipc.db.getTimelineDay(todayString()),
+          ipc.tracking.getLiveSession(),
+          isLinux ? ipc.tracking.getDiagnostics() : Promise.resolve(null),
         ])
         if (cancelled) return
 
@@ -892,6 +992,7 @@ export default function Onboarding({
         )
 
         setProof({ liveSession, timeline, ready })
+        setProofLoadError(null)
 
         const nextProofState: ProofState = ready ? 'ready' : 'collecting'
         const currentOnboardingState = onboardingStateRef.current
@@ -906,7 +1007,7 @@ export default function Onboarding({
         }
       } catch (err) {
         if (!cancelled) {
-          setErrorMessage(err instanceof Error ? err.message : String(err))
+          setProofLoadError(err instanceof Error ? err.message : String(err))
         }
       }
     }
@@ -1024,6 +1125,7 @@ export default function Onboarding({
 
     try {
       const nextExcludedApps = Array.from(excludedApps)
+      await ipc.attribution.ensureClients(clients)
       await ipc.settings.set({
         onboardingComplete: true,
         onboardingState: nextOnboardingState,
@@ -1098,8 +1200,12 @@ export default function Onboarding({
     // mid-flow reload) is already personalized. Fall back to the placeholder.
     const resolvedName = nameDraft.trim() || namePlaceholder.trim()
     if (resolvedName && resolvedName !== nameDraft) setNameDraft(resolvedName)
-    await ipc.settings.set({ userName: resolvedName })
-    await persistOnboarding('why')
+    try {
+      await ipc.settings.set({ userName: resolvedName })
+      await persistOnboarding('why')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   function advanceWhy() {
@@ -1137,22 +1243,36 @@ export default function Onboarding({
   }
 
   async function continueFromAbout() {
-    await ipc.settings.set({
-      userRole: userRoleLabel,
-      userGoals: Array.from(goals),
-      userIntent: intentDraft.trim(),
-    })
-    await persistOnboarding('voice')
+    try {
+      await ipc.settings.set({
+        userRole: userRoleLabel,
+        userGoals: Array.from(goals),
+        userIntent: intentDraft.trim(),
+      })
+      await persistOnboarding('voice')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function chooseVoice(voice: SummaryVoice) {
+    const previous = summaryVoice
     setSummaryVoiceState(voice)
-    await ipc.settings.set({ summaryVoice: voice })
+    try {
+      await ipc.settings.set({ summaryVoice: voice })
+    } catch (error) {
+      setSummaryVoiceState(previous)
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function continueFromVoice() {
-    await ipc.settings.set({ summaryVoice })
-    await persistOnboarding('work')
+    try {
+      await ipc.settings.set({ summaryVoice })
+      await persistOnboarding('work')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   function toggleInSet<T>(value: T, setter: Dispatch<SetStateAction<Set<T>>>) {
@@ -1202,27 +1322,44 @@ export default function Onboarding({
   }
 
   async function continueFromWork() {
-    await ipc.settings.set({
-      focusApps: Array.from(focusApps),
-      interestedCategories: Array.from(interestedCategories),
-    })
-    await persistOnboarding('connections')
+    try {
+      await ipc.settings.set({
+        focusApps: Array.from(focusApps),
+        interestedCategories: Array.from(interestedCategories),
+      })
+      await persistOnboarding('connections')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function continueFromConnections() {
-    await ipc.settings.set({ userClients: clients, workRhythm })
-    await persistOnboarding('privacy')
+    setBusy(true)
+    setErrorMessage(null)
+    try {
+      await ipc.attribution.ensureClients(clients)
+      await ipc.settings.set({ workRhythm })
+      await persistOnboarding('privacy')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (!transitionBusyRef.current) setBusy(false)
+    }
   }
 
   async function continueFromPrivacy() {
     const nextExcludedApps = Array.from(excludedApps)
-    await ipc.settings.set({
-      // Excluding specific apps requires the controls master switch on. Turn it
-      // on implicitly when the user actually picked something to keep private.
-      trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
-      trackingExcludedApps: nextExcludedApps,
-    })
-    await persistOnboarding('ai_setup', { personalizationState: 'completed' })
+    try {
+      await ipc.settings.set({
+        // Excluding specific apps requires the controls master switch on. Turn it
+        // on implicitly when the user actually picked something to keep private.
+        trackingControlsEnabled: trackingOptIn || nextExcludedApps.length > 0,
+        trackingExcludedApps: nextExcludedApps,
+      })
+      await persistOnboarding('ai_setup', { personalizationState: 'completed' })
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
   }
 
   async function openCheckout() {
@@ -1451,12 +1588,16 @@ export default function Onboarding({
               </div>
             ) : (
               <div className="ob-proof-pending">
-                <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
-                {isLinux && linuxTracking && linuxTracking.supportLevel !== 'ready' ? (
-                  <p>{linuxTracking.supportMessage} Open Settings → Capture health after setup for the full picture.</p>
+                {proofLoadError ? (
+                  <p>Daylens could not check the first signal yet: {proofLoadError}. It will retry automatically.</p>
                 ) : (
-                  <p>Go about your day. Daylens keeps listening for real work signal.</p>
+                  <div className="onboarding-breath" aria-hidden="true"><span /><span /><span /></div>
                 )}
+                {!proofLoadError && isLinux && linuxTracking && linuxTracking.supportLevel !== 'ready' ? (
+                  <p>{linuxTracking.supportMessage} Open Settings → Capture health after setup for the full picture.</p>
+                ) : !proofLoadError ? (
+                  <p>Go about your day. Daylens keeps listening for real work signal.</p>
+                ) : null}
               </div>
             )}
           </Stage>
@@ -1635,17 +1776,13 @@ export default function Onboarding({
                   </button>
                 ))}
               </div>
-              <div className="ob-addrow">
-                <input
-                  className="ob-input"
-                  value={customAppDraft}
-                  onChange={(e) => setCustomAppDraft(e.target.value)}
-                  placeholder="Add one: Excel, PowerPoint, Premiere…"
-                  maxLength={60}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomApp(customAppDraft) } }}
-                />
-                <button className="ob-add-btn" onClick={() => addCustomApp(customAppDraft)} disabled={!customAppDraft.trim()}>Add</button>
-              </div>
+              <AddItemRow
+                value={customAppDraft}
+                onChange={setCustomAppDraft}
+                onAdd={addCustomApp}
+                placeholder="Add one: Excel, PowerPoint, Premiere…"
+                maxLength={60}
+              />
               <div className="ob-hint ob-hint-wink">Don't see your favorite app? Add it, or don't. Daylens tracks them all anyway. I just got tired of listing them. 😅</div>
             </div>
           </Stage>
@@ -1666,28 +1803,20 @@ export default function Onboarding({
             <div className="ob-section">
               <div className="ob-label">Add your clients or projects <span className="ob-label-opt">optional</span></div>
               <div className="ob-hint">Name the ones you bill or want time grouped under. Daylens then spots them in your window titles and docs, so it can tell you "3.5h on Acme this week" without you logging a thing.</div>
-              <div className="ob-addrow">
-                <input
-                  className="ob-input"
-                  value={clientDraft}
-                  onChange={(e) => setClientDraft(e.target.value)}
-                  placeholder="Type a client or project name…"
-                  maxLength={80}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addClient(clientDraft) } }}
-                />
-                <button className="ob-add-btn" onClick={() => addClient(clientDraft)} disabled={!clientDraft.trim()}>Add</button>
-              </div>
+              <AddItemRow
+                value={clientDraft}
+                onChange={setClientDraft}
+                onAdd={addClient}
+                placeholder="Type a client or project name…"
+                maxLength={80}
+              />
               {clients.length === 0 && <div className="ob-hint ob-hint-quiet">Nothing here yet. Add as many as you like, or skip and add them later.</div>}
-              {clients.length > 0 && (
-                <div className="ob-chipwrap">
-                  {clients.map((c) => (
-                    <span key={c} className="ob-chip is-token">
-                      {c}
-                      <button className="ob-token-x" aria-label={`Remove ${c}`} onClick={() => setClients((prev) => prev.filter((x) => x !== c))}>×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <TokenChips
+                items={clients}
+                kind="token"
+                onRemove={(client) => setClients((current) => current.filter((item) => item !== client))}
+                removeLabel={(client) => `Remove ${client}`}
+              />
             </div>
 
             <div className="ob-section">
@@ -1730,17 +1859,14 @@ export default function Onboarding({
           >
             <div className="ob-section">
               <div className="ob-addbox">
-                <div className="ob-addrow">
-                  <input
-                    className="ob-input"
-                    value={privateDraft}
-                    onChange={(e) => setPrivateDraft(e.target.value)}
-                    placeholder="Start typing an app or site… (Messages, reddit.com)"
-                    maxLength={80}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPrivateApp(privateDraft) } }}
-                  />
-                  <button className="ob-add-btn" onClick={() => addPrivateApp(privateDraft)} disabled={!privateDraft.trim()}>Keep private</button>
-                </div>
+                <AddItemRow
+                  value={privateDraft}
+                  onChange={setPrivateDraft}
+                  onAdd={addPrivateApp}
+                  placeholder="Start typing an app or site… (Messages, reddit.com)"
+                  maxLength={80}
+                  buttonLabel="Keep private"
+                />
                 {privateMatches.length > 0 && (
                   <div className="ob-suggest">
                     {privateMatches.map((app) => (
@@ -1752,16 +1878,12 @@ export default function Onboarding({
                 )}
               </div>
 
-              {excludedApps.size > 0 && (
-                <div className="ob-chipwrap">
-                  {Array.from(excludedApps).map((app) => (
-                    <span key={app} className="ob-chip is-private">
-                      🔒 {app}
-                      <button className="ob-token-x" aria-label={`Stop keeping ${app} private`} onClick={() => toggleInSet(app, setExcludedApps)}>×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <TokenChips
+                items={Array.from(excludedApps)}
+                kind="private"
+                onRemove={(app) => toggleInSet(app, setExcludedApps)}
+                removeLabel={(app) => `Stop keeping ${app} private`}
+              />
             </div>
           </Stage>
         )
@@ -1821,27 +1943,22 @@ export default function Onboarding({
               <div>
                 <div className="ob-callout-title">Morning briefs and evening wraps</div>
                 <div className="ob-callout-body">
-                  Daylens can nudge you at the start and end of your day, plus warn when focus drifts. We need macOS notification permission before you finish setup.
+                  Daylens can nudge you at the start and end of your day, plus warn when focus drifts. We need notification permission before you finish setup.
                 </div>
               </div>
               <div className={`ob-status ob-status-${notificationStatusTone}`} style={{ marginTop: 12 }}>
                 <span className="ob-status-dot" />
                 <span className="ob-status-label">{notificationStatusLabel}</span>
               </div>
-              {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
-                <button
-                  type="button"
-                  className="ob-btn-secondary ob-btn-sm"
-                  style={{ marginTop: 12 }}
-                  onClick={() => void (notificationPermission === 'denied' ? openNotificationSettings() : requestNotificationPermission())}
-                  disabled={busy}
-                >
-                  {notificationPermission === 'denied' ? 'Open System Settings' : 'Turn on notifications'}
-                </button>
-              )}
+              <NotificationPermissionButton
+                permission={notificationPermission}
+                busy={busy}
+                onRequest={requestNotificationPermission}
+                onOpenSettings={openNotificationSettings}
+              />
               {notificationPermission === 'denied' && (
                 <div className="ob-callout-body" style={{ marginTop: 8 }}>
-                  Notifications are off for Daylens. Open System Settings → Notifications → Daylens and allow alerts.
+                  Notifications are off for Daylens. Open your system's notification settings and allow alerts for Daylens.
                 </div>
               )}
             </div>
@@ -1885,18 +2002,15 @@ export default function Onboarding({
                 <div className="ob-callout-title">Notifications still off</div>
                 <div className="ob-callout-body">
                   {notificationPermission === 'denied'
-                    ? 'Daylens cannot send morning briefs or evening wraps until you enable notifications in System Settings → Notifications → Daylens.'
+                    ? "Daylens cannot send morning briefs or evening wraps until you allow Daylens in your system's notification settings."
                     : 'Allow notifications so Daylens can reach you with briefs, wraps, and focus nudges.'}
                 </div>
-                <button
-                  type="button"
-                  className="ob-btn-secondary ob-btn-sm"
-                  style={{ marginTop: 12 }}
-                  onClick={() => void (notificationPermission === 'denied' ? openNotificationSettings() : requestNotificationPermission())}
-                  disabled={busy}
-                >
-                  {notificationPermission === 'denied' ? 'Open System Settings' : 'Turn on notifications'}
-                </button>
+                <NotificationPermissionButton
+                  permission={notificationPermission}
+                  busy={busy}
+                  onRequest={requestNotificationPermission}
+                  onOpenSettings={openNotificationSettings}
+                />
               </div>
             )}
           </Stage>

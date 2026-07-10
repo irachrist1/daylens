@@ -44,6 +44,7 @@ import type { ClientRecord } from '../core/query/attributionResolvers'
 import { runAttributionForRange } from '../services/attribution'
 import { backfillMemoryFromHistory } from '../jobs/eveningConsolidation'
 import { getDb, tableExists } from '../services/database'
+import { setSettings } from '../services/settings'
 import { flushCurrentSession, getCurrentSession, getLinuxTrackingDiagnostics, trackingStatus } from '../services/tracking'
 import { getBrowserStatus } from '../services/browser'
 import { isWindowsFocusCaptureRunning } from '../services/windowsFocusCapture'
@@ -55,6 +56,7 @@ import { computeAppActivityDigest } from '../services/appActivityDigest'
 import { analyzeTimelineDay } from '../services/analyzeDay'
 import { resolveIcon } from '../services/iconResolver'
 import { getLinuxDesktopDiagnostics } from '../services/linuxDesktop'
+import { applyTimelineBlockEdit } from '../services/timelineBlockEdits'
 import { IPC, isAppCategory } from '@shared/types'
 import {
   getTrackingPermissionDetails,
@@ -75,6 +77,8 @@ import type {
   WorkContextBlock,
   TimelineWorkSession,
   TimelineBlockReviewUpdate,
+  TimelineBlockEditPayload,
+  TimelineBlockEditResult,
   PurgeTrackedEvidencePayload,
   WorkMemorySettingsSummary,
 } from '@shared/types'
@@ -91,6 +95,13 @@ function localDateString(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+async function syncActiveClientNamesToSettings(db = getDb()): Promise<void> {
+  const names = listClientsDetailed(db)
+    .filter((client) => client.status === 'active')
+    .map((client) => client.name)
+  await setSettings({ userClients: names })
 }
 
 // Returns [fromMs, toMs] spanning the full local calendar day for a YYYY-MM-DD string.
@@ -691,6 +702,21 @@ export function registerDbHandlers(): void {
     return result
   })
 
+  ipcMain.handle(IPC.DB.UPDATE_TIMELINE_BLOCK, (_e, payload: TimelineBlockEditPayload): TimelineBlockEditResult => {
+    const db = getDb()
+    const dayPayload = materializeTimelineDayProjection(db, payload.date, getLiveSessionForDate(payload.date))
+    const block = dayPayload.blocks.find((candidate) => candidate.id === payload.blockId) ?? null
+    if (!block) throw new Error('Block not found.')
+
+    const result = applyTimelineBlockEdit(db, block, payload)
+    if (result.changed) {
+      invalidateProjectionScope('timeline', 'block_edit', { date: payload.date })
+      invalidateProjectionScope('apps', 'block_edit', { date: payload.date })
+      invalidateProjectionScope('insights', 'block_edit', { date: payload.date })
+    }
+    return result
+  })
+
   // Permanently purge a sensitive tracked record (block editor → remove
   // entry). This deletes the underlying rows — app sessions, website visits,
   // focus events, matching artifacts — inside the given span, so the record
@@ -989,17 +1015,38 @@ export function registerDbHandlers(): void {
     return listClientsDetailed(getDb())
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.CREATE_CLIENT, (_e, payload: { name: string; color?: string | null }): ClientRecord => {
-    return createClient(payload, getDb())
+  ipcMain.handle(IPC.ATTRIBUTION.CREATE_CLIENT, async (_e, payload: { name: string; color?: string | null }): Promise<ClientRecord> => {
+    const db = getDb()
+    const client = createClient(payload, db)
+    await syncActiveClientNamesToSettings(db)
+    return client
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.UPDATE_CLIENT, (_e, payload: { id: string; name?: string; color?: string | null }): ClientRecord | null => {
-    return updateClient(payload, getDb())
+  ipcMain.handle(IPC.ATTRIBUTION.ENSURE_CLIENTS, async (_e, names: string[]): Promise<ClientRecord[]> => {
+    const db = getDb()
+    const uniqueNames = Array.from(new Set(
+      (Array.isArray(names) ? names : [])
+        .map((name) => String(name ?? '').trim())
+        .filter(Boolean),
+    )).slice(0, 24)
+    const ensure = db.transaction(() => uniqueNames.map((name) => getOrCreateClientByName(name, db)))
+    const clients = ensure()
+    await syncActiveClientNamesToSettings(db)
+    return clients
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.ARCHIVE_CLIENT, (_e, id: string): boolean => {
-    const ok = archiveClient(id, getDb())
+  ipcMain.handle(IPC.ATTRIBUTION.UPDATE_CLIENT, async (_e, payload: { id: string; name?: string; color?: string | null }): Promise<ClientRecord | null> => {
+    const db = getDb()
+    const client = updateClient(payload, db)
+    await syncActiveClientNamesToSettings(db)
+    return client
+  })
+
+  ipcMain.handle(IPC.ATTRIBUTION.ARCHIVE_CLIENT, async (_e, id: string): Promise<boolean> => {
+    const db = getDb()
+    const ok = archiveClient(id, db)
     if (ok) {
+      await syncActiveClientNamesToSettings(db)
       invalidateProjectionScope('timeline', 'client_archived')
       invalidateProjectionScope('apps', 'client_archived')
       invalidateProjectionScope('insights', 'client_archived')
@@ -1007,9 +1054,11 @@ export function registerDbHandlers(): void {
     return ok
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.RESTORE_CLIENT, (_e, id: string): boolean => {
-    const ok = restoreClient(id, getDb())
+  ipcMain.handle(IPC.ATTRIBUTION.RESTORE_CLIENT, async (_e, id: string): Promise<boolean> => {
+    const db = getDb()
+    const ok = restoreClient(id, db)
     if (ok) {
+      await syncActiveClientNamesToSettings(db)
       invalidateProjectionScope('timeline', 'client_restored')
       invalidateProjectionScope('apps', 'client_restored')
       invalidateProjectionScope('insights', 'client_restored')
@@ -1017,9 +1066,11 @@ export function registerDbHandlers(): void {
     return ok
   })
 
-  ipcMain.handle(IPC.ATTRIBUTION.DELETE_CLIENT, (_e, id: string): boolean => {
-    const ok = deleteClient(id, getDb())
+  ipcMain.handle(IPC.ATTRIBUTION.DELETE_CLIENT, async (_e, id: string): Promise<boolean> => {
+    const db = getDb()
+    const ok = deleteClient(id, db)
     if (ok) {
+      await syncActiveClientNamesToSettings(db)
       invalidateProjectionScope('timeline', 'client_deleted')
       invalidateProjectionScope('apps', 'client_deleted')
       invalidateProjectionScope('insights', 'client_deleted')
@@ -1301,4 +1352,3 @@ function mergeLiveSessionForDate(sessions: AppSession[], dateStr: string): AppSe
     },
   ].sort((left, right) => left.startTime - right.startTime)
 }
-

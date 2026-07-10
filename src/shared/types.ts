@@ -42,6 +42,22 @@ export interface CategoryOverrideEffect {
   sessionsAffected: number
 }
 
+/** One atomic save from the Timeline block editor. All supplied changes either
+ * commit together or roll back together in the main-process transaction. */
+export interface TimelineBlockEditPayload {
+  blockId: string
+  date: string
+  label?: string
+  category?: AppCategory
+  startMs?: number
+  endMs?: number
+}
+
+export interface TimelineBlockEditResult {
+  changed: boolean
+  changedFields: Array<'label' | 'category' | 'time'>
+}
+
 // D5: each Apps row leads with what was accomplished, not how long.
 // This compact digest provides the headline activity per app over a range —
 // the top work block the app participated in and the top artifact it touched.
@@ -1359,6 +1375,16 @@ export interface WrapPreflightWarning {
   message: string
 }
 
+/** Which connector sources actually had data for a day — the same presence the
+ *  wrap writer's enrichment resolution sees, so the coverage card and the prose
+ *  can never disagree about what was available. */
+export interface WrapDaySources {
+  calendar: boolean
+  git: boolean
+  focus: boolean
+  notes: boolean
+}
+
 export interface WrapPreflightResult {
   date: string
   warnings: WrapPreflightWarning[]
@@ -1375,6 +1401,9 @@ export interface WrapPreflightResult {
    *  Null when nothing was tracked. The wrap uses this to be honest about when
    *  its view of the day actually began. */
   firstCaptureClock: string | null
+  /** Connector sources that had real data for this day (drives the wrap's
+   *  coverage card: what the recap is built on, and what it isn't). */
+  sources: WrapDaySources
 }
 
 export type WrappedPeriod = 'week' | 'month' | 'year'
@@ -2063,6 +2092,7 @@ export const IPC = {
     DELETE_TIMELINE_BLOCK: 'db:delete-timeline-block',
     MERGE_TIMELINE_EPISODES: 'db:merge-timeline-episodes',
     SET_BLOCK_SPAN: 'db:set-block-span',
+    UPDATE_TIMELINE_BLOCK: 'db:update-timeline-block',
     PURGE_TRACKED_EVIDENCE: 'db:purge-tracked-evidence',
     PURGE_TIMELINE_BLOCK: 'db:purge-timeline-block',
     GET_DISTRACTION_COST: 'db:get-distraction-cost',
@@ -2182,6 +2212,7 @@ export const IPC = {
     LIST_CLIENTS: 'attribution:list-clients',
     LIST_CLIENTS_DETAILED: 'attribution:list-clients-detailed',
     CREATE_CLIENT: 'attribution:create-client',
+    ENSURE_CLIENTS: 'attribution:ensure-clients',
     UPDATE_CLIENT: 'attribution:update-client',
     ARCHIVE_CLIENT: 'attribution:archive-client',
     RESTORE_CLIENT: 'attribution:restore-client',

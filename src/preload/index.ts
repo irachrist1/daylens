@@ -46,6 +46,8 @@ import type {
   ResolvedIconPayload,
   SyncStatus,
   TimelineBlockReviewUpdate,
+  TimelineBlockEditPayload,
+  TimelineBlockEditResult,
   PurgeTrackedEvidencePayload,
   MemoryBackfillResult,
   TrackingDiagnosticsPayload,
@@ -177,6 +179,8 @@ const api = {
       ipcRenderer.invoke(IPC.DB.MERGE_TIMELINE_EPISODES, payload),
     setBlockSpan: (payload: { blockId: string; date: string; startMs: number; endMs: number }): Promise<{ changed: boolean }> =>
       ipcRenderer.invoke(IPC.DB.SET_BLOCK_SPAN, payload),
+    updateTimelineBlock: (payload: TimelineBlockEditPayload): Promise<TimelineBlockEditResult> =>
+      ipcRenderer.invoke(IPC.DB.UPDATE_TIMELINE_BLOCK, payload),
     purgeTrackedEvidence: (payload: PurgeTrackedEvidencePayload): Promise<{ purged: boolean }> =>
       ipcRenderer.invoke(IPC.DB.PURGE_TRACKED_EVIDENCE, payload),
     purgeTimelineBlock: (payload: { blockId: string; date?: string | null }): Promise<{ purged: boolean }> =>
@@ -376,6 +380,8 @@ const api = {
     listClientsDetailed: (): Promise<ClientRecord[]> => ipcRenderer.invoke(IPC.ATTRIBUTION.LIST_CLIENTS_DETAILED),
     createClient: (payload: { name: string; color?: string | null }): Promise<ClientRecord> =>
       ipcRenderer.invoke(IPC.ATTRIBUTION.CREATE_CLIENT, payload),
+    ensureClients: (names: string[]): Promise<ClientRecord[]> =>
+      ipcRenderer.invoke(IPC.ATTRIBUTION.ENSURE_CLIENTS, names),
     updateClient: (payload: { id: string; name?: string; color?: string | null }): Promise<ClientRecord | null> =>
       ipcRenderer.invoke(IPC.ATTRIBUTION.UPDATE_CLIENT, payload),
     archiveClient: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.ATTRIBUTION.ARCHIVE_CLIENT, id),
