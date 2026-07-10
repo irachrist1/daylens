@@ -19,7 +19,7 @@ export function formatFullDate(dateStr: string): string {
   })
 }
 
-function dateStringFromMs(ms: number): string {
+export function localDateStringFromMs(ms: number): string {
   const d = new Date(ms)
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -29,14 +29,22 @@ function dateStringFromMs(ms: number): string {
 
 export function shiftDateString(dateStr: string, offsetDays: number): string {
   const [y, m, d] = dateStr.split('-').map(Number)
-  return dateStringFromMs(new Date(y, m - 1, d + offsetDays).getTime())
+  return localDateStringFromMs(new Date(y, m - 1, d + offsetDays).getTime())
+}
+
+export function weekStartString(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const next = new Date(y, m - 1, d)
+  const day = next.getDay()
+  next.setDate(next.getDate() + (day === 0 ? -6 : 1 - day))
+  return localDateStringFromMs(next.getTime())
 }
 
 // Returns today's date as a local YYYY-MM-DD string.
 // DO NOT use new Date().toISOString().split('T')[0] — that returns the UTC date
 // which is wrong in UTC- timezones after ~7 pm local time.
 export function todayString(): string {
-  return dateStringFromMs(Date.now())
+  return localDateStringFromMs(Date.now())
 }
 
 export function dayBounds(dateStr: string): [number, number] {

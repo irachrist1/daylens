@@ -26,23 +26,11 @@ import type { UpdaterStatusInfo } from '../../preload/index'
 import ConnectAI from '../components/ConnectAI'
 import { formatUsdAmount } from '@shared/formatUsd'
 import { CHANGELOG, LATEST_CHANGELOG, formatChangelogDate, changelogIssueLabel, type ChangelogEntry } from '@shared/changelog'
+import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
+import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
 
-const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
-  { value: 'development', label: 'Development' },
-  { value: 'communication', label: 'Communication' },
-  { value: 'research', label: 'Research' },
-  { value: 'writing', label: 'Writing' },
-  { value: 'aiTools', label: 'AI Tools' },
-  { value: 'design', label: 'Design' },
-  { value: 'browsing', label: 'Browsing' },
-  { value: 'meetings', label: 'Meetings' },
-  { value: 'entertainment', label: 'Entertainment' },
-  { value: 'email', label: 'Email' },
-  { value: 'productivity', label: 'Productivity' },
-  { value: 'social', label: 'Social' },
-  { value: 'system', label: 'System' },
-  { value: 'uncategorized', label: 'Uncategorized' },
-]
+const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
+  .map((option) => option.value === 'uncategorized' ? { ...option, label: 'Uncategorized' } : option)
 
 function Toggle({
   checked,
@@ -1004,9 +992,10 @@ function TrackingControlsContent({
   persist,
 }: {
   settings: AppSettings
-  persist: (partial: Partial<AppSettings>) => Promise<void>
+  persist: (partial: Partial<AppSettings>) => Promise<boolean>
 }) {
   const [busy, setBusy] = useState(false)
+  const [privacyError, setPrivacyError] = useState<string | null>(null)
   const enabled = settings.trackingControlsEnabled ?? false
   const excludedApps = settings.trackingExcludedApps ?? []
   const excludedSites = settings.trackingExcludedSites ?? []
@@ -1017,10 +1006,14 @@ function TrackingControlsContent({
   const addApp = async (value: string) => {
     if (excludedApps.some((a) => a.toLowerCase() === value.toLowerCase())) return
     setBusy(true)
+    setPrivacyError(null)
     try {
-      await persist({ trackingExcludedApps: [...excludedApps, value] })
+      const saved = await persist({ trackingExcludedApps: [...excludedApps, value] })
+      if (!saved) return
       // Remove what was already captured so it disappears from history, not just future capture.
-      await ipc.tracking.deleteAppHistory({ bundleId: value, appName: value }).catch(() => {})
+      await ipc.tracking.deleteAppHistory({ bundleId: value, appName: value })
+    } catch (error) {
+      setPrivacyError(`The exclusion was saved, but existing history could not be removed: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
@@ -1031,9 +1024,13 @@ function TrackingControlsContent({
     const value = normalizeSite(raw)
     if (!value || excludedSites.some((s) => s.toLowerCase() === value)) return
     setBusy(true)
+    setPrivacyError(null)
     try {
-      await persist({ trackingExcludedSites: [...excludedSites, value] })
-      await ipc.tracking.deleteSiteHistory({ domain: value }).catch(() => {})
+      const saved = await persist({ trackingExcludedSites: [...excludedSites, value] })
+      if (!saved) return
+      await ipc.tracking.deleteSiteHistory({ domain: value })
+    } catch (error) {
+      setPrivacyError(`The exclusion was saved, but existing history could not be removed: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
@@ -1055,6 +1052,7 @@ function TrackingControlsContent({
       />
       {enabled && (
         <>
+          {privacyError && <div style={{ color: '#f87171', fontSize: 12.5, lineHeight: 1.5, padding: '8px 0' }}>{privacyError}</div>}
           <SettingsRow
             title="Skip private / incognito windows"
             description="When on, Daylens records nothing from a browser's incognito or private window — no URL, page title, or session."
@@ -2082,6 +2080,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [trackingDiagnostics, setTrackingDiagnostics] = useState<TrackingDiagnosticsPayload | null>(null)
   const [defaultUserName, setDefaultUserName] = useState('')
   const [recentApps, setRecentApps] = useState<AppUsageSummary[]>([])
+  const [labelsLoaded, setLabelsLoaded] = useState(false)
   const [categoryOverrides, setCategoryOverrides] = useState<Record<string, AppCategory>>({})
   const [categoryBusyBundleId, setCategoryBusyBundleId] = useState<string | null>(null)
   // The full app list can be long, so keep Labels tidy: show a handful by default,
@@ -2122,75 +2121,49 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   const [editingClientName, setEditingClientName] = useState('')
   const [editingClientColor, setEditingClientColor] = useState('')
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState>('not-determined')
+  const [settingsWriteError, setSettingsWriteError] = useState<string | null>(null)
+  const [settingsLoadErrors, setSettingsLoadErrors] = useState<Record<string, string>>({})
+  const settingsWriteQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const selectedAiProvider = settings?.aiProvider
 
   useEffect(() => {
     let cancelled = false
 
     // Render the Settings shell as soon as `ipc.settings.get()` resolves.
-    // Everything else (CLI detection, diagnostics, sync, summaries, overrides,
-    // suggested name) is loaded in parallel afterwards so each section can
-    // appear as soon as its own data is ready, without blocking first paint.
+    // Section-owned data is loaded by the effects below only when that section
+    // is visible; opening General must not start every Settings subsystem.
     void (async () => {
       // Reuse the settings App already loaded when available, so navigating to
       // Settings does not issue a second ipc.settings.get() round-trip (F56).
-      const current = initialSettings ?? await ipc.settings.get()
-      if (cancelled) return
-      setSettings(current)
-
-      // Optimistic AI-access guess based on persisted provider, refined below
-      // when CLI detection or hasApiKey resolves.
-      if (!cliToolForProvider(current.aiProvider)) {
-        void ipc.settings.hasApiKey(current.aiProvider).then((access) => {
-          if (!cancelled) setHasApiKey(access)
-        })
+      try {
+        const current = initialSettings ?? await ipc.settings.get()
+        if (!cancelled) setSettings(current)
+      } catch (error) {
+        if (!cancelled) recordSettingsLoadError('Settings', error)
       }
-
-      void ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null })).then((tools) => {
-        if (cancelled) return
-        setCliTools(tools as CLIToolDetection)
-      })
-      void ipc.tracking.getDiagnostics().catch(() => null).then((tracking) => {
-        if (!cancelled) setTrackingDiagnostics(tracking as TrackingDiagnosticsPayload | null)
-      })
-      void ipc.notifications.getPermissionState().catch(() => 'unsupported' as NotificationPermissionState).then((state) => {
-        if (!cancelled) setNotificationPermission(state)
-      })
-      // Every app the user has used — including uncategorized ones — so any app
-      // (e.g. Zen) is reachable and categorizable (settings spec §4, invariant #3).
-      // Not capped or windowed like the Apps view.
-      void ipc.db.getAllAppsForLabeling().catch(() => []).then((summaries) => {
-        if (cancelled) return
-        setRecentApps((summaries as AppUsageSummary[]).filter((summary) => summary.bundleId))
-      })
-      void ipc.db.getCategoryOverrides().catch(() => ({})).then((overrides) => {
-        if (!cancelled) setCategoryOverrides(overrides as Record<string, AppCategory>)
-      })
-      void ipc.db.getScopedMemoryProfile().catch(() => ({ general: [], clients: [] })).then((profile) => {
-        if (cancelled) return
-        setWorkMemoryProfile(profile.general)
-        setClientMemory(profile.clients)
-      })
-      void ipc.db.getMemoryAudit().catch(() => []).then((audit) => {
-        if (!cancelled) setMemoryAudit(audit as MemoryAuditEntry[])
-      })
-      void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
-        if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
-      })
     })()
 
     return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
+    if (!['capture', 'notifications', 'mcp'].includes(activeSection)) return
     let cancelled = false
     const refresh = async () => {
       if (document.hidden) return
-      const next = await ipc.tracking.getDiagnostics().catch(() => null)
-      if (!cancelled) setTrackingDiagnostics(next as TrackingDiagnosticsPayload | null)
+      try {
+        const next = await ipc.tracking.getDiagnostics()
+        if (!cancelled) setTrackingDiagnostics(next)
+      } catch (error) {
+        if (!cancelled) recordSettingsLoadError('Capture health', error)
+      }
     }
     const refreshWhenVisible = () => {
       if (!document.hidden) void refresh()
     }
+
+    void refresh()
+    if (activeSection !== 'capture') return () => { cancelled = true }
 
     document.addEventListener('visibilitychange', refreshWhenVisible)
     const timer = window.setInterval(() => { void refresh() }, 5_000)
@@ -2199,46 +2172,132 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       document.removeEventListener('visibilitychange', refreshWhenVisible)
       window.clearInterval(timer)
     }
-  }, [])
+  }, [activeSection])
 
   useEffect(() => {
-    if (!settings) return
-    const cliTool = cliToolForProvider(settings.aiProvider)
+    if (activeSection !== 'general') return
+    let cancelled = false
+    void ipc.app.getDefaultUserName().catch(() => '').then((suggestedName) => {
+      if (!cancelled) setDefaultUserName(String(suggestedName ?? ''))
+    })
+    return () => { cancelled = true }
+  }, [activeSection])
+
+  useEffect(() => {
+    if (!['ai', 'billing'].includes(activeSection)) return
+    let cancelled = false
+    void ipc.ai.detectCliTools().catch(() => ({ claude: null, chatgpt: null, gemini: null, codex: null })).then((tools) => {
+      if (!cancelled) setCliTools(tools as CLIToolDetection)
+    })
+    return () => { cancelled = true }
+  }, [activeSection])
+
+  useEffect(() => {
+    if (activeSection !== 'notifications') return
+    let cancelled = false
+    void ipc.notifications.getPermissionState().then((state) => {
+      if (!cancelled) setNotificationPermission(state)
+    }).catch((error) => {
+      if (!cancelled) recordSettingsLoadError('Notifications', error)
+    })
+    return () => { cancelled = true }
+  }, [activeSection])
+
+  useEffect(() => {
+    if (activeSection !== 'labels' || labelsLoaded) return
+    let cancelled = false
+    void Promise.all([
+      ipc.db.getAllAppsForLabeling(),
+      ipc.db.getCategoryOverrides(),
+    ]).then(([summaries, overrides]) => {
+      if (cancelled) return
+      setRecentApps(summaries.filter((summary) => summary.bundleId))
+      setCategoryOverrides(overrides)
+      setLabelsLoaded(true)
+    }).catch((error) => {
+      if (!cancelled) recordSettingsLoadError('Labels', error)
+    })
+    return () => { cancelled = true }
+  }, [activeSection, labelsLoaded])
+
+  useEffect(() => {
+    if (activeSection !== 'memory' || workMemoryProfile !== null) return
+    let cancelled = false
+    void Promise.all([
+      ipc.db.getScopedMemoryProfile(),
+      ipc.db.getMemoryAudit(),
+    ]).then(([profile, audit]) => {
+      if (cancelled) return
+      setWorkMemoryProfile(profile.general)
+      setClientMemory(profile.clients)
+      setMemoryAudit(audit)
+    }).catch((error) => {
+      if (!cancelled) recordSettingsLoadError('Memory', error)
+    })
+    return () => { cancelled = true }
+  }, [activeSection, workMemoryProfile])
+
+  useEffect(() => {
+    if (!selectedAiProvider || !['ai', 'billing'].includes(activeSection)) return
+    const cliTool = cliToolForProvider(selectedAiProvider)
     if (cliTool) {
       setHasApiKey(!!cliTools[cliTool])
       return
     }
-    void ipc.settings.hasApiKey(settings.aiProvider).then((access) => setHasApiKey(access))
-  }, [cliTools, settings?.aiProvider])
+    void ipc.settings.hasApiKey(selectedAiProvider).then((access) => setHasApiKey(access))
+  }, [activeSection, cliTools, selectedAiProvider])
 
   useEffect(() => {
-    if (!settings?.mcpServerEnabled) return
+    if (activeSection !== 'mcp' || !settings?.mcpServerEnabled) return
     void ipc.mcp.getConfig().then((cfg) => setMcpConfig(cfg))
-  }, [settings?.mcpServerEnabled])
+  }, [activeSection, settings?.mcpServerEnabled])
 
   useEffect(() => {
     if (activeSection !== 'enrichment') return
-    void ipc.settings.getEnrichmentSources().then(setEnrichmentSources).catch(() => setEnrichmentSources(null))
+    void ipc.settings.getEnrichmentSources().then(setEnrichmentSources).catch((error) => recordSettingsLoadError('Enrichment', error))
   }, [activeSection])
 
-  function toggleEnrichmentSource(key: string, value: boolean) {
+  async function toggleEnrichmentSource(key: string, value: boolean) {
     if (!settings) return
     const next = { ...(settings.enrichmentSources ?? {}), [key]: value }
-    void persist({ enrichmentSources: next })
+    if (!await persist({ enrichmentSources: next })) return
     setEnrichmentSources((prev) => prev && ({
       mcpServers: prev.mcpServers.map((s) => (`mcp:${s.name}` === key ? { ...s, enabled: value } : s)),
       focusApps: prev.focusApps.map((f) => (`focus:${f.app}` === key ? { ...f, enabled: value } : f)),
     }))
   }
 
-  async function persist(partial: Partial<AppSettings>) {
-    if (!settings) return
-    const next = { ...settings, ...partial }
-    setSettings(next)
-    await ipc.settings.set(partial)
-    if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
-      const cfg = await ipc.mcp.getConfig()
-      setMcpConfig(cfg)
+  function recordSettingsLoadError(section: string, error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    setSettingsLoadErrors((current) => ({ ...current, [section]: message }))
+  }
+
+  async function persist(partial: Partial<AppSettings>): Promise<boolean> {
+    if (!settings) return false
+    setSettingsWriteError(null)
+    setSettings((current) => current ? { ...current, ...partial } : current)
+    const write = settingsWriteQueueRef.current.then(() => ipc.settings.set(partial))
+    settingsWriteQueueRef.current = write.catch(() => {})
+    try {
+      await write
+      // Re-apply after the serialized write completes. If an earlier failed write
+      // forced an authoritative reload while this one was queued, its successful
+      // value must still win in the controlled UI.
+      setSettings((current) => current ? { ...current, ...partial } : current)
+      if ('mcpServerEnabled' in partial && partial.mcpServerEnabled) {
+        const cfg = await ipc.mcp.getConfig()
+        setMcpConfig(cfg)
+      }
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setSettingsWriteError(`Could not save this setting: ${message}`)
+      const authoritative = await ipc.settings.get().catch(() => null)
+      if (authoritative) {
+        setSettings(authoritative)
+        applyAppearanceSettings(authoritative)
+      }
+      return false
     }
   }
 
@@ -2258,15 +2317,22 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   // Save an inline edit to a fact. A hand edit becomes a correction (the backend
   // flips its origin to 'user') that a rebuild never overwrites.
   async function reloadMemoryAudit() {
-    const audit = await ipc.db.getMemoryAudit().catch(() => [])
-    setMemoryAudit(audit as MemoryAuditEntry[])
+    try {
+      setMemoryAudit(await ipc.db.getMemoryAudit())
+    } catch (error) {
+      recordSettingsLoadError('Memory history', error)
+    }
   }
 
   // Refresh the per-client groups after any edit/forget/add that could touch a
   // client fact (edits/forgets go by id and return only the general profile).
   async function reloadClientMemory() {
-    const profile = await ipc.db.getScopedMemoryProfile().catch(() => null)
-    if (profile) setClientMemory(profile.clients)
+    try {
+      const profile = await ipc.db.getScopedMemoryProfile()
+      setClientMemory(profile.clients)
+    } catch (error) {
+      recordSettingsLoadError('Memory', error)
+    }
   }
 
   async function addClientMemoryFact(clientId: string) {
@@ -2538,14 +2604,27 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
   }
 
   async function reloadClients() {
-    const rows = await ipc.attribution.listClientsDetailed().catch(() => [] as ClientRecord[])
-    setClients(rows)
-    setClientsLoaded(true)
+    try {
+      const rows = await ipc.attribution.listClientsDetailed()
+      setClients(rows)
+      setSettingsLoadErrors((current) => {
+        if (!('Clients' in current)) return current
+        const next = { ...current }
+        delete next.Clients
+        return next
+      })
+    } catch (error) {
+      recordSettingsLoadError('Clients', error)
+    } finally {
+      setClientsLoaded(true)
+    }
   }
 
   useEffect(() => {
-    void reloadClients()
-  }, [])
+    if (activeSection === 'clients' && !clientsLoaded) void reloadClients()
+  // reloadClients only closes over stable state setters and IPC.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, clientsLoaded])
 
   async function handleCreateClient() {
     const name = newClientName.trim()
@@ -3028,7 +3107,11 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
               : matchedApps.slice(0, COLLAPSED_COUNT)
             return (
           <div>
-            {recentApps.length === 0 ? (
+            {!labelsLoaded ? (
+              <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
+                Loading app labels…
+              </div>
+            ) : recentApps.length === 0 ? (
               <div style={{ fontSize: 12.5, color: 'var(--color-text-tertiary)', lineHeight: 1.6 }}>
                 Needs a little more tracked history first.
               </div>
@@ -3425,7 +3508,7 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
                 {mcpAdvancedOpen && (
                 <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)', marginBottom: 8, lineHeight: 1.55 }}>
-                  Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>{trackingDiagnostics?.platform === 'win32' ? '%APPDATA%\\Claude\\claude_desktop_config.json' : '~/Library/Application Support/Claude/claude_desktop_config.json'}</code>):
+                  Add the following to your MCP client config (Claude Desktop: <code style={{ fontSize: 11.5 }}>{claudeDesktopConfigDisplayPath(trackingDiagnostics?.platform ?? 'darwin')}</code>):
                 </div>
                 <div style={{ position: 'relative' }}>
                   <pre style={{
@@ -3616,6 +3699,16 @@ export default function Settings({ initialSettings = null }: { initialSettings?:
       />
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
         <div key={activeSection} style={{ padding: '34px 44px 72px' }}>
+          {settingsWriteError && (
+            <div role="alert" style={{ ...infoPanelStyle, color: '#f87171', marginTop: 0, marginBottom: 16 }}>
+              {settingsWriteError}
+            </div>
+          )}
+          {Object.keys(settingsLoadErrors).length > 0 && (
+            <div role="alert" style={{ ...infoPanelStyle, color: '#f87171', marginTop: 0, marginBottom: 16 }}>
+              Could not load {Object.keys(settingsLoadErrors).join(', ')}. The page is keeping the last known state instead of treating the failed read as empty.
+            </div>
+          )}
           {originDef && (
             <button
               type="button"

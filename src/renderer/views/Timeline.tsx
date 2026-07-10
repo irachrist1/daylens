@@ -6,11 +6,13 @@ import type { AIDaySummaryResult, AISurfaceSummary, AppCategory, CalendarRangeBl
 import { activityColorForCategory, leisureBlocksDimmed } from '@shared/activityColors'
 import { calendarCardHeights } from '../lib/timelineBlockLayout'
 import { blockActiveSeconds } from '@shared/blockDuration'
-import { isArtifactCompatibleWithBlockCategory, looksLikeRawArtifactLabel, naturalizeLabel, userVisibleBlockLabel } from '@shared/blockLabel'
+import { userVisibleBlockLabel } from '@shared/blockLabel'
 import { blockTypeTag, effectiveBlockKind } from '@shared/workKind'
 import AppIcon from '../components/AppIcon'
 import EntityIcon from '../components/EntityIcon'
-import InlineRevealText from '../components/InlineRevealText'
+import EvidenceIdentity from '../components/EvidenceIdentity'
+import PeriodNavigator from '../components/PeriodNavigator'
+import { useCompactLayout } from '../hooks/useCompactLayout'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
 import { buildDetailRowTree, type DetailRowNode } from '../lib/blockDetailRowTree'
@@ -25,79 +27,20 @@ import { mergeSelectionSpan, spanMergeState } from '../lib/timelineMergeSelectio
 import { ipc } from '../lib/ipc'
 import { sanitizeIpcError } from '../lib/ipcError'
 import { formatDisplayAppName } from '../lib/apps'
-import { formatDuration, formatFullDate, todayString } from '../lib/format'
+import { formatDuration, formatFullDate, shiftDateString, todayString, weekStartString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
-import { sanitizeForModel } from '@shared/aiSanitize'
-
-// Browser keyword check used to filter the "in App and App" clause down to
-// the apps that could plausibly own a page artifact (i.e. browsers).
-function isBrowserAppName(bundleId: string, appName: string): boolean {
-  const haystack = `${bundleId} ${appName}`.toLowerCase()
-  return /(chrome|safari|firefox|edge|brave|arc|opera|vivaldi|dia|comet|browser)/.test(haystack)
-}
-
-const PAGE_ARTIFACT_LABEL_CATEGORIES: ReadonlySet<AppCategory> = new Set<AppCategory>([
-  'browsing', 'research', 'entertainment', 'social', 'aiTools',
-])
+import { activityCategoryLabel, EDITABLE_BLOCK_CATEGORY_OPTIONS } from '@shared/activityCategories'
+import { blockShortSummary, safeTimelineText, shortDomainLabel } from '../lib/timelineText'
 
 // The types a user can assign a block in Edit → Type. Category drives the
 // block's color everywhere, so this doubles as the recolor control. The
 // neutral system/uncategorized values are not offered — a corrected block
 // always has a real type.
-const BLOCK_CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = [
-  { value: 'development', label: 'Development' },
-  { value: 'design', label: 'Design' },
-  { value: 'writing', label: 'Writing' },
-  { value: 'research', label: 'Research' },
-  { value: 'aiTools', label: 'AI tools' },
-  { value: 'email', label: 'Email' },
-  { value: 'communication', label: 'Communication' },
-  { value: 'meetings', label: 'Meetings' },
-  { value: 'productivity', label: 'Productivity' },
-  { value: 'browsing', label: 'Browsing' },
-  { value: 'entertainment', label: 'Entertainment' },
-  { value: 'social', label: 'Social' },
-]
-
-// Mirror of the R1 ownership gate at the renderer surface so the rail / day
-// sentence / summary subject all reject browser-page leaks even if a stale
-// label.current was persisted before the backend gate was tightened.
-function pageArtifactLabelAllowed(block: WorkContextBlock): boolean {
-  if (PAGE_ARTIFACT_LABEL_CATEGORIES.has(block.dominantCategory)) return true
-  const totalSeconds = block.topApps.reduce((sum, app) => sum + (app.totalSeconds ?? 0), 0)
-  if (totalSeconds <= 0) return false
-  const top2 = block.topApps.slice(0, 2)
-  const browserInTop2 = top2.find((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
-  if (!browserInTop2) return false
-  return (browserInTop2.totalSeconds ?? 0) / totalSeconds > 0.5
-}
-
-// Strip raw URL query/fragment + secret-shaped tokens from any free-text the
-// timeline displays. The renderer used to print page artifact displayTitles
-// verbatim, so an OAuth callback URL stored as the artifact title leaked the
-// `?code=…` straight into the block card.
-function safeTimelineText(text: string): string {
-  return sanitizeForModel(text)
-}
-
-function shiftDate(dateStr: string, days: number): string {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const next = new Date(y, m - 1, d + days)
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
-}
-
-function getWeekStart(dateStr: string): string {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const next = new Date(y, m - 1, d)
-  const day = next.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  next.setDate(next.getDate() + diff)
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
-}
+const BLOCK_CATEGORY_OPTIONS = EDITABLE_BLOCK_CATEGORY_OPTIONS
 
 function weekRangeLabel(dateStr: string): string {
-  const start = getWeekStart(dateStr)
-  const end = shiftDate(start, 6)
+  const start = weekStartString(dateStr)
+  const end = shiftDateString(start, 6)
   const [sy, sm, sd] = start.split('-').map(Number)
   const [ey, em, ed] = end.split('-').map(Number)
   const startLabel = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(sy, sm - 1, sd))
@@ -114,136 +57,10 @@ function formatClockTime(timestamp: number): string {
   }).format(timestamp)
 }
 
-function categoryLabel(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
 // Human-readable phrasing for why an episode started or stopped.
-
-function shortDomainLabel(domain: string): string {
-  return domain.replace(/^www\./i, '')
-}
 
 function blockNarrative(block: WorkContextBlock): string | null {
   return block.label.narrative?.trim() || null
-}
-
-// Short deterministic summary used when the AI narrative hasn't landed yet, so
-// every block on the timeline reads consistently instead of some having prose
-// and others showing nothing between the title and the app icons.
-//
-// The duration in this prose summary is the block's *active tracked* time, not
-// its wall-clock span. A block that bridges an untracked lull has a span far
-// larger than what was logged inside it; saying "Spent 1h 57m watching …" for a
-// window that only logged 1h 4m overstates the day (R4). blockActiveSeconds
-// (summed session time clamped to span) is the honest figure, and it lines up
-// with the Focus/Drift totals which now use the same basis.
-// Pick a verb that fits the block's dominant category. Keeps deterministic
-// summaries from reading like "56m on X in Y" and instead sounds like the
-// human-voice examples in the V1 punch-list ("Spent 56m preparing …").
-function categoryVerbPhrase(category: WorkContextBlock['dominantCategory']): { verb: string; noun: string } {
-  switch (category) {
-    case 'development': return { verb: 'editing', noun: 'code' }
-    case 'design': return { verb: 'working on', noun: 'design work' }
-    case 'writing': return { verb: 'writing', noun: 'a draft' }
-    case 'research': return { verb: 'researching', noun: 'reference material' }
-    case 'aiTools': return { verb: 'working with', noun: 'AI tools' }
-    case 'email': return { verb: 'checking', noun: 'email' }
-    case 'communication': return { verb: 'in', noun: 'conversation' }
-    case 'meetings': return { verb: 'in', noun: 'meetings' }
-    case 'browsing': return { verb: 'reviewing', noun: 'web context' }
-    case 'productivity': return { verb: 'working through', noun: 'tasks' }
-    case 'entertainment': return { verb: 'watching', noun: 'video content' }
-    case 'social': return { verb: 'on', noun: 'social' }
-    case 'system': return { verb: 'on', noun: 'system tasks' }
-    default: return { verb: 'spent on', noun: 'mixed work' }
-  }
-}
-
-function artifactPhraseForCategory(
-  artifactTitle: string,
-  artifactType: string,
-  category: WorkContextBlock['dominantCategory'],
-): string {
-  // "Inbox (3)", "Inbox" → "email"; the title alone is noise here.
-  if (/^inbox(?:\s*\(\d+\))?$/i.test(artifactTitle)) return 'email'
-  if (artifactType === 'page' && category === 'browsing') return `the ${artifactTitle} page`
-  if (artifactType === 'page' && (category === 'research' || category === 'aiTools')) {
-    return `${artifactTitle}`
-  }
-  if (artifactType === 'document') return `${artifactTitle}`
-  return artifactTitle
-}
-
-function blockShortSummary(block: WorkContextBlock): string {
-  const duration = formatDuration(blockActiveSeconds(block))
-  const allApps = block.topApps
-    .filter((app) => app.category !== 'system' && app.category !== 'uncategorized')
-  // Same ownership gate as the label/artifact path: a development block with a
-  // background youtube.com tab must not read "across youtube.com". Only carry
-  // site phrases when the block's category could plausibly own a page artifact.
-  const allowPageSubject = pageArtifactLabelAllowed(block)
-  const sites = allowPageSubject
-    ? block.websites.slice(0, 2).map((site) => shortDomainLabel(site.domain))
-    : []
-  // Skip page/domain artifacts that don't fit the block's category — a dev
-  // block with a co-occurring YouTube tab must not summarize itself as the
-  // YouTube video.
-  const topArtifact = block.topArtifacts.find(
-    (artifact) =>
-      artifact.displayTitle.trim().length > 0
-      && isArtifactCompatibleWithBlockCategory(artifact, block.dominantCategory),
-  )
-  const rawArtifact = topArtifact ? safeTimelineText(topArtifact.displayTitle.trim()) : null
-  // §3.5 / invariant 3: never let a raw file, slug, or article tab-title become
-  // the subject of the summary ("editing AGENT-EXECUTION-PLAN.md"). Drop it and
-  // fall back to the category noun ("editing code").
-  const cleanArtifact = rawArtifact ? naturalizeLabel(rawArtifact) || rawArtifact : null
-  const naturalizedArtifact = cleanArtifact && !looksLikeRawArtifactLabel(cleanArtifact) ? cleanArtifact : null
-
-  // Same artifact-ownership filter as before: only attribute the artifact to
-  // apps that could plausibly own it (browsers for page artifacts, the named
-  // owner for document artifacts).
-  const orderedApps = (() => {
-    if (!topArtifact) return allApps
-    if (topArtifact.artifactType === 'page') {
-      const browsers = allApps.filter((app) => app.isBrowser || isBrowserAppName(app.bundleId, app.appName))
-      return browsers.length > 0 ? browsers : allApps
-    }
-    if (topArtifact.ownerBundleId) {
-      const owners = allApps.filter((app) => app.bundleId === topArtifact.ownerBundleId)
-      return owners.length > 0 ? owners : allApps
-    }
-    return allApps
-  })()
-  const appNames = orderedApps.slice(0, 2).map((app) => formatDisplayAppName(app.appName))
-  const primaryApp = appNames[0] ?? null
-  const secondaryApp = appNames[1] ?? null
-  const { verb, noun } = categoryVerbPhrase(block.dominantCategory)
-
-  const supportingClause = secondaryApp
-    ? `, mostly in ${primaryApp} with ${secondaryApp} as supporting context`
-    : primaryApp
-      ? `, mostly in ${primaryApp}`
-      : ''
-
-  if (naturalizedArtifact) {
-    const artifactPhrase = artifactPhraseForCategory(naturalizedArtifact, topArtifact!.artifactType, block.dominantCategory)
-    return `Spent ${duration} ${verb} ${artifactPhrase}${supportingClause}.`
-  }
-  if (primaryApp && sites.length > 0) {
-    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}${supportingClause}.`
-  }
-  if (primaryApp) {
-    return `Spent ${duration} ${verb} ${noun}${supportingClause}.`
-  }
-  if (sites.length > 0) {
-    return `Spent ${duration} ${verb} ${noun} across ${sites.join(' and ')}.`
-  }
-  return `Spent ${duration} on ${categoryLabel(block.dominantCategory).toLowerCase()}.`
 }
 
 // Calendar geometry. The timeline is drawn as a real calendar grid: a block
@@ -359,10 +176,10 @@ function monthGridDates(dateStr: string): string[] {
   const first = `${y}-${String(m).padStart(2, '0')}-01`
   const lastDay = new Date(y, m, 0).getDate()
   const last = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  const start = getWeekStart(first)
-  const end = shiftDate(getWeekStart(last), 6)
+  const start = weekStartString(first)
+  const end = shiftDateString(weekStartString(last), 6)
   const dates: string[] = []
-  for (let d = start; d <= end; d = shiftDate(d, 1)) dates.push(d)
+  for (let d = start; d <= end; d = shiftDateString(d, 1)) dates.push(d)
   return dates
 }
 
@@ -377,22 +194,6 @@ function timelineNavStateFromParams(searchParams: URLSearchParams): TimelineNavS
     view: rawView === 'week' ? 'week' : rawView === 'month' ? 'month' : 'day',
     date: searchParams.get('date') ?? todayString(),
   }
-}
-
-function IconChevronLeft() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m10 3.5-4.5 4.5 4.5 4.5" />
-    </svg>
-  )
-}
-
-function IconChevronRight() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 3.5 10.5 8 6 12.5" />
-    </svg>
-  )
 }
 
 // One block drawn as a calendar event: absolutely positioned at its clock
@@ -914,7 +715,7 @@ function BlockEditModal({
     const carrier = topApp && (!topSite || topApp.totalSeconds >= topSite.totalSeconds)
       ? formatDisplayAppName(topApp.appName)
       : topSite ? shortDomainLabel(topSite.domain) : null
-    const label = BLOCK_CATEGORY_OPTIONS.find((option) => option.value === topCategory)?.label ?? categoryLabel(topCategory)
+    const label = BLOCK_CATEGORY_OPTIONS.find((option) => option.value === topCategory)?.label ?? activityCategoryLabel(topCategory)
     return {
       category: topCategory,
       color: activityColorForCategory(topCategory),
@@ -954,28 +755,26 @@ function BlockEditModal({
     setError(null)
     try {
       const title = titleDraft.trim()
-      if (title && title !== block.label.current) {
-        await ipc.db.setBlockLabelOverride({ blockId: block.id, date: payload.date, label: title, narrative: block.label.narrative })
-      }
-      if (categoryDraft !== block.dominantCategory) {
-        await ipc.db.setBlockReview({ blockId: block.id, date: payload.date, state: 'corrected', correctedCategory: categoryDraft })
-      }
       const clampedStart = clampStartTimeDraft(startDraft, block.startTime)
       const clampedEnd = clampEndTimeDraft(endDraft, block.endTime)
       setStartDraft(clampedStart)
       setEndDraft(clampedEnd)
       const spanDraft = blockSpanDraftChanged(clampedStart, clampedEnd, block)
-      if (spanDraft?.changed) {
-        // Applied last: a trim re-shapes the day and retires block ids.
-        await ipc.db.setBlockSpan({ blockId: block.id, date: payload.date, startMs: spanDraft.startMs, endMs: spanDraft.endMs })
-      }
+      const result = await ipc.db.updateTimelineBlock({
+        blockId: block.id,
+        date: payload.date,
+        label: title && title !== block.label.current ? title : undefined,
+        category: categoryDraft !== block.dominantCategory ? categoryDraft : undefined,
+        startMs: spanDraft?.changed ? spanDraft.startMs : undefined,
+        endMs: spanDraft?.changed ? spanDraft.endMs : undefined,
+      })
       // One event per save; when several fields changed, report the most
       // structural one (time > category > label).
-      const whatChanged = spanDraft?.changed
+      const whatChanged = result.changedFields.includes('time')
         ? 'time'
-        : categoryDraft !== block.dominantCategory
+        : result.changedFields.includes('category')
           ? 'category'
-          : (title && title !== block.label.current) ? 'label' : null
+          : result.changedFields.includes('label') ? 'label' : null
       if (whatChanged) {
         track(ANALYTICS_EVENT.BLOCK_EDITED, { block_id: block.id, what_changed: whatChanged })
       }
@@ -1038,7 +837,7 @@ function BlockEditModal({
     bundleId: app.bundleId,
     appName: app.appName,
     name: formatDisplayAppName(app.appName),
-    detail: categoryLabel(app.category),
+    detail: activityCategoryLabel(app.category),
     seconds: app.totalSeconds,
     icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={activityColorForCategory(app.category)} />,
   }))
@@ -1180,7 +979,7 @@ function BlockEditModal({
                 style={{ ...inputBase, height: 32, padding: '0 8px', cursor: 'pointer' }}
               >
                 {!BLOCK_CATEGORY_OPTIONS.some((option) => option.value === categoryDraft) && (
-                  <option value={categoryDraft}>{categoryLabel(categoryDraft)}</option>
+                  <option value={categoryDraft}>{activityCategoryLabel(categoryDraft)}</option>
                 )}
                 {BLOCK_CATEGORY_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -1310,6 +1109,13 @@ function DaySummaryInspector({ payload, onRefresh }: { payload: DayTimelinePaylo
     setRecap(cached ?? null)
     setRecapLoading(false)
   }, [payload.date])
+
+  useEffect(() => ipc.projections.onInvalidated((event) => {
+    if (event.scope !== 'timeline' && event.scope !== 'all') return
+    if (event.date && event.date !== payload.date) return
+    daySummaryRecapCache.delete(payload.date)
+    setRecap(null)
+  }), [payload.date])
 
   // Analyze Day (today) / Re-analyze (a past day): finalize the provisional day
   // into named blocks and refresh deterministic-floor / low-confidence labels.
@@ -1533,7 +1339,7 @@ function BlockDetailInspector({
       const app = row.app
       return {
         name: formatDisplayAppName(app.appName),
-        detail: categoryLabel(app.category),
+        detail: activityCategoryLabel(app.category),
         icon: <AppIcon bundleId={app.bundleId} appName={app.appName} size={24} fontSize={10} color={accent} />,
       }
     }
@@ -1581,16 +1387,14 @@ function BlockDetailInspector({
     const { name, detail, icon, onOpen } = presentationFor(row)
     const content = (
       <>
-        {icon}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <InlineRevealText
-            text={name}
-            style={{ fontSize: indented ? 12.5 : 13, fontWeight: 600, color: 'var(--color-text-primary)' }}
-          />
-          {detail && (
+        <EvidenceIdentity
+          icon={icon}
+          title={name}
+          titleStyle={{ fontSize: indented ? 12.5 : 13 }}
+          detail={detail ? (
             <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail}</div>
-          )}
-        </div>
+          ) : undefined}
+        />
         <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
           {formatDuration(row.seconds)}
         </div>
@@ -1732,7 +1536,7 @@ function BlockDetailInspector({
                   color: 'var(--color-text-tertiary)',
                   border: '1px solid var(--color-border-ghost)',
                 }}>
-                  {categoryLabel(category)} · {formatDuration(seconds)}
+                  {activityCategoryLabel(category)} · {formatDuration(seconds)}
                 </span>
               ))}
             </div>
@@ -1800,9 +1604,9 @@ function CalendarWeekView({
   nowMs: number
   scrollerRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const weekStart = getWeekStart(selectedDate)
+  const weekStart = weekStartString(selectedDate)
   const today = todayString()
-  const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => shiftDate(weekStart, index)), [weekStart])
+  const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => shiftDateString(weekStart, index)), [weekStart])
   const includesToday = dates.includes(today)
 
   const weekResource = useProjectionResource<DayTimelinePayload[]>({
@@ -1817,9 +1621,10 @@ function CalendarWeekView({
     scope: 'timeline',
     dependencies: [weekStart],
     intervalMs: 0,
-    load: () => ipc.ai.getWeekReview(weekStart).catch(() => null),
+    load: () => ipc.ai.getWeekReview(weekStart),
   })
   const [generatingWeekReview, setGeneratingWeekReview] = useState(false)
+  const [weekReviewError, setWeekReviewError] = useState<string | null>(null)
 
   const days = useMemo(() => weekResource.data ?? [], [weekResource.data])
   const byDate = useMemo(() => new Map(days.map((payload) => [payload.date, payload])), [days])
@@ -1830,9 +1635,12 @@ function CalendarWeekView({
 
   const handleGenerateWeekReview = useCallback(async () => {
     setGeneratingWeekReview(true)
+    setWeekReviewError(null)
     try {
-      await ipc.ai.getWeekReview(weekStart, true).catch(() => null)
+      await ipc.ai.getWeekReview(weekStart, true)
       await weekReviewResource.refresh()
+    } catch (error) {
+      setWeekReviewError(error instanceof Error ? error.message : String(error))
     } finally {
       setGeneratingWeekReview(false)
     }
@@ -1988,7 +1796,7 @@ function CalendarWeekView({
               Main mode
             </div>
             <div style={{ fontSize: 16, fontWeight: 760, color: 'var(--color-text-primary)' }}>
-              {topWeekCategory ? categoryLabel(topWeekCategory[0]) : 'No data'}
+              {topWeekCategory ? activityCategoryLabel(topWeekCategory[0]) : 'No data'}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
               {topWeekCategory ? formatDuration(topWeekCategory[1]) : 'Waiting for tracked time'}
@@ -2026,7 +1834,11 @@ function CalendarWeekView({
             </button>
           </div>
           <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' }}>
-            {generatingWeekReview
+            {weekReviewError
+              ? `Could not generate the week review: ${weekReviewError}`
+              : weekReviewResource.error
+                ? `Could not load the saved week review: ${weekReviewResource.error}`
+                : generatingWeekReview
               ? 'Generating a grounded review for this week…'
               : weekReview
                 ? weekReview.summary
@@ -2219,7 +2031,7 @@ export default function Timeline() {
   // The far end of a shift-selected merge span. Null means a plain single
   // selection; set means "select the whole run between the anchor and here".
   const [mergeRangeEndId, setMergeRangeEndId] = useState<string | null>(null)
-  const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
+  const isCompact = useCompactLayout()
   const [navState, setNavState] = useState<TimelineNavState>(() => timelineNavStateFromParams(searchParams))
   // Clock tick for the current-time line and the live block's growing bottom
   // edge — 30s keeps the active session visibly moving between data refreshes.
@@ -2248,12 +2060,6 @@ export default function Timeline() {
         : next
     ))
   }, [searchSignature])
-
-  useEffect(() => {
-    const onResize = () => setIsCompact(window.innerWidth < 1120)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000)
@@ -2600,7 +2406,7 @@ export default function Timeline() {
   const onCurrentPeriod = view === 'day'
     ? isToday
     : view === 'week'
-      ? getWeekStart(date) === getWeekStart(today)
+      ? weekStartString(date) === weekStartString(today)
       : monthKey(date) === monthKey(today)
   const forwardDisabled = onCurrentPeriod
 
@@ -2612,11 +2418,11 @@ export default function Timeline() {
 
   function stepDate(direction: -1 | 1) {
     if (view === 'week') {
-      setDate(shiftDate(getWeekStart(date), direction * 7))
+      setDate(shiftDateString(weekStartString(date), direction * 7))
     } else if (view === 'month') {
       setDate(shiftMonth(date, direction))
     } else {
-      setDate(shiftDate(date, direction))
+      setDate(shiftDateString(date, direction))
     }
   }
 
@@ -2663,115 +2469,21 @@ export default function Timeline() {
         background: 'var(--color-bg)',
         borderBottom: '1px solid var(--color-border-ghost)',
         padding: '20px 32px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 16,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            type="button"
-            onClick={() => stepDate(-1)}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 999,
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              color: 'var(--color-text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <IconChevronLeft />
-          </button>
-          <div style={{
-            minWidth: 156,
-            textAlign: 'center',
-            padding: '8px 16px',
-            borderRadius: 999,
-            border: '1px solid var(--color-border-ghost)',
-            background: 'var(--color-surface)',
-            fontSize: 13,
-            fontWeight: 700,
-            color: 'var(--color-text-primary)',
-          }}>
-            {headerLabel}
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (!forwardDisabled) stepDate(1)
-            }}
-            disabled={forwardDisabled}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 999,
-              border: 'none',
-              background: 'transparent',
-              cursor: forwardDisabled ? 'default' : 'pointer',
-              color: 'var(--color-text-secondary)',
-              opacity: forwardDisabled ? 0.3 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <IconChevronRight />
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {!onCurrentPeriod && (
-            <button
-              type="button"
-              onClick={() => setDate(todayString())}
-              style={{
-                padding: '7px 12px',
-                borderRadius: 8,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface)',
-                color: 'var(--color-text-secondary)',
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Today
-            </button>
-          )}
-          <div style={{
-            display: 'flex',
-            gap: 3,
-            padding: 3,
-            borderRadius: 9,
-            background: 'var(--color-surface-high)',
-            border: '1px solid var(--color-border-ghost)',
-          }}>
-            {(['day', 'week', 'month'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setView(mode)}
-                style={{
-                  padding: '4px 12px',
-                  borderRadius: 7,
-                  border: 'none',
-                  cursor: 'pointer',
-                  background: view === mode ? 'var(--gradient-primary)' : 'transparent',
-                  color: view === mode ? 'var(--color-primary-contrast)' : 'var(--color-text-secondary)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                {mode === 'day' ? 'Day' : mode === 'week' ? 'Week' : 'Month'}
-              </button>
-            ))}
-          </div>
-        </div>
+        <PeriodNavigator
+          label={headerLabel}
+          value={view}
+          options={[
+            { value: 'day', label: 'Day' },
+            { value: 'week', label: 'Week' },
+            { value: 'month', label: 'Month' },
+          ]}
+          onChange={setView}
+          onPrevious={() => stepDate(-1)}
+          onNext={() => stepDate(1)}
+          nextDisabled={forwardDisabled}
+          onToday={onCurrentPeriod ? undefined : () => setDate(todayString())}
+        />
       </div>
 
       {/* The timeline scrolls without showing a scrollbar (founder ask, Jul

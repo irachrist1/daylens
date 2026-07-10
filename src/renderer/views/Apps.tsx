@@ -3,95 +3,24 @@ import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
 import { ALL_TIME_DAYS } from '@shared/types'
 import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession, PageRef } from '@shared/types'
-import { kindForDomain } from '@shared/workKind'
+import { partitionDomainsWorkFirst } from '@shared/workKind'
+import { activityCategoryLabel } from '@shared/activityCategories'
+import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative } from '@shared/appNarrativeContract'
+import { withLiveAppSummary } from '@shared/liveAppSummaries'
 import EntityIcon from '../components/EntityIcon'
 import InlineRevealText from '../components/InlineRevealText'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
 import { ipc } from '../lib/ipc'
 import { formatDisplayAppName } from '../lib/apps'
-import { formatDuration, todayString } from '../lib/format'
+import { formatDuration, localDateStringFromMs, shiftDateString, todayString } from '../lib/format'
 import { openArtifact } from '../lib/openTarget'
+import PeriodNavigator from '../components/PeriodNavigator'
+import ActivityListCard from '../components/ActivityListCard'
+import EvidenceIdentity from '../components/EvidenceIdentity'
+import { useCompactLayout } from '../hooks/useCompactLayout'
 
 const DAYS_OPTIONS = [1, 7, 30, ALL_TIME_DAYS] as const
-
-// Stable work-first ordering: leisure (streaming/social) domains sink below the
-// rest while each group keeps its incoming duration order. Mirrors the recap's
-// ordering so the view and the AI agree (spec invariant 8).
-function partitionWorkFirst<T>(rows: T[], domain: (row: T) => string | null | undefined): { work: T[]; leisure: T[] } {
-  const work: T[] = []
-  const leisure: T[] = []
-  for (const row of rows) {
-    if (kindForDomain(domain(row)) === 'leisure') leisure.push(row)
-    else work.push(row)
-  }
-  return { work, leisure }
-}
-
-const CATEGORY_LABELS: Record<AppCategory, string> = {
-  development: 'Development',
-  communication: 'Communication',
-  research: 'Research',
-  writing: 'Writing',
-  aiTools: 'AI tools',
-  design: 'Design',
-  browsing: 'Browsing',
-  meetings: 'Meetings',
-  entertainment: 'Entertainment',
-  email: 'Email',
-  productivity: 'Productivity',
-  social: 'Social',
-  system: 'System',
-  uncategorized: 'Other',
-}
-
-function categoryLabel(category: AppCategory): string {
-  return CATEGORY_LABELS[category] ?? category
-}
-
-function liveAwareSummaries(
-  summaries: AppUsageSummary[],
-  live: LiveSession | null,
-  days: number,
-): AppUsageSummary[] {
-  if (!live) return summaries
-
-  const end = Date.now()
-  const today = new Date()
-  const rangeStart = days >= ALL_TIME_DAYS
-    ? 0
-    : new Date(today.getFullYear(), today.getMonth(), today.getDate() - Math.max(0, days - 1)).getTime()
-  const liveStart = Math.max(live.startTime, rangeStart)
-  const seconds = Math.max(0, Math.round((end - liveStart) / 1000))
-
-  if (seconds <= 0) return summaries
-
-  const liveKey = live.canonicalAppId ?? live.bundleId
-  const index = summaries.findIndex((summary) =>
-    (summary.canonicalAppId ?? summary.bundleId) === liveKey
-    || summary.bundleId === live.bundleId)
-  if (index >= 0) {
-    return summaries
-      .map((summary, position) => position === index
-        ? { ...summary, totalSeconds: summary.totalSeconds + seconds }
-        : summary)
-      .sort((left, right) => right.totalSeconds - left.totalSeconds)
-  }
-
-  return [
-    ...summaries,
-    {
-      bundleId: live.bundleId,
-      canonicalAppId: live.canonicalAppId ?? live.bundleId,
-      appName: live.appName,
-      category: live.category,
-      totalSeconds: seconds,
-      isFocused: ['development', 'research', 'writing', 'aiTools', 'design', 'productivity'].includes(live.category),
-      sessionCount: 1,
-    },
-  ].sort((left, right) => right.totalSeconds - left.totalSeconds)
-}
-
 
 function appMetricSentence(totalSeconds: number, sessionCount?: number): string {
   const sessions = sessionCount ?? 0
@@ -101,17 +30,6 @@ function appMetricSentence(totalSeconds: number, sessionCount?: number): string 
 function formatBlockRange(startTime: number, endTime: number): string {
   const formatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
   return `${formatter.format(startTime)} – ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(endTime)}`
-}
-
-function localDateKey(timestamp: number): string {
-  const date = new Date(timestamp)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function shiftAppsDate(dateStr: string, delta: number): string {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const next = new Date(y, m - 1, d + delta)
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
 }
 
 function formatAppsDateLabel(dateStr: string): string {
@@ -165,15 +83,9 @@ export default function Apps() {
   const isAppsPastDay = dateMode && selectedDate !== todayString()
   const [selectedCategory, setSelectedCategory] = useState<AppCategory | null>(null)
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
-  const [isCompact, setIsCompact] = useState(() => window.innerWidth < 1120)
+  const isCompact = useCompactLayout()
   const contentRef = useRef<HTMLDivElement | null>(null)
   const lastTrackedDetailKeyRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    const onResize = () => setIsCompact(window.innerWidth < 1120)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
 
   useEffect(() => {
     track(ANALYTICS_EVENT.APPS_OPENED, {
@@ -206,26 +118,36 @@ export default function Apps() {
   })
 
   const summaries = useMemo(
-    () => liveAwareSummaries(appsResource.data?.summaries ?? [], appsResource.data?.live ?? null, days),
+    () => {
+      const today = new Date()
+      const rangeStart = days >= ALL_TIME_DAYS
+        ? 0
+        : new Date(today.getFullYear(), today.getMonth(), today.getDate() - Math.max(0, days - 1)).getTime()
+      return withLiveAppSummary(
+        appsResource.data?.summaries ?? [],
+        appsResource.data?.live ?? null,
+        rangeStart,
+        Date.now(),
+      )
+    },
     [appsResource.data, days],
   )
 
   const categories = useMemo(() => {
-    const seenLabels = new Set<string>()
+    const seen = new Set<AppCategory>()
     const result: AppCategory[] = []
     for (const summary of summaries) {
-      const label = categoryLabel(summary.category)
-      if (!seenLabels.has(label)) {
-        seenLabels.add(label)
+      if (!seen.has(summary.category)) {
+        seen.add(summary.category)
         result.push(summary.category)
       }
     }
-    return result.sort((left, right) => categoryLabel(left).localeCompare(categoryLabel(right)))
+    return result.sort((left, right) => activityCategoryLabel(left).localeCompare(activityCategoryLabel(right)))
   }, [summaries])
 
   const filteredSummaries = useMemo(
     () => selectedCategory
-      ? summaries.filter((summary) => categoryLabel(summary.category) === categoryLabel(selectedCategory))
+      ? summaries.filter((summary) => summary.category === selectedCategory)
       : summaries,
     [selectedCategory, summaries],
   )
@@ -300,12 +222,10 @@ export default function Apps() {
       selectedCanonicalId as string,
       isAppsPastDay ? selectedDate : days,
       false,
-    ).catch(() => null),
+    ),
   })
 
-  const expectedRangeKey = isAppsPastDay
-    ? `1d:${selectedDate}`
-    : `${days}d:${todayString()}`
+  const expectedRangeKey = appDetailRangeKey(isAppsPastDay ? selectedDate : days, todayString())
   const selectedRangeLabel = dateMode
     ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
     : (days >= ALL_TIME_DAYS ? 'all time' : `last ${days} days`)
@@ -319,7 +239,7 @@ export default function Apps() {
   // scopeKey format matches `app:${canonicalAppId}:${rangeKey}` produced by
   // the main-process narrative builder.
   const expectedNarrativeScopeKey = selectedCanonicalId
-    ? `app:${selectedCanonicalId}:${expectedRangeKey}`
+    ? appNarrativeScopeKey(selectedCanonicalId, expectedRangeKey)
     : null
   const rawNarrative = narrativeResource.data
     && narrativeResource.data.scope === 'app_detail'
@@ -330,9 +250,8 @@ export default function Apps() {
   // enough evidence to cite two entities. Treat that as "no real narrative":
   // the user sees deterministic local summary, and the button reads Generate
   // instead of Refresh (the latter implies a generated story already exists).
-  const THIN_NARRATIVE_MARKER = 'thin app-specific signal'
   const isThinNarrative = (value: { summary: string } | null): boolean =>
-    !!value && value.summary.includes(THIN_NARRATIVE_MARKER)
+    !!value && isThinAppNarrative(value.summary)
   const narrative = rawNarrative && !isThinNarrative(rawNarrative) ? rawNarrative : null
 
   // Tracks scopeKeys the user explicitly clicked Generate on in this session.
@@ -392,7 +311,7 @@ export default function Apps() {
       let status: GenerationStatus
       if (!result) {
         status = { kind: 'no-bundle' }
-      } else if (result.summary.includes(THIN_NARRATIVE_MARKER)) {
+      } else if (isThinAppNarrative(result.summary)) {
         status = { kind: 'thin' }
       } else {
         status = { kind: 'ok' }
@@ -474,120 +393,31 @@ export default function Apps() {
         borderBottom: '1px solid var(--color-border-ghost)',
         background: 'var(--color-bg)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
-          {/* LEFT: date switcher (C23, mirrors Timeline header). */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button
-              type="button"
-              onClick={() => { setDays(1); setSelectedDate((d) => shiftAppsDate(dateMode ? d : todayString(), -1)) }}
-              style={{
-                width: 32, height: 32, borderRadius: 999, border: 'none',
-                background: 'transparent', cursor: 'pointer',
-                color: 'var(--color-text-secondary)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              aria-label="Previous day"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m10 3.5-4.5 4.5 4.5 4.5" />
-              </svg>
-            </button>
-            <div style={{
-              minWidth: 156,
-              textAlign: 'center',
-              padding: '8px 16px',
-              borderRadius: 999,
-              border: '1px solid var(--color-border-ghost)',
-              background: 'var(--color-surface)',
-              fontSize: 13,
-              fontWeight: 700,
-              color: 'var(--color-text-primary)',
-            }}>
-              {dateMode
-                ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate))
-                : (days >= ALL_TIME_DAYS ? 'All time' : `Last ${days} days`)}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                const next = shiftAppsDate(dateMode ? selectedDate : todayString(), 1)
-                if (next <= todayString()) { setDays(1); setSelectedDate(next) }
-              }}
-              disabled={dateMode && selectedDate === todayString()}
-              style={{
-                width: 32, height: 32, borderRadius: 999, border: 'none',
-                background: 'transparent',
-                cursor: (dateMode && selectedDate === todayString()) ? 'default' : 'pointer',
-                color: 'var(--color-text-secondary)',
-                opacity: (dateMode && selectedDate === todayString()) ? 0.3 : 1,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              aria-label="Next day"
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 3.5 10.5 8 6 12.5" />
-              </svg>
-            </button>
-          </div>
-
-          {/* RIGHT: range toggle + jump-to-today, mirroring Timeline's right cluster. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {(!dateMode || selectedDate !== todayString()) && (
-              <button
-                type="button"
-                onClick={() => { setDays(1); setSelectedDate(todayString()) }}
-                style={{
-                  padding: '7px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface-low)',
-                  color: 'var(--color-text-secondary)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Today
-              </button>
-            )}
-            <div style={{
-              display: 'flex',
-              gap: 3,
-              padding: 3,
-              borderRadius: 9,
-              background: 'var(--color-surface-high)',
-              border: '1px solid var(--color-border-ghost)',
-              flexShrink: 0,
-            }}>
-              {DAYS_OPTIONS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={(dateMode && option === 1) || (!dateMode && days === option)}
-                  onClick={() => {
-                    setDays(option)
-                    if (option === 1) setSelectedDate(todayString())
-                  }}
-                  style={{
-                    padding: '4px 12px',
-                    borderRadius: 7,
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: dateMode && option === 1
-                      ? 'var(--gradient-primary)'
-                      : (!dateMode && days === option ? 'var(--gradient-primary)' : 'transparent'),
-                    color: (dateMode && option === 1) || (!dateMode && days === option)
-                      ? 'var(--color-primary-contrast)'
-                      : 'var(--color-text-secondary)',
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  {option === 1 ? 'Day' : option >= ALL_TIME_DAYS ? 'All' : `${option}d`}
-                </button>
-              ))}
-            </div>
-          </div>
+        <div style={{ marginBottom: 16 }}>
+          <PeriodNavigator
+            label={dateMode
+              ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate))
+              : (days >= ALL_TIME_DAYS ? 'All time' : `Last ${days} days`)}
+            value={days === 1 ? 'day' : days === 7 ? '7d' : days === 30 ? '30d' : 'all'}
+            options={[
+              { value: 'day', label: 'Day' },
+              { value: '7d', label: '7d' },
+              { value: '30d', label: '30d' },
+              { value: 'all', label: 'All' },
+            ]}
+            onChange={(value) => {
+              const nextDays = value === 'day' ? 1 : value === '7d' ? 7 : value === '30d' ? 30 : ALL_TIME_DAYS
+              setDays(nextDays)
+              if (nextDays === 1) setSelectedDate(todayString())
+            }}
+            onPrevious={() => { setDays(1); setSelectedDate((current) => shiftDateString(dateMode ? current : todayString(), -1)) }}
+            onNext={() => {
+              const next = shiftDateString(dateMode ? selectedDate : todayString(), 1)
+              if (next <= todayString()) { setDays(1); setSelectedDate(next) }
+            }}
+            nextDisabled={dateMode && selectedDate === todayString()}
+            onToday={(!dateMode || selectedDate !== todayString()) ? () => { setDays(1); setSelectedDate(todayString()) } : undefined}
+          />
         </div>
 
         {categories.length > 0 && (
@@ -624,7 +454,7 @@ export default function Apps() {
                   cursor: 'pointer',
                 }}
               >
-                {categoryLabel(category)}
+                {activityCategoryLabel(category)}
               </button>
             ))}
           </div>
@@ -690,7 +520,7 @@ export default function Apps() {
                           {appName}
                         </div>
                         <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
-                          {categoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
+                          {activityCategoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
                           {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
                         </div>
                       </div>
@@ -775,7 +605,7 @@ export default function Apps() {
                         style={{ fontSize: 27, fontWeight: 780, letterSpacing: '-0.03em', color: 'var(--color-text-primary)' }}
                       />
                       <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                        {categoryLabel(selectedSummary.category)} · {selectedRangeLabel}
+                        {activityCategoryLabel(selectedSummary.category)} · {selectedRangeLabel}
                       </div>
                     </div>
                     <button
@@ -809,6 +639,11 @@ export default function Apps() {
                       <p style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
                         The sites and pages below are computed from your activity. Press Generate for a written recap.
                       </p>
+                    )}
+                    {narrativeResource.error && !isUserGenerating && (
+                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
+                        Could not load the saved narrative: {narrativeResource.error}
+                      </div>
                     )}
                     {deleteActivityError && (
                       <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
@@ -893,7 +728,7 @@ export default function Apps() {
                   // first (spec invariant 8): work domains lead, streaming/
                   // social sink into a quieter "Off to the side" group.
                   const browserActivity = detail.browserActivity
-                  const domainSplit = partitionWorkFirst(browserActivity?.domains ?? [], (d) => d.domain)
+                  const domainSplit = partitionDomainsWorkFirst(browserActivity?.domains ?? [], (d) => d.domain)
 
                   const offToTheSideSubhead = (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px', color: 'var(--color-text-tertiary)' }}>
@@ -931,20 +766,17 @@ export default function Apps() {
                           cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
                         }}
                       >
-                        <EntityIcon artifactType="page" domain={page.domain} url={page.url} size={28} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <InlineRevealText
-                            text={page.displayTitle}
-                            style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                          />
-                          <InlineRevealText
-                            text={page.domain}
-                            style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
-                          />
-                          <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                            {page.visitCount ?? 1} visit{(page.visitCount ?? 1) === 1 ? '' : 's'}
-                          </div>
-                        </div>
+                        <EvidenceIdentity
+                          icon={<EntityIcon artifactType="page" domain={page.domain} url={page.url} size={28} />}
+                          title={page.displayTitle}
+                          titleStyle={{ fontSize: 13.5, fontWeight: 620 }}
+                          detail={<>
+                            <InlineRevealText text={page.domain} style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }} />
+                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
+                              {page.visitCount ?? 1} visit{(page.visitCount ?? 1) === 1 ? '' : 's'}
+                            </div>
+                          </>}
+                        />
                       </button>
                       <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
                         {formatDuration(page.totalSeconds)}
@@ -971,75 +803,33 @@ export default function Apps() {
 
                   return (
                     <>
-                      {useRollup && rollups.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            What you did there
-                          </div>
-                          <div style={{ display: 'grid', gap: 8 }}>
-                            {rollups.slice(0, 10).map((row) => (
-                              <button
-                                key={`${row.patternId ?? row.sampleBlockIds[0]}`}
-                                type="button"
-                                onClick={() => { window.location.hash = `#/timeline?view=day&date=${localDateKey(row.earliestStart)}` }}
-                                style={{
-                                  width: '100%',
-                                  border: '1px solid var(--color-border-ghost)',
-                                  background: 'var(--color-surface-low)',
-                                  borderRadius: 12,
-                                  padding: '10px 14px',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-                                  {row.patternLabel}
-                                  {row.sessionCount > 1 && (
-                                    <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
-                                      {' '}× {row.sessionCount} sessions
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                                  {formatDuration(row.totalSeconds)}
-                                  {row.sessionCount === 1 ? ` · ${formatBlockRange(row.earliestStart, row.latestEnd)}` : ''}
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        </section>
-                      )}
-                      {!useRollup && filteredAppearances.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            What you did there
-                          </div>
-                          <div style={{ display: 'grid', gap: 8 }}>
-                            {filteredAppearances.slice(0, 10).map((block) => (
-                              <button
-                                key={block.blockId}
-                                type="button"
-                                onClick={() => { window.location.hash = `#/timeline?view=day&date=${localDateKey(block.startTime)}` }}
-                                style={{
-                                  width: '100%',
-                                  border: '1px solid var(--color-border-ghost)',
-                                  background: 'var(--color-surface-low)',
-                                  borderRadius: 12,
-                                  padding: '10px 14px',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                <div style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}>
-                                  {block.label}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3 }}>
-                                  {formatBlockRange(block.startTime, block.endTime)}
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        </section>
+                      {useRollup ? (
+                        <ActivityListCard
+                          title="What you did there"
+                          rows={rollups.slice(0, 10).map((row) => ({
+                            id: row.patternId ?? row.sampleBlockIds[0],
+                            label: <>
+                              {row.patternLabel}
+                              {row.sessionCount > 1 && (
+                                <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
+                                  {' '}× {row.sessionCount} sessions
+                                </span>
+                              )}
+                            </>,
+                            detail: `${formatDuration(row.totalSeconds)}${row.sessionCount === 1 ? ` · ${formatBlockRange(row.earliestStart, row.latestEnd)}` : ''}`,
+                            onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(row.earliestStart)}` },
+                          }))}
+                        />
+                      ) : (
+                        <ActivityListCard
+                          title="What you did there"
+                          rows={filteredAppearances.slice(0, 10).map((block) => ({
+                            id: block.blockId,
+                            label: block.label,
+                            detail: formatBlockRange(block.startTime, block.endTime),
+                            onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(block.startTime)}` },
+                          }))}
+                        />
                       )}
 
                       {fileArtifacts.length > 0 && (
