@@ -267,7 +267,7 @@ export function planDayWrapSlides(facts: DayWrapFacts): WrapSlideSpec[] {
         ? { value: hook.value, seconds: hook.seconds }
         : { value: hook.value },
       fallbackLine: `${hook.value}, ${hook.caption}.`,
-      ask: `Phrase this true fact so it lands as the "huh, neat" moment: ${hook.caption}. Anchor it in the concrete value (${hook.value}) or the real activity, never stay abstract. Use a part-of-day word, never a bare clock time, and do not open by referencing when the day started. State ONLY this fact: do not add a comparison to other parts of the day (no "more than the rest combined", no "the afternoon was free") and do not claim anything about time you were not given.`,
+      ask: `Phrase this true fact so it lands as the "huh, neat" moment: ${hook.caption}. Anchor it in the concrete value (${hook.value}) or the real activity, never stay abstract, and give it meaning by tying it to ONE other real, NAMED fact of the day (the actual work or activity it sat inside, or a real part of day), never a verdict. No filler characterizations ("that is what deep work looks like", "a real slice of the day") and no unstated comparisons or consistency claims (no "more than the rest combined", no "held even all day"); do not claim anything about time you were not given. Use a part-of-day word, never a bare clock time, and do not open by referencing when the day started.`,
       factsNote: `${hook.value} = ${hook.caption}`,
     })
   }
