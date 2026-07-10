@@ -46,6 +46,17 @@ ones it owns. The cross-cutting set:
 5. **Hand it to the founder to test.** The founder's only job is to test; everything up to
    the test is yours. Only the founder marks something done, after a real day.
 
+## Platform and monorepo boundaries
+
+- **Verify every OS-facing change across macOS, Windows, and Linux.** For tracking, capture,
+  file paths, permissions, native integration, or any other operating-system behavior, report
+  which platforms were actually checked and explicitly flag any that were not. Never assume
+  macOS behavior is universal.
+- **Stay in the requested monorepo lane.** The Electron app (`src/`), web app (`apps/web/`),
+  MCP server (`packages/mcp-server/`), and billing service (`services/billing/`) have separate
+  setups. Do not cross those boundaries unless the founder explicitly asks for a cross-lane
+  change; shared contracts belong in the shared packages.
+
 ## Model routing doctrine
 
 Use the cheapest model that can meet the bar, but cost is only a tie-breaker. For anything
