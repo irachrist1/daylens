@@ -19,6 +19,7 @@ import { invalidateProjectionScope } from '../core/projections/invalidation'
 import { mergeTimelineEpisodes, shouldReanalyzeBlockWithAI } from './workBlocks'
 import { getBlockLabelOverride, writeAIBlockLabel } from '../db/queries'
 import { generateWorkBlockInsight, generateDayRegroupPlan } from './ai'
+import { absenceSpannedBy, formatAbsenceRange, partitionAtRealAbsences } from '../lib/absenceGuard'
 
 export type BlockInsightTrigger = 'user' | 'background' | 'system'
 
@@ -101,6 +102,38 @@ export async function analyzeTimelineDay(
   let attempted = 0
   const failures: string[] = []
 
+  // REPAIR (v2-ship-plan W1-A): a day stored before the absence guard existed
+  // can contain a block that spans a real absence of 15+ minutes — on July 10
+  // a 3:49 PM–10:05 PM block sat over an 8:01–9:39 PM absence. Detect any such
+  // block and force the day to rebuild from its sessions: the pipeline now
+  // refuses to join across the gap (scoreBoundary treats a real absence as a
+  // hard cut that outranks every stored merge correction), so the block splits
+  // exactly at the absence. User corrections survive the rebuild — label
+  // overrides and reviews re-attach by evidence key, AI names carry forward
+  // inside persistTimelineDay, and cuts/valid merges replay from their durable
+  // stores. This runs in the normal re-analyze flow (the Analyze button /
+  // REBUILD_TIMELINE_DAY), so repairing a bad day is one click, never a
+  // direct edit of anyone's database.
+  const spanningAbsence = payload.blocks.filter((block) =>
+    !block.isLive
+    && !block.provisional
+    && block.sessions.length > 1
+    && absenceSpannedBy(block.sessions) !== null)
+  if (spanningAbsence.length > 0) {
+    for (const block of spanningAbsence) {
+      const gap = absenceSpannedBy(block.sessions)
+      console.warn(
+        `[timeline] repairing ${dateStr}: block "${block.label.current}" spans a real absence `
+        + `(${gap ? formatAbsenceRange(gap) : 'unknown'}) — splitting at the gap`,
+      )
+    }
+    payload = materializeTimelineDayProjection(db, dateStr, resolveLiveSession(dateStr), { forceRebuild: true })
+    invalidateProjectionScope('timeline', 'absence-repair')
+    invalidateProjectionScope('apps', 'absence-repair')
+    invalidateProjectionScope('insights', 'absence-repair')
+    changed = true
+  }
+
   // AI-driven regroup (timeline.md §3.3 / §5): decide which adjacent heuristic
   // blocks are the same continued intent and should become one. The AI decides
   // only the grouping; the merge rides the durable boundary-correction path so
@@ -120,11 +153,20 @@ export async function analyzeTimelineDay(
         // A user-renamed block is never merged away.
         if (members.some((member) => getBlockLabelOverride(db, member.id)?.label?.trim())) continue
         if (members.some((member) => member.isLive || !member.sessions.some((session) => session.id >= 0))) continue
-        try {
-          mergeTimelineEpisodes(db, dateStr, members)
-          mergedAny = true
-        } catch (error) {
-          console.warn('[timeline] AI merge skipped for a group:', error)
+        // The absence guard vetoes any AI-proposed group that spans a real
+        // absence of 15+ minutes (the AI proposes, the guard decides). The
+        // contiguous runs on each side of the gap keep the AI's grouping
+        // intent and still merge among themselves; mergeTimelineEpisodes
+        // enforces the same veto again at the write, as the last line of
+        // defense for every caller.
+        for (const run of partitionAtRealAbsences(members, (member) => member.sessions)) {
+          if (run.length < 2) continue
+          try {
+            mergeTimelineEpisodes(db, dateStr, run)
+            mergedAny = true
+          } catch (error) {
+            console.warn('[timeline] AI merge skipped for a group:', error)
+          }
         }
       }
       if (mergedAny) {
