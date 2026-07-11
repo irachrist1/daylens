@@ -1,5 +1,6 @@
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { FOCUSED_CATEGORIES } from '@shared/types'
+import { activityCategoryLabel } from '@shared/activityCategories'
 
 type WorkEvidenceSource = 'appSummary' | 'session' | 'website'
 
@@ -44,10 +45,7 @@ const WEBSITE_CATEGORY_RULES: Array<{ category: AppCategory; patterns: RegExp[] 
 ]
 
 function prettyCategory(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (match) => match.toUpperCase())
+  return activityCategoryLabel(category)
 }
 
 function formatDuration(seconds: number): string {

@@ -51,12 +51,13 @@ import { isHostFilteredFromArtifacts, isHostBlockedForLabel, isHostBlockedForApp
 import { categoryForDomain } from '@shared/domainCategories'
 import { blockActiveSeconds } from '@shared/blockDuration'
 import { looksLikeRawArtifactLabel } from '@shared/blockLabel'
+import { activityCategoryLabel } from '@shared/activityCategories'
 import { DEFAULT_TIMELINE_BLOCK_REVIEW, isTimelineBlockReviewState, isTrustedTimelineBlock } from '@shared/timelineReview'
 import { inferWorkIntent } from '@shared/workIntent'
 import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
-import { localDayBounds, localDateString } from '../lib/localDate'
+import { daysFromTodayLocalDateString, localDayBounds, localDateString } from '../lib/localDate'
 import { ownedDayBounds } from '../lib/dayOwnership'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { extractFilenames } from '../lib/windowTitleFilenames'
@@ -343,10 +344,7 @@ function computeIsBrowserSession(session: Pick<AppSession, 'bundleId' | 'appName
 }
 
 export function prettyCategory(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI Tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (match) => match.toUpperCase())
+  return activityCategoryLabel(category)
 }
 
 function formatDuration(seconds: number): string {
@@ -5829,12 +5827,7 @@ export function getRecapRange(
 }
 
 export function localDateStringForOffset(offsetDays: number): string {
-  const target = new Date()
-  target.setDate(target.getDate() + offsetDays)
-  const year = target.getFullYear()
-  const month = String(target.getMonth() + 1).padStart(2, '0')
-  const day = String(target.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return daysFromTodayLocalDateString(offsetDays)
 }
 
 function lookupPersistedTimelineBlockDate(db: Database.Database, blockId: string): string | null {

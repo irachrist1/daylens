@@ -5,7 +5,7 @@ export const ACTIVITY_CATEGORY_LABELS: Record<AppCategory, string> = {
   communication: 'Communication',
   research: 'Research',
   writing: 'Writing',
-  aiTools: 'AI tools',
+  aiTools: 'AI Tools',
   design: 'Design',
   browsing: 'Browsing',
   meetings: 'Meetings',
@@ -14,7 +14,7 @@ export const ACTIVITY_CATEGORY_LABELS: Record<AppCategory, string> = {
   productivity: 'Productivity',
   social: 'Social',
   system: 'System',
-  uncategorized: 'Other',
+  uncategorized: 'Uncategorized',
 }
 
 export const ALL_ACTIVITY_CATEGORY_OPTIONS = (Object.keys(ACTIVITY_CATEGORY_LABELS) as AppCategory[])

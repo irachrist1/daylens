@@ -3,7 +3,6 @@ import crypto from 'node:crypto'
 import type {
   AppCategory,
   AppDetailPayload,
-  AppProfile,
   AppSession,
   ArtifactRef,
   LiveSession,
@@ -12,12 +11,11 @@ import type {
 import { appDetailRangeKey } from '@shared/appNarrativeContract'
 import { withLiveAppSummary } from '@shared/liveAppSummaries'
 import {
-  getAppCharacter,
   getAppSummariesForRange,
   getBrowserActivityBreakdown,
   getSessionsForRange,
 } from '../db/queries'
-import { localDayBounds } from '../lib/localDate'
+import { localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import {
   artifactIdFor,
   compactWindowTitle,
@@ -134,11 +132,10 @@ export function getAppDetailPayload(
   const today = isDate ? daysOrDate as string : localDateStringForOffset(0)
   const rawDays = isDate ? 1 : Number(daysOrDate)
   const days = Number.isFinite(rawDays) ? Math.max(1, Math.floor(rawDays)) : 7
-  const [todayFrom, todayTo] = localDayBounds(today)
-  const anchor = new Date(todayFrom)
+  const [, todayTo] = localDayBounds(today)
   const fromMs = days >= 36500
     ? 0
-    : new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - Math.max(0, days - 1)).getTime()
+    : localDayBounds(shiftLocalDateString(today, -Math.max(0, days - 1)))[0]
   const rangeKey = appDetailRangeKey(isDate ? today : days, today)
   const effectiveLiveSession = !isDate || today === localDateStringForOffset(0) ? liveSession : null
 
@@ -193,46 +190,13 @@ export function getAppDetailPayload(
   }
   const topArtifacts = Array.from(artifactTotals.values()).sort((a, b) => b.totalSeconds - a.totalSeconds).slice(0, 8)
 
-  const pairedAppsMap = new Map<string, { canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>()
-  for (const block of relatedBlocks) {
-    for (const app of block.topApps) {
-      const identity = resolveCanonicalApp(app.bundleId, app.appName)
-      const pairedCanonicalId = identity.canonicalAppId ?? app.bundleId
-      if (pairedCanonicalId === canonicalAppId) continue
-      const existing = pairedAppsMap.get(pairedCanonicalId)
-      if (existing) {
-        existing.totalSeconds += app.totalSeconds
-        if (!existing.bundleId && app.bundleId) existing.bundleId = app.bundleId
-      } else {
-        pairedAppsMap.set(pairedCanonicalId, {
-          canonicalAppId: pairedCanonicalId,
-          bundleId: app.bundleId ?? null,
-          displayName: identity.displayName,
-          totalSeconds: app.totalSeconds,
-        })
-      }
-    }
-  }
-  const pairedApps = Array.from(pairedAppsMap.values()).sort((a, b) => b.totalSeconds - a.totalSeconds).slice(0, 8)
-
   const timeOfDayDistribution = Array.from({ length: 24 }, (_, hour) => ({ hour, totalSeconds: 0 }))
   for (const session of sessions) timeOfDayDistribution[new Date(session.startTime).getHours()].totalSeconds += session.durationSeconds
 
   const sampleSession = sessions[0]
-  const appCharacter = sampleSession ? getAppCharacter(db, sampleSession.bundleId, days) : null
   const displayName = sampleSession
     ? resolveCanonicalApp(sampleSession.bundleId, sampleSession.appName).displayName
     : resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
-  const profile: AppProfile = {
-    canonicalAppId,
-    displayName,
-    roleSummary: appCharacter?.label ?? 'Activity profile',
-    topArtifacts,
-    pairedApps,
-    topBlockIds: relatedBlocks.slice(0, 8).map((block) => block.id),
-    computedAt: Date.now(),
-  }
-
   const rawAppearances = Array.from(sessionDerivedBlocksByDate.values()).flat()
     .sort((a, b) => b.startTime - a.startTime)
     .map((block) => ({
@@ -313,20 +277,13 @@ export function getAppDetailPayload(
   return {
     canonicalAppId,
     displayName,
-    appCharacter,
-    profile,
     totalSeconds,
     sessionCount,
     topArtifacts,
     browserActivity,
-    pairedApps,
     blockAppearances,
     blockMemoryRollups,
-    workflowAppearances: relatedBlocks.flatMap((block) => block.workflowRefs)
-      .filter((workflow, index, workflows) => workflows.findIndex((entry) => entry.id === workflow.id) === index)
-      .slice(0, 10),
     timeOfDayDistribution,
-    computedAt: profile.computedAt,
     rangeKey,
   }
 }

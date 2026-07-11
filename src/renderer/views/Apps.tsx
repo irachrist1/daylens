@@ -1,83 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Trash2 } from 'lucide-react'
 import { ANALYTICS_EVENT, trackedTimeBucket } from '@shared/analytics'
-import { ALL_TIME_DAYS } from '@shared/types'
-import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession, PageRef } from '@shared/types'
-import { partitionDomainsWorkFirst } from '@shared/workKind'
 import { activityCategoryLabel } from '@shared/activityCategories'
+import { ALL_TIME_DAYS } from '@shared/types'
+import type { AISurfaceSummary, AppCategory, AppDetailPayload, AppUsageSummary, LiveSession } from '@shared/types'
 import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative } from '@shared/appNarrativeContract'
 import { withLiveAppSummary } from '@shared/liveAppSummaries'
-import EntityIcon from '../components/EntityIcon'
-import InlineRevealText from '../components/InlineRevealText'
+import PeriodNavigator from '../components/PeriodNavigator'
+import { useCompactLayout } from '../hooks/useCompactLayout'
 import { useProjectionResource } from '../hooks/useProjectionResource'
 import { track } from '../lib/analytics'
+import { dayBounds, shiftDateString, todayString } from '../lib/format'
 import { ipc } from '../lib/ipc'
-import { formatDisplayAppName } from '../lib/apps'
-import { formatDuration, localDateStringFromMs, shiftDateString, todayString } from '../lib/format'
-import { openArtifact } from '../lib/openTarget'
-import PeriodNavigator from '../components/PeriodNavigator'
-import ActivityListCard from '../components/ActivityListCard'
-import EvidenceIdentity from '../components/EvidenceIdentity'
-import { useCompactLayout } from '../hooks/useCompactLayout'
+import AppDetail, { type GenerationStatus } from './apps/AppDetail'
+import AppList from './apps/AppList'
+import type { WebsiteActivityTarget } from './apps/BrowserActivityBreakdown'
+import { appSummaryId, filterAppSummariesByCategory, splitAppSummaries } from './apps/appsViewModel'
 
 const DAYS_OPTIONS = [1, 7, 30, ALL_TIME_DAYS] as const
 
-function appMetricSentence(totalSeconds: number, sessionCount?: number): string {
-  const sessions = sessionCount ?? 0
-  return `Tracked for ${formatDuration(totalSeconds)}${sessions ? ` across ${sessions} session${sessions === 1 ? '' : 's'}` : ''}.`
-}
-
-function formatBlockRange(startTime: number, endTime: number): string {
-  const formatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-  return `${formatter.format(startTime)} – ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(endTime)}`
-}
-
 function formatAppsDateLabel(dateStr: string): string {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(y, m - 1, d))
-}
-
-function DeleteIconButton({
-  label,
-  busy,
-  onClick,
-}: {
-  label: string
-  busy: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={busy}
-      onClick={onClick}
-      style={{
-        width: 30,
-        height: 30,
-        borderRadius: 8,
-        border: '1px solid rgba(248, 113, 113, 0.28)',
-        background: busy ? 'rgba(248, 113, 113, 0.12)' : 'transparent',
-        color: '#ef4444',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: busy ? 'default' : 'pointer',
-        opacity: busy ? 0.55 : 0.82,
-        flexShrink: 0,
-      }}
-    >
-      <Trash2 size={14} strokeWidth={1.9} aria-hidden="true" />
-    </button>
-  )
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+    .format(new Date(year, month - 1, day))
 }
 
 export default function Apps() {
-  // days === 1 enables the date switcher (today raw OR a past day). 7d/30d
-  // are range modes that ignore selectedDate.
   const [days, setDays] = useState<(typeof DAYS_OPTIONS)[number]>(1)
-  const [selectedDate, setSelectedDate] = useState<string>(todayString())
+  const [selectedDate, setSelectedDate] = useState(todayString())
   const dateMode = days === 1
   const isAppsToday = dateMode && selectedDate === todayString()
   const isAppsPastDay = dateMode && selectedDate !== todayString()
@@ -88,156 +37,85 @@ export default function Apps() {
   const lastTrackedDetailKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
-    track(ANALYTICS_EVENT.APPS_OPENED, {
-      surface: 'apps',
-      trigger: 'navigation',
-      view: 'apps',
-    })
+    track(ANALYTICS_EVENT.APPS_OPENED, { surface: 'apps', trigger: 'navigation', view: 'apps' })
   }, [])
 
-  const appsResource = useProjectionResource<{
-    summaries: AppUsageSummary[]
-    live: LiveSession | null
-  }>({
+  const appsResource = useProjectionResource<{ summaries: AppUsageSummary[]; live: LiveSession | null }>({
     scope: 'apps',
     dependencies: [days, dateMode ? selectedDate : null],
-    // Only auto-poll today's live data. Past-day reads are static; no
-    // refresh on date navigation (follow-up C).
     intervalMs: isAppsToday ? 30_000 : 0,
     load: async () => {
-      const summariesP = dateMode
+      const summariesPromise = dateMode
         ? (isAppsToday ? ipc.db.getAppSummaries(1) : ipc.db.getAppSummariesForDate(selectedDate))
         : ipc.db.getAppSummaries(days)
-      const liveP = isAppsToday ? ipc.tracking.getLiveSession() : Promise.resolve(null)
-      const [summaries, live] = await Promise.all([summariesP, liveP])
-      return {
-        summaries: summaries as AppUsageSummary[],
-        live: live as LiveSession | null,
-      }
+      const livePromise = isAppsToday ? ipc.tracking.getLiveSession() : Promise.resolve(null)
+      const [summaries, live] = await Promise.all([summariesPromise, livePromise])
+      return { summaries, live }
     },
   })
 
-  const summaries = useMemo(
-    () => {
-      const today = new Date()
-      const rangeStart = days >= ALL_TIME_DAYS
-        ? 0
-        : new Date(today.getFullYear(), today.getMonth(), today.getDate() - Math.max(0, days - 1)).getTime()
-      return withLiveAppSummary(
-        appsResource.data?.summaries ?? [],
-        appsResource.data?.live ?? null,
-        rangeStart,
-        Date.now(),
-      )
-    },
-    [appsResource.data, days],
-  )
+  const summaries = useMemo(() => {
+    const rangeStart = days >= ALL_TIME_DAYS
+      ? 0
+      : dayBounds(shiftDateString(todayString(), -Math.max(0, days - 1)))[0]
+    return withLiveAppSummary(
+      appsResource.data?.summaries ?? [],
+      appsResource.data?.live ?? null,
+      rangeStart,
+      Date.now(),
+    )
+  }, [appsResource.data, days])
 
   const categories = useMemo(() => {
-    const seen = new Set<AppCategory>()
-    const result: AppCategory[] = []
-    for (const summary of summaries) {
-      if (!seen.has(summary.category)) {
-        seen.add(summary.category)
-        result.push(summary.category)
-      }
-    }
-    return result.sort((left, right) => activityCategoryLabel(left).localeCompare(activityCategoryLabel(right)))
+    const categories = [...new Set(summaries.map((summary) => summary.category))]
+    return categories.sort((left, right) => activityCategoryLabel(left).localeCompare(activityCategoryLabel(right)))
   }, [summaries])
 
   const filteredSummaries = useMemo(
-    () => selectedCategory
-      ? summaries.filter((summary) => summary.category === selectedCategory)
-      : summaries,
+    () => filterAppSummariesByCategory(summaries, selectedCategory),
     [selectedCategory, summaries],
   )
-
-  // Preserve the backend's most-used-first ordering. Low-signal entries sit
-  // below a fold, but primary apps are never regrouped in a way that lets a
-  // lower-usage category jump ahead of a more-used app.
-  const { primary, fleeting } = useMemo(() => {
-    const primary: AppUsageSummary[] = []
-    const fleeting: AppUsageSummary[] = []
-    for (const summary of filteredSummaries) {
-      const isFleeting = summary.totalSeconds < 120 || (summary.sessionCount ?? 1) <= 1 && summary.totalSeconds < 5 * 60
-      if (isFleeting && !selectedCategory) {
-        fleeting.push(summary)
-        continue
-      }
-      primary.push(summary)
-    }
-    return { primary, fleeting }
-  }, [filteredSummaries, selectedCategory])
+  const { primary, fleeting } = useMemo(
+    () => splitAppSummaries(filteredSummaries, selectedCategory),
+    [filteredSummaries, selectedCategory],
+  )
 
   useEffect(() => {
-    if (!selectedAppId) return
-    // Check against the FULL summary set, not the category-filtered one. Clearing
-    // on the filtered list blanked the detail pane whenever a category switch or
-    // a live refresh re-bucketed the selected app out of view. Skip while data is
-    // still loading so a transient empty list doesn't drop the selection.
-    if (summaries.length === 0) return
-    const stillExists = summaries.some((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId)
-    if (!stillExists) {
-      setSelectedAppId(null)
-    }
+    if (!selectedAppId || summaries.length === 0) return
+    if (!summaries.some((summary) => appSummaryId(summary) === selectedAppId)) setSelectedAppId(null)
   }, [summaries, selectedAppId])
 
   useEffect(() => {
-    const node = contentRef.current
-    if (!node) return
-    node.scrollTop = 0
+    if (contentRef.current) contentRef.current.scrollTop = 0
   }, [days, selectedCategory, selectedAppId])
 
-  // Resolve against the full summary list so a selected app keeps its detail
-  // pane even when the active category filter would exclude it.
-  const selectedSummary = summaries.find((summary) => (summary.canonicalAppId ?? summary.bundleId) === selectedAppId) ?? null
-  const selectedCanonicalId = selectedSummary ? (selectedSummary.canonicalAppId ?? selectedSummary.bundleId) : null
-
+  const selectedSummary = summaries.find((summary) => appSummaryId(summary) === selectedAppId) ?? null
+  const selectedCanonicalId = selectedSummary ? appSummaryId(selectedSummary) : null
+  const requestRange = isAppsPastDay ? selectedDate : days
 
   const detailResource = useProjectionResource<AppDetailPayload>({
     scope: 'apps',
     enabled: !!selectedCanonicalId,
     dependencies: [selectedCanonicalId, days, isAppsPastDay ? selectedDate : null],
-    shouldReload: (event) => (
-      !event.canonicalAppId
-      || event.canonicalAppId === selectedCanonicalId
-    ),
-    load: () => ipc.db.getAppDetail(selectedCanonicalId as string, isAppsPastDay ? selectedDate : days),
+    shouldReload: (event) => !event.canonicalAppId || event.canonicalAppId === selectedCanonicalId,
+    load: () => ipc.db.getAppDetail(selectedCanonicalId as string, requestRange),
   })
-  // Always loads cache-only on selection or app/range change. The explicit
-  // generate handler below owns force-generation; we never bake `force=true`
-  // into this resource because its loading state cannot be reliably observed
-  // (subsequent loads set `reloading`, not `loading`), making any state
-  // machine tied to it race against itself.
+
   const narrativeResource = useProjectionResource<AISurfaceSummary | null>({
     scope: 'apps',
     enabled: !!selectedCanonicalId,
     dependencies: [selectedCanonicalId, days, isAppsPastDay ? selectedDate : null],
     intervalMs: 0,
-    shouldReload: (event) => (
-      !event.canonicalAppId
-      || event.canonicalAppId === selectedCanonicalId
-    ),
-    load: () => ipc.ai.getAppNarrative(
-      selectedCanonicalId as string,
-      isAppsPastDay ? selectedDate : days,
-      false,
-    ),
+    shouldReload: (event) => !event.canonicalAppId || event.canonicalAppId === selectedCanonicalId,
+    load: () => ipc.ai.getAppNarrative(selectedCanonicalId as string, requestRange, false),
   })
 
-  const expectedRangeKey = appDetailRangeKey(isAppsPastDay ? selectedDate : days, todayString())
-  const selectedRangeLabel = dateMode
-    ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
-    : (days >= ALL_TIME_DAYS ? 'all time' : `last ${days} days`)
-  const detail = detailResource.data && detailResource.data.canonicalAppId === selectedCanonicalId
+  const expectedRangeKey = appDetailRangeKey(requestRange, todayString())
+  const detail = detailResource.data
+    && detailResource.data.canonicalAppId === selectedCanonicalId
     && detailResource.data.rangeKey === expectedRangeKey
     ? detailResource.data
     : null
-  // Only trust the narrative if it was produced for the currently selected
-  // app. Without this guard, switching apps briefly shows a stale narrative
-  // from the previously selected app while the new one loads.
-  // scopeKey format matches `app:${canonicalAppId}:${rangeKey}` produced by
-  // the main-process narrative builder.
   const expectedNarrativeScopeKey = selectedCanonicalId
     ? appNarrativeScopeKey(selectedCanonicalId, expectedRangeKey)
     : null
@@ -246,99 +124,51 @@ export default function Apps() {
     && narrativeResource.data.scopeKey === expectedNarrativeScopeKey
     ? narrativeResource.data
     : null
-  // The AI is instructed to return the literal phrase below when it lacks
-  // enough evidence to cite two entities. Treat that as "no real narrative":
-  // the user sees deterministic local summary, and the button reads Generate
-  // instead of Refresh (the latter implies a generated story already exists).
-  const isThinNarrative = (value: { summary: string } | null): boolean =>
-    !!value && isThinAppNarrative(value.summary)
-  const narrative = rawNarrative && !isThinNarrative(rawNarrative) ? rawNarrative : null
+  const narrative = rawNarrative && !isThinAppNarrative(rawNarrative.summary) ? rawNarrative : null
 
-  // Tracks scopeKeys the user explicitly clicked Generate on in this session.
-  // The "Generating a stronger app narrative…" message and the disabled
-  // button state are only shown for these scopes — cache-only reads on
-  // selection no longer flash the spinner. Cleared in the handler's finally
-  // block once the force-generation roundtrip completes.
   const [activeGenerationScopes, setActiveGenerationScopes] = useState<Set<string>>(() => new Set())
-  // Per-scope status from the most recent Generate click. Lets the UI tell the
-  // user when the AI ran but produced no usable narrative ("thin signal"),
-  // when it errored, or when it succeeded — instead of the previous silent
-  // failure where the button cycled back to "Generate" with no visible change.
-  type GenerationStatus =
-    | { kind: 'ok' }
-    | { kind: 'thin' }
-    | { kind: 'no-bundle' }
-    | { kind: 'error'; message: string }
   const [lastGenerationStatus, setLastGenerationStatus] = useState<Record<string, GenerationStatus>>({})
   const [deletingActivityKey, setDeletingActivityKey] = useState<string | null>(null)
   const [deleteActivityError, setDeleteActivityError] = useState<string | null>(null)
-  // Domains expanded to show their page rows in the merged "where the time
-  // went" section. All collapsed by default; reset when the panel retargets.
-  const [expandedDomains, setExpandedDomains] = useState<Set<string>>(() => new Set())
   const isUserGenerating = expectedNarrativeScopeKey
     ? activeGenerationScopes.has(expectedNarrativeScopeKey)
     : false
   const currentGenerationStatus = expectedNarrativeScopeKey
     ? lastGenerationStatus[expectedNarrativeScopeKey] ?? null
     : null
+
   const handleGenerateAppNarrative = async () => {
-    if (!selectedCanonicalId || !expectedNarrativeScopeKey) {
-      console.warn('[apps-narrative] click ignored: no selected app')
-      return
-    }
-    if (activeGenerationScopes.has(expectedNarrativeScopeKey)) return
+    if (!selectedCanonicalId || !expectedNarrativeScopeKey || activeGenerationScopes.has(expectedNarrativeScopeKey)) return
     const scopeKey = expectedNarrativeScopeKey
-    const requestRange = isAppsPastDay ? selectedDate : days
-    console.info(`[apps-narrative] generating for ${scopeKey} (range=${requestRange})`)
-    setActiveGenerationScopes((prev) => {
-      const next = new Set(prev)
-      next.add(scopeKey)
-      return next
-    })
-    setLastGenerationStatus((prev) => {
-      if (!(scopeKey in prev)) return prev
-      const next = { ...prev }
+    setActiveGenerationScopes((previous) => new Set(previous).add(scopeKey))
+    setLastGenerationStatus((previous) => {
+      if (!(scopeKey in previous)) return previous
+      const next = { ...previous }
       delete next[scopeKey]
       return next
     })
     try {
       const result = await ipc.ai.getAppNarrative(selectedCanonicalId, requestRange, true)
-      console.info(`[apps-narrative] ipc returned for ${scopeKey}`, {
-        hasResult: !!result,
-        scopeKey: result?.scopeKey,
-        chars: result?.summary?.length ?? 0,
-      })
-      let status: GenerationStatus
-      if (!result) {
-        status = { kind: 'no-bundle' }
-      } else if (isThinAppNarrative(result.summary)) {
-        status = { kind: 'thin' }
-      } else {
-        status = { kind: 'ok' }
-      }
-      setLastGenerationStatus((prev) => ({ ...prev, [scopeKey]: status }))
+      const status: GenerationStatus = !result
+        ? { kind: 'no-bundle' }
+        : isThinAppNarrative(result.summary)
+          ? { kind: 'thin' }
+          : { kind: 'ok' }
+      setLastGenerationStatus((previous) => ({ ...previous, [scopeKey]: status }))
       await narrativeResource.refresh()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.warn(`[apps-narrative] generation failed for ${scopeKey}:`, message)
-      setLastGenerationStatus((prev) => ({ ...prev, [scopeKey]: { kind: 'error', message } }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLastGenerationStatus((previous) => ({ ...previous, [scopeKey]: { kind: 'error', message } }))
     } finally {
-      setActiveGenerationScopes((prev) => {
-        if (!prev.has(scopeKey)) return prev
-        const next = new Set(prev)
+      setActiveGenerationScopes((previous) => {
+        const next = new Set(previous)
         next.delete(scopeKey)
         return next
       })
     }
   }
 
-  const handleDeleteWebsiteActivity = async (target: {
-    domain: string
-    url?: string | null
-    normalizedUrl?: string | null
-    pageKey?: string | null
-    title?: string | null
-  }) => {
+  const handleDeleteWebsiteActivity = async (target: WebsiteActivityTarget) => {
     const label = target.title?.trim() || target.domain
     const isPage = Boolean(target.url || target.normalizedUrl || target.pageKey)
     const targetKind = isPage ? 'page' : 'domain'
@@ -377,7 +207,6 @@ export default function Apps() {
     const detailKey = `${detail.canonicalAppId}:${detail.rangeKey}`
     if (lastTrackedDetailKeyRef.current === detailKey) return
     lastTrackedDetailKeyRef.current = detailKey
-    setExpandedDomains(new Set())
     track(ANALYTICS_EVENT.APP_DETAIL_OPENED, {
       surface: 'apps',
       tracked_time_bucket: trackedTimeBucket(detail.totalSeconds),
@@ -386,25 +215,18 @@ export default function Apps() {
     })
   }, [detail])
 
+  const selectedRangeLabel = dateMode
+    ? (isAppsToday ? 'today' : formatAppsDateLabel(selectedDate))
+    : (days >= ALL_TIME_DAYS ? 'all time' : `last ${days} days`)
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{
-        padding: '28px 32px 18px',
-        borderBottom: '1px solid var(--color-border-ghost)',
-        background: 'var(--color-bg)',
-      }}>
+      <div style={{ padding: '28px 32px 18px', borderBottom: '1px solid var(--color-border-ghost)', background: 'var(--color-bg)' }}>
         <div style={{ marginBottom: 16 }}>
           <PeriodNavigator
-            label={dateMode
-              ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate))
-              : (days >= ALL_TIME_DAYS ? 'All time' : `Last ${days} days`)}
+            label={dateMode ? (isAppsToday ? 'Today' : formatAppsDateLabel(selectedDate)) : (days >= ALL_TIME_DAYS ? 'All time' : `Last ${days} days`)}
             value={days === 1 ? 'day' : days === 7 ? '7d' : days === 30 ? '30d' : 'all'}
-            options={[
-              { value: 'day', label: 'Day' },
-              { value: '7d', label: '7d' },
-              { value: '30d', label: '30d' },
-              { value: 'all', label: 'All' },
-            ]}
+            options={[{ value: 'day', label: 'Day' }, { value: '7d', label: '7d' }, { value: '30d', label: '30d' }, { value: 'all', label: 'All' }]}
             onChange={(value) => {
               const nextDays = value === 'day' ? 1 : value === '7d' ? 7 : value === '30d' ? 30 : ALL_TIME_DAYS
               setDays(nextDays)
@@ -422,25 +244,9 @@ export default function Apps() {
 
         {categories.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <button
-              type="button"
-              aria-pressed={selectedCategory === null}
-              onClick={() => setSelectedCategory(null)}
-              style={{
-                padding: '6px 11px',
-                borderRadius: 999,
-                border: '1px solid var(--color-border-ghost)',
-                background: selectedCategory === null ? 'var(--color-surface-low)' : 'transparent',
-                color: selectedCategory === null ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-            >
-              All
-            </button>
-            {categories.map((category) => (
+            {[null, ...categories].map((category) => (
               <button
-                key={category}
+                key={category ?? 'all'}
                 type="button"
                 aria-pressed={selectedCategory === category}
                 onClick={() => setSelectedCategory(category)}
@@ -454,7 +260,7 @@ export default function Apps() {
                   cursor: 'pointer',
                 }}
               >
-                {activityCategoryLabel(category)}
+                {category === null ? 'All' : activityCategoryLabel(category)}
               </button>
             ))}
           </div>
@@ -462,538 +268,31 @@ export default function Apps() {
       </div>
 
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : '320px minmax(0, 1fr)',
-          height: '100%',
-          width: '100%',
-          maxWidth: 1180,
-          minWidth: 0,
-        }}>
-          <div style={{
-            borderRight: isCompact ? 'none' : '1px solid var(--color-border-ghost)',
-            overflowY: 'auto',
-            padding: '18px 16px 28px',
-          }}>
-            {appsResource.error && (
-              <div style={{ color: '#f87171', fontSize: 13 }}>Could not load apps: {appsResource.error}</div>
-            )}
-
-            {!appsResource.error && filteredSummaries.length === 0 && (
-              <div style={{
-                borderRadius: 16,
-                border: '1px solid var(--color-border-ghost)',
-                background: 'var(--color-surface)',
-                padding: '24px 18px',
-                textAlign: 'center',
-                color: 'var(--color-text-tertiary)',
-              }}>
-                No app activity in this range yet.
-              </div>
-            )}
-
-            <div style={{ display: 'grid', gap: 18 }}>
-              {primary.map((summary) => {
-                const key = summary.canonicalAppId ?? summary.bundleId
-                const selected = key === selectedAppId
-                const appName = formatDisplayAppName(summary.appName)
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => setSelectedAppId(key)}
-                    style={{
-                      width: '100%',
-                      border: selected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
-                      background: selected ? 'var(--color-surface-low)' : 'transparent',
-                      borderRadius: 14,
-                      padding: '14px 14px',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                      <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={30} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--color-text-primary)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {appName}
-                        </div>
-                        <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 3, lineHeight: 1.3 }}>
-                          {activityCategoryLabel(summary.category)} · {formatDuration(summary.totalSeconds)}
-                          {summary.sessionCount ? ` · ${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}` : ''}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-
-              {fleeting.length > 0 && (
-                <details style={{ marginTop: 4 }}>
-                  <summary style={{
-                    cursor: 'pointer',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    letterSpacing: '0.10em',
-                    textTransform: 'uppercase',
-                    color: 'var(--color-text-tertiary)',
-                    padding: '6px 4px',
-                    listStyle: 'none',
-                  }}>
-                    Smaller or fleeting ({fleeting.length})
-                  </summary>
-                  <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
-                    {fleeting.map((summary) => {
-                      const key = summary.canonicalAppId ?? summary.bundleId
-                      const selected = key === selectedAppId
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-pressed={selected}
-                          onClick={() => setSelectedAppId(key)}
-                          style={{
-                            width: '100%',
-                            border: selected ? '1px solid var(--color-border-ghost)' : '1px solid transparent',
-                            background: selected ? 'var(--color-surface-low)' : 'transparent',
-                            borderRadius: 12,
-                            padding: '8px 12px',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <EntityIcon appName={summary.appName} bundleId={summary.bundleId} canonicalAppId={summary.canonicalAppId} size={22} />
-                            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--color-text-secondary)' }}>
-                              {formatDisplayAppName(summary.appName)}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-                              {formatDuration(summary.totalSeconds)}
-                            </div>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </details>
-              )}
-
-            </div>
-          </div>
-
+        <div style={{ display: 'grid', gridTemplateColumns: isCompact ? 'minmax(0, 1fr)' : '320px minmax(0, 1fr)', height: '100%', width: '100%', maxWidth: 1180, minWidth: 0 }}>
+          <AppList
+            error={appsResource.error}
+            summaries={filteredSummaries}
+            primary={primary}
+            fleeting={fleeting}
+            selectedAppId={selectedAppId}
+            compact={isCompact}
+            onSelect={setSelectedAppId}
+          />
           <div ref={contentRef} style={{ overflowY: 'auto', padding: '22px 24px 32px' }}>
-            {!selectedSummary && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 200 }}>
-                <span style={{ fontSize: 13, color: 'var(--color-text-tertiary)', opacity: 0.5 }}>Select an app</span>
-              </div>
-            )}
-
-            {selectedSummary && (
-              <div style={{ display: 'grid', gap: 18 }}>
-                <div style={{
-                  borderRadius: 18,
-                  border: '1px solid var(--color-border-ghost)',
-                  background: 'var(--color-surface)',
-                  padding: '20px 22px',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'start', gap: 14 }}>
-                    <EntityIcon appName={selectedSummary.appName} bundleId={selectedSummary.bundleId} canonicalAppId={selectedSummary.canonicalAppId} size={38} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <InlineRevealText
-                        text={formatDisplayAppName(selectedSummary.appName)}
-                        style={{ fontSize: 27, fontWeight: 780, letterSpacing: '-0.03em', color: 'var(--color-text-primary)' }}
-                      />
-                      <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-                        {activityCategoryLabel(selectedSummary.category)} · {selectedRangeLabel}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={isUserGenerating}
-                      onClick={() => { void handleGenerateAppNarrative() }}
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid var(--color-border-ghost)',
-                        background: 'var(--color-surface-low)',
-                        color: 'var(--color-text-secondary)',
-                        fontSize: 11.5,
-                        fontWeight: 700,
-                        cursor: isUserGenerating ? 'default' : 'pointer',
-                        opacity: isUserGenerating ? 0.6 : 1,
-                      }}
-                    >
-                      {isUserGenerating ? 'Generating…' : narrative ? 'Refresh' : 'Generate'}
-                    </button>
-                  </div>
-                  <>
-                    {/* Deterministic metric always; the AI recap is appended only
-                        after Generate (spec 4.3) — the real detail lives in the
-                        sections below and never waits on AI. */}
-                    <p style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)', margin: '14px 0 0' }}>
-                      {appMetricSentence(selectedSummary.totalSeconds, selectedSummary.sessionCount)}
-                      {narrative?.summary ? ` ${narrative.summary}` : ''}
-                    </p>
-                    {!narrative && !isUserGenerating && !currentGenerationStatus && (
-                      <p style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--color-text-tertiary)', margin: '8px 0 0' }}>
-                        The sites and pages below are computed from your activity. Press Generate for a written recap.
-                      </p>
-                    )}
-                    {narrativeResource.error && !isUserGenerating && (
-                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
-                        Could not load the saved narrative: {narrativeResource.error}
-                      </div>
-                    )}
-                    {deleteActivityError && (
-                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
-                        Could not delete activity: {deleteActivityError}
-                      </div>
-                    )}
-                    {isUserGenerating && (
-                      <div aria-live="polite" style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                        Generating a stronger app narrative…
-                      </div>
-                    )}
-                    {!isUserGenerating && currentGenerationStatus?.kind === 'thin' && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                        Daylens has only thin signal for this app right now — try again after more activity.
-                      </div>
-                    )}
-                    {!isUserGenerating && currentGenerationStatus?.kind === 'no-bundle' && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                        No recent activity for this app in the selected range.
-                      </div>
-                    )}
-                    {!isUserGenerating && currentGenerationStatus?.kind === 'error' && (
-                      <div style={{ fontSize: 11.5, color: '#f87171', marginTop: 10 }}>
-                        Could not generate narrative: {currentGenerationStatus.message}
-                      </div>
-                    )}
-                    {narrative?.stale && (
-                      <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 10 }}>
-                        Showing the last saved narrative while new activity settles.
-                      </div>
-                    )}
-                  </>
-                  {/* B12: minute totals are secondary metadata, not headline. */}
-                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 14, letterSpacing: '0.02em' }}>
-                    {formatDuration(selectedSummary.totalSeconds)}
-                    {selectedSummary.sessionCount ? ` · ${selectedSummary.sessionCount} session${selectedSummary.sessionCount === 1 ? '' : 's'}` : ''}
-                  </div>
-                </div>
-
-                {detailResource.error && (
-                  <div style={{ color: '#f87171', fontSize: 13 }}>
-                    Could not load app detail: {detailResource.error}
-                  </div>
-                )}
-
-                {!detail && !detailResource.error && (
-                  <div style={{ display: 'grid', gap: 10 }} aria-label="Loading app detail">
-                    {[80, 64, 72].map((w) => (
-                      <div
-                        key={w}
-                        style={{
-                          height: 56,
-                          borderRadius: 14,
-                          background: 'var(--color-surface)',
-                          border: '1px solid var(--color-border-ghost)',
-                          opacity: 0.55,
-                          width: `${w}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {detail && (() => {
-                  // Backend `labelMatchesSelectedApp` already removes blocks whose
-                  // label is just the app name. Re-filtering here was eating valid
-                  // page-titled blocks for browser apps (Safari surfaced empty).
-                  const filteredAppearances = detail.blockAppearances
-                  const fileArtifacts = detail.topArtifacts.filter((a) => a.artifactType !== 'page')
-                  // F6: prefer the memory-pattern rollup when at least one row
-                  // collapses 2+ sessions under a learned pattern. For an Apps
-                  // view that previously listed 14 near-identical "Daylens
-                  // development" rows, this surfaces a single row with
-                  // "Daylens development × 14 sessions" instead.
-                  const rollups = detail.blockMemoryRollups ?? []
-                  const useRollup = rollups.some((row) => row.patternId && row.sessionCount >= 2)
-
-                  // One merged "where the time went" tree (2026-07-05): the
-                  // domain rows expand into their page rows, and the math
-                  // reconciles by construction — Σ pages = domain, Σ domains
-                  // + "No page recorded" = the header total. Work surfaces
-                  // first (spec invariant 8): work domains lead, streaming/
-                  // social sink into a quieter "Off to the side" group.
-                  const browserActivity = detail.browserActivity
-                  const domainSplit = partitionDomainsWorkFirst(browserActivity?.domains ?? [], (d) => d.domain)
-
-                  const offToTheSideSubhead = (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px', color: 'var(--color-text-tertiary)' }}>
-                      <div style={{ flex: 1, height: 1, background: 'var(--color-border-ghost)' }} />
-                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Off to the side</span>
-                      <div style={{ flex: 1, height: 1, background: 'var(--color-border-ghost)' }} />
-                    </div>
-                  )
-
-                  const toggleDomain = (domain: string) => {
-                    setExpandedDomains((prev) => {
-                      const next = new Set(prev)
-                      if (next.has(domain)) next.delete(domain)
-                      else next.add(domain)
-                      return next
-                    })
-                  }
-
-                  const renderPageRow = (page: PageRef) => (
-                    <div key={page.id} style={{ display: 'flex', alignItems: 'start', gap: 10, width: '100%' }}>
-                      <button
-                        type="button"
-                        onClick={() => void openArtifact(page)}
-                        disabled={page.openTarget.kind === 'unsupported' || !page.openTarget.value}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'start',
-                          gap: 10,
-                          flex: 1,
-                          minWidth: 0,
-                          padding: 0,
-                          border: 'none',
-                          background: 'transparent',
-                          textAlign: 'left',
-                          cursor: page.openTarget.kind === 'unsupported' || !page.openTarget.value ? 'default' : 'pointer',
-                        }}
-                      >
-                        <EvidenceIdentity
-                          icon={<EntityIcon artifactType="page" domain={page.domain} url={page.url} size={28} />}
-                          title={page.displayTitle}
-                          titleStyle={{ fontSize: 13.5, fontWeight: 620 }}
-                          detail={<>
-                            <InlineRevealText text={page.domain} style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }} />
-                            <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                              {page.visitCount ?? 1} visit{(page.visitCount ?? 1) === 1 ? '' : 's'}
-                            </div>
-                          </>}
-                        />
-                      </button>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                        {formatDuration(page.totalSeconds)}
-                      </div>
-                      <DeleteIconButton
-                        label={`Delete activity for ${page.displayTitle}`}
-                        busy={deletingActivityKey === (
-                          page.url || page.normalizedUrl || page.pageKey
-                            ? `url:${page.normalizedUrl ?? page.url ?? page.pageKey}`
-                            : `domain:${page.domain}`
-                        )}
-                        onClick={() => {
-                          void handleDeleteWebsiteActivity({
-                            domain: page.domain,
-                            url: page.url,
-                            normalizedUrl: page.normalizedUrl,
-                            pageKey: page.pageKey,
-                            title: page.displayTitle,
-                          })
-                        }}
-                      />
-                    </div>
-                  )
-
-                  return (
-                    <>
-                      {useRollup ? (
-                        <ActivityListCard
-                          title="What you did there"
-                          rows={rollups.slice(0, 10).map((row) => ({
-                            id: row.patternId ?? row.sampleBlockIds[0],
-                            label: <>
-                              {row.patternLabel}
-                              {row.sessionCount > 1 && (
-                                <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
-                                  {' '}× {row.sessionCount} sessions
-                                </span>
-                              )}
-                            </>,
-                            detail: `${formatDuration(row.totalSeconds)}${row.sessionCount === 1 ? ` · ${formatBlockRange(row.earliestStart, row.latestEnd)}` : ''}`,
-                            onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(row.earliestStart)}` },
-                          }))}
-                        />
-                      ) : (
-                        <ActivityListCard
-                          title="What you did there"
-                          rows={filteredAppearances.slice(0, 10).map((block) => ({
-                            id: block.blockId,
-                            label: block.label,
-                            detail: formatBlockRange(block.startTime, block.endTime),
-                            onClick: () => { window.location.hash = `#/timeline?view=day&date=${localDateStringFromMs(block.startTime)}` },
-                          }))}
-                        />
-                      )}
-
-                      {fileArtifacts.length > 0 && (
-                        <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                            Files & documents
-                          </div>
-                          <div style={{ display: 'grid', gap: 12 }}>
-                            {fileArtifacts.slice(0, 8).map((artifact) => (
-                              <button
-                                key={artifact.id}
-                                type="button"
-                                onClick={() => void openArtifact(artifact)}
-                                disabled={artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'start',
-                                  gap: 10,
-                                  width: '100%',
-                                  padding: 0,
-                                  border: 'none',
-                                  background: 'transparent',
-                                  textAlign: 'left',
-                                  cursor: artifact.openTarget.kind === 'unsupported' || !artifact.openTarget.value ? 'default' : 'pointer',
-                                }}
-                              >
-                                <EntityIcon
-                                  artifactType={artifact.artifactType}
-                                  canonicalAppId={artifact.canonicalAppId}
-                                  ownerBundleId={artifact.ownerBundleId}
-                                  ownerAppName={artifact.ownerAppName}
-                                  ownerAppInstanceId={artifact.ownerAppInstanceId}
-                                  title={artifact.displayTitle}
-                                  path={artifact.path}
-                                  domain={artifact.host}
-                                  url={artifact.url}
-                                  size={28}
-                                />
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <InlineRevealText
-                                    text={artifact.displayTitle}
-                                    style={{ fontSize: 13.5, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                  />
-                                  <InlineRevealText
-                                    text={artifact.subtitle || artifact.host || artifact.path || artifact.artifactType}
-                                    style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)' }}
-                                  />
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(artifact.totalSeconds)}
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        </section>
-                      )}
-
-                      {browserActivity && (domainSplit.work.length > 0 || domainSplit.leisure.length > 0 || browserActivity.unattributedSeconds > 0) && (() => {
-                        const renderDomainGroup = (entry: NonNullable<AppDetailPayload['browserActivity']>['domains'][number]) => {
-                          const expanded = expandedDomains.has(entry.domain)
-                          return (
-                            <div key={entry.domain}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleDomain(entry.domain)}
-                                  aria-expanded={expanded}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 10,
-                                    flex: 1,
-                                    minWidth: 0,
-                                    padding: 0,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    textAlign: 'left',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <span
-                                    aria-hidden="true"
-                                    style={{
-                                      display: 'inline-flex',
-                                      width: 10,
-                                      justifyContent: 'center',
-                                      color: 'var(--color-text-tertiary)',
-                                      fontSize: 9,
-                                      transform: expanded ? 'rotate(90deg)' : 'none',
-                                      transition: 'transform 120ms ease',
-                                    }}
-                                  >
-                                    ▶
-                                  </span>
-                                  <EntityIcon artifactType="page" domain={entry.domain} size={26} />
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <InlineRevealText
-                                      text={entry.domain}
-                                      style={{ fontSize: 13, fontWeight: 620, color: 'var(--color-text-primary)' }}
-                                    />
-                                    <div style={{ fontSize: 11.5, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
-                                      {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'}
-                                      {` · ${entry.pages.length} page${entry.pages.length === 1 ? '' : 's'}`}
-                                    </div>
-                                  </div>
-                                </button>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(entry.totalSeconds)}
-                                </div>
-                                <DeleteIconButton
-                                  label={`Delete activity for ${entry.domain}`}
-                                  busy={deletingActivityKey === `domain:${entry.domain}`}
-                                  onClick={() => { void handleDeleteWebsiteActivity({ domain: entry.domain, title: entry.domain }) }}
-                                />
-                              </div>
-                              {expanded && entry.pages.length > 0 && (
-                                <div style={{ display: 'grid', gap: 12, margin: '10px 0 4px', paddingLeft: 20, borderLeft: '2px solid var(--color-border-ghost)', marginLeft: 4 }}>
-                                  {entry.pages.map(renderPageRow)}
-                                </div>
-                              )}
-                            </div>
-                          )
-                        }
-                        return (
-                          <section style={{ borderRadius: 18, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', padding: '18px 20px' }}>
-                            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', marginBottom: 12 }}>
-                              Where your {formatDuration(browserActivity.totalSeconds)} went
-                            </div>
-                            <div style={{ display: 'grid', gap: 10 }}>
-                              {domainSplit.work.map(renderDomainGroup)}
-                            </div>
-                            {domainSplit.leisure.length > 0 && (
-                              <>
-                                {domainSplit.work.length > 0 && offToTheSideSubhead}
-                                <div style={{ display: 'grid', gap: 10 }}>
-                                  {domainSplit.leisure.map(renderDomainGroup)}
-                                </div>
-                              </>
-                            )}
-                            {/* Foreground browser time with no page recorded (native
-                                browser UI, new tabs, uncaptured pages). Explicit and
-                                non-interactive — never smeared into a domain
-                                (invariant 10) — so the rows above plus this one add
-                                up to the header total exactly. */}
-                            {browserActivity.unattributedSeconds > 0 && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: (domainSplit.work.length > 0 || domainSplit.leisure.length > 0) ? 12 : 0, opacity: 0.75 }}>
-                                <span aria-hidden="true" style={{ width: 10 }} />
-                                <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 7, background: 'var(--color-surface-high)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, color: 'var(--color-text-tertiary)', flexShrink: 0 }}>—</span>
-                                <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--color-text-tertiary)' }}>
-                                  No page recorded
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>
-                                  {formatDuration(browserActivity.unattributedSeconds)}
-                                </div>
-                              </div>
-                            )}
-                          </section>
-                        )
-                      })()}
-                    </>
-                  )
-                })()}
-              </div>
-            )}
+            <AppDetail
+              summary={selectedSummary}
+              rangeLabel={selectedRangeLabel}
+              detail={detail}
+              detailError={detailResource.error}
+              narrative={narrative}
+              narrativeError={narrativeResource.error}
+              generationStatus={currentGenerationStatus}
+              isGenerating={isUserGenerating}
+              deleteError={deleteActivityError}
+              deletingActivityKey={deletingActivityKey}
+              onGenerate={() => { void handleGenerateAppNarrative() }}
+              onDeleteWebsiteActivity={(target) => { void handleDeleteWebsiteActivity(target) }}
+            />
           </div>
         </div>
       </div>

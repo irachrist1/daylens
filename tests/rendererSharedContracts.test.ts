@@ -5,8 +5,8 @@ import { appDetailRangeKey, appNarrativeScopeKey, isThinAppNarrative, THIN_APP_N
 import { withLiveAppSummary } from '../src/shared/liveAppSummaries.ts'
 
 test('shared activity categories keep UI identity separate from prompt prose', () => {
-  assert.equal(activityCategoryLabel('aiTools'), 'AI tools')
-  assert.equal(activityCategoryLabel('uncategorized'), 'Other')
+  assert.equal(activityCategoryLabel('aiTools'), 'AI Tools')
+  assert.equal(activityCategoryLabel('uncategorized'), 'Uncategorized')
   assert.equal(activityCategoryLabel('uncategorized', { uncategorized: 'Uncategorized' }), 'Uncategorized')
   assert.equal(EDITABLE_BLOCK_CATEGORY_OPTIONS.some(({ value }) => value === 'system'), false)
 })

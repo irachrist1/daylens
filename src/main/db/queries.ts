@@ -20,11 +20,12 @@ import type {
   WorkContextInsight,
 } from '@shared/types'
 import { isCategoryFocused } from '../lib/focusScore'
-import { localDayBounds } from '../lib/localDate'
+import { localDateString, localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import { resolveCanonicalApp, type CanonicalAppIdentity } from '../lib/appIdentity'
 import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
+import { activityCategoryLabel } from '@shared/activityCategories'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -277,25 +278,8 @@ function mergeSessions(sessions: AppSession[]): AppSession[] {
   return merged
 }
 
-function toLocalDateKey(timestampMs: number): string {
-  const date = new Date(timestampMs)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function shiftLocalDateString(dateStr: string, offsetDays: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  return toLocalDateKey(new Date(year, month - 1, day + offsetDays).getTime())
-}
-
 function formatCategoryLabel(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+  return activityCategoryLabel(category)
 }
 
 function normalizePlannedApps(apps: string[] | null | undefined): string[] {
@@ -789,7 +773,7 @@ export function searchSessions(
     windowTitle: row.window_title,
     startTime: row.start_time,
     endTime: row.end_time,
-    date: toLocalDateKey(row.start_time),
+    date: localDateString(new Date(row.start_time)),
     excerpt: row.excerpt ?? row.window_title ?? row.app_name,
   }))
 }
@@ -886,7 +870,7 @@ export function searchBrowser(
     url: row.url,
     startTime: row.visit_time,
     endTime: row.visit_time + Math.max(0, row.duration_sec) * 1000,
-    date: toLocalDateKey(row.visit_time),
+    date: localDateString(new Date(row.visit_time)),
     excerpt: row.excerpt ?? row.page_title ?? row.url ?? row.domain,
   }))
 }
@@ -929,7 +913,7 @@ export function searchArtifacts(
     filePath: row.file_path,
     startTime: row.created_at,
     endTime: row.created_at,
-    date: toLocalDateKey(row.created_at),
+    date: localDateString(new Date(row.created_at)),
     excerpt: row.excerpt ?? row.title,
   }))
 }
@@ -1565,6 +1549,55 @@ export function getThreadMessages(
       rating: 'up' | 'down' | null
       ratingUpdatedAt: number | null
     })) as AIThreadMessage[]
+}
+
+// Newest page of a thread's messages for the chat view. Opening a conversation
+// must not load its entire history (threads grow unbounded); the view loads the
+// most recent `limit` messages and pages older ones in on demand. The cursor is
+// the (createdAt, id) of the oldest already-loaded message so pages stay stable
+// against ties in created_at. Returned messages are ascending, ready to render
+// or prepend. The AI send path still reads full history via getThreadMessages.
+export function getThreadMessagesPage(
+  db: Database.Database,
+  threadId: number,
+  options: { limit: number; before?: { createdAt: number; id: number } | null },
+): { messages: AIThreadMessage[]; hasEarlier: boolean } {
+  const limit = Math.max(1, options.limit)
+  const before = options.before ?? null
+  const rows = db
+    .prepare(
+      `SELECT
+         id,
+         role,
+         content,
+         created_at AS createdAt,
+         metadata_json AS metadataJson,
+         rating,
+         rating_updated_at AS ratingUpdatedAt
+       FROM ai_messages
+       WHERE thread_id = ?
+         ${before ? 'AND (created_at < ? OR (created_at = ? AND id < ?))' : ''}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(...(before
+      ? [threadId, before.createdAt, before.createdAt, before.id, limit + 1]
+      : [threadId, limit + 1])) as Array<{
+      id: number
+      role: 'user' | 'assistant'
+      content: string
+      createdAt: number
+      metadataJson: string | null
+      rating: 'up' | 'down' | null
+      ratingUpdatedAt: number | null
+    }>
+
+  const hasEarlier = rows.length > limit
+  const page = hasEarlier ? rows.slice(0, limit) : rows
+  return {
+    messages: page.reverse().map((row) => mapAIThreadMessage(row)) as AIThreadMessage[],
+    hasEarlier,
+  }
 }
 
 export function getThreadConversationState(

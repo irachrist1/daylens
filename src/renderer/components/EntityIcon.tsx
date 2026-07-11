@@ -128,6 +128,7 @@ export default function EntityIcon({
   ownerBundleId,
   ownerAppName,
   ownerAppInstanceId,
+  color,
   size = 28,
 }: {
   appName?: string | null
@@ -142,6 +143,7 @@ export default function EntityIcon({
   ownerBundleId?: string | null
   ownerAppName?: string | null
   ownerAppInstanceId?: string | null
+  color?: string
   size?: number
 }) {
   const [didError, setDidError] = useState(false)
@@ -170,7 +172,7 @@ export default function EntityIcon({
 
   if (appName) {
     const key = normalizeAppNameKey(appName)
-    const color = key.includes('claude') || key.includes('dia')
+    const fallbackColor = key.includes('claude') || key.includes('dia')
       ? '#f59e0b'
       : key.includes('codex') || key.includes('chatgpt')
         ? '#38bdf8'
@@ -186,7 +188,7 @@ export default function EntityIcon({
         appName={appName}
         size={size}
         fontSize={size <= 22 ? 9 : 10}
-        color={color}
+        color={color ?? fallbackColor}
       />
     )
   }

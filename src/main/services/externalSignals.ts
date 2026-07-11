@@ -20,7 +20,7 @@ import { getSettings } from './settings'
 import { collectGitActivity } from './gitSignals'
 import { collectCalendarEvents } from './calendarSignals'
 import { collectFocusAppSignals } from './enrichmentDiscovery'
-import { localDateString } from '../lib/localDate'
+import { localDateString, shiftLocalDateString } from '../lib/localDate'
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -201,7 +201,7 @@ export function startExternalSignalCollection(): void {
   if (scheduled) return
   const run = () => {
     const today = localDateString()
-    const yesterday = localDateString(new Date(Date.now() - 86_400_000))
+    const yesterday = shiftLocalDateString(localDateString(), -1)
     void collectExternalSignals(yesterday).then(() => collectExternalSignals(today))
   }
   setTimeout(run, 2 * 60 * 1000)

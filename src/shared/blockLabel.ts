@@ -1,4 +1,5 @@
 import type { AppCategory, ArtifactRef, WorkContextBlock } from './types'
+import { activityCategoryLabel } from './activityCategories'
 
 // Categories where a browser page artifact is a plausible label source for the
 // whole block. For development/communication/writing/etc. a co-occurring browser
@@ -129,10 +130,7 @@ function isUsefulLabel(value: string | null | undefined): value is string {
 }
 
 function categoryDisplayName(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+  return activityCategoryLabel(category)
 }
 
 function cleanSiteName(domain: string): string {

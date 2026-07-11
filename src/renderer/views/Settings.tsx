@@ -30,7 +30,6 @@ import { ALL_ACTIVITY_CATEGORY_OPTIONS } from '@shared/activityCategories'
 import { claudeDesktopConfigDisplayPath } from '@shared/platformPaths'
 
 const CATEGORY_OPTIONS: Array<{ value: AppCategory; label: string }> = ALL_ACTIVITY_CATEGORY_OPTIONS
-  .map((option) => option.value === 'uncategorized' ? { ...option, label: 'Uncategorized' } : option)
 
 function Toggle({
   checked,

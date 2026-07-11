@@ -3,6 +3,7 @@ import { getAppSummariesForRange, getPeakHours, getSessionsForRange, getWebsiteS
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
 import { blockActiveSeconds } from '@shared/blockDuration'
+import { activityCategoryLabel } from '@shared/activityCategories'
 import { deriveWorkEvidenceSummary, type WorkEvidenceSignal } from '../lib/workEvidence'
 import {
   buildClientInvoiceNarrativeForRange,
@@ -553,10 +554,7 @@ function relativeDayLabel(date: Date, reference: Date = new Date()): string {
 }
 
 function formatCategoryName(category: AppCategory): string {
-  if (category === 'aiTools') return 'AI Tools'
-  return category
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (match) => match.toUpperCase())
+  return activityCategoryLabel(category)
 }
 
 function rankedCategoryBreakdown(apps: AppUsageSummary[]): Array<{ category: AppCategory; totalSeconds: number }> {
