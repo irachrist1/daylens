@@ -49,9 +49,11 @@ export const HOMEWORK_GUILT_PATTERNS = [
 // runtime validator AND the benchmark share, so a rule lives in exactly one place.
 
 export const EVIDENCE_HONESTY_DIRECTIVES = [
-  'SAY ONLY WHAT WAS OBSERVED. Every fact you receive is what Daylens saw on this one computer: which app, window, site, or meeting surface was frontmost, for how long, plus any connected signals (git, calendar). Time in an app is evidence the app was open and in front, and with real dwell it is fair to narrate the person doing that work; it is NOT proof they finished, read, watched, or absorbed anything. Never claim an outcome, a completed read, or a finished piece of work unless the facts state it (a git commit, a recorded note).',
-  'CALENDAR IS A SCHEDULE, NOT A RECORD OF ATTENDANCE. A calendar event means the calendar HELD that event; write "your calendar had the design review", "the 1:1 sat on the calendar at midday", never "you attended", "you sat in", "you sat through", or "you went to" a meeting on calendar evidence alone. Time observed in a meeting app is the only ground for saying the person was IN a call.',
-  'UNTRACKED TIME IS UNKNOWN, NOT EMPTY. Time that was not observed is simply not in the story: never call it idle, rest, a break, off task, or a gap in the person\'s effort, and never guess what filled it. If it matters, anchor the honesty to the SCREEN, plainly ("most of the day happened away from this screen", "only 23 minutes reached the screen"), and NEVER name the product as the narrator: a line never says "Daylens saw", "Daylens only saw", or "Daylens didn\'t see" — the app never speaks its own name (voice.md §2.8). Naming Daylens as the thing WORKED ON (a project, commits to it) is of course fine.',
+  'SAY ONLY WHAT WAS OBSERVED. Every fact you receive is what Daylens saw on this one computer: which app, window, site, or meeting surface was frontmost, for how long, plus any connected signals (git, calendar). Time in an app is evidence the app was open and in front, and with real dwell it is fair to narrate the person doing that work; it is NOT proof they finished, read, watched, or absorbed anything. Never write "you read" or "you watched" anything: a page or a player in the foreground was OPEN, never provably consumed. Never claim an outcome, a completed read, or a finished piece of work unless the facts state it (a git commit, a recorded note); on a day with no such evidence, never write "finished", "shipped", "done", or any other completion word about the work.',
+  'CALENDAR IS A SCHEDULE, NOT A RECORD OF ATTENDANCE. A calendar event means the calendar HELD that event; write "your calendar had the design review", "the 1:1 sat on the calendar at midday", never "you attended", "you sat in", "you sat through", "you joined", or "you went to" a meeting on calendar evidence alone. Time observed in a meeting app is the only ground for saying the person was IN a call.',
+  'UNTRACKED TIME IS UNKNOWN, NOT EMPTY. Time that was not observed is simply not in the story: never call it idle, rest, a break, off task, or a gap in the person\'s effort, and never guess what filled it (no walks, naps, lunches, gym runs, or errands the screen never saw). If it matters, anchor the honesty to the SCREEN, plainly ("most of the day happened away from this screen", "only 23 minutes reached the screen"), and NEVER name the product as the narrator: a line never says "Daylens saw", "Daylens only saw", or "Daylens didn\'t see" — the app never speaks its own name (voice.md §2.8). Naming Daylens as the thing WORKED ON (a project, commits to it) is of course fine.',
+  'AN UNBROKEN STRETCH IS OBSERVABLE; ATTENTION IS NOT. Narrate the run, the duration, the one thing nothing interrupted; never grade the attention inside it. Never write "focused", "unfocused", or "deep focus": the screen shows time, not state of mind. (Naming a real focus-timer session from the focusSessions facts is fine.)',
+  'NO PLAN, NO INTENT. The facts never contain what the person planned, meant, or intended to do; there is no written plan anywhere in this data. Never write "the plan was", "you planned to", "as planned", and never compare the day to any supposed intention. Narrate what happened, never what was supposed to happen.',
   'NEVER SPECULATE. No "probably", "must have", "likely", "no doubt", "surely". If the facts do not say it, the wrap does not say it.',
 ] as const
 
@@ -61,7 +63,20 @@ export const OVERCLAIM_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> =
   { re: /\b(?:probably|must have|likely|no doubt|surely|presumably)\b/i, reason: 'speculates about something the facts do not state' },
   { re: /\bidle\b/i, reason: 'characterizes untracked or quiet time as "idle"; unobserved time is unknown, never idle' },
   { re: /\boff[- ]task\b/i, reason: 'grades time as "off task"' },
-  { re: /\byou (?:attended|sat (?:in|through)|went to|showed up (?:to|at|for))\b/i, reason: 'claims attendance the tracked data cannot prove; calendar evidence only supports "your calendar had ..."' },
+  { re: /\byou (?:attended|sat (?:in|through)|went to|showed up (?:to|at|for)|joined|hopped on|jumped on|dialed in)\b/i, reason: 'claims attendance the tracked data cannot prove; calendar evidence only supports "your calendar had ..."' },
+  // App-open is never proof of consumption: a page or player in the foreground
+  // was OPEN, not read or watched. Naming the surface and the time stays legal
+  // ("YouTube pooled 59m"); the consumption verb is what dies.
+  { re: /\byou (?:read|re-?read|watched|re-?watched|listened to|consumed|absorbed|caught up on)\b/i, reason: 'claims consumption ("you read/watched") that foreground time cannot prove; an open page or player is evidence it was open, not that it was taken in' },
+  // Unobserved time is unknown: never narrate what physically filled it.
+  { re: /\byou (?:took a (?:walk|nap|break)|went for a (?:walk|run)|stepped (?:away|out)|napped|went to (?:lunch|the gym))\b/i, reason: 'narrates what filled unobserved time; time away from this screen is unknown and never guessed at' },
+  // Attention quality is not observable; an unbroken stretch is. The word
+  // "focus session" (a real focus-timer fact) stays legal.
+  { re: /\b(?:focused|unfocused)\b/i, reason: 'grades attention quality ("focused"); an unbroken stretch is observable, attention is not — narrate the run, not the state of mind' },
+  { re: /\b(?:deep(?:est)?|sharp(?:est)?|intense|laser|pure) focus\b/i, reason: 'grades attention quality ("deep focus"); an unbroken stretch is observable, attention is not' },
+  // No plan exists anywhere in the data (no morning-intention field is built);
+  // any plan-vs-actual claim is invented.
+  { re: /\b(?:the plan was|you (?:had )?planned|you (?:set out|meant|intended) to|as planned|your plan\b|the morning intention)\b/i, reason: 'claims a plan the person never wrote down; no written intention exists in the data, so any plan is invented' },
   // The product never speaks its own name as the narrator (voice.md §2.8).
   // "Daylens" as the thing worked on ("9 commits to Daylens") stays legal; it is
   // the observer voice ("Daylens saw / only saw / didn't see") that dies.
@@ -76,6 +91,25 @@ export function findOverclaimViolation(text: string): string | null {
     if (m) return `${reason} ("${m[0]}")`
   }
   return null
+}
+
+// ─── Completion claims (Layer 2's evidence rule) ─────────────────────────────
+// "X is done" is the most satisfying true thing a wrap can say and the easiest
+// place to lie: app time never proves an outcome. Completion words are legal
+// ONLY when the day carries verified output evidence (git commits / PRs, or
+// recorded meeting notes) — otherwise the honest wrap narrates the time and
+// says nothing about the result. Context-gated (not in OVERCLAIM_PATTERNS)
+// because with evidence these are exactly the words voice.md loves.
+
+const COMPLETION_CLAIM_RE = /\b(?:finished|completed|shipped|submitted|published|merged|wrapped up|got done|(?:is|are|was|were) done|crossed the line)\b/i
+
+/** The first unverified completion claim, or null. Pass `outputVerified: true`
+ *  when the facts carry real output evidence (shipped / meetingNotes). */
+export function findUnverifiedCompletionClaim(text: string, outputVerified: boolean): string | null {
+  if (outputVerified) return null
+  const m = text.match(COMPLETION_CLAIM_RE)
+  if (!m) return null
+  return `claims finished output ("${m[0]}") with no verified artifact behind it; without a git commit or a recorded note, narrate the time spent and say nothing about completion`
 }
 
 // Raw technical text that must never reach human-readable prose: paths, file
@@ -134,6 +168,15 @@ export interface LineGuardContext {
    *  authorize an invented "2 commits". Empty/absent means no enrichment counts
    *  exist, so ANY such count is invented and killed. */
   allowedCounts?: ReadonlySet<string>
+  /** The only compact duration tokens ("8h58m", "46m", "3h") a line may write —
+   *  harvested from the compact facts the writer saw plus every slide's own
+   *  facts. Undefined = grounding off (callers that predate it). This is what
+   *  kills the off-by-one "8h 57m" on a slide whose facts say 8h 58m. */
+  allowedDurations?: ReadonlySet<string>
+  /** True when the period's facts carry verified output evidence (git shipped /
+   *  recorded meeting notes). Without it, completion claims ("finished",
+   *  "shipped", "is done") are invented outcomes and die. */
+  outputVerified?: boolean
 }
 
 export function guardContextPercents(slides: WrapSlideSpec[]): Set<number> {
@@ -192,6 +235,39 @@ function ungroundedTimeIn(text: string, allowed: ReadonlySet<string>): string | 
   return null
 }
 
+// ─── Duration grounding ───────────────────────────────────────────────────────
+// Compact duration tokens ("8h 58m", "46m", "3h") are pre-formatted facts, so a
+// line may only write ones that exist somewhere in the facts. This is the
+// deterministic fix for the paid-bench week failures where the model wrote
+// "8h 57m" for an 8h 58m stretch and hand-computed a wrong "12h 21m" delta:
+// close-but-wrong durations sailed past the old excess-only hour check and cost
+// an automatic accuracy 0 at the judge. Word-form durations ("two and a half
+// hours") are untouched; they are prose, not fact tokens.
+
+const DURATION_TOKEN_REGEX = /\b(\d+)\s*h(?:\s*(\d{1,2})\s*m)?\b|\b(\d+)\s*m\b/gi
+
+function normalizeDurationToken(match: RegExpMatchArray): string {
+  if (match[3] !== undefined) return `${Number(match[3])}m`
+  const minutes = match[2] !== undefined ? `${Number(match[2])}m` : ''
+  return `${Number(match[1])}h${minutes}`
+}
+
+/** Every normalized compact duration token mentioned in a text. */
+export function durationTokensIn(text: string): Set<string> {
+  const tokens = new Set<string>()
+  for (const match of text.matchAll(DURATION_TOKEN_REGEX)) tokens.add(normalizeDurationToken(match))
+  return tokens
+}
+
+/** The first compact duration in the text that appears nowhere in the allowed
+ *  facts tokens, or null. */
+function ungroundedDurationIn(text: string, allowed: ReadonlySet<string>): string | null {
+  for (const match of text.matchAll(DURATION_TOKEN_REGEX)) {
+    if (!allowed.has(normalizeDurationToken(match))) return match[0]
+  }
+  return null
+}
+
 export interface WrapLineGuardOpts {
   minChars?: number
   maxChars?: number
@@ -226,10 +302,16 @@ export function wrapLineViolation(value: string, ctx: LineGuardContext, opts?: W
   }
   const overclaim = findOverclaimViolation(value)
   if (overclaim) return `${overclaim}; state only what the tracked data observed, plainly`
+  const completion = findUnverifiedCompletionClaim(value, ctx.outputVerified ?? false)
+  if (completion) return completion
   const leak = findRawArtifactLeak(value)
   if (leak) return `leaks raw technical text into prose: ${leak}; name the work in human words, never a path, file, branch, or id`
   const hours = hourClaimViolation(value, ctx)
   if (hours) return hours
+  if (ctx.allowedDurations) {
+    const duration = ungroundedDurationIn(value, ctx.allowedDurations)
+    if (duration) return `writes the duration "${duration}" which appears nowhere in the facts; copy a pre-formatted duration character for character, or say it in words instead`
+  }
   const percent = percentClaimViolation(value, ctx)
   if (percent) return percent
   const time = ungroundedTimeIn(value, opts?.allowedTimes ?? ctx.allowedTimes)
@@ -397,6 +479,54 @@ export function validateDeckLines(
   ctx: LineGuardContext,
 ): Record<string, string | null> {
   return validateDeckLinesDetailed(raw, slides, ctx).lines
+}
+
+// ─── Deck-level emoji budget ──────────────────────────────────────────────────
+// The per-line check allows one earned emoji per LINE; the deck contract
+// (catalog "Emoji note") allows one per DECK. Enforced here after per-line
+// validation: the first emoji in deck order is the earned one, every later
+// emoji-bearing piece is rejected and sent to the repair round.
+
+export interface DeckEmojiEnforcement {
+  lines: Record<string, string | null>
+  question: string | null
+  reflection: string | null
+  rejections: WrapLineRejection[]
+}
+
+export function enforceDeckEmojiBudget(
+  lines: Record<string, string | null>,
+  slides: WrapSlideSpec[],
+  question: string | null,
+  reflection: string | null,
+): DeckEmojiEnforcement {
+  const hasEmoji = (text: string) => new RegExp(EMOJI_REGEX.source, 'u').test(text)
+  const out: DeckEmojiEnforcement = { lines: { ...lines }, question, reflection, rejections: [] }
+  let spentOn: string | null = null
+  const reject = (id: string, candidate: string) => {
+    out.rejections.push({
+      id,
+      candidate,
+      reason: `carries an emoji but the deck already spent its one emoji on "${spentOn}"; at most ONE line in the whole deck may end with one — rewrite this piece without any emoji`,
+    })
+  }
+  for (const spec of slides) {
+    if (!spec.ask) continue
+    const line = out.lines[spec.id]
+    if (!line || !hasEmoji(line)) continue
+    if (spentOn == null) { spentOn = spec.id; continue }
+    reject(spec.id, line)
+    out.lines[spec.id] = null
+  }
+  if (out.question && hasEmoji(out.question)) {
+    if (spentOn == null) spentOn = 'question'
+    else { reject('question', out.question); out.question = null }
+  }
+  if (out.reflection && hasEmoji(out.reflection)) {
+    if (spentOn == null) spentOn = 'reflection'
+    else { reject('reflection', out.reflection); out.reflection = null }
+  }
+  return out
 }
 
 /** The user message for the ONE repair round: each rejected piece, the line the

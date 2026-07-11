@@ -379,7 +379,11 @@ highlights) is handed to the writer, and the prompt requires it to land
 happened in, or the reflection) — never buried in a footnote. The count guard
 (`enrichmentAllowedCounts`) kills any commit/PR count the connector didn't hand
 over, so output is never guessed or inflated. On a day with no verified output,
-the recap simply says nothing about output — silence, not a guess.
+the recap simply says nothing about output — silence, not a guess. This is
+enforced deterministically: completion words ("finished", "shipped", "is done",
+"crossed the line", …) are legal in a line ONLY when the day's facts carry
+verified output (git shipped / recorded meeting notes); otherwise the guard
+rejects the line outright (`findUnverifiedCompletionClaim`).
 
 ## `shipped` — what you finished  *(NOT BUILT YET — proposed card, DAY + WEEK)*
 
@@ -622,7 +626,7 @@ indirectly.
 - **ACCOUNTING/FINANCE:** "About seven hours, and the month-end close was the whole
   spine of it. The reconciliations tied out by early afternoon and the pack went to
   the partners after. A couple of calls broke it up but never derailed it. The kind
-  of day that ends with something actually finished."
+  of day that leaves the close further along than it found it."
 - **CONSULTING:** "Close to seven hours, and the client deck took most of them. Two
   discovery calls in the morning fed straight into it, and it went out an hour before
   the readout. A heads-down day with a clear finish line, and you hit it."
@@ -740,7 +744,8 @@ state**.
   close."
 - **nightOwl:** "The evening did the heavy lifting on the proposal. You found a
   second gear after 8."
-- **count:** "You came back to the proposal seven separate times before it was done."
+- **count:** "You came back to the proposal seven separate times today, and the day kept
+  circling back to it."
 - **topApp juxtaposition** *(only when the hook itself states the comparison)*:
   "More time in the editor today than in everything else put together."
 
@@ -1005,14 +1010,36 @@ deterministic `coverage` card is never judged (no prose to score).
   actually went (`headline` + `split` + `apps`/`story` reconciling)? A deck that is
   accurate and on-voice but reveals nothing forgotten tops out around 8, not 10.
 
+## The whole-deck judgment (one story, not fifteen lines)
+
+Per-slide scores cannot see the failure the founder actually hits: a deck where
+every line passes alone but the deck reads wrong as a whole. After per-slide
+scoring, the benchmark judges the ENTIRE deck in order and fails it on any of:
+
+1. **Cross-slide repetition** — the same fact, number, or phrase re-announced on
+   more than one slide beyond ONE deliberate callback. The cards may share
+   numbers by design (the chart reconciles to the headline); the PROSE may not
+   keep re-introducing them.
+2. **Broken arc** — the deck must read as one day (or week) told start to
+   finish: a hook, the substance in an order that makes sense, an honest close.
+   Shuffled rhythm is fine; shuffled STORY is not.
+3. **Internal contradiction** — two slides disagreeing about the same fact (a
+   morning called quiet on one card and the day's engine on another).
+4. **The emoji budget** — more than one emoji across the whole deck (the rule
+   above), checked deterministically.
+
+The deck-level pass gates the benchmark exactly like the per-slide scores: a
+deck of ten 10s that repeats itself or contradicts itself fails.
+
 ## How the judge learns from this catalog
 
 The per-slide anchor sets in `tests/wrapped-bench/anchors.ts` are distilled from
 the galleries above and injected into every judge call as "excellent" and
 "failing" calibration lines. **Every slide id the planner can emit with an AI ask
 has its own set — day and week separately** (the week slides no longer share one
-thin set); the dynamic families (`story-*`, `thread-0…3`) each share one family
-set by design. `tests/wrapAnchors.test.ts` enforces that coverage, and also that
+thin set); month and year score against the same period set (the period planner
+emits identical slide ids for all three cadences); the dynamic families
+(`story-*`, `thread-0…3`) each share one family set by design. `tests/wrapAnchors.test.ts` enforces that coverage, and also that
 no "perfect" anchor would itself be killed by the deterministic runtime guards
 (a line the writer can never ship must never be taught as the ceiling). The
 benchmark fixtures (`tests/wrapped-bench/fixtures.ts`) deliberately span day

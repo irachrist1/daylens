@@ -196,7 +196,7 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
   const span = startClock && facts.ribbonEndClock ? `${startClock} to ${facts.ribbonEndClock}` : null
   out.push({
     id: 'headline', kind: 'stat', kicker: 'The day, in one number',
-    stat: { value: hm(facts.activeSeconds), seconds: facts.activeSeconds, sublabel: span ?? 'tracked across the day' },
+    stat: { value: hm(facts.activeSeconds), seconds: facts.activeSeconds, sublabel: span ?? 'active time' },
     fallbackLine: span ? `Your day ran from ${startClock} to ${facts.ribbonEndClock}.` : 'That is the whole of it, active time only.',
     ask: 'One short line under the day-total number that ADDS a real read the number does not already say. It MUST name a concrete anchor: the real work that filled the day AND where in the day its weight sat (a part of day, or this slide\'s own start/end clocks). On a rest day the concrete anchor is the real downtime: name the actual leisure surface from the facts, not a shrug; "mid-morning" or "the screen time that showed up" is not an anchor. Do not restate the total, do not write "tracked across the day" or "start to finish", do not lean on vague adjectives, and do not imply the day ran to midnight.',
     factsNote: `total ${hm(facts.activeSeconds)}, the day proper began ${startClock ?? 'unknown'}, last activity ${facts.ribbonEndClock ?? 'unknown'}${facts.isLeisureDay
@@ -237,7 +237,7 @@ export function planDayWrapSlides(facts: DayWrapFacts, coverage?: WrapCoverageIn
       id: 'focus', kind: 'stat', kicker: 'Your longest unbroken stretch',
       stat: { value: hm(facts.standout.seconds), seconds: facts.standout.seconds, sublabel: `${facts.standout.name} · ${facts.standout.startClock} to ${facts.standout.endClock}` },
       fallbackLine: `${hm(facts.standout.seconds)} straight on ${lowerName(facts.standout.name)}, ${facts.standout.startClock} to ${facts.standout.endClock}. Nothing broke it.`,
-      ask: 'The longest unbroken stretch of the day. Do not just state the duration (it is on the card); lead with what that run MEANT: the deepest focus of the day, the one thing nothing interrupted, or when in the day that kind of focus landed. Name the real work being done.',
+      ask: 'The longest unbroken stretch of the day. Do not just state the duration (it is on the card); lead with what that run MEANT: the deepest unbroken run of the day, the one thing nothing interrupted, or when in the day that kind of depth landed. Name the real work being done. Never write "focus" or "focused"; the unbroken time is the fact, attention is not observable.',
       factsNote: `${hm(facts.standout.seconds)} on ${facts.standout.name}, ${facts.standout.startClock} to ${facts.standout.endClock}`,
     })
   }
@@ -397,7 +397,7 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
   out.push({
     id: 'opening', kind: 'opening', kicker: facts.rangeLabel.toUpperCase(),
     fallbackLine: facts.daysWithActivity >= 6 ? `A full ${noun}, end to end.` : facts.daysWithActivity >= 3 ? `A ${noun} with a few real days in it.` : `A light ${noun}.`,
-    ask: `One punchy sentence on what kind of ${noun} this was overall. Honest and specific, no numbers.`,
+    ask: `One punchy sentence on what kind of ${noun} this was overall. Name the one real thing that defined it (the biggest thread by name, or the true shape of the days), concretely. No numbers, and no effort adjectives ("hard", "long", "relentless") standing in for the real thing.`,
     factsNote: `total ${hm(facts.totalSeconds)}, work ${hm(facts.workSeconds)}, leisure ${hm(facts.leisureSeconds)}, ${facts.daysWithActivity} active days${threads[0] ? `, biggest thread: ${threads[0].subject}` : ''}`,
   })
 
@@ -430,7 +430,7 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
       id: 'consistency', kind: 'stat', kicker: 'Days you showed up',
       stat: { value: `${facts.daysWithActivity} of 7` },
       fallbackLine: `You were at it ${facts.daysWithActivity} of the 7 days.`,
-      ask: `You worked ${facts.daysWithActivity} of 7 days. One observational line, no grade.`,
+      ask: `You worked ${facts.daysWithActivity} of 7 days. One observational line with a real read on the rhythm of showing up (a day plainly taken, or the streak said plainly), never a cheer, never a grade, and never the bare count restated.`,
       factsNote: `${facts.daysWithActivity} of 7 days active`,
     })
   }
@@ -503,7 +503,7 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
       id: `thread-${i}`, kind: 'stat', kicker: i === 0 ? `What the ${noun} was really about` : i === 1 ? 'The other big thread' : `Thread ${i + 1} of the ${noun}`,
       stat: { value: hm(t.seconds), seconds: t.seconds, sublabel: `${t.subject}${t.daysActive > 1 ? ` · ${t.daysActive} days` : ''}` },
       fallbackLine: `${hm(t.seconds)} on ${t.subject}${t.daysActive > 1 ? `, across ${plural(t.daysActive, 'day')}` : ''}.`,
-      ask: `${t.subject} took ${hm(t.seconds)}${t.daysActive > 1 ? ` across ${t.daysActive} days` : ''}. One line on what that commitment looked like.`,
+      ask: `${t.subject} took ${hm(t.seconds)}${t.daysActive > 1 ? ` across ${t.daysActive} days` : ''}. One line on what that commitment looked like: how the time actually spread (one deep sitting, or returns across days) and what was being worked at, never filler like "a real commitment".`,
       factsNote: `${t.subject}: ${hm(t.seconds)}, ${plural(t.daysActive, 'day')}`,
     })
   })
@@ -560,7 +560,7 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
       id: 'split', kind: 'split', kicker: 'The honest split',
       split: { aLabel: 'Work', aPct: wp, aSeconds: facts.workSeconds, bLabel: 'Leisure', bPct: lp, bSeconds: facts.leisureSeconds },
       fallbackLine: `${wp}% work, ${lp}% leisure. That is the real ratio.`,
-      ask: `The ${noun} split ${wp}% work to ${lp}% leisure. Frame the ratio honestly, no grade, no guilt. You may use exactly these percentages.`,
+      ask: `The ${noun} split ${wp}% work to ${lp}% leisure. Frame the ratio honestly, no grade, no guilt. You may use exactly these percentages. Say nothing about WHEN in the days the leisure sat; this slide's facts hold only the ratio.`,
       factsNote: `work ${hm(facts.workSeconds)} (${wp}%), leisure ${hm(facts.leisureSeconds)} (${lp}%)`,
     })
   }
@@ -643,7 +643,7 @@ export function planPeriodWrapSlides(facts: WrappedPeriodFacts): WrapSlideSpec[]
       id: 'average', kind: 'stat', kicker: 'A typical day',
       stat: { value: hm(avg), seconds: avg, sublabel: 'per active day' },
       fallbackLine: `${hm(avg)} on a typical active day.`,
-      ask: 'One line on what a typical day looked like, from the per-day average.',
+      ask: 'One line on what a typical day looked like, from the per-day average: the kind of pace this volume is, plainly. Never claim how individual days clustered around the average; the facts do not say that.',
       factsNote: `${hm(avg)} per active day (${hm(facts.totalSeconds)} over ${facts.daysWithActivity} days)`,
     })
   }
