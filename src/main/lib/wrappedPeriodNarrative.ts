@@ -41,7 +41,7 @@ function periodWord(period: WrappedPeriod): string {
 const PERIOD_TIME_LITERACY = [
   'HOW TO READ TIMES. Every time in the facts is a local 12-hour clock string.',
   '"12am" is midnight, the start of the day. "12pm" is noon. "12:27pm" is early afternoon, 27 minutes after noon, never night.',
-  'CLOCK RULE, STRICT: You may write a clock time on a slide ONLY if that exact time appears in THAT slide\'s own facts, copied CHARACTER FOR CHARACTER. Never round it (write "11:29pm", never "11pm" or "past 11"), never turn it into a word ("noon", "midnight", "dinnertime"), never do clock arithmetic, never move a time onto a slide whose facts do not list it.',
+  'CLOCK RULE, STRICT: You may write a clock time on a slide ONLY if that exact time appears in THAT slide\'s own facts, copied CHARACTER FOR CHARACTER. Never round it (write "11:29pm", never "11pm" or "past 11"), never do clock arithmetic, never move a time onto a slide whose facts do not list it. "noon" and "midnight" ARE clock claims (12pm and 12am): write them only when that slide\'s facts hold exactly that time. Never write "dinnertime"; meals are a guess.',
   'To place something in time without a grounded clock, name the PART OF DAY or the DAY ("Tuesday", "the mornings", "the evenings"), never a bare clock the facts did not give you. "5pm", "9am" are clock times, not parts of day.',
 ].join(' ')
 
@@ -114,7 +114,7 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     'Tools and apps may be named ONLY on the slides whose facts contain them (timesink, apps, forgotten, leisure). Everywhere else, say what was being made. A tool (Claude Code, Cursor, Warp, Canva) is the instrument, never the thing being made.',
     `Main mode = facts.dominantWorkCategory, the actual WORK, never leisure. A working person's ${label} is never "mostly entertainment" because a few videos played on the side.`,
     'NEVER grade: no focus score, no drift, no productivity score. Write a percentage ONLY on the work-versus-leisure split slide, and only the exact percentages that slide hands you; never put a percentage on any other slide.',
-    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focus score", "noon", "midnight", "dinnertime". Use part-of-day words for time; just describe what happened otherwise.',
+    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focus score", "dinnertime". Part-of-day words ("morning", "midday", "the evenings", "late into the night") are free prose; use them naturally and accurately. But "noon" and "midnight" are CLOCK TIMES, exactly like "12pm" and "12am": write them ONLY when that exact time is in the slide\'s own facts. A night that ended at 11:55pm ended at 11:55pm, never "midnight"; copy the listed clock or say "late into the night".',
     'DO NOT DEFEND OR JUSTIFY REST OR LEISURE. Never argue that downtime was "not drift", "not a distraction", "deliberate", or "earned". Rest is allowed and needs no defense; say plainly what happened and move on.',
     'Never state how MANY meetings there were; the facts only know the total meeting time.',
     `NEVER predict the next ${label}, NEVER say anything carries forward or needs picking up, NEVER assign homework. The recap looks back, never ahead.`,

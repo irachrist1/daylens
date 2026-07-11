@@ -2084,3 +2084,510 @@ _What changed this iteration:_ stability confirmation run, no changes
 - **reflection** (10): Every claim traces to facts: the ML class, proposal, presentation, the 1h53m longest stretch from 11:09am to 1:13pm on pipeline material, and SPCS work in Notion and PowerPoint. Warm, varied, closes cleanly without hype or self-reference, and the read on where attention landed adds motion beyond the numbers.
 
 </details>
+
+
+## Benchmark run 2026-07-11T17:32:18.348Z (day cadence)
+
+### day 2026-07-07 (full) — day 2026-07-07
+
+Deck average (prose slides): **9.57** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 2 | **9** | A day that slowly built, with the evening going entirely to Daylens. |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | Most of it was Daylens work, with the ML class running through the late morning. |
+| story-morning | ai | 3 | 2 | 3 | 1 | **9** | The day opened at 11:15am in your ML class on Meet, which ran through to noon. |
+| story-midday | ai | 3 | 2 | 3 | 2 | **10** | The afternoon split between the cache hit rate investigation and a second stretch of the … |
+| story-evening | ai | 3 | 2 | 3 | 1 | **9** | From 5pm onward you went deep into Daylens, staying with it all the way to 10:26pm, with … |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | The evening held 3h 7m of your work, and almost all of it was the same thing: Daylens, st… |
+| latenight | ai | 3 | 2 | 3 | 2 | **10** | Last activity at 10:26pm, a long day that clearly had one more thing to finish before clo… |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | From 7:28pm to 9pm you ran 1h 18m straight on Daylens, the cleanest, most unbroken stretc… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | Spread across a handful of tools, with YouTube, Google Meet, and Canva each holding a rea… |
+| meetings | ai | 3 | 2 | 3 | 2 | **10** | Meetings took 1h 13m of your 5h 40m of work, almost all of it the ML class on Google Meet. |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube took 59m and it reads as the breather, not the work, spread across the afternoon … |
+| split | ai | 3 | 2 | 3 | 1 | **9** | 79% work, 21% leisure. A real working day, honestly. |
+| forgotten | ai | 2 | 2 | 3 | 1 | **8** | Intercom quietly took 28m, enough to be meaningful but easy to forget it happened. |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The Daylens work ran from the afternoon all the way to 10:26pm, with 20 commits shipped. … |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Tuesday came together mostly in the second half of the day, which is its own kind of rhyt… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (9): Correctly reads the day's shape — 11:15am late start ('slowly built') and the evening 5pm-10:26pm block on Daylens, both traceable to wholeDayFacts. Warm and specific without restating the printed totals, adding a genuine read of how time spread.
+- **headline** (10): Names the real main work (Daylens, most of the total) and the ML class in late morning (11:15am meeting), both grounded in the facts. Reads like a friend's summary and adds a read on how the day split rather than restating 7h 28m.
+- **story-morning** (9): Names the real 11:15am start, the ML class on Meet, and running to noon, all grounded in the facts. Warm and human without hype. It adds a small read (the day opening in class) but mostly frames the printed times rather than delivering a deeper read, so motion is moderate.
+- **story-midday** (10): Names the real cache hit rate investigation, the ML class meeting, and the YouTube/Alueducation background, all from the slide facts. The 'filling the gaps' read adds motion over a plain list, and the tone is natural and grounded.
+- **story-evening** (9): Names the real 5pm-to-10:26pm evening stretch on Daylens with YouTube and Netflix as leisure, all traceable to slide facts. Warm and human, but mostly restates the printed span and activity rather than adding a distinct read of what the stretch meant.
+- **wildcard** (10): Names the correct 3h 7m evening figure and correctly ties it to the Daylens work (5pm-10:26pm was all Daylens per the story), adding a true read that the evening was single-focused rather than just restating the number. Warm, human phrasing without hype.
+- **latenight** (10): Uses the exact 10:26pm end time and reads the late close as a full, long day wanting one more thing done, which matches the day's length and the Daylens evening stretch. Warm and human without hype, and it adds a read beyond the printed number.
+- **focus** (10): Names the real stretch, times, and Daylens project accurately from the facts; the phrasing reads human and frames it as the cleanest run of the day, adding a read beyond the printed number.
+- **apps** (10): Names the three real top apps (YouTube 59m, Meet 49m, Canva 46m) accurately and reads the spread as a handful of tools each carrying weight, which is a genuine caption-level read rather than a chart restatement.
+- **meetings** (10): Names the 1h 13m of 5h 40m plus the ML class on Google Meet (Meet – ML Pipeline is 1h 7m, so 'almost all of it' is accurate), all traceable to the facts. The read that one meeting dominated the calls adds motion the bare number doesn't, and the tone is natural.
+- **timesink** (10): Names the real app and exact 59m, and the afternoon/evening spread traces to the story (YouTube in both afternoon and evening blocks). The 'breather not the work' read adds a genuine interpretation the card's number can't show, in a warm human voice.
+- **split** (9): Both percentages trace to the slide facts and the '79% work, 21% leisure' framing is accurate. Tone is warm and human without hype. Motion is modest: it largely restates the card split with a light qualitative read ('a real working day') rather than telling how the time actually spread.
+- **forgotten** (8): Names Intercom and the correct 28m, warm and human without hype. The 'meaningful but easy to forget' read leans a bit generic and the 'quietly took' framing mostly restates the number rather than adding a concrete read of what that time was.
+- **question** (10): Names the real Daylens work, the evening run to 10:26pm, and the 20 commits, all traceable to facts. Warm, specific setup followed by a genuine open question that invites a real answer rather than restating the card.
+- **reflection** (10): Every claim traces to facts: ML class morning, cache/rename afternoon, Daylens evening, 20 commits with real shipped highlights, and the 11:15am late start. Warm and observant without hype or self-reference, and it adds a genuine read about the day's late-loading rhythm rather than restating a number.
+
+</details>
+
+### day 2026-07-04 (full) — day 2026-07-04
+
+Deck average (prose slides): **9.36** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 2 | **9** | Today was one long, unbroken push into the research and design planning for SPCS Group, f… |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | Almost all of it went to SPCS Group, with the build side of SPCS Technology joining in th… |
+| story-lateNight | ai | 2 | 2 | 3 | 1 | **8** | You started the day at midnight, already deep in research and design planning for SPCS Gr… |
+| story-morning | ai | 2 | 2 | 3 | 1 | **8** | The morning kept the same thread going, back into the SPCS Group research and design work… |
+| story-midday | ai | 2 | 2 | 3 | 1 | **8** | The afternoon held steady on SPCS Group research and design planning. No real pivot, just… |
+| story-evening | ai | 3 | 2 | 3 | 2 | **10** | The evening is where the build work for SPCS Technology finally came in, alongside the ta… |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Canva quietly took an hour and two minutes, which is easy to forget until you see it sitt… |
+| latenight | ai | 2 | 2 | 3 | 1 | **8** | The day closed at 11:29pm. When the work is that close to done, the laptop is hard to clo… |
+| apps _(cap)_ | ai | 2 | 2 | 3 | 2 | **9** | The day was spread across a few tools rather than anchored in one. YouTube ran long, but … |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | From midnight all the way to 6:21pm, the research and design planning for SPCS Group held… |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | The evening pulled 2h 44m of real work, which is where building SPCS Technology finally g… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube took 3h 29m and it is in the entertainment column, so that is the honest read: it… |
+| split | ai | 3 | 2 | 3 | 2 | **10** | 90% work, 10% leisure. The day barely breathed. |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The research and design planning for SPCS Group ran from midnight to mid-afternoon. What … |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Today was a long one. The SPCS Group research and design planning held from midnight thro… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (9): Names the real focus (research and design planning for SPCS Group) and captures the near-continuous 9h+ push starting at 12am, which traces to the facts. Reads human and adds a genuine read of the day's shape beyond the raw hours. Slightly ungrammatical ending ('barely letting up') and could carry one more concrete number for full specificity.
+- **headline** (10): Names the real main work (SPCS Group), the secondary build (SPCS Technology), and correctly places the build in the evening per the story timeline; reads warmly and adds a true read of how the day split rather than restating 10h 2m.
+- **story-lateNight** (8): Names the real work (research and design planning for SPCS Group) and the true 1h 51m stretch as 'nearly two hours,' both grounded. Warm and human without hype. Motion is modest: it mostly restates the midnight start and duration already on the card, adding little read beyond the time.
+- **story-morning** (8): Names the real SPCS Group research and design work but skips the concrete 2h 36m figure that would sharpen it. Tone is warm and human ('same focus, just with daylight behind it'), and it adds a small read of continuity from the late-night stretch, though it mostly extends the previous slide rather than revealing something new about the morning itself.
+- **story-midday** (8): Names the real afternoon work (SPCS Group research and design planning) accurately, though it drops the 1h 51m figure that could have added specificity. Tone is warm and human without hype. Motion is modest: 'no real pivot, just more of the same' is a light read but leans close to restating the steady block.
+- **story-evening** (10): Names the real evening work (building SPCS Technology, tail of SPCS Group research) and the X/YouTube leisure, all from the slide facts. The 'one real exhale' read is warm and adds context the chart cannot, given the day was 9h+ work with under an hour of leisure.
+- **forgotten** (10): Names Canva and the exact 1h 2m, matching the slide facts. Warm, human phrasing that reads like a friend noticing a buried block, and the 'until you see it sitting there' adds the forgotten-time read beyond the printed number.
+- **latenight** (8): Names the correct 11:29pm end time and adds a warm human read about staying up. The 'that close to done' claim is a mild speculative flourish that isn't directly supported but reads as tone rather than an invented fact; motion is decent but leans on restating the printed time.
+- **apps** (9): Names YouTube, Notion, Claude, Canva accurately from slide facts and reads the spread as diffuse rather than anchored, a genuine caption read. Slightly short of full specificity since it leans on tool names without a concrete time point, but appropriate for the lighter caption bar.
+- **focus** (10): Names the real project, the true span (12am to 6:21pm), and reads the length as a stretch that held; all values trace to the slide facts. Warm, conversational, and adds the read that they stayed with one thing rather than just restating the number.
+- **wildcard** (10): Names the real 2h 44m evening figure, the SPCS Technology build, and the true shift from a day of research/planning to building, all traceable to the facts. Reads like a human observation and adds a genuine read on how the day sequenced rather than restating the card number.
+- **timesink** (10): Names YouTube and the exact 3h 29m from slide facts, correctly categorized as entertainment/leisure. The read that it was leisure not work adds a genuine interpretation over the chart, and the tone is honest without spin or hype.
+- **split** (10): Uses the exact 90/10 split from the facts, and 'the day barely breathed' adds a genuine read of how lopsided the day was without hype or restating a chart row.
+- **question** (10): Names the real work (Research and design planning for SPCS Group) and grounds the timeframe in the true longest stretch (12am to 6:21pm, reasonably read as midnight to mid-afternoon), then poses a genuine curious question that opens up what the day's long stretch was chasing. Warm, human, and adds a read over the raw numbers.
+- **reflection** (10): Every fact traces to the sources: research/design planning from midnight, 16 commits (8+8) across both real project names, the highlight details, and the 11:29pm close. Warm, varied, friend-who-watched voice with a genuine read on the long single-sitting day, adding meaning beyond the printed numbers.
+
+</details>
+
+### day 2026-07-02 (full) — day 2026-07-02
+
+Deck average (prose slides): **9.85** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | Mostly a rest day, with one real anchor: the Machine Learning Pipeline class held the mor… |
+| headline | ai | 2 | 2 | 3 | 2 | **9** | The day leaned into downtime, with the ML Pipeline class as the one stretch of real work. |
+| story-morning | ai | 3 | 2 | 3 | 2 | **10** | From 9:59am the Machine Learning Pipeline class took over the morning and held your atten… |
+| story-midday | ai | 2 | 2 | 3 | 2 | **9** | The class carried into the afternoon too, and when it wound down you switched to Netflix … |
+| meetings | ai | 3 | 2 | 3 | 2 | **10** | Your calendar had the Machine Learning Pipeline class scheduled for 2h, and Google Meet s… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | X at 1h 25m was clearly leisure, spread across the day in social browsing, not a work too… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | The day was spread across a few surfaces, with X and YouTube each holding over an hour an… |
+| split | ai | 3 | 2 | 3 | 2 | **10** | 77% of the day was leisure and 23% was work. That is what a genuine rest day looks like, … |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | Almost all the real work, 1h 39m of it, was inside the Machine Learning Pipeline class be… |
+| earlystart | ai | 3 | 2 | 3 | 2 | **10** | The day started at 2:27am, which is less a morning and more the tail end of a very late n… |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Google Meet quietly clocked 30m, easy to overlook next to X and YouTube, but it was where… |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | The Machine Learning Pipeline class from 9:59am to 12:20pm was the longest unbroken stret… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The ML Pipeline class ran almost two hours, what part of the curriculum were you on? |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Thursday was a rest day with one real anchor: two hours inside the Machine Learning Pipel… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the real anchor (Machine Learning Pipeline class) and reads it correctly as the morning's structure per longestStretch 9:59am–12:20pm; 'mostly a rest day' traces to mostlyRest and the leisure-heavy split. Warm, human, and adds a read over the raw split rather than restating numbers.
+- **headline** (9): Correctly leads with rest and names the real work (ML Pipeline meeting/class) which traces to the facts; a specific time or the 1h56m stretch would push specificity to 3, but the read of the day is accurate and human.
+- **story-morning** (10): Names the real 9:59am start and the Machine Learning Pipeline meeting that ran to noon, all grounded in the slide facts. Warm, natural phrasing and the read that it 'held your attention straight through' adds a genuine sense of the stretch beyond the raw block.
+- **story-midday** (9): Correctly identifies the ML class continuing into the afternoon and the Netflix/X leisure shift, both traceable to slide facts; adds a read on the transition rather than restating the time block. Slightly less specific than the anchors since it drops the exact times, but warm and grounded.
+- **meetings** (10): Names the real class, the 2h scheduled block, and the 1h 56m actual screen time — all traceable to facts. The scheduled-versus-actual contrast is a genuine read the card's single number cannot show, and it reads naturally without hype or restating the printed value.
+- **timesink** (10): Names X and 1h 25m correctly from slide facts and the social category, and the 'spread across the day' read matches the story timeline. Adds a genuine read that this was leisure, not work, going beyond the printed number, in a natural voice.
+- **apps** (10): Names X, YouTube (both correctly over an hour) and Google Meet, all traceable to slide facts; the 'spread across a few surfaces' framing adds a read the chart doesn't state, in a warm human voice.
+- **split** (10): Both percentages trace exactly to the slide facts, and the 'genuine rest day' read matches wholeDayFacts.mostlyRest. Warm, human characterization that adds a true read over the bare split without hype or invented values.
+- **wildcard** (10): Names the real ML Pipeline meeting and the 1h 39m before-noon figure from slide facts; the total work was 1h 56m so calling 1h 39m 'almost all' is a fair characterization, and the rest-heavy day (6h 29m leisure) supports 'fully off.' Reads warm and adds the read that work front-loaded before noon rather than restating a card number.
+- **earlystart** (10): Names the exact 2:27am start and reads it accurately as late-night rather than early-morning, which aligns with the 2:27am-4:32am late-night stretch in wholeDayFacts; warm, human phrasing adds a genuine read beyond the printed time.
+- **forgotten** (10): Names the real 30m and Google Meet, correctly contrasts with X and YouTube (both true top surfaces), and adds a genuine read that this small block held the day's only real work (the ML meeting). Warm and human without hype.
+- **focus** (10): Names the real meeting and exact 9:59am to 12:20pm window from slide facts; the read that nothing else competed adds a true motion beyond the printed 1h 56m, and the tone is warm and human without hype.
+- **question** (10): Names the real Machine Learning Pipeline session and its near-two-hour length (1h 56m longest stretch), both grounded in facts. Reads like a curious friend and opens a genuine follow-up the card cannot show.
+- **reflection** (10): Names the ML Pipeline block (1h56m before noon), 15 commits to Daylens, and real shipped highlights (right-click edit flows, gCal event-card popover), all traceable to facts. Warm, human framing of a rest-day shape without hype or self-reference, and adds a genuine read that the chart cannot show.
+
+</details>
+
+### day 2026-06-12 (thin) — day 2026-06-12
+
+Deck average (prose slides): **8.5** · all slides passed: **false**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | Friday was a short, focused window on Pioneer AI by Fastino Labs, and not much else made … |
+| headline | ai | 3 | 2 | 3 | 1 | **9** | The Pioneer AI work was the whole story, starting at 9:35am. |
+| story-morning ⚠️ | ai | 2 | 0 | 3 | 1 | **6** | From 9:35 to 10:02 you were talking through Pioneer AI by Fastino Labs, and that was the … |
+| split | ai | 3 | 2 | 3 | 2 | **10** | 90% of the tracked time was that Pioneer AI conversation, with 10% on X and YouTube at th… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | Messages carried the most weight, with Codex and PowerPoint also in the mix, so the time … |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The calendar had a basketball match, a training class, and a strategy session with Norman… |
+| reflection ⚠️ | ai | 2 | 1 | 2 | 1 | **6** | Daylens only saw 23 minutes of screen activity today, so most of Friday happened away fro… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the real project (Pioneer AI by Fastino Labs) and correctly reads the short 23m day as a single focused window; 'not much else made it onto the screen' is a true, warm read that adds over the printed totals without inventing values.
+- **headline** (9): Names the real work (Pioneer AI) and the true 9:35am start, all traceable to facts. Reads naturally like a friend's observation. Says it was 'the whole story' which is accurate but mostly restates that this was the day's single work, adding only modest read beyond the card.
+- **story-morning** (6): Accurate times and the real project name from wholeDayFacts, but the phrase 'what Daylens saw today' is a product self-reference that caps tone at 0; motion is minimal since it mostly restates the slide's single fact.
+- **split** (10): Names the real 90/10 split, ties work to the Pioneer AI conversation and leisure to X and YouTube, all traceable to facts; reads naturally and adds the 'at the edges' read over the bare chart.
+- **apps** (10): Names Messages, Codex, and PowerPoint correctly from the facts and reads the spread as a scattered day rather than one anchored tool, adding a genuine read over the chart. Warm, natural phrasing without hype.
+- **question** (10): Names three real calendar items (basketball match, training class, strategy session with Norman) all traceable to the meetings facts, and the crowded-Friday framing against only 23m tracked is a genuine, curious read rather than a card restatement.
+- **reflection** (6): Uses real facts (23m, Pioneer AI by Fastino Labs, 11 events, the class/strategy/match), but 'Daylens only saw' is explicit product self-reference which caps tone and is a hard voice violation. The read that Friday happened off-screen is a decent motion beat, though it leans on restating the low-data caveat.
+
+</details>
+
+### day 2026-05-23 (boring) — day 2026-05-23
+
+Deck average (prose slides): **8.4** · all slides passed: **false**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 1 | 2 | 3 | 1 | **7** | Saturday was a screen-light day, the kind where the computer barely came out. |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | X and YouTube from late morning into the afternoon, with no work in the mix. |
+| timesink | ai | 2 | 2 | 3 | 2 | **9** | X was the day's main screen time, which makes sense for a Saturday with nothing on the wo… |
+| apps _(cap)_ | ai | 2 | 2 | 2 | 1 | **7** | The day was split pretty evenly between X, YouTube, and everything else, with Fast gettin… |
+| question ⚠️ | ai | 2 | 0 | 3 | 1 | **6** | Your calendar had a run and light fitness on it today, but Daylens only saw the screen, s… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Today was a genuine off day. The screen came on around late morning, X and YouTube filled… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (7): Accurately captures the low-total rest day (2h 34m, mostly leisure) with warm, human phrasing, but names no specific number, time, or app, staying qualitative like the vaguer end; it adds a light read but leans on characterization the card's small total already implies.
+- **headline** (10): Names the real leisure apps (X, YouTube), the correct late-morning-to-afternoon window, and correctly leads with the rest-day read of no work. Reads like a friend's observation and adds the shape of the day beyond the printed 2h 34m.
+- **timesink** (9): Names X as the top pool and correctly reads the zero-work Saturday from wholeDayFacts, adding a genuine read rather than restating the 57m. Warm and human; could have carried the minute figure for a full 3 on specificity.
+- **apps** (7): Names X, YouTube, and Fast accurately, but 'split pretty evenly' misreads the data: X at 57m plus Other at 57m dominate while YouTube (25m) and Fast (12m) are much smaller, so the evenness claim is not supported. Warm, natural caption voice, but the read it adds is slightly off.
+- **question** (6): Names real calendar items (run, light fitness) accurately, but 'Daylens only saw the screen' is explicit product self-reference, which caps tone at 0.
+- **reflection** (10): Names real facts: late-morning start (10:54am), X and YouTube as top leisure, mid-afternoon wrap (2:46pm), and the scheduled writing/run/AI learning blocks that didn't materialize. Warm and human without hype, and it adds a genuine read that this was a rest day lived away from the screen rather than restating a chart.
+
+</details>
+
+### day 2026-05-10 (lowVariety) — day 2026-05-10
+
+Deck average (prose slides): **8.83** · all slides passed: **false**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 2 | **9** | Sunday stayed offline from work entirely, and the day mostly belonged to YouTube and X. |
+| headline ⚠️ | ai | 2 | 0 | 3 | 1 | **6** | YouTube and X carried most of what Daylens saw, with no work in the mix at all. |
+| latenight | ai | 3 | 2 | 3 | 2 | **10** | The screen was still on at 11:55pm, a long, unhurried Sunday that was in no rush to end. |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube at 1h 28m was pure leisure here, the main thing the day was made of, not a detour… |
+| apps _(cap)_ | ai | 2 | 2 | 3 | 2 | **9** | The day spread across YouTube, X, and a chunk of other apps, nothing deeply concentrated … |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The calendar had a run, a writing block, and AI learning on it for today. Was any of that… |
+| reflection | ai | 2 | 1 | 3 | 2 | **8** | Sunday was a genuine day off. No work showed up at all, and the screen time that did appe… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (9): Names the true zero-work day and the two real leisure apps (YouTube, X) that dominated; accurate to both fact sources. Reads like a friend's observation and adds the read that the day belonged to those apps rather than restating a number.
+- **headline** (6): Names the real leisure apps (YouTube, X) and correctly notes zero work, tracing to facts, but 'Daylens saw' is a self-reference to the product which caps tone at 0. It adds a modest read (rest day, no work) beyond the printed number.
+- **latenight** (10): Names the exact 11:55pm end time and correctly reads the restful Sunday character (mostlyRest, no work). Warm and specific without hype, and the 'unhurried, in no rush to end' read adds something the printed time alone doesn't.
+- **timesink** (10): Names YouTube and 1h 28m correctly, and on a rest day where work was 0m the read that it was the main thing rather than a distraction is an accurate, warm characterization that adds a genuine take beyond the printed number.
+- **apps** (9): Names the real apps (YouTube, X, Other) and adds a genuine read that time was spread rather than concentrated, which the chart alone doesn't state; warm and human without hype. Slightly less specific by omitting the durations, but appropriate for a caption.
+- **question** (10): Names real scheduled blocks from the meetings facts (Run, Writing, AI and ML learning) and contrasts them against the actual restful day, asking a genuine question about whether those plans were intentional. Warm, curious, and grounded with no invented values.
+- **reflection** (8): Names the real leisure apps (YouTube, X), the zero work, and the gap between planned meetings and the actual rest day, all accurate. Loses tone points for the self-reference to Daylens, which is a voice violation and caps tone. The read on planned-versus-taken adds genuine motion beyond the card.
+
+</details>
+
+
+## Benchmark run 2026-07-11T17:48:01.395Z (day cadence)
+
+### day 2026-07-07 (full) — day 2026-07-07
+
+Deck average (prose slides): **9.57** · all slides passed: **false**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | A day that belonged to Daylens, with a machine learning class in the morning and real com… |
+| headline ⚠️ | ai | 1 | 1 | 3 | 1 | **6** | Most of that weight landed on Daylens, where the bulk of the work actually lived. |
+| story-morning | ai | 3 | 2 | 3 | 2 | **10** | You got going at 11:15am straight into your ML Pipeline class on Meet, which carried you … |
+| story-midday | ai | 3 | 2 | 3 | 2 | **10** | The afternoon split between investigating the prompt cache hit rate drop and a second str… |
+| story-evening | ai | 3 | 2 | 3 | 2 | **10** | The evening was all Daylens, a long run of it from 5pm to 10:26pm, with YouTube and Netfl… |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | The evening held 3h 7m of your work, and nearly all of it went to Daylens, which is also … |
+| latenight | ai | 3 | 2 | 3 | 2 | **10** | The screen went quiet at 10:26pm, which says the day ran long and the Daylens work had a … |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | From 7:28pm to 9pm you were in Daylens without breaking stride, the deepest run of the da… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | Most of the named time sat in YouTube, Google Meet, and Canva, but the bulk of the day li… |
+| meetings | ai | 3 | 2 | 3 | 2 | **10** | Meetings took 1h 13m of your work time, nearly all of it your ML Pipeline class on Meet. |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube took 59m and it reads like breathing room, not the work, given everything else th… |
+| split | ai | 3 | 1 | 3 | 1 | **8** | 79% work to 21% leisure, a clean lean day with Daylens doing most of the heavy lifting. 🔥 |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Intercom quietly took 28m, which makes sense given the commits that went into the Interco… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The ML Pipeline class sat on your calendar for 2h but you were on Meet for 49m total, wha… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Tuesday shaped up as a Daylens day through and through. You shipped 20 commits, including… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the real ML meeting, the Daylens focus, and the evening shipping (20 commits) — all traceable. Reads like a friend recapping the day's shape, and the arc from morning class to evening commits adds a real read beyond the printed totals.
+- **headline** (6): Accurately names Daylens as the main work, but omits the headline number, the 11:15am start, or the 10:26pm end that would anchor the day, and 'where the bulk of the work actually lived' is a vague restatement rather than a real read on how time spread.
+- **story-morning** (10): Names the real 11:15am start, the ML Pipeline class on Meet, and the run to noon, all traceable to facts. The 'got going at 11:15am' notes the late start (dayBegan) as a genuine read, and the phrasing reads warm and human rather than robotic.
+- **story-midday** (10): Names the real afternoon work (prompt cache investigation, the ML class, YouTube) all traceable to the slide facts, and 'a second stretch' adds a genuine read connecting it to the morning meeting. Reads naturally and warm without hype.
+- **story-evening** (10): Names the real evening work (Daylens), the correct span (5pm to 10:26pm), and the leisure apps (YouTube, Netflix), all traceable to slide facts. 'Bookends' adds a genuine read on how the leisure sat around the work, and the tone is warm and human without hype.
+- **wildcard** (10): The 3h 7m evening figure matches the slide, evening work being on Daylens and containing the longest stretch (7:28pm to 9pm) both trace to wholeDayFacts. Reads like a friend who watched the day, and it connects the evening block to the longest unbroken stretch rather than restating the number.
+- **latenight** (10): Names the real 10:26pm end time and ties it to the true evening Daylens stretch, which traces to wholeDayFacts. Reads warm and human, and adds a genuine read about the work pulling late rather than just restating the clock time.
+- **focus** (10): Names the exact stretch (7:28pm to 9pm) and project (Daylens, a real shipped project), all accurate to the slide facts. Reads warm and human, and the phrase 'deepest run of the day and the one that held longest' adds a genuine read beyond the printed number.
+- **apps** (10): Names the three top apps correctly and notes Other holding the largest chunk (3h 51m), all traceable to slide facts. Adds a genuine read that the real work was scattered across unlisted tools, which the chart alone doesn't say. Reads human and observant.
+- **meetings** (10): Names the real 1h 13m and correctly attributes nearly all of it to the ML Pipeline Meet call (1h 7m of the 1h 13m traces to facts). Adds a genuine read about where the meeting time concentrated rather than just restating the number, in a natural voice.
+- **timesink** (10): Names YouTube and the exact 59m, and adds a genuine read that this was breathing room amid a heavy work day rather than a leak. Warm, human phrasing without hype, and the read goes beyond the card's printed number.
+- **split** (8): Percentages match the facts and Daylens as the heavy lifter traces to wholeDayFacts (2h 8m plus the longest stretch). The fire emoji leans toward hype and dents the human tone; the read that Daylens carried the load adds a little over the printed split.
+- **forgotten** (10): Names the exact 28m in Intercom and ties it convincingly to real shipped work (Intercom Articles importer, Messenger copy from highlights), adding a genuine read on why the forgotten time existed. Warm, natural phrasing without hype or restating the card alone.
+- **question** (10): Names the ML Pipeline class (scheduled 2h, matches meetings) and Google Meet 49m total, both traceable, and builds a genuine curiosity from the gap between scheduled and actual. Reads like an attentive friend and ends in a real question.
+- **reflection** (10): Names real facts throughout: 20 commits, the Intercom importer and Messenger copy, version 1.0.45, the ML class in the morning, and the 7:28-9pm longest stretch — all trace to the facts. Reads warm and human, and the read on the evening stretch as the steadiest run adds motion beyond the printed numbers.
+
+</details>
+
+### day 2026-07-04 (full) — day 2026-07-04
+
+Deck average (prose slides): **9.57** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 1 | **8** | The Fourth of July, and you spent it deep inside the SPCS Group, researching and mapping … |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | Almost all of it went to research and design planning for SPCS Group, from midnight throu… |
+| story-lateNight | ai | 2 | 2 | 3 | 2 | **9** | You were already at it at midnight, working through the SPCS Group research and design pl… |
+| story-morning | ai | 2 | 2 | 3 | 2 | **9** | The morning kept the same thread going, still deep in research and design planning for SP… |
+| story-midday | ai | 2 | 2 | 3 | 1 | **8** | The afternoon held the same shape, research and design planning for SPCS Group, steady an… |
+| story-evening | ai | 3 | 2 | 3 | 2 | **10** | The evening was when the building started in earnest, 16 commits across Dev SPCS and Dev … |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Canva quietly took an hour and two minutes, easy to forget given everything else going on… |
+| latenight | ai | 3 | 2 | 3 | 2 | **10** | The last activity landed at 11:29pm, which tells you this one was genuinely hard to close… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | YouTube led by a wide margin, with Notion, Claude, and Canva each holding a real slice of… |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | From midnight to 6:21pm, the research and design planning for SPCS Group ran unbroken for… |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | The evening carried 2h 44m of actual building, which is where the 16 commits across Dev S… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube took 3h 29m and it sits squarely in the entertainment column, so it was the leak,… |
+| split | ai | 3 | 2 | 3 | 2 | **10** | 90% work, 10% leisure. The day did not leave much room on either side. |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The research and design planning for SPCS Group ran basically all day, what was the thing… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | You started at midnight and were still at it past 11:29pm, with the research and design p… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (8): Names the real work (SPCS Group research and design planning) and correctly reads the day as dominated by it; the holiday framing adds warmth without inventing anything. Loses a point on specificity for skipping the striking 9h+ figure or hours, and motion is modest since it mostly reframes what the card shows rather than adding a sharper read of how the time spread.
+- **headline** (10): Names the real main work (6h 49m of the 10h 2m fits 'almost all') and accurately describes the midnight-through-evening spread from the story timeline; adds a read on how the day filled rather than restating the 10h 2m total.
+- **story-lateNight** (9): Names the real SPCS Group research and design planning work and correctly places it at midnight; misses the 1h 51m figure but stays accurate. Warm, human phrasing that adds a genuine read of a quiet late-night start rather than restating the card.
+- **story-morning** (9): Names the real work (research and design planning for SPCS Group) and reads the continuity of a single thread across the day, which the card's number alone doesn't convey; drops the 2h 36m figure so specificity isn't maxed, but the continuity read adds genuine motion and the tone is warm and human.
+- **story-midday** (8): Names the real afternoon work correctly but omits the specific 1h 51m figure that would have added grounding. Tone is warm and human; 'long center of gravity' fits the day's 6h 49m stretch. Motion is modest, mostly characterizing continuity rather than revealing something new.
+- **story-evening** (10): Names the real evening work (building SPCS Technology surfaced as content/pages/design system), the 16 commits total (8+8 across both projects, both in wholeDayFacts.shipped), and the X/YouTube leisure. Warm, human read that frames the exhale after the long earlier stretch, adding motion beyond the card's numbers.
+- **forgotten** (10): Names Canva with the exact 1h 2m from the slide facts, reads like a warm human observation, and adds the read that this block hid beneath the bigger work rather than just restating the number.
+- **latenight** (10): Uses the exact 11:29pm end time and adds a genuine read about the day being hard to close out; warm and human without hype, and the characterization traces to the true long-running day.
+- **apps** (10): Names YouTube's clear lead and the trio of Notion/Claude/Canva accurately, and adds a genuine read (tools spread rather than concentrated) beyond the chart rows. Warm, human phrasing fitting the caption bar.
+- **focus** (10): Names the real project, exact times (midnight to 6:21pm), and 6h 49m, all tracing to the slide facts. 'By far the heaviest single thread' is a true read the card number alone doesn't state, and the tone is warm and human without hype.
+- **wildcard** (10): Names the 2h 44m building block, the 16 commits (8+8) across both real shipped projects, and frames it against the day of planning that preceded it. Every value traces to the facts, and it adds a genuine read the card's lone number cannot show.
+- **timesink** (10): Names YouTube, 3h 29m, and the entertainment category correctly, and adds a real read that the leak was modest against 9h+ of work surrounding it. Warm, honest voice with no hype or invented values.
+- **split** (10): Uses the exact 90/10 split and adds a genuine read about how little room the day left, going beyond the printed number. Reads human and grounded without hype.
+- **question** (10): Names the real all-day thread (6h 49m on Research and design planning for SPCS Group) and asks a genuine, context-anchored question about what was being settled; reads like a friend who watched the day, no invented values.
+- **reflection** (10): Names real times (midnight to past 11:29pm), the true through-line project, and the 16 commits (8+8) across both correctly humanized shipped project names. The July 4 holiday read and 'building caught up with the thinking' add genuine motion beyond the card; tone is warm and observed without hype.
+
+</details>
+
+### day 2026-07-02 (full) — day 2026-07-02
+
+Deck average (prose slides): **10** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | Thursday was a rest day with one real anchor: an ML class on Google Meet that held the mo… |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | Most of the screen time went to YouTube, X, and Netflix, with the ML class as the day's o… |
+| story-morning | ai | 3 | 2 | 3 | 2 | **10** | From 9:59am you were in your Machine Learning Pipeline class on Google Meet, and that ran… |
+| story-midday | ai | 3 | 2 | 3 | 2 | **10** | The ML class carried into the afternoon, and once it wrapped, Netflix and X filled the re… |
+| meetings | ai | 3 | 2 | 3 | 2 | **10** | Your calendar had the Machine Learning Pipeline class scheduled for 2h, and 1h 56m of act… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | X at 1h 25m is social browsing, not work, and on a day that was mostly downtime anyway, i… |
+| apps _(cap)_ | ai | 2 | 1 | 3 | 1 | **7** | The day was spread across a handful of surfaces, with X and YouTube each taking a solid c… |
+| split | ai | 3 | 2 | 3 | 2 | **10** | 77% leisure, 23% work. Thursday was a rest day and the split shows it plainly. |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | Almost all the real work, 1h 39m of it, landed in the morning inside the Machine Learning… |
+| earlystart | ai | 3 | 2 | 3 | 2 | **10** | The day opened at 2:27am, which is less a morning and more the tail end of a night. |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Google Meet quietly held 30m, which is where the ML class actually lived, easy to overloo… |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | The Machine Learning Pipeline class from 9:59am to 12:20pm was the one unbroken run of th… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | Was the ML Pipeline class a course session you follow regularly, or a one-off deep dive y… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Thursday had a clear shape: one real block of work in the morning, then a long exhale int… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the rest-day framing, the ML meeting on Meet, and the morning anchor — all grounded in the facts. Warm, human phrasing without hype, and 'held the morning together' adds a genuine read beyond the printed totals.
+- **headline** (10): Names the real top-leisure apps (YouTube, X, Netflix) and correctly frames the ML meeting as the single piece of work, matching the rest-day lead the slide asks for. Warm, human phrasing that adds a read over the printed 9h 5m rather than restating it.
+- **story-morning** (10): Names the real 9:59am start, the ML Pipeline meeting on Google Meet, and the noon end, all grounded in facts; calling it the fullest work stretch is true per longestStretch. Reads warm and human and adds a genuine read beyond the kicker.
+- **story-midday** (10): Names the ML class, Netflix, X, and the 4:33pm endpoint, all grounded in the slide facts. Reads like a friend narrating the arc and adds a genuine read of how the window unfolded rather than restating the block.
+- **meetings** (10): Names the real ML Pipeline class, the 2h scheduled block, and the 1h 56m observed Meet time, all traceable to facts. Reads like a friend noting how scheduled versus actual lined up, adding a genuine read beyond the card's 2h 21m number.
+- **timesink** (10): Names X and its exact 1h 25m from slide facts, and the 'mostly downtime' read traces to wholeDayFacts (6h 29m leisure vs 1h 56m work). Warm, human voice that adds a genuine read about the shape of the day rather than restating the number.
+- **apps** (7): Names the real apps (X, YouTube, Google Meet, Every, Mobbin, Other) accurately, but reads as a list-in-a-sentence that mostly walks the chart rows rather than delivering a genuine read. The vague hedging ('handful of surfaces', 'solid chunk', 'smaller slice') feels more like a generated summary than a friend's observation, and it stops short of a real insight.
+- **split** (10): Both percentages trace to slide facts, and 'rest day' matches wholeDayFacts.mostlyRest. Tone is calm and human, and calling it a rest day adds a read beyond the raw split.
+- **wildcard** (10): The 1h 39m before-noon figure matches the slide fact, the ML Pipeline meeting/class traces to wholeDayFacts, and the morning framing is accurate. Reads like a friend's observation and adds a genuine read about when the real work clustered rather than restating the number.
+- **earlystart** (10): Uses the exact 2:27am start and adds a genuine read that this is really late-night, not a morning, which matches the wholeDayFacts late-night stretch. Warm, human, and non-robotic.
+- **forgotten** (10): Names the real 30m Google Meet figure and correctly ties it to the ML Pipeline meeting from the facts; the read that this quiet surface was where the day's only work actually happened adds genuine motion beyond the printed number, in a warm human voice.
+- **focus** (10): Names the real session (Machine Learning Pipeline, characterized as class per meetings data) with exact 9:59am to 12:20pm window; reads human and adds the read that nothing broke it rather than just restating the 1h 56m number on the card.
+- **question** (10): Anchors to the real 1h 56m Machine Learning Pipeline meeting and its class classification, asking a genuine open question about whether it's recurring. Warm, curious, human, and traces cleanly to the facts.
+- **reflection** (10): Names the ML class morning block, 15 commits to Daylens, and the leisure-heavy afternoon/evening — all traceable to facts. Warm, varied, non-hype tone with a genuine read on the day's rest-heavy shape rather than restating the chart.
+
+</details>
+
+### day 2026-06-12 (thin) — day 2026-06-12
+
+Deck average (prose slides): **9.83** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | Most of what reached the screen this morning was one conversation, talking through Pionee… |
+| headline | ai | 2 | 2 | 3 | 2 | **9** | The Pioneer AI conversation was the day's real center, with 11 meetings on the calendar f… |
+| story-morning | ai | 3 | 2 | 3 | 2 | **10** | From 9:35am you were into Pioneer AI by Fastino Labs, working through it across Messages,… |
+| split | ai | 3 | 2 | 3 | 2 | **10** | Nearly all of what hit the screen was work, 90% of it, with a small slice of X and YouTub… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | The time was fairly spread, Messages leading at 9m, then Codex, PowerPoint, and a handful… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The calendar had 11 things today, including the Master Class Internship Training and a ba… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Only 23 minutes reached this screen on Friday, but the calendar tells a fuller story: 11 … |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the real work (Pioneer AI by Fastino Labs) and correctly frames the short 23m day as mostly one conversation in the morning window. Warm, human phrasing that reads as a genuine observation rather than restating the raw minutes.
+- **headline** (9): Names the real work (Pioneer AI) and the true 11 meeting count from wholeDayFacts, both accurate. Reads human and adds a real read about how the day was structured rather than just restating the 23m number.
+- **story-morning** (10): Names the real times (9:35 to 10:02), the real work (Pioneer AI by Fastino Labs), and the top apps (Messages, Codex, PowerPoint), all traceable to the facts. Reads like a friend narrating the stretch, and the detail about which apps carried the work adds a read the bare time block cannot.
+- **split** (10): Names the real 90% work share and correctly attributes the leisure remainder to X and YouTube, both true topLeisure facts. Reads warm and human, and the leisure detail adds a read beyond the bare split on the card.
+- **apps** (10): Names Messages at 9m, then Codex and PowerPoint in true order, with real trailing apps as filler; the 'fairly spread' read adds a genuine characterization the chart alone doesn't give. Warm and human without hype or invented values.
+- **question** (10): Names the real 11 meetings, the Master Class Internship Training, and the basketball match, all traceable to wholeDayFacts. The question about control over a packed calendar adds a genuine read beyond the facts and reads like an observant friend.
+- **reflection** (10): Every value traces to facts: 23m, Friday, 11 events, the class, strategy meeting, basketball match, and Pioneer AI at the morning's start (9:35am). Tone is honest and human about a partial day, and the closing read that the day lived off-screen adds genuine motion beyond the raw numbers.
+
+</details>
+
+### day 2026-05-23 (boring) — day 2026-05-23
+
+Deck average (prose slides): **8.8** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 1 | **8** | Saturday was a rest day, screen time short and mostly social browsing. |
+| headline | ai | 1 | 2 | 3 | 1 | **7** | The screen came on around mid-morning and was done by mid-afternoon. |
+| timesink | ai | 2 | 2 | 3 | 2 | **9** | X was the day's main screen presence, which tracks for a Saturday with no work in the mix. |
+| apps _(cap)_ | ai | 2 | 2 | 3 | 1 | **8** | The time spread between X, YouTube, and Fast, with nothing concentrated on any single tas… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | Your calendar had a writing block and an AI and ML learning block scheduled, but none of … |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Saturday barely touched the screen and that is the whole story. You came on around mid-mo… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (8): Names the rest-day framing and the social-browsing read (X led at 57m), which is accurate and grounded. Tone is calm and human, not hype. Motion is modest since 'screen time short' largely restates the 2h 34m total, though 'mostly social browsing' adds a light read.
+- **headline** (7): Vague on times ('mid-morning'/'mid-afternoon' instead of the real 10:54am to 2:46pm) and never names the 2h 34m or the rest-day read, so it stays generic. Tone is warm and human, and nothing is invented, but it adds little beyond the card's printed window.
+- **timesink** (9): Names X as the top pool and correctly reads it as fitting a work-free Saturday (work: 0m in facts); the qualitative read adds meaning beyond the printed 57m. Slightly less specific for not anchoring the minutes, but the honest read carries it.
+- **apps** (8): Names the three real leisure apps (X, YouTube, Fast) accurately and reads naturally like a friend. The 'nothing concentrated' read adds a modest interpretation over the chart, but is somewhat undercut since X (57m) actually dominated the tracked apps, making the spread claim a bit soft.
+- **question** (10): Names two real scheduled blocks (Writing, AI and ML learning) from meetings and correctly notes zero work happened, contrasting plan against a restful Saturday. The question adds a genuine read and reads like a thoughtful friend.
+- **reflection** (10): Names real facts: mid-morning start (10:54am), X and YouTube as top leisure, done by mid-afternoon (2:46pm), and the scheduled but untracked calendar items (run, fitness, writing, learning block). Warm, plainspoken tone that reads like a friend, and it adds the true read that the planned slate never materialized, which the numbers alone don't show.
+
+</details>
+
+### day 2026-05-10 (lowVariety) — day 2026-05-10
+
+Deck average (prose slides): **8.67** · all slides passed: **false**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 1 | **8** | Sunday stayed offline from work completely, and the screen time that showed up was mostly… |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | YouTube and X carried the afternoon and evening, with nothing work-related reaching the s… |
+| latenight | ai | 3 | 2 | 3 | 2 | **10** | The screen was still on at 11:55pm, a long, unhurried Sunday that never quite closed. |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube was the leisure it looks like, an hour and a half of watching on a day with no wo… |
+| apps _(cap)_ | ai | 2 | 2 | 3 | 1 | **8** | The day split mainly between YouTube and X, with a solid stretch of other activity roundi… |
+| question | ai | 3 | 2 | 3 | 2 | **10** | Your calendar had an AI and ML learning block and a writing block scheduled, neither of w… |
+| reflection ⚠️ | fallback | 0 | 1 | 3 | 0 | **4** | A day mostly off the clock. Rest counts too. That is the whole story, and it is enough. |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (8): Names the true no-work rest day and the two real leisure apps (YouTube, X), all grounded in facts. Tone is calm and human. Motion is modest since it mostly restates the slide's rest-day fact and the top apps without adding a deeper read.
+- **headline** (10): Names the real leisure apps (YouTube, X) and correctly frames this as a rest day with no work, drawing on wholeDayFacts (work 0m, afternoon/evening spent on those apps). Reads like a thoughtful observer and adds a read the bare 5h 22m number can't show.
+- **latenight** (10): Uses the exact 11:55pm end time and correctly names the day as Sunday; 'long, unhurried' is a fair read of a 5h 22m mostly-rest day. Warm, human phrasing that adds a read the card's number alone doesn't convey.
+- **timesink** (10): Names YouTube and the accurate ~1h 28m as 'an hour and a half,' and the 'no work on the screen at all' traces to work 0m in wholeDayFacts. Reads like a friend's honest observation, no hype, and adds the read that this was purely a rest day.
+- **apps** (8): Names the two real leisure apps and gestures at the large 'Other' block, all accurate to slide facts; tone is easy and human. Loses some motion because it largely mirrors the chart without adding a sharper read, and 'solid stretch of other activity' is vague since Other was actually the biggest chunk.
+- **question** (10): Names two real scheduled blocks from the facts (AI and ML learning, writing) and correctly notes work time was 0m, then asks a genuine, grounded question about what filled the time. Warm and curious without hype.
+- **reflection** (4): Accurate that it was a rest day with no work, but names zero specifics — no times, no YouTube/X, no 2h 44m leisure, none of the day's real texture. Reads as generic filler that could apply to any rest day, and adds no read the slide facts don't already imply.
+
+</details>
+
+
+## Benchmark run 2026-07-11T18:03:03.188Z (day cadence)
+
+### day 2026-07-07 (full) — day 2026-07-07
+
+Deck average (prose slides): **9.57** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 3 | 2 | 3 | 2 | **10** | A day that belonged to Daylens, with an ML class in the morning and a long evening push t… |
+| headline | ai | 2 | 2 | 3 | 2 | **9** | Work ran from late morning through the evening, Daylens being the thread that held most o… |
+| story-morning | ai | 3 | 2 | 3 | 1 | **9** | The day opened with your ML Pipeline class on Google Meet, running from 11:15am into noon. |
+| story-midday | ai | 3 | 2 | 3 | 2 | **10** | The afternoon had you investigating the Prompt cache hit rate drop and building the image… |
+| story-evening | ai | 3 | 2 | 3 | 2 | **10** | From 5pm to 10:26pm the whole evening went to Daylens, a long unbroken run of it. YouTube… |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | The evening held 3h 7m of your work, and almost all of it was Daylens. That is where the … |
+| latenight | ai | 2 | 2 | 3 | 1 | **8** | The day closed at 10:26pm, which says this one did not wind down early. |
+| focus | ai | 3 | 2 | 3 | 1 | **9** | Your deepest run of the day was 1h 18m on Daylens from 7:28pm to 9pm, the longest anythin… |
+| apps _(cap)_ | ai | 2 | 2 | 3 | 2 | **9** | The spread is wide: YouTube, Google Meet, and Canva each pulled meaningful time, and a bi… |
+| meetings | ai | 3 | 2 | 3 | 2 | **10** | Meetings took 1h 13m of the 5h 40m work day, nearly all of it the ML Pipeline class. |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | YouTube's 59m was the most time on any single named surface, and it sits in entertainment… |
+| split | ai | 3 | 2 | 3 | 1 | **9** | 79% work to 21% leisure. A day that leaned clearly toward the work. |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Intercom got 28m without making the day's headliner list, worth remembering it was there. |
+| question | ai | 3 | 2 | 3 | 2 | **10** | The ML Pipeline class had 49m on Google Meet but was scheduled for 2h, what did the rest … |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Tuesday shaped up as a Daylens day, with 20 commits landed across importer work, tracking… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (10): Names the real ML class in the morning (Machine Learning Pipeline meeting 11:15am to 12pm), the Daylens focus, and the evening run ending 10:26pm — all traceable. Reads like a friend narrating the day's shape, and it adds a genuine arc the total number cannot show.
+- **headline** (9): Accurately frames the day from late morning (11:15am) into evening with Daylens as the main work thread, all traceable to facts; warm and human without hype. Slightly less specific than the anchors since it names no clock times or hour counts, but it adds a genuine read of how the day cohered.
+- **story-morning** (9): Names the real meeting (ML Pipeline on Google Meet) with correct 11:15am-to-noon window; the 'class' framing traces to the meetings data. Warm and clean, but it mostly restates the slide's single fact without adding a deeper read of what the stretch meant.
+- **story-midday** (10): Every element traces to the slide facts: the cache-hit investigation, the image renaming build, the ML class carrying over, and the YouTube/Alueducation break. Reads like a friend narrating the stretch, and the 'showed up somewhere in there as a breather' adds a read the card doesn't print.
+- **story-evening** (10): Names the real evening block (5pm to 10:26pm), the Daylens focus, and YouTube/Netflix as background, all traceable to facts. The 'long unbroken run' read adds motion beyond the printed times, and 'came in at the edges' is a warm, human characterization of the leisure.
+- **wildcard** (10): Names the real 3h 7m evening total from the slide facts and correctly attributes it to Daylens (the evening's work per the story timeline), adding a genuine read about where the day's weight landed rather than restating the number.
+- **latenight** (8): Names the correct 10:26pm end time and reads warm and human. The 'did not wind down early' read is close to restating the card's 'day ended late' framing, so motion is modest rather than a genuinely new read.
+- **focus** (9): Names the real stretch, duration, project, and clock window accurately. Warm and human with the fire emoji working. Motion is limited: 'the longest anything went uninterrupted' mostly restates the card's own framing rather than adding a fresh read on what the stretch meant.
+- **apps** (9): Names YouTube, Google Meet, and Canva as the meaningful pulls and correctly reads the large Other block as a scattered day; accurate to the facts. Human and observational, adding a real read over the chart, though it stops short of naming exact times.
+- **meetings** (10): Both clock times (1h 13m, 5h 40m) trace to slide facts, and the ML Pipeline meeting (1h 7m of the 1h 13m) is correctly characterized as nearly all of it from wholeDayFacts. Reads naturally and adds a real read about what filled the meeting time rather than restating the card number.
+- **timesink** (10): Names YouTube's 59m and entertainment category exactly from the facts, and adds a real read that the leisure side is what pooled here rather than just restating the number. Warm, conversational, no hype or voice violations.
+- **split** (9): Both percentages trace exactly to the slide facts, and the tone is calm and human. The second sentence adds a light read but stays close to simply restating the ratio already on the card, so motion is modest.
+- **forgotten** (10): Names Intercom and the correct 28m, and the 'without making the headliner list' phrasing matches its rank outside the top 3. Tone is warm and conversational, and the 'worth remembering it was there' read adds the forgotten-block angle the card alone can't.
+- **question** (10): Names the real 49m Google Meet time and the 2h scheduled ML Pipeline class, both traceable to facts, and turns the gap into a genuine curious question. Reads like an observant friend noticing something the chart can't say.
+- **reflection** (10): Every detail traces to facts: 20 commits, the importer/tracking/Intercom/version bump highlights, the ML morning, the 1h 18m 7:28-9pm Daylens stretch, and the late start (11:15am) closing past 10:26pm. Reads warm and human, and the 'started late and closed past 10' plus the shape of the day adds a real read beyond the printed numbers.
+
+</details>
+
+### day 2026-07-04 (full) — day 2026-07-04
+
+Deck average (prose slides): **9.21** · all slides passed: **true**
+
+
+| slide | src | spec | tone | acc | mot | total | line |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| opening | ai | 2 | 2 | 3 | 1 | **8** | A Saturday that went deep into SPCS, from the middle of the night all the way through to … |
+| headline | ai | 3 | 2 | 3 | 2 | **10** | Research and design planning for SPCS Group carried most of the weight, from late night t… |
+| story-lateNight | ai | 2 | 2 | 3 | 2 | **9** | The night before the fourth of July, you were already in it, working through the research… |
+| story-morning | ai | 2 | 2 | 3 | 2 | **9** | The morning kept the same thread going, still deep in the research and design planning fo… |
+| story-midday | ai | 2 | 2 | 3 | 1 | **8** | The afternoon held the same focus, research and design planning for SPCS Group continuing… |
+| story-evening | ai | 2 | 2 | 3 | 2 | **9** | The evening is when building SPCS Technology came into the picture, with some X and YouTu… |
+| forgotten | ai | 3 | 2 | 3 | 2 | **10** | Canva had a solid hour of your time in there, easy to miss when the day was this long. |
+| latenight | ai | 2 | 2 | 3 | 2 | **9** | The day closed at 11:29pm, which tells you something about how hard this one was to put d… |
+| apps _(cap)_ | ai | 3 | 2 | 3 | 2 | **10** | YouTube was the standout surface by a wide margin, with Notion and Claude doing the next-… |
+| focus | ai | 3 | 2 | 3 | 2 | **10** | Midnight to 6:21pm on research and design planning for SPCS Group, one unbroken direction… |
+| wildcard | ai | 3 | 2 | 3 | 2 | **10** | 2h 44m of building SPCS Technology all landed in the evening, after a full day of researc… |
+| timesink | ai | 3 | 2 | 3 | 2 | **10** | 3h 29m of YouTube on a day this full reads as entertainment woven into the edges, not the… |
+| split | ai | 3 | 0 | 3 | 1 | **7** | 90% work, 10% leisure, on a Saturday, that is about as committed as a day gets. 🔥 |
+| question | ai | 3 | 2 | 3 | 2 | **10** | Was the research and design planning feeding directly into what you were building in SPCS… |
+| reflection | ai | 3 | 2 | 3 | 2 | **10** | Sixteen commits across Dev SPCS and Dev SPCS rebrand, real portfolio content, a full desi… |
+
+<details><summary>judge reasoning</summary>
+
+- **opening** (8): Names the real project (SPCS) and correctly captures the 12am-to-evening span from the story, which traces to facts. Reads warm and human, not robotic. Loses a point on specificity for not carrying a hard data point like the 9h 3m work total, and motion is modest since it mostly restates the timespan rather than offering a deeper read.
+- **headline** (10): Names the real main work and correctly reads its spread from late night through afternoon (matching the 6h49m stretch from 12am), adding a genuine read over the printed 10h 2m total. Warm, specific, and fully grounded.
+- **story-lateNight** (9): Names the real work (research and design planning for SPCS Group) and the 12am start, all grounded in facts. Warm, human framing about the late-night start setting the tone adds a genuine read beyond the printed number, though it omits the specific 1h 51m duration that would have sharpened it.
+- **story-morning** (9): Names the real work (research and design planning for SPCS Group) accurately, though it skips the 2h 36m figure that would have added a specific anchor. Tone is warm and human, and the 'no pivot, no new direction' read adds continuity motion beyond the card's row.
+- **story-midday** (8): Names the real afternoon work (research and design planning for SPCS Group) but omits the slide's 1h 51m figure that would sharpen it. Tone is warm and human without hype. The 'long single-minded run' read leans on the longest-stretch fact and adds a modest read beyond restating the block.
+- **story-evening** (9): Names the real evening work (building SPCS Technology, research thread, X and YouTube) and traces cleanly to both fact sources; the read that both sides of the project ran at once adds genuine motion. Loses a specificity point for not anchoring a time or duration despite the 5pm-11:29pm window being available.
+- **forgotten** (10): Names Canva and its true hour+ (1h 2m), and the read that it hides in a very long 10h day is accurate and adds genuine motion beyond the printed number. Warm, natural phrasing without hype.
+- **latenight** (9): The exact 11:29pm end time is correct and central; the read about it being hard to put down adds motion the card alone doesn't convey. Warm without hype, though only the one data point carries it.
+- **apps** (10): Names YouTube as the clear leader and correctly reads Notion and Claude as the next heaviest, all traceable to slide facts. Adds a genuine read over the chart rows in a warm, non-hype voice.
+- **focus** (10): Names the real stretch (midnight to 6:21pm) and the real work (Research and design planning for SPCS Group), all tracing to slide facts. The read about one unbroken direction spanning night, morning, and afternoon adds meaning beyond the printed duration, and the tone reads like a watchful friend.
+- **wildcard** (10): Names the real 2h 44m evening build of SPCS Technology and correctly frames the daytime research on SPCS Group, both traceable to facts; reads like a warm human observation and adds the true read that building clustered in the evening after a research-heavy day.
+- **timesink** (10): Names the exact 3h 29m YouTube figure and correctly reads it against a full 10h 2m day; the framing that it's the biggest single surface yet not the center adds a genuine read beyond the printed number, in warm non-hype voice.
+- **split** (7): Numbers match the facts and the Saturday detail is grounded, but the fire emoji plus 'about as committed as a day gets' reads as hype, capping tone at 0; motion adds a light read but mostly restates the split.
+- **question** (10): Names both real work threads (research/design planning for SPCS Group and building SPCS Technology, the two things worked on) and poses a genuine curious question about whether they connect. Warm, specific, grounded in facts, and adds a real read the chart can't show.
+- **reflection** (10): Every detail traces to facts: 16 commits (8+8), both project names from shipped, highlights accurately summarized, midnight start and the research-then-building progression matching the story timeline. Reads warm and human without hype, and the closing read on how the day spread adds motion beyond the printed numbers.
+
+</details>

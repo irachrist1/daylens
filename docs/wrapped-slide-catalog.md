@@ -1,22 +1,37 @@
-# Wrapped — the slide catalog
+# Daylens Wrapped — the slide catalog
 
-> **Note (2026-07-10).** A richer, example-heavy rewrite of this catalog is in
-> draft at [`wrapped-slide-catalog.v2-draft.md`](wrapped-slide-catalog.v2-draft.md)
-> — the 9-layer model, per-role example galleries, and two proposed new slides.
-> **This file is still the shipping catalog** (the benchmark anchors in
-> `tests/wrapped-bench/anchors.ts` are distilled from it); the v2 draft does not
-> supersede it yet. If you are extending the catalog, read both and prefer
-> adding new material to the draft.
+> **Status (2026-07-10).** This is the **official catalog**: simultaneously the
+> **product spec** for the perfect recap and the **calibration anchor set** for the
+> LLM judge that scores AI-written slide lines. It replaces both the original
+> Stage-1 catalog and the `wrapped-slide-catalog.v2-draft.md` draft (retired; its
+> five open taste calls are resolved in "Resolved decisions" at the end). The
+> benchmark anchors in `tests/wrapped-bench/anchors.ts` are distilled from this
+> file — keep the two in sync. Read this with [`voice.md`](specs/voice.md) (how
+> every word must sound; it wins on any disagreement about *sound*) and the deck
+> planner [`src/renderer/lib/wrapDeck.ts`](../src/renderer/lib/wrapDeck.ts) (the
+> one contract; every id and every threshold here traces to a real spec there).
 
-The full catalog of slides Wrapped can produce, for the **day** and **week**
-cadences, and the **rubric** the benchmark scores every one against. This is the
-Stage 1 standard: the benchmark tests (`tests/wrappedBenchmark.test.ts`) are built
-from this document, and no slide ships until it clears the rubric here.
+---
 
-Read this with `wrapped.md` (the product spec, law) and `voice.md` (how every word
-must sound). Where an example line here and `voice.md` disagree about *sound*,
-`voice.md` wins — the examples below illustrate the rubric, they are never
-templates.
+## The North Star (the bar every example must clear)
+
+A perfect recap does **two things at once and needs both**:
+
+1. It **notices the revealing detail you forgot** — the 22 minutes in Notion, that
+   you were three hours in before the standup, that the meeting ran through lunch
+   and you built through it. The "how did it know that?" beat.
+2. It gives a **complete, honest accounting of where every hour actually went** —
+   nothing padded, nothing dropped, the real shape of the day told back to you.
+   The "oh, *that's* what today was" beat.
+
+Comprehensive **and** revealing. The persona is a sharp friend who was in the room
+all day, forgot nothing, has taste, and tells your day back to you better than you
+could. Not a dashboard, not a coach, not a therapist. A record-keeper with taste.
+
+Every example line below is either a **10** (put it in front of the judge as
+"this is the ceiling") or a **fail** (put it in front of the judge as "this is the
+floor you reject"). There are no 7s in the galleries on purpose; the 7 is defined
+once, in the rubric at the end.
 
 ---
 
@@ -37,472 +52,996 @@ happened**:
    restates or invents one. A line that breaks a guard dies alone and the slide
    shows its deterministic `fallbackLine` — the deck never collapses wholesale.
 
-**The arc, both cadences:** Hook → Substance → Where it went → Wildcard → Finale.
-
-**Counts.** A full working day yields **12–16** slides from a catalog of **20+**
-possible; a real week yields **15–18** from a catalog of **27** possible. Which
-appear depends entirely on what the day/period contained.
-
-Fields referenced below are from `DayWrapFacts` (`src/renderer/lib/dayWrapScenes.ts`)
-and `WrappedPeriodFacts` (`@shared/types`). Stage-0 tools
-(`src/main/services/wrappedTools.ts`) that feed a slide are named where relevant.
+**The felt arc, both cadences:** Hook → Substance → where it went → the surprise →
+the honest close. The middle is seed-shuffled so no two days read in the same
+order, but every layer the day *had* gets its beat.
 
 ---
 
-## The rubric — how every slide is scored
+## The 9 layers a complete recap covers
 
-Each slide's AI line is scored on four dimensions. **Max 10 per slide.**
+A recap is complete when it has touched every layer the day actually contained.
+Layers 2, 5, and 8 are **enrichment**: they light up only when a connector
+(git, calendar, todos) is present, and today most of them ride *inside* existing
+slides' prose rather than owning a card.
 
-### Specificity (0–3)
-Does it name real things — app names, times, actual numbers, the real work — or
-does it speak in vague terms?
-- **3** — every sentence carries at least one specific, correct data point from
-  the facts (a real activity name, a real clock time, a real duration).
-- **2** — specific, but one sentence coasts on generality.
-- **1** — mostly vague; a single concrete detail.
-- **0** — "you worked hard today," no anchor to the real day.
+| # | Layer | The question it answers | Owns / rides these slides |
+| --- | --- | --- | --- |
+| 1 | **Substance** | What did you work on? (named as human work) | `opening`, `headline`, `timesink`, `apps`, `thread-0…3`, `threads`, `categories` |
+| 2 | **Output** *(enrichment)* | What did you make / ship / finish? | rides prominently in `headline`, `story-*`, `thread-*`, `reflection`; **`shipped` card: not built yet** |
+| 3 | **Shape** | The rhythm: when sharp, when it scattered, the arc | `focus`, `split`, `shape`, `bestday`, `worstday`, `bestbucket`, `consistency`, `average` |
+| 4 | **Story** | The connected morning→evening narrative | `story-morning`, `story-midday`, `story-evening`, `reflection` |
+| 5 | **World** *(enrichment)* | Who / what was around the work? | `meetings` (calendar enriches names) |
+| 6 | **Surprise** | What you forgot or didn't notice (baseline deviation) | `forgotten`, `wildcard` |
+| 7 | **Context** | How today compares to your usual | `compare`, `average`, `consistency`, `earlystart(s)`, `latenight(s)` |
+| 8 | **Intent** *(enrichment)* | Plan vs actual (a written morning intention) | **`plan-vs-actual` card: not built yet**; nothing rides elsewhere until it is |
+| 9 | **Human** | The energy / effort texture — WHAT, never WHY | `focus`, `leisure`, `question`; woven through `story-*` and `reflection` |
 
-### Tone (0–2)
-Does it read like a human reflection or a generated report?
-- **2** — reads like a thoughtful person who knows you wrote it about your day.
-  Connective tissue, varied rhythm, on the chosen voice.
-- **1** — fine but flat; a summary with extra words.
-- **0** — robotic, hype, therapy, self-referential, or a bullet dressed as a
-  sentence. Any `voice.md` §2 non-negotiable broken caps Tone at 0.
-
-### Accuracy (0–3)
-Do the numbers and names match the facts object exactly?
-- **3** — zero hallucinated or misattributed values; every clock time, duration,
-  percentage, and name traces to *this slide's* facts.
-- **1–2** — correct but a value is imprecise or attributed to the wrong thing.
-- **0** — **any invented number, time, percentage, or name is an automatic 0.**
-  (The runtime validator already strips these; a 0 here means the guard missed one
-  and the prompt must be fixed, not the guard leaned on.)
-
-### Narrative forward motion (0–2)
-Does the prose tell the user something they couldn't already read off the card?
-- **2** — adds a genuine read: how the time was spread, what the stretch meant, a
-  true juxtaposition the chart can't show.
-- **1** — adds a little framing.
-- **0** — restates the number that is already printed on the slide.
-
-### Thresholds (the pass bar)
-- **Per slide:** a slide scoring **below 7 fails** the suite.
-- **Improvement loop:** any slide scoring **below 8** enters the recursive
-  improvement loop (§1.3) until it reaches 8.
-- **Deck:** the **deck average must be ≥ 9** to pass overall.
-- The benchmark test suite **fails the build** if any slide is < 7 or the deck
-  average is < 9.
-
-Interactive/deterministic-only slides (`apps`, `shape`, `threads`, `finale`) whose
-AI line is a short caption are scored on the same rubric but graded against the
-lighter job the card asks of them (a caption that adds a read scores full motion).
+Alongside the nine layers, **every deck carries one honesty card** — `coverage`,
+documented next — that is not a narrative layer at all: it is the seam the whole
+product promises to show.
 
 ---
 
-## DAY WRAP — the catalog
+## The honesty card — `coverage`  *(DAY + PERIOD; always present; never AI)*
 
-A full working day plays roughly 12–16 of these. `question`, `reflection`, and
-`finale` always appear; everything else is gated by data.
+**What it is.** "Here's what this wrap is actually built on": the observed window
+("11:15am to 8:04pm on this computer"), the evidence sources that were present
+(apps and windows, browser activity, calendar, git commits, focus timers, meeting
+notes) and the ones that weren't, and the one-line seam:
+*"Time Daylens didn't observe isn't in the story."*
 
-### 1. Opening — the one-line read
-**Beat.** The hook. One punchy, honest sentence on the *shape* of the whole day,
-no numbers. It sets the tone and is also the notification one-liner, so it has to
-earn the open.
-**Draws from.** `activeSeconds`, `workSeconds`, `leisureSeconds`, `isLeisureDay`.
+**Why it exists.** The product's entire identity is that it doesn't lie
+("wrapped yes or no.md"): a recap that names its blind spots stays honest, and a
+thin day must look honestly thin instead of dressed up. This card is that promise
+made visible on every single deck.
+
+**How it works.** Deterministic by design — `buildDayCoverageSlide` /
+the period coverage spec in `wrapDeck.ts`. The AI **never writes this slide**
+(`ask: ''`), so it can never overclaim. It is pinned right after the headline,
+outside the shuffle, on both cadences. When connector presence is unknown, the
+card lists nothing about connectors rather than falsely claiming they were absent.
+
+**Minimum data.** None — it always appears (that is the point).
+
+There are no "perfect" or "fail" galleries for this card and it is never judged:
+there is no prose to score. Its correctness is enforced by ordinary tests, not
+the rubric.
+
+---
+
+## How to read a slide entry
+
+Each entry gives:
+
+- **Layer(s) + beat** — which of the 9 it serves, and the one sentence of what
+  story it tells and why it matters.
+- **Draws from** — the exact `DayWrapFacts` / `WrappedPeriodFacts` fields, the
+  enrichment fields, and the **Stage-0 tools** (`src/main/services/wrappedTools.ts`)
+  that feed it: `getWindowTitleContext`, `getGitActivity`, `getCalendarEvents`,
+  `getDayComparison`, `getLongestFocusStretch`, `getDistractionProfile`,
+  `getMostSurprisingFact`.
+- **Minimum data** — the real threshold in `wrapDeck.ts`. Below it, the slide does
+  not exist. Thin data never pads.
+- **Perfect (a 10)** — lines that are the ceiling.
+- **Fail** — one or two lines the judge must score low, with *why*.
+- **Role variants** (core slides only) — the same beat across roles so the recap
+  reads role-aware: **TECH/FOUNDER**, **ACCOUNTING/FINANCE** (calendar-heavy, few
+  commits), **CONSULTING**, **STUDENT**, **CREATOR/DESIGNER**.
+
+**Role note.** The role comes from **what the person selected during onboarding**
+(`userRole`, delivered to the writer via `userProfileDirective`) — never inferred
+from which apps they used (naming "the reconciliation" for someone who merely
+opened Excel would be an invented fact). When no role was set, the directive
+simply omits it and the recap falls back to a **plain, neutral tone that assumes
+no profession** — it names the surfaces and shapes it can see, nothing more.
+
+**Time-of-day note.** Time-of-day words — morning, midday, afternoon, evening,
+night, noon, midnight — are ordinary English. None is banned, none is forced;
+the only rule is that whatever is said **matches when things actually happened**.
+Mechanically: "noon" and "midnight" are precise clock claims (12pm / 12am), so
+the grounding validator treats them like any clock time — they must appear in
+that slide's own facts. "Midday", "morning", "the evening" are part-of-day words
+and free prose. (This supersedes the draft-era "midday vs noon" ban both ways.)
+
+**Emoji note.** Emoji are used when they genuinely fit the moment — earned,
+occasional, never forced onto every slide and never banned. The legal set is
+🏆 🔥 🌙 ☕ 🎯 ✨, at most one per line, only at the very end of a line, and the
+deck contract keeps it to at most one line per deck carrying one. In the
+galleries below an emoji appears on more than one slide only because each slide
+is shown in isolation as "here is where one *could* be earned"; a real deck
+keeps zero or one.
+
+**The two negative anchors that apply everywhere** (memorize these; most fails are
+a flavor of one):
+
+- **The vague-hype fail:** "Today was a productive and focused day with lots of
+  great work in Cursor." — vague, hype, uses a banned word ("focused"/"productive"),
+  and names the tool where it should name the work. Score 0–2.
+- **The card-restate fail:** "You spent 6h 40m working and had 2 meetings." — robotic,
+  restates the card, invents a meeting *count* the facts don't hold, adds no read.
+  Score 0–3.
+
+---
+
+# LAYER 1 — SUBSTANCE
+
+*What you worked on, named as human work. The spine of "where every hour went."*
+
+## `opening` — the one-line read  *(DAY + WEEK)*
+
+**Layers 1 + 3.** The hook. One punchy, honest sentence naming the *one real thing*
+that defined the day (or the true shape of it), no numbers. It is also the
+notification one-liner, so it has to earn the open. Serves Substance (names the
+work) and Shape (the arc).
+
+**Draws from.** `activeSeconds`, `workSeconds`, `leisureSeconds`, `isLeisureDay`,
+`workActivities[0]` (→ `workActionPhrase`); week: `daysWithActivity`, top thread.
+No tool required; `getGitActivity` / `getCalendarEvents` can sharpen the named thing.
+
 **Minimum data.** Always present once `quality` is `partial` or `full`.
-- Great: "You started before most people were awake and the code never really let
-  you go."
-- Great: "A split day: heads-down all morning, then it scattered after lunch."
-- Great: "Mostly off the clock today, and that reads as a choice, not a gap."
-- Bad: "Today was a productive and focused day with lots of great work." (vague,
-  hype, no shape)
 
-### 2. Headline — the day in one number
-**Beat.** The single big number (total active time), count-up animated. The line
-must ADD something the number can't say (when it began, how it spread) and must
-never restate the total or say "tracked across the day."
-**Draws from.** `activeSeconds`, `mainStartClock`, `ribbonEndClock`, `dayStory`
-(spillover awareness). Tool: `getDayComparison` can color "a long one" later.
-**Minimum data.** Always present on a `full`/`partial` day.
-- Great: "Nearly all of it landed between 9am and 6pm. A clean, contained day."
-- Great: "It began at 7am and the front half carried the weight."
-- Great: "That total is denser than it looks; two long stretches did most of it."
-- Bad: "You tracked 5h 16m today." (restates the number on the card)
+**Perfect (a 10)** — *core slide, shown across roles:*
 
-### 3–6. The day as a story (late night / morning / afternoon / evening)
-**Beat.** The heart of the wrap. Each real part of the day, narrated like a friend
-who was there — names the real work as an action ("building the timeline"), connects
-the beats, owns a leisure aside with one kind line, never lists. Up to four slides,
-one per part of day that cleared the threshold. A pre-dawn sliver is its own
-"last night's tail" beat, framed as winding down, never as starting the day.
-**Draws from.** `dayStory[]` (each `DayStorySegment`: `label`, `clockStart`,
-`clockEnd`, `items` [humanized work actions], `aside`, `spillover`). Tools:
-`getWindowTitleContext` → `titleContext` gives the depth under "4 hours in Cursor".
-**Minimum data.** A segment appears only if it holds ≥ 5 min of nameable activity.
-- Great (morning): "You went straight into the malaria classifier at 7 and stayed
-  with it for two and a half hours before your first real break."
-- Great (afternoon): "The meeting ran through lunch and you built through it anyway,
-  back on the pipeline the moment it ended."
-- Great (evening): "By evening it was cleanup — the essay, then a long YouTube tail
-  that honestly reads like a breather after a heavy day."
-- Bad: "In the morning you used Cursor, Claude Code, and Chrome." (names the
-  plumbing, lists, no story)
+- **TECH/FOUNDER:** "A maker's morning that set the whole tone, then the day opened
+  up after the design review. The tracking engine quietly won the day."
+- **ACCOUNTING/FINANCE:** "The close swallowed the morning, and once the
+  reconciliations balanced the afternoon finally had room to breathe."
+- **CONSULTING:** "Two discovery calls before lunch, then the whole afternoon
+  disappeared into the client deck."
+- **STUDENT:** "A slow start, then the problem set caught fire around midday and
+  didn't let go until dinner."
+- **CREATOR/DESIGNER:** "The thumbnail fought you all morning, then the edit
+  clicked after lunch and carried the rest of the day."
+- **No role set (neutral):** "One document owned the morning, and the afternoon
+  scattered into a dozen smaller things."
 
-### 7. Longest unbroken stretch — the focus reveal
-**Beat.** The single longest unbroken work block: when it started, what it was,
-that nothing broke it. One of the most interesting facts of any day; the reveal
-should land. Earned pride is allowed here.
-**Draws from.** `standout` (`seconds`, `startClock`, `endClock`, `name`). Tool:
-`getLongestFocusStretch`.
-**Minimum data.** A work stretch ≥ 25 min exists.
-- Great: "2h 14m without a break on the malaria classifier, 7 to 9am. Nothing got
-  in. 🔥"
-- Great: "Your longest run was the proposal, 1h 40m straight after lunch, no tab
-  switching."
-- Great: "One block held the whole afternoon: an hour and a half on the pipeline,
-  unbroken."
-- Bad: "Your longest stretch was 2h 14m." (restates the stat, no meaning)
+**Fail.**
 
-### 8. Where the most time pooled — the biggest time sink
-**Beat.** The single surface that held the most time, framed honestly given its
-category — is it the work, or the leak? No scold, no cheer.
-**Draws from.** `appSites[0]` (name, seconds, category). Tool:
-`getDistractionProfile` informs the honest framing.
-**Minimum data.** A named app/site with ≥ 20 min.
-- Great: "Claude Code held more of the day than anything else, and on a build day
-  that reads as the work, not the drift."
-- Great: "Safari took the most time, and most of that was docs, not wandering."
-- Great: "YouTube pooled the most minutes today. Some days the break is the
-  headline."
-- Bad: "You spent the most time in Claude Code." (no read on what it means)
+- "Today was a productive and focused day with lots of great work." — vague, hype,
+  banned words, no shape. *(0–1)*
+- "You had a busy day with several activities across multiple apps." — dashboard
+  voice, names nothing, no one real thing. *(1)*
 
-### 9. Where the time went — the one chart
-**Beat.** The app/site distribution chart, the one place a chart is the point.
-Slices sum to the headline exactly. The line is ONE short caption that adds a read,
-not a restatement of the bars.
-**Draws from.** `appSites[]` (each slice, reconciled to `activeSeconds`).
-**Minimum data.** ≥ 2 app/site slices.
-- Great: "Two tools carried the day; everything else was a rounding error."
-- Great: "A short list. You didn't spread yourself thin today."
-- Great: "The top three are all one project wearing different hats."
-- Bad: "Cursor 2h, Claude Code 1h, Safari 40m, Slack 20m." (restates the chart)
+---
 
-### 10. The honest split — work vs leisure
-**Beat.** The real work-to-leisure ratio, the ONE place the line may speak exact
-percentages (and only the two the slide shows). Framed without judgment or grade.
-**Draws from.** `workSeconds`, `leisureSeconds`, largest-remainder percentages.
-**Minimum data.** Both work AND leisure > 0.
-- Great: "59% work, 41% off the clock. A day that left room to breathe."
-- Great: "Two thirds work today, and the other third wasn't wasted."
-- Great: "Closer to even than most days, and that's allowed."
-- Bad: "You were 59% productive today." (turns a split into a grade — banned)
+## `headline` — the day (or period) in one number  *(DAY + WEEK)*
 
-### 11. An early one — early start
-**Beat.** The day started unusually early; name the real clock time and let it
-speak. Observational, never a badge.
-**Draws from.** `ribbon[0].startMs` (first hour 1–6am), `ribbonStartClock`. Tool:
-`getMostSurprisingFact` (`unusualStart`).
-**Minimum data.** First activity between 1am and 6am.
-- Great: "The day started at 6:12am. The house was still quiet."
-- Great: "You were three hours in before most people had coffee."
-- Great: "5:40am. Whatever pulled you up early, it got the cleanest hours."
-- Bad: "You woke up early today." (no real time, and it can't see when you woke)
+**Layers 1 + 3.** The single big number (total active time), count-up animated. The
+card already shows the number; the line must **add a read the number can't say** —
+where the weight sat, the work that filled it — and must never restate the total,
+say "tracked across the day," or imply the day ran to midnight off a pre-dawn tail.
 
-### 12. It ran late — late night
-**Beat.** The day ran late; name the real end-of-day clock time, observational,
-never a scold. (Mutually exclusive with early start when both trigger; the seed
-picks.)
-**Draws from.** `ribbon[last].endMs` (≥ 10pm or < 4am), `ribbonEndClock`.
-**Minimum data.** Last activity at/after 10pm or before 4am.
-- Great: "The last thing you touched was at 10:26pm. It was a long one. 🌙"
-- Great: "You didn't really stop until 11 tonight."
-- Great: "The screen was still on at 12:40am, winding down, not ramping up."
-- Bad: "You stayed up too late working." (scold + a WHY it can't see)
+**Draws from.** `activeSeconds`/`totalSeconds`, `mainStartClock`, `ribbonEndClock`,
+`dayStory` (spillover awareness), top thread. Tools: `getDayComparison` can later
+color "a long one"; `getGitActivity` / `getCalendarEvents` sharpen where the weight
+sat. **A clock time is allowed here** only because `mainStartClock`/`ribbonEndClock`
+are this slide's own facts.
 
-### 13. You probably forgot this one — the forgotten surface
-**Beat.** A real surface that took meaningful time without ever being a headline —
-the "oh right, that" moment.
-**Draws from.** `appSites` ranked outside the top 3, ≥ 10 min. Tool:
-`getMostSurprisingFact` (`forgottenApp`).
-**Minimum data.** A 4th+ ranked app/site with ≥ 10 min.
-- Great: "Notion quietly took 26 minutes today without ever being the main thing."
-- Great: "You spent more time in Preview than you'd probably guess: 18 minutes."
-- Great: "A forgotten half hour in Numbers, buried between the bigger blocks."
-- Bad: "You also used Notion today." (no surprise, no time, no life)
+**Minimum data.** Always present on a `full`/`partial` day (or a period with activity).
 
-### 14. In meetings and calls
-**Beat.** Meeting time as its own beat, separating deep work from talking. Plain
-and factual. Never states HOW MANY meetings — the facts only know total time.
-**Draws from.** `meetingsSeconds` (block span, not active seconds). Tool:
-`getCalendarEvents` enriches with names/durations when calendar is connected.
-**Minimum data.** ≥ 30 min of meetings-category time.
-- Great: "About an hour went to calls, and the ML pipeline sync was most of it."
-- Great: "49 minutes in meetings, all of it in the morning before the real build."
-- Great: "The calls clustered early, which left the afternoon clear for one thing."
-- Bad: "You had 3 meetings today." (invents a count the facts don't hold)
+**Perfect (a 10)** — *card shows `6h 40m`; core slide, across roles:*
 
-### 15. And one more thing — the wildcard
-**Beat.** The signature "huh, neat" moment: one spontaneous, surprising, TRUE thing
-that changes every day. The seed picks which computed candidate hook leads. This is
-one slide with several possible faces (below), so it reads different every day.
+- **TECH/FOUNDER:** "Most of it stacked up before lunch, when the tracking engine
+  took your two best hours in one sitting."
+- **ACCOUNTING/FINANCE:** "The front half of the day was almost all the month-end
+  close, before a single client call broke it up."
+- **CONSULTING:** "Two thirds of it was the client deck, and it all landed in one
+  long afternoon push."
+- **STUDENT:** "Most of that was the problem set, and nearly all of it came after 3pm
+  once the lectures were done."
+- **CREATOR/DESIGNER:** "The edit carried the bulk of it, one long uninterrupted run
+  from midday on."
+
+**Fail.**
+
+- "You tracked 6h 40m today." — restates the number on the card. *(0)*
+- "6h 40m, tracked across the day from start to finish." — the exact banned filler,
+  and implies an all-day span. *(0–1)*
+
+---
+
+## `timesink` — where the most time pooled  *(DAY + WEEK)*
+
+**Layer 1.** The single surface that held the most time, framed honestly given its
+category: the work, or the leak. **This is one of the two slides where naming the
+tool IS the point** (`apps` is the other). No scold, no cheer.
+
+**Draws from.** `appSites[0]` (day, `kind !== 'other'`) / `topApps[0]` (week), with
+`name`, `seconds`, `category`. Tool: `getDistractionProfile` informs the honest
+work-or-leak read.
+
+**Minimum data.** Day: a named app/site with **≥ 20 min** (and not `other`). Week:
+top app with **≥ 45 min**.
+
+**Perfect (a 10):**
+
+- **TECH/FOUNDER:** "Claude Code held more of the day than anything else, and on a
+  build day that reads as the work, not the leak."
+- **ACCOUNTING/FINANCE:** "Excel pooled the most time by a wide margin, which for a
+  close week is exactly where it should be."
+- **CREATOR/DESIGNER:** "Premiere took the biggest share, and most of that was one
+  continuous cut, not scrubbing back and forth."
+- **STUDENT:** "YouTube pooled the most minutes today, and some days the break is
+  the headline. No spin on it."
+
+**Fail.**
+
+- "You spent the most time in Excel." — no read on what it means, restates the card.
+  *(1–2)*
+- "Excel was your biggest distraction at 3h 12m." — "distraction" is banned, and a
+  reconciliation tool is the work, not the leak. *(0)*
+
+---
+
+## `apps` — where the time went (the one chart)  *(DAY + WEEK)*
+
+**Layers 1 + 3.** The app/site distribution chart — the one place a chart *is* the
+point. Slices reconcile to the headline exactly. The line is ONE short caption that
+reads the **shape** (concentrated in one or two tools, or spread thin) and names at
+least one real app. Never adds up or compares the bar values numerically; the chart
+already shows the sizes. Naming tools is allowed and expected here.
+
+**Draws from.** `appSites[]` (day) / `topApps[]` top 6 (week). No tool required.
+
+**Minimum data.** **≥ 2** app/site slices.
+
+**Perfect (a 10):**
+
+- "Two tools carried the day and everything else was a rounding error. Cursor and
+  Claude Code, back to back."
+- "A short, deep list. You lived in Figma and barely touched anything else."
+- "The day lived in a handful of tools: Excel for the reconciliations, Outlook for
+  the back-and-forth, and the GL system underneath it all."
+- "Spread wide today. The slides, the spreadsheet, and the inbox all took a real
+  slice, the mark of a day pulled in several directions."
+
+**Fail.**
+
+- "Cursor 2h, Claude Code 1h, Safari 40m, Slack 20m." — restates the chart. *(0)*
+- "Figma was bigger than Slack and Notion combined." — does the arithmetic the chart
+  already shows, and voice bans it. *(0–1)*
+
+---
+
+## `thread-0…3` — the thread deep-dives  *(WEEK)*
+
+**Layers 1 + 2.** The biggest named threads each get their own card: what that
+commitment actually looked like across the week. Two cards for a week, four for a
+month/year. This is where **output enrichment** rides — git tells you *what shipped*
+under the thread, not just how long it ran.
+
+**Draws from.** `threads[]` (`subject`, `seconds`, `daysActive`; raw artifact labels
+filtered by `looksLikeRawArtifactLabel`). Tool: `getGitActivity` enriches the thread
+with what was actually built/shipped.
+
+**Minimum data.** A clean-named thread exists (raw file/artifact labels rejected).
+
+**Perfect (a 10):**
+
+- **TECH/FOUNDER (thread-0):** "The tracking engine was the week: about twelve hours
+  across four days, and every other thread bent around it. It ended with the
+  midnight-split bug finally closed."
+- **CONSULTING (thread-0):** "The client deck was the spine of the week, close to
+  fourteen hours, rebuilt twice before the Thursday readout."
+- **ACCOUNTING/FINANCE (thread-1):** "The other constant was the audit workpapers,
+  about three hours that kept resurfacing between the bigger blocks."
+- **STUDENT (thread-1):** "The dissertation reading was the quiet second thread,
+  a couple of hours at a time, four days out of five."
+
+**Fail.**
+
+- "Thread 1 was Malaria_Notebook.ipynb, 12h." — raw artifact label, restates. *(0)*
+- "You worked on the deck a lot this week." — names nothing real, no duration, no
+  shape. *(1)*
+
+---
+
+## `threads` — the thread chart / `categories` — the work by kind  *(WEEK)*
+
+**Layer 1.** `threads` ranks the week's real threads as bars; `categories` names what
+*kind* of work dominated (coding / writing / design / admin). One caption on what the
+ranking says, as a story, never the list restated and never invented percentages.
+
+**Draws from.** `threads[]` top 5; `categories[]` (→ `humanCategoryWord`). No tool.
+
+**Minimum data.** `threads` ≥ 2 clean threads; `categories` ≥ 2 kinds and
+`workSeconds > 0`.
+
+**Perfect (a 10):**
+
+- (threads) "One thread towered and the rest were the supporting cast."
+- (threads) "Two threads split it evenly: the proposal early, the network build
+  late, about nine hours each."
+- (categories, TECH) "This was a building week, not a writing one. The design and
+  admin were just what kept it moving."
+- (categories, CONSULTING) "Mostly slide work and calls this week. The analysis was
+  the thin layer underneath both."
+
+**Fail.**
+
+- "Coding 60%, design 25%, admin 15%." — invents percentages not on the card. *(0)*
+- "Your threads were pipeline, Claude, design, admin." — restates the chart. *(0–1)*
+
+---
+
+# LAYER 2 — OUTPUT *(enrichment)*
+
+*What you MADE, shipped, finished. Verified output is the most satisfying true
+thing a recap can say — and the easiest place to lie, so it carries the strictest
+evidence rule in the catalog.*
+
+**What ships today (built, live).** When the git connector has real evidence —
+commits by the configured author, PR activity from the user's own authenticated
+`gh` — the sanitized `shipped` enrichment (projects, exact counts, humanized
+highlights) is handed to the writer, and the prompt requires it to land
+**prominently in at least one main slide** (the headline read, the story beat it
+happened in, or the reflection) — never buried in a footnote. The count guard
+(`enrichmentAllowedCounts`) kills any commit/PR count the connector didn't hand
+over, so output is never guessed or inflated. On a day with no verified output,
+the recap simply says nothing about output — silence, not a guess.
+
+## `shipped` — what you finished  *(NOT BUILT YET — proposed card, DAY + WEEK)*
+
+> **Not built yet.** There is no `shipped` id in `wrapDeck.ts` and no card in the
+> running app; today Layer 2 ships only as the cross-slide prose behavior above.
+> This entry is the locked contract for the card **if and when** it is built.
+> **Gate:** at least one real, *confirmed* artifact of output the connector
+> actually attests — a merged PR, N commits with a coherent subject, a doc marked
+> done, a sent deliverable. **Never guessed, never implied** from app time ("3
+> hours in Figma" is not a shipped design). Without a connector that resolves
+> *output* (not just time), this card does not appear, and its absence is silent —
+> a day of real effort with no shippable artifact is process, not failure, and the
+> effort still shows up in Shape and Story.
+
+**Layer 2.** The single most satisfying beat a recap can land: not "you spent time
+on X" but "X now exists." It closes the loop between effort and result. It names the
+*thing made*, never the tool, and never inflates (only what the connector actually
+handed over — no invented records, per voice.md §5 and §16).
+
+**Draws from (when built).** `getGitActivity` (commits, PRs, merges, diff subjects),
+future doc/design/send connectors. Minimum viable: git commit count + merged-PR
+titles resolved to human work.
+
+**Minimum data (when built).** ≥ 1 concrete, confirmed, finished artifact resolvable
+to human work. No artifact → no card, silently.
+
+**Perfect (a 10)** — *across roles:*
+
+- **TECH/FOUNDER:** "Eleven commits and the midnight-split fix merged before lunch.
+  The bug that had been quietly wrong for weeks is closed. 🎯"
+- **ACCOUNTING/FINANCE:** "The Q2 books closed today. Every reconciliation balanced
+  and the pack went out to the partners."
+- **CONSULTING:** "The client deck went out. Twenty-two slides, the readout version,
+  sent an hour before the call."
+- **STUDENT:** "The essay is done and submitted. Two thousand words that were a blank
+  page this morning."
+- **CREATOR/DESIGNER:** "The video is cut and exported. Nine minutes, the version
+  you'll actually publish, rendered by evening."
+
+**Fail.**
+
+- "You made great progress on your project today." — vague, hype, names no artifact.
+  *(0–1)*
+- "You wrote 11 commits and pushed them to GitHub." — robotic, names the plumbing
+  ("commits," "GitHub") instead of the work that shipped. *(1–2)*
+- "You shipped a record number of commits today." — invents a superlative the
+  connector never provided. *(0, accuracy gate)*
+- "You probably finished the deck, given the hours." — output guessed from app
+  time. The one unforgivable failure for this layer. *(0, accuracy gate)*
+
+---
+
+# LAYER 3 — SHAPE
+
+*The rhythm of the day: when it was sharp, when it scattered, the arc. Half of the
+"honest accounting" mandate lives here.*
+
+## `focus` — the longest unbroken stretch  *(DAY + WEEK)*
+
+**Layers 3 + 9 + 1.** The single longest unbroken block: when it started, what it
+was, that nothing broke it. One of the most interesting facts of any day, and the one
+place earned pride is welcome. Serves Shape (the rhythm's peak), Human (the effort
+texture), and Substance (names the real work). **Clock time allowed** (`startClock`
+is this slide's fact).
+
+**Draws from.** `standout` (day: `seconds`, `startClock`, `endClock`, `name`) /
+`longestStretch` (week: `+ dayLabel`). Tools: `getLongestFocusStretch`,
+`getWindowTitleContext` (→ `titleContext`) adds the depth under "two and a half
+hours in Cursor."
+
+**Minimum data.** Day: a `standout` exists (a real unbroken work stretch). Week: a
+`longestStretch` exists.
+
+**Perfect (a 10)** — *card shows `2h 28m`, `7:12am to 9:40am`:*
+
+- **TECH/FOUNDER:** "From 7:12am you stayed with the tracking engine for two and a
+  half hours without surfacing, your longest unbroken run of the day. 🔥"
+- **ACCOUNTING/FINANCE:** "The reconciliations held you for two and a half hours
+  straight from 7:12am, before a single email got a reply. Nothing broke it."
+- **CONSULTING:** "The deck took your deepest run of the day, two and a half hours
+  from 7:12am with no calls cutting in."
+- **STUDENT:** "Two and a half hours on the problem set from 7:12am, not a single
+  switch away. The cleanest stretch of the day."
+- **CREATOR/DESIGNER:** "One unbroken cut from 7:12am, two and a half hours in the
+  edit before you came up for air. 🔥"
+
+**Fail.**
+
+- "Your longest stretch was 2h 28m." — restates the stat, no meaning. *(0)*
+- "You focused for 2h 28m without any distractions." — "focused"/"distractions"
+  banned; robotic. *(0)*
+
+---
+
+## `split` — the honest split (work vs leisure)  *(DAY + WEEK)*
+
+**Layer 3.** The real work-to-leisure ratio, framed without judgment. **The ONE slide
+where the line may speak exact percentages**, and only the two the card shows. This
+is the "no guilt over breaks" slide: leisure is accounted for, never scored — and
+never *defended* either ("earned", "deliberate", "not drift" are all bans; rest
+needs no lawyer).
+
+**Draws from.** `workSeconds`, `leisureSeconds`, largest-remainder percentages
+(`largestRemainderPercentages`). No tool.
+
+**Minimum data.** Both work AND leisure **> 0**.
+
+**Perfect (a 10)** — *card shows `88 / 12`:*
+
+- "Nearly all of it was the build, with just enough off the clock to not fry.
+  88% to 12%."
+- "A heads-down ratio: 88 to 12. The kind of day where the work crowded almost
+  everything else out."
+- "88% on the books, 12% off them, and the off hours sat at the end of the day
+  where they belonged."
+
+**Fail.**
+
+- "You were 88% productive today." — turns a split into a grade; "productive" banned.
+  *(0)*
+- "88% work, 12% wasted on breaks." — "wasted" banned, guilt over a break. *(0)*
+- "88% work, and the 12% off was earned." — defends rest; rest needs no defense.
+  *(1–2)*
+
+---
+
+## `shape` — the silhouette / `bestday` / `worstday` / `bestbucket` / `consistency` / `average`  *(WEEK)*
+
+**Layer 3 (with 7).** The period's rhythm made visible: the per-day/per-bucket bars
+(`shape`), the fullest day given its due (`bestday`), the lightest day said without
+judgment (`worstday`), the biggest sub-period by name (`bestbucket`, month/year),
+how many days you showed up (`consistency`), and the typical day (`average`).
+Together they are the honest accounting at period scale.
+
+**Draws from.** `buckets[]`, `busiestBucket`, `busiestDay`, `quietestActiveDay`,
+`daysWithActivity`, `totalSeconds / daysWithActivity`. No tool required.
+
+**Minimum data.** `shape` ≥ 2 buckets; `bestday` a busiest day; `worstday` a distinct
+quietest day **and ≥ 3 active days**; `bestbucket` `period !== 'week'` and ≥ 2 buckets;
+`consistency` week and ≥ 2 active days; `average` ≥ 3 active days.
+
+**Perfect (a 10):**
+
+- (shape) "Sunday was the mountain and Wednesday the valley. The rest held a steady
+  line."
+- (shape) "Front-loaded and honest about it: Monday and Tuesday did the heavy
+  lifting, the rest was follow-through."
+- (bestday) "Sunday carried the week, and it was the day the proposal finally moved
+  from notes to a draft."
+- (worstday) "Wednesday was the exhale, and the week was better for it."
+- (consistency) "Seven of seven. You didn't take a day fully off this week."
+- (average, FINANCE) "About 7h 35m on a working day, which for a close week is full
+  without being punishing."
+- (average, CONSULTING) "Close to six hours on a working day, the pace of a delivery
+  week rather than a pitch week."
+- (bestbucket) "The second week did the heavy lifting, nearly a third of the whole
+  month in seven days."
+
+**Fail.**
+
+- "Wednesday was your worst day." — "worst" as a verdict; no honesty, just judgment.
+  *(1)*
+- "Here are your daily totals." / "Your average was 7h 35m per day." — restates the
+  chart / the card. *(0)*
+- "Sunday carried the week, more than any two other days combined." — arithmetic
+  across bars the facts never stated. *(0–1, accuracy gate)*
+
+---
+
+# LAYER 4 — STORY
+
+*The connected morning→evening narrative. The heart of the wrap: a friend who was
+there, walking you through your own day.*
+
+## `story-morning` / `story-midday` / `story-evening`  *(DAY; dynamic beats)*
+
+**Layers 4 + 1 (+ 2, + 5 via enrichment).** Each real part of the day, narrated in at
+most two sentences: names the one or two things that mattered (never all, never a
+list), connects the beats, owns a leisure aside with one kind clause, weaves in git
+(*what shipped*) and calendar (*the meeting that broke it*) when present. A pre-dawn
+sliver is its own "last night's tail" beat, framed as winding down, never as starting
+the day. **Clock time allowed** (each segment's `clockStart`/`clockEnd` are its facts).
+
+**Draws from.** `dayStory[]` (`DayStorySegment`: `label`, `part`, `clockStart`,
+`clockEnd`, `items` [humanized work actions], `aside`, `spillover`, `seconds`). Tools:
+`getWindowTitleContext` (depth), `getGitActivity` (the shipped clause),
+`getCalendarEvents` (the meeting that anchors a beat).
+
+**Minimum data.** A segment appears only if it holds nameable activity (`items.length > 0`).
+
+**Perfect (a 10)** — *core slide, across roles (morning beat):*
+
+- **TECH/FOUNDER:** "You were on the tracking engine from the first coffee, fixing
+  the midnight day-split that had been quietly wrong for weeks. By the standup at 9
+  you'd already closed it."
+- **ACCOUNTING/FINANCE:** "The morning was all the month-end close, one account at a
+  time, until the trial balance finally tied out just before the 10am partner call."
+- **CONSULTING:** "You opened with two back-to-back discovery calls, then went
+  straight into the deck while the notes were still fresh."
+- **STUDENT:** "The morning went to the 9am lecture and the reading after it, and you
+  were still underlining when the second class started."
+- **CREATOR/DESIGNER:** "You spent the morning wrestling the thumbnail, three
+  versions before one held, then finally opened the edit just before lunch."
+
+*Midday / evening (for range):*
+
+- **midday (TECH):** "The design review at midday reset the plan, and you were back
+  on the engine the moment it ended, no wind-down."
+- **evening (STUDENT):** "By evening it was cleanup, the bibliography and a last
+  read-through, then a long YouTube tail that reads like a breather after a heavy
+  day."
+
+**Fail.**
+
+- "In the morning you used Cursor, Claude Code, and Chrome." — names the plumbing,
+  lists, no story. *(0–1)*
+- "Morning: 3h. Afternoon: 2h. Evening: 1h." — timestamps, not narration. *(0)*
+
+---
+
+## `reflection` — the closing message  *(DAY + WEEK)*
+
+**Layers 4 + all.** The finale paragraph, written like a text you'd send someone at
+the end of their day. 3–5 sentences that *synthesize* every layer the day had:
+substance, the arc, the one thing shipped, the surprise, the honest ratio. Warm,
+specific, grounded, no advice, no prediction, no hype. This is the slide where Output
+enrichment most naturally rides today.
+
+**Draws from.** the whole facts object (`narrative.reflection`). All tools feed it
+indirectly.
+
+**Minimum data.** Always present.
+
+**Perfect (a 10)** — *core slide, across roles:*
+
+- **TECH/FOUNDER:** "You put in about seven hours and nearly all of it went to the
+  tracking engine, which finally closed the midnight-split bug before lunch. The
+  morning was the cleanest part, one long unbroken run before the design review. You
+  took the evening slower and that's fair. A good, honest day of building."
+- **ACCOUNTING/FINANCE:** "About seven hours, and the month-end close was the whole
+  spine of it. The reconciliations tied out by early afternoon and the pack went to
+  the partners after. A couple of calls broke it up but never derailed it. The kind
+  of day that ends with something actually finished."
+- **CONSULTING:** "Close to seven hours, and the client deck took most of them. Two
+  discovery calls in the morning fed straight into it, and it went out an hour before
+  the readout. A heads-down day with a clear finish line, and you hit it."
+- **STUDENT:** "About seven hours once the lectures were done. The problem set was the
+  real work, one long stretch in the afternoon that did most of it, and the essay went
+  in before dinner. A day that started slow and ended with two things off your plate."
+- **CREATOR/DESIGNER:** "Seven hours, most of it in the edit once the thumbnail
+  finally stopped fighting you. The cut came together in one long afternoon run and
+  the video is exported. A day that looked stuck at first and wasn't by the end."
+
+**Fail.**
+
+- "Great job today! Keep up the momentum and crush it tomorrow!" — hype, prediction,
+  therapy, names nothing. *(0)*
+- "You worked 6h 40m, had 2 meetings, and used 8 apps." — a stat dump, not a message.
+  *(0–1)*
+
+---
+
+# LAYER 5 — WORLD *(enrichment)*
+
+*Meetings, and who/what was around the work. Calendar-fed.*
+
+## `meetings` — in meetings and calls  *(DAY + WEEK)*
+
+**Layer 5.** Meeting time as its own beat, separating deep work from talking. Plain
+and factual. **Never states HOW MANY meetings** unless calendar is connected and the
+count is a real fact — the base facts only know total meeting *time*. When calendar is
+connected, the specific meeting that mattered can be named — always as what the
+calendar *held*, never as attendance the data can't prove.
+
+**Draws from.** `meetingsSeconds` (block span). Tool: `getCalendarEvents` enriches
+with real event names/durations when calendar is connected.
+
+**Minimum data.** **≥ 30 min** of meetings-category time.
+
+**Perfect (a 10):**
+
+- **TECH/FOUNDER:** "About an hour went to calls, and the design review was most of
+  it. The rest of the day stayed clear for the build."
+- **ACCOUNTING/FINANCE:** "Close to two hours in meetings, the partner review and two
+  client check-ins, which for close week is a light talking load."
+- **CONSULTING:** "Both discovery calls ran back to back before lunch, which is why
+  the afternoon had room for the deck."
+
+**Fail.**
+
+- "You had 3 meetings today." — invents a count the base facts don't hold (no
+  calendar). *(0, accuracy gate)*
+- "You spent 1h 4m in meetings." — restates the card, no read. *(1–2)*
+
+---
+
+# LAYER 6 — SURPRISE
+
+*What you forgot or didn't notice. Baseline deviation. The "how did it know that?"
+beat.*
+
+## `forgotten` — you probably forgot this one  *(DAY + WEEK)*
+
+**Layer 6.** A real surface that took meaningful time without ever being a headline —
+the "oh right, that" moment. The purest expression of the North Star's revealing half.
+Names the surface and the duration; **no clock time** (it isn't one of this slide's
+facts) and no invented reason it happened. (The *kicker* says "probably"; the line
+itself never speculates — the overclaim guard kills "probably"/"likely" in prose.)
+
+**Draws from.** `appSites` ranked outside top 3, `kind !== 'other'`, ≥ 10 min (day) /
+`topApps` outside top 3, ≥ 20 min (week). Tool: `getMostSurprisingFact` (`forgottenApp`).
+
+**Minimum data.** A 4th+ ranked app/site clearing the floor.
+
+**Perfect (a 10)** — *core slide, across roles:*
+
+- **TECH/FOUNDER:** "Notion quietly ate 22 minutes, notes you opened once and never
+  closed."
+- **ACCOUNTING/FINANCE:** "A forgotten half hour in DocuSign today, buried between the
+  bigger blocks, signatures chased in the margins."
+- **CONSULTING:** "You spent more time in the expense tool than you'd guess, about 20
+  minutes, none of it the work you'd remember."
+- **STUDENT:** "Eighteen minutes in the citation manager you'll swear you never
+  opened. It adds up between the reading."
+- **CREATOR/DESIGNER:** "A quiet 25 minutes in the stock-footage tab, hunting one
+  clip, never the main event."
+
+**Fail.**
+
+- "You also used Notion today." — no surprise, no time, no life. *(1)*
+- "You wasted 22 minutes in Notion." — "wasted" banned; assigns a verdict the app
+  can't see. *(0)*
+
+---
+
+## `wildcard` — and one more thing  *(DAY)*
+
+**Layer 6 (+ 7).** The signature "huh, neat" moment: one spontaneous, surprising,
+TRUE thing that changes every day. The seed picks which computed candidate hook leads,
+so one slide has several possible faces. **The contract (fixed 2026-07-10):** anchor
+the line in the hook's concrete value or the real activity, give it meaning by tying
+it to ONE other real, *named* fact of the day, use a part-of-day word rather than a
+bare clock time, and add **no comparison or consistency claim the hook itself didn't
+state**.
+
 **Draws from.** `wildcardHook` (chosen from `candidateHooks[]`). Tool:
 `getMostSurprisingFact`.
+
 **Minimum data.** At least one candidate hook cleared its floor.
 
-The wildcard's faces (each a distinct catalog possibility; only one appears):
-- **15a · longestStretch** — "2h 14m unbroken, your deepest single stretch today."
-- **15b · peakWindow** — "Your best stretch was the morning; the afternoon never
-  matched it."
-- **15c · earlyBird** — "Most of the real work was done before noon."
-- **15d · nightOwl** — "The evening did the heavy lifting; you found a second gear
-  after 8."
-- **15e · count** — "You came back to the proposal seven separate times before it
-  was done."
-- **15f · topApp juxtaposition** — "More time on the classifier than everything else
-  combined."
-- Bad (any face): "Interesting fact: you were productive!" (invented, generic, a
-  score in disguise)
+**The faces (only one appears):**
 
-### 16. The curious question — interactive
-**Beat.** The ONE slide that asks the user something (every other line never asks).
-One genuine question the AI is curious about after reading the day, specific to
-THIS data, answerable inline. Never a task, never a "should."
-**Draws from.** the whole facts object (`narrative.question`).
-**Minimum data.** Always present.
-- Great: "You gave the classifier the whole morning. Was it the fun kind of hard,
-  or the grinding kind?"
-- Great: "The proposal came back to life today after two quiet days. What
-  unblocked it?"
-- Great: "That YouTube tail after 9pm, was that the reward or the wall?"
-- Bad: "What will you work on tomorrow?" (prediction/homework — banned)
+- **longestStretch:** "Your deepest single run today was that unbroken morning block
+  on the grant application, and nothing else came close."
+- **peakWindow:** "Your best stretch was the morning, and it went to the edit. The
+  afternoon never quite matched it."
+- **earlyBird:** "Most of the real work was done before midday, almost all of it the
+  close."
+- **nightOwl:** "The evening did the heavy lifting on the proposal. You found a
+  second gear after 8."
+- **count:** "You came back to the proposal seven separate times before it was done."
+- **topApp juxtaposition** *(only when the hook itself states the comparison)*:
+  "More time in the editor today than in everything else put together."
 
-### 17. The reflection — the finale paragraph
-**Beat.** The closing message, written like a text you'd send someone at the end of
-their day. 3–5 sentences, warm, specific, grounded, no advice, no prediction.
-**Draws from.** the whole facts object (`narrative.reflection`).
-**Minimum data.** Always present.
-- Great: "You put in about five hours today and nearly all of it went to the
-  classifier, which crossed 80% by evening. The morning was the cleanest part, one
-  long unbroken run before the meetings started. You took the afternoon a little
-  slower and that's fine. It was a good, honest day of work."
-- Bad: "Great job today! Keep up the momentum and crush it tomorrow!" (hype +
-  prediction + therapy)
+**Fail.**
 
-### 18. The finale — share card
-**Beat.** The screenshot-perfect summary card: date, headline number, top few
-activities, one signature stat, Daylens watermark. A short sign-off line.
-**Draws from.** deck meta + facts. Deterministic-heavy; the AI line is a short
-close.
-**Minimum data.** Always present.
-- Great: "That's the day. See you tomorrow."
-- Great: "One number, one long stretch, one thing finished. Enough."
-- Bad: "Thanks for using Daylens!" (self-referential product-speak)
-
-**Day catalog total: 20+ possible faces** (opening, headline, 4 story parts, focus,
-timesink, apps, split, early, late, forgotten, meetings, 6 wildcard faces, question,
-reflection, finale). **12–16 appear on any given full day.**
+- "Interesting fact: you were productive!" — invented, generic, a score in disguise.
+  *(0)*
+- "Your best stretch was before 9am, way more than the afternoon and evening
+  combined." — adds a comparison it wasn't given. *(0–1, accuracy gate)*
 
 ---
 
-## WEEK WRAP — the catalog
+# LAYER 7 — CONTEXT
 
-A real week plays roughly 15–18 of these from **27** possible. Same rubric. The
-period deck sums **frozen daily snapshots**, so every number reconciles.
+*How today compares to your usual: longer, earlier, a streak, against last time.*
 
-### 1. Opening — what kind of week
-**Beat.** One honest sentence on the arc of the whole week, no numbers.
-**Draws from.** `totalSeconds`, `daysWithActivity`, biggest thread.
-**Minimum data.** Always.
-- Great: "A week with one clear center of gravity: the ML pipeline pulled almost
-  everything toward it."
-- Great: "Front-loaded and heavy, then it eased off by the weekend."
-- Bad: "It was a busy and productive week overall." (vague, hype)
+## `earlystart` / `latenight`  *(DAY)* and `earlystarts` / `latenights`  *(WEEK)*
 
-### 2. Headline — the week in one number
-**Beat.** The week's total, count-up. The line reads the total, never restates it.
-**Draws from.** `totalSeconds`, `daysWithActivity`.
-- Great: "Fifty-three hours across seven days is a lot of steady, not a lot of
-  spikes."
-- Bad: "You tracked 53h 4m this week." (restates)
+**Layers 7 + 3.** The day's (or week's) edges. Started unusually early, or ran late,
+named by the real clock time, observational, never a scold and never a WHY it can't
+see. **Clock time allowed** (the edge clocks are these slides' facts).
 
-### 3. Days you showed up — consistency (week only)
-**Beat.** How many of the seven days had activity. Observational, no grade.
-**Draws from.** `daysWithActivity`.
-**Minimum data.** `period === 'week'` and ≥ 2 active days.
-- Great: "Seven of seven. You didn't take a day fully off this week."
-- Bad: "You showed up 100% of days!" (grade)
+**Draws from.** Day: `ribbon[0]`/`ribbon[last]` hour, `ribbonStartClock`/
+`ribbonEndClock`. Week: `dayEdges[]` (`firstHour`/`lastHour`, `firstClock`/`lastClock`,
+`dayLabel`), counts. Tool: `getMostSurprisingFact` (`unusualStart`).
 
-### 4. The shape of the week — the silhouette
-**Beat.** The per-day bar chart, story first: where it peaked, where it thinned.
-**Draws from.** `buckets[]`, `busiestBucket`.
-**Minimum data.** ≥ 2 buckets.
-- Great: "Sunday was the mountain and Wednesday the valley; the rest held a steady
-  line."
-- Bad: "Here are your daily totals." (restates the chart)
+**Minimum data.** Day early: first activity 1–6am. Day late: last activity ≥ 10pm or
+< 4am. Week: ≥ 1 day past the edge.
 
-### 5. The big day — best day
-**Beat.** The fullest day, given its due.
-**Draws from.** `busiestDay` (`dayLabel`, `totalSeconds`).
-**Minimum data.** A busiest day exists.
-- Great: "Sunday carried the week: 10h 27m, more than any two other days combined."
-- Bad: "Your busiest day was Sunday with 10h 27m." (restates)
+**Perfect (a 10):**
 
-### 6. The quiet one — worst day
-**Beat.** The lightest active day, said honestly, no judgment.
-**Draws from.** `quietestActiveDay`, distinct from busiest, ≥ 3 active days.
-- Great: "Wednesday was the exhale: 8 minutes, and the week was better for it."
-- Bad: "Wednesday was your worst day." ("worst" as a verdict)
+- (earlystart, TECH) "The day started at 6:12am. The house was still quiet and the
+  code had the cleanest hours to itself. ☕"
+- (earlystart, STUDENT) "5:40am. Whatever pulled you up early, the reading got the
+  best of it."
+- (latenight) "The last thing you touched landed at 10:26pm. A long one, still in it
+  well after dark. 🌙"
+- (latenights, WEEK) "Five nights ran past 11, the latest ending at 12:40am Thursday.
+  A week that didn't clock out easily."
+- (earlystarts, WEEK) "Two days started before 7, the earliest a 5:40am Tuesday that
+  got the whole morning to itself."
 
-### 7. Longest unbroken stretch — the focus reveal (period)
-**Beat.** The single longest unbroken stretch of the whole week, when and on what.
-Be a little proud.
-**Draws from.** `longestStretch` (`seconds`, `dayLabel`, `startClock`, `label`).
-- Great: "4h 14m without breaking on Thursday, all of it in Claude Code. Your
-  deepest run of the week. 🏆"
-- Bad: "Your longest stretch was 4h 14m." (restates)
+**Fail.**
 
-### 8. The big week — best bucket (month/year only)
-**Beat.** For a month/year deck, the fullest week/month called out by name.
-**Draws from.** `busiestBucket`, `period !== 'week'`.
-- Great: "The second week of the month did the heavy lifting, nearly a third of the
-  whole thing."
-- Bad: "Week 2 had the most hours." (restates)
+- "You stayed up too late working." — scold plus a WHY it can't see. *(0)*
+- "You woke up early today." — the app can't see you wake; no real clock. *(0–1)*
 
-### 9–12. Thread deep-dives (thread-0 … thread-3)
-**Beat.** The biggest named threads each get their own card — what that commitment
-looked like. Two for a week, four for a month/year.
-**Draws from.** `threads[]` (`subject`, `seconds`, `daysActive`). Tool:
-`getGitActivity` enriches thread naming with what was actually shipped.
-**Minimum data.** A clean-named thread exists (raw artifact labels filtered out).
-- Great (thread-0): "The ML pipeline was the week: 12 hours across four days, and
-  every other thread bent around it."
-- Great (thread-1): "The other constant was the Claude Code work, 3 hours that kept
-  resurfacing between the bigger blocks."
-- Bad: "Thread 1 was Malaria Notebook, 12h." (raw label, restates)
+---
 
-### 13. What mattered — the thread chart
-**Beat.** The ranked thread list as a chart; one caption on what the ranking says.
-**Draws from.** `threads[]` (top 5).
-**Minimum data.** ≥ 2 clean threads.
-- Great: "One thread towered; the rest were the supporting cast."
-- Bad: "Your threads were pipeline, Claude, design, admin." (restates)
+## `compare` — against last period  *(WEEK)*
 
-### 14. Where the most time pooled — biggest time sink (period)
-**Beat.** The single app that took the most raw time across the week, framed
-honestly as the work or the leak.
-**Draws from.** `topApps[0]`, ≥ 45 min.
-- Great: "Dia held 32 hours this week, and most of that was the pipeline living in a
-  browser tab, not idle drift."
-- Bad: "You used Dia the most." (no read)
+**Layer 7.** This period against the previous, framed as arithmetic, never a verdict.
+Uses the exact difference the card provides, never a computed one, never a percentage.
 
-### 15. Where the time actually went — the app chart (period)
-**Beat.** The week's real app distribution; one short caption.
-**Draws from.** `topApps[]` (top 6).
-**Minimum data.** ≥ 2 apps.
-- Great: "The whole week ran through three tools; the rest is noise."
-- Bad: "Dia, Safari, Notion, Slack, Cursor, Warp." (restates)
+**Draws from.** `previousPeriodSeconds`, `totalSeconds`, the exact `delta`. Tool:
+`getDayComparison` (day-level analog).
 
-### 16. The work, by kind
-**Beat.** What kind of work dominated (coding / writing / design / admin), as a
-story not a readout.
-**Draws from.** `categories[]` (humanized kind words).
-**Minimum data.** ≥ 2 categories and `workSeconds > 0`.
-- Great: "This was a building week, not a writing one; the design and admin were
-  just what kept it moving."
-- Bad: "Coding 60%, design 25%, admin 15%." (invents percentages not on the card)
-
-### 17. The honest split — work vs leisure (period)
-**Beat.** The week's real work-to-leisure ratio; the two exact percentages allowed.
-**Draws from.** `workSeconds`, `leisureSeconds`.
-**Minimum data.** Both > 0.
-- Great: "40% work, 60% off the clock. Not every week is a sprint, and this one
-  wasn't."
-- Bad: "You were only 40% productive this week." (grade)
-
-### 18. Off the clock — leisure surfaces
-**Beat.** Where the downtime went, one kind honest line. Rest is allowed.
-**Draws from.** `leisureSurfaces[]`, `leisureSeconds` ≥ 30 min.
-- Great: "The downtime was mostly YouTube and Netflix, clustered in the evenings
-  after the work was done."
-- Bad: "You wasted time on YouTube and Netflix." ("wasted" — banned)
-
-### 19. In meetings and calls (period)
-**Beat.** Total meeting time for the week, plain.
-**Draws from.** `meetingsSeconds` ≥ 30 min. Tool: `getCalendarEvents`.
-- Great: "A little over an hour in calls all week, which is a light meeting load for
-  the amount that got built."
-- Bad: "You had 1h 7m of meetings across several calls." (invents "several")
-
-### 20. You probably forgot this one — forgotten surface (period)
-**Beat.** A surface that took real time without being a headline, over the week.
-**Draws from.** `topApps` ranked outside top 3, ≥ 20 min.
-- Great: "Warp quietly took 26 minutes this week, never once the main event."
-- Bad: "You also used Warp." (no life)
-
-### 21. It ran late — late nights
-**Beat.** How many nights ran past 11pm and the latest, observational.
-**Draws from.** `dayEdges[]` (lastHour ≥ 23 or < 4).
-- Great: "Five nights ran past 11, the latest ending at 12:40am on Thursday. A week
-  that didn't clock out easily. 🌙"
-- Bad: "You stayed up too late 5 nights." (scold)
-
-### 22. The early starts
-**Beat.** How many days started before 7am and the earliest.
-**Draws from.** `dayEdges[]` (firstHour 1–6).
-- Great: "Two days started before 7, the earliest a 2:27am Thursday that was really
-  Wednesday refusing to end."
-- Bad: "You woke up early twice." (can't see waking)
-
-### 23. Against last week — the comparison
-**Beat.** This period vs the previous, framed as arithmetic, never a verdict.
-**Draws from.** `previousPeriodSeconds`. Tool: `getDayComparison` (day-level analog).
 **Minimum data.** `previousPeriodSeconds > 0`.
-- Great: "About 6 hours more than last week, most of that landing on Sunday alone."
-- Bad: "You improved 12% over last week!" (grade + invented percent)
 
-### 24. A typical day — the daily average
-**Beat.** The per-active-day average, plain arithmetic.
-**Draws from.** `totalSeconds / daysWithActivity`, ≥ 3 active days.
-- Great: "About 7h 35m on a working day, which is a full day without being a
-  punishing one."
-- Bad: "Your average was 7h 35m per day." (restates)
+**Perfect (a 10):**
 
-### 25. The curious question — interactive (period)
-**Beat.** One genuine question about the week, answerable inline.
-**Draws from.** whole facts object.
-- Great: "The pipeline ate the whole week. Was that the plan, or did it quietly take
-  over?"
-- Bad: "What are your goals for next week?" (homework)
+- "About six hours more than last week, most of that landing on Sunday alone."
+- "Almost exactly last week again, within an hour. A steady stretch, not a spike."
+- "A lighter week than the one before it by a few hours, and it reads as a breather,
+  not a slump."
 
-### 26. The reflection — end-of-week message
-**Beat.** The closing paragraph, written like a text at the end of the week.
-- Great: "Fifty-three hours, and the ML pipeline was the spine of nearly all of it,
-  twelve of those hours across four days. Sunday was the big one and Wednesday was
-  almost nothing, which is a healthy shape for a week. You ran late more nights than
-  not. It was a heads-down stretch, and it looks like it moved the thing that
-  mattered."
-- Bad: "Amazing week! You're a machine. Next week will be even better!" (hype +
-  prediction)
+**Fail.**
 
-### 27. The finale — share card (period)
-**Beat.** The week summarized, watermarked, saveable. Short sign-off.
-- Great: "That's the week. One thread, start to finish."
-- Bad: "Thanks for a great week with Daylens!" (product-speak)
-
-**Week catalog total: 27 possible slides.** **15–18 appear** in a real week
-(consistency + late/early + compare + the second thread cards push a full week to
-the top of that range; a thin week drops the deep-dives, worst-day, and comparison).
+- "You improved 12% over last week!" — grade plus invented percentage. *(0)*
+- "This week was more productive than last week." — "productive," a verdict. *(0)*
 
 ---
 
-## What the benchmark must enforce (summary)
+# LAYER 8 — INTENT *(enrichment)*
 
-- Every slide's line scores **≥ 7**, and the improvement loop lifts anything **< 8**.
-- The **deck average is ≥ 9**.
-- **Accuracy is a hard gate:** any number, clock time, percentage, or name not in
-  that slide's facts is an automatic 0 and a suite failure.
-- Every line obeys the `voice.md` non-negotiables (no scores, no hype, no em dashes,
-  no homework/prediction, no raw labels, emoji only from the earned set).
-- The catalog is the source of truth for *which* slides exist; the benchmark builds
-  one fixture per slide type from **real data** in `daylens.sqlite`.
+*Plan vs actual: what you wrote down that you meant to do, against what happened.
+The layer that turns a recap into accountability without judgment.*
+
+## `plan-vs-actual` — the plan, and the day  *(NOT BUILT YET — proposed card, DAY + WEEK)*
+
+> **Not built yet.** There is no `plan-vs-actual` id in `wrapDeck.ts`, no card in
+> the running app, and — as of 2026-07-10 — **no morning-intention field in the
+> app yet either** (no schema column, no capture UI); that field is a
+> prerequisite. This entry is the locked contract for the card if and when both
+> exist. **The plan source is exactly one thing: a plan the person actually and
+> explicitly wrote down for that day (the morning intention).** Never a plan
+> *derived* from the calendar, never one inferred from habits or history, never
+> one invented by the model. On any day with no written intention, this slide
+> simply does not appear — no fallback, no guess, just silence.
+
+**Layer 8.** The honest mirror: you wrote "ship the tracking fix and clear the
+inbox" in the morning, and the evening recap holds that next to what the day
+actually held. States the plan and the actual side by side, no scold when they
+diverge (WHAT, never WHY — voice.md §10). A gap is named plainly, never explained,
+never graded.
+
+**Draws from (when built).** The written morning intention (field to be added),
+reconciled against `dayStory` / `threads` for what actually happened.
+
+**Minimum data (when built).** A written intention exists for that exact day.
+None → no card, silently.
+
+**Perfect (a 10)** — *across roles:*
+
+- **TECH/FOUNDER:** "You wrote 'tracking engine' this morning and the morning went
+  exactly there. The one thing that slipped was the code review, still sitting
+  where you left it."
+- **ACCOUNTING/FINANCE:** "The plan was to close two entities today. One tied out,
+  the second is a reconciliation short."
+- **CONSULTING:** "You'd set the afternoon aside for the deck and it held. The
+  client-call prep you also wrote down got the leftover twenty minutes."
+- **STUDENT:** "Three things on the morning list. The problem set and the reading
+  got real hours, the lab report never came up."
+- **CREATOR/DESIGNER:** "You planned to shoot and edit today. The shoot ran long,
+  and the edit is the half of the plan the day never reached."
+
+**Fail.**
+
+- "You completed 80% of your planned tasks today." — a grade, a percentage, banned.
+  *(0)*
+- "You got distracted and didn't finish your plan." — "distracted," a verdict, a WHY
+  it can't see. *(0)*
+- "You planned to work on the deck." — no *actual* half; states intent alone, no
+  comparison. *(1)*
+- "Your calendar suggests the plan was deep work until noon." — a plan *inferred*
+  from the calendar; the one unforgivable failure for this layer. *(0, accuracy
+  gate)*
+
+---
+
+# LAYER 9 — HUMAN
+
+*The energy and effort texture. WHAT, never WHY. Rest counts.*
+
+## `leisure` — off the clock  *(WEEK)*
+
+**Layer 9.** Where the downtime went, one kind, honest line. Rest is allowed and never
+apologized for — and never defended either. Naming the leisure surface is fine (it's
+the point here), but never "wasted," never a deficit.
+
+**Draws from.** `leisureSurfaces[]`, `leisureSeconds`. No tool.
+
+**Minimum data.** `leisureSurfaces.length > 0` and `leisureSeconds ≥ 30 min`.
+
+**Perfect (a 10):**
+
+- "The downtime was mostly YouTube and Netflix, clustered in the evenings after the
+  work was done."
+- "A real weekend in there. The downtime pooled into two long evenings and left the
+  workdays clean."
+
+**Fail.**
+
+- "You wasted time on YouTube and Netflix." — "wasted," banned. *(0)*
+- "You spent 4h 12m on leisure activities." — robotic, restates. *(1)*
+
+---
+
+## `question` — the one curious question  *(DAY + WEEK)*
+
+**Layer 9.** The ONE slide that asks the user something (every other line never asks).
+One genuine question the AI is curious about after reading the day, specific to THIS
+data, answerable inline. Never a task, never a "should," never homework about tomorrow.
+
+**Draws from.** the whole facts object (`narrative.question`).
+
+**Minimum data.** Always present.
+
+**Perfect (a 10):**
+
+- **TECH/FOUNDER:** "You gave the tracking engine the whole morning. Was it the fun
+  kind of hard, or the grinding kind?"
+- **CONSULTING:** "The deck came back to life today after two quiet days. What
+  unblocked it?"
+- **CREATOR/DESIGNER:** "That thumbnail took three tries before it held. Was the third
+  one obvious in hindsight, or a lucky swing?"
+
+**Fail.**
+
+- "What will you work on tomorrow?" — prediction / homework, banned. *(0)*
+- "Do you think you were productive today?" — invites a self-grade; "productive"
+  banned. *(0)*
+
+---
+
+## `finale` — the share card  *(DAY + WEEK)*
+
+**Deterministic-heavy; the AI line is a short close.** The screenshot-perfect summary:
+date, headline number, top activities, one signature stat, Daylens watermark. A short
+sign-off, no product-speak.
+
+**Minimum data.** Always present.
+
+**Perfect (a 10):** "That's the day. One long stretch, one thing finished." /
+"That's the week. One thread, start to finish." / "That's the day. The close is
+closed."
+
+**Fail.** "Thanks for using Daylens!" — self-referential product-speak. *(0)*
+
+---
+
+# ACCEPTANCE CRITERIA — the judge's rubric
+
+Every AI-written slide line is scored on four dimensions, **max 10**. The catalog
+galleries above are the anchors; this section is the calibration key so the judge can
+place a line between them. Interactive/caption slides (`apps`, `shape`, `threads`,
+`finale`) are scored on the same axes against the lighter job they do. The
+deterministic `coverage` card is never judged (no prose to score).
+
+## Specificity (0–3) — does it name real things?
+
+- **3 (a 10-grade line):** every sentence carries a correct, specific data point from
+  *this slide's* facts. *"From 7:12am you stayed with the tracking engine for two and
+  a half hours without surfacing."* — real clock, real work, real duration.
+- **2 (the 7 floor):** specific, but one clause coasts on generality. *"You stayed
+  with the tracking engine for a good while this morning."* — real work, vague time.
+- **0 (a fail):** no anchor to the real day. *"You worked hard today."*
+
+## Tone (0–2) — human reflection, or generated report?
+
+- **2 (a 10-grade line):** reads like a thoughtful person who was there. Connective
+  tissue, varied rhythm, on-voice. *"Notion quietly ate 22 minutes, notes you opened
+  once and never closed."*
+- **1 (the 7 floor):** fine but flat, a summary with extra words. *"Notion took 22
+  minutes today that weren't part of the main work."*
+- **0 (a fail):** robotic, hype, therapy, self-referential, or a bullet dressed as a
+  sentence. **Any voice.md §2 non-negotiable broken caps Tone at 0** (em dash, banned
+  word, score, hype, apology, self-reference). *"Notion captured 22m of secondary
+  engagement."*
+
+## Accuracy (0–3) — do numbers and names match the facts exactly?  *(hard gate)*
+
+- **3 (a 10-grade line):** zero hallucinated or misattributed values; every clock,
+  duration, percentage, and name traces to *this slide's* facts. *"88% to 12%"* on the
+  slide whose card shows 88/12.
+- **1–2 (partial):** correct but a value is imprecise or attributed to the wrong
+  thing. *"Nearly 90% work"* when the card says 88% (close, but the slide is the one
+  place exact percentages are required).
+- **0 (an automatic fail):** **any invented number, time, percentage, name, or count.**
+  *"You had 3 meetings"* with no calendar; *"a record number of commits"* the connector
+  never gave. The runtime validator strips most of these; a 0 here means the prompt,
+  not the guard, must be fixed.
+
+## Narrative forward motion (0–2) — does it tell you something the card can't?
+
+- **2 (a 10-grade line):** adds a genuine read — how the time spread, what the stretch
+  meant, a true juxtaposition. *"Most of it stacked up before lunch, when the tracking
+  engine took your two best hours in one sitting."* (card just shows 6h 40m.)
+- **1 (the 7 floor):** adds a little framing. *"Most of it was before lunch."*
+- **0 (a fail):** restates the number already printed. *"You tracked 6h 40m today."*
+
+## Thresholds (the pass bar, unchanged from Stage 1)
+
+- **Per slide:** below **7** fails the suite. Below **8** enters the recursive
+  improvement loop until it reaches 8.
+- **Deck:** the deck average must be **≥ 9** to pass overall.
+- **Accuracy is absolute:** any invented number/name/count is a 0 and a suite failure,
+  regardless of how good the prose is.
+- **The North Star check (qualitative, per deck):** does the finished deck do *both*
+  jobs — did it (a) surface at least one genuinely revealing/forgotten detail
+  (`forgotten`, `wildcard`, or a Story beat), and (b) account for where the hours
+  actually went (`headline` + `split` + `apps`/`story` reconciling)? A deck that is
+  accurate and on-voice but reveals nothing forgotten tops out around 8, not 10.
+
+## How the judge learns from this catalog
+
+The per-slide anchor sets in `tests/wrapped-bench/anchors.ts` are distilled from
+the galleries above and injected into every judge call as "excellent" and
+"failing" calibration lines. **Every slide id the planner can emit with an AI ask
+has its own set — day and week separately** (the week slides no longer share one
+thin set); the dynamic families (`story-*`, `thread-0…3`) each share one family
+set by design. `tests/wrapAnchors.test.ts` enforces that coverage, and also that
+no "perfect" anchor would itself be killed by the deterministic runtime guards
+(a line the writer can never ship must never be taught as the ceiling). The
+benchmark fixtures (`tests/wrapped-bench/fixtures.ts`) deliberately span day
+shapes — rich, thin, boring, low-variety, floor — so the bar holds on messy days,
+not just good ones.
+
+---
+
+## Resolved decisions (2026-07-10)
+
+The five open taste calls from the v2 draft, resolved by the founder:
+
+1. **"noon" vs "midday" (time-of-day words).** Neither is banned; nothing is
+   forced. All time-of-day words are ordinary English, used naturally and only
+   where they match when things actually happened. Mechanically, "noon" and
+   "midnight" are clock claims (12pm/12am) grounded by the validator against the
+   slide's own facts; "midday"/"morning"/"evening" are free part-of-day words.
+   The writer prompts and the validator were updated to agree with voice.md §6.
+2. **`shipped`.** Kept in the catalog as a proposed card, clearly marked **not
+   built yet**. The shipping behavior today is cross-slide prose: verified git/PR
+   output is woven prominently into `headline` / `story-*` / `reflection`, with
+   exact-count guards. The card, when built, is gated on a *confirmed* artifact —
+   never guessed or implied from app time; no artifact means silence.
+3. **`plan-vs-actual`.** Kept in the catalog as a proposed card, clearly marked
+   **not built yet** (the morning-intention field it depends on does not exist in
+   the app yet). Contract locked: explicit written intention only, never a
+   calendar-derived or invented plan, and total silence on days with no plan.
+4. **Emoji.** Natural, occasional, earned — never forced onto every slide, never
+   banned. Legal set 🏆 🔥 🌙 ☕ 🎯 ✨, end-of-line only, at most one line per deck.
+5. **Role.** Always from the onboarding selection (`userRole` via
+   `userProfileDirective`), never inferred from app usage. No role set → plain,
+   neutral tone that assumes no profession.

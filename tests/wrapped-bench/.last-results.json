@@ -1,23 +1,23 @@
 {
-  "generatedAt": "2026-07-10T16:25:52.992Z",
+  "generatedAt": "2026-07-11T18:00:08.477Z",
   "results": [
     {
       "cadence": "day",
-      "key": "2026-07-10",
+      "key": "2026-07-07",
       "slides": [
         {
           "id": "opening",
           "kind": "opening",
           "source": "ai",
           "caption": false,
-          "line": "You shipped real Daylens features in the afternoon and were done by early evening.",
+          "line": "A day that belonged to Daylens, with a machine learning class in the morning and real commits shipped by evening.",
           "score": {
-            "specificity": 2,
+            "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
-            "total": 9,
-            "reasoning": "Names the real shipped project (Daylens from wholeDayFacts.shipped) and correctly reads the afternoon coding stretch ending by early evening (day ran 12:08pm to 6:17pm). Warm, human phrasing that adds a true shape read over the raw split; lacks a concrete number to hit full specificity."
+            "total": 10,
+            "reasoning": "Names the real ML meeting, the Daylens focus, and the evening shipping (20 commits) — all traceable. Reads like a friend recapping the day's shape, and the arc from morning class to evening commits adds a real read beyond the printed totals."
           },
           "passed": true
         },
@@ -26,199 +26,30 @@
           "kind": "stat",
           "source": "ai",
           "caption": false,
-          "line": "Seven commits to Daylens, all packed into an afternoon that started just after 12:08pm.",
+          "line": "Most of that weight landed on Daylens, where the bulk of the work actually lived.",
           "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Seven commits to Daylens traces to shipped.commitsByProject and the 12:08pm start is on the card; both accurate. It reads warm and human, and the read that the whole day's shipping packed into one afternoon adds something the bare total number doesn't."
-          },
-          "passed": true
-        },
-        {
-          "id": "wildcard",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "Warp pulled you back three separate times in the afternoon, which is where most of the coding work actually happened.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Uses the true '3 returns to Warp' fact and correctly ties it to the afternoon coding block (12:08pm longest stretch on Coding), adding a genuine read beyond the printed number. Warm and specific without hype or invented values."
-          },
-          "passed": true
-        },
-        {
-          "id": "forgotten",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "Google Docs quietly got 16 minutes, enough to matter, not enough to make the main list.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real app and exact 16m, and the read that it slipped below the top surfaces matches thisSlideFacts. Warm, human phrasing ('quietly got,' 'not enough to make the main list') that adds a genuine read beyond the printed number."
-          },
-          "passed": true
-        },
-        {
-          "id": "split",
-          "kind": "split",
-          "source": "ai",
-          "caption": false,
-          "line": "59% of the day was work, 41% was YouTube and browsing. That is a pretty honest Friday split.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
+            "specificity": 1,
+            "tone": 1,
             "accuracy": 3,
             "motion": 1,
-            "total": 9,
-            "reasoning": "Both percentages trace to slide facts, and YouTube/browsing correctly characterizes the leisure from wholeDayFacts. Tone is warm and conversational without hype. Motion is modest since it largely restates the printed split, though naming what the leisure actually was adds a small read."
+            "total": 6,
+            "reasoning": "Accurately names Daylens as the main work, but omits the headline number, the 11:15am start, or the 10:26pm end that would anchor the day, and 'where the bulk of the work actually lived' is a vague restatement rather than a real read on how time spread."
           },
-          "passed": true
-        },
-        {
-          "id": "timesink",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "Warp at 1h 26m is the day's biggest block and it was all development work, so that time went exactly where it was supposed to.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names Warp, the correct 1h 26m, and the development category, all traceable to slide facts. The read that the time 'went exactly where it was supposed to' adds a genuine interpretation over the raw number, and the tone is warm without hype."
-          },
-          "passed": true
-        },
-        {
-          "id": "focus",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "The day opened with the longest run of it, coding from 12:08pm to 2:42pm with nothing breaking it up.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real times (12:08pm to 2:42pm) and the activity (coding), and adds the true read that this run opened the day and was the longest, which the card's number alone doesn't convey. Warm, natural phrasing without hype or invented values."
-          },
-          "passed": true
-        },
-        {
-          "id": "apps",
-          "kind": "bars",
-          "source": "ai",
-          "caption": true,
-          "line": "Warp carried most of the weight, with YouTube a clear second, and everything else, Granola, Google Docs, Cursor, PowerPoint, filling in smaller gaps around those two.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real apps in true rank order (Warp 1h26m, YouTube 48m, then the smaller ones) and adds a read about how the day concentrated in two tools rather than restating times. Warm, natural caption voice with no invented values."
-          },
-          "passed": true
-        },
-        {
-          "id": "question",
-          "kind": "question",
-          "source": "ai",
-          "caption": false,
-          "line": "The Frontiers PAIO Hackathon on July 28th got 21 minutes today. Is that something you are actively preparing for?",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names a real fact (Frontiers PAIO Hackathon July 28th, 21m in Safari) and turns it into a genuine curious question, matching the excellent anchors. Warm, specific, and adds a real read beyond restating the number."
-          },
-          "passed": true
-        },
-        {
-          "id": "reflection",
-          "kind": "reflection",
-          "source": "ai",
-          "caption": false,
-          "line": "Seven commits to Daylens on a Friday afternoon that did not start until 12:08pm. The work covered real ground: guard death handling, background capture reliability on both platforms, meeting-note narration, and the benchmark judge. You also had the weekly AI training sync in the calendar. Short day, but the output was specific and the code shipped.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real 7 commits, the 12:08pm start, specific shipped highlights (guard deaths, background capture, meeting-note narration, benchmark judge), and the AI training meeting — all traceable to facts. Reads like a friend summing up a short but focused day, and the 'short day but specific output' read adds motion beyond the numbers."
-          },
-          "passed": true
-        }
-      ],
-      "deckAverage": 9.78,
-      "allSlidesPassed": true,
-      "needsWork": []
-    },
-    {
-      "cadence": "day",
-      "key": "2026-07-09",
-      "slides": [
-        {
-          "id": "opening",
-          "kind": "opening",
-          "source": "ai",
-          "caption": false,
-          "line": "Thursday was a learning day, the kind where most of your hours went into an ML pipeline class and building a proposal alongside it.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real ML pipeline class and the SPCS proposal build, both traceable to facts, and characterizes the day as a learning day which matches the reading-up work dominating the hours. Warm, human framing that reads as a true synthesis rather than restating the total."
-          },
-          "passed": true
-        },
-        {
-          "id": "headline",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "The day ran from 8:50am and the bulk of it went into the Machine Learning Pipeline material.",
-          "score": {
-            "specificity": 3,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 10,
-            "reasoning": "Names the real start time and the day's main work (ML Pipeline material, the top task at 1h 53m), both grounded in facts. Reads naturally and adds a read on where the bulk of the day went rather than just restating the 6h 3m total."
-          },
-          "passed": true
+          "passed": false
         },
         {
           "id": "story-morning",
           "kind": "text",
           "source": "ai",
           "caption": false,
-          "line": "You came in working on the SPCS Build Proposal CCI and then moved into the ML Pipeline class, with Google Meet open for the session and a little YouTube on the side.",
+          "line": "You got going at 11:15am straight into your ML Pipeline class on Meet, which carried you right through to noon.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Names the real morning work (SPCS Build Proposal, ML Pipeline class), Google Meet for the session and YouTube on the side, all traceable to slide facts. Reads like a friend narrating the flow, and the sequencing adds a genuine read of how the morning moved rather than just restating the block."
+            "reasoning": "Names the real 11:15am start, the ML Pipeline class on Meet, and the run to noon, all traceable to facts. The 'got going at 11:15am' notes the late start (dayBegan) as a genuine read, and the phrasing reads warm and human rather than robotic."
           },
           "passed": true
         },
@@ -227,46 +58,30 @@
           "kind": "text",
           "source": "ai",
           "caption": false,
-          "line": "The afternoon was mostly reading, the ML Pipeline material carried through from the morning and the PowerPoint work sat alongside it for the full stretch.",
-          "score": {
-            "specificity": 2,
-            "tone": 2,
-            "accuracy": 3,
-            "motion": 2,
-            "total": 9,
-            "reasoning": "Names both real afternoon topics (ML Pipeline material and PowerPoint work) and correctly reads the ML thread carrying over from the morning, which the story facts support. Tone is calm and observational, and it adds a genuine read of how the two threads coexisted rather than restating the block. Slightly short of top specificity since it leans on 'the full stretch' without the 3h 11m figure."
-          },
-          "passed": true
-        },
-        {
-          "id": "timesink",
-          "kind": "stat",
-          "source": "ai",
-          "caption": false,
-          "line": "Google Colab held 54m of the day, and given that the ML Pipeline class was running, that reads squarely as the work, not a detour.",
+          "line": "The afternoon split between investigating the prompt cache hit rate drop and a second stretch of the ML class, with some YouTube worked in along the way.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Names the real app and exact 54m, ties it to the ML Pipeline work from wholeDayFacts, and adds a genuine read that the time was work rather than a detour. Warm and specific without hype."
+            "reasoning": "Names the real afternoon work (prompt cache investigation, the ML class, YouTube) all traceable to the slide facts, and 'a second stretch' adds a genuine read connecting it to the morning meeting. Reads naturally and warm without hype."
           },
           "passed": true
         },
         {
-          "id": "split",
-          "kind": "split",
+          "id": "story-evening",
+          "kind": "text",
           "source": "ai",
           "caption": false,
-          "line": "83% work, 17% leisure. The day was mostly heads-down, with just 1h 1m going to anything outside of it.",
+          "line": "The evening was all Daylens, a long run of it from 5pm to 10:26pm, with YouTube and Netflix as the bookends.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Uses the real 83/17 split and the exact 1h 1m leisure figure, all traceable to slide facts. The 'mostly heads-down' read adds a genuine characterization over the raw percentages, and the tone is natural without hype."
+            "reasoning": "Names the real evening work (Daylens), the correct span (5pm to 10:26pm), and the leisure apps (YouTube, Netflix), all traceable to slide facts. 'Bookends' adds a genuine read on how the leisure sat around the work, and the tone is warm and human without hype."
           },
           "passed": true
         },
@@ -275,14 +90,30 @@
           "kind": "stat",
           "source": "ai",
           "caption": false,
-          "line": "The afternoon held 2h 58m of work, the heaviest part of the day, and most of it was the ML Pipeline material carrying on from the morning into the PowerPoint reading.",
+          "line": "The evening held 3h 7m of your work, and nearly all of it went to Daylens, which is also where the day's longest unbroken stretch landed.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Uses the real 2h 58m afternoon figure and correctly names the ML Pipeline and PowerPoint reading that dominated that block per wholeDayFacts. Reads like a friend tracing the day, and adds the read that the afternoon work carried over from the morning rather than restating the number alone."
+            "reasoning": "The 3h 7m evening figure matches the slide, evening work being on Daylens and containing the longest stretch (7:28pm to 9pm) both trace to wholeDayFacts. Reads like a friend who watched the day, and it connects the evening block to the longest unbroken stretch rather than restating the number."
+          },
+          "passed": true
+        },
+        {
+          "id": "latenight",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The screen went quiet at 10:26pm, which says the day ran long and the Daylens work had a way of pulling you forward.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 10:26pm end time and ties it to the true evening Daylens stretch, which traces to wholeDayFacts. Reads warm and human, and adds a genuine read about the work pulling late rather than just restating the clock time."
           },
           "passed": true
         },
@@ -291,14 +122,14 @@
           "kind": "stat",
           "source": "ai",
           "caption": false,
-          "line": "From 11:09am to 1:13pm you stayed on the Machine Learning Pipeline material without breaking, the deepest single run of the day, crossing from late morning into the afternoon.",
+          "line": "From 7:28pm to 9pm you were in Daylens without breaking stride, the deepest run of the day and the one that held longest.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Uses the exact times and project, and the 'crossing from late morning into afternoon' read adds something the card's number alone can't show. Warm, human phrasing with no hype or invented values."
+            "reasoning": "Names the exact stretch (7:28pm to 9pm) and project (Daylens, a real shipped project), all accurate to the slide facts. Reads warm and human, and the phrase 'deepest run of the day and the one that held longest' adds a genuine read beyond the printed number."
           },
           "passed": true
         },
@@ -307,14 +138,62 @@
           "kind": "bars",
           "source": "ai",
           "caption": true,
-          "line": "The chart is spread across a lot of tools: Google Colab and Google Meet led the named ones, with Canva, Pinterest, YouTube, and Claude each taking a smaller slice.",
+          "line": "Most of the named time sat in YouTube, Google Meet, and Canva, but the bulk of the day lived in Other, which tells you the real work was spread across tools that don't headline the chart.",
           "score": {
-            "specificity": 2,
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the three top apps correctly and notes Other holding the largest chunk (3h 51m), all traceable to slide facts. Adds a genuine read that the real work was scattered across unlisted tools, which the chart alone doesn't say. Reads human and observant."
+          },
+          "passed": true
+        },
+        {
+          "id": "meetings",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Meetings took 1h 13m of your work time, nearly all of it your ML Pipeline class on Meet.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 1h 13m and correctly attributes nearly all of it to the ML Pipeline Meet call (1h 7m of the 1h 13m traces to facts). Adds a genuine read about where the meeting time concentrated rather than just restating the number, in a natural voice."
+          },
+          "passed": true
+        },
+        {
+          "id": "timesink",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "YouTube took 59m and it reads like breathing room, not the work, given everything else that was moving.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names YouTube and the exact 59m, and adds a genuine read that this was breathing room amid a heavy work day rather than a leak. Warm, human phrasing without hype, and the read goes beyond the card's printed number."
+          },
+          "passed": true
+        },
+        {
+          "id": "split",
+          "kind": "split",
+          "source": "ai",
+          "caption": false,
+          "line": "79% work to 21% leisure, a clean lean day with Daylens doing most of the heavy lifting. 🔥",
+          "score": {
+            "specificity": 3,
             "tone": 1,
             "accuracy": 3,
             "motion": 1,
-            "total": 7,
-            "reasoning": "Names real apps correctly and ranks them accurately (Colab 54m, Meet 49m leading), but the phrasing 'The chart is spread across' is slightly self-referential to the visual and it mostly lists the same rows the chart already shows rather than adding a genuine read about what those tools meant."
+            "total": 8,
+            "reasoning": "Percentages match the facts and Daylens as the heavy lifter traces to wholeDayFacts (2h 8m plus the longest stretch). The fire emoji leans toward hype and dents the human tone; the read that Daylens carried the load adds a little over the printed split."
           },
           "passed": true
         },
@@ -323,14 +202,14 @@
           "kind": "stat",
           "source": "ai",
           "caption": false,
-          "line": "Pinterest showed up for 24m, somewhere in the day, quiet enough that it probably does not feel like it happened.",
+          "line": "Intercom quietly took 28m, which makes sense given the commits that went into the Intercom Articles importer and Messenger copy.",
           "score": {
-            "specificity": 2,
+            "specificity": 3,
             "tone": 2,
             "accuracy": 3,
-            "motion": 1,
-            "total": 8,
-            "reasoning": "Names Pinterest and the correct 24m from the facts, and reads warm and human. The read that it slipped by unnoticed is decent but 'somewhere in the day' is vague filler rather than a genuine spread or meaning read like the anchors."
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the exact 28m in Intercom and ties it convincingly to real shipped work (Intercom Articles importer, Messenger copy from highlights), adding a genuine read on why the forgotten time existed. Warm, natural phrasing without hype or restating the card alone."
           },
           "passed": true
         },
@@ -339,14 +218,14 @@
           "kind": "question",
           "source": "ai",
           "caption": false,
-          "line": "Was the ML Pipeline class a live session on Google Meet, or were you working through it on your own?",
+          "line": "The ML Pipeline class sat on your calendar for 2h but you were on Meet for 49m total, what pulled you out early?",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Names the real ML Pipeline class and Google Meet from the facts, and poses a genuine question that draws on the ambiguity between the scheduled class and the Meet sessions — reads like a curious friend, not a report."
+            "reasoning": "Names the ML Pipeline class (scheduled 2h, matches meetings) and Google Meet 49m total, both traceable, and builds a genuine curiosity from the gap between scheduled and actual. Reads like an attentive friend and ends in a real question."
           },
           "passed": true
         },
@@ -355,19 +234,518 @@
           "kind": "reflection",
           "source": "ai",
           "caption": false,
-          "line": "Thursday was genuinely full: an ML class, a proposal, and a presentation to build, all in one day. The longest run, nearly two hours on the pipeline material across late morning and early afternoon, was the clearest sign that something had your real attention. The SPCS Build Proposal CCI moved forward too, spread across both Notion and PowerPoint. A solid Thursday.",
+          "line": "Tuesday shaped up as a Daylens day through and through. You shipped 20 commits, including the Intercom importer, Messenger copy, and a version bump to 1.0.45, while the ML class bookended your morning. The evening stretch from 7:28pm to 9pm was the quietest and steadiest part, a real run at the work. It was a full one.",
           "score": {
             "specificity": 3,
             "tone": 2,
             "accuracy": 3,
             "motion": 2,
             "total": 10,
-            "reasoning": "Every claim traces to facts: the ML class, proposal, presentation, the 1h53m longest stretch from 11:09am to 1:13pm on pipeline material, and SPCS work in Notion and PowerPoint. Warm, varied, closes cleanly without hype or self-reference, and the read on where attention landed adds motion beyond the numbers."
+            "reasoning": "Names real facts throughout: 20 commits, the Intercom importer and Messenger copy, version 1.0.45, the ML class in the morning, and the 7:28-9pm longest stretch — all trace to the facts. Reads warm and human, and the read on the evening stretch as the steadiest run adds motion beyond the printed numbers."
           },
           "passed": true
         }
       ],
-      "deckAverage": 9.73,
+      "deckAverage": 9.57,
+      "allSlidesPassed": false,
+      "needsWork": [
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Most of that weight landed on Daylens, where the bulk of the work actually lived.",
+          "score": {
+            "specificity": 1,
+            "tone": 1,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 6,
+            "reasoning": "Accurately names Daylens as the main work, but omits the headline number, the 11:15am start, or the 10:26pm end that would anchor the day, and 'where the bulk of the work actually lived' is a vague restatement rather than a real read on how time spread."
+          },
+          "passed": false
+        }
+      ]
+    },
+    {
+      "cadence": "day",
+      "key": "2026-07-04",
+      "slides": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "source": "ai",
+          "caption": false,
+          "line": "The Fourth of July, and you spent it deep inside the SPCS Group, researching and mapping out how the whole thing should look and work.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the real work (SPCS Group research and design planning) and correctly reads the day as dominated by it; the holiday framing adds warmth without inventing anything. Loses a point on specificity for skipping the striking 9h+ figure or hours, and motion is modest since it mostly reframes what the card shows rather than adding a sharper read of how the time spread."
+          },
+          "passed": true
+        },
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Almost all of it went to research and design planning for SPCS Group, from midnight through the afternoon and into the evening.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real main work (6h 49m of the 10h 2m fits 'almost all') and accurately describes the midnight-through-evening spread from the story timeline; adds a read on how the day filled rather than restating the 10h 2m total."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-lateNight",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "You were already at it at midnight, working through the SPCS Group research and design planning while the rest of the world was asleep. A quiet, unhurried start to a long day.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 9,
+            "reasoning": "Names the real SPCS Group research and design planning work and correctly places it at midnight; misses the 1h 51m figure but stays accurate. Warm, human phrasing that adds a genuine read of a quiet late-night start rather than restating the card."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-morning",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "The morning kept the same thread going, still deep in research and design planning for SPCS Group. No pivot, no context switch, just the same problem and more time with it.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 9,
+            "reasoning": "Names the real work (research and design planning for SPCS Group) and reads the continuity of a single thread across the day, which the card's number alone doesn't convey; drops the 2h 36m figure so specificity isn't maxed, but the continuity read adds genuine motion and the tone is warm and human."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-midday",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "The afternoon held the same shape, research and design planning for SPCS Group, steady and unbroken. The work had a long center of gravity today.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the real afternoon work correctly but omits the specific 1h 51m figure that would have added grounding. Tone is warm and human; 'long center of gravity' fits the day's 6h 49m stretch. Motion is modest, mostly characterizing continuity rather than revealing something new."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-evening",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "The evening was when the building started in earnest, 16 commits across Dev SPCS and Dev SPCS rebrand, real content, new pages, the design system applied. X and YouTube were in there too, a natural exhale after a very long stretch.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real evening work (building SPCS Technology surfaced as content/pages/design system), the 16 commits total (8+8 across both projects, both in wholeDayFacts.shipped), and the X/YouTube leisure. Warm, human read that frames the exhale after the long earlier stretch, adding motion beyond the card's numbers."
+          },
+          "passed": true
+        },
+        {
+          "id": "forgotten",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Canva quietly took an hour and two minutes, easy to forget given everything else going on, but it was in there.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names Canva with the exact 1h 2m from the slide facts, reads like a warm human observation, and adds the read that this block hid beneath the bigger work rather than just restating the number."
+          },
+          "passed": true
+        },
+        {
+          "id": "latenight",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The last activity landed at 11:29pm, which tells you this one was genuinely hard to close out.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Uses the exact 11:29pm end time and adds a genuine read about the day being hard to close out; warm and human without hype, and the characterization traces to the true long-running day."
+          },
+          "passed": true
+        },
+        {
+          "id": "apps",
+          "kind": "bars",
+          "source": "ai",
+          "caption": true,
+          "line": "YouTube led by a wide margin, with Notion, Claude, and Canva each holding a real slice of the day, research spread across several tools rather than concentrated in one.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names YouTube's clear lead and the trio of Notion/Claude/Canva accurately, and adds a genuine read (tools spread rather than concentrated) beyond the chart rows. Warm, human phrasing fitting the caption bar."
+          },
+          "passed": true
+        },
+        {
+          "id": "focus",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "From midnight to 6:21pm, the research and design planning for SPCS Group ran unbroken for 6h 49m, the longest continuous pull of the day and by far the heaviest single thread. 🔥",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real project, exact times (midnight to 6:21pm), and 6h 49m, all tracing to the slide facts. 'By far the heaviest single thread' is a true read the card number alone doesn't state, and the tone is warm and human without hype."
+          },
+          "passed": true
+        },
+        {
+          "id": "wildcard",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The evening carried 2h 44m of actual building, which is where the 16 commits across Dev SPCS and Dev SPCS rebrand landed after a full day of planning.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the 2h 44m building block, the 16 commits (8+8) across both real shipped projects, and frames it against the day of planning that preceded it. Every value traces to the facts, and it adds a genuine read the card's lone number cannot show."
+          },
+          "passed": true
+        },
+        {
+          "id": "timesink",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "YouTube took 3h 29m and it sits squarely in the entertainment column, so it was the leak, plain and simple, though a modest one relative to how much work surrounded it.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names YouTube, 3h 29m, and the entertainment category correctly, and adds a real read that the leak was modest against 9h+ of work surrounding it. Warm, honest voice with no hype or invented values."
+          },
+          "passed": true
+        },
+        {
+          "id": "split",
+          "kind": "split",
+          "source": "ai",
+          "caption": false,
+          "line": "90% work, 10% leisure. The day did not leave much room on either side.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Uses the exact 90/10 split and adds a genuine read about how little room the day left, going beyond the printed number. Reads human and grounded without hype."
+          },
+          "passed": true
+        },
+        {
+          "id": "question",
+          "kind": "question",
+          "source": "ai",
+          "caption": false,
+          "line": "The research and design planning for SPCS Group ran basically all day, what was the thing you were actually trying to figure out or settle?",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real all-day thread (6h 49m on Research and design planning for SPCS Group) and asks a genuine, context-anchored question about what was being settled; reads like a friend who watched the day, no invented values."
+          },
+          "passed": true
+        },
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "ai",
+          "caption": false,
+          "line": "You started at midnight and were still at it past 11:29pm, with the research and design planning for SPCS Group as the through-line the whole time. By evening the building caught up with the thinking, 16 commits across Dev SPCS and Dev SPCS rebrand, real content, the design system applied, pages wired up. That is a lot of ground covered in a single day, and on a holiday at that.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names real times (midnight to past 11:29pm), the true through-line project, and the 16 commits (8+8) across both correctly humanized shipped project names. The July 4 holiday read and 'building caught up with the thinking' add genuine motion beyond the card; tone is warm and observed without hype."
+          },
+          "passed": true
+        }
+      ],
+      "deckAverage": 9.57,
+      "allSlidesPassed": true,
+      "needsWork": []
+    },
+    {
+      "cadence": "day",
+      "key": "2026-07-02",
+      "slides": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "source": "ai",
+          "caption": false,
+          "line": "Thursday was a rest day with one real anchor: an ML class on Google Meet that held the morning together.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the rest-day framing, the ML meeting on Meet, and the morning anchor — all grounded in the facts. Warm, human phrasing without hype, and 'held the morning together' adds a genuine read beyond the printed totals."
+          },
+          "passed": true
+        },
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Most of the screen time went to YouTube, X, and Netflix, with the ML class as the day's one piece of real work.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real top-leisure apps (YouTube, X, Netflix) and correctly frames the ML meeting as the single piece of work, matching the rest-day lead the slide asks for. Warm, human phrasing that adds a read over the printed 9h 5m rather than restating it."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-morning",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "From 9:59am you were in your Machine Learning Pipeline class on Google Meet, and that ran through to just past noon, the fullest stretch of work the day had.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 9:59am start, the ML Pipeline meeting on Google Meet, and the noon end, all grounded in facts; calling it the fullest work stretch is true per longestStretch. Reads warm and human and adds a genuine read beyond the kicker."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-midday",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "The ML class carried into the afternoon, and once it wrapped, Netflix and X filled the rest of the window to 4:33pm.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the ML class, Netflix, X, and the 4:33pm endpoint, all grounded in the slide facts. Reads like a friend narrating the arc and adds a genuine read of how the window unfolded rather than restating the block."
+          },
+          "passed": true
+        },
+        {
+          "id": "meetings",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Your calendar had the Machine Learning Pipeline class scheduled for 2h, and 1h 56m of actual observed time in Google Meet lined up right behind it.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real ML Pipeline class, the 2h scheduled block, and the 1h 56m observed Meet time, all traceable to facts. Reads like a friend noting how scheduled versus actual lined up, adding a genuine read beyond the card's 2h 21m number."
+          },
+          "passed": true
+        },
+        {
+          "id": "timesink",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "X at 1h 25m is social browsing, not work, and on a day that was mostly downtime anyway, it fits the shape of the day more than it fights it.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names X and its exact 1h 25m from slide facts, and the 'mostly downtime' read traces to wholeDayFacts (6h 29m leisure vs 1h 56m work). Warm, human voice that adds a genuine read about the shape of the day rather than restating the number."
+          },
+          "passed": true
+        },
+        {
+          "id": "apps",
+          "kind": "bars",
+          "source": "ai",
+          "caption": true,
+          "line": "The day was spread across a handful of surfaces, with X and YouTube each taking a solid chunk and Google Meet, Every, and Mobbin each getting a smaller slice alongside a large block of other activity.",
+          "score": {
+            "specificity": 2,
+            "tone": 1,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 7,
+            "reasoning": "Names the real apps (X, YouTube, Google Meet, Every, Mobbin, Other) accurately, but reads as a list-in-a-sentence that mostly walks the chart rows rather than delivering a genuine read. The vague hedging ('handful of surfaces', 'solid chunk', 'smaller slice') feels more like a generated summary than a friend's observation, and it stops short of a real insight."
+          },
+          "passed": true
+        },
+        {
+          "id": "split",
+          "kind": "split",
+          "source": "ai",
+          "caption": false,
+          "line": "77% leisure, 23% work. Thursday was a rest day and the split shows it plainly.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Both percentages trace to slide facts, and 'rest day' matches wholeDayFacts.mostlyRest. Tone is calm and human, and calling it a rest day adds a read beyond the raw split."
+          },
+          "passed": true
+        },
+        {
+          "id": "wildcard",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Almost all the real work, 1h 39m of it, landed in the morning inside the Machine Learning Pipeline class, before anything else took hold.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "The 1h 39m before-noon figure matches the slide fact, the ML Pipeline meeting/class traces to wholeDayFacts, and the morning framing is accurate. Reads like a friend's observation and adds a genuine read about when the real work clustered rather than restating the number."
+          },
+          "passed": true
+        },
+        {
+          "id": "earlystart",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The day opened at 2:27am, which is less a morning and more the tail end of a night.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Uses the exact 2:27am start and adds a genuine read that this is really late-night, not a morning, which matches the wholeDayFacts late-night stretch. Warm, human, and non-robotic."
+          },
+          "passed": true
+        },
+        {
+          "id": "forgotten",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "Google Meet quietly held 30m, which is where the ML class actually lived, easy to overlook but the backbone of the day's work.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 30m Google Meet figure and correctly ties it to the ML Pipeline meeting from the facts; the read that this quiet surface was where the day's only work actually happened adds genuine motion beyond the printed number, in a warm human voice."
+          },
+          "passed": true
+        },
+        {
+          "id": "focus",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The Machine Learning Pipeline class from 9:59am to 12:20pm was the one unbroken run of the day, and nothing cut into it.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real session (Machine Learning Pipeline, characterized as class per meetings data) with exact 9:59am to 12:20pm window; reads human and adds the read that nothing broke it rather than just restating the 1h 56m number on the card."
+          },
+          "passed": true
+        },
+        {
+          "id": "question",
+          "kind": "question",
+          "source": "ai",
+          "caption": false,
+          "line": "Was the ML Pipeline class a course session you follow regularly, or a one-off deep dive you set up yourself?",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Anchors to the real 1h 56m Machine Learning Pipeline meeting and its class classification, asking a genuine open question about whether it's recurring. Warm, curious, human, and traces cleanly to the facts."
+          },
+          "passed": true
+        },
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "ai",
+          "caption": false,
+          "line": "Thursday had a clear shape: one real block of work in the morning, then a long exhale into the rest of the day. The ML class held the morning together, 15 commits shipped to Daylens, and then the afternoon and evening were mostly yours to do with as you liked. A quiet, honest day.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the ML class morning block, 15 commits to Daylens, and the leisure-heavy afternoon/evening — all traceable to facts. Warm, varied, non-hype tone with a genuine read on the day's rest-heavy shape rather than restating the chart."
+          },
+          "passed": true
+        }
+      ],
+      "deckAverage": 10,
       "allSlidesPassed": true,
       "needsWork": [
         {
@@ -375,16 +753,397 @@
           "kind": "bars",
           "source": "ai",
           "caption": true,
-          "line": "The chart is spread across a lot of tools: Google Colab and Google Meet led the named ones, with Canva, Pinterest, YouTube, and Claude each taking a smaller slice.",
+          "line": "The day was spread across a handful of surfaces, with X and YouTube each taking a solid chunk and Google Meet, Every, and Mobbin each getting a smaller slice alongside a large block of other activity.",
           "score": {
             "specificity": 2,
             "tone": 1,
             "accuracy": 3,
             "motion": 1,
             "total": 7,
-            "reasoning": "Names real apps correctly and ranks them accurately (Colab 54m, Meet 49m leading), but the phrasing 'The chart is spread across' is slightly self-referential to the visual and it mostly lists the same rows the chart already shows rather than adding a genuine read about what those tools meant."
+            "reasoning": "Names the real apps (X, YouTube, Google Meet, Every, Mobbin, Other) accurately, but reads as a list-in-a-sentence that mostly walks the chart rows rather than delivering a genuine read. The vague hedging ('handful of surfaces', 'solid chunk', 'smaller slice') feels more like a generated summary than a friend's observation, and it stops short of a real insight."
           },
           "passed": true
+        }
+      ]
+    },
+    {
+      "cadence": "day",
+      "key": "2026-06-12",
+      "slides": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "source": "ai",
+          "caption": false,
+          "line": "Most of what reached the screen this morning was one conversation, talking through Pioneer AI by Fastino Labs.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real work (Pioneer AI by Fastino Labs) and correctly frames the short 23m day as mostly one conversation in the morning window. Warm, human phrasing that reads as a genuine observation rather than restating the raw minutes."
+          },
+          "passed": true
+        },
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The Pioneer AI conversation was the day's real center, with 11 meetings on the calendar filling in the rest.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 9,
+            "reasoning": "Names the real work (Pioneer AI) and the true 11 meeting count from wholeDayFacts, both accurate. Reads human and adds a real read about how the day was structured rather than just restating the 23m number."
+          },
+          "passed": true
+        },
+        {
+          "id": "story-morning",
+          "kind": "text",
+          "source": "ai",
+          "caption": false,
+          "line": "From 9:35am you were into Pioneer AI by Fastino Labs, working through it across Messages, Codex, and PowerPoint until about 10:02am.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real times (9:35 to 10:02), the real work (Pioneer AI by Fastino Labs), and the top apps (Messages, Codex, PowerPoint), all traceable to the facts. Reads like a friend narrating the stretch, and the detail about which apps carried the work adds a read the bare time block cannot."
+          },
+          "passed": true
+        },
+        {
+          "id": "split",
+          "kind": "split",
+          "source": "ai",
+          "caption": false,
+          "line": "Nearly all of what hit the screen was work, 90% of it, with a small slice of X and YouTube making up the rest.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 90% work share and correctly attributes the leisure remainder to X and YouTube, both true topLeisure facts. Reads warm and human, and the leisure detail adds a read beyond the bare split on the card."
+          },
+          "passed": true
+        },
+        {
+          "id": "apps",
+          "kind": "bars",
+          "source": "ai",
+          "caption": true,
+          "line": "The time was fairly spread, Messages leading at 9m, then Codex, PowerPoint, and a handful of others rounding it out.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names Messages at 9m, then Codex and PowerPoint in true order, with real trailing apps as filler; the 'fairly spread' read adds a genuine characterization the chart alone doesn't give. Warm and human without hype or invented values."
+          },
+          "passed": true
+        },
+        {
+          "id": "question",
+          "kind": "question",
+          "source": "ai",
+          "caption": false,
+          "line": "The calendar had 11 things today, including the Master Class Internship Training and a basketball match. How much of it was actually yours to decide on?",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real 11 meetings, the Master Class Internship Training, and the basketball match, all traceable to wholeDayFacts. The question about control over a packed calendar adds a genuine read beyond the facts and reads like an observant friend."
+          },
+          "passed": true
+        },
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "ai",
+          "caption": false,
+          "line": "Only 23 minutes reached this screen on Friday, but the calendar tells a fuller story: 11 events, a training class, a long strategy meeting, a basketball match. The Pioneer AI work sat right at the start of the morning, tidy and focused. The day clearly lived mostly somewhere other than this screen, and that is just what it was.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Every value traces to facts: 23m, Friday, 11 events, the class, strategy meeting, basketball match, and Pioneer AI at the morning's start (9:35am). Tone is honest and human about a partial day, and the closing read that the day lived off-screen adds genuine motion beyond the raw numbers."
+          },
+          "passed": true
+        }
+      ],
+      "deckAverage": 9.83,
+      "allSlidesPassed": true,
+      "needsWork": []
+    },
+    {
+      "cadence": "day",
+      "key": "2026-05-23",
+      "slides": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "source": "ai",
+          "caption": false,
+          "line": "Saturday was a rest day, screen time short and mostly social browsing.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the rest-day framing and the social-browsing read (X led at 57m), which is accurate and grounded. Tone is calm and human, not hype. Motion is modest since 'screen time short' largely restates the 2h 34m total, though 'mostly social browsing' adds a light read."
+          },
+          "passed": true
+        },
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The screen came on around mid-morning and was done by mid-afternoon.",
+          "score": {
+            "specificity": 1,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 7,
+            "reasoning": "Vague on times ('mid-morning'/'mid-afternoon' instead of the real 10:54am to 2:46pm) and never names the 2h 34m or the rest-day read, so it stays generic. Tone is warm and human, and nothing is invented, but it adds little beyond the card's printed window."
+          },
+          "passed": true
+        },
+        {
+          "id": "timesink",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "X was the day's main screen presence, which tracks for a Saturday with no work in the mix.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 9,
+            "reasoning": "Names X as the top pool and correctly reads it as fitting a work-free Saturday (work: 0m in facts); the qualitative read adds meaning beyond the printed 57m. Slightly less specific for not anchoring the minutes, but the honest read carries it."
+          },
+          "passed": true
+        },
+        {
+          "id": "apps",
+          "kind": "bars",
+          "source": "ai",
+          "caption": true,
+          "line": "The time spread between X, YouTube, and Fast, with nothing concentrated on any single task.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the three real leisure apps (X, YouTube, Fast) accurately and reads naturally like a friend. The 'nothing concentrated' read adds a modest interpretation over the chart, but is somewhat undercut since X (57m) actually dominated the tracked apps, making the spread claim a bit soft."
+          },
+          "passed": true
+        },
+        {
+          "id": "question",
+          "kind": "question",
+          "source": "ai",
+          "caption": false,
+          "line": "Your calendar had a writing block and an AI and ML learning block scheduled, but none of that reached the screen. Was Saturday just a planned day off?",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names two real scheduled blocks (Writing, AI and ML learning) from meetings and correctly notes zero work happened, contrasting plan against a restful Saturday. The question adds a genuine read and reads like a thoughtful friend."
+          },
+          "passed": true
+        },
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "ai",
+          "caption": false,
+          "line": "Saturday barely touched the screen and that is the whole story. You came on around mid-morning, spent most of it on X and YouTube, and were done by mid-afternoon. Your calendar had a full slate, including a run, fitness, writing, and a learning block, none of which showed up here. A quiet day, honestly, and there is nothing complicated about it.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names real facts: mid-morning start (10:54am), X and YouTube as top leisure, done by mid-afternoon (2:46pm), and the scheduled but untracked calendar items (run, fitness, writing, learning block). Warm, plainspoken tone that reads like a friend, and it adds the true read that the planned slate never materialized, which the numbers alone don't show."
+          },
+          "passed": true
+        }
+      ],
+      "deckAverage": 8.8,
+      "allSlidesPassed": true,
+      "needsWork": [
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The screen came on around mid-morning and was done by mid-afternoon.",
+          "score": {
+            "specificity": 1,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 7,
+            "reasoning": "Vague on times ('mid-morning'/'mid-afternoon' instead of the real 10:54am to 2:46pm) and never names the 2h 34m or the rest-day read, so it stays generic. Tone is warm and human, and nothing is invented, but it adds little beyond the card's printed window."
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "cadence": "day",
+      "key": "2026-05-10",
+      "slides": [
+        {
+          "id": "opening",
+          "kind": "opening",
+          "source": "ai",
+          "caption": false,
+          "line": "Sunday stayed offline from work completely, and the screen time that showed up was mostly YouTube and X.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the true no-work rest day and the two real leisure apps (YouTube, X), all grounded in facts. Tone is calm and human. Motion is modest since it mostly restates the slide's rest-day fact and the top apps without adding a deeper read."
+          },
+          "passed": true
+        },
+        {
+          "id": "headline",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "YouTube and X carried the afternoon and evening, with nothing work-related reaching the screen.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names the real leisure apps (YouTube, X) and correctly frames this as a rest day with no work, drawing on wholeDayFacts (work 0m, afternoon/evening spent on those apps). Reads like a thoughtful observer and adds a read the bare 5h 22m number can't show."
+          },
+          "passed": true
+        },
+        {
+          "id": "latenight",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "The screen was still on at 11:55pm, a long, unhurried Sunday that never quite closed.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Uses the exact 11:55pm end time and correctly names the day as Sunday; 'long, unhurried' is a fair read of a 5h 22m mostly-rest day. Warm, human phrasing that adds a read the card's number alone doesn't convey."
+          },
+          "passed": true
+        },
+        {
+          "id": "timesink",
+          "kind": "stat",
+          "source": "ai",
+          "caption": false,
+          "line": "YouTube was the leisure it looks like, an hour and a half of watching on a day with no work on the screen at all.",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names YouTube and the accurate ~1h 28m as 'an hour and a half,' and the 'no work on the screen at all' traces to work 0m in wholeDayFacts. Reads like a friend's honest observation, no hype, and adds the read that this was purely a rest day."
+          },
+          "passed": true
+        },
+        {
+          "id": "apps",
+          "kind": "bars",
+          "source": "ai",
+          "caption": true,
+          "line": "The day split mainly between YouTube and X, with a solid stretch of other activity rounding it out.",
+          "score": {
+            "specificity": 2,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 1,
+            "total": 8,
+            "reasoning": "Names the two real leisure apps and gestures at the large 'Other' block, all accurate to slide facts; tone is easy and human. Loses some motion because it largely mirrors the chart without adding a sharper read, and 'solid stretch of other activity' is vague since Other was actually the biggest chunk."
+          },
+          "passed": true
+        },
+        {
+          "id": "question",
+          "kind": "question",
+          "source": "ai",
+          "caption": false,
+          "line": "Your calendar had an AI and ML learning block and a writing block scheduled, neither of which showed up on screen. What ended up filling that time?",
+          "score": {
+            "specificity": 3,
+            "tone": 2,
+            "accuracy": 3,
+            "motion": 2,
+            "total": 10,
+            "reasoning": "Names two real scheduled blocks from the facts (AI and ML learning, writing) and correctly notes work time was 0m, then asks a genuine, grounded question about what filled the time. Warm and curious without hype."
+          },
+          "passed": true
+        },
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "fallback",
+          "caption": false,
+          "line": "A day mostly off the clock. Rest counts too. That is the whole story, and it is enough.",
+          "score": {
+            "specificity": 0,
+            "tone": 1,
+            "accuracy": 3,
+            "motion": 0,
+            "total": 4,
+            "reasoning": "Accurate that it was a rest day with no work, but names zero specifics — no times, no YouTube/X, no 2h 44m leisure, none of the day's real texture. Reads as generic filler that could apply to any rest day, and adds no read the slide facts don't already imply."
+          },
+          "passed": false
+        }
+      ],
+      "deckAverage": 8.67,
+      "allSlidesPassed": false,
+      "needsWork": [
+        {
+          "id": "reflection",
+          "kind": "reflection",
+          "source": "fallback",
+          "caption": false,
+          "line": "A day mostly off the clock. Rest counts too. That is the whole story, and it is enough.",
+          "score": {
+            "specificity": 0,
+            "tone": 1,
+            "accuracy": 3,
+            "motion": 0,
+            "total": 4,
+            "reasoning": "Accurate that it was a rest day with no work, but names zero specifics — no times, no YouTube/X, no 2h 44m leisure, none of the day's real texture. Reads as generic filler that could apply to any rest day, and adds no read the slide facts don't already imply."
+          },
+          "passed": false
         }
       ]
     }

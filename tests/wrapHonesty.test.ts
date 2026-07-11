@@ -39,8 +39,25 @@ test('overclaim guard kills speculation words', () => {
 test('overclaim guard passes honest observed phrasing', () => {
   assert.equal(findOverclaimViolation('Your calendar had the design review at midday.'), null)
   assert.equal(findOverclaimViolation('Cursor was in front for 2h 14m this morning.'), null)
-  assert.equal(findOverclaimViolation('Daylens did not see the morning, so the story starts at 12:08pm.'), null)
+  assert.equal(findOverclaimViolation('The morning never reached this screen, so the story starts at 12:08pm.'), null)
   assert.equal(findOverclaimViolation('The 1:1 sat on the calendar and the afternoon built around it.'), null)
+})
+
+// The product never narrates in its own name (voice.md §2.8) — the exact
+// failure the 2026-07-11 paid benchmark caught on thin days, where the old
+// honesty directive induced "Daylens only saw ..." and the judge capped tone.
+
+test('overclaim guard kills the product speaking as the narrator', () => {
+  assert.ok(findOverclaimViolation('Daylens only saw 23 minutes of screen activity today.'))
+  assert.ok(findOverclaimViolation('That was the whole of what Daylens saw today.'))
+  assert.ok(findOverclaimViolation("Daylens didn't see the afternoon at all."))
+  assert.ok(findOverclaimViolation('Daylens tracked a short window this morning.'))
+})
+
+test('Daylens as the thing worked on stays legal', () => {
+  assert.equal(findOverclaimViolation('The evening went entirely to Daylens, one long unbroken run.'), null)
+  assert.equal(findOverclaimViolation('Nine commits to Daylens by the end of the night.'), null)
+  assert.equal(findOverclaimViolation('The Daylens work carried the whole afternoon.'), null)
 })
 
 // ─── Raw-artifact leak guard ──────────────────────────────────────────────────
@@ -78,6 +95,30 @@ test('wrapLineViolation rejects attendance and leak lines with writer-facing rea
 
 test('wrapLineViolation passes an honest calendar-anchored line', () => {
   assert.equal(wrapLineViolation('Your calendar held the design review, and the code got the rest of the morning from 9am.', ctx), null)
+})
+
+// ─── Time-of-day words (founder decision 2026-07-10) ─────────────────────────
+// No time word is banned and none is forced; the only rule is accuracy. "noon"
+// and "midnight" are precise clock claims (12pm / 12am) and must ground in the
+// slide's own facts like any clock time; "midday" / "morning" / "the evening"
+// are part-of-day words and free prose.
+
+test('noon and midnight are clock claims that must ground in the slide facts', () => {
+  assert.ok(wrapLineViolation('You were still at it at midnight.', ctx))
+  assert.ok(wrapLineViolation('The close tied out by noon.', ctx))
+  assert.equal(
+    wrapLineViolation('The close tied out by noon.', { ...ctx, allowedTimes: new Set(['12pm']) }),
+    null,
+  )
+  assert.equal(
+    wrapLineViolation('You were still at it at midnight.', { ...ctx, allowedTimes: new Set(['12am']) }),
+    null,
+  )
+})
+
+test('midday and other part-of-day words are free prose, never clock tokens', () => {
+  assert.equal(wrapLineViolation('The 1:1 sat on the calendar at midday and the afternoon built around it.', ctx), null)
+  assert.equal(wrapLineViolation('The morning carried the close and the evening stayed quiet.', ctx), null)
 })
 
 // ─── Coverage slide ───────────────────────────────────────────────────────────

@@ -51,7 +51,7 @@ export const HOMEWORK_GUILT_PATTERNS = [
 export const EVIDENCE_HONESTY_DIRECTIVES = [
   'SAY ONLY WHAT WAS OBSERVED. Every fact you receive is what Daylens saw on this one computer: which app, window, site, or meeting surface was frontmost, for how long, plus any connected signals (git, calendar). Time in an app is evidence the app was open and in front, and with real dwell it is fair to narrate the person doing that work; it is NOT proof they finished, read, watched, or absorbed anything. Never claim an outcome, a completed read, or a finished piece of work unless the facts state it (a git commit, a recorded note).',
   'CALENDAR IS A SCHEDULE, NOT A RECORD OF ATTENDANCE. A calendar event means the calendar HELD that event; write "your calendar had the design review", "the 1:1 sat on the calendar at midday", never "you attended", "you sat in", "you sat through", or "you went to" a meeting on calendar evidence alone. Time observed in a meeting app is the only ground for saying the person was IN a call.',
-  'UNTRACKED TIME IS UNKNOWN, NOT EMPTY. Time Daylens did not observe is simply not in the story: never call it idle, rest, a break, off task, or a gap in the person\'s effort, and never guess what filled it. If it matters, say plainly that Daylens did not see that part of the day.',
+  'UNTRACKED TIME IS UNKNOWN, NOT EMPTY. Time that was not observed is simply not in the story: never call it idle, rest, a break, off task, or a gap in the person\'s effort, and never guess what filled it. If it matters, anchor the honesty to the SCREEN, plainly ("most of the day happened away from this screen", "only 23 minutes reached the screen"), and NEVER name the product as the narrator: a line never says "Daylens saw", "Daylens only saw", or "Daylens didn\'t see" — the app never speaks its own name (voice.md §2.8). Naming Daylens as the thing WORKED ON (a project, commits to it) is of course fine.',
   'NEVER SPECULATE. No "probably", "must have", "likely", "no doubt", "surely". If the facts do not say it, the wrap does not say it.',
 ] as const
 
@@ -62,6 +62,10 @@ export const OVERCLAIM_PATTERNS: ReadonlyArray<{ re: RegExp; reason: string }> =
   { re: /\bidle\b/i, reason: 'characterizes untracked or quiet time as "idle"; unobserved time is unknown, never idle' },
   { re: /\boff[- ]task\b/i, reason: 'grades time as "off task"' },
   { re: /\byou (?:attended|sat (?:in|through)|went to|showed up (?:to|at|for))\b/i, reason: 'claims attendance the tracked data cannot prove; calendar evidence only supports "your calendar had ..."' },
+  // The product never speaks its own name as the narrator (voice.md §2.8).
+  // "Daylens" as the thing worked on ("9 commits to Daylens") stays legal; it is
+  // the observer voice ("Daylens saw / only saw / didn't see") that dies.
+  { re: /\bDaylens(?:'s)?\s+(?:only\s+|never\s+|barely\s+)?(?:saw|sees|watch(?:ed|es)?|track(?:ed|s)?|observ(?:ed|es)|record(?:ed|s)?|caught|miss(?:ed|es)?|notic(?:ed|es)?|did\s*not\s+\w+|didn'?t\s+\w+|can(?:no|')t\s+see|couldn'?t\s+see)\b/i, reason: 'names the product as the narrator ("Daylens saw ..."); the recap never speaks its own name — anchor the honesty to the screen instead ("away from this screen", "reached the screen")' },
 ]
 
 /** The first overclaim in the text, or null. One rule, used by the runtime
@@ -142,14 +146,17 @@ export function guardContextPercents(slides: WrapSlideSpec[]): Set<number> {
 
 // ─── Clock-time grounding ─────────────────────────────────────────────────────
 
-const CLOCK_TOKEN_REGEX = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\bmidnight\b|\bnoon\b|\bmidday\b/gi
+// "noon" and "midnight" are precise clock claims (12pm / 12am) and must ground
+// like any other clock time. "midday" is a part-of-day word like "morning" or
+// "the evening" — free prose, never a clock token.
+const CLOCK_TOKEN_REGEX = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\bmidnight\b|\bnoon\b/gi
 
 /** Normalize one clock mention to a comparable token: "12:00 PM" → "12pm",
  *  "midnight" → "12am", "8:22pm" → "8:22pm". */
 function normalizeClockToken(match: RegExpMatchArray): string {
   const whole = match[0].toLowerCase()
   if (whole === 'midnight') return '12am'
-  if (whole === 'noon' || whole === 'midday') return '12pm'
+  if (whole === 'noon') return '12pm'
   const hour = match[1]
   const minutes = match[2] && match[2] !== '00' ? `:${match[2]}` : ''
   const meridiem = match[3].toLowerCase()
