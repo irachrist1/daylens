@@ -86,6 +86,10 @@ export function useAIChat() {
   const [threads, setThreads] = useState<AIThreadSummary[]>([])
   const [activeThreadId, setActiveThreadId] = useState<number | null>(null)
   const [isNewChatDraft, setIsNewChatDraft] = useState(rememberedThreadId === null)
+  // Opening a conversation loads only its newest page of messages; these track
+  // whether older ones exist and whether an earlier page is in flight.
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
   const [actionFeedback, setActionFeedback] = useState<Record<string, ActionFeedbackEntry>>({})
   const [messageActionState, setMessageActionState] = useState<Record<string, MessageActionStateEntry>>({})
   const [actionWidgetState, setActionWidgetState] = useState<Record<string, ActionWidgetStateEntry>>({})
@@ -256,10 +260,12 @@ export function useAIChat() {
     rememberedThreadId = threadId
     latestRequestedThreadRef.current = threadId
     setThreadLoading(true)
+    setHasEarlierMessages(false)
     try {
       const detail = await ipc.ai.getThread(threadId)
       if (latestRequestedThreadRef.current !== threadId) return
       setMessages(threadMessagesFromHistory(detail.messages))
+      setHasEarlierMessages(detail.hasEarlier)
     } catch (error) {
       // Surface the failure as an inline error rather than silently keeping a
       // mismatched view (R4 — no raw IPC text).
@@ -270,6 +276,48 @@ export function useAIChat() {
       if (latestRequestedThreadRef.current === threadId) setThreadLoading(false)
     }
   }, [])
+
+  // Page in the next-older slice of the active thread's history. The cursor is
+  // the oldest already-loaded persisted message; the fetched page is prepended.
+  const loadEarlierMessages = useCallback(async () => {
+    const threadId = activeThreadId
+    if (threadId == null || loadingEarlier || threadLoading || !hasEarlierMessages) return
+    const oldest = messages.find((message) => typeof message.id === 'number')
+    if (!oldest || typeof oldest.id !== 'number') return
+    setLoadingEarlier(true)
+    try {
+      const detail = await ipc.ai.getThread(threadId, {
+        before: { createdAt: oldest.createdAt, id: oldest.id },
+      })
+      if (latestRequestedThreadRef.current !== threadId) return
+      setMessages((current) => [...threadMessagesFromHistory(detail.messages), ...current])
+      setHasEarlierMessages(detail.hasEarlier)
+    } catch (error) {
+      console.error('[ai] failed to load earlier messages', error)
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }, [activeThreadId, loadingEarlier, threadLoading, hasEarlierMessages, messages])
+
+  // Rename a conversation, optimistically: the sidebar/header update at once,
+  // and the previous title quietly comes back if the save fails (same contract
+  // as archive/rate — no blocking spinner, no modal).
+  const renameThread = useCallback(async (threadId: number, title: string) => {
+    const nextTitle = title.trim()
+    const previous = threads.find((thread) => thread.id === threadId)
+    if (!previous || !nextTitle || nextTitle === previous.title) return
+    setThreads((current) => current.map((thread) => (
+      thread.id === threadId ? { ...thread, title: nextTitle } : thread
+    )))
+    try {
+      await ipc.ai.renameThread(threadId, nextTitle)
+    } catch (error) {
+      console.error('[ai] failed to rename thread', error)
+      setThreads((current) => current.map((thread) => (
+        thread.id === threadId ? { ...thread, title: previous.title } : thread
+      )))
+    }
+  }, [threads])
 
   // Hydrate the thread list once and adopt the most recent thread — unless the
   // tab was opened via a deep link (/ai?threadId=…), in which case the deep-link
@@ -696,6 +744,7 @@ export function useAIChat() {
 
   const resetComposerState = useCallback(() => {
     setMessages([])
+    setHasEarlierMessages(false)
     clearFeedback()
   }, [clearFeedback])
 
@@ -816,6 +865,8 @@ export function useAIChat() {
     messages,
     loading,
     threadLoading,
+    hasEarlierMessages,
+    loadingEarlier,
     threadsHydrated,
     threads,
     activeThreadId,
@@ -852,6 +903,8 @@ export function useAIChat() {
     selectThread,
     deleteThread,
     archiveThread,
+    renameThread,
+    loadEarlierMessages,
     triggerActionFeedback,
     handlePromptChipClick,
     switchProviderAndRetry,

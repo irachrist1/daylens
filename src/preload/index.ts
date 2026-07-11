@@ -13,14 +13,13 @@ import type {
   AIMessageFeedbackUpdate,
   AIChatTurnResult,
   AIStarterSuggestionResult,
-  AIDailyReportPreparationResult,
   AIWrappedNarrative,
   AISurfaceSummary,
   AIThreadMessage,
   AIThreadSettings,
+  AIThreadDetail,
+  AIThreadPageRequest,
   AIThreadSummary,
-  AIArtifactRecord,
-  AIArtifactContent,
   AIDaySummaryResult,
   AIProvider,
   AppActivityDigest,
@@ -239,8 +238,6 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WEEK_REVIEW, { weekStart, force }),
     getAppNarrative: (canonicalAppId: string, daysOrDate?: number | string, force?: boolean): Promise<AISurfaceSummary | null> =>
       ipcRenderer.invoke(IPC.AI.GET_APP_NARRATIVE, { canonicalAppId, daysOrDate, force }),
-    prepareDailyReport: (date?: string): Promise<AIDailyReportPreparationResult> =>
-      ipcRenderer.invoke(IPC.AI.PREPARE_DAILY_REPORT, { date }),
     getWrappedNarrative: (date: string, force?: boolean): Promise<AIWrappedNarrative | null> =>
       ipcRenderer.invoke(IPC.AI.GET_WRAPPED_NARRATIVE, { date, force }),
     getWrappedPeriodWrap: (period: WrappedPeriod, anchorDate: string, force?: boolean): Promise<{ facts: WrappedPeriodFacts; narrative: WrappedPeriodNarrative } | null> =>
@@ -251,18 +248,13 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_WRAP_PREFLIGHT, { date }),
     askWrapped: (payload: WrappedAskRequest): Promise<WrappedAskResult> =>
       ipcRenderer.invoke(IPC.AI.ASK_WRAPPED, payload),
-    getHistory: (payload?: { threadId?: number | null }): Promise<AIThreadMessage[]> =>
-      ipcRenderer.invoke(IPC.AI.GET_HISTORY, payload),
-    clearHistory: () => ipcRenderer.invoke(IPC.AI.CLEAR_HISTORY),
     regenerateBlockLabel: (blockId: string): Promise<WorkContextInsight> =>
       ipcRenderer.invoke(IPC.AI.REGENERATE_BLOCK_LABEL, blockId),
     detectCliTools: () => ipcRenderer.invoke(IPC.AI.DETECT_CLI_TOOLS),
     listThreads: (payload?: { includeArchived?: boolean }): Promise<AIThreadSummary[]> =>
       ipcRenderer.invoke(IPC.AI.LIST_THREADS, payload),
-    getThread: (threadId: number): Promise<{ thread: AIThreadSummary | null; messages: AIThreadMessage[] }> =>
-      ipcRenderer.invoke(IPC.AI.GET_THREAD, { threadId }),
-    createThread: (title?: string | null): Promise<AIThreadSummary> =>
-      ipcRenderer.invoke(IPC.AI.CREATE_THREAD, { title }),
+    getThread: (threadId: number, options?: Omit<AIThreadPageRequest, 'threadId'>): Promise<AIThreadDetail> =>
+      ipcRenderer.invoke(IPC.AI.GET_THREAD, { threadId, ...options }),
     archiveThread: (threadId: number, archived: boolean): Promise<void> =>
       ipcRenderer.invoke(IPC.AI.ARCHIVE_THREAD, { threadId, archived }),
     renameThread: (threadId: number, title: string): Promise<void> =>
@@ -273,14 +265,8 @@ const api = {
       ipcRenderer.invoke(IPC.AI.GET_THREAD_SETTINGS, { threadId }),
     setThreadSettings: (threadId: number, settings: AIThreadSettings): Promise<AIThreadSettings> =>
       ipcRenderer.invoke(IPC.AI.SET_THREAD_SETTINGS, { threadId, settings }),
-    listArtifacts: (threadId: number): Promise<AIArtifactRecord[]> =>
-      ipcRenderer.invoke(IPC.AI.LIST_ARTIFACTS, { threadId }),
-    getArtifact: (artifactId: number): Promise<AIArtifactContent | null> =>
-      ipcRenderer.invoke(IPC.AI.GET_ARTIFACT, { artifactId }),
     openArtifact: (artifactId: number): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.AI.OPEN_ARTIFACT, { artifactId }),
-    exportArtifact: (artifactId: number): Promise<{ ok: boolean; path?: string; error?: string; canceled?: boolean }> =>
-      ipcRenderer.invoke(IPC.AI.EXPORT_ARTIFACT, { artifactId }),
   },
   search: {
     all: (query: string, opts?: SearchOptions): Promise<DaylensSearchResult[]> =>

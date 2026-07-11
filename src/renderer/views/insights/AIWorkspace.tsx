@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Copy, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
+import { Copy, Pencil, RefreshCw, SlidersHorizontal, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react'
 import { ANALYTICS_EVENT } from '@shared/analytics'
 import type { AIProviderMode, AIStarterSuggestion, AIThreadSettings } from '@shared/types'
 import { track } from '../../lib/analytics'
@@ -43,6 +43,8 @@ export default function AIWorkspace() {
     messages,
     loading,
     threadLoading,
+    hasEarlierMessages,
+    loadingEarlier,
     threadsHydrated,
     threads,
     activeThreadId,
@@ -75,6 +77,8 @@ export default function AIWorkspace() {
     selectThread,
     deleteThread,
     archiveThread,
+    renameThread,
+    loadEarlierMessages,
     switchProviderAndRetry,
     alternateProviders,
     transformAnswer,
@@ -162,9 +166,37 @@ export default function AIWorkspace() {
     bottomRef.current?.scrollIntoView({ behavior: 'auto' })
   }, [])
 
+  // Prepending an earlier page must not yank the view to the bottom; the flag
+  // swallows exactly the messages-change that the prepend causes.
+  const suppressAutoScrollRef = useRef(false)
   useEffect(() => {
+    if (suppressAutoScrollRef.current) {
+      suppressAutoScrollRef.current = false
+      return
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
+
+  const onLoadEarlier = useCallback(() => {
+    suppressAutoScrollRef.current = true
+    void loadEarlierMessages()
+  }, [loadEarlierMessages])
+
+  // U5: rename the active conversation from the header — click the title, type,
+  // Enter/blur saves, Escape cancels. Same inline-title pattern as the timeline
+  // block editor; the save itself is optimistic with a quiet rollback.
+  const [titleDraft, setTitleDraft] = useState<string | null>(null)
+  const startHeaderRename = useCallback(() => {
+    if (activeThreadId == null) return
+    const current = threads.find((thread) => thread.id === activeThreadId)
+    setTitleDraft(current?.title ?? '')
+  }, [activeThreadId, threads])
+  const commitHeaderRename = useCallback(() => {
+    if (titleDraft != null && activeThreadId != null) void renameThread(activeThreadId, titleDraft)
+    setTitleDraft(null)
+  }, [titleDraft, activeThreadId, renameThread])
+  // Switching conversations abandons any unsaved title edit.
+  useEffect(() => { setTitleDraft(null) }, [activeThreadId])
 
   const onNewChat = useCallback(() => {
     handleNewChat()
@@ -260,10 +292,11 @@ export default function AIWorkspace() {
       list.push({ id: 'chat-copy-all', group: 'chat', label: 'Copy chat', hint: 'Copy the whole conversation', icon: small(<Copy size={15} strokeWidth={1.8} />), perform: () => copyChat() })
     }
     if (activeThreadId != null) {
+      list.push({ id: 'chat-rename', group: 'chat', label: 'Rename chat…', icon: small(<Pencil size={15} strokeWidth={1.8} />), perform: startHeaderRename })
       list.push({ id: 'chat-settings', group: 'chat', label: 'Chat settings…', icon: small(<SlidersHorizontal size={15} strokeWidth={1.8} />), perform: () => setSettingsOpen(true) })
     }
     setCommandSurfaceActions(list)
-  }, [hasApiKey, latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, transformAnswer, onNewChat, copyChat, activeThreadId, messages.length])
+  }, [hasApiKey, latestAssistant, alternateProviders, accel, handleCopy, handleRetry, handleRate, switchProviderAndRetry, transformAnswer, onNewChat, copyChat, activeThreadId, messages.length, startHeaderRename])
 
   // Drop our actions when the AI view unmounts so the palette doesn't show stale
   // chat actions from another tab.
@@ -407,6 +440,7 @@ export default function AIWorkspace() {
             onSelect={onSelectThread}
             onDelete={deleteThread}
             onArchive={archiveThread}
+            onRename={(thread, title) => { void renameThread(thread.id, title) }}
           />
         </div>
       )}
@@ -427,9 +461,33 @@ export default function AIWorkspace() {
           </button>
         )}
         <div style={{ minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
-          <div style={{ fontSize: 13, fontWeight: 680, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activeThreadLabel ?? 'New chat'}
-          </div>
+          {titleDraft != null && activeThreadId != null ? (
+            <input
+              type="text"
+              value={titleDraft}
+              autoFocus
+              aria-label="Conversation title"
+              onFocus={(event) => event.target.select()}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') commitHeaderRename()
+                else if (event.key === 'Escape') setTitleDraft(null)
+              }}
+              onBlur={commitHeaderRename}
+              style={{ display: 'block', width: 'min(340px, 100%)', fontSize: 13, fontWeight: 680, color: 'var(--color-text-primary)', border: 'none', borderBottom: '1.5px solid var(--color-border-ghost)', background: 'transparent', outline: 'none', padding: '0 0 1px' }}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={startHeaderRename}
+              disabled={activeThreadId == null}
+              title={activeThreadId != null ? 'Rename this conversation' : undefined}
+              aria-label={activeThreadId != null ? 'Rename this conversation' : undefined}
+              style={{ display: 'block', maxWidth: '100%', padding: 0, border: 'none', background: 'transparent', textAlign: 'left', fontSize: 13, fontWeight: 680, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: activeThreadId != null ? 'text' : 'default' }}
+            >
+              {activeThreadLabel ?? 'New chat'}
+            </button>
+          )}
           {hasApiKey && (
             <button
               type="button"
@@ -517,6 +575,9 @@ export default function AIWorkspace() {
                 onDismissActionWidget={dismissActionWidget}
                 onFollowUpClick={onFollowUpClick}
                 scrollToBottom={scrollToBottom}
+                hasEarlier={hasEarlierMessages}
+                loadingEarlier={loadingEarlier}
+                onLoadEarlier={onLoadEarlier}
               />
               <div ref={bottomRef} />
             </>

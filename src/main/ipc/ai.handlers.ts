@@ -1,17 +1,13 @@
 import { ipcMain } from 'electron'
-import { updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
+import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
 import {
-  clearAIHistory,
   detectCLITools,
   getAppNarrative,
   generateDaySummary,
-  prepareDailyReport,
   generateWorkBlockInsight,
-  getAIHistory,
   getStarterSuggestions,
-  getThreadHistory,
   getWeekReview,
   sendMessage,
   suggestAppCategory,
@@ -30,19 +26,19 @@ import { materializeTimelineDayProjection } from '../core/query/projections'
 import { localDateString } from '../lib/localDate'
 import {
   archiveThread,
-  createThread,
   deleteThread,
-  exportArtifact,
   getThread,
   getThreadSettings,
-  listArtifactsByThread,
   listThreadsLite,
   openArtifact,
-  readArtifactPreview,
   renameThread,
   setThreadSettings,
 } from '../services/artifacts'
-import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedAskRequest, type WrappedPeriod } from '@shared/types'
+import { IPC, type AIActionCommitResult, type AIActionUndo, type AIActionWidget, type AIChatSendRequest, type AIStarterSuggestionResult, type AIThreadDetail, type AIThreadPageRequest, type AIThreadSettings, type AIThreadSummary, type WorkContextBlock, type WrappedAskRequest, type WrappedPeriod } from '@shared/types'
+
+// Opening a conversation loads only this many of its newest messages; the
+// renderer pages older ones in with "Load earlier messages".
+const DEFAULT_THREAD_PAGE_SIZE = 60
 
 function toThreadSummary(row: ReturnType<typeof listThreadsLite>[number]): AIThreadSummary {
   return {
@@ -116,10 +112,6 @@ export function registerAIHandlers(): void {
     )
   })
 
-  ipcMain.handle(IPC.AI.PREPARE_DAILY_REPORT, async (_e, payload?: { date?: string | null }) => {
-    return prepareDailyReport(payload?.date ?? undefined)
-  })
-
   ipcMain.handle(IPC.AI.GET_WRAPPED_NARRATIVE, async (_e, payload: { date: string; force?: boolean }) => {
     const today = (() => {
       const d = new Date()
@@ -149,14 +141,6 @@ export function registerAIHandlers(): void {
   // short user-triggered call; no thread is created and nothing is persisted.
   ipcMain.handle(IPC.AI.ASK_WRAPPED, async (_e, payload: WrappedAskRequest) => {
     return askWrappedQuestion(payload)
-  })
-
-  ipcMain.handle(IPC.AI.GET_HISTORY, (_e, payload?: { threadId?: number | null }) => {
-    return getAIHistory(payload?.threadId ?? null)
-  })
-
-  ipcMain.handle(IPC.AI.CLEAR_HISTORY, () => {
-    clearAIHistory()
   })
 
   ipcMain.handle(IPC.AI.GENERATE_BLOCK_INSIGHT, async (_e, block: WorkContextBlock) => {
@@ -214,15 +198,14 @@ export function registerAIHandlers(): void {
     return listThreadsLite({ includeArchived: payload?.includeArchived ?? false }).map(toThreadSummary)
   })
 
-  ipcMain.handle(IPC.AI.GET_THREAD, (_e, payload: { threadId: number }): { thread: AIThreadSummary | null; messages: ReturnType<typeof getThreadHistory> } => {
+  ipcMain.handle(IPC.AI.GET_THREAD, (_e, payload: AIThreadPageRequest): AIThreadDetail => {
     const row = getThread(payload.threadId)
-    const thread = row ? toThreadSummary(row) : null
-    const messages = row ? getThreadHistory(payload.threadId) : []
-    return { thread, messages }
-  })
-
-  ipcMain.handle(IPC.AI.CREATE_THREAD, (_e, payload?: { title?: string | null }): AIThreadSummary => {
-    return toThreadSummary(createThread(payload?.title ?? null))
+    if (!row) return { thread: null, messages: [], hasEarlier: false }
+    const page = getThreadMessagesPage(getDb(), payload.threadId, {
+      limit: payload.limit ?? DEFAULT_THREAD_PAGE_SIZE,
+      before: payload.before ?? null,
+    })
+    return { thread: toThreadSummary(row), messages: page.messages, hasEarlier: page.hasEarlier }
   })
 
   ipcMain.handle(IPC.AI.ARCHIVE_THREAD, (_e, payload: { threadId: number; archived: boolean }) => {
@@ -247,21 +230,7 @@ export function registerAIHandlers(): void {
   })
 
   // ─── Artifacts ────────────────────────────────────────────────────────────
-  ipcMain.handle(IPC.AI.LIST_ARTIFACTS, (_e, payload: { threadId: number }) => {
-    return listArtifactsByThread(payload.threadId)
-  })
-
-  ipcMain.handle(IPC.AI.GET_ARTIFACT, async (_e, payload: { artifactId: number }) => {
-    // Preview-only read: caps content to the first N KB so a large artifact is
-    // not cloned in full over IPC. Open/export read the complete artifact.
-    return readArtifactPreview(payload.artifactId)
-  })
-
   ipcMain.handle(IPC.AI.OPEN_ARTIFACT, async (_e, payload: { artifactId: number }) => {
     return openArtifact(payload.artifactId)
-  })
-
-  ipcMain.handle(IPC.AI.EXPORT_ARTIFACT, async (_e, payload: { artifactId: number }) => {
-    return exportArtifact(payload.artifactId)
   })
 }

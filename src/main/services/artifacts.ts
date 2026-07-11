@@ -9,7 +9,7 @@
 // assistant messages keeps working; this layer gives us durable rows that
 // survive message deletion and can be listed per thread.
 
-import { app, dialog, shell } from 'electron'
+import { app, shell } from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -206,60 +206,6 @@ async function readArtifactContent(id: number): Promise<AIArtifactContent | null
   return { record, content: row?.content ?? null }
 }
 
-// Preview reader for the renderer. Reads only the first maxBytes so a very
-// large artifact (multi-MB report / file blob) is not structured-cloned in full
-// across IPC just to render a preview pane (F58). Open/export still use
-// readArtifactContent for the complete content.
-const ARTIFACT_PREVIEW_MAX_BYTES = 256 * 1024
-
-export async function readArtifactPreview(
-  id: number,
-  maxBytes = ARTIFACT_PREVIEW_MAX_BYTES,
-): Promise<AIArtifactContent | null> {
-  const record = getArtifact(id)
-  if (!record) return null
-
-  if (record.filePath) {
-    try {
-      const handle = await fs.open(record.filePath, 'r')
-      try {
-        const buffer = Buffer.alloc(maxBytes)
-        const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0)
-        const stat = await handle.stat()
-        return {
-          record,
-          content: buffer.toString('utf8', 0, bytesRead),
-          truncated: stat.size > maxBytes,
-        }
-      } finally {
-        await handle.close()
-      }
-    } catch (error) {
-      console.warn('[artifacts] failed to read file preview', record.filePath, error)
-      return { record, content: null }
-    }
-  }
-
-  const db = getDb()
-  // Operate on bytes, not characters: SQLite substr/length count characters, so
-  // for multibyte (emoji/CJK) content a 256KB char cap could return up to ~1MB.
-  // Cast to BLOB so substr/length are byte-accurate (a split trailing multibyte
-  // char just yields a replacement char in the preview, which is fine).
-  const row = db
-    .prepare(`
-      SELECT
-        CAST(substr(CAST(inline_content AS BLOB), 1, ?) AS TEXT) AS content,
-        length(CAST(inline_content AS BLOB)) AS byteLen
-      FROM ai_artifacts WHERE id = ?
-    `)
-    .get(maxBytes, id) as { content: string | null; byteLen: number | null } | undefined
-  return {
-    record,
-    content: row?.content ?? null,
-    truncated: (row?.byteLen ?? 0) > maxBytes,
-  }
-}
-
 async function deleteArtifact(id: number): Promise<void> {
   const record = getArtifact(id)
   if (!record) return
@@ -292,26 +238,6 @@ export async function openArtifact(id: number): Promise<{ ok: boolean; error?: s
   }
 }
 
-export async function exportArtifact(
-  id: number,
-): Promise<{ ok: boolean; path?: string; error?: string; canceled?: boolean }> {
-  const loaded = await readArtifactContent(id)
-  if (!loaded) return { ok: false, error: 'Artifact not found' }
-  const defaultName = `${(loaded.record.title || 'artifact').replace(/[^a-z0-9-_ ]+/gi, '').trim() || 'artifact'}.${extForKind(loaded.record.kind)}`
-  const result = await dialog.showSaveDialog({ defaultPath: defaultName })
-  if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-  try {
-    if (loaded.record.filePath) {
-      await fs.copyFile(loaded.record.filePath, result.filePath)
-    } else {
-      await fs.writeFile(result.filePath, loaded.content ?? '', 'utf8')
-    }
-    return { ok: true, path: result.filePath }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 // ─── Thread helpers ──────────────────────────────────────────────────────────
 
 export interface ListThreadsOptions {
@@ -330,38 +256,34 @@ export interface ThreadRowLite {
   lastSnippet: string | null
 }
 
-export function listThreadsLite(options: ListThreadsOptions = {}): ThreadRowLite[] {
-  const db = getDb()
-  const where = options.includeArchived ? '' : 'WHERE t.archived = 0'
-  const limit = Math.max(1, options.limit ?? 100)
-  const rows = db
-    .prepare(`
-      SELECT
-        t.id           AS id,
-        t.title        AS title,
-        t.created_at   AS createdAt,
-        t.updated_at   AS updatedAt,
-        t.last_message_at AS lastMessageAt,
-        t.archived     AS archived,
-        (SELECT COUNT(*) FROM ai_messages m WHERE m.thread_id = t.id) AS messageCount,
-        (SELECT content FROM ai_messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS lastSnippet
-      FROM ai_threads t
-      ${where}
-      ORDER BY t.last_message_at DESC, t.id DESC
-      LIMIT ?
-    `)
-    .all(limit) as Array<{
-      id: number
-      title: string
-      createdAt: number
-      updatedAt: number
-      lastMessageAt: number
-      archived: number
-      messageCount: number
-      lastSnippet: string | null
-    }>
+// Shared row shape for every thread read, so getThread / the draft finder /
+// listThreadsLite can never drift apart on which columns they surface.
+const THREAD_ROW_SELECT = `
+  SELECT
+    t.id           AS id,
+    t.title        AS title,
+    t.created_at   AS createdAt,
+    t.updated_at   AS updatedAt,
+    t.last_message_at AS lastMessageAt,
+    t.archived     AS archived,
+    (SELECT COUNT(*) FROM ai_messages m WHERE m.thread_id = t.id) AS messageCount,
+    (SELECT content FROM ai_messages m WHERE m.thread_id = t.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS lastSnippet
+  FROM ai_threads t
+`
 
-  return rows.map((row) => ({
+interface ThreadRowRaw {
+  id: number
+  title: string
+  createdAt: number
+  updatedAt: number
+  lastMessageAt: number
+  archived: number
+  messageCount: number
+  lastSnippet: string | null
+}
+
+function threadRowFromRaw(row: ThreadRowRaw): ThreadRowLite {
+  return {
     id: row.id,
     title: row.title,
     createdAt: row.createdAt,
@@ -370,7 +292,23 @@ export function listThreadsLite(options: ListThreadsOptions = {}): ThreadRowLite
     archived: row.archived === 1,
     messageCount: row.messageCount,
     lastSnippet: row.lastSnippet ? row.lastSnippet.slice(0, 160) : null,
-  }))
+  }
+}
+
+export function listThreadsLite(options: ListThreadsOptions = {}): ThreadRowLite[] {
+  const db = getDb()
+  const where = options.includeArchived ? '' : 'WHERE t.archived = 0'
+  const limit = Math.max(1, options.limit ?? 100)
+  const rows = db
+    .prepare(`
+      ${THREAD_ROW_SELECT}
+      ${where}
+      ORDER BY t.last_message_at DESC, t.id DESC
+      LIMIT ?
+    `)
+    .all(limit) as ThreadRowRaw[]
+
+  return rows.map(threadRowFromRaw)
 }
 
 function emitThreadEvent(event: AnalyticsEventName, threadId: number): void {
@@ -384,10 +322,17 @@ export function createThread(title?: string | null): ThreadRowLite {
   const db = getDb()
   const now = Date.now()
   if (title == null) {
-    const existingDraft = listThreadsLite({ includeArchived: false, limit: 1000 })
-      .find((row) => row.messageCount === 0)
+    const existingDraft = db
+      .prepare(`
+        ${THREAD_ROW_SELECT}
+        WHERE t.archived = 0
+          AND NOT EXISTS (SELECT 1 FROM ai_messages m WHERE m.thread_id = t.id)
+        ORDER BY t.last_message_at DESC, t.id DESC
+        LIMIT 1
+      `)
+      .get() as ThreadRowRaw | undefined
     if (existingDraft) {
-      return existingDraft
+      return threadRowFromRaw(existingDraft)
     }
   }
   const finalTitle = normalizeThreadTitle(title, DEFAULT_THREAD_TITLE)
@@ -443,8 +388,11 @@ export function touchThreadLastMessage(db: Database.Database, threadId: number, 
 }
 
 export function getThread(threadId: number): ThreadRowLite | null {
-  const rows = listThreadsLite({ includeArchived: true, limit: 1000 })
-  return rows.find((row) => row.id === threadId) ?? null
+  const db = getDb()
+  const row = db
+    .prepare(`${THREAD_ROW_SELECT} WHERE t.id = ? LIMIT 1`)
+    .get(threadId) as ThreadRowRaw | undefined
+  return row ? threadRowFromRaw(row) : null
 }
 
 // ── D4: per-thread settings, stored in ai_threads.metadata_json.settings ──────

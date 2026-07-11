@@ -107,13 +107,25 @@ test('scaffold keeps the 10 LONGEST blocks, chronological, with rich evidence on
   const parsed = JSON.parse(scaffold) as {
     blocks: Array<{ label: string; durationRank: number; timeRange: string; supportingEvidence?: unknown }>
   }
-  // The two shortest blocks (10m and 15m — stretches 8 and 4) are dropped.
-  const labels = new Set(parsed.blocks.map((block) => block.label))
-  assert.ok(!labels.has('work stretch 8'))
-  assert.ok(!labels.has('work stretch 4'))
-  // Chronological order is preserved for the survivors.
-  const starts = parsed.blocks.map((block) => block.timeRange)
-  assert.deepEqual(starts, [...starts].sort())
+  // The two shortest blocks (10m and 15m — stretches 8 and 4) are dropped;
+  // survivors stay in start-time order (stretch index rises with start time).
+  // Do not sort the formatted clock strings — "10:20 AM" sorts before "8:00 AM"
+  // lexicographically, which is not chronological.
+  assert.deepEqual(
+    parsed.blocks.map((block) => block.label),
+    [
+      'work stretch 1',
+      'work stretch 2',
+      'work stretch 3',
+      'work stretch 5',
+      'work stretch 6',
+      'work stretch 7',
+      'work stretch 9',
+      'work stretch 10',
+      'work stretch 11',
+      'work stretch 12',
+    ],
+  )
   // Rich supporting evidence rides only on the top-4 by duration.
   const withEvidence = parsed.blocks.filter((block) => block.supportingEvidence !== undefined)
   assert.equal(withEvidence.length, 4)

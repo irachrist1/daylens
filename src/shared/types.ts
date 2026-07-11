@@ -759,6 +759,22 @@ export interface AIThreadSummary {
   lastSnippet?: string | null
 }
 
+// Opening a conversation loads only its most recent messages; older pages are
+// fetched on demand with a (createdAt, id) cursor — never the whole history.
+export interface AIThreadPageRequest {
+  threadId: number
+  limit?: number
+  before?: { createdAt: number; id: number } | null
+}
+
+export interface AIThreadDetail {
+  thread: AIThreadSummary | null
+  // Ascending page of messages ending just before the cursor (or the newest
+  // messages when no cursor was passed).
+  messages: AIThreadMessage[]
+  hasEarlier: boolean
+}
+
 // D4: per-thread overrides, stored in ai_threads.metadata_json (no migration).
 // `provider` + `model` are set together (a model picked from the catalog) and
 // take precedence over the global chat provider for this thread's turns, but
@@ -1006,16 +1022,6 @@ export interface AppCharacter {
   sessionCount: number
 }
 
-export interface AppProfile {
-  canonicalAppId: string
-  displayName: string
-  roleSummary: string
-  topArtifacts: ArtifactRef[]
-  pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
-  topBlockIds: string[]
-  computedAt: number
-}
-
 export interface WorkflowPattern {
   id: string
   signatureKey: string
@@ -1030,8 +1036,6 @@ export interface WorkflowPattern {
 export interface AppDetailPayload {
   canonicalAppId: string
   displayName: string
-  appCharacter: AppCharacter | null
-  profile: AppProfile
   totalSeconds: number
   sessionCount: number
   topArtifacts: ArtifactRef[]
@@ -1060,7 +1064,6 @@ export interface AppDetailPayload {
       pages: PageRef[]
     }>
   }
-  pairedApps: Array<{ canonicalAppId: string; bundleId: string | null; displayName: string; totalSeconds: number }>
   blockAppearances: Array<{
     blockId: string
     startTime: number
@@ -1087,9 +1090,7 @@ export interface AppDetailPayload {
     latestEnd: number
     sampleBlockIds: string[]
   }>
-  workflowAppearances: WorkflowRef[]
   timeOfDayDistribution: Array<{ hour: number; totalSeconds: number }>
-  computedAt: number
   rangeKey: string
 }
 
@@ -2122,14 +2123,11 @@ export const IPC = {
     GENERATE_DAY_SUMMARY: 'ai:generate-day-summary',
     GET_WEEK_REVIEW: 'ai:get-week-review',
     GET_APP_NARRATIVE: 'ai:get-app-narrative',
-    PREPARE_DAILY_REPORT: 'ai:prepare-daily-report',
     GET_WRAPPED_NARRATIVE: 'ai:get-wrapped-narrative',
     GET_WRAPPED_PERIOD_NARRATIVE: 'ai:get-wrapped-period-narrative',
     GET_WRAP_PROVIDER_STATE: 'ai:get-wrap-provider-state',
     GET_WRAP_PREFLIGHT: 'ai:get-wrap-preflight',
     ASK_WRAPPED: 'ai:ask-wrapped',
-    GET_HISTORY: 'ai:get-history',
-    CLEAR_HISTORY: 'ai:clear-history',
     GENERATE_BLOCK_INSIGHT: 'ai:generate-block-insight',
     REGENERATE_BLOCK_LABEL: 'ai:regenerate-block-label',
     SUGGEST_APP_CATEGORY: 'ai:suggest-app-category',
@@ -2137,16 +2135,12 @@ export const IPC = {
     TEST_CLI_TOOL: 'ai:test-cli-tool',
     LIST_THREADS: 'ai:list-threads',
     GET_THREAD: 'ai:get-thread',
-    CREATE_THREAD: 'ai:create-thread',
     ARCHIVE_THREAD: 'ai:archive-thread',
     RENAME_THREAD: 'ai:rename-thread',
     DELETE_THREAD: 'ai:delete-thread',
     GET_THREAD_SETTINGS: 'ai:get-thread-settings',
     SET_THREAD_SETTINGS: 'ai:set-thread-settings',
-    LIST_ARTIFACTS: 'ai:list-artifacts',
-    GET_ARTIFACT: 'ai:get-artifact',
     OPEN_ARTIFACT: 'ai:open-artifact',
-    EXPORT_ARTIFACT: 'ai:export-artifact',
   },
   SETTINGS: {
     GET: 'settings:get',

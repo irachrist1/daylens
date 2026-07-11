@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { FileText, Trash2 } from 'lucide-react'
+import { FileText, Pencil, Trash2 } from 'lucide-react'
 import type { AIThreadSummary } from '@shared/types'
 import { IconArchive, IconSearch } from './icons'
 
@@ -15,6 +15,7 @@ export interface ConversationSidebarProps {
   onSelect: (id: number) => void
   onDelete: (thread: AIThreadSummary) => void
   onArchive: (thread: AIThreadSummary, archived: boolean) => void
+  onRename: (thread: AIThreadSummary, title: string) => void
 }
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 Days', 'Previous 30 Days', 'Older'] as const
@@ -46,30 +47,75 @@ function matches(thread: AIThreadSummary, query: string): boolean {
   return thread.title.toLowerCase().includes(q) || (thread.lastSnippet ?? '').toLowerCase().includes(q)
 }
 
+// Inline title editor for a row: Enter or blur saves, Escape cancels — the
+// same interaction as editing a block title on the timeline.
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string
+  onCommit: (title: string) => void
+  onCancel: () => void
+}) {
+  const [draft, setDraft] = useState(initial)
+  return (
+    <input
+      type="text"
+      value={draft}
+      autoFocus
+      aria-label="Conversation title"
+      onFocus={(event) => event.target.select()}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') onCommit(draft)
+        else if (event.key === 'Escape') onCancel()
+      }}
+      onBlur={() => onCommit(draft)}
+      style={{ flex: 1, minWidth: 0, margin: '3px 6px', padding: '3px 3px 4px', fontSize: 12.5, fontWeight: 600, border: 'none', borderBottom: '1.5px solid var(--color-border-ghost)', background: 'transparent', color: 'var(--color-text-primary)', outline: 'none' }}
+    />
+  )
+}
+
 function ThreadRow({
   thread,
   active,
   archived,
   hovered,
   confirmingDelete,
+  renaming,
   onSelect,
   onHover,
   onArchive,
   onRequestDelete,
   onConfirmDelete,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
 }: {
   thread: AIThreadSummary
   active: boolean
   archived: boolean
   hovered: boolean
   confirmingDelete: boolean
+  renaming: boolean
   onSelect: () => void
   onHover: (hovering: boolean) => void
   onArchive: () => void
   onRequestDelete: () => void
   onConfirmDelete: () => void
+  onStartRename: () => void
+  onCommitRename: (title: string) => void
+  onCancelRename: () => void
 }) {
   const isReport = isDayReportThread(thread)
+  if (renaming) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', borderRadius: 8, marginBottom: 1, background: 'var(--color-surface-high)' }}>
+        <RenameInput initial={thread.title} onCommit={onCommitRename} onCancel={onCancelRename} />
+      </div>
+    )
+  }
   return (
     <div
       onMouseEnter={() => onHover(true)}
@@ -107,6 +153,15 @@ function ThreadRow({
         <div style={{ display: 'flex', flexShrink: 0, marginRight: 3 }}>
           <button
             type="button"
+            onClick={onStartRename}
+            aria-label={`Rename ${thread.title}`}
+            title="Rename"
+            style={{ width: 24, height: 24, border: 'none', borderRadius: 5, background: 'transparent', color: 'var(--color-text-tertiary)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
+          >
+            <Pencil size={12} strokeWidth={1.9} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
             onClick={onArchive}
             aria-label={archived ? `Unarchive ${thread.title}` : `Archive ${thread.title}`}
             title={archived ? 'Unarchive' : 'Archive'}
@@ -135,10 +190,12 @@ function ConversationSidebarImpl({
   onSelect,
   onDelete,
   onArchive,
+  onRename,
 }: ConversationSidebarProps) {
   const [query, setQuery] = useState('')
   const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [renamingId, setRenamingId] = useState<number | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
 
   const { groups, archived } = useMemo(() => {
@@ -167,11 +224,15 @@ function ConversationSidebarImpl({
       archived={isArchived}
       hovered={hoveredId === thread.id}
       confirmingDelete={confirmDeleteId === thread.id}
+      renaming={renamingId === thread.id}
       onSelect={() => { setConfirmDeleteId(null); onSelect(thread.id) }}
       onHover={(hovering) => setHoveredId(hovering ? thread.id : null)}
       onArchive={() => { setConfirmDeleteId(null); onArchive(thread, !isArchived) }}
       onRequestDelete={() => setConfirmDeleteId(thread.id)}
       onConfirmDelete={() => { setConfirmDeleteId(null); void onDelete(thread) }}
+      onStartRename={() => { setConfirmDeleteId(null); setRenamingId(thread.id) }}
+      onCommitRename={(title) => { setRenamingId(null); onRename(thread, title) }}
+      onCancelRename={() => setRenamingId(null)}
     />
   )
 

@@ -87,6 +87,11 @@ export interface MessageListProps {
   onDismissActionWidget: (proposalId: string) => void
   onFollowUpClick: (message: ThreadMessage, suggestionText: string, source: string) => void
   scrollToBottom: () => void
+  // Opening a conversation loads only the newest page of its history; when
+  // older messages exist, a "Load earlier messages" affordance tops the list.
+  hasEarlier?: boolean
+  loadingEarlier?: boolean
+  onLoadEarlier?: () => void
 }
 
 // FB7: "Turn into…" — post-answer transforms on the latest answer. Each runs a
@@ -161,9 +166,24 @@ function MessageListImpl({
   onDismissActionWidget,
   onFollowUpClick,
   scrollToBottom,
+  hasEarlier,
+  loadingEarlier,
+  onLoadEarlier,
 }: MessageListProps) {
   return (
     <div style={{ display: 'grid', gap: 24, contain: 'layout' }}>
+      {hasEarlier && onLoadEarlier && (
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <button
+            type="button"
+            onClick={onLoadEarlier}
+            disabled={loadingEarlier}
+            style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid var(--color-border-ghost)', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', fontSize: 12, fontWeight: 600, cursor: loadingEarlier ? 'default' : 'pointer', opacity: loadingEarlier ? 0.7 : 1 }}
+          >
+            {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
+          </button>
+        </div>
+      )}
       {messages.map((message, index) => (
         message.role === 'user' ? (
           <div key={message.id} className="ai-message-in" style={{ display: 'flex', justifyContent: 'flex-end' }}>
