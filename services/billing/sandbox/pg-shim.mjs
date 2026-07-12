@@ -20,6 +20,10 @@ const db = {
   bootstrapAttempts: [], // { ip_hash, attempted_at }
 }
 
+// Dev-only escape hatch for the sandbox's revocation/failure fixtures.
+export const sandboxState = db
+export const sandboxControl = { failNextContaining: null }
+
 const now = () => new Date()
 const toMs = (v) => (v == null ? null : v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Date.parse(v))
 const addDays = (date, n) => new Date(date.getTime() + n * 86_400_000)
@@ -45,7 +49,12 @@ function newAccount(installationHash, cipher) {
     local_pass_expires_at: null,
     polar_customer_id: null,
     polar_subscription_id: null,
+    polar_event_occurred_at: null,
+    polar_event_rank: 0,
     customer_email: null,
+    intercom_user_id: null,
+    installation_token_version: 1,
+    tokens_revoked_at: null,
     litellm_key_cipher: cipher,
   }
 }
@@ -57,6 +66,20 @@ function accountByHash(hash) {
 
 function intentKey(provider, txRef) {
   return `${provider}\0${txRef}`
+}
+
+let transactionTail = Promise.resolve()
+
+function restore(snapshot) {
+  for (const key of Object.keys(db)) db[key] = snapshot[key]
+}
+
+async function acquireTransaction() {
+  let release
+  const previous = transactionTail
+  transactionTail = new Promise((resolve) => { release = resolve })
+  await previous
+  return release
 }
 
 // Execute one normalized statement. Returns { rows }.
@@ -90,8 +113,8 @@ function run(text, params = []) {
     return { rows: [] }
   }
   if (q.startsWith("UPDATE billing_accounts SET plan = 'subscription'")) {
-    // params: [status, period_start, period_end, customer_id, subscription_id, accountId]
-    const row = db.accounts.get(p[5])
+    // params: [status, period_start, period_end, customer_id, subscription_id, event_at, event_rank, accountId]
+    const row = db.accounts.get(p[7])
     if (row) {
       row.plan = 'subscription'
       row.subscription_status = p[0]
@@ -99,14 +122,29 @@ function run(text, params = []) {
       row.renewal_at = p[2] ? new Date(p[2]) : addMonth(now())
       row.polar_customer_id = p[3] ?? row.polar_customer_id
       row.polar_subscription_id = p[4] ?? row.polar_subscription_id
+      row.polar_event_occurred_at = p[5]
+      row.polar_event_rank = p[6]
       row.updated_at = now()
     }
     return { rows: [] }
   }
   if (q.startsWith("UPDATE billing_accounts SET subscription_status = 'canceled'")) {
-    const row = db.accounts.get(p[0])
+    const row = db.accounts.get(p[2])
     if (row) {
       row.subscription_status = 'canceled'
+      row.polar_event_occurred_at = p[0]
+      row.polar_event_rank = p[1]
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith("UPDATE billing_accounts SET subscription_status = 'revoked'")) {
+    const row = db.accounts.get(p[2])
+    if (row) {
+      row.subscription_status = 'revoked'
+      row.renewal_at = now()
+      row.polar_event_occurred_at = p[0]
+      row.polar_event_rank = p[1]
       row.updated_at = now()
     }
     return { rows: [] }
@@ -140,6 +178,21 @@ function run(text, params = []) {
       row.updated_at = now()
     }
     return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET intercom_user_id = COALESCE')) {
+    const row = db.accounts.get(p[0])
+    if (!row || (row.intercom_user_id != null && row.intercom_user_id !== p[1])) return { rows: [] }
+    row.intercom_user_id ??= p[1]
+    row.updated_at = now()
+    return { rows: [{ intercom_user_id: row.intercom_user_id }] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET installation_token_version = installation_token_version + 1')) {
+    const row = db.accounts.get(p[0])
+    if (!row) return { rows: [] }
+    row.installation_token_version += 1
+    row.tokens_revoked_at = now()
+    row.updated_at = now()
+    return { rows: [{ installation_token_version: row.installation_token_version }] }
   }
 
   // ── billing_bootstrap_attempts ────────────────────────────────────
@@ -290,11 +343,47 @@ function run(text, params = []) {
 }
 
 class Client {
+  inTransaction = false
+  snapshot = null
+  releaseTransaction = null
+
   async query(text, params) {
+    const command = String(text).trim().toUpperCase()
+    if (command === 'BEGIN') {
+      if (this.inTransaction) throw new Error('pg-shim: transaction already open')
+      this.releaseTransaction = await acquireTransaction()
+      this.snapshot = structuredClone(db)
+      this.inTransaction = true
+      return { rows: [] }
+    }
+    if (command === 'COMMIT') {
+      if (!this.inTransaction) throw new Error('pg-shim: no transaction')
+      this.inTransaction = false
+      this.snapshot = null
+      this.releaseTransaction()
+      this.releaseTransaction = null
+      return { rows: [] }
+    }
+    if (command === 'ROLLBACK') {
+      if (!this.inTransaction) return { rows: [] }
+      restore(this.snapshot)
+      this.inTransaction = false
+      this.snapshot = null
+      this.releaseTransaction()
+      this.releaseTransaction = null
+      return { rows: [] }
+    }
+    if (sandboxControl.failNextContaining && String(text).includes(sandboxControl.failNextContaining)) {
+      const marker = sandboxControl.failNextContaining
+      sandboxControl.failNextContaining = null
+      throw new Error(`pg-shim: injected failure at ${marker}`)
+    }
     return run(text, params)
   }
 
-  release() {}
+  release() {
+    if (this.inTransaction) throw new Error('pg-shim: client released with transaction open')
+  }
 }
 
 export class Pool {

@@ -14,9 +14,20 @@ CREATE TABLE IF NOT EXISTS billing_accounts (
   local_pass_expires_at TIMESTAMPTZ,
   polar_customer_id TEXT,
   polar_subscription_id TEXT,
+  polar_event_occurred_at TIMESTAMPTZ,
+  polar_event_rank INTEGER NOT NULL DEFAULT 0,
   customer_email TEXT,
+  intercom_user_id TEXT,
+  installation_token_version INTEGER NOT NULL DEFAULT 1,
+  tokens_revoked_at TIMESTAMPTZ,
   litellm_key_cipher TEXT NOT NULL
 );
+
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS polar_event_occurred_at TIMESTAMPTZ;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS polar_event_rank INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS intercom_user_id TEXT;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS installation_token_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS tokens_revoked_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS billing_usage (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
