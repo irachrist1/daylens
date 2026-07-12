@@ -28,11 +28,16 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          # apps/web is an npm workspace member; the only lockfile is the root one.
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        working-directory: apps/web
-        run: npm ci
+        # Workspace members have no own lockfile — install from the monorepo root.
+        # --ignore-scripts skips the desktop app's Electron native rebuild (repo CI
+        # convention); sharp is the one web dependency that needs its install script.
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild sharp
 
       - name: Generate Convex API types
         working-directory: apps/web
