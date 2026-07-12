@@ -1362,3 +1362,23 @@ The adversarial W1-A review found seven ways an apparently corrected Timeline co
 
 Regression coverage: `absenceGuard.test.ts`, `timelineAbsenceRepair.test.ts`,
 `correctedActivityFacts.test.ts`, `aiResolvers.test.ts`, and `peakHours.test.ts`.
+
+## 2026-07-12 — Passive browser presence can still hold a live session open overnight
+
+The post-merge running-app gate exposed a separate capture ambiguity, not a corrected-read
+regression. The live database contained one recovered Dia session from 23:39 through 14:18
+the next day (51,498 seconds), so Timeline and Apps honestly reconciled to the same wrong
+14h total. The activity ledger showed long `idle_start` → `idle_end` intervals inside it.
+
+Root cause: `looksLikePassivePresenceSession` deliberately keeps video, meeting, and class
+tabs open beyond the five-minute away threshold, but there is no upper bound or positive
+playback/call signal. If the screen stays awake on a media-looking browser tab overnight,
+the live snapshot continues to advance and restart recovery persists the whole wall-clock
+span as captured duration. The deterministic absence repair cannot split that row because
+the false duration is already inside one raw session.
+
+Do not paper this over in Timeline copy or edit the live DB. The foundation fix needs a
+founder product choice: either cap title-inferred passive presence (which can truncate a
+real long class/movie), or add positive cross-platform playback/call evidence and stop
+credit when that evidence ends. macOS, Windows, and Linux behavior must be designed and
+verified together.
