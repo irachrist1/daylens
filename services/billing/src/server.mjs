@@ -69,7 +69,8 @@ function base64url(value) {
 }
 
 function signToken(payload, ttlSeconds) {
-  const body = base64url(JSON.stringify({ ...payload, exp: Math.floor(Date.now() / 1000) + ttlSeconds }))
+  const now = Math.floor(Date.now() / 1000)
+  const body = base64url(JSON.stringify({ ...payload, iat: now, exp: now + ttlSeconds }))
   const signature = crypto.createHmac('sha256', process.env.SESSION_SECRET).update(body).digest('base64url')
   return `${body}.${signature}`
 }
@@ -131,7 +132,7 @@ async function body(req, maxBytes = 2_000_000) {
   return { raw, json: raw.length ? JSON.parse(raw.toString('utf8')) : {} }
 }
 
-async function generateLiteLLMKey(accountId) {
+async function generateLiteLLMKey(accountId, maxBudget = 5) {
   const response = await fetch(`${litellmUrl}/key/generate`, {
     method: 'POST',
     headers: {
@@ -140,9 +141,10 @@ async function generateLiteLLMKey(accountId) {
     },
     body: JSON.stringify({
       key_alias: `daylens-${accountId}`,
-      max_budget: 5,
+      max_budget: maxBudget,
       metadata: { account_id: accountId },
     }),
+    signal: AbortSignal.timeout(15_000),
   })
   const payload = await response.json()
   if (!response.ok || !payload.key) throw new Error(payload.error || 'litellm_key_generation_failed')
@@ -161,6 +163,7 @@ async function setLiteLLMBudget(account, maxBudget, budgetDuration = null) {
       max_budget: maxBudget,
       ...(budgetDuration ? { budget_duration: budgetDuration } : {}),
     }),
+    signal: AbortSignal.timeout(15_000),
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
@@ -168,11 +171,46 @@ async function setLiteLLMBudget(account, maxBudget, budgetDuration = null) {
   }
 }
 
+async function reconcileLiteLLMBudget(accountId) {
+  const result = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [accountId])
+  const account = result.rows[0]
+  if (!account) throw new Error('billing_account_not_found')
+  const mode = accessMode(account)
+  if (!account.litellm_budget_sync_required && account.litellm_budget_mode === mode) return account
+
+  if (mode === 'free_credit') {
+    // Paid-period spend belongs to a different entitlement. A fresh virtual
+    // key gives the remaining free-credit ledger its own clean LiteLLM budget.
+    const maxBudget = Math.max(0, Number(account.free_credit_remaining_micros)) / 1_000_000
+    const key = await generateLiteLLMKey(`${account.id}-${crypto.randomBytes(4).toString('hex')}`, maxBudget)
+    await pool.query(
+      `UPDATE billing_accounts SET litellm_key_cipher = $1, litellm_budget_mode = $2,
+       litellm_budget_sync_required = false, updated_at = now() WHERE id = $3`,
+      [encrypt(key), mode, account.id],
+    )
+  } else {
+    const maxBudget = mode === 'subscription' || mode === 'local_pass' ? fairUseMicros / 1_000_000 : 0
+    await setLiteLLMBudget(account, maxBudget, mode === 'subscription' || mode === 'local_pass' ? '30d' : null)
+    await pool.query(
+      `UPDATE billing_accounts SET litellm_budget_mode = $1,
+       litellm_budget_sync_required = false, updated_at = now() WHERE id = $2`,
+      [mode, account.id],
+    )
+  }
+  const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [account.id])
+  return updated.rows[0]
+}
+
 async function accountForToken(req, type = 'install') {
   const payload = verifyToken(bearer(req), type)
   const result = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [payload.accountId])
-  if (!result.rows[0]) throw new Error('invalid_token')
-  return result.rows[0]
+  const account = result.rows[0]
+  if (
+    !account
+    || account.tokens_revoked_at
+    || Number(payload.ver) !== Number(account.installation_token_version)
+  ) throw new Error('invalid_token')
+  return account
 }
 
 function accessMode(account) {
@@ -189,11 +227,11 @@ function accessMode(account) {
   return 'none'
 }
 
-async function periodSpendMicros(account) {
+async function periodSpendMicros(account, db = pool) {
   const from = account.period_started_at || account.local_pass_expires_at
     ? account.period_started_at || new Date(new Date(account.local_pass_expires_at).getTime() - 30 * 86400000)
     : new Date(0)
-  const result = await pool.query(
+  const result = await db.query(
     `SELECT COALESCE(SUM(cost_micros), 0)::bigint AS spend
      FROM billing_usage WHERE account_id = $1 AND occurred_at >= $2 AND mode <> 'free_credit'`,
     [account.id, from],
@@ -250,21 +288,19 @@ async function bootstrap(req, res) {
   const installationHash = hash(installationId)
   let result = await pool.query('SELECT * FROM billing_accounts WHERE installation_hash = $1', [installationHash])
   if (!result.rows[0]) {
+    // Provision before opening a database transaction. A slow/unavailable
+    // LiteLLM must not occupy the Postgres pool; a concurrent duplicate may
+    // create one orphan virtual key, but the unique insert chooses one account
+    // atomically and no partially provisioned row can escape.
+    const key = await generateLiteLLMKey(`bootstrap-${crypto.randomBytes(8).toString('hex')}`)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      const inserted = await client.query(
+      await client.query(
         `INSERT INTO billing_accounts (installation_hash, litellm_key_cipher)
-         VALUES ($1, 'pending') ON CONFLICT (installation_hash) DO NOTHING RETURNING *`,
-        [installationHash],
+         VALUES ($1, $2) ON CONFLICT (installation_hash) DO NOTHING RETURNING *`,
+        [installationHash, encrypt(key)],
       )
-      if (inserted.rows[0]) {
-        const key = await generateLiteLLMKey(inserted.rows[0].id)
-        await client.query(
-          'UPDATE billing_accounts SET litellm_key_cipher = $1 WHERE id = $2',
-          [encrypt(key), inserted.rows[0].id],
-        )
-      }
       await client.query('COMMIT')
     } catch (error) {
       await client.query('ROLLBACK')
@@ -275,7 +311,29 @@ async function bootstrap(req, res) {
     result = await pool.query('SELECT * FROM billing_accounts WHERE installation_hash = $1', [installationHash])
   }
   const account = result.rows[0]
-  return json(res, 200, { token: signToken({ type: 'install', accountId: account.id }, 90 * 86400) })
+  if (account.tokens_revoked_at) {
+    return json(res, 403, { error: 'This installation was revoked. Contact support to restore it.' })
+  }
+  return json(res, 200, { token: signToken({ type: 'install', accountId: account.id, ver: account.installation_token_version }, 30 * 86400) })
+}
+
+async function rotateInstallationToken(account, req, res) {
+  const parsed = await body(req, 64_000)
+  const installationId = String(parsed.json.installationId || '')
+  if (installationId.length < 20 || !safeEqualString(hash(installationId), account.installation_hash)) {
+    return json(res, 403, { error: 'Installation proof did not match.' })
+  }
+  const result = await pool.query(
+    `UPDATE billing_accounts SET installation_token_version = installation_token_version + 1,
+     updated_at = now() WHERE id = $1 AND installation_token_version = $2
+     RETURNING installation_token_version`,
+    [account.id, account.installation_token_version],
+  )
+  const version = result.rows[0]?.installation_token_version
+  if (!version) return json(res, 409, { error: 'The installation token was already rotated. Retry with the newest token.' })
+  return json(res, 200, {
+    token: signToken({ type: 'install', accountId: account.id, ver: version }, 30 * 86400),
+  })
 }
 
 async function payments(account, res) {
@@ -389,7 +447,10 @@ function verifyStandardWebhook(req, raw, secret) {
   if (!id || !timestamp || !secret) return false
   const ageSeconds = Math.abs(Date.now() / 1000 - Number(timestamp))
   if (!Number.isFinite(ageSeconds) || ageSeconds > 5 * 60) return false
-  const secretBytes = Buffer.from(secret.replace(/^whsec_/, ''), 'base64')
+  // Polar exposes a raw `polar_whs_...` value. Their Standard Webhooks helper
+  // base64-encodes then decodes it; direct HMAC therefore uses the entire raw
+  // UTF-8 secret as the key.
+  const secretBytes = Buffer.from(secret, 'utf8')
   const expected = crypto.createHmac('sha256', secretBytes).update(`${id}.${timestamp}.${raw}`).digest('base64')
   return signatures.some((entry) => {
     const candidate = entry.replace(/^v1,/, '')
@@ -397,23 +458,23 @@ function verifyStandardWebhook(req, raw, secret) {
   })
 }
 
-async function rememberPaymentEvent(provider, eventId) {
+async function rememberPaymentEvent(client, provider, eventId) {
   if (!eventId) throw new Error('missing_payment_event_id')
-  const inserted = await pool.query(
+  const inserted = await client.query(
     `INSERT INTO billing_payment_events (provider, event_id) VALUES ($1, $2)
      ON CONFLICT DO NOTHING RETURNING event_id`,
     [provider, eventId],
   )
   if (inserted.rows[0]) return true
-  const existing = await pool.query(
-    `SELECT processed_at FROM billing_payment_events WHERE provider = $1 AND event_id = $2`,
+  const existing = await client.query(
+    `SELECT processed_at FROM billing_payment_events WHERE provider = $1 AND event_id = $2 FOR UPDATE`,
     [provider, eventId],
   )
   return Boolean(existing.rows[0] && !existing.rows[0].processed_at)
 }
 
-async function markPaymentEventProcessed(provider, eventId) {
-  await pool.query(
+async function markPaymentEventProcessed(client, provider, eventId) {
+  await client.query(
     `UPDATE billing_payment_events SET processed_at = now(), last_error = NULL WHERE provider = $1 AND event_id = $2`,
     [provider, eventId],
   )
@@ -430,40 +491,109 @@ async function polarWebhook(req, res) {
   const parsed = await body(req)
   if (!verifyStandardWebhook(req, parsed.raw, process.env.POLAR_WEBHOOK_SECRET)) return json(res, 401, { error: 'invalid_signature' })
   const event = parsed.json
-  if (!await rememberPaymentEvent('polar', event.id)) return json(res, 200, { ok: true })
+  // Standard Webhooks defines webhook-id as the delivery/event id. Polar
+  // payloads are not required to duplicate it in the JSON body.
+  const eventId = String(req.headers['webhook-id'] || '')
   const data = event.data || {}
   const accountId = data.external_customer_id || data.metadata?.account_id || data.customer?.external_id
+  const productId = data.product_id || data.product?.id
+  const occurredAt = new Date(data.modified_at || event.created_at)
+  const desiredState = event.type === 'subscription.revoked' || data.status === 'revoked'
+    ? 'revoked'
+    : event.type === 'subscription.canceled' || data.status === 'canceled' || data.cancel_at_period_end === true
+      ? 'canceled'
+      : 'active'
+  const eventRank = { active: 1, canceled: 2, revoked: 3 }[desiredState]
+  const incomingSubscriptionId = String(data.id || '')
+  let shouldReconcile = false
+  const client = await pool.connect()
   try {
-    if (accountId && ['subscription.active', 'subscription.created', 'subscription.updated'].includes(event.type)) {
-      await pool.query(
+    await client.query('BEGIN')
+    if (!await rememberPaymentEvent(client, 'polar', eventId)) {
+      await client.query('COMMIT')
+      return json(res, 200, { ok: true })
+    }
+    if (!Number.isFinite(occurredAt.getTime())) throw new Error('missing_polar_event_timestamp')
+    if (productId !== process.env.POLAR_PRODUCT_ID) {
+      await markPaymentEventProcessed(client, 'polar', eventId)
+      await client.query('COMMIT')
+      return json(res, 200, { ok: true })
+    }
+
+    const currentResult = accountId
+      ? await client.query('SELECT * FROM billing_accounts WHERE id = $1 FOR UPDATE', [accountId])
+      : { rows: [] }
+    const current = currentResult.rows[0]
+    const subscriptionResult = incomingSubscriptionId
+      ? await client.query(
+        'SELECT * FROM billing_polar_subscriptions WHERE subscription_id = $1 FOR UPDATE',
+        [incomingSubscriptionId],
+      )
+      : { rows: [] }
+    const subscription = subscriptionResult.rows[0]
+    const sameSubscription = Boolean(incomingSubscriptionId && incomingSubscriptionId === current?.polar_subscription_id)
+    const previousAt = subscription?.event_occurred_at ? new Date(subscription.event_occurred_at).getTime() : -Infinity
+    const isCurrent = occurredAt.getTime() > previousAt
+      || (occurredAt.getTime() === previousAt && eventRank >= Number(subscription?.event_rank || 0))
+    const accepted = isCurrent && !(subscription?.status === 'revoked' && desiredState === 'active')
+    if (current && incomingSubscriptionId && accepted) {
+      await client.query(
+        `INSERT INTO billing_polar_subscriptions
+         (subscription_id, account_id, status, event_occurred_at, event_rank)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (subscription_id) DO UPDATE SET status = EXCLUDED.status,
+         event_occurred_at = EXCLUDED.event_occurred_at, event_rank = EXCLUDED.event_rank,
+         updated_at = now()`,
+        [incomingSubscriptionId, accountId, desiredState, occurredAt, eventRank],
+      )
+    }
+    if (current && incomingSubscriptionId && accepted && (sameSubscription || !subscription) && desiredState === 'active' && ['subscription.active', 'subscription.created', 'subscription.updated', 'subscription.uncanceled'].includes(event.type)) {
+      await client.query(
         `UPDATE billing_accounts SET plan = 'subscription', subscription_status = $1,
          period_started_at = COALESCE($2, now()), renewal_at = COALESCE($3, now() + interval '1 month'),
          polar_customer_id = COALESCE($4, polar_customer_id),
-         polar_subscription_id = COALESCE($5, polar_subscription_id), updated_at = now()
-         WHERE id = $6`,
+         polar_subscription_id = COALESCE($5, polar_subscription_id), polar_event_occurred_at = $6,
+         polar_event_rank = $7, litellm_budget_sync_required = true, updated_at = now()
+         WHERE id = $8`,
         [
           data.status || 'active',
           data.current_period_start || null,
           data.current_period_end || null,
           data.customer_id || data.customer?.id || null,
           data.id || null,
+          occurredAt,
+          eventRank,
           accountId,
         ],
       )
-      const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [accountId])
-      if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
+      shouldReconcile = true
     }
-    if (accountId && ['subscription.canceled', 'subscription.revoked'].includes(event.type)) {
-      await pool.query(
-        `UPDATE billing_accounts SET subscription_status = 'canceled', updated_at = now() WHERE id = $1`,
-        [accountId],
+    if (current && sameSubscription && accepted && desiredState === 'canceled') {
+      await client.query(
+        `UPDATE billing_accounts SET subscription_status = 'canceled', polar_event_occurred_at = $1,
+         polar_event_rank = $2, litellm_budget_sync_required = true, updated_at = now() WHERE id = $3`,
+        [occurredAt, eventRank, accountId],
       )
+      shouldReconcile = true
     }
-    await markPaymentEventProcessed('polar', event.id)
+    if (current && sameSubscription && accepted && desiredState === 'revoked') {
+      await client.query(
+        `UPDATE billing_accounts SET subscription_status = 'revoked', renewal_at = now(), polar_event_occurred_at = $1,
+         polar_event_rank = $2, litellm_budget_sync_required = true, updated_at = now() WHERE id = $3`,
+        [occurredAt, eventRank, accountId],
+      )
+      shouldReconcile = true
+    }
+    await markPaymentEventProcessed(client, 'polar', eventId)
+    await client.query('COMMIT')
   } catch (error) {
-    await markPaymentEventFailed('polar', event.id, error)
+    await client.query('ROLLBACK')
+    await markPaymentEventFailed('polar', eventId, error)
     throw error
+  } finally {
+    client.release()
   }
+  if (shouldReconcile) await reconcileLiteLLMBudget(accountId)
   return json(res, 200, { ok: true })
 }
 
@@ -474,54 +604,66 @@ async function flutterwaveWebhook(req, res) {
   }
   const event = parsed.json
   const eventId = String(event.id || event.data?.id || event.data?.tx_ref || '')
-  if (!await rememberPaymentEvent('flutterwave', eventId)) return json(res, 200, { ok: true })
+  let reconcileAccountId = null
+  const client = await pool.connect()
   try {
+    await client.query('BEGIN')
+    if (!await rememberPaymentEvent(client, 'flutterwave', eventId)) {
+      await client.query('COMMIT')
+      return json(res, 200, { ok: true })
+    }
     const verified = await verifyFlutterwaveTransaction(event.data?.id)
     const data = verified.data || {}
-    const txRef = String(data.tx_ref || event.data?.tx_ref || '')
-    const intent = await pool.query(
-      `SELECT * FROM billing_payment_intents WHERE provider = 'flutterwave' AND tx_ref = $1`,
+    const txRef = String(data.tx_ref || '')
+    if (!txRef) throw new Error('missing_verified_flutterwave_tx_ref')
+    const intent = await client.query(
+      `SELECT * FROM billing_payment_intents WHERE provider = 'flutterwave' AND tx_ref = $1 FOR UPDATE`,
       [txRef],
     )
     const payment = intent.rows[0]
     if (!payment) throw new Error('unknown_flutterwave_payment_intent')
     if (payment.status === 'successful') {
-      const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [payment.account_id])
-      if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
-      await markPaymentEventProcessed('flutterwave', eventId)
+      await markPaymentEventProcessed(client, 'flutterwave', eventId)
+      await client.query('COMMIT')
       return json(res, 200, { ok: true })
     }
     if (data.status !== 'successful') {
-      await pool.query(
+      await client.query(
         `UPDATE billing_payment_intents SET status = $1, provider_reference = $2, updated_at = now()
          WHERE provider = 'flutterwave' AND tx_ref = $3`,
         [data.status || 'failed', String(data.id || ''), txRef],
       )
-      await markPaymentEventProcessed('flutterwave', eventId)
+      await markPaymentEventProcessed(client, 'flutterwave', eventId)
+      await client.query('COMMIT')
       return json(res, 200, { ok: true })
     }
     if (data.currency !== payment.currency || Number(data.amount) !== Number(payment.amount)) {
       throw new Error('flutterwave_payment_mismatch')
     }
-    await pool.query(
+    await client.query(
       `UPDATE billing_payment_intents SET status = 'successful', provider_reference = $1, updated_at = now()
        WHERE provider = 'flutterwave' AND tx_ref = $2`,
       [String(data.id || ''), txRef],
     )
-    await pool.query(
+    await client.query(
       `UPDATE billing_accounts SET plan = 'local_pass',
        local_pass_expires_at = GREATEST(COALESCE(local_pass_expires_at, now()), now()) + interval '30 days',
-       period_started_at = now(), customer_email = COALESCE($1, customer_email), updated_at = now()
+       period_started_at = now(), customer_email = COALESCE($1, customer_email),
+       litellm_budget_sync_required = true, updated_at = now()
        WHERE id = $2`,
       [data.customer?.email || event.data?.customer?.email || null, payment.account_id],
     )
-    const updated = await pool.query('SELECT * FROM billing_accounts WHERE id = $1', [payment.account_id])
-    if (updated.rows[0]) await setLiteLLMBudget(updated.rows[0], fairUseMicros / 1_000_000, '30d')
-    await markPaymentEventProcessed('flutterwave', eventId)
+    reconcileAccountId = payment.account_id
+    await markPaymentEventProcessed(client, 'flutterwave', eventId)
+    await client.query('COMMIT')
   } catch (error) {
+    await client.query('ROLLBACK')
     await markPaymentEventFailed('flutterwave', eventId, error)
     throw error
+  } finally {
+    client.release()
   }
+  if (reconcileAccountId) await reconcileLiteLLMBudget(reconcileAccountId)
   return json(res, 200, { ok: true })
 }
 
@@ -541,75 +683,151 @@ async function verifyFlutterwaveTransaction(id) {
 // The IV secret lives only in this service's .env — the desktop client must never
 // bundle it (anything in the Electron bundle is extractable), so the hash is
 // computed here and returned to the app.
-// TODO(intercom): once identity verification is enforced, bind userId to the
-// calling account on first use (first-write-wins) so one install token cannot
-// mint hashes for arbitrary ids.
-async function intercomUserHash(req, res) {
+async function intercomUserHash(account, req, res) {
   const secret = process.env.INTERCOM_IDENTITY_VERIFICATION_SECRET
   if (!secret) return json(res, 503, { error: 'Intercom identity verification is not configured yet.' })
-  const { json: payload } = await body(req, 10_000)
-  const userId = typeof payload.userId === 'string' ? payload.userId.trim() : ''
-  if (!userId || userId.length > 128) return json(res, 400, { error: 'userId is required.' })
-  return json(res, 200, { userHash: crypto.createHmac('sha256', secret).update(userId).digest('hex') })
+  await body(req, 10_000)
+  const userId = account.id
+  return json(res, 200, {
+    userId,
+    userHash: crypto.createHmac('sha256', secret).update(userId).digest('hex'),
+  })
 }
 
-async function managedCompletion(req, res) {
-  const account = await accountForToken(req, 'ai')
-  const mode = accessMode(account)
-  if (mode === 'none') return json(res, 402, { error: 'AI access is paused. Subscribe or add your own key.' })
-  if ((mode === 'subscription' || mode === 'local_pass') && await periodSpendMicros(account) >= fairUseMicros) {
-    return json(res, 429, { error: 'This plan reached its fair-use ceiling for the current period.' })
-  }
-  const parsed = await body(req)
-  const feature = String(req.headers['x-daylens-feature'] || 'ai')
-  const upstream = await fetch(`${litellmUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${decrypt(account.litellm_key_cipher)}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      ...parsed.json,
-      // The request model is an allowlist of exactly two aliases: the economy
-      // alias when the client asked for it (and it is configured), else the
-      // default. Never pass a client-supplied model name through to LiteLLM.
-      model: economyModelConfigured && parsed.json?.model === litellmEconomyModelAlias
-        ? litellmEconomyModelAlias
-        : litellmModelAlias,
-      stream: false,
-      metadata: { account_id: account.id, feature },
-    }),
-  })
-  const payload = await upstream.json()
-  if (!upstream.ok) return json(res, upstream.status, { error: payload?.error?.message || 'Managed AI provider failed.' })
-  const costUsd = Number(upstream.headers.get('x-litellm-response-cost') || payload?._hidden_params?.response_cost)
-  if (!Number.isFinite(costUsd) || costUsd < 0) {
-    return json(res, 502, { error: 'The provider answered, but its cost could not be metered safely. Please retry.' })
-  }
-  const costMicros = Math.round(costUsd * 1_000_000)
-  const usage = payload.usage || {}
+async function reserveManagedSpend(accountId) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    await client.query(
-      `INSERT INTO billing_usage
-       (account_id, mode, feature, provider, model, input_tokens, output_tokens, cost_micros, success, request_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9)`,
-      [account.id, mode, feature, managedProvider, payload.model || managedModel, usage.prompt_tokens || null, usage.completion_tokens || null, costMicros, payload.id || null],
-    )
-    if (mode === 'free_credit') {
-      await client.query(
-        `UPDATE billing_accounts SET free_credit_remaining_micros =
-         GREATEST(0, free_credit_remaining_micros - $1), updated_at = now() WHERE id = $2`,
-        [costMicros, account.id],
-      )
+    const locked = await client.query('SELECT * FROM billing_accounts WHERE id = $1 FOR UPDATE', [accountId])
+    const account = locked.rows[0]
+    if (!account) throw new Error('invalid_token')
+    const mode = accessMode(account)
+    if (mode === 'none') {
+      await client.query('ROLLBACK')
+      return { status: 402, error: 'AI access is paused. Subscribe or add your own key.' }
     }
+    const reserved = account.spend_reserved_until && new Date(account.spend_reserved_until).getTime() > Date.now()
+      ? Number(account.spend_reserved_micros || 0)
+      : 0
+    const available = mode === 'free_credit'
+      ? Number(account.free_credit_remaining_micros) - reserved
+      : fairUseMicros - await periodSpendMicros(account, client) - reserved
+    if (available <= 0) {
+      await client.query('ROLLBACK')
+      return {
+        status: mode === 'free_credit' ? 402 : 429,
+        error: mode === 'free_credit'
+          ? 'AI access is paused. Subscribe or add your own key.'
+          : 'This plan reached its fair-use ceiling for the current period.',
+      }
+    }
+    await client.query(
+      `UPDATE billing_accounts SET spend_reserved_micros = $1,
+       spend_reserved_until = now() + interval '2 minutes', updated_at = now() WHERE id = $2`,
+      [available, account.id],
+    )
     await client.query('COMMIT')
+    return { account, mode, amountMicros: available }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
   } finally {
     client.release()
+  }
+}
+
+async function releaseManagedSpend(accountId, amountMicros) {
+  await pool.query(
+    `UPDATE billing_accounts SET spend_reserved_micros = 0,
+     spend_reserved_until = NULL, updated_at = now()
+     WHERE id = $2 AND spend_reserved_micros = $1`,
+    [amountMicros, accountId],
+  )
+}
+
+async function managedCompletion(req, res) {
+  const tokenAccount = await accountForToken(req, 'ai')
+  const parsed = await body(req)
+  const feature = String(req.headers['x-daylens-feature'] || 'ai')
+  await reconcileLiteLLMBudget(tokenAccount.id)
+  const reservation = await reserveManagedSpend(tokenAccount.id)
+  if (reservation.status) return json(res, reservation.status, { error: reservation.error })
+
+  let payload
+  let costUsd
+  let usage
+  const { account, mode, amountMicros } = reservation
+  let upstream
+  try {
+    upstream = await fetch(`${litellmUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${decrypt(account.litellm_key_cipher)}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...parsed.json,
+        model: economyModelConfigured && parsed.json?.model === litellmEconomyModelAlias
+          ? litellmEconomyModelAlias
+          : litellmModelAlias,
+        stream: false,
+        metadata: { account_id: account.id, feature },
+      }),
+      signal: AbortSignal.timeout(90_000),
+    })
+    payload = await upstream.json()
+    if (!upstream.ok) {
+      await releaseManagedSpend(account.id, amountMicros)
+      return json(res, upstream.status, { error: payload?.error?.message || 'Managed AI provider failed.' })
+    }
+    costUsd = Number(upstream.headers.get('x-litellm-response-cost') || payload?._hidden_params?.response_cost)
+    if (!Number.isFinite(costUsd) || costUsd < 0) {
+      await releaseManagedSpend(account.id, amountMicros)
+      return json(res, 502, { error: 'The provider answered, but its cost could not be metered safely. Please retry.' })
+    }
+    const costMicros = Math.round(costUsd * 1_000_000)
+    if (costMicros > amountMicros) {
+      await releaseManagedSpend(account.id, amountMicros)
+      return json(res, 502, { error: 'The provider response exceeded the reserved spend limit and was discarded safely.' })
+    }
+    usage = payload.usage || {}
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const locked = await client.query('SELECT * FROM billing_accounts WHERE id = $1 FOR UPDATE', [account.id])
+      if (!locked.rows[0]) throw new Error('billing_account_not_found')
+      await client.query(
+        `INSERT INTO billing_usage
+         (account_id, mode, feature, provider, model, input_tokens, output_tokens, cost_micros, success, request_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9)`,
+        [account.id, mode, feature, managedProvider, payload.model || managedModel, usage.prompt_tokens || null, usage.completion_tokens || null, costMicros, payload.id || null],
+      )
+      if (mode === 'free_credit') {
+        const charged = await client.query(
+          `UPDATE billing_accounts SET free_credit_remaining_micros = free_credit_remaining_micros - $1,
+           spend_reserved_micros = 0, spend_reserved_until = NULL, updated_at = now()
+           WHERE id = $3 AND free_credit_remaining_micros >= $1 RETURNING id`,
+          [costMicros, amountMicros, account.id],
+        )
+        if (!charged.rows[0]) throw new Error('reserved_spend_settlement_failed')
+      } else {
+        await client.query(
+          `UPDATE billing_accounts SET spend_reserved_micros = 0,
+           spend_reserved_until = NULL, updated_at = now()
+           WHERE id = $2 AND spend_reserved_micros = $1`,
+          [amountMicros, account.id],
+        )
+      }
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
+  } catch (error) {
+    if (!upstream) await releaseManagedSpend(account.id, amountMicros).catch(() => {})
+    throw error
   }
 
   const text = payload.choices?.[0]?.message?.content || ''
@@ -696,11 +914,12 @@ async function route(req, res) {
   if (req.method === 'GET' && url.pathname === '/v1/billing') return json(res, 200, await billingSnapshot(account))
   if (req.method === 'GET' && url.pathname === '/v1/usage') return usage(account, url, res)
   if (req.method === 'GET' && url.pathname === '/v1/payments') return payments(account, res)
+  if (req.method === 'POST' && url.pathname === '/v1/installations/rotate-token') return rotateInstallationToken(account, req, res)
   if (req.method === 'POST' && url.pathname === '/v1/ai/session') {
     const snapshot = await billingSnapshot(account)
     if (!snapshot.canUseAI) return json(res, 402, { error: snapshot.message })
     return json(res, 200, {
-      accessToken: signToken({ type: 'ai', accountId: account.id }, 600),
+      accessToken: signToken({ type: 'ai', accountId: account.id, ver: account.installation_token_version }, 600),
       baseUrl: `${publicBaseUrl}/v1/managed`,
       provider: managedProvider,
       model: managedModel,
@@ -708,7 +927,7 @@ async function route(req, res) {
       mode: snapshot.mode,
     })
   }
-  if (req.method === 'POST' && url.pathname === '/v1/intercom/user-hash') return intercomUserHash(req, res)
+  if (req.method === 'POST' && url.pathname === '/v1/intercom/user-hash') return intercomUserHash(account, req, res)
   if (req.method === 'POST' && url.pathname === '/v1/checkout/polar') return createPolarCheckout(account, res)
   if (req.method === 'POST' && url.pathname === '/v1/checkout/flutterwave') return createFlutterwaveCheckout(account, req, res)
   if (req.method === 'POST' && url.pathname === '/v1/billing/portal') {

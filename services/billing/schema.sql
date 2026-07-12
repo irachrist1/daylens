@@ -14,9 +14,26 @@ CREATE TABLE IF NOT EXISTS billing_accounts (
   local_pass_expires_at TIMESTAMPTZ,
   polar_customer_id TEXT,
   polar_subscription_id TEXT,
+  polar_event_occurred_at TIMESTAMPTZ,
+  polar_event_rank INTEGER NOT NULL DEFAULT 0,
   customer_email TEXT,
+  installation_token_version INTEGER NOT NULL DEFAULT 1,
+  tokens_revoked_at TIMESTAMPTZ,
+  spend_reserved_micros BIGINT NOT NULL DEFAULT 0,
+  spend_reserved_until TIMESTAMPTZ,
+  litellm_budget_mode TEXT NOT NULL DEFAULT 'free_credit',
+  litellm_budget_sync_required BOOLEAN NOT NULL DEFAULT false,
   litellm_key_cipher TEXT NOT NULL
 );
+
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS polar_event_occurred_at TIMESTAMPTZ;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS polar_event_rank INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS installation_token_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS tokens_revoked_at TIMESTAMPTZ;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS spend_reserved_micros BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS spend_reserved_until TIMESTAMPTZ;
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS litellm_budget_mode TEXT NOT NULL DEFAULT 'free_credit';
+ALTER TABLE billing_accounts ADD COLUMN IF NOT EXISTS litellm_budget_sync_required BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS billing_usage (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -44,6 +61,18 @@ CREATE TABLE IF NOT EXISTS billing_payment_events (
   last_error TEXT,
   PRIMARY KEY (provider, event_id)
 );
+
+CREATE TABLE IF NOT EXISTS billing_polar_subscriptions (
+  subscription_id TEXT PRIMARY KEY,
+  account_id UUID NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  event_occurred_at TIMESTAMPTZ NOT NULL,
+  event_rank INTEGER NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS billing_polar_subscriptions_account
+  ON billing_polar_subscriptions (account_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS billing_payment_intents (
   provider TEXT NOT NULL,

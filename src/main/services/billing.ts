@@ -154,14 +154,17 @@ async function request<T>(path: string, init: RequestInit = {}, retryBootstrap =
 // TODO(intercom): inert until the founder pastes INTERCOM_IDENTITY_VERIFICATION_SECRET
 // into services/billing/.env and the billing service is deployed with
 // DAYLENS_BILLING_API_URL wired into the build.
-export async function getIntercomUserHash(userId: string): Promise<string | null> {
-  if (!apiUrl() || !userId) return null
+export async function getIntercomIdentity(): Promise<{ userId: string; userHash: string } | null> {
+  if (!apiUrl()) return null
   try {
-    const payload = await request<{ userHash?: string }>('/v1/intercom/user-hash', {
+    const payload = await request<{ userId?: string; userHash?: string }>('/v1/intercom/user-hash', {
       method: 'POST',
-      body: JSON.stringify({ userId }),
+      body: '{}',
     })
-    return typeof payload.userHash === 'string' && payload.userHash ? payload.userHash : null
+    return typeof payload.userId === 'string' && payload.userId
+      && typeof payload.userHash === 'string' && payload.userHash
+      ? { userId: payload.userId, userHash: payload.userHash }
+      : null
   } catch {
     return null
   }

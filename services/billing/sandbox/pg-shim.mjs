@@ -16,9 +16,14 @@ const db = {
   accounts: new Map(), // id -> row
   usage: [], // usage rows
   paymentEvents: new Map(), // `${provider}\0${event_id}` -> row
+  polarSubscriptions: new Map(), // subscription_id -> row
   paymentIntents: new Map(), // `${provider}\0${tx_ref}` -> row
   bootstrapAttempts: [], // { ip_hash, attempted_at }
 }
+
+// Dev-only escape hatch for the sandbox's revocation/failure fixtures.
+export const sandboxState = db
+export const sandboxControl = { failNextContaining: null }
 
 const now = () => new Date()
 const toMs = (v) => (v == null ? null : v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Date.parse(v))
@@ -45,7 +50,15 @@ function newAccount(installationHash, cipher) {
     local_pass_expires_at: null,
     polar_customer_id: null,
     polar_subscription_id: null,
+    polar_event_occurred_at: null,
+    polar_event_rank: 0,
     customer_email: null,
+    installation_token_version: 1,
+    tokens_revoked_at: null,
+    spend_reserved_micros: 0,
+    spend_reserved_until: null,
+    litellm_budget_mode: 'free_credit',
+    litellm_budget_sync_required: false,
     litellm_key_cipher: cipher,
   }
 }
@@ -59,6 +72,20 @@ function intentKey(provider, txRef) {
   return `${provider}\0${txRef}`
 }
 
+let transactionTail = Promise.resolve()
+
+function restore(snapshot) {
+  for (const key of Object.keys(db)) db[key] = snapshot[key]
+}
+
+async function acquireTransaction() {
+  let release
+  const previous = transactionTail
+  transactionTail = new Promise((resolve) => { release = resolve })
+  await previous
+  return release
+}
+
 // Execute one normalized statement. Returns { rows }.
 function run(text, params = []) {
   const q = String(text).replace(/\s+/g, ' ').trim()
@@ -69,17 +96,17 @@ function run(text, params = []) {
   // ── billing_accounts ──────────────────────────────────────────────
   if (q.startsWith('SELECT * FROM billing_accounts WHERE id =')) {
     const row = db.accounts.get(p[0])
-    return { rows: row ? [row] : [] }
+    return { rows: row ? [structuredClone(row)] : [] }
   }
   if (q.startsWith('SELECT * FROM billing_accounts WHERE installation_hash =')) {
     const row = accountByHash(p[0])
-    return { rows: row ? [row] : [] }
+    return { rows: row ? [structuredClone(row)] : [] }
   }
   if (q.startsWith('INSERT INTO billing_accounts (installation_hash, litellm_key_cipher)')) {
     if (accountByHash(p[0])) return { rows: [] } // ON CONFLICT DO NOTHING
-    const row = newAccount(p[0], 'pending')
+    const row = newAccount(p[0], p[1])
     db.accounts.set(row.id, row)
-    return { rows: [row] }
+    return { rows: [structuredClone(row)] }
   }
   if (q.startsWith('UPDATE billing_accounts SET litellm_key_cipher = $1 WHERE id = $2')) {
     const row = db.accounts.get(p[1])
@@ -89,9 +116,28 @@ function run(text, params = []) {
     }
     return { rows: [] }
   }
+  if (q.startsWith('UPDATE billing_accounts SET litellm_key_cipher = $1, litellm_budget_mode = $2')) {
+    const row = db.accounts.get(p[2])
+    if (row) {
+      row.litellm_key_cipher = p[0]
+      row.litellm_budget_mode = p[1]
+      row.litellm_budget_sync_required = false
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET litellm_budget_mode = $1')) {
+    const row = db.accounts.get(p[1])
+    if (row) {
+      row.litellm_budget_mode = p[0]
+      row.litellm_budget_sync_required = false
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
   if (q.startsWith("UPDATE billing_accounts SET plan = 'subscription'")) {
-    // params: [status, period_start, period_end, customer_id, subscription_id, accountId]
-    const row = db.accounts.get(p[5])
+    // params: [status, period_start, period_end, customer_id, subscription_id, event_at, event_rank, accountId]
+    const row = db.accounts.get(p[7])
     if (row) {
       row.plan = 'subscription'
       row.subscription_status = p[0]
@@ -99,14 +145,32 @@ function run(text, params = []) {
       row.renewal_at = p[2] ? new Date(p[2]) : addMonth(now())
       row.polar_customer_id = p[3] ?? row.polar_customer_id
       row.polar_subscription_id = p[4] ?? row.polar_subscription_id
+      row.polar_event_occurred_at = p[5]
+      row.polar_event_rank = p[6]
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
   }
   if (q.startsWith("UPDATE billing_accounts SET subscription_status = 'canceled'")) {
-    const row = db.accounts.get(p[0])
+    const row = db.accounts.get(p[2])
     if (row) {
       row.subscription_status = 'canceled'
+      row.polar_event_occurred_at = p[0]
+      row.polar_event_rank = p[1]
+      row.litellm_budget_sync_required = true
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith("UPDATE billing_accounts SET subscription_status = 'revoked'")) {
+    const row = db.accounts.get(p[2])
+    if (row) {
+      row.subscription_status = 'revoked'
+      row.renewal_at = now()
+      row.polar_event_occurred_at = p[0]
+      row.polar_event_rank = p[1]
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
@@ -120,18 +184,19 @@ function run(text, params = []) {
       row.local_pass_expires_at = addDays(new Date(base), 30)
       row.period_started_at = now()
       row.customer_email = p[0] ?? row.customer_email
+      row.litellm_budget_sync_required = true
       row.updated_at = now()
     }
     return { rows: [] }
   }
-  if (q.startsWith('UPDATE billing_accounts SET free_credit_remaining_micros')) {
-    // params: [costMicros, accountId]
-    const row = db.accounts.get(p[1])
-    if (row) {
-      row.free_credit_remaining_micros = Math.max(0, Number(row.free_credit_remaining_micros) - Number(p[0]))
-      row.updated_at = now()
-    }
-    return { rows: [] }
+  if (q.startsWith('UPDATE billing_accounts SET free_credit_remaining_micros = free_credit_remaining_micros - $1')) {
+    const row = db.accounts.get(p[2])
+    if (!row || Number(row.free_credit_remaining_micros) < Number(p[0])) return { rows: [] }
+    row.free_credit_remaining_micros -= Number(p[0])
+    row.spend_reserved_micros = 0
+    row.spend_reserved_until = null
+    row.updated_at = now()
+    return { rows: [{ id: row.id }] }
   }
   if (q.startsWith('UPDATE billing_accounts SET customer_email = $1, updated_at = now() WHERE id = $2')) {
     const row = db.accounts.get(p[1])
@@ -139,6 +204,49 @@ function run(text, params = []) {
       row.customer_email = p[0]
       row.updated_at = now()
     }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET installation_token_version = installation_token_version + 1')) {
+    const row = db.accounts.get(p[0])
+    if (!row || Number(row.installation_token_version) !== Number(p[1])) return { rows: [] }
+    row.installation_token_version += 1
+    row.updated_at = now()
+    return { rows: [{ installation_token_version: row.installation_token_version }] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET spend_reserved_micros = $1,')) {
+    const row = db.accounts.get(p[1])
+    if (row) {
+      row.spend_reserved_micros = Number(p[0])
+      row.spend_reserved_until = new Date(Date.now() + 120_000)
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+  if (q.startsWith('UPDATE billing_accounts SET spend_reserved_micros = 0,')) {
+    const row = db.accounts.get(p[1])
+    if (row && Number(row.spend_reserved_micros) === Number(p[0])) {
+      row.spend_reserved_micros = 0
+      row.spend_reserved_until = null
+      row.updated_at = now()
+    }
+    return { rows: [] }
+  }
+
+  // ── billing_polar_subscriptions ───────────────────────────────────
+  if (q.startsWith('SELECT * FROM billing_polar_subscriptions WHERE subscription_id =')) {
+    const row = db.polarSubscriptions.get(p[0])
+    return { rows: row ? [structuredClone(row)] : [] }
+  }
+  if (q.startsWith('INSERT INTO billing_polar_subscriptions')) {
+    const row = {
+      subscription_id: p[0],
+      account_id: p[1],
+      status: p[2],
+      event_occurred_at: p[3],
+      event_rank: p[4],
+      updated_at: now(),
+    }
+    db.polarSubscriptions.set(p[0], row)
     return { rows: [] }
   }
 
@@ -290,11 +398,47 @@ function run(text, params = []) {
 }
 
 class Client {
+  inTransaction = false
+  snapshot = null
+  releaseTransaction = null
+
   async query(text, params) {
+    const command = String(text).trim().toUpperCase()
+    if (command === 'BEGIN') {
+      if (this.inTransaction) throw new Error('pg-shim: transaction already open')
+      this.releaseTransaction = await acquireTransaction()
+      this.snapshot = structuredClone(db)
+      this.inTransaction = true
+      return { rows: [] }
+    }
+    if (command === 'COMMIT') {
+      if (!this.inTransaction) throw new Error('pg-shim: no transaction')
+      this.inTransaction = false
+      this.snapshot = null
+      this.releaseTransaction()
+      this.releaseTransaction = null
+      return { rows: [] }
+    }
+    if (command === 'ROLLBACK') {
+      if (!this.inTransaction) return { rows: [] }
+      restore(this.snapshot)
+      this.inTransaction = false
+      this.snapshot = null
+      this.releaseTransaction()
+      this.releaseTransaction = null
+      return { rows: [] }
+    }
+    if (sandboxControl.failNextContaining && String(text).includes(sandboxControl.failNextContaining)) {
+      const marker = sandboxControl.failNextContaining
+      sandboxControl.failNextContaining = null
+      throw new Error(`pg-shim: injected failure at ${marker}`)
+    }
     return run(text, params)
   }
 
-  release() {}
+  release() {
+    if (this.inTransaction) throw new Error('pg-shim: client released with transaction open')
+  }
 }
 
 export class Pool {

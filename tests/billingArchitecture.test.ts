@@ -42,6 +42,27 @@ test('billing backend records payment intents and retryable webhook processing',
   assert.match(server, /processed_at FROM billing_payment_events/)
 })
 
+test('managed billing reserves spend before provider I/O and settles it atomically', () => {
+  const schema = fs.readFileSync(path.join(root, 'services/billing/schema.sql'), 'utf8')
+  const server = fs.readFileSync(path.join(root, 'services/billing/src/server.mjs'), 'utf8')
+  assert.match(schema, /spend_reserved_micros BIGINT NOT NULL DEFAULT 0/)
+  assert.match(schema, /spend_reserved_until TIMESTAMPTZ/)
+  const reserve = server.indexOf('async function reserveManagedSpend')
+  const reserveCommit = server.indexOf("await client.query('COMMIT')", reserve)
+  const provider = server.indexOf("fetch(`${litellmUrl}/chat/completions`")
+  assert.ok(reserve >= 0 && reserveCommit > reserve && provider > reserveCommit)
+  assert.match(server, /costMicros > amountMicros/)
+})
+
+test('Intercom identity is derived by the billing server, never chosen by the desktop', () => {
+  const server = fs.readFileSync(path.join(root, 'services/billing/src/server.mjs'), 'utf8')
+  const desktop = fs.readFileSync(path.join(root, 'src/main/services/billing.ts'), 'utf8')
+  const handler = server.match(/async function intercomUserHash[\s\S]*?\n}/)?.[0] ?? ''
+  assert.match(handler, /const userId = account\.id/)
+  assert.doesNotMatch(handler, /payload\.userId|intercom_user_id/)
+  assert.match(desktop, /body: '\{\}'/)
+})
+
 test('desktop keeps own-key access ahead of managed access', () => {
   const source = fs.readFileSync(path.join(root, 'src/main/services/billing.ts'), 'utf8')
   const ownKeyCheck = source.indexOf('selectedOwnKeyProvider')

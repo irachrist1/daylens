@@ -57,6 +57,25 @@ psql "$DATABASE_URL" -f services/billing/schema.sql
 
 The schema stores account state, usage metadata, payment events, and payment intents. It does not store prompts, resolved facts, answers, or raw activity.
 
+Managed calls reserve the account's currently available credit in a short row-locked
+transaction, commit that reservation, and only then call LiteLLM. Settlement records
+usage and releases the unused reservation atomically. Reservations expire after two
+minutes so a crashed server cannot freeze an account indefinitely. Entitlement webhooks
+commit Daylens state before synchronizing LiteLLM; a persisted sync flag makes that
+provider update retryable on the next managed call.
+
+Installation bearer tokens expire after 30 days and carry an account token version.
+The desktop can rotate a suspected token with `POST /v1/installations/rotate-token`
+using its current bearer token plus the local installation ID as proof. For an
+emergency server-side revocation when the device is unavailable:
+
+```sql
+UPDATE billing_accounts
+SET installation_token_version = installation_token_version + 1,
+    tokens_revoked_at = now(), updated_at = now()
+WHERE id = '<account uuid>';
+```
+
 ## Railway deployment
 
 This repo ships Railway-ready Docker service roots:
@@ -93,6 +112,7 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 LITELLM_MASTER_KEY=<shared high-entropy key>
 DAYLENS_PROVIDER_API_KEY=<upstream provider key for LiteLLM>
 DAYLENS_MANAGED_MODEL=anthropic/claude-sonnet-4-6
+DAYLENS_ECONOMY_MODEL=<lower-cost provider model>
 ```
 
 Set these variables on **`daylens-litellm` only**:
@@ -107,6 +127,7 @@ Set these variables on **`daylens-billing` only**:
 NODE_ENV=production
 LITELLM_URL=http://daylens-litellm.railway.internal:4000
 LITELLM_MODEL_ALIAS=daylens-default
+LITELLM_ECONOMY_MODEL_ALIAS=daylens-economy
 DAYLENS_MANAGED_PROVIDER=anthropic
 SESSION_SECRET=<openssl rand -base64 48>
 INSTALLATION_HASH_SECRET=<openssl rand -base64 48>
@@ -264,15 +285,20 @@ no Polar/Flutterwave/LiteLLM accounts**. From the repo root:
 npm run billing:sandbox
 ```
 
-It boots `src/server.mjs` unmodified and scripts the 10 smoke checks above against it,
+It boots `src/server.mjs` unmodified and scripts the smoke checks above plus adversarial
+webhook, token-revocation, identity, overspend, and concurrency cases against it,
 printing `PASS`/`FAIL` per check and exiting non-zero on any failure.
 
 What it stands up (all in one Node process, all ephemeral):
 
 - **Store** - an in-memory shim loaded in place of `pg` (`sandbox/pg-shim.mjs`), so the
   server runs with no database. It implements only the queries the server issues; an
-  unrecognised query throws loudly. Transactions are simulated as no-ops, so this is a
-  functional harness, not a concurrency test.
+  unrecognised query throws loudly. Transactions snapshot, roll back, and serialize in
+  the harness so crash recovery and concurrent-delivery regressions are exercised. The
+  harness also pins the production `FOR UPDATE` clauses and reservation-before-provider
+  ordering explicitly because its global transaction serialization is stronger than
+  Postgres row locking. This is still not a
+  substitute for the real-Postgres and provider test-mode checks before deployment.
 - **LiteLLM** - a fake upstream that returns a canned completion plus a fake
   `x-litellm-response-cost`, so metering and the `$5` credit draw-down are real.
 - **Polar + Flutterwave** - fake checkout, customer-session, and transaction-verify
