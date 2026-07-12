@@ -66,6 +66,18 @@ test('sessions with no endTime fall back to duration for coverage', () => {
   assert.deepEqual(gaps, [{ startMs: 10 * MIN, endMs: 26 * MIN }])
 })
 
+test('an inflated wall-clock end cannot hide a real absence after captured activity stopped', () => {
+  // Real row 1399: Dia claimed 13:07:44–13:43:24, but contained only 236s of
+  // captured activity. The next session started at the stored end, so trusting
+  // endTime erased a 31m44s absence from the guard.
+  const start = new Date('2026-03-19T13:07:44').getTime()
+  const nextStart = new Date('2026-03-19T13:43:24').getTime()
+  assert.deepEqual(findRealAbsences([
+    { startTime: start, endTime: nextStart, durationSeconds: 236 },
+    { startTime: nextStart, endTime: nextStart + 5 * MIN, durationSeconds: 5 * 60 },
+  ]), [{ startMs: start + 236_000, endMs: nextStart }])
+})
+
 test('absenceSpannedBy is the merge veto: union of blocks across a gap reports it', () => {
   const blockA = [session(0, 20), session(21, 30)]
   const blockB = [session(148, 30)] // 97-minute absence, the July 10 shape

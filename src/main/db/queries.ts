@@ -26,6 +26,7 @@ import { resolveBrowserApplication } from '../services/browserRegistry'
 import { learnFromBlockOverride } from '../services/workMemory'
 import { isSystemNoiseApp } from '@shared/systemNoise'
 import { activityCategoryLabel } from '@shared/activityCategories'
+import { REAL_ABSENCE_MIN_MS } from '../lib/absenceGuard'
 
 function resolveDisplayName(bundleId: string, fallbackName: string): string {
   return resolveCanonicalApp(bundleId, fallbackName).displayName
@@ -235,7 +236,12 @@ export interface LiveAppSessionSnapshot {
 }
 
 function sessionEndTime(row: Pick<AppSessionRow, 'start_time' | 'end_time' | 'duration_sec'>): number {
-  return row.end_time ?? (row.start_time + row.duration_sec * 1_000)
+  const capturedEnd = row.start_time + Math.max(0, row.duration_sec) * 1_000
+  if (row.end_time == null) return capturedEnd
+  // `end_time` is sometimes only a stale wall-clock envelope. Keep normal
+  // polling/rounding drift, but never turn a >=15-minute uncovered tail into
+  // captured activity before the absence guard gets to inspect the session.
+  return row.end_time - capturedEnd >= REAL_ABSENCE_MIN_MS ? capturedEnd : row.end_time
 }
 
 function appSessionEndTime(session: Pick<AppSession, 'startTime' | 'endTime' | 'durationSeconds'>): number {
@@ -362,6 +368,9 @@ export interface SearchOptions {
   // raises this as it collects results so lower-yield tables only scan rows that
   // could still land in the final top-`limit` set. Not set by IPC callers.
   minStartMs?: number
+  // Internal pagination ceiling used after corrected search filters ignored
+  // Timeline spans. Not exposed over IPC.
+  maxStartMs?: number
 }
 
 export interface SessionSearchResult {
@@ -436,7 +445,10 @@ function searchBounds(opts: SearchOptions): { fromMs: number; toMs: number; limi
   const dateFloor = parseDateBound(opts.startDate, 'start') ?? 0
   return {
     fromMs: Math.max(dateFloor, opts.minStartMs ?? 0),
-    toMs: parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
+    toMs: Math.min(
+      parseDateBound(opts.endDate, 'end') ?? Number.MAX_SAFE_INTEGER,
+      opts.maxStartMs ?? Number.MAX_SAFE_INTEGER,
+    ),
     limit: normalizedSearchLimit(opts.limit),
   }
 }
@@ -733,6 +745,7 @@ export function getSessionsForRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
+  options: { minimumDurationSeconds?: number } = {},
 ): AppSession[] {
   const overrides = getCategoryOverrides(db)
 
@@ -753,7 +766,7 @@ export function getSessionsForRange(
         return clipRowToRange(row, fromMs, toMs, category, identity)
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
-  ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
+  ).filter((session) => session.durationSeconds >= (options.minimumDurationSeconds ?? MIN_DISPLAY_SEC))
 }
 
 export function searchSessions(
@@ -2118,7 +2131,7 @@ export function getBrowserActivityBreakdown(
   fromMs: number,
   toMs: number,
   canonicalBrowserId: string,
-  options: { excludeSpans?: readonly CorrectionSpan[] } = {},
+  options: { excludeSpans?: readonly CorrectionSpan[]; sessions?: readonly AppSession[] } = {},
 ): BrowserActivityBreakdown {
   const excludeSpans = options.excludeSpans ?? []
   // Reconcile over the WHOLE range and every browser — the claim pool a page
@@ -2132,11 +2145,11 @@ export function getBrowserActivityBreakdown(
   // total can never exceed what the app header counts (the header sums
   // duration_sec, not wall-clock spans).
   const foreground: { start: number; end: number }[] = []
-  for (const session of getSessionsForRange(db, fromMs, toMs)) {
+  for (const session of options.sessions ?? getSessionsForRange(db, fromMs, toMs)) {
     if ((session.canonicalAppId ?? session.bundleId) !== canonicalBrowserId && session.bundleId !== canonicalBrowserId) continue
     // Corrected truth (invariant 7): a deleted Timeline block's foreground
     // windows carry no page credit — its domains/pages vanish with its total.
-    if (excludeSpans.length > 0 && sessionStartsInsideSpans(session, excludeSpans)) continue
+    if (!options.sessions && excludeSpans.length > 0 && sessionStartsInsideSpans(session, excludeSpans)) continue
     const start = Math.max(session.startTime, fromMs)
     const end = Math.min(
       Math.min(

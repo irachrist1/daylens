@@ -4,7 +4,6 @@ import {
   getActivityStateEventsForRange,
   getBlockLabelOverride,
   getFocusSessionsForDateRange,
-  getSessionsForRange,
   getReconciledWebsiteVisitsForRange,
   getTopPagesForDomains,
   getWebsiteVisitsForRange,
@@ -77,6 +76,7 @@ import {
 } from './workMemory'
 import { isBrowserApplication } from './browserRegistry'
 import { getBackgroundProcessEvidence } from './backgroundProcessEvidence'
+import { getCorrectedSessionsForRange, getCorrectedWebsiteSummariesForRange } from './activityFacts'
 
 /**
  * Sanitize a label that might be a raw file path or bundle path.
@@ -5577,8 +5577,8 @@ export function getTimelineDayPayload(
   const [fromMs, toMs] = isLiveProvisionalDay
     ? localDayBounds(dateStr)
     : ownedDayBounds(db, dateStr, { liveSessionStartMs: liveSession?.startTime ?? null })
-  const sessions = withFocusApps(mergeLiveSession(getSessionsForRange(db, fromMs, toMs), liveSession))
-  const websites = getWebsiteSummariesForRange(db, fromMs, toMs)
+  const sessions = withFocusApps(mergeLiveSession(getCorrectedSessionsForRange(db, fromMs, toMs), liveSession))
+  const websites = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
   const builtBlocks = isLiveProvisionalDay
     ? buildProvisionalLiveBlocks(db, sessions)
     : buildTimelineBlocksForDay(db, dateStr, sessions, options)
@@ -5650,8 +5650,8 @@ function getLightweightDayPayload(
   dateStr: string,
 ): DayTimelinePayload | null {
   const [fromMs, toMs] = ownedDayBounds(db, dateStr)
-  const sessions = getSessionsForRange(db, fromMs, toMs)
-  const websitesForDay = getWebsiteSummariesForRange(db, fromMs, toMs)
+  const sessions = getCorrectedSessionsForRange(db, fromMs, toMs)
+  const websitesForDay = getCorrectedWebsiteSummariesForRange(db, fromMs, toMs)
 
   const rows = db.prepare(`
     SELECT

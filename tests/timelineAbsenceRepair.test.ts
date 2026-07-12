@@ -6,7 +6,9 @@ import { SCHEMA_SQL } from '../src/main/db/schema.ts'
 import { materializeTimelineDayProjection } from '../src/main/core/query/projections.ts'
 import { analyzeTimelineDay } from '../src/main/services/analyzeDay.ts'
 import { mergeTimelineEpisodes, writeTimelineBlockReview } from '../src/main/services/workBlocks.ts'
-import { setBlockLabelOverride } from '../src/main/db/queries.ts'
+import { getSessionsForRange, setBlockLabelOverride } from '../src/main/db/queries.ts'
+import { absenceSpannedBy } from '../src/main/lib/absenceGuard.ts'
+import { getCorrectedSessionsForRange } from '../src/main/services/activityFacts.ts'
 
 // The absence guard end-to-end (v2-ship-plan W1-A). The founder's real July 10
 // had a block from 3:49 PM to 10:05 PM with a real absence from 8:01 PM to
@@ -98,6 +100,38 @@ test('mergeTimelineEpisodes refuses to join blocks across a real absence', () =>
   db.close()
 })
 
+test('the real session read path preserves captured duration so an inflated end cannot erase the gap', () => {
+  const db = createDb()
+  const start = localMs(9)
+  const inflatedEnd = start + 2_139_000
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('company.thebrowser.Browser', 'Dia', ?, ?, 236,
+      'browsing', 0, 'Work', 'Dia', 'test', 1)
+  `).run(start, inflatedEnd)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec,
+      category, is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('company.thebrowser.Browser', 'Dia', ?, ?, 1500,
+      'browsing', 0, 'Work', 'Dia', 'test', 1)
+  `).run(inflatedEnd, inflatedEnd + 1_500_000)
+
+  const sessions = getSessionsForRange(db, localMs(8), localMs(11), { minimumDurationSeconds: 0 })
+  assert.equal(sessions[0]?.durationSeconds, 236, 'range hydration must not replace captured duration with the stale wall span')
+  assert.deepEqual(absenceSpannedBy(sessions), { startMs: start + 236_000, endMs: inflatedEnd })
+
+  const payload = materializeTimelineDayProjection(db, TEST_DATE, null)
+  const hiddenGapMid = (start + 236_000 + inflatedEnd) / 2
+  assert.ok(
+    payload.blocks.every((block) => !(block.startTime < hiddenGapMid && block.endTime > hiddenGapMid)),
+    'the hydrated sessions must reach the block guard unchanged',
+  )
+  db.close()
+})
+
 test('an AI regroup plan spanning the absence is partitioned: sides merge, the gap never does', async () => {
   const db = createDb()
   // Two over-split topics per side so the regroup has real work to do.
@@ -135,20 +169,12 @@ test('an AI regroup plan spanning the absence is partitioned: sides merge, the g
   db.close()
 })
 
-test('re-analyze REPAIRS a stored day whose block spans an absence, preserving the user rename', async () => {
+test('re-analyze REPAIRS a stored day and carries the fused block correction to the larger split half', async () => {
   const db = createDb()
   seedDayWithAbsence(db)
   const fresh = materializeTimelineDayProjection(db, TEST_DATE, null)
   const freshBlocks = fresh.blocks.filter((block) => !block.isLive)
   assert.equal(freshBlocks.length, 2)
-
-  // The user renamed the morning block — the correction that must survive.
-  const morning = freshBlocks[0]
-  writeTimelineBlockReview(db, TEST_DATE, morning as WorkContextBlock, {
-    state: 'corrected',
-    correctedLabel: 'Fixing the tracker',
-  })
-  setBlockLabelOverride(db, morning.id, 'Fixing the tracker', null)
 
   // Poison the day the way the pre-guard bug did: one stored block fused
   // across the absence, held together by a merge correction spanning the gap,
@@ -191,6 +217,15 @@ test('re-analyze REPAIRS a stored day whose block spans an absence, preserving t
   const poisonedBlocks = poisoned.blocks.filter((block) => !block.isLive)
   assert.equal(poisonedBlocks.length, 1)
   assert.ok(blockSpansGap(poisonedBlocks[0]), 'the poisoned block must span the absence')
+  // This is the missed review scenario: the correction belongs to the exact
+  // fused block being split, not a neighbouring pre-repair block whose
+  // evidence key happens to survive.
+  writeTimelineBlockReview(db, TEST_DATE, poisonedBlocks[0] as WorkContextBlock, {
+    state: 'corrected',
+    correctedLabel: 'Fixing the tracker',
+    correctedCategory: 'research',
+  })
+  setBlockLabelOverride(db, poisonedBlocks[0].id, 'Fixing the tracker', null)
 
   // The founder's one click: re-analyze. No AI needed to repair the shape.
   const result = await analyzeTimelineDay(db, TEST_DATE, {
@@ -206,10 +241,16 @@ test('re-analyze REPAIRS a stored day whose block spans an absence, preserving t
   const poisonRow = db.prepare(`SELECT COUNT(*) AS n FROM timeline_boundary_corrections WHERE id = 'bnd_poisoned'`)
     .get() as { n: number }
   assert.equal(poisonRow.n, 1)
-  // The user's rename re-attached to the rebuilt morning block (invariant 8).
+  const corrected = repaired.filter((block) => block.label.current === 'Fixing the tracker')
+  assert.equal(corrected.length, 1, 'the fused rename belongs to exactly the split half with the most overlap')
+  const largest = [...repaired].sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime))[0]
+  assert.equal(corrected[0].id, largest.id)
+  assert.equal(corrected[0].dominantCategory, 'research', 'the fused category correction must survive too')
+  const correctedSessions = getCorrectedSessionsForRange(db, localMs(9), localMs(12, 30))
+  assert.ok(correctedSessions.some((session) => session.startTime < localMs(GAP_START_H) && session.category === 'research'))
   assert.ok(
-    repaired.some((block) => block.label.current === 'Fixing the tracker'),
-    `the rename must survive the repair; labels: ${repaired.map((b) => b.label.current).join(' | ')}`,
+    correctedSessions.some((session) => session.startTime >= localMs(GAP_END.h, GAP_END.m) && session.category === 'development'),
+    'the obsolete fused review must not recategorize the non-selected half',
   )
   db.close()
 })

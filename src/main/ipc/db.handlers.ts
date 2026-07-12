@@ -5,10 +5,8 @@ import {
   getAppCharacter,
   getAllAppsForLabeling,
   getCategoryOverrideEffect,
-  getPeakHours,
   getSessionsForRange,
   getSessionsForApp,
-  getWebsiteSummariesForRange,
   setCategoryOverride,
   clearCategoryOverride,
   getCategoryOverrides,
@@ -24,7 +22,11 @@ import {
   addClientMemoryFact,
 } from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
-import { getCorrectedAppSummariesForRange } from '../services/activityFacts'
+import {
+  getCorrectedAppSummariesForRange,
+  getCorrectedPeakHours as getPeakHours,
+  getCorrectedWebsiteSummariesForRange as getWebsiteSummariesForRange,
+} from '../services/activityFacts'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
   resolveClientQuery,

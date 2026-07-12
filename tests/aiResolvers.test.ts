@@ -15,6 +15,7 @@ import type {
   GetAppUsageResult,
   SearchSessionsResult,
 } from '../src/main/services/aiTools.ts'
+import { execSearchSessions } from '../src/main/services/aiTools.ts'
 
 function setupDb(): Database.Database {
   const db = new Database(':memory:')
@@ -86,6 +87,110 @@ test('getApp on an unknown app reports empty without throwing', (t) => {
   seedCodingDay(db)
   const fact = runResolverQuery({ resolver: 'getApp', app: 'NonexistentApp42' }, db)
   assert.equal(fact.isEmpty, true, 'no tracked time for an app that was never used')
+})
+
+test('AI search cannot surface session or page content from an ignored Timeline span', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const start = localMs(today, 9)
+  const end = localMs(today, 10)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('secret.app', 'SecretApp', ?, ?, 3600, 'development', 1,
+      'Project Nightfall confidential', 'SecretApp', 'test', 1)
+  `).run(start, end)
+  db.prepare(`
+    INSERT INTO website_visits (
+      domain, page_title, url, visit_time, visit_time_us, duration_sec,
+      browser_bundle_id, source
+    ) VALUES ('nightfall.example', 'Project Nightfall brief', 'https://nightfall.example/brief',
+      ?, ?, 3600, 'secret.app', 'active_browser_context')
+  `).run(start, start * 1000)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_secret', 'secret', ?, 'secret', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: start, endTime: end }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Nightfall',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+  }, db)
+  assert.deepEqual(result.hits, [])
+  assert.equal(result.matchKind, 'empty')
+})
+
+test('AI search pages past ignored matches to return the next visible result', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const insert = db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('search.app', 'Search App', ?, ?, 30, 'research', 1,
+      'Needle project', 'Search App', 'test', 1)
+  `)
+  const visibleStart = localMs(today, 8)
+  insert.run(visibleStart, visibleStart + 30_000)
+  for (let minute = 0; minute < 25; minute++) {
+    const start = localMs(today, 9, minute)
+    insert.run(start, start + 30_000)
+  }
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_search_limit', 'search_limit', ?, 'search_limit', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: localMs(today, 9), endTime: localMs(today, 10) }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Needle',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+    limit: 25,
+  }, db)
+  assert.equal(result.matchKind, 'strict')
+  assert.equal(result.hits.length, 1)
+  assert.equal(result.hits[0].startTime, visibleStart)
+})
+
+test('AI search keeps a row when only part of its interval was ignored', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const start = localMs(today, 9)
+  const end = localMs(today, 10)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('partial.app', 'Partial App', ?, ?, 3600, 'research', 1,
+      'Needle project', 'Partial App', 'test', 1)
+  `).run(start, end)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_partial_search', 'partial_search', ?, 'partial_search', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: start + 15 * 60_000, endTime: start + 45 * 60_000 }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Needle',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+  }, db)
+  assert.equal(result.matchKind, 'strict')
+  assert.equal(result.hits.length, 1)
+  assert.equal(result.hits[0].startTime, start)
 })
 
 function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {

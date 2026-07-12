@@ -40,9 +40,14 @@ export interface AbsenceGap {
 
 function guardSessionEndMs(session: GuardSession): number {
   const derived = session.startTime + Math.max(0, session.durationSeconds) * 1000
-  return typeof session.endTime === 'number' && session.endTime > session.startTime
-    ? session.endTime
-    : derived
+  if (typeof session.endTime !== 'number' || session.endTime <= session.startTime) return derived
+
+  // end_time is a wall-clock envelope, while duration_sec is the captured
+  // activity inside it. Normally they differ only by polling/rounding drift.
+  // A difference large enough to be a real absence is not harmless drift:
+  // trusting the envelope would manufacture continuous evidence where none
+  // was captured (real row 1399 carried 236s across a 2,139s envelope).
+  return session.endTime - derived >= REAL_ABSENCE_MIN_MS ? derived : session.endTime
 }
 
 /** True when a gap of this length between two stretches of captured activity

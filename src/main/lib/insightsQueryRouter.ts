@@ -1,11 +1,13 @@
 import type Database from 'better-sqlite3'
-import { getPeakHours, getWebsiteSummariesForRange, searchBrowser } from '../db/queries'
+import { searchBrowser } from '../db/queries'
 // The insights router quotes totals to the user, so it reads the corrected
 // activity truth (invariant 7): deleted Timeline blocks are subtracted from
 // every app/session fact, matching the Timeline and Apps views exactly.
 import {
   getCorrectedAppSummariesForRange as getAppSummariesForRange,
   getCorrectedSessionsForRange as getSessionsForRange,
+  getCorrectedWebsiteSummariesForRange as getWebsiteSummariesForRange,
+  getCorrectedPeakHours as getPeakHours,
 } from '../services/activityFacts'
 import type { AppCategory, AppSession, AppUsageSummary, WebsiteSummary } from '@shared/types'
 import { DISTRACTION_DOMAINS, FOCUSED_CATEGORIES } from '@shared/types'
