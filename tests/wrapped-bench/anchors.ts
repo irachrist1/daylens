@@ -21,6 +21,11 @@ export interface SlideAnchors {
   bad: string[]
 }
 
+/** Every cadence the benchmark can judge. Month and year share the week
+ *  (period) anchor table: the period planner emits the same slide ids for all
+ *  three, so one calibration set covers them by design. */
+export type WrapBenchCadence = 'day' | 'week' | 'month' | 'year'
+
 /** Dynamic-id families share one anchor set: story beats (story-morning, …)
  *  and the period thread deep-dives (thread-0 … thread-3). */
 export function normalizeSlideId(slideId: string): string {
@@ -143,7 +148,7 @@ const DAY_ANCHORS: Record<string, SlideAnchors> = {
   wildcard: {
     perfect: [
       'Your day started earlier than any day in two weeks, and those first two hours were the cleanest work you did.',
-      'You came back to the proposal 14 separate times before it was done. It is done.',
+      'You came back to the proposal 14 separate times today, and the day kept circling back to it.',
       'The evening did the heavy lifting on the edit. You found a second gear after the early scattering.',
     ],
     bad: [
@@ -176,7 +181,7 @@ const DAY_ANCHORS: Record<string, SlideAnchors> = {
   reflection: {
     perfect: [
       'Tuesday was a maker\'s day. You gave the tracking engine your first and best hours, closed the midnight bug that had been wrong for weeks, and still made room for the design review and the settings work after lunch. The eleven commits tell the same story the timeline does: early, heads-down, mostly on one thing. A good one to have behind you.',
-      'About seven hours, and the month-end close was the whole spine of it. The reconciliations tied out by early afternoon and the pack went to the partners after. A couple of calls broke it up but never derailed it. The kind of day that ends with something actually finished.',
+      'About seven hours, and the month-end close was the whole spine of it. The reconciliations tied out by early afternoon and the pack went to the partners after. A couple of calls broke it up but never derailed it. The kind of day that leaves the close further along than it found it.',
     ],
     bad: [
       'Today you were productive and got a lot done. You worked on several things and had some meetings. Great job, keep it up tomorrow.',
@@ -392,7 +397,7 @@ const WEEK_ANCHORS: Record<string, SlideAnchors> = {
   },
   reflection: {
     perfect: [
-      'Good week. The launch and the proposal both crossed the line, and the timeline rework you\'ve been circling finally got four real days in a row. Tuesday was the engine of it. Friday you eased off, and the shape says the week could afford it. A week that knew what it was about.',
+      'Good week. The timeline rework you\'ve been circling finally got four real days in a row, and Tuesday was the engine of it. The client deck kept its place in the mornings without ever taking over. Friday you eased off, and the shape says the week could afford it. A week that knew what it was about.',
       'A steady close week. The reconciliations took the front half, the partner pack went out Thursday, and the calls never managed to derail the desk time. Wednesday was almost nothing and the week was better for the exhale. Solid, honest hours.',
     ],
     bad: ['A solid and productive week where you accomplished a lot. Nice work, and keep the momentum going next week.'],
@@ -400,8 +405,9 @@ const WEEK_ANCHORS: Record<string, SlideAnchors> = {
 }
 
 /** Anchors for a slide, or null when we don't have a calibrated set yet (the
- *  judge then falls back to the rubric alone for that slide). */
-export function anchorsFor(cadence: 'day' | 'week', slideId: string): SlideAnchors | null {
-  const table = cadence === 'week' ? WEEK_ANCHORS : DAY_ANCHORS
+ *  judge then falls back to the rubric alone for that slide). Month and year
+ *  score against the period (week) table — identical slide ids. */
+export function anchorsFor(cadence: WrapBenchCadence, slideId: string): SlideAnchors | null {
+  const table = cadence === 'day' ? DAY_ANCHORS : WEEK_ANCHORS
   return table[normalizeSlideId(slideId)] ?? null
 }

@@ -22,6 +22,8 @@ import {
   EVIDENCE_HONESTY_DIRECTIVES,
   buildRepairUserMessage,
   deckPromptSection,
+  durationTokensIn,
+  enforceDeckEmojiBudget,
   guardContextPercents,
   guardContextTimes,
   stripCodeFence,
@@ -100,12 +102,24 @@ export function wrappedNarrativeCacheKey(facts: DayWrapFacts, factsHash: string)
 }
 
 function guardContext(facts: DayWrapFacts, slides: WrapSlideSpec[], enrichment?: DayEnrichment | null): LineGuardContext {
+  // Durations ground against everything the writer actually saw: the compact
+  // facts JSON plus every slide's own card text. A close-but-wrong "8h 57m"
+  // (facts: 8h 58m) dies deterministically instead of costing accuracy 0 at
+  // the judge.
+  const durationSource = [
+    JSON.stringify(compactDayFacts(facts, enrichment)),
+    ...slides.map((s) => `${s.kicker} ${s.factsNote} ${s.stat?.value ?? ''} ${s.stat?.sublabel ?? ''} ${s.ask}`),
+  ].join(' ')
   return {
     totalHours: facts.activeSeconds / 3600,
     hourTolerance: 1.05,
     allowedPercents: guardContextPercents(slides),
     allowedTimes: guardContextTimes(slides),
     allowedCounts: enrichmentAllowedCounts(enrichment),
+    allowedDurations: durationTokensIn(durationSource),
+    // Completion words are earned only by verified output: real commits/PRs or
+    // recorded meeting notes. Without them, "finished" is a guess.
+    outputVerified: Boolean(enrichment?.shipped || enrichment?.meetingNotes),
   }
 }
 
@@ -239,7 +253,7 @@ export function buildWrappedPrompts(facts: DayWrapFacts, enrichment?: DayEnrichm
     'WORK IS AN ACTION, NOT A PLACE. Narrate the person DOING the work; never say they were "on" a project or inside an app, except on the slides that are explicitly about an app or site. A tool (Claude Code, Cursor, Warp, Canva) is the instrument, never the thing being made.',
     'Tools and sites may be named ONLY on the slides whose facts contain them (timesink, apps, forgotten, leisure). Everywhere else, say what was being made, not what it was made in.',
     'NEVER grade, NEVER mention focus percentages or scores, NEVER guilt a break. Write a percentage ONLY on the work-versus-leisure split slide, and only the exact percentages that slide hands you; never put a percentage on any other slide.',
-    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focus score", "dinnertime". Part-of-day words ("morning", "midday", "the evening", "late into the night") are free prose; use them naturally and accurately. But "noon" and "midnight" are CLOCK TIMES, exactly like "12pm" and "12am": write them ONLY when that exact time is in the slide\'s own facts. A day that ended at 11:55pm ended at 11:55pm, never "midnight" and never "almost midnight"; copy the listed clock or say "late into the night".',
+    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focused", "focus score", "dinnertime". Part-of-day words ("morning", "midday", "the evening", "late into the night") are free prose; use them naturally and accurately. But "noon" and "midnight" are CLOCK TIMES, exactly like "12pm" and "12am": write them ONLY when that exact time is in the slide\'s own facts. A day that ended at 11:55pm ended at 11:55pm, never "midnight" and never "almost midnight"; copy the listed clock or say "late into the night".',
     'DO NOT DEFEND OR JUSTIFY REST OR LEISURE. Never argue that downtime was "not drift", "not a distraction", "deliberate", or "earned". Rest is allowed and needs no defense; just say plainly what the person did and move on.',
     'Copy every DURATION exactly as the facts pre-format it (if the facts say 42m, never write "45 minutes" or "about 45m"); never round or invent a duration.',
     'The curious question must contain NO clock time and NO percentage.',
@@ -308,17 +322,22 @@ export function validateWrappedNarrativeObject(
   const reflection = wrapReflectionViolation(obj.reflection, ctx)
   if (reflection.reason) rejections.push({ id: 'reflection', candidate: typeof obj.reflection === 'string' ? obj.reflection : null, reason: reflection.reason })
 
+  // Per-line emoji rules passed; now the DECK contract: at most one emoji in
+  // the whole wrap. Later emoji-bearing pieces die and go to the repair round.
+  const budget = enforceDeckEmojiBudget(lines, slides, question.value, reflection.value)
+  rejections.push(...budget.rejections)
+
   // The opening line is the wrap's lead (and the notification one-liner). A
   // response whose opening dies has failed the whole job.
-  const lead = lines.opening
+  const lead = budget.lines.opening
   if (!lead) return { narrative: null, rejections }
 
   return {
     narrative: {
       lead,
-      lines,
-      question: question.value,
-      reflection: reflection.value,
+      lines: budget.lines,
+      question: budget.question,
+      reflection: budget.reflection,
       source: 'ai',
       factsHash,
     },

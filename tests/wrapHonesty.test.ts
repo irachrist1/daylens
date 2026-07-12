@@ -188,3 +188,68 @@ test('period decks pin a coverage slide after the headline, outside the shuffle'
   assert.equal(slides[2].ask, '')
   assert.match(slides[2].fallbackLine, /5 days of tracked activity on this computer/)
 })
+
+// ─── Deterministic planner copy passes its own guards ─────────────────────────
+// The benchmark's deterministic pre-check runs on every SHOWN line — including
+// a slide that fell back to its deterministic copy, and the fallback question/
+// reflection. So the planner's own fallback lines must clear the same overclaim
+// and raw-artifact guards the AI lines do, or a fallback would fail the paid
+// gate on copy no model wrote. (Slides with ask: '' — coverage, finale — are
+// exempt here exactly as they are in the bench: they are never judged.)
+
+test('no judged fallback line trips the deterministic guards', () => {
+  const richDay = dayFacts({
+    meetingsSeconds: 45 * 60,
+    standout: { name: 'The tracking engine', seconds: 2 * 3600 + 28 * 60, startClock: '7:12am', endClock: '9:40am' },
+    appSites: [
+      { name: 'Cursor', seconds: 2 * 3600, category: 'development', kind: 'app' },
+      { name: 'Claude Code', seconds: 90 * 60, category: 'aiTools', kind: 'app' },
+      { name: 'YouTube', seconds: 40 * 60, category: 'entertainment', kind: 'site' },
+      { name: 'Notion', seconds: 22 * 60, category: 'productivity', kind: 'app' },
+    ],
+    wildcardHook: { kind: 'count', value: '14', caption: 'separate returns to the proposal', seconds: undefined },
+    dayStory: [
+      { label: 'Morning', part: 'morning', clockStart: '9:12am', clockEnd: '12:01pm', items: ['The tracking engine'], aside: null, spillover: false, seconds: 3 * 3600 },
+      { label: 'Evening', part: 'evening', clockStart: '6:10pm', clockEnd: '8:04pm', items: ['The settings screen', 'YouTube'], aside: 'YouTube', spillover: false, seconds: 2 * 3600 },
+    ],
+  } as Partial<DayWrapFacts>)
+  const richWeek = {
+    ...periodFacts(),
+    previousPeriodSeconds: 18 * 3600,
+    meetingsSeconds: 2 * 3600,
+    categories: [
+      { category: 'development', seconds: 10 * 3600 },
+      { category: 'writing', seconds: 3 * 3600 },
+    ],
+    topApps: [
+      { appName: 'Cursor', seconds: 9 * 3600 },
+      { appName: 'Figma', seconds: 3 * 3600 },
+      { appName: 'Slack', seconds: 2 * 3600 },
+      { appName: 'Notion', seconds: 40 * 60 },
+    ],
+    threads: [
+      { subject: 'The timeline rework', seconds: 8 * 3600, daysActive: 4 },
+      { subject: 'The onboarding polish', seconds: 4 * 3600, daysActive: 2 },
+    ],
+    buckets: [
+      { label: 'Mon', totalSeconds: 5 * 3600, dominantWorkCategory: 'development' },
+      { label: 'Tue', totalSeconds: 8 * 3600, dominantWorkCategory: 'development' },
+    ],
+    busiestDay: { dateStr: '2026-07-01', dayLabel: 'Tuesday', totalSeconds: 8 * 3600 },
+    quietestActiveDay: { dateStr: '2026-07-03', dayLabel: 'Thursday', totalSeconds: 2 * 3600 },
+    busiestBucket: { label: 'Tue', totalSeconds: 8 * 3600 },
+    longestStretch: { dateStr: '2026-07-01', dayLabel: 'Tuesday', seconds: 152 * 60, label: 'The timeline rework', startClock: '9:04am' },
+    leisureSurfaces: ['YouTube', 'Netflix'],
+    dayEdges: [
+      { dateStr: '2026-07-01', dayLabel: 'Tuesday', firstHour: 5, lastHour: 23, firstClock: '5:40am', lastClock: '11:29pm' },
+    ],
+  } as unknown as WrappedPeriodFacts
+  const slides = [...planDayWrapSlides(richDay), ...planPeriodWrapSlides(richWeek)]
+  assert.ok(slides.filter((sl) => sl.ask).length >= 20, 'the sweep should cover a rich deck, not a stub')
+  for (const spec of slides) {
+    if (!spec.ask && spec.kind !== 'question' && spec.kind !== 'reflection') continue
+    const where = `${spec.id} fallback "${spec.fallbackLine}"`
+    assert.equal(findOverclaimViolation(spec.fallbackLine), null, `${where} trips the overclaim guard`)
+    assert.equal(findRawArtifactLeak(spec.fallbackLine), null, `${where} leaks raw technical text`)
+  }
+})

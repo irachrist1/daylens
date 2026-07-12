@@ -202,3 +202,47 @@ test('saveWrapExport: a single slide exports as one panel', async () => {
   assert.equal(created[0].height, EXPORT_PANEL_H)
   assert.equal(saved[0].filename, 'daylens-week-opening.png')
 })
+
+// ─── Failures are visible, never swallowed (W1-D outcome 5) ──────────────────
+// The old UI mapped every failure back to the idle button label, so a null
+// toBlob (the canvas-cap symptom) or a throwing save sink looked like nothing
+// happened. The pipeline must report failure, and the labels must say it.
+
+import { exportButtonLabel, saveSlideButtonLabel } from '../src/renderer/components/wrap/wrapExport.ts'
+
+test('failure: a null blob reports false and nothing reaches the save sink', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps, saved } = stubCanvasDeps()
+  deps.toBlob = async () => null // encoder/canvas produced nothing
+  const ok = await saveWrapExport(models, 'daylens-week.png', meta.footer, deps)
+  assert.equal(ok, false, 'a produced-nothing export must report failure')
+  assert.equal(saved.length, 0, 'no phantom file reaches the sink')
+})
+
+test('failure: a throwing save sink rejects so the caller can surface it', async () => {
+  const { slides, meta } = deckAndMeta()
+  const models = buildWrapExportModels(slides, NARRATIVE.lines, NARRATIVE, meta, 7)
+  const { deps } = stubCanvasDeps()
+  deps.save = async () => { throw new Error('disk full') }
+  await assert.rejects(
+    () => saveWrapExport(models, 'daylens-week.png', meta.footer, deps),
+    /disk full/,
+    'a failed write must reject, never resolve as success',
+  )
+})
+
+test('failure labels: the failed state is said honestly, one calm line, no sorry', () => {
+  assert.equal(exportButtonLabel('idle'), 'Export wrap')
+  assert.equal(exportButtonLabel('working'), 'Exporting…')
+  assert.equal(exportButtonLabel('done'), 'Exported ✓')
+  assert.equal(exportButtonLabel('failed'), "Export didn't finish. Try again")
+  assert.equal(saveSlideButtonLabel('failed'), "Save didn't finish. Try again")
+  assert.equal(saveSlideButtonLabel('saved'), 'Saved ✓')
+  assert.equal(saveSlideButtonLabel('idle'), 'Save slide')
+  // voice.md errors: never apologize, never spiral.
+  for (const label of [exportButtonLabel('failed'), saveSlideButtonLabel('failed')]) {
+    assert.doesNotMatch(label, /sorry|unfortunately|error code/i)
+    assert.notEqual(label, 'Export wrap', 'a failure must be distinguishable from idle')
+  }
+})

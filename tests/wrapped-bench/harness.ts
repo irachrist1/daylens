@@ -21,7 +21,20 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { stageReadOnlyCopyOfRealDb, cleanupRealDbCopy, type RealDbContext } from '../ai-behaviour/realDb'
-import { anchorsFor, type SlideAnchors } from './anchors'
+import { anchorsFor, type SlideAnchors, type WrapBenchCadence } from './anchors'
+import {
+  DECK_JUDGE_SYSTEM,
+  buildDeckJudgeUser,
+  checkDeckDuplicateLines,
+  checkDeckEmojiBudget,
+  combineDeckJudgeSamples,
+  deckJudgePassed,
+  formatDeckJudge,
+  parseDeckJudgeVerdict,
+  type DeckJudgeEntry,
+  type DeckJudgeResult,
+  type DeckJudgeVerdict,
+} from './deckJudge'
 // The SAME deterministic honesty rules the runtime guard enforces (one shared
 // source): re-run here independently so a guard regression fails the bench
 // instead of shipping. Pure module — safe to import before the DB boots.
@@ -39,6 +52,9 @@ const JUDGE_MODEL = process.env.WRAPPED_JUDGE_MODEL ?? 'claude-opus-4-8'
 // single unlucky read can't sink (or inflate) a line. 3 is enough to kill the
 // ±0.4 run-to-run swing the abstract-rubric judge used to have.
 const JUDGE_SAMPLES = Math.max(1, Number(process.env.WRAPPED_JUDGE_SAMPLES) || 3)
+// The whole-deck judge is sampled too (majority per criterion) so one flaky
+// read can't fail — or wave through — an entire deck.
+const DECK_JUDGE_SAMPLES = Math.max(1, Number(process.env.WRAPPED_DECK_JUDGE_SAMPLES) || 3)
 
 // ─── Rubric shapes ────────────────────────────────────────────────────────────
 
@@ -67,13 +83,19 @@ export interface SlideResult {
 }
 
 export interface DeckResult {
-  cadence: 'day' | 'week'
+  cadence: WrapBenchCadence
   key: string // date or period anchor
   slides: SlideResult[]
   /** Average over the PROSE slides (captions excluded, founder Q2). */
   deckAverage: number
   /** Every prose slide >= 7 and every caption slide >= 7. */
   allSlidesPassed: boolean
+  /** The whole-deck judgment: repetition / arc / contradiction (LLM, majority
+   *  of samples) + emoji budget and exact-duplicate lines (deterministic). */
+  deckJudge: DeckJudgeResult
+  /** THE gate: every slide passed AND deckAverage >= 9 AND the deck judge
+   *  passed. Per-slide perfection with a broken whole is still a fail. */
+  passed: boolean
   /** Slides that need the improvement loop (source=fallback OR total < 8). */
   needsWork: SlideResult[]
 }
@@ -176,23 +198,18 @@ export async function generateDayDeck(date: string): Promise<{ facts: DayWrapFac
 export async function generatePeriodDeck(period: WrappedPeriod, anchorDate: string): Promise<{ facts: WrappedPeriodFacts } & GeneratedDeck> {
   const { planPeriodWrapSlides } = await import('../../src/renderer/lib/wrapDeck')
   const { getWrappedPeriodWrap } = await import('../../src/main/services/wrappedPeriodNarrative')
+  const { compactPeriodFacts } = await import('../../src/main/lib/wrappedPeriodNarrative')
   let { facts, narrative } = await getWrappedPeriodWrap(period, anchorDate, { force: true, triggerSource: 'user' })
   for (let i = 0; narrative.source === 'fallback' && i < GEN_RETRIES; i++) {
     process.stderr.write(`[wrapped-bench] ${period} ${anchorDate} fell back (transient), retry ${i + 1}/${GEN_RETRIES}…\n`)
     await sleep(1500 * (i + 1))
     ;({ facts, narrative } = await getWrappedPeriodWrap(period, anchorDate, { force: true, triggerSource: 'user' }))
   }
-  const factsSummary = JSON.stringify({
-    period: facts.period, range: facts.rangeLabel,
-    total: Math.round(facts.totalSeconds / 60) + 'm', work: Math.round(facts.workSeconds / 60) + 'm', leisure: Math.round(facts.leisureSeconds / 60) + 'm',
-    daysActive: facts.daysWithActivity, prevPeriod: Math.round(facts.previousPeriodSeconds / 60) + 'm',
-    threads: facts.threads.slice(0, 6).map((t) => ({ subject: t.subject, min: Math.round(t.seconds / 60), days: t.daysActive })),
-    topApps: facts.topApps.slice(0, 8).map((a) => ({ app: a.appName, min: Math.round(a.seconds / 60) })),
-    busiestDay: facts.busiestDay ? { day: facts.busiestDay.dayLabel, min: Math.round(facts.busiestDay.totalSeconds / 60) } : null,
-    quietestDay: facts.quietestActiveDay ? { day: facts.quietestActiveDay.dayLabel, min: Math.round(facts.quietestActiveDay.totalSeconds / 60) } : null,
-    longestStretch: facts.longestStretch ? { min: Math.round(facts.longestStretch.seconds / 60), day: facts.longestStretch.dayLabel, label: facts.longestStretch.label, from: facts.longestStretch.startClock ?? null } : null,
-    leisureSurfaces: facts.leisureSurfaces.slice(0, 5), meetingsMin: Math.round(facts.meetingsSeconds / 60),
-  })
+  // The judge must score against the SAME facts the writer saw (the day path's
+  // Gap-1 rule). The old hand-rolled subset dropped dayEdges/days/buckets/
+  // categories, so TRUE week claims ("every day ran past 11pm") were scored as
+  // invented and week decks bled accuracy for honesty they actually had.
+  const factsSummary = JSON.stringify(compactPeriodFacts(facts))
   return {
     facts,
     slides: planPeriodWrapSlides(facts),
@@ -227,7 +244,7 @@ const JUDGE_SYSTEM = [
 ].join('\n')
 
 export interface JudgeInput {
-  cadence: 'day' | 'week'
+  cadence: WrapBenchCadence
   slideId: string
   kicker: string
   factsNote: string
@@ -363,11 +380,64 @@ function applyDeterministicChecks(result: SlideResult): SlideResult {
   return { ...result, score, passed: false }
 }
 
+// ─── The whole-deck judge ─────────────────────────────────────────────────────
+// Per-slide scores cannot see cross-slide repetition, a broken arc, or two
+// slides contradicting each other — the exact failure "it doesn't sound right"
+// names. One pass reads the ENTIRE deck in order and gates like the slides do.
+
+async function deckJudgeOnce(anthropic: Anthropic, user: string): Promise<DeckJudgeVerdict> {
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await anthropic.messages.create({
+        model: JUDGE_MODEL,
+        max_tokens: 700,
+        system: DECK_JUDGE_SYSTEM,
+        messages: [{ role: 'user', content: user }],
+      })
+      const text = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map((b) => b.text).join('')
+      const verdict = parseDeckJudgeVerdict(text)
+      if (verdict) return verdict
+      lastErr = new Error(`unparseable deck-judge response: ${text.slice(0, 200)}`)
+    } catch (err) {
+      lastErr = err
+    }
+    await sleep(500 * (attempt + 1))
+  }
+  throw new Error(`[wrapped-bench] deck judge failed after retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`)
+}
+
+export async function judgeWholeDeck(
+  anthropic: Anthropic,
+  cadence: WrapBenchCadence,
+  key: string,
+  deck: GeneratedDeck,
+): Promise<DeckJudgeResult> {
+  const { resolveSlideLine } = await import('../../src/renderer/lib/wrapDeck')
+  const entries: DeckJudgeEntry[] = deck.slides.map((spec) => {
+    const line = spec.kind === 'question'
+      ? (deck.question ?? spec.fallbackLine)
+      : spec.kind === 'reflection'
+        ? (deck.reflection ?? spec.fallbackLine)
+        : resolveSlideLine(spec, deck.lines)
+    return { id: spec.id, kicker: spec.kicker, line, deterministic: line === spec.fallbackLine }
+  })
+  const emojiBudget = checkDeckEmojiBudget(entries.map((e) => e.line))
+  const duplicateLines = checkDeckDuplicateLines(entries)
+  const user = buildDeckJudgeUser(cadence, key, entries, deck.factsSummary)
+  const samples: DeckJudgeVerdict[] = []
+  for (let i = 0; i < DECK_JUDGE_SAMPLES; i++) samples.push(await deckJudgeOnce(anthropic, user))
+  const verdict = combineDeckJudgeSamples(samples)
+  const result: DeckJudgeResult = { verdict, emojiBudget, duplicateLines, samples: samples.length, passed: false }
+  result.passed = deckJudgePassed(result)
+  return result
+}
+
 // ─── Scoring a whole deck ─────────────────────────────────────────────────────
 
 export async function scoreDeck(
   anthropic: Anthropic,
-  cadence: 'day' | 'week',
+  cadence: WrapBenchCadence,
   key: string,
   deck: GeneratedDeck,
 ): Promise<DeckResult> {
@@ -411,7 +481,12 @@ export async function scoreDeck(
   const allSlidesPassed = results.every((r) => r.passed)
   const needsWork = results.filter((r) => r.source === 'fallback' || r.score.total < 8)
 
-  return { cadence, key, slides: results, deckAverage: round2(deckAverage), allSlidesPassed, needsWork }
+  // The deck-level pass: one judgment of the entire deck in order, gating the
+  // suite exactly like the per-slide scores do.
+  const deckJudge = await judgeWholeDeck(anthropic, cadence, key, deck)
+  const passed = allSlidesPassed && deckAverage >= 9 && deckJudge.passed
+
+  return { cadence, key, slides: results, deckAverage: round2(deckAverage), allSlidesPassed, deckJudge, passed, needsWork }
 }
 
 function round2(n: number): number { return Math.round(n * 100) / 100 }
@@ -426,7 +501,8 @@ export function appendLog(section: string): void {
 export function formatDeckLog(iteration: string, deck: DeckResult, changeNote: string): string {
   const lines: string[] = []
   lines.push(`\n### ${iteration} — ${deck.cadence} ${deck.key}\n`)
-  lines.push(`Deck average (prose slides): **${deck.deckAverage}** · all slides passed: **${deck.allSlidesPassed}**\n`)
+  lines.push(`Deck average (prose slides): **${deck.deckAverage}** · all slides passed: **${deck.allSlidesPassed}** · deck gate: **${deck.passed ? 'PASS' : 'FAIL'}**\n`)
+  lines.push(`\nWhole-deck judge: ${formatDeckJudge(deck.deckJudge)}\n`)
   if (changeNote) lines.push(`\n_What changed this iteration:_ ${changeNote}\n`)
   lines.push('\n| slide | src | spec | tone | acc | mot | total | line |')
   lines.push('| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |')

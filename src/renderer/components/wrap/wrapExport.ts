@@ -272,7 +272,10 @@ export async function renderWrapExport(
   return deps.toBlob(canvas)
 }
 
-/** Render + save. Returns true when a file was actually produced. */
+/** Render + save. Returns true when a file was actually produced; false when
+ *  the canvas/encoder produced nothing (e.g. a null toBlob). A throwing save
+ *  sink rejects, so callers can surface the failure — silence is never an
+ *  outcome here. */
 export async function saveWrapExport(
   models: WrapExportSlideModel[],
   filename: string,
@@ -283,6 +286,31 @@ export async function saveWrapExport(
   if (!blob) return false
   await deps.save(blob, filename)
   return true
+}
+
+// ─── Export status labels (honest, voice.md §errors: one calm line, no sorry) ─
+// Pure so the hermetic suite can pin that a failure is VISIBLE — the old UI
+// mapped every failure back to the idle label and the user learned nothing.
+
+export type WrapExportState = 'idle' | 'working' | 'done' | 'failed'
+
+export function exportButtonLabel(state: WrapExportState): string {
+  switch (state) {
+    case 'working': return 'Exporting…'
+    case 'done': return 'Exported ✓'
+    case 'failed': return "Export didn't finish. Try again"
+    default: return 'Export wrap'
+  }
+}
+
+export type WrapSlideSaveState = 'idle' | 'saved' | 'failed'
+
+export function saveSlideButtonLabel(state: WrapSlideSaveState): string {
+  switch (state) {
+    case 'saved': return 'Saved ✓'
+    case 'failed': return "Save didn't finish. Try again"
+    default: return 'Save slide'
+  }
 }
 
 // ─── Text helpers ─────────────────────────────────────────────────────────────

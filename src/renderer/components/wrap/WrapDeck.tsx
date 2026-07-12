@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import type { WrappedAskResult } from '@shared/types'
 import type { WrapDeckMeta, WrapSlideSpec } from '../../lib/wrapDeck'
 import { resolveSlideLine } from '../../lib/wrapDeck'
-import { buildWrapExportModels, saveWrapExport } from './wrapExport'
+import { buildWrapExportModels, exportButtonLabel, saveSlideButtonLabel, saveWrapExport, type WrapExportState, type WrapSlideSaveState } from './wrapExport'
 import WrapSlideView from './WrapSlideView'
 import { ghostButton, pickPalette, prefersReducedMotion, primaryButton, Scene, THEME, type Theme, type WrapPalette } from './wrapKit'
 
@@ -148,21 +148,25 @@ export default function WrapDeck({
     () => buildWrapExportModels(slides, narrative.lines, { question: narrative.question, reflection: narrative.reflection }, meta, seed),
     [slides, narrative, meta, seed],
   )
-  const [savedIndex, setSavedIndex] = useState<number | null>(null)
-  const [exportState, setExportState] = useState<'idle' | 'working' | 'done'>('idle')
-  useEffect(() => { setSavedIndex(null) }, [slideIndex])
+  // A failed export is SAID, not swallowed: the old code mapped a false/thrown
+  // save back to the idle label, so a null toBlob (the month-deck canvas-cap
+  // bug's symptom) looked like nothing happened. Failure is now a visible
+  // state with an honest label (voice.md errors: one calm line, no sorry).
+  const [saveState, setSaveState] = useState<WrapSlideSaveState>('idle')
+  const [exportState, setExportState] = useState<WrapExportState>('idle')
+  useEffect(() => { setSaveState('idle') }, [slideIndex])
   const saveSlide = useCallback(() => {
     const model = exportModels[slideIndex]
     if (!model) return
-    void saveWrapExport([model], `${exportStem}-${model.id}.png`, meta.footer).then((ok) => {
-      if (ok) setSavedIndex(slideIndex)
-    })
+    void saveWrapExport([model], `${exportStem}-${model.id}.png`, meta.footer)
+      .then((ok) => setSaveState(ok ? 'saved' : 'failed'))
+      .catch(() => setSaveState('failed'))
   }, [exportModels, slideIndex, exportStem, meta.footer])
   const exportAll = useCallback(() => {
     setExportState('working')
     void saveWrapExport(exportModels, `${exportStem}.png`, meta.footer)
-      .then((ok) => setExportState(ok ? 'done' : 'idle'))
-      .catch(() => setExportState('idle'))
+      .then((ok) => setExportState(ok ? 'done' : 'failed'))
+      .catch(() => setExportState('failed'))
   }, [exportModels, exportStem, meta.footer])
 
   // The in-context ask.
@@ -268,7 +272,7 @@ export default function WrapDeck({
       {active && active.kind !== 'finale' && (
         <div style={{ position: 'absolute', bottom: 26, left: 22, right: 22, zIndex: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
           <button onClick={(e) => { e.stopPropagation(); saveSlide() }} style={pillButton} aria-label="Save this slide as an image">
-            {savedIndex === slideIndex ? 'Saved ✓' : 'Save slide'}
+            {saveSlideButtonLabel(saveState)}
           </button>
           {!isQuestionSlide && (
             <button
@@ -393,7 +397,7 @@ function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, ge
   theme: Theme
   slides: WrapSlideSpec[]
   narrative: WrapDeckNarrativeView
-  exportState: 'idle' | 'working' | 'done'
+  exportState: WrapExportState
   onExport: () => void
   generatedLabel?: string | null
   onRegenerate?: () => void
@@ -439,7 +443,7 @@ function FinaleSlide({ meta, theme, slides, narrative, exportState, onExport, ge
 
       <div style={finaleActions}>
         <button onClick={(e) => { e.stopPropagation(); onExport() }} style={primaryButton(theme.accent)} aria-label="Export every slide as one image">
-          {exportState === 'working' ? 'Exporting…' : exportState === 'done' ? 'Exported ✓' : 'Export wrap'}
+          {exportButtonLabel(exportState)}
         </button>
         {finaleExtra && (
           <button onClick={(e) => { e.stopPropagation(); finaleExtra.onClick() }} style={ghostButton}>{finaleExtra.label}</button>

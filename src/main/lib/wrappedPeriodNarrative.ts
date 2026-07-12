@@ -22,6 +22,8 @@ import {
   EVIDENCE_HONESTY_DIRECTIVES,
   buildRepairUserMessage,
   deckPromptSection,
+  durationTokensIn,
+  enforceDeckEmojiBudget,
   guardContextPercents,
   guardContextTimes,
   stripCodeFence,
@@ -84,11 +86,23 @@ export function periodNarrativeCacheKey(facts: WrappedPeriodFacts, factsHash: st
 function guardContext(facts: WrappedPeriodFacts, slides: WrapSlideSpec[]): LineGuardContext {
   // Week ±1.5h; month ±5h; year ±20h — bigger periods round looser.
   const tolerance = facts.period === 'week' ? 1.5 : facts.period === 'month' ? 5 : 20
+  // Durations ground against everything the writer saw: the compact facts JSON
+  // plus every slide's own card text. This is what killed the week bench at
+  // 8.0-8.3: a hand-rounded "8h 57m" (facts: 8h 58m) and a self-computed delta
+  // sailed past the old excess-only hour check and cost accuracy 0 at the judge.
+  const durationSource = [
+    JSON.stringify(compactPeriodFacts(facts)),
+    ...slides.map((s) => `${s.kicker} ${s.factsNote} ${s.stat?.value ?? ''} ${s.stat?.sublabel ?? ''} ${s.ask}`),
+  ].join(' ')
   return {
     totalHours: facts.totalSeconds / 3600,
     hourTolerance: tolerance,
     allowedPercents: guardContextPercents(slides),
     allowedTimes: guardContextTimes(slides),
+    allowedDurations: durationTokensIn(durationSource),
+    // Period facts carry no output evidence (no git/notes enrichment rides a
+    // period wrap today), so completion claims are always unverified here.
+    outputVerified: false,
   }
 }
 
@@ -114,12 +128,12 @@ export function buildPeriodPrompts(facts: WrappedPeriodFacts): { systemPrompt: s
     'Tools and apps may be named ONLY on the slides whose facts contain them (timesink, apps, forgotten, leisure). Everywhere else, say what was being made. A tool (Claude Code, Cursor, Warp, Canva) is the instrument, never the thing being made.',
     `Main mode = facts.dominantWorkCategory, the actual WORK, never leisure. A working person's ${label} is never "mostly entertainment" because a few videos played on the side.`,
     'NEVER grade: no focus score, no drift, no productivity score. Write a percentage ONLY on the work-versus-leisure split slide, and only the exact percentages that slide hands you; never put a percentage on any other slide.',
-    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focus score", "dinnertime". Part-of-day words ("morning", "midday", "the evenings", "late into the night") are free prose; use them naturally and accurately. But "noon" and "midnight" are CLOCK TIMES, exactly like "12pm" and "12am": write them ONLY when that exact time is in the slide\'s own facts. A night that ended at 11:55pm ended at 11:55pm, never "midnight"; copy the listed clock or say "late into the night".',
+    'BANNED WORDS, never write any of them, not even to negate them: "productive", "productivity", "distraction", "distracted", "drift", "focused", "focus score", "dinnertime". Part-of-day words ("morning", "midday", "the evenings", "late into the night") are free prose; use them naturally and accurately. But "noon" and "midnight" are CLOCK TIMES, exactly like "12pm" and "12am": write them ONLY when that exact time is in the slide\'s own facts. A night that ended at 11:55pm ended at 11:55pm, never "midnight"; copy the listed clock or say "late into the night".',
     'DO NOT DEFEND OR JUSTIFY REST OR LEISURE. Never argue that downtime was "not drift", "not a distraction", "deliberate", or "earned". Rest is allowed and needs no defense; say plainly what happened and move on.',
     'Never state how MANY meetings there were; the facts only know the total meeting time.',
     `NEVER predict the next ${label}, NEVER say anything carries forward or needs picking up, NEVER assign homework. The recap looks back, never ahead.`,
     'Never use an em dash anywhere. Use a comma, a period, or "and". Use "to" for ranges, never a dash.',
-    'Copy every duration exactly as the facts pre-format it; never round or invent a duration (if the facts say 42m, never write "45 minutes").',
+    'Copy every duration exactly as the facts pre-format it; never round or invent a duration (if the facts say 42m, never write "45 minutes"). Never re-express a total in other units ("nearly two full days of meetings"); say the pre-formatted duration or nothing.',
     'Never describe yourself as a model.',
     PERIOD_ANGLES[seedFromDate(facts.anchorDate) % PERIOD_ANGLES.length],
   ].join(' ')
@@ -204,16 +218,21 @@ export function validatePeriodNarrativeObject(
   const reflection = wrapReflectionViolation(obj.reflection, ctx)
   if (reflection.reason) rejections.push({ id: 'reflection', candidate: typeof obj.reflection === 'string' ? obj.reflection : null, reason: reflection.reason })
 
-  const lead = lines.opening
+  // Per-line emoji rules passed; now the DECK contract: at most one emoji in
+  // the whole wrap. Later emoji-bearing pieces die and go to the repair round.
+  const budget = enforceDeckEmojiBudget(lines, slides, question.value, reflection.value)
+  rejections.push(...budget.rejections)
+
+  const lead = budget.lines.opening
   if (!lead) return { narrative: null, rejections }
 
   return {
     narrative: {
       period: facts.period,
       lead,
-      lines,
-      question: question.value,
-      reflection: reflection.value,
+      lines: budget.lines,
+      question: budget.question,
+      reflection: budget.reflection,
       source: 'ai',
       factsHash,
     },
@@ -274,7 +293,10 @@ export function buildPeriodFallbackNarrative(
   if (facts.totalSeconds <= 0) {
     return {
       period: facts.period,
-      lead: `Daylens did not see enough activity this ${label} to tell a real story yet.`,
+      // Honest and product-voice-legal: the app never narrates in its own name
+      // (voice.md §2.8) — the old copy ("Daylens did not see ...") broke the
+      // very rule the overclaim guard enforces on AI lines.
+      lead: `Not enough tracked this ${label} to tell a real story yet.`,
       lines: {}, question: null, reflection: null,
       source: 'fallback',
       factsHash,
