@@ -175,7 +175,10 @@ export function getCorrectedSessionsForRange(
   fromMs: number,
   toMs: number,
 ): AppSession[] {
-  const sessions = getSessionsForRange(db, fromMs, toMs)
+  // Match the Apps aggregate's 10-second capture floor. The generic session
+  // list uses a 15-second display floor; using it here silently lost a valid
+  // 10-second return while the Apps header still counted it.
+  const sessions = getSessionsForRange(db, fromMs, toMs, { minimumDurationSeconds: 10 })
   return applyTimelineCorrectionsToSessions(db, sessions, fromMs, toMs)
 }
 

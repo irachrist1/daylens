@@ -733,6 +733,7 @@ export function getSessionsForRange(
   db: Database.Database,
   fromMs: number,
   toMs: number,
+  options: { minimumDurationSeconds?: number } = {},
 ): AppSession[] {
   const overrides = getCategoryOverrides(db)
 
@@ -753,7 +754,7 @@ export function getSessionsForRange(
         return clipRowToRange(row, fromMs, toMs, category, identity)
       })
       .filter((session): session is AppSession => session !== null && session.durationSeconds > 0)
-  ).filter((session) => session.durationSeconds >= MIN_DISPLAY_SEC)
+  ).filter((session) => session.durationSeconds >= (options.minimumDurationSeconds ?? MIN_DISPLAY_SEC))
 }
 
 export function searchSessions(
