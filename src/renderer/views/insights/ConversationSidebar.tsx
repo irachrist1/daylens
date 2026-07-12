@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from 'react'
 import { FileText, Pencil, Trash2 } from 'lucide-react'
 import type { AIThreadSummary } from '@shared/types'
 import { IconArchive, IconSearch } from './icons'
+import { groupThreadsForSidebar } from './sidebarGroups'
 
 // D1: a proper conversation list — grouped by recency, searchable, with an
 // Archive section and the current chat highlighted. FB3: the new-chat affordance
@@ -18,33 +19,12 @@ export interface ConversationSidebarProps {
   onRename: (thread: AIThreadSummary, title: string) => void
 }
 
-const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 Days', 'Previous 30 Days', 'Older'] as const
-type GroupLabel = (typeof GROUP_ORDER)[number]
-
-const DAY_MS = 86_400_000
-
 // FB6: auto-generated day reports are titled "Day report YYYY-MM-DD". Detect them
 // so they read as generated reports, not conversations.
 const DAY_REPORT_RE = /^Day report \d{4}-\d{2}-\d{2}$/
 
 function isDayReportThread(thread: Pick<AIThreadSummary, 'title'>): boolean {
   return DAY_REPORT_RE.test(thread.title.trim())
-}
-
-function recencyGroupOf(ms: number): GroupLabel {
-  const now = new Date()
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  if (ms >= startToday) return 'Today'
-  if (ms >= startToday - DAY_MS) return 'Yesterday'
-  if (ms >= startToday - 7 * DAY_MS) return 'Previous 7 Days'
-  if (ms >= startToday - 30 * DAY_MS) return 'Previous 30 Days'
-  return 'Older'
-}
-
-function matches(thread: AIThreadSummary, query: string): boolean {
-  if (!query) return true
-  const q = query.toLowerCase()
-  return thread.title.toLowerCase().includes(q) || (thread.lastSnippet ?? '').toLowerCase().includes(q)
 }
 
 // Inline title editor for a row: Enter or blur saves, Escape cancels — the
@@ -198,21 +178,9 @@ function ConversationSidebarImpl({
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
 
-  const { groups, archived } = useMemo(() => {
-    const active = threads.filter((t) => !t.archived && matches(t, query))
-    const arch = threads.filter((t) => t.archived && matches(t, query))
-    const byGroup = new Map<GroupLabel, AIThreadSummary[]>()
-    for (const thread of [...active].sort((a, b) => b.lastMessageAt - a.lastMessageAt)) {
-      const label = recencyGroupOf(thread.lastMessageAt)
-      const bucket = byGroup.get(label) ?? []
-      bucket.push(thread)
-      byGroup.set(label, bucket)
-    }
-    const ordered = GROUP_ORDER
-      .map((label) => ({ label, items: byGroup.get(label) ?? [] }))
-      .filter((g) => g.items.length > 0)
-    return { groups: ordered, archived: arch.sort((a, b) => b.lastMessageAt - a.lastMessageAt) }
-  }, [threads, query])
+  // Grouping/dedup lives in sidebarGroups.ts (pure + unit-tested): one row per
+  // thread id, disjoint active/archive, recency buckets newest-first.
+  const { groups, archived } = useMemo(() => groupThreadsForSidebar(threads, query), [threads, query])
 
   const totalActive = threads.filter((t) => !t.archived).length
 

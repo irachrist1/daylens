@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { cancelAIRequest } from '../lib/aiCancellation'
 import { getThreadMessagesPage, updateAIMessageFeedback, writeAIBlockLabel } from '../db/queries'
 import { getDb } from '../services/database'
 import { uploadRatedAIMessageFeedback } from '../services/aiFeedbackUpload'
@@ -60,6 +61,12 @@ export function registerAIHandlers(): void {
         event.sender.send(IPC.AI.STREAM_EVENT, streamEvent)
       },
     })
+  })
+
+  // Real cancel (W1-C): abort the in-flight provider request for this turn.
+  // Returns whether a matching turn was still running.
+  ipcMain.handle(IPC.AI.CANCEL_MESSAGE, (_e, payload: { clientRequestId: string }): boolean => {
+    return cancelAIRequest(payload.clientRequestId)
   })
 
   ipcMain.handle(IPC.AI.GET_STARTER_SUGGESTIONS, async (): Promise<AIStarterSuggestionResult> => {

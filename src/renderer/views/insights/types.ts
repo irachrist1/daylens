@@ -11,9 +11,12 @@ export interface AltProvider {
 // A chat message as held in renderer state. `id` may be a synthetic string
 // while a turn is in flight (`user:<reqId>` / `assistant:<reqId>`) and becomes
 // the persisted numeric id once the server turn resolves.
+// `cancelled`: the user hit Stop mid-generation — the turn was aborted in the
+// main process, nothing was persisted, and the row must never read as a
+// completed answer (W1-C real cancel).
 export type ThreadMessage = Omit<AIThreadMessage, 'id'> & {
   id: string | number
-  state: 'pending' | 'complete' | 'error'
+  state: 'pending' | 'complete' | 'error' | 'cancelled'
   // R4: classified error context for the branded error card (Retry + rate-limit
   // auto-retry hint + switch-provider on a hard wall). Present only when
   // state === 'error'.
