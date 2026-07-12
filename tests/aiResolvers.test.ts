@@ -162,6 +162,37 @@ test('AI search pages past ignored matches to return the next visible result', (
   assert.equal(result.hits[0].startTime, visibleStart)
 })
 
+test('AI search keeps a row when only part of its interval was ignored', (t) => {
+  const db = setupDb()
+  t.after(() => db.close())
+  const today = new Date()
+  const start = localMs(today, 9)
+  const end = localMs(today, 10)
+  db.prepare(`
+    INSERT INTO app_sessions (
+      bundle_id, app_name, start_time, end_time, duration_sec, category,
+      is_focused, window_title, raw_app_name, capture_source, capture_version
+    ) VALUES ('partial.app', 'Partial App', ?, ?, 3600, 'research', 1,
+      'Needle project', 'Partial App', 'test', 1)
+  `).run(start, end)
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO timeline_block_reviews (
+      id, block_id, date, evidence_key, review_state, original_block_json,
+      correction_json, created_at, updated_at
+    ) VALUES ('review_partial_search', 'partial_search', ?, 'partial_search', 'ignored', ?, '{}', ?, ?)
+  `).run(dateStr(today), JSON.stringify({ startTime: start + 15 * 60_000, endTime: start + 45 * 60_000 }), now, now)
+
+  const result = execSearchSessions({
+    query: 'Needle',
+    startDate: dateStr(today),
+    endDate: dateStr(today),
+  }, db)
+  assert.equal(result.matchKind, 'strict')
+  assert.equal(result.hits.length, 1)
+  assert.equal(result.hits[0].startTime, start)
+})
+
 function seedYouTubeVisits(db: Database.Database, day: Date, durationSec: number): void {
   // The reconciler credits site time only when the hosting browser was
   // foreground, so seed a Safari session covering the visit window.

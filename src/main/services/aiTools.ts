@@ -558,8 +558,17 @@ export function execSearchSessions(params: SearchSessionsParams, db: Database.Da
   const ignoredFrom = params.startDate ? localDayBounds(params.startDate)[0] : 0
   const ignoredTo = params.endDate ? localDayBounds(params.endDate)[1] : Date.now()
   const ignoredSpans = getIgnoredBlockSpansForRange(db, ignoredFrom, ignoredTo)
-  const isVisibleHit = (hit: { startTime: number; endTime: number }): boolean =>
-    !ignoredSpans.some((span) => span.startMs < hit.endTime && span.endMs > hit.startTime)
+  const isVisibleHit = (hit: { startTime: number; endTime: number }): boolean => {
+    let cursor = hit.startTime
+    for (const span of ignoredSpans) {
+      if (span.endMs <= cursor) continue
+      if (span.startMs >= hit.endTime) break
+      if (span.startMs > cursor) return true
+      cursor = Math.max(cursor, span.endMs)
+      if (cursor >= hit.endTime) return false
+    }
+    return cursor < hit.endTime
+  }
 
   const mapSessionHit = (h: { id: number; appName: string; windowTitle: string | null; startTime: number; endTime: number; date: string; excerpt: string | null }): SessionSearchHit => ({
     id: h.id,
