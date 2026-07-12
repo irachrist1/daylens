@@ -531,7 +531,10 @@ try {
   const sameSubscriptionBill = await api('/v1/billing', { token: scopedToken })
   await sendPolarWebhook(`polar-b-active-${randHex()}`, 'subscription.active', scopedAccount, { subscriptionId: subB })
   const newSubscriptionBill = await api('/v1/billing', { token: scopedToken })
-  check(27, 'Polar terminal ordering is scoped to one subscription ID', sameSubscriptionBill.json.mode !== 'subscription' && newSubscriptionBill.json.mode === 'subscription', `same=${sameSubscriptionBill.json.mode}, new=${newSubscriptionBill.json.mode}`)
+  await sendPolarWebhook(`polar-a-after-b-${randHex()}`, 'subscription.active', scopedAccount, { subscriptionId: subA, occurredAt: new Date(Date.now() + 2000) })
+  const oldSubscriptionAfterNewBill = await api('/v1/billing', { token: scopedToken })
+  const currentSubscriptionId = sandboxState.accounts.get(scopedAccount)?.polar_subscription_id
+  check(27, 'Polar terminal ordering is scoped to one subscription ID', sameSubscriptionBill.json.mode !== 'subscription' && newSubscriptionBill.json.mode === 'subscription' && oldSubscriptionAfterNewBill.json.mode === 'subscription' && currentSubscriptionId === subB, `same=${sameSubscriptionBill.json.mode}, new=${newSubscriptionBill.json.mode}, after-old=${oldSubscriptionAfterNewBill.json.mode}, current=${currentSubscriptionId}`)
 } catch (error) {
   console.error('\nSandbox run threw:', error)
   results.push({ n: -1, title: 'harness', passed: false, detail: String(error) })

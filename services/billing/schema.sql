@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS billing_payment_events (
   PRIMARY KEY (provider, event_id)
 );
 
+CREATE TABLE IF NOT EXISTS billing_polar_subscriptions (
+  subscription_id TEXT PRIMARY KEY,
+  account_id UUID NOT NULL REFERENCES billing_accounts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  event_occurred_at TIMESTAMPTZ NOT NULL,
+  event_rank INTEGER NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS billing_polar_subscriptions_account
+  ON billing_polar_subscriptions (account_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS billing_payment_intents (
   provider TEXT NOT NULL,
   tx_ref TEXT NOT NULL,

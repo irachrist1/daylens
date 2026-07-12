@@ -16,6 +16,7 @@ const db = {
   accounts: new Map(), // id -> row
   usage: [], // usage rows
   paymentEvents: new Map(), // `${provider}\0${event_id}` -> row
+  polarSubscriptions: new Map(), // subscription_id -> row
   paymentIntents: new Map(), // `${provider}\0${tx_ref}` -> row
   bootstrapAttempts: [], // { ip_hash, attempted_at }
 }
@@ -228,6 +229,24 @@ function run(text, params = []) {
       row.spend_reserved_until = null
       row.updated_at = now()
     }
+    return { rows: [] }
+  }
+
+  // ── billing_polar_subscriptions ───────────────────────────────────
+  if (q.startsWith('SELECT * FROM billing_polar_subscriptions WHERE subscription_id =')) {
+    const row = db.polarSubscriptions.get(p[0])
+    return { rows: row ? [structuredClone(row)] : [] }
+  }
+  if (q.startsWith('INSERT INTO billing_polar_subscriptions')) {
+    const row = {
+      subscription_id: p[0],
+      account_id: p[1],
+      status: p[2],
+      event_occurred_at: p[3],
+      event_rank: p[4],
+      updated_at: now(),
+    }
+    db.polarSubscriptions.set(p[0], row)
     return { rows: [] }
   }
 

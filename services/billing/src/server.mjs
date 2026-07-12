@@ -524,12 +524,30 @@ async function polarWebhook(req, res) {
       ? await client.query('SELECT * FROM billing_accounts WHERE id = $1 FOR UPDATE', [accountId])
       : { rows: [] }
     const current = currentResult.rows[0]
+    const subscriptionResult = incomingSubscriptionId
+      ? await client.query(
+        'SELECT * FROM billing_polar_subscriptions WHERE subscription_id = $1 FOR UPDATE',
+        [incomingSubscriptionId],
+      )
+      : { rows: [] }
+    const subscription = subscriptionResult.rows[0]
     const sameSubscription = Boolean(incomingSubscriptionId && incomingSubscriptionId === current?.polar_subscription_id)
-    const newSubscription = Boolean(incomingSubscriptionId && incomingSubscriptionId !== current?.polar_subscription_id)
-    const previousAt = current?.polar_event_occurred_at ? new Date(current.polar_event_occurred_at).getTime() : -Infinity
-    const isCurrent = newSubscription || occurredAt.getTime() > previousAt
-      || (occurredAt.getTime() === previousAt && eventRank >= Number(current?.polar_event_rank || 0))
-    if (current && incomingSubscriptionId && isCurrent && (newSubscription || current.subscription_status !== 'revoked') && desiredState === 'active' && ['subscription.active', 'subscription.created', 'subscription.updated', 'subscription.uncanceled'].includes(event.type)) {
+    const previousAt = subscription?.event_occurred_at ? new Date(subscription.event_occurred_at).getTime() : -Infinity
+    const isCurrent = occurredAt.getTime() > previousAt
+      || (occurredAt.getTime() === previousAt && eventRank >= Number(subscription?.event_rank || 0))
+    const accepted = isCurrent && !(subscription?.status === 'revoked' && desiredState === 'active')
+    if (current && incomingSubscriptionId && accepted) {
+      await client.query(
+        `INSERT INTO billing_polar_subscriptions
+         (subscription_id, account_id, status, event_occurred_at, event_rank)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (subscription_id) DO UPDATE SET status = EXCLUDED.status,
+         event_occurred_at = EXCLUDED.event_occurred_at, event_rank = EXCLUDED.event_rank,
+         updated_at = now()`,
+        [incomingSubscriptionId, accountId, desiredState, occurredAt, eventRank],
+      )
+    }
+    if (current && incomingSubscriptionId && accepted && (sameSubscription || !subscription) && desiredState === 'active' && ['subscription.active', 'subscription.created', 'subscription.updated', 'subscription.uncanceled'].includes(event.type)) {
       await client.query(
         `UPDATE billing_accounts SET plan = 'subscription', subscription_status = $1,
          period_started_at = COALESCE($2, now()), renewal_at = COALESCE($3, now() + interval '1 month'),
@@ -550,7 +568,7 @@ async function polarWebhook(req, res) {
       )
       shouldReconcile = true
     }
-    if (current && sameSubscription && isCurrent && desiredState === 'canceled') {
+    if (current && sameSubscription && accepted && desiredState === 'canceled') {
       await client.query(
         `UPDATE billing_accounts SET subscription_status = 'canceled', polar_event_occurred_at = $1,
          polar_event_rank = $2, litellm_budget_sync_required = true, updated_at = now() WHERE id = $3`,
@@ -558,7 +576,7 @@ async function polarWebhook(req, res) {
       )
       shouldReconcile = true
     }
-    if (current && sameSubscription && isCurrent && desiredState === 'revoked') {
+    if (current && sameSubscription && accepted && desiredState === 'revoked') {
       await client.query(
         `UPDATE billing_accounts SET subscription_status = 'revoked', renewal_at = now(), polar_event_occurred_at = $1,
          polar_event_rank = $2, litellm_budget_sync_required = true, updated_at = now() WHERE id = $3`,
