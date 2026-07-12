@@ -74,7 +74,7 @@ function derivedSessionToAppSession(
 function getDerivedDayTimelinePayload(
   db: Database.Database,
   dateStr: string,
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): DayTimelinePayload | null {
   if (dateStr === localDateString()) return null
   const day = readDerivedDay(db, dateStr)
@@ -128,7 +128,7 @@ export function getTimelineDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): DayTimelinePayload {
   if (!liveSession) {
     const derived = getDerivedDayTimelinePayload(db, dateStr, options)
@@ -141,7 +141,7 @@ export function getHistoryDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): HistoryDayPayload {
   if (!liveSession) {
     const derived = getDerivedDayTimelinePayload(db, dateStr, options)
@@ -154,8 +154,9 @@ export function materializeTimelineDayProjection(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
+  options: { forceRebuild?: boolean } = {},
 ): DayTimelinePayload {
-  return getTimelineDayProjection(db, dateStr, liveSession, { materialize: true })
+  return getTimelineDayProjection(db, dateStr, liveSession, { materialize: true, forceRebuild: options.forceRebuild })
 }
 
 export function getWeeklySummaryProjection(

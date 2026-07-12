@@ -58,6 +58,7 @@ import { isSystemNoiseTitle } from '@shared/systemNoise'
 import { resolveKind, dominantKind, effectiveBlockKind, kindForCategory, kindForDomain, type WorkKind } from '@shared/workKind'
 import { humanizeTitle, leisureActivityTitle } from '@shared/humanize'
 import { daysFromTodayLocalDateString, localDayBounds, localDateString } from '../lib/localDate'
+import { REAL_ABSENCE_MIN_MS, absenceSpannedBy, formatAbsenceRange, isRealAbsenceGap } from '../lib/absenceGuard'
 import { ownedDayBounds } from '../lib/dayOwnership'
 import { deriveWorkEvidenceSummary } from '../lib/workEvidence'
 import { extractFilenames } from '../lib/windowTitleFilenames'
@@ -107,7 +108,9 @@ export function sanitizeBlockLabel(label: string | null | undefined): string | n
 // renders as blank space on the timeline, and a new block starts only once
 // real activity resumes. A block's duration is the time the user was genuinely
 // active, never the wall-clock span across an idle lull.
-const IDLE_GAP_THRESHOLD_MS = 15 * 60_000
+// Derived from the one shared absence guard (lib/absenceGuard.ts) so no local
+// tweak can quietly diverge from the rule every merge path enforces.
+const IDLE_GAP_THRESHOLD_MS = REAL_ABSENCE_MIN_MS
 const MEETING_THRESHOLD_SEC = 20 * 60
 const LONG_SINGLE_APP_THRESHOLD_SEC = 45 * 60
 const BRIEF_INTERRUPTION_THRESHOLD_SEC = 3 * 60
@@ -152,14 +155,14 @@ const TIMELINE_MIN_BLOCK_FLOOR_MS = 15 * 60_000
 // break: a 24-second 1:56am blip must not fold into the 9:41am block and make
 // one 11-hour phantom starting at 2am. Aligned with the 15-minute session
 // break: a gap of 15+ minutes is never absorbed into any block.
-const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = 15 * 60_000
+const TIMELINE_SLIVER_FOLD_MAX_GAP_MS = REAL_ABSENCE_MIN_MS
 // The same work continued across a brief untracked lull is one block, not two.
 // A short pause in the middle of a coding morning should not split one Ghostty
 // session into "Terminal work" and a separate block. Two stretches of the same
 // dominant app doing related work bridge a gap up to this size, even across a
 // coarse-segment boundary. Aligned with the 15-minute session break: a real
 // gap (15+ minutes away) always stays split — it is blank space, not work.
-const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = 15 * 60_000
+const TIMELINE_SAME_WORK_BRIDGE_GAP_MS = REAL_ABSENCE_MIN_MS
 // Higher ceiling for candidates where every session shares the same
 // (bundleId, compacted window title) pair with no internal gap >= 5 min.
 // Quality bar: a 90-minute block titled "Daylens AI refactor — extract
@@ -1365,6 +1368,10 @@ export function loadPersistedAppDetailBlocksForDates(
   const grouped = new Map<string, AppDetailBlockSlice[]>()
   if (dates.length === 0) return grouped
 
+  // Corrected block facts (invariant 7 / apps.md invariant 13): a block the
+  // user deleted (review state 'ignored') never reaches the Apps panel, and a
+  // rename or recategorization the user made on the Timeline is what Apps
+  // shows too — the same filter and corrections every timeline read applies.
   const placeholders = dates.map(() => '?').join(', ')
   const rows = db.prepare(`
     SELECT
@@ -1375,9 +1382,13 @@ export function loadPersistedAppDetailBlocksForDates(
       dominant_category,
       label_current,
       evidence_summary_json
-    FROM timeline_blocks
+    FROM timeline_blocks b
     WHERE invalidated_at IS NULL
       AND date IN (${placeholders})
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_block_reviews r
+        WHERE r.block_id = b.id AND r.review_state = 'ignored'
+      )
     ORDER BY start_time ASC
   `).all(...dates) as Array<{
     id: string
@@ -1390,6 +1401,24 @@ export function loadPersistedAppDetailBlocksForDates(
   }>
 
   const workflowsByBlock = workflowRefsByBlockId(db, rows.map((row) => row.id))
+  const correctionsByBlock = new Map<string, { label: string | null; category: AppCategory | null }>()
+  if (rows.length > 0) {
+    const reviewRows = db.prepare(`
+      SELECT block_id, correction_json
+      FROM timeline_block_reviews
+      WHERE review_state = 'corrected' AND block_id IN (${sqlPlaceholders(rows.length)})
+      ORDER BY updated_at ASC
+    `).all(...rows.map((row) => row.id)) as Array<{ block_id: string; correction_json: string }>
+    for (const reviewRow of reviewRows) {
+      const correction = parseReviewJson(reviewRow.correction_json)
+      const label = stringValue(correction.label)
+      const category = isAppCategory(correction.category) ? correction.category : null
+      if (label || category) {
+        // updated_at ASC: the latest correction for a block wins.
+        correctionsByBlock.set(reviewRow.block_id, { label, category })
+      }
+    }
+  }
 
   for (const row of rows) {
     let evidence: Partial<TimelineEvidenceSummary> = {}
@@ -1405,14 +1434,15 @@ export function loadPersistedAppDetailBlocksForDates(
       .sort((left, right) => right.totalSeconds - left.totalSeconds)
       .slice(0, 8)
 
+    const correction = correctionsByBlock.get(row.id)
     const current = grouped.get(row.date) ?? []
     current.push({
       id: row.id,
       startTime: row.start_time,
       endTime: row.end_time,
-      dominantCategory: row.dominant_category,
+      dominantCategory: correction?.category ?? row.dominant_category,
       label: {
-        current: row.label_current,
+        current: correction?.label ?? row.label_current,
       },
       topApps: Array.isArray(evidence.apps)
         ? normalizeAppSummariesForBlockDisplay(evidence.apps as WorkContextAppSummary[])
@@ -1911,6 +1941,18 @@ export function mergeTimelineEpisodes(
   const ordered = [...blocks].sort((a, b) => a.startTime - b.startTime)
   if (ordered.length < 2) {
     throw new Error('Pick at least two blocks to merge.')
+  }
+  // The absence guard (lib/absenceGuard.ts): a merge may never join work
+  // across a real absence of 15+ minutes — a block is genuine engagement, and
+  // the fused span would silently count time away as work. This is the single
+  // write path every merge uses (manual Merge, AI merge actions, the day
+  // regroup), so the veto here covers them all.
+  const spannedAbsence = absenceSpannedBy(ordered.flatMap((block) => block.sessions))
+  if (spannedAbsence) {
+    throw new Error(
+      `These blocks are separated by a real absence (${formatAbsenceRange(spannedAbsence)}). `
+      + 'Daylens never joins work across time away.',
+    )
   }
   for (let i = 0; i < ordered.length - 1; i += 1) {
     const earlier = ordered[i]
@@ -3474,6 +3516,17 @@ function scoreBoundary(
   corrections: BoundaryCorrections,
 ): { score: number; reasons: BoundaryReason[] } {
   const reasons: BoundaryReason[] = []
+  // The absence guard outranks EVERY stored correction (lib/absenceGuard.ts):
+  // a real absence of 15+ minutes is a hard boundary no merge may erase — not
+  // an AI regroup's, not a cleanup's, not even a user's. This is what lets a
+  // re-analyze REPAIR a day whose stored corrections were written before the
+  // guard existed (the July 10 block that fused 3:49 PM work to 10:05 PM work
+  // across a 8:01–9:39 PM absence): the poisoned merge span simply loses at
+  // the gap and the day splits there on rebuild.
+  const gapMs = gapBetweenCandidates(left, right)
+  if ((left.boundedAfterGap && right.boundedBeforeGap) || isRealAbsenceGap(gapMs)) {
+    return { score: BOUNDARY_HARD_SCORE, reasons: ['idle-gap'] }
+  }
   // A user merge erases this boundary and overrides every heuristic below it,
   // including a kind change — the user's intent always wins over segmentation.
   if (corrections.lookup(left, right) === 'merge') return { score: -BOUNDARY_HARD_SCORE, reasons: [] }
@@ -3490,10 +3543,6 @@ function scoreBoundary(
   }
   if (leftSig.mode === 'meeting') return { score: BOUNDARY_HARD_SCORE, reasons: ['meeting-end'] }
   if (rightSig.mode === 'meeting') return { score: BOUNDARY_HARD_SCORE, reasons: ['meeting-start'] }
-  const gapMs = gapBetweenCandidates(left, right)
-  if ((left.boundedAfterGap && right.boundedBeforeGap) || gapMs >= TIMELINE_SAME_WORK_BRIDGE_GAP_MS) {
-    return { score: BOUNDARY_HARD_SCORE, reasons: ['idle-gap'] }
-  }
 
   // A merge can never build a runaway block; respect the same span ceiling the
   // upstream passes use. If joining would exceed it, the boundary stays.
@@ -5076,14 +5125,23 @@ export function buildTimelineBlocksForDay(
   db: Database.Database,
   dateStr: string,
   sessions: AppSession[],
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): WorkContextBlock[] {
   const shouldMaterialize = options.materialize ?? true
+  // forceRebuild (the absence-repair path in analyzeDay.ts): reconstruct the
+  // day from its sessions through the full pipeline even when it is
+  // "processed". The rebuild rides persistTimelineDay, which snapshots and
+  // carries forward AI labels by evidence key BEFORE invalidating the old
+  // rows, so curated names re-attach to every block whose session set is
+  // unchanged, and user corrections replay from their durable stores
+  // (invariant 8) — except a merge across a real absence, which the guard in
+  // scoreBoundary now refuses to honor.
+  const forceRebuild = (options.forceRebuild ?? false) && shouldMaterialize
   const todayStr = localDateString()
-  let forceMaterialize = false
+  let forceMaterialize = forceRebuild
   sessions = withoutIgnoredSpans(sessions, loadIgnoredBlockSpans(db, dateStr))
 
-  if (dateStr < todayStr) {
+  if (dateStr < todayStr && !forceRebuild) {
     const persisted = loadPersistedTimelineBlocksForDay(db, dateStr, sessions)
     if (persisted && persisted.length > 0) {
       // Keep nightly/user-processed days exactly as they were summarized, and
@@ -5493,7 +5551,7 @@ export function getTimelineDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): DayTimelinePayload {
   // timeline.md §4 (founder rule): today stays provisional — one neutral block
   // per continuous sitting, split only at real 15+ minute activity gaps —
@@ -5564,7 +5622,7 @@ export function getHistoryDayPayload(
   db: Database.Database,
   dateStr: string,
   liveSession?: LiveSession | null,
-  options: { materialize?: boolean } = {},
+  options: { materialize?: boolean; forceRebuild?: boolean } = {},
 ): HistoryDayPayload {
   return getTimelineDayPayload(db, dateStr, liveSession, options)
 }

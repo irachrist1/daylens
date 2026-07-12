@@ -3,7 +3,6 @@ import {
   clearBlockLabelOverride,
   setBlockLabelOverride,
   getAppCharacter,
-  getAppSummariesForRange,
   getAllAppsForLabeling,
   getCategoryOverrideEffect,
   getPeakHours,
@@ -25,6 +24,7 @@ import {
   addClientMemoryFact,
 } from '../services/workMemoryProfile'
 import { getAppDetailProjection, getArtifactDetailProjection, getHistoryDayProjection, getTimelineDayProjection, getWorkflowPatternsProjection, getWeeklySummaryProjection, materializeTimelineDayProjection } from '../core/query/projections'
+import { getCorrectedAppSummariesForRange } from '../services/activityFacts'
 import { invalidateProjectionScope } from '../core/projections/invalidation'
 import {
   resolveClientQuery,
@@ -354,10 +354,12 @@ function buildWorkSessionPayloads(db: ReturnType<typeof getDb>, whereClause: str
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 export function registerDbHandlers(): void {
-  // Today's app summaries — uses local calendar day, not UTC day
+  // Today's app summaries — uses local calendar day, not UTC day.
+  // Corrected facts (invariant 7): a Timeline block the user deleted is
+  // subtracted here too, so Today's totals agree with the Timeline.
   ipcMain.handle(IPC.DB.GET_TODAY, () => {
     const [from, to] = dayBounds(localDateString())
-    return getAppSummariesForRange(getDb(), from, to)
+    return getCorrectedAppSummariesForRange(getDb(), from, to)
   })
 
   // Raw sessions for a given date — used by History and Today timeline
@@ -406,20 +408,23 @@ export function registerDbHandlers(): void {
   // App usage summaries for a range — used by Apps view
   // days=1 → today since local midnight (not rolling 24h)
   // days=7/30 → rolling window ending at end of today
+  // Corrected facts (invariant 7): deleted Timeline blocks are subtracted, so
+  // the Apps list totals never disagree with the Timeline. Raw capture stays
+  // stored untouched underneath.
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES, (_e, days: number = 7) => {
     // Normalize at the boundary so every period reaches one canonical query.
     const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 7
     const [todayFrom, todayTo] = dayBounds(localDateString())
     if (normalizedDays <= 1) {
-      return getAppSummariesForRange(getDb(), todayFrom, todayTo)
+      return getCorrectedAppSummariesForRange(getDb(), todayFrom, todayTo)
     }
     // All-time: one query over all captured history. Avoids the day-by-day
     // cache loop, which would iterate ~36,500 times for this sentinel.
     if (normalizedDays >= ALL_TIME_DAYS) {
-      return getAppSummariesForRange(getDb(), 0, todayTo)
+      return getCorrectedAppSummariesForRange(getDb(), 0, todayTo)
     }
     const [from] = dayBounds(shiftLocalDate(localDateString(), -(normalizedDays - 1)))
-    return getAppSummariesForRange(getDb(), from, todayTo)
+    return getCorrectedAppSummariesForRange(getDb(), from, todayTo)
   })
 
   // C23 / D6: Apps view date switcher. Returns summaries for a specific
@@ -429,7 +434,7 @@ export function registerDbHandlers(): void {
   // and thousands of micro-sessions.
   ipcMain.handle(IPC.DB.GET_APP_SUMMARIES_FOR_DATE, (_e, dateStr: string) => {
     const [from, to] = dayBounds(dateStr)
-    return getAppSummariesForRange(getDb(), from, to)
+    return getCorrectedAppSummariesForRange(getDb(), from, to)
   })
 
   ipcMain.handle(IPC.DB.GET_ALL_APPS_FOR_LABELING, () => {

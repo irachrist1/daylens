@@ -7,14 +7,19 @@
 // `executeTool` remains as a typed name→resolver dispatch for tests/the MCP layer.
 import type Database from 'better-sqlite3'
 import {
-  getAppSummariesForRange,
   getReconciledDomainIntervals,
-  getSessionsForRange,
   getWebsiteSummariesForRange,
   searchSessions as dbSearchSessions,
   searchBrowser as dbSearchBrowser,
   searchArtifacts as dbSearchArtifacts,
 } from '../db/queries'
+// AI facts read the corrected activity truth (invariant 7): a Timeline block
+// the user deleted is subtracted from every total the AI quotes, so the AI
+// never contradicts the Timeline or the Apps view.
+import {
+  getCorrectedAppSummariesForRange as getAppSummariesForRange,
+  getCorrectedSessionsForRange as getSessionsForRange,
+} from './activityFacts'
 import { localDateString } from '../lib/localDate'
 import { computeFocusScoreV2 } from '../lib/focusScore'
 import {

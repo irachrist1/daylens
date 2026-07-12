@@ -14,7 +14,9 @@ import {
   getAppSummariesForRange,
   getBrowserActivityBreakdown,
   getSessionsForRange,
+  sessionStartsInsideSpans,
 } from '../db/queries'
+import { getIgnoredBlockSpansForRange } from './activityFacts'
 import { localDayBounds, shiftLocalDateString } from '../lib/localDate'
 import {
   artifactIdFor,
@@ -139,7 +141,14 @@ export function getAppDetailPayload(
   const rangeKey = appDetailRangeKey(isDate ? today : days, today)
   const effectiveLiveSession = !isDate || today === localDateStringForOffset(0) ? liveSession : null
 
-  const allSessions = mergeLiveSession(getSessionsForRange(db, fromMs, todayTo), effectiveLiveSession)
+  // Corrected truth (invariant 7): the spans of Timeline blocks the user
+  // deleted are subtracted from EVERY fact this payload derives — sessions,
+  // totals, domain/page credit, appearances — so the Apps panel never
+  // disagrees with the Timeline. Raw capture stays stored untouched.
+  const correctionSpans = getIgnoredBlockSpansForRange(db, fromMs, todayTo)
+  const rawSessions = getSessionsForRange(db, fromMs, todayTo)
+    .filter((session) => correctionSpans.length === 0 || !sessionStartsInsideSpans(session, correctionSpans))
+  const allSessions = mergeLiveSession(rawSessions, effectiveLiveSession)
   const sessions = allSessions.filter((session) => {
     const identity = resolveCanonicalApp(session.bundleId, session.appName)
     return (session.canonicalAppId ?? identity.canonicalAppId ?? session.bundleId) === canonicalAppId
@@ -197,7 +206,12 @@ export function getAppDetailPayload(
   const displayName = sampleSession
     ? resolveCanonicalApp(sampleSession.bundleId, sampleSession.appName).displayName
     : resolveCanonicalApp(canonicalAppId, canonicalAppId).displayName
-  const rawAppearances = Array.from(sessionDerivedBlocksByDate.values()).flat()
+  // Appearances come from the same corrected block facts the Timeline shows
+  // (invariant 7 / apps.md invariant 13): persisted blocks carry the user's
+  // renames and category corrections, and a deleted block never appears. The
+  // session-derived clusters only fill in when a day has no persisted blocks
+  // yet (today/live) — the fallback already applied in blocksByDate above.
+  const rawAppearances = [...relatedBlocks]
     .sort((a, b) => b.startTime - a.startTime)
     .map((block) => ({
       blockId: block.id,
@@ -222,7 +236,7 @@ export function getAppDetailPayload(
   const blockMemoryRollups = memoryRollupsForBlocks(db, blockAppearances)
 
   const summariesForRange = withLiveAppSummary(
-    getAppSummariesForRange(db, fromMs, todayTo),
+    getAppSummariesForRange(db, fromMs, todayTo, { excludeSpans: correctionSpans }),
     effectiveLiveSession ?? null,
     fromMs,
     Date.now(),
@@ -235,7 +249,7 @@ export function getAppDetailPayload(
 
   let browserActivity: AppDetailPayload['browserActivity']
   if (sessions.some((session) => isBrowserSession(session))) {
-    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId)
+    const breakdown = getBrowserActivityBreakdown(db, fromMs, todayTo, canonicalAppId, { excludeSpans: correctionSpans })
     browserActivity = {
       totalSeconds,
       attributedSeconds: breakdown.attributedSeconds,
