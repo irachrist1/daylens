@@ -51,6 +51,16 @@ export function initDb(): void {
     _db = new Database(dbPath)
 
     stage = 'pragma'
+    // On a brand-new database (no pages yet), enable incremental auto-vacuum
+    // BEFORE the first table is created — it cannot be turned on later without
+    // a full VACUUM. This lets the AI-telemetry retention job
+    // (aiUsageRetention.ts) physically shrink the file after big prunes.
+    // Existing DBs keep whatever mode they were created with; freed pages
+    // there go to the freelist and are reused, which stops growth without a
+    // blocking VACUUM.
+    if ((_db.pragma('page_count', { simple: true }) as number) === 0) {
+      _db.pragma('auto_vacuum = INCREMENTAL')
+    }
     // WAL mode for concurrent reads during tracking flushes
     _db.pragma('journal_mode = WAL')
     _db.pragma('foreign_keys = ON')

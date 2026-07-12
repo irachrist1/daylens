@@ -298,6 +298,12 @@ function localDayKey(ms: number): string {
   return `${year}-${month}-${day}`
 }
 
+// Inverse of localDayKey: local midnight (ms) for a YYYY-MM-DD day key.
+function localDayStartMs(day: string): number {
+  const [year, month, dayOfMonth] = day.split('-').map(Number)
+  return new Date(year, month - 1, dayOfMonth).getTime()
+}
+
 function billingModeToType(mode: string | null): BillingUsageType {
   if (mode === 'free_credit' || mode === 'subscription' || mode === 'local_pass') return mode
   return 'own_key'
@@ -513,6 +519,60 @@ interface GroupedUsageRow {
   cache_write_tokens: number
 }
 
+// Rolled-up telemetry for days older than the retention window (see
+// aiUsageRetention.ts). Grouping keys were stored as '' where the original
+// event had NULL provider/model, so the read path maps '' back to null.
+interface RawUsageRollup {
+  day: string
+  job_type: string
+  screen: string
+  trigger_source: string
+  provider: string
+  model: string
+  billing_mode: string
+  calls: number
+  successes: number
+  failures: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  cost_usd: number
+}
+
+function readUsageRollupsInRange(db: ReturnType<typeof getDb>, from: number, to: number): RawUsageRollup[] {
+  // Rollup granularity is whole local days; every Usage-screen range is
+  // midnight-aligned, so string day-key comparison is exact: a day is in
+  // [from, to) iff fromDay <= day < toDay.
+  return db.prepare(`
+    SELECT day, job_type, screen, trigger_source, provider, model, billing_mode,
+           calls, successes, failures,
+           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd
+    FROM ai_usage_daily_rollup
+    WHERE day >= ? AND day < ?
+    ORDER BY day ASC
+  `).all(localDayKey(from), localDayKey(to)) as RawUsageRollup[]
+}
+
+function rollupToGroupedUsageRow(rollup: RawUsageRollup): GroupedUsageRow {
+  return {
+    hour: localDayStartMs(rollup.day),
+    model: rollup.model || null,
+    feature: rollup.job_type,
+    screen: rollup.screen || null,
+    trigger_source: rollup.trigger_source || null,
+    provider: rollup.provider || null,
+    billing_mode: rollup.billing_mode || null,
+    calls: rollup.calls,
+    successes: rollup.successes,
+    failures: rollup.failures,
+    input_tokens: rollup.input_tokens,
+    output_tokens: rollup.output_tokens,
+    cache_read_tokens: rollup.cache_read_tokens,
+    cache_write_tokens: rollup.cache_write_tokens,
+  }
+}
+
 // The live usage report. Headline totals + the per-day chart aggregate the WHOLE
 // range in SQL (grouped, so memory stays flat no matter how many events); the
 // detailed rows table is the most recent 2000 for display only.
@@ -540,6 +600,16 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
     GROUP BY hour, model, feature, screen, trigger_source, provider, billing_mode
   `).all(from, to) as GroupedUsageRow[]
 
+  // Days older than the retention window live only in ai_usage_daily_rollup
+  // (aiUsageRetention.ts): same counts and token sums, per local day instead
+  // of per event. Spend prices from model + token sums exactly like the raw
+  // grouped path above (pricing is linear in tokens), so totals and charts
+  // are unchanged by the rollup. A rolled day appears as one "hour" at its
+  // local midnight — sub-day granularity only matters for the 1-day view,
+  // which is always inside the detail window.
+  const rollups = readUsageRollupsInRange(db, from, to)
+  const allGroups: GroupedUsageRow[] = [...grouped, ...rollups.map(rollupToGroupedUsageRow)]
+
   const jobMap = new Map<JobSummaryKey, BillingUsageJobSummary>()
   const hourlyMap = new Map<string, BillingUsageHourlyPoint>()
   const modelPointMap = new Map<string, BillingUsagePoint>()
@@ -554,7 +624,7 @@ export function localUsage(from: number, to: number, sourceLabel = 'Daylens loca
   let backgroundCalls = 0
   let backgroundTokens = 0
 
-  for (const group of grouped) {
+  for (const group of allGroups) {
     const tokens = group.input_tokens + group.output_tokens + group.cache_read_tokens + group.cache_write_tokens
     const spend = priceTokensUsd(group.model, group.input_tokens, group.output_tokens, group.cache_read_tokens, group.cache_write_tokens)
     const type = billingModeToType(group.billing_mode)
@@ -675,7 +745,44 @@ export function exportUsageRows(from: number, to: number): BillingUsageRow[] {
     WHERE started_at >= ? AND started_at < ?
     ORDER BY started_at ASC
   `).all(from, to) as RawUsageEvent[]
-  return events.map(normalizeUsageRow)
+
+  // Days older than the retention window export as one aggregate line per
+  // (day, feature, provider, model, …) group, carrying the group's call and
+  // failure counts (the `calls` column — 1 on ordinary per-event lines) so
+  // the CSV's totals still cover the whole selected range exactly.
+  const rollupRows: BillingUsageRow[] = readUsageRollupsInRange(db, from, to).map((rollup, index) => {
+    const tokens = rollup.input_tokens + rollup.output_tokens + rollup.cache_read_tokens + rollup.cache_write_tokens
+    const estimated = priceTokensUsd(
+      rollup.model || null,
+      rollup.input_tokens,
+      rollup.output_tokens,
+      rollup.cache_read_tokens,
+      rollup.cache_write_tokens,
+    )
+    return {
+      id: `rollup:${rollup.day}:${index}`,
+      occurredAt: localDayStartMs(rollup.day),
+      type: billingModeToType(rollup.billing_mode),
+      feature: rollup.job_type,
+      screen: rollup.screen || null,
+      triggerSource: rollup.trigger_source || null,
+      provider: rollup.provider || null,
+      model: rollup.model || null,
+      inputTokens: rollup.input_tokens,
+      outputTokens: rollup.output_tokens,
+      cacheReadTokens: rollup.cache_read_tokens,
+      cacheWriteTokens: rollup.cache_write_tokens,
+      tokens: tokens || null,
+      costUsd: rollup.cost_usd > 0 ? rollup.cost_usd : estimated,
+      costSource: rollup.cost_usd > 0 ? 'provider' : 'estimated',
+      success: rollup.failures === 0,
+      calls: rollup.calls,
+      failures: rollup.failures,
+    }
+  })
+
+  return [...rollupRows, ...events.map(normalizeUsageRow)]
+    .sort((left, right) => left.occurredAt - right.occurredAt)
 }
 
 function mergeRemoteWithLocal(remote: BillingUsageReport, local: BillingUsageReport): BillingUsageReport {

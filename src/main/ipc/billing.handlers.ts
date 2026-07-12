@@ -55,8 +55,12 @@ export function registerBillingHandlers(): void {
       filters: [{ name: 'CSV', extensions: ['csv'] }],
     })
     if (result.canceled || !result.filePath) return { canceled: true }
+    // 'Calls'/'Failed calls' exist because days older than the telemetry
+    // retention window export as one aggregate line per day+feature+model
+    // group (see aiUsageRetention.ts) — per-event lines are always 1 / 0-or-1,
+    // so summing the columns still reports the whole range exactly.
     const lines = [
-      ['Date', 'Type', 'Feature', 'Screen', 'Trigger', 'Provider', 'Model', 'Input tokens', 'Output tokens', 'Cache read tokens', 'Cache write tokens', 'Total tokens', 'Cost USD', 'Success'],
+      ['Date', 'Type', 'Feature', 'Screen', 'Trigger', 'Provider', 'Model', 'Input tokens', 'Output tokens', 'Cache read tokens', 'Cache write tokens', 'Total tokens', 'Cost USD', 'Success', 'Calls', 'Failed calls'],
       ...rows.map((row) => [
         new Date(row.occurredAt).toISOString(),
         row.type,
@@ -72,6 +76,8 @@ export function registerBillingHandlers(): void {
         row.tokens ?? '',
         row.costUsd ?? '',
         row.success ? 'yes' : 'no',
+        row.calls ?? 1,
+        row.failures ?? (row.success ? 0 : 1),
       ]),
     ]
     await fs.writeFile(result.filePath, lines.map((line) => line.map(csvCell).join(',')).join('\n'), 'utf8')

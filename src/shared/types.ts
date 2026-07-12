@@ -1732,6 +1732,11 @@ export interface BillingUsageRow {
   costUsd: number | null
   costSource?: BillingUsageCostSource
   success: boolean
+  // Aggregate export lines (pre-retention-window days rolled up per day; see
+  // aiUsageRetention.ts) carry the group's call/failure counts here. Ordinary
+  // per-event rows omit them (calls = 1, failures = success ? 0 : 1).
+  calls?: number
+  failures?: number
 }
 
 export interface BillingUsagePoint {

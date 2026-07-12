@@ -104,6 +104,7 @@ import { registerSearchHandlers } from './ipc/search.handlers'
 import { registerSyncHandlers } from './ipc/sync.handlers'
 import { startMcpServer, stopMcpServer } from './services/mcpServer'
 import { initDb, closeDb, getDb } from './services/database'
+import { startAIUsageRetentionSchedule, stopAIUsageRetentionSchedule } from './services/aiUsageRetention'
 import { runPendingDerivedStateReset } from './core/projections/metadata'
 import { hasApiKey, initSettings, getSettings, setSettings } from './services/settings'
 import { getLinuxTrackingDiagnostics, startTracking, stopTracking, trackingStatus } from './services/tracking'
@@ -525,6 +526,7 @@ async function shutdownApp(options?: { awaitFinalSync?: boolean; backupBeforeExi
   stopBrowserTracking()
   stopSync()
   stopProcessMonitor()
+  stopAIUsageRetentionSchedule()
   unregisterCommandPaletteShortcut()
 
   if (options?.awaitFinalSync) {
@@ -895,6 +897,11 @@ app.whenReady()
     })
 
     initDb()
+
+    // AI-telemetry retention (W1-B): deferred first pass after launch, then
+    // daily. Wired here — not in startBackgroundServices — because the DB
+    // needs pruning even when tracking is disabled or paused.
+    if (!SMOKE_TEST) startAIUsageRetentionSchedule()
 
     // The process monitor (Windows + Linux) is started in startBackgroundServices
     // once tracking is enabled; diagnostics requests reuse the same instance.
