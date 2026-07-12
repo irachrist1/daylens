@@ -104,7 +104,7 @@ function run(text, params = []) {
   }
   if (q.startsWith('INSERT INTO billing_accounts (installation_hash, litellm_key_cipher)')) {
     if (accountByHash(p[0])) return { rows: [] } // ON CONFLICT DO NOTHING
-    const row = newAccount(p[0], 'pending')
+    const row = newAccount(p[0], p[1])
     db.accounts.set(row.id, row)
     return { rows: [structuredClone(row)] }
   }

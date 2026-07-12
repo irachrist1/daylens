@@ -144,6 +144,7 @@ async function generateLiteLLMKey(accountId, maxBudget = 5) {
       max_budget: maxBudget,
       metadata: { account_id: accountId },
     }),
+    signal: AbortSignal.timeout(15_000),
   })
   const payload = await response.json()
   if (!response.ok || !payload.key) throw new Error(payload.error || 'litellm_key_generation_failed')
@@ -162,6 +163,7 @@ async function setLiteLLMBudget(account, maxBudget, budgetDuration = null) {
       max_budget: maxBudget,
       ...(budgetDuration ? { budget_duration: budgetDuration } : {}),
     }),
+    signal: AbortSignal.timeout(15_000),
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
@@ -286,21 +288,19 @@ async function bootstrap(req, res) {
   const installationHash = hash(installationId)
   let result = await pool.query('SELECT * FROM billing_accounts WHERE installation_hash = $1', [installationHash])
   if (!result.rows[0]) {
+    // Provision before opening a database transaction. A slow/unavailable
+    // LiteLLM must not occupy the Postgres pool; a concurrent duplicate may
+    // create one orphan virtual key, but the unique insert chooses one account
+    // atomically and no partially provisioned row can escape.
+    const key = await generateLiteLLMKey(`bootstrap-${crypto.randomBytes(8).toString('hex')}`)
     const client = await pool.connect()
     try {
       await client.query('BEGIN')
-      const inserted = await client.query(
+      await client.query(
         `INSERT INTO billing_accounts (installation_hash, litellm_key_cipher)
-         VALUES ($1, 'pending') ON CONFLICT (installation_hash) DO NOTHING RETURNING *`,
-        [installationHash],
+         VALUES ($1, $2) ON CONFLICT (installation_hash) DO NOTHING RETURNING *`,
+        [installationHash, encrypt(key)],
       )
-      if (inserted.rows[0]) {
-        const key = await generateLiteLLMKey(inserted.rows[0].id)
-        await client.query(
-          'UPDATE billing_accounts SET litellm_key_cipher = $1 WHERE id = $2',
-          [encrypt(key), inserted.rows[0].id],
-        )
-      }
       await client.query('COMMIT')
     } catch (error) {
       await client.query('ROLLBACK')
